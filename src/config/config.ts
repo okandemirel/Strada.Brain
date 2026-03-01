@@ -7,6 +7,18 @@ dotenv.config();
 const configSchema = z.object({
   // AI Providers
   anthropicApiKey: z.string().min(1, "ANTHROPIC_API_KEY is required"),
+  openaiApiKey: z.string().optional(),
+  deepseekApiKey: z.string().optional(),
+  qwenApiKey: z.string().optional(),
+  kimiApiKey: z.string().optional(),
+  minimaxApiKey: z.string().optional(),
+  groqApiKey: z.string().optional(),
+  mistralApiKey: z.string().optional(),
+  togetherApiKey: z.string().optional(),
+  fireworksApiKey: z.string().optional(),
+  geminiApiKey: z.string().optional(),
+  // Comma-separated provider names for fallback chain: "claude,deepseek,ollama"
+  providerChain: z.string().optional(),
 
   // Telegram (optional — only required when using telegram channel)
   telegramBotToken: z.string().optional(),
@@ -28,6 +40,17 @@ const configSchema = z.object({
 
   // Project
   unityProjectPath: z.string().min(1, "UNITY_PROJECT_PATH is required"),
+
+  // Dashboard
+  dashboardEnabled: z
+    .string()
+    .transform((s) => s === "true")
+    .default("false"),
+  dashboardPort: z
+    .string()
+    .transform((s) => parseInt(s, 10))
+    .pipe(z.number().int().min(1024).max(65535))
+    .default("3100"),
 
   // Memory
   memoryEnabled: z
@@ -52,6 +75,19 @@ export function loadConfig(): Config {
 
   const result = configSchema.safeParse({
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
+    openaiApiKey: process.env["OPENAI_API_KEY"],
+    deepseekApiKey: process.env["DEEPSEEK_API_KEY"],
+    qwenApiKey: process.env["QWEN_API_KEY"],
+    kimiApiKey: process.env["KIMI_API_KEY"],
+    minimaxApiKey: process.env["MINIMAX_API_KEY"],
+    groqApiKey: process.env["GROQ_API_KEY"],
+    mistralApiKey: process.env["MISTRAL_API_KEY"],
+    togetherApiKey: process.env["TOGETHER_API_KEY"],
+    fireworksApiKey: process.env["FIREWORKS_API_KEY"],
+    geminiApiKey: process.env["GEMINI_API_KEY"],
+    providerChain: process.env["PROVIDER_CHAIN"],
+    dashboardEnabled: process.env["DASHBOARD_ENABLED"],
+    dashboardPort: process.env["DASHBOARD_PORT"],
     telegramBotToken: process.env["TELEGRAM_BOT_TOKEN"],
     allowedTelegramUserIds: process.env["ALLOWED_TELEGRAM_USER_IDS"],
     requireEditConfirmation: process.env["REQUIRE_EDIT_CONFIRMATION"],

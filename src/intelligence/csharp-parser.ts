@@ -6,6 +6,26 @@
 
 const MAX_PARSE_FILE_SIZE = 1024 * 1024; // 1MB max per file
 
+/** Count newlines up to offset to get line number (1-based). */
+function lineNumberAt(content: string, offset: number): number {
+  let count = 1;
+  for (let i = 0; i < offset; i++) {
+    if (content[i] === "\n") count++;
+  }
+  return count;
+}
+
+/** Parse space-separated modifiers from a regex capture group. */
+function parseModifiers(raw: string | undefined): string[] {
+  const trimmed = (raw ?? "").trim();
+  return trimmed ? trimmed.split(/\s+/) : [];
+}
+
+/** Strip generic type arguments, e.g. "List<int>" → "List". */
+export function stripGenericArgs(typeName: string): string {
+  return typeName.replace(/<[^>]+>/g, "");
+}
+
 export interface ParsedClass {
   name: string;
   namespace: string;
@@ -37,6 +57,29 @@ export interface ParsedMethod {
   lineNumber: number;
 }
 
+export interface ParsedField {
+  name: string;
+  type: string;
+  modifiers: string[];
+  isProperty: boolean;
+  hasGetter: boolean;
+  hasSetter: boolean;
+  lineNumber: number;
+}
+
+export interface ParsedAttribute {
+  name: string;
+  arguments: string;
+  lineNumber: number;
+}
+
+export interface ParsedConstructor {
+  className: string;
+  parameters: string[];
+  dependencies: string[];
+  lineNumber: number;
+}
+
 export interface ParsedUsing {
   namespace: string;
 }
@@ -48,6 +91,9 @@ export interface CSharpFileInfo {
   classes: ParsedClass[];
   structs: ParsedStruct[];
   methods: ParsedMethod[];
+  fields: ParsedField[];
+  attributes: ParsedAttribute[];
+  constructors: ParsedConstructor[];
 }
 
 /**
@@ -66,6 +112,9 @@ export function parseCSharpFile(
       classes: [],
       structs: [],
       methods: [],
+      fields: [],
+      attributes: [],
+      constructors: [],
     };
   }
 
@@ -74,6 +123,9 @@ export function parseCSharpFile(
   const classes = extractClasses(content, filePath, namespace);
   const structs = extractStructs(content, filePath, namespace);
   const methods = extractMethods(content);
+  const fields = extractFields(content);
+  const attributes = extractAttributes(content);
+  const constructors = extractConstructors(content, classes);
 
   return {
     filePath,
@@ -82,6 +134,9 @@ export function parseCSharpFile(
     classes,
     structs,
     methods,
+    fields,
+    attributes,
+    constructors,
   };
 }
 
@@ -119,8 +174,7 @@ function extractClasses(
 
   let match;
   while ((match = classRegex.exec(content)) !== null) {
-    const modifierStr = (match[2] ?? "").trim();
-    const modifiers = modifierStr ? modifierStr.split(/\s+/) : [];
+    const modifiers = parseModifiers(match[2]);
     const name = match[3]!;
     const genericArgs = match[4] ? match[4].split(",").map((s) => s.trim()) : [];
     const inheritance = match[5] ? match[5].split(",").map((s) => s.trim()) : [];
@@ -130,7 +184,7 @@ function extractClasses(
     const interfaces: string[] = [];
 
     for (const item of inheritance) {
-      const cleanItem = item.replace(/<[^>]+>/g, "").trim();
+      const cleanItem = stripGenericArgs(item).trim();
       if (!baseClass && !cleanItem.startsWith("I") && cleanItem[0] === cleanItem[0]!.toUpperCase()) {
         baseClass = item;
       } else {
@@ -138,9 +192,7 @@ function extractClasses(
       }
     }
 
-    // Calculate line number
-    const beforeMatch = content.substring(0, match.index);
-    const lineNumber = beforeMatch.split("\n").length;
+    const lineNumber = lineNumberAt(content, match.index!);
 
     results.push({
       name,
@@ -178,8 +230,7 @@ function extractStructs(
       ? match[4].split(",").map((s) => s.trim())
       : [];
 
-    const beforeMatch = content.substring(0, match.index);
-    const lineNumber = beforeMatch.split("\n").length;
+    const lineNumber = lineNumberAt(content, match.index!);
 
     results.push({
       name,
@@ -203,8 +254,7 @@ function extractMethods(content: string): ParsedMethod[] {
 
   let match;
   while ((match = methodRegex.exec(content)) !== null) {
-    const modifierStr = (match[1] ?? "").trim();
-    const modifiers = modifierStr ? modifierStr.split(/\s+/) : [];
+    const modifiers = parseModifiers(match[1]);
     const returnType = match[2]!;
     const name = match[3]!;
     const paramStr = match[4]!.trim();
@@ -215,8 +265,7 @@ function extractMethods(content: string): ParsedMethod[] {
       continue;
     }
 
-    const beforeMatch = content.substring(0, match.index);
-    const lineNumber = beforeMatch.split("\n").length;
+    const lineNumber = lineNumberAt(content, match.index!);
 
     results.push({
       name,
@@ -230,14 +279,138 @@ function extractMethods(content: string): ParsedMethod[] {
   return results;
 }
 
+function extractFields(content: string): ParsedField[] {
+  const results: ParsedField[] = [];
+
+  // Match fields: modifiers type name (= value)?;
+  const fieldRegex =
+    /^\s*((?:public|private|protected|internal|static|readonly|const|volatile)\s+)+(\w+(?:<[^>]+>)?(?:\[\])?(?:\??)?)\s+(\w+)\s*(?:=\s*[^;]+)?;/gm;
+
+  let match;
+  while ((match = fieldRegex.exec(content)) !== null) {
+    const modifiers = parseModifiers(match[1]);
+    const type = match[2]!;
+    const name = match[3]!;
+
+    // Skip known non-field patterns
+    if (["return", "throw", "yield", "var", "new"].includes(type)) continue;
+
+    const lineNumber = lineNumberAt(content, match.index!);
+
+    results.push({
+      name,
+      type,
+      modifiers,
+      isProperty: false,
+      hasGetter: false,
+      hasSetter: false,
+      lineNumber,
+    });
+  }
+
+  // Match properties: modifiers type Name { get; set; }
+  const propRegex =
+    /^\s*((?:public|private|protected|internal|static|virtual|override|abstract)\s+)+(\w+(?:<[^>]+>)?(?:\[\])?(?:\??)?)\s+(\w+)\s*\{([^}]*)\}/gm;
+
+  while ((match = propRegex.exec(content)) !== null) {
+    const modifiers = parseModifiers(match[1]);
+    const type = match[2]!;
+    const name = match[3]!;
+    const body = match[4] ?? "";
+
+    // Skip known non-property patterns
+    if (["if", "while", "for", "foreach", "switch"].includes(name)) continue;
+    if (name[0] !== name[0]!.toUpperCase()) continue; // Properties are PascalCase
+
+    const lineNumber = lineNumberAt(content, match.index!);
+
+    results.push({
+      name,
+      type,
+      modifiers,
+      isProperty: true,
+      hasGetter: /get\s*[;{]/.test(body),
+      hasSetter: /set\s*[;{]/.test(body) || /init\s*[;{]/.test(body),
+      lineNumber,
+    });
+  }
+
+  return results;
+}
+
+function extractAttributes(content: string): ParsedAttribute[] {
+  const results: ParsedAttribute[] = [];
+
+  const attrRegex = /^\s*\[(\w+)(?:\(([^)]*)\))?\]/gm;
+
+  let match;
+  while ((match = attrRegex.exec(content)) !== null) {
+    const name = match[1]!;
+    const args = match[2] ?? "";
+
+    // Skip well-known non-attribute brackets like array indices
+    if (["0", "1", "2", "i", "j", "k", "index"].includes(name)) continue;
+
+    const lineNumber = lineNumberAt(content, match.index!);
+
+    results.push({ name, arguments: args, lineNumber });
+  }
+
+  return results;
+}
+
+function extractConstructors(
+  content: string,
+  classes: ParsedClass[]
+): ParsedConstructor[] {
+  const results: ParsedConstructor[] = [];
+  const classNames = new Set(classes.map((c) => c.name));
+
+  // Match constructors: modifiers ClassName(params)
+  const ctorRegex =
+    /^\s*(?:public|private|protected|internal)\s+(\w+)\s*\(([^)]*)\)/gm;
+
+  let match;
+  while ((match = ctorRegex.exec(content)) !== null) {
+    const name = match[1]!;
+    const paramStr = match[2]!.trim();
+
+    // Only match known class names (to avoid false positives with methods)
+    if (!classNames.has(name)) continue;
+
+    const parameters = paramStr ? paramStr.split(",").map((s) => s.trim()) : [];
+
+    // Extract dependency types (interface-prefixed parameters = DI dependencies)
+    const dependencies: string[] = [];
+    for (const param of parameters) {
+      const parts = param.split(/\s+/);
+      if (parts.length >= 2) {
+        const typeName = parts[0]!;
+        if (typeName.startsWith("I") && typeName[1] === typeName[1]!.toUpperCase()) {
+          dependencies.push(typeName);
+        }
+      }
+    }
+
+    const lineNumber = lineNumberAt(content, match.index!);
+
+    results.push({
+      className: name,
+      parameters,
+      dependencies,
+      lineNumber,
+    });
+  }
+
+  return results;
+}
+
 /**
  * Check if a class inherits from a specific base class (by name).
  */
 export function inheritsFrom(cls: ParsedClass, baseName: string): boolean {
   if (!cls.baseClass) return false;
-  // Handle generic base classes like EntityMediator<TView>
-  const cleanBase = cls.baseClass.replace(/<[^>]+>/g, "");
-  return cleanBase === baseName;
+  return stripGenericArgs(cls.baseClass) === baseName;
 }
 
 /**
@@ -247,8 +420,5 @@ export function implementsInterface(
   item: { interfaces: string[] },
   interfaceName: string
 ): boolean {
-  return item.interfaces.some((iface) => {
-    const clean = iface.replace(/<[^>]+>/g, "");
-    return clean === interfaceName;
-  });
+  return item.interfaces.some((iface) => stripGenericArgs(iface) === interfaceName);
 }

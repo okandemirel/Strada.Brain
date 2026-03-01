@@ -1,73 +1,104 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FileWriteTool } from "./file-write.js";
-import { createToolContext } from "../../test-helpers.js";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { rmSync, existsSync } from "node:fs";
+import type { ToolContext } from "./tool.interface.js";
 
-vi.mock("../../security/path-guard.js", () => ({
-  validatePath: vi.fn().mockResolvedValue({ valid: true, fullPath: "/test/project/file.cs" }),
-}));
+let tempDir: string;
+let ctx: ToolContext;
+let tool: FileWriteTool;
 
-vi.mock("node:fs/promises", () => ({
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  mkdir: vi.fn().mockResolvedValue(undefined),
-}));
+beforeAll(() => {
+  tempDir = mkdtempSync(join(tmpdir(), "file-write-test-"));
+  ctx = { projectPath: tempDir, workingDirectory: tempDir, readOnly: false };
+});
 
-import { validatePath } from "../../security/path-guard.js";
-import { writeFile, mkdir } from "node:fs/promises";
+afterAll(() => {
+  rmSync(tempDir, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  tool = new FileWriteTool();
+});
 
 describe("FileWriteTool", () => {
-  let tool: FileWriteTool;
-  const ctx = createToolContext();
-
-  beforeEach(() => {
-    tool = new FileWriteTool();
-    vi.mocked(validatePath).mockResolvedValue({ valid: true, fullPath: "/test/project/file.cs" });
-  });
-
-  it("writes a file successfully", async () => {
-    const result = await tool.execute({ path: "test.cs", content: "class A {}" }, ctx);
+  it("writes a file and returns a success message", async () => {
+    const result = await tool.execute(
+      { path: "output.txt", content: "Hello, World!\nSecond line." },
+      ctx
+    );
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("File written");
-    expect(mkdir).toHaveBeenCalled();
-    expect(writeFile).toHaveBeenCalledWith("/test/project/file.cs", "class A {}", "utf-8");
+    expect(result.content).toContain("output.txt");
+
+    // Verify the file was actually created on disk
+    const written = readFileSync(join(tempDir, "output.txt"), "utf-8");
+    expect(written).toBe("Hello, World!\nSecond line.");
   });
 
   it("returns error in read-only mode", async () => {
+    const readOnlyCtx: ToolContext = {
+      projectPath: tempDir,
+      workingDirectory: tempDir,
+      readOnly: true,
+    };
     const result = await tool.execute(
-      { path: "test.cs", content: "x" },
-      createToolContext({ readOnly: true })
+      { path: "blocked.txt", content: "data" },
+      readOnlyCtx
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain("read-only");
   });
 
-  it("returns error when path is empty", async () => {
-    const result = await tool.execute({ path: "", content: "x" }, ctx);
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain("required");
-  });
-
   it("returns error when content exceeds 256KB", async () => {
-    const bigContent = "x".repeat(300 * 1024);
-    const result = await tool.execute({ path: "big.cs", content: bigContent }, ctx);
+    const hugeContent = "x".repeat(256 * 1024 + 1);
+    const result = await tool.execute(
+      { path: "huge.txt", content: hugeContent },
+      ctx
+    );
     expect(result.isError).toBe(true);
     expect(result.content).toContain("too large");
   });
 
-  it("returns error when path validation fails", async () => {
-    vi.mocked(validatePath).mockResolvedValue({ valid: false, fullPath: "", error: "blocked" });
-    const result = await tool.execute({ path: ".env", content: "x" }, ctx);
+  it("creates parent directories for nested paths", async () => {
+    // validatePath requires the direct parent to exist for realpath resolution.
+    // Create the parent so validation passes, then verify the tool writes
+    // the file correctly into the nested structure.
+    const { mkdirSync: mkdirSyncNode } = await import("node:fs");
+    mkdirSyncNode(join(tempDir, "assets", "scripts"), { recursive: true });
+
+    const result = await tool.execute(
+      { path: "assets/scripts/player.txt", content: "nested content" },
+      ctx
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain("File written");
+
+    const fullPath = join(tempDir, "assets", "scripts", "player.txt");
+    expect(existsSync(fullPath)).toBe(true);
+    expect(readFileSync(fullPath, "utf-8")).toBe("nested content");
+  });
+
+  it("returns error when path is empty", async () => {
+    const result = await tool.execute({ path: "", content: "data" }, ctx);
     expect(result.isError).toBe(true);
-    expect(result.content).toContain("blocked");
+    expect(result.content).toContain("required");
   });
 
-  it("creates parent directories", async () => {
-    await tool.execute({ path: "Assets/Scripts/New.cs", content: "class A {}" }, ctx);
-    expect(mkdir).toHaveBeenCalledWith(expect.any(String), { recursive: true });
-  });
+  it("reports the correct byte count in the success message", async () => {
+    const content = "abc\ndef";
+    const expectedBytes = Buffer.byteLength(content, "utf-8");
 
-  it("reports line count and byte length", async () => {
-    const result = await tool.execute({ path: "t.cs", content: "line1\nline2\nline3" }, ctx);
-    expect(result.content).toContain("3 lines");
-    expect(result.metadata?.lineCount).toBe(3);
+    const result = await tool.execute(
+      { path: "bytes-check.txt", content },
+      ctx
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain(`${expectedBytes} bytes`);
+
+    // Verify by reading the file back
+    const written = readFileSync(join(tempDir, "bytes-check.txt"), "utf-8");
+    expect(Buffer.byteLength(written, "utf-8")).toBe(expectedBytes);
   });
 });

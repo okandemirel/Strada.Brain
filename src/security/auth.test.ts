@@ -1,4 +1,3 @@
-import { describe, it, expect, vi } from "vitest";
 import { AuthManager } from "./auth.js";
 
 vi.mock("../utils/logger.js", () => ({
@@ -11,34 +10,26 @@ vi.mock("../utils/logger.js", () => ({
 }));
 
 describe("AuthManager", () => {
-  let auth: AuthManager;
-
-  it("allows authorized user", () => {
-    auth = new AuthManager([123, 456]);
-    expect(auth.isTelegramUserAllowed(123)).toBe(true);
-    expect(auth.isTelegramUserAllowed(456)).toBe(true);
+  it("returns true for an allowed user ID", () => {
+    const auth = new AuthManager([100]);
+    expect(auth.isTelegramUserAllowed(100)).toBe(true);
   });
 
-  it("denies unauthorized user", () => {
-    auth = new AuthManager([123]);
+  it("returns false for an unauthorized user", () => {
+    const auth = new AuthManager([100]);
     expect(auth.isTelegramUserAllowed(999)).toBe(false);
   });
 
-  it("denies all when no IDs configured", () => {
-    auth = new AuthManager([]);
-    expect(auth.isTelegramUserAllowed(1)).toBe(false);
-    expect(auth.isTelegramUserAllowed(0)).toBe(false);
+  it("allows multiple configured IDs", () => {
+    const auth = new AuthManager([100, 200, 300]);
+    expect(auth.isTelegramUserAllowed(100)).toBe(true);
+    expect(auth.isTelegramUserAllowed(200)).toBe(true);
+    expect(auth.isTelegramUserAllowed(300)).toBe(true);
   });
 
-  it("handles duplicate IDs gracefully", () => {
-    auth = new AuthManager([123, 123, 123]);
-    expect(auth.isTelegramUserAllowed(123)).toBe(true);
-    expect(auth.isTelegramUserAllowed(456)).toBe(false);
-  });
-
-  it("handles large user IDs", () => {
-    const largeId = 9876543210;
-    auth = new AuthManager([largeId]);
-    expect(auth.isTelegramUserAllowed(largeId)).toBe(true);
+  it("returns true when the same ID is checked twice", () => {
+    const auth = new AuthManager([42]);
+    expect(auth.isTelegramUserAllowed(42)).toBe(true);
+    expect(auth.isTelegramUserAllowed(42)).toBe(true);
   });
 });

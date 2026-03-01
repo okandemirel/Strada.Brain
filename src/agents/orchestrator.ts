@@ -2,6 +2,7 @@ import type { IAIProvider, ConversationMessage, ToolCall, ToolResult } from "./p
 import type { ITool, ToolContext } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage } from "../channels/channel.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
+import type { MetricsCollector } from "../dashboard/metrics.js";
 import { STRATA_SYSTEM_PROMPT, buildProjectContext, buildAnalysisSummary } from "./context/strata-knowledge.js";
 import { getLogger } from "../utils/logger.js";
 
@@ -37,6 +38,7 @@ export class Orchestrator {
   private readonly readOnly: boolean;
   private readonly requireConfirmation: boolean;
   private readonly memoryManager?: IMemoryManager;
+  private readonly metrics?: MetricsCollector;
   private readonly sessions = new Map<string, Session>();
   private readonly sessionLocks = new Map<string, Promise<void>>();
   private readonly systemPrompt: string;
@@ -49,6 +51,7 @@ export class Orchestrator {
     readOnly: boolean;
     requireConfirmation: boolean;
     memoryManager?: IMemoryManager;
+    metrics?: MetricsCollector;
   }) {
     this.provider = opts.provider;
     this.channel = opts.channel;
@@ -56,6 +59,7 @@ export class Orchestrator {
     this.readOnly = opts.readOnly;
     this.requireConfirmation = opts.requireConfirmation;
     this.memoryManager = opts.memoryManager;
+    this.metrics = opts.metrics;
 
     // Build tool registry
     this.tools = new Map();
@@ -97,6 +101,8 @@ export class Orchestrator {
       textLength: text.length,
       channel: msg.channelType,
     });
+    this.metrics?.recordMessage();
+    this.metrics?.setActiveSessions(this.sessions.size);
 
     // Get or create session
     const session = this.getOrCreateSession(chatId);
@@ -202,6 +208,11 @@ export class Orchestrator {
         inputTokens: response.usage.inputTokens,
         outputTokens: response.usage.outputTokens,
       });
+      this.metrics?.recordTokenUsage(
+        response.usage.inputTokens,
+        response.usage.outputTokens,
+        this.provider.name
+      );
 
       // If no tool calls, send the final text response
       if (
@@ -303,14 +314,17 @@ export class Orchestrator {
         }
       }
 
+      const toolStart = Date.now();
       try {
         const result = await tool.execute(tc.input, toolContext);
+        this.metrics?.recordToolCall(tc.name, Date.now() - toolStart, !result.isError);
         results.push({
           toolCallId: tc.id,
           content: sanitizeToolResult(result.content),
           isError: result.isError,
         });
       } catch (error) {
+        this.metrics?.recordToolCall(tc.name, Date.now() - toolStart, false);
         const errMsg =
           error instanceof Error ? error.message : "Unknown error";
         logger.error("Tool execution error", {
@@ -334,7 +348,8 @@ export class Orchestrator {
       toolName === "file_edit" ||
       toolName === "strata_create_module" ||
       toolName === "strata_create_component" ||
-      toolName === "strata_create_mediator"
+      toolName === "strata_create_mediator" ||
+      toolName === "strata_create_system"
     );
   }
 

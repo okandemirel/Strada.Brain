@@ -5,6 +5,7 @@ import {
   parseCSharpFile,
   inheritsFrom,
   implementsInterface,
+  stripGenericArgs,
   type CSharpFileInfo,
 } from "./csharp-parser.js";
 import { getLogger } from "../utils/logger.js";
@@ -70,6 +71,12 @@ export interface EventUsage {
   className: string;
 }
 
+export interface DependencyEdge {
+  from: string;
+  to: string;
+  type: "inherits" | "implements" | "injects" | "uses_event";
+}
+
 export interface StrataProjectAnalysis {
   modules: ModuleInfo[];
   systems: SystemInfo[];
@@ -78,6 +85,7 @@ export interface StrataProjectAnalysis {
   mediators: MediatorInfo[];
   controllers: ControllerInfo[];
   events: EventUsage[];
+  dependencies: DependencyEdge[];
   csFileCount: number;
   analyzedAt: Date;
 }
@@ -133,6 +141,9 @@ export class StrataAnalyzer {
     const mediators = this.findMediators(parsed);
     const controllers = this.findControllers(parsed);
 
+    // Build dependency graph
+    const dependencies = this.buildDependencyGraph(parsed, events);
+
     const result: StrataProjectAnalysis = {
       modules,
       systems,
@@ -141,6 +152,7 @@ export class StrataAnalyzer {
       mediators,
       controllers,
       events,
+      dependencies,
       csFileCount: csFiles.length,
       analyzedAt: new Date(),
     };
@@ -232,7 +244,7 @@ export class StrataAnalyzer {
       for (const cls of file.classes) {
         // Look for classes that implement an I-prefixed interface
         for (const iface of cls.interfaces) {
-          const cleanIface = iface.replace(/<[^>]+>/g, "");
+          const cleanIface = stripGenericArgs(iface);
           if (cleanIface.startsWith("I") && cleanIface.length > 1) {
             services.push({
               interfaceName: cleanIface,
@@ -349,6 +361,80 @@ export class StrataAnalyzer {
     }
   }
 
+  /**
+   * Build a dependency graph from parsed files and event usage.
+   * Captures inheritance, interface implementation, DI injection, and event coupling.
+   */
+  private buildDependencyGraph(
+    parsed: CSharpFileInfo[],
+    events: EventUsage[]
+  ): DependencyEdge[] {
+    const edges: DependencyEdge[] = [];
+    const seen = new Set<string>();
+
+    const addEdge = (from: string, to: string, type: DependencyEdge["type"]) => {
+      const key = `${from}→${to}:${type}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      edges.push({ from, to, type });
+    };
+
+    for (const file of parsed) {
+      // Class inheritance and interface edges
+      for (const cls of file.classes) {
+        if (cls.baseClass) {
+          addEdge(cls.name, stripGenericArgs(cls.baseClass), "inherits");
+        }
+        for (const iface of cls.interfaces) {
+          addEdge(cls.name, stripGenericArgs(iface), "implements");
+        }
+      }
+
+      // Struct interface edges
+      for (const struct of file.structs) {
+        for (const iface of struct.interfaces) {
+          addEdge(struct.name, stripGenericArgs(iface), "implements");
+        }
+      }
+
+      // Constructor DI dependencies
+      for (const ctor of file.constructors) {
+        for (const dep of ctor.dependencies) {
+          addEdge(ctor.className, dep, "injects");
+        }
+      }
+    }
+
+    // Event coupling: publishers → subscribers via shared event type
+    const publishers = new Map<string, string[]>();
+    const subscribers = new Map<string, string[]>();
+
+    for (const ev of events) {
+      if (ev.action === "publish") {
+        const list = publishers.get(ev.eventType) ?? [];
+        list.push(ev.className);
+        publishers.set(ev.eventType, list);
+      } else {
+        const list = subscribers.get(ev.eventType) ?? [];
+        list.push(ev.className);
+        subscribers.set(ev.eventType, list);
+      }
+    }
+
+    for (const [eventType, pubs] of publishers) {
+      const subs = subscribers.get(eventType) ?? [];
+      for (const pub of pubs) {
+        for (const sub of subs) {
+          if (pub !== sub) {
+            addEdge(pub, sub, "uses_event");
+          }
+        }
+      }
+    }
+
+    return edges;
+  }
+
   private async findCSharpFiles(): Promise<string[]> {
     return glob("**/*.cs", {
       cwd: this.projectPath,
@@ -442,6 +528,26 @@ export class StrataAnalyzer {
           lines.push(`    Publishers: ${[...new Set(usage.publishers)].join(", ")}`);
         if (usage.subscribers.length > 0)
           lines.push(`    Subscribers: ${[...new Set(usage.subscribers)].join(", ")}`);
+      }
+    }
+
+    // Dependency Graph
+    if (analysis.dependencies && analysis.dependencies.length > 0) {
+      lines.push(`\nDependency Graph (${analysis.dependencies.length} edges):`);
+      const byType = new Map<string, DependencyEdge[]>();
+      for (const edge of analysis.dependencies) {
+        const list = byType.get(edge.type) ?? [];
+        list.push(edge);
+        byType.set(edge.type, list);
+      }
+      for (const [type, edges] of byType) {
+        lines.push(`  ${type} (${edges.length}):`);
+        for (const edge of edges.slice(0, 20)) {
+          lines.push(`    ${edge.from} → ${edge.to}`);
+        }
+        if (edges.length > 20) {
+          lines.push(`    ... and ${edges.length - 20} more`);
+        }
       }
     }
 

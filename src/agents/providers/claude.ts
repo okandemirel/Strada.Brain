@@ -5,6 +5,7 @@ import type {
   ToolDefinition,
   ProviderResponse,
   ToolCall,
+  StreamCallback,
 } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
@@ -50,6 +51,42 @@ export class ClaudeProvider implements IAIProvider {
       tools: anthropicTools.length > 0 ? anthropicTools : undefined,
     });
 
+    return this.parseResponse(response);
+  }
+
+  async chatStream(
+    systemPrompt: string,
+    messages: ConversationMessage[],
+    tools: ToolDefinition[],
+    onChunk: StreamCallback
+  ): Promise<ProviderResponse> {
+    const logger = getLogger();
+
+    const anthropicMessages = this.buildMessages(messages);
+    const anthropicTools = tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.input_schema as Anthropic.Tool.InputSchema,
+    }));
+
+    logger.debug("Claude streaming API call", {
+      model: this.model,
+      messageCount: anthropicMessages.length,
+    });
+
+    const stream = this.client.messages.stream({
+      model: this.model,
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: anthropicMessages,
+      tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+    });
+
+    stream.on("text", (text) => {
+      onChunk(text);
+    });
+
+    const response = await stream.finalMessage();
     return this.parseResponse(response);
   }
 

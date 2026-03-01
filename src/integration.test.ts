@@ -1,0 +1,217 @@
+import { vi, beforeEach, afterEach } from "vitest";
+import { Orchestrator } from "./agents/orchestrator.js";
+import { createMockChannel, createMockTool } from "./test-helpers.js";
+import type { IChannelAdapter } from "./channels/channel.interface.js";
+import type { IAIProvider, ProviderResponse } from "./agents/providers/provider.interface.js";
+import type { ITool } from "./agents/tools/tool.interface.js";
+
+vi.mock("./utils/logger.js", () => ({
+  getLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
+vi.mock("./agents/context/strata-knowledge.js", () => ({
+  STRATA_SYSTEM_PROMPT: "Test system prompt",
+  buildProjectContext: vi.fn().mockReturnValue("\nProject context"),
+  buildAnalysisSummary: vi.fn().mockReturnValue(""),
+}));
+
+function createMockProvider() {
+  let callCount = 0;
+  return {
+    name: "mock-integration",
+    chat: vi.fn(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          text: "Let me read that file.",
+          toolCalls: [{ id: "tc-1", name: "file_read", input: { path: "test.cs" } }],
+          stopReason: "tool_use" as const,
+          usage: { inputTokens: 50, outputTokens: 30 },
+        };
+      }
+      return {
+        text: "Here is the content of the file.",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 80, outputTokens: 40 },
+      };
+    }),
+  };
+}
+
+function createSimpleProvider() {
+  return {
+    name: "mock-simple",
+    chat: vi.fn(async (): Promise<ProviderResponse> => ({
+      text: "Hello! How can I help you?",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 20, outputTokens: 15 },
+    })),
+  };
+}
+
+function createUnknownToolProvider() {
+  let callCount = 0;
+  return {
+    name: "mock-unknown-tool",
+    chat: vi.fn(async (): Promise<ProviderResponse> => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          text: "Let me try that.",
+          toolCalls: [{ id: "tc-bad", name: "nonexistent_tool", input: {} }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 30, outputTokens: 20 },
+        };
+      }
+      return {
+        text: "Sorry, I could not find that tool.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 60, outputTokens: 25 },
+      };
+    }),
+  };
+}
+
+describe("Integration: full message flow", () => {
+  let channel: IChannelAdapter;
+  let fileReadTool: ITool;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    channel = createMockChannel();
+    fileReadTool = createMockTool("file_read", { content: "using UnityEngine;\npublic class Test {}" });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("handles tool call round-trip: user -> provider -> tool -> provider -> channel", async () => {
+    const provider = createMockProvider();
+
+    const orchestrator = new Orchestrator({
+      provider,
+      tools: [fileReadTool],
+      channel,
+      projectPath: "/test/project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    const promise = orchestrator.handleMessage({
+      channelType: "cli",
+      chatId: "integration-1",
+      userId: "user-1",
+      text: "Read the file at Assets/test.cs",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    // Provider should have been called twice: once for the initial request, once after tool result
+    expect(provider.chat).toHaveBeenCalledTimes(2);
+
+    // Tool should have been executed with the correct input
+    expect(fileReadTool.execute).toHaveBeenCalledWith(
+      { path: "test.cs" },
+      expect.objectContaining({ projectPath: "/test/project" })
+    );
+
+    // The second provider call should include the tool result in messages
+    const secondCallMessages = vi.mocked(provider.chat).mock.calls[1]![1];
+    const toolResultMsg = secondCallMessages.find((m) => m.toolResults?.length);
+    expect(toolResultMsg).toBeDefined();
+    expect(toolResultMsg!.toolResults![0]!.content).toContain("using UnityEngine");
+
+    // Final response should be sent to the channel
+    expect(channel.sendMarkdown).toHaveBeenCalledWith(
+      "integration-1",
+      "Here is the content of the file."
+    );
+  });
+
+  it("handles simple text response without tool calls", async () => {
+    const provider = createSimpleProvider();
+
+    const orchestrator = new Orchestrator({
+      provider,
+      tools: [fileReadTool],
+      channel,
+      projectPath: "/test/project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    const promise = orchestrator.handleMessage({
+      channelType: "cli",
+      chatId: "integration-2",
+      userId: "user-1",
+      text: "Hello",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    // Provider called once, no tool loop
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+
+    // No tools executed
+    expect(fileReadTool.execute).not.toHaveBeenCalled();
+
+    // Direct response sent to the channel
+    expect(channel.sendMarkdown).toHaveBeenCalledWith(
+      "integration-2",
+      "Hello! How can I help you?"
+    );
+  });
+
+  it("handles unknown tool call by sending error result back to provider", async () => {
+    const provider = createUnknownToolProvider();
+
+    const orchestrator = new Orchestrator({
+      provider,
+      tools: [fileReadTool],
+      channel,
+      projectPath: "/test/project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    const promise = orchestrator.handleMessage({
+      channelType: "cli",
+      chatId: "integration-3",
+      userId: "user-1",
+      text: "Do something special",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    // Provider called twice: first returns unknown tool, second returns final text
+    expect(provider.chat).toHaveBeenCalledTimes(2);
+
+    // No actual tool was executed
+    expect(fileReadTool.execute).not.toHaveBeenCalled();
+
+    // Verify the error result was sent back in the second call
+    const secondCallMessages = vi.mocked(provider.chat).mock.calls[1]![1];
+    const toolResultMsg = secondCallMessages.find((m) => m.toolResults?.length);
+    expect(toolResultMsg).toBeDefined();
+    expect(toolResultMsg!.toolResults![0]!.content).toContain("unknown tool");
+    expect(toolResultMsg!.toolResults![0]!.isError).toBe(true);
+
+    // Final response acknowledging the error is sent to the channel
+    expect(channel.sendMarkdown).toHaveBeenCalledWith(
+      "integration-3",
+      "Sorry, I could not find that tool."
+    );
+  });
+});

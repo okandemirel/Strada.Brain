@@ -3,7 +3,10 @@ import { loadConfig } from "./config/config.js";
 import { createLogger } from "./utils/logger.js";
 import { AuthManager } from "./security/auth.js";
 import { ClaudeProvider } from "./agents/providers/claude.js";
+import { buildProviderChain } from "./agents/providers/provider-registry.js";
 import { Orchestrator } from "./agents/orchestrator.js";
+import { MetricsCollector } from "./dashboard/metrics.js";
+import { DashboardServer } from "./dashboard/server.js";
 import { TelegramChannel } from "./channels/telegram/bot.js";
 import { CLIChannel } from "./channels/cli/repl.js";
 import { FileReadTool } from "./agents/tools/file-read.js";
@@ -14,11 +17,16 @@ import { AnalyzeProjectTool } from "./agents/tools/strata/analyze-project.js";
 import { ModuleCreateTool } from "./agents/tools/strata/module-create.js";
 import { ComponentCreateTool } from "./agents/tools/strata/component-create.js";
 import { MediatorCreateTool } from "./agents/tools/strata/mediator-create.js";
+import { SystemCreateTool } from "./agents/tools/strata/system-create.js";
 import { FileMemoryManager } from "./memory/file-memory-manager.js";
 import { MemorySearchTool } from "./agents/tools/memory-search.js";
+import { PluginLoader } from "./agents/plugins/plugin-loader.js";
+import { WhatsAppChannel } from "./channels/whatsapp/client.js";
+import { Daemon } from "./gateway/daemon.js";
 import type { IChannelAdapter } from "./channels/channel.interface.js";
 import type { ITool } from "./agents/tools/tool.interface.js";
 import type { IMemoryManager } from "./memory/memory.interface.js";
+import type { IAIProvider } from "./agents/providers/provider.interface.js";
 
 const program = new Command();
 
@@ -29,8 +37,8 @@ program
 
 program
   .command("start")
-  .description("Start Strata Brain daemon")
-  .option("--channel <type>", "Channel to use: telegram or cli", "telegram")
+  .description("Start Strata Brain")
+  .option("--channel <type>", "Channel to use: telegram, whatsapp, or cli", "telegram")
   .action(async (opts: { channel: string }) => {
     await startBrain(opts.channel);
   });
@@ -40,6 +48,21 @@ program
   .description("Start Strata Brain in CLI mode (for local testing)")
   .action(async () => {
     await startBrain("cli");
+  });
+
+program
+  .command("daemon")
+  .description("Run Strata Brain as an always-on daemon with auto-restart")
+  .option("--channel <type>", "Channel to use: telegram, whatsapp, or cli", "telegram")
+  .action(async (opts: { channel: string }) => {
+    const config = loadConfig();
+    const logger = createLogger(config.logLevel, config.logFile);
+    logger.info("Starting Strata Brain in daemon mode");
+
+    const daemon = new Daemon({
+      args: ["start", "--channel", opts.channel],
+    });
+    await daemon.start();
   });
 
 program.parse();
@@ -62,9 +85,32 @@ async function startBrain(channelType: string): Promise<void> {
   }
   const auth = new AuthManager(allowedIds);
 
-  // Initialize AI provider
-  const provider = new ClaudeProvider(config.anthropicApiKey);
-  logger.info("Claude AI provider initialized");
+  // Initialize AI provider(s)
+  // Supports: PROVIDER_CHAIN=claude,deepseek,ollama for fallback
+  // Or single provider via ANTHROPIC_API_KEY (default)
+  let provider: IAIProvider;
+
+  if (config.providerChain) {
+    const names = config.providerChain.split(",").map((s) => s.trim());
+    provider = buildProviderChain(names, {
+      claude: config.anthropicApiKey,
+      anthropic: config.anthropicApiKey,
+      openai: config.openaiApiKey,
+      deepseek: config.deepseekApiKey,
+      qwen: config.qwenApiKey,
+      kimi: config.kimiApiKey,
+      minimax: config.minimaxApiKey,
+      groq: config.groqApiKey,
+      mistral: config.mistralApiKey,
+      together: config.togetherApiKey,
+      fireworks: config.fireworksApiKey,
+      gemini: config.geminiApiKey,
+    });
+  } else {
+    // Default: Claude only (backwards compatible)
+    provider = new ClaudeProvider(config.anthropicApiKey);
+  }
+  logger.info("AI provider initialized", { name: provider.name });
 
   // Initialize memory manager
   let memoryManager: IMemoryManager | undefined;
@@ -89,21 +135,55 @@ async function startBrain(channelType: string): Promise<void> {
     new ModuleCreateTool(),
     new ComponentCreateTool(),
     new MediatorCreateTool(),
+    new SystemCreateTool(),
   ];
   if (memoryManager) {
     tools.push(new MemorySearchTool(memoryManager));
   }
+
+  // Load plugins
+  const pluginDirs = process.env["PLUGIN_DIRS"]?.split(",").map((d) => d.trim()).filter(Boolean) ?? [];
+  if (pluginDirs.length > 0) {
+    const pluginLoader = new PluginLoader(pluginDirs);
+    const pluginTools = await pluginLoader.loadAll();
+    tools.push(...pluginTools);
+  }
+
   logger.info(`Registered ${tools.length} tools`);
 
   // Initialize channel
   let channel: IChannelAdapter;
   if (channelType === "cli") {
     channel = new CLIChannel();
+  } else if (channelType === "whatsapp") {
+    const sessionPath = process.env["WHATSAPP_SESSION_PATH"] ?? ".whatsapp-session";
+    const allowedNumbers = process.env["WHATSAPP_ALLOWED_NUMBERS"]?.split(",").map((n) => n.trim()).filter(Boolean) ?? [];
+    if (allowedNumbers.length === 0) {
+      logger.warn("WHATSAPP_ALLOWED_NUMBERS is empty — all WhatsApp users will be denied access");
+    }
+    channel = new WhatsAppChannel(sessionPath, allowedNumbers);
   } else {
     if (!config.telegramBotToken) {
       throw new Error("TELEGRAM_BOT_TOKEN is required when using Telegram channel");
     }
     channel = new TelegramChannel(config.telegramBotToken, auth);
+  }
+
+  // Initialize metrics and dashboard
+  const metrics = new MetricsCollector();
+  let dashboard: DashboardServer | undefined;
+  if (config.dashboardEnabled) {
+    dashboard = new DashboardServer(
+      config.dashboardPort,
+      metrics,
+      () => memoryManager?.getStats()
+    );
+    try {
+      await dashboard.start();
+    } catch (err) {
+      logger.warn(`Dashboard failed to start: ${err instanceof Error ? err.message : err}`);
+      dashboard = undefined;
+    }
   }
 
   // Initialize orchestrator
@@ -115,6 +195,7 @@ async function startBrain(channelType: string): Promise<void> {
     readOnly: config.readOnlyMode,
     requireConfirmation: config.requireEditConfirmation,
     memoryManager,
+    metrics,
   });
 
   // Wire message handler
@@ -131,6 +212,9 @@ async function startBrain(channelType: string): Promise<void> {
   const shutdown = async (): Promise<void> => {
     logger.info("Shutting down Strata Brain...");
     clearInterval(cleanupInterval);
+    if (dashboard) {
+      await dashboard.stop();
+    }
     if (memoryManager) {
       await memoryManager.shutdown();
     }

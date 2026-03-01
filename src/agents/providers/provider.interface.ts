@@ -53,6 +53,11 @@ export interface ProviderResponse {
 }
 
 /**
+ * Callback for streaming text chunks from the provider.
+ */
+export type StreamCallback = (chunk: string) => void;
+
+/**
  * Common interface for AI providers (Claude, OpenAI, Ollama).
  */
 export interface IAIProvider {
@@ -66,4 +71,11 @@ export interface IAIProvider {
     tools: ToolDefinition[]
   ): Promise<ProviderResponse>;
 
+  /** Send a message and stream text chunks back via callback. Falls back to non-streaming. */
+  chatStream?(
+    systemPrompt: string,
+    messages: ConversationMessage[],
+    tools: ToolDefinition[],
+    onChunk: StreamCallback
+  ): Promise<ProviderResponse>;
 }
