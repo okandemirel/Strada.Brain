@@ -4,6 +4,7 @@ import type { IChannelAdapter, IncomingMessage } from "../channels/channel.inter
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
 import { STRATA_SYSTEM_PROMPT, buildProjectContext, buildAnalysisSummary } from "./context/strata-knowledge.js";
+import type { IRAGPipeline } from "../rag/rag.interface.js";
 import { getLogger } from "../utils/logger.js";
 
 const MAX_TOOL_ITERATIONS = 15;
@@ -39,6 +40,7 @@ export class Orchestrator {
   private readonly requireConfirmation: boolean;
   private readonly memoryManager?: IMemoryManager;
   private readonly metrics?: MetricsCollector;
+  private readonly ragPipeline?: IRAGPipeline;
   private readonly sessions = new Map<string, Session>();
   private readonly sessionLocks = new Map<string, Promise<void>>();
   private readonly systemPrompt: string;
@@ -52,6 +54,7 @@ export class Orchestrator {
     requireConfirmation: boolean;
     memoryManager?: IMemoryManager;
     metrics?: MetricsCollector;
+    ragPipeline?: IRAGPipeline;
   }) {
     this.provider = opts.provider;
     this.channel = opts.channel;
@@ -60,6 +63,7 @@ export class Orchestrator {
     this.requireConfirmation = opts.requireConfirmation;
     this.memoryManager = opts.memoryManager;
     this.metrics = opts.metrics;
+    this.ragPipeline = opts.ragPipeline;
 
     // Build tool registry
     this.tools = new Map();
@@ -179,6 +183,26 @@ export class Orchestrator {
           }
         } catch {
           // Memory retrieval failure is non-fatal
+        }
+
+        // Inject RAG code context
+        if (this.ragPipeline) {
+          try {
+            const ragResults = await this.ragPipeline.search(lastUserMsg.content, {
+              topK: 6,
+              minScore: 0.2,
+            });
+            if (ragResults.length > 0) {
+              systemPrompt += this.ragPipeline.formatContext(ragResults);
+              logger.debug("Injected RAG context", {
+                chatId,
+                resultCount: ragResults.length,
+                topScore: ragResults[0]!.finalScore.toFixed(3),
+              });
+            }
+          } catch {
+            // RAG failure is non-fatal
+          }
         }
       }
 

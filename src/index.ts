@@ -27,6 +27,16 @@ import type { IChannelAdapter } from "./channels/channel.interface.js";
 import type { ITool } from "./agents/tools/tool.interface.js";
 import type { IMemoryManager } from "./memory/memory.interface.js";
 import type { IAIProvider } from "./agents/providers/provider.interface.js";
+import { RAGPipeline } from "./rag/rag-pipeline.js";
+import { FileVectorStore } from "./rag/vector-store.js";
+import { OpenAIEmbeddingProvider } from "./rag/embeddings/openai-embeddings.js";
+import { OllamaEmbeddingProvider } from "./rag/embeddings/ollama-embeddings.js";
+import { CachedEmbeddingProvider } from "./rag/embeddings/embedding-cache.js";
+import { CodeSearchTool } from "./agents/tools/code-search.js";
+import { RAGIndexTool } from "./agents/tools/rag-index.js";
+import type { IRAGPipeline } from "./rag/rag.interface.js";
+import type { IEmbeddingProvider } from "./rag/rag.interface.js";
+import { join } from "node:path";
 
 const program = new Command();
 
@@ -121,6 +131,61 @@ async function startBrain(channelType: string): Promise<void> {
     logger.info("Memory manager initialized", { dbPath: config.memoryDbPath });
   }
 
+  // Initialize RAG pipeline
+  let ragPipeline: IRAGPipeline | undefined;
+  if (config.ragEnabled) {
+    try {
+      let embeddingProvider: IEmbeddingProvider;
+      if (config.embeddingProvider === "ollama") {
+        embeddingProvider = new OllamaEmbeddingProvider({
+          model: config.embeddingModel,
+          baseUrl: config.embeddingBaseUrl,
+        });
+      } else {
+        const apiKey = config.openaiApiKey;
+        if (!apiKey) {
+          logger.warn("RAG disabled: OPENAI_API_KEY required for OpenAI embeddings");
+        } else {
+          embeddingProvider = new OpenAIEmbeddingProvider({
+            apiKey,
+            model: config.embeddingModel,
+            baseUrl: config.embeddingBaseUrl,
+          });
+        }
+      }
+
+      if (embeddingProvider!) {
+        const cachedProvider = new CachedEmbeddingProvider(embeddingProvider, {
+          persistPath: join(config.memoryDbPath, "cache"),
+        });
+        await cachedProvider.initialize();
+
+        const vectorStore = new FileVectorStore(
+          join(config.memoryDbPath, "vectors"),
+          cachedProvider.dimensions
+        );
+
+        const pipeline = new RAGPipeline(cachedProvider, vectorStore);
+        await pipeline.initialize();
+        ragPipeline = pipeline;
+
+        logger.info("RAG pipeline initialized", {
+          provider: cachedProvider.name,
+          dimensions: cachedProvider.dimensions,
+        });
+
+        // Background indexing at startup
+        pipeline.indexProject(config.unityProjectPath).then((stats) => {
+          logger.info("Initial RAG indexing complete", stats);
+        }).catch((err) => {
+          logger.warn(`Initial RAG indexing failed: ${err instanceof Error ? err.message : err}`);
+        });
+      }
+    } catch (err) {
+      logger.warn(`RAG initialization failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   // Initialize tools
   const tools: ITool[] = [
     // File operations
@@ -139,6 +204,10 @@ async function startBrain(channelType: string): Promise<void> {
   ];
   if (memoryManager) {
     tools.push(new MemorySearchTool(memoryManager));
+  }
+  if (ragPipeline) {
+    tools.push(new CodeSearchTool(ragPipeline));
+    tools.push(new RAGIndexTool(ragPipeline));
   }
 
   // Load plugins
@@ -196,6 +265,7 @@ async function startBrain(channelType: string): Promise<void> {
     requireConfirmation: config.requireEditConfirmation,
     memoryManager,
     metrics,
+    ragPipeline,
   });
 
   // Wire message handler
@@ -214,6 +284,9 @@ async function startBrain(channelType: string): Promise<void> {
     clearInterval(cleanupInterval);
     if (dashboard) {
       await dashboard.stop();
+    }
+    if (ragPipeline) {
+      await ragPipeline.shutdown();
     }
     if (memoryManager) {
       await memoryManager.shutdown();

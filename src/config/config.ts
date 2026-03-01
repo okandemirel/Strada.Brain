@@ -59,6 +59,22 @@ const configSchema = z.object({
     .default("true"),
   memoryDbPath: z.string().default(".strata-memory"),
 
+  // RAG / Embeddings
+  ragEnabled: z
+    .string()
+    .transform((s) => s === "true")
+    .default("true"),
+  embeddingProvider: z
+    .enum(["openai", "ollama"])
+    .default("openai"),
+  embeddingModel: z.string().optional(),
+  embeddingBaseUrl: z.string().optional(),
+  ragContextMaxTokens: z
+    .string()
+    .transform((s) => parseInt(s, 10))
+    .pipe(z.number().int().min(500).max(16000))
+    .default("4000"),
+
   // Logging
   logLevel: z
     .enum(["error", "warn", "info", "debug"])
@@ -95,6 +111,11 @@ export function loadConfig(): Config {
     unityProjectPath: process.env["UNITY_PROJECT_PATH"],
     memoryEnabled: process.env["MEMORY_ENABLED"],
     memoryDbPath: process.env["MEMORY_DB_PATH"],
+    ragEnabled: process.env["RAG_ENABLED"],
+    embeddingProvider: process.env["EMBEDDING_PROVIDER"],
+    embeddingModel: process.env["EMBEDDING_MODEL"],
+    embeddingBaseUrl: process.env["EMBEDDING_BASE_URL"],
+    ragContextMaxTokens: process.env["RAG_CONTEXT_MAX_TOKENS"],
     logLevel: process.env["LOG_LEVEL"],
     logFile: process.env["LOG_FILE"],
   });
