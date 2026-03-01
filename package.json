@@ -1,0 +1,48 @@
+{
+  "name": "strada-brain",
+  "version": "0.1.0",
+  "description": "AI-powered Unity development assistant for Strada.Core framework projects",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "unity",
+    "ai",
+    "telegram",
+    "strata",
+    "game-development",
+    "ecs",
+    "mvcs"
+  ],
+  "author": "Strata Brain Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "grammy": "^1.35.0",
+    "glob": "^11.0.0",
+    "zod": "^3.24.0",
+    "dotenv": "^16.4.0",
+    "winston": "^3.17.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "tsx": "^4.19.0",
+    "vitest": "^2.1.0",
+    "eslint": "^9.16.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0"
+  }
+}
