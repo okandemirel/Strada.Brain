@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { AuthManager } from "./auth.js";
 
 vi.mock("../utils/logger.js", () => ({
@@ -12,10 +12,6 @@ vi.mock("../utils/logger.js", () => ({
 
 describe("AuthManager", () => {
   let auth: AuthManager;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
 
   it("allows authorized user", () => {
     auth = new AuthManager([123, 456]);

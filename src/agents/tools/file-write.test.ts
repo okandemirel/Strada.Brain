@@ -20,7 +20,6 @@ describe("FileWriteTool", () => {
 
   beforeEach(() => {
     tool = new FileWriteTool();
-    vi.clearAllMocks();
     vi.mocked(validatePath).mockResolvedValue({ valid: true, fullPath: "/test/project/file.cs" });
   });
 

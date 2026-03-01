@@ -21,7 +21,6 @@ describe("ModuleCreateTool", () => {
 
   beforeEach(() => {
     tool = new ModuleCreateTool();
-    vi.clearAllMocks();
     vi.mocked(isValidCSharpIdentifier).mockReturnValue(true);
   });
 

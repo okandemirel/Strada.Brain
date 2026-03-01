@@ -23,7 +23,6 @@ describe("FileReadTool", () => {
 
   beforeEach(() => {
     tool = new FileReadTool();
-    vi.clearAllMocks();
     vi.mocked(validatePath).mockResolvedValue({ valid: true, fullPath: "/test/project/file.cs" });
     vi.mocked(stat).mockResolvedValue({ isFile: () => true, size: 100 } as any);
     vi.mocked(readFile).mockResolvedValue("line1\nline2\nline3\nline4\nline5");

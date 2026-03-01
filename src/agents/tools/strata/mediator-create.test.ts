@@ -22,7 +22,6 @@ describe("MediatorCreateTool", () => {
 
   beforeEach(() => {
     tool = new MediatorCreateTool();
-    vi.clearAllMocks();
     vi.mocked(isValidCSharpIdentifier).mockReturnValue(true);
   });
 

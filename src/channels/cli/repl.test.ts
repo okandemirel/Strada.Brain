@@ -24,7 +24,6 @@ describe("CLIChannel", () => {
   let channel: CLIChannel;
 
   beforeEach(() => {
-    vi.clearAllMocks();
     // Reset the mock so createInterface returns a fresh mock
     vi.mocked(readline.createInterface).mockReturnValue({
       question: vi.fn(),

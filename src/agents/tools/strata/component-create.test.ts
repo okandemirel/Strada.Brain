@@ -22,7 +22,6 @@ describe("ComponentCreateTool", () => {
 
   beforeEach(() => {
     tool = new ComponentCreateTool();
-    vi.clearAllMocks();
     vi.mocked(validatePath).mockResolvedValue({ valid: true, fullPath: "/test/project/Assets/Test.cs" });
     vi.mocked(isValidCSharpIdentifier).mockReturnValue(true);
     vi.mocked(isValidCSharpType).mockReturnValue(true);

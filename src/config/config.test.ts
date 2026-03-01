@@ -29,7 +29,6 @@ function setEnv(overrides: Record<string, string | undefined> = {}) {
 describe("loadConfig", () => {
   beforeEach(() => {
     resetConfigCache();
-    vi.clearAllMocks();
     vi.mocked(realpathSync).mockImplementation((p) => String(p));
     vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as ReturnType<typeof statSync>);
     // Clear relevant env vars

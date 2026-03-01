@@ -21,7 +21,6 @@ describe("ClaudeProvider", () => {
   let provider: ClaudeProvider;
 
   beforeEach(() => {
-    vi.clearAllMocks();
     provider = new ClaudeProvider("test-api-key");
   });
 

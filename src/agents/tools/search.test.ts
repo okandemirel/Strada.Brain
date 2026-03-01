@@ -26,7 +26,6 @@ describe("GlobSearchTool", () => {
 
   beforeEach(() => {
     tool = new GlobSearchTool();
-    vi.clearAllMocks();
   });
 
   it("returns matching files", async () => {
@@ -63,7 +62,6 @@ describe("GrepSearchTool", () => {
 
   beforeEach(() => {
     tool = new GrepSearchTool();
-    vi.clearAllMocks();
     vi.mocked(stat).mockResolvedValue({ size: 100 } as any);
   });
 
@@ -113,7 +111,6 @@ describe("ListDirectoryTool", () => {
 
   beforeEach(() => {
     tool = new ListDirectoryTool();
-    vi.clearAllMocks();
     vi.mocked(validatePath).mockResolvedValue({ valid: true, fullPath: "/test/project" });
   });
 

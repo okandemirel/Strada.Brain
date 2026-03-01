@@ -47,7 +47,6 @@ describe("TelegramChannel", () => {
   let auth: AuthManager;
 
   beforeEach(() => {
-    vi.clearAllMocks();
     mockMiddlewares.length = 0;
     mockHandlers.clear();
     auth = new AuthManager([123, 456]);
@@ -141,13 +140,14 @@ describe("TelegramChannel", () => {
     const callbackHandler = mockHandlers.get("callback_query:data");
     expect(callbackHandler).toBeDefined();
 
+    const answerCallbackQuery = vi.fn();
     await callbackHandler!({
       from: { id: 999 },
       callbackQuery: { data: "confirm_test:Yes" },
-      answerCallbackQuery: vi.fn(),
+      answerCallbackQuery,
     });
 
-    // Should answer with "Unauthorized"
+    expect(answerCallbackQuery).toHaveBeenCalledWith({ text: "Unauthorized" });
   });
 
   it("isHealthy returns bot init state", () => {

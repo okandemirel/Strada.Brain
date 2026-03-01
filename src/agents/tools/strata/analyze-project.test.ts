@@ -31,7 +31,6 @@ describe("AnalyzeProjectTool", () => {
 
   beforeEach(() => {
     tool = new AnalyzeProjectTool();
-    vi.clearAllMocks();
   });
 
   it("returns formatted analysis", async () => {

@@ -187,4 +187,12 @@ describe("validatePath", () => {
       expect(result.valid).toBe(true);
     });
   });
+
+  it("rejects absolute path that escapes project", async () => {
+    await withTempDir(async (dir) => {
+      const result = await validatePath(dir, "/etc/passwd");
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain("outside the project directory");
+    });
+  });
 });

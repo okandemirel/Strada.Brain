@@ -26,7 +26,6 @@ describe("StrataAnalyzer", () => {
   let analyzer: StrataAnalyzer;
 
   beforeEach(() => {
-    vi.clearAllMocks();
     analyzer = new StrataAnalyzer("/test/project");
   });
 

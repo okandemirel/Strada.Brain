@@ -20,7 +20,6 @@ describe("FileEditTool", () => {
 
   beforeEach(() => {
     tool = new FileEditTool();
-    vi.clearAllMocks();
     vi.mocked(validatePath).mockResolvedValue({ valid: true, fullPath: "/test/project/file.cs" });
     vi.mocked(readFile).mockResolvedValue("hello world hello");
   });

@@ -116,8 +116,13 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    // The tool result should contain "unknown tool" error
     expect(provider.chat).toHaveBeenCalledTimes(2);
+    // Verify the second call includes an error tool result for the unknown tool
+    const secondCallArgs = vi.mocked(provider.chat).mock.calls[1]!;
+    const messages = secondCallArgs[1];
+    const toolResultMsg = messages.find((m) => m.toolResults?.length);
+    expect(toolResultMsg?.toolResults?.[0]?.content).toContain("unknown tool");
+    expect(toolResultMsg?.toolResults?.[0]?.isError).toBe(true);
   });
 
   it("handles tool execution errors gracefully", async () => {
@@ -147,6 +152,12 @@ describe("Orchestrator", () => {
     await promise;
 
     expect(provider.chat).toHaveBeenCalledTimes(2);
+    // Verify the second call includes an error tool result for the failed execution
+    const secondCallArgs = vi.mocked(provider.chat).mock.calls[1]!;
+    const messages = secondCallArgs[1];
+    const toolResultMsg = messages.find((m) => m.toolResults?.length);
+    expect(toolResultMsg?.toolResults?.[0]?.content).toContain("Tool execution failed");
+    expect(toolResultMsg?.toolResults?.[0]?.isError).toBe(true);
   });
 
   it("sends generic error to user on agent loop failure", async () => {
@@ -273,51 +284,13 @@ describe("Orchestrator", () => {
 });
 
 describe("sanitizeToolResult (via Orchestrator)", () => {
-  it("strips API key patterns from tool results", async () => {
+  beforeEach(() => {
     vi.useRealTimers();
-    const channel = createMockChannel();
-    const tool = createMockTool("file_read", {
-      content: "Found key: sk-ant-1234567890abcdef in config",
-    });
-    const provider = createMockProvider();
-
-    // First call: tool_use, second call: end_turn
-    vi.mocked(provider.chat)
-      .mockResolvedValueOnce({
-        text: "",
-        toolCalls: [{ id: "tc1", name: "file_read", input: {} }],
-        stopReason: "tool_use",
-        usage: { inputTokens: 100, outputTokens: 50 },
-      })
-      .mockResolvedValueOnce({
-        text: "Here is the result",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 100, outputTokens: 50 },
-      });
-
-    const orch = new Orchestrator({
-      provider, tools: [tool], channel,
-      projectPath: "/test", readOnly: false, requireConfirmation: false,
-    });
-
-    await orch.handleMessage({
-      channelType: "cli", chatId: "c1", userId: "u1", text: "read", timestamp: new Date(),
-    });
-
-    // Second call to provider.chat should have tool_result with redacted key
-    const secondCallArgs = vi.mocked(provider.chat).mock.calls[1]!;
-    const messages = secondCallArgs[1];
-    const toolResultMsg = messages.find((m) => m.toolResults?.length);
-    expect(toolResultMsg?.toolResults?.[0]?.content).toContain("[REDACTED]");
-    expect(toolResultMsg?.toolResults?.[0]?.content).not.toContain("sk-ant-1234567890");
   });
 
-  it("truncates results exceeding 8192 chars", async () => {
-    vi.useRealTimers();
+  function createSanitizeTestOrch(toolContent: string) {
     const channel = createMockChannel();
-    const longResult = "x".repeat(9000);
-    const tool = createMockTool("file_read", { content: longResult });
+    const tool = createMockTool("file_read", { content: toolContent });
     const provider = createMockProvider();
 
     vi.mocked(provider.chat)
@@ -339,14 +312,41 @@ describe("sanitizeToolResult (via Orchestrator)", () => {
       projectPath: "/test", readOnly: false, requireConfirmation: false,
     });
 
+    return { orch, provider };
+  }
+
+  async function getSanitizedContent(toolContent: string): Promise<string> {
+    const { orch, provider } = createSanitizeTestOrch(toolContent);
     await orch.handleMessage({
       channelType: "cli", chatId: "c1", userId: "u1", text: "read", timestamp: new Date(),
     });
-
     const secondCallArgs = vi.mocked(provider.chat).mock.calls[1]!;
     const messages = secondCallArgs[1];
     const toolResultMsg = messages.find((m) => m.toolResults?.length);
-    expect(toolResultMsg?.toolResults?.[0]?.content).toContain("(truncated)");
-    expect(toolResultMsg?.toolResults?.[0]?.content.length).toBeLessThan(9000);
+    return toolResultMsg?.toolResults?.[0]?.content ?? "";
+  }
+
+  it("strips sk- API key patterns", async () => {
+    const content = await getSanitizedContent("Found key: sk-ant-1234567890abcdef in config");
+    expect(content).toContain("[REDACTED]");
+    expect(content).not.toContain("sk-ant-1234567890");
+  });
+
+  it("strips key- patterns", async () => {
+    const content = await getSanitizedContent("key-abc1234567890xyz");
+    expect(content).toContain("[REDACTED]");
+    expect(content).not.toContain("key-abc1234567890");
+  });
+
+  it("strips token- patterns", async () => {
+    const content = await getSanitizedContent("token-xyz1234567890abc");
+    expect(content).toContain("[REDACTED]");
+    expect(content).not.toContain("token-xyz1234567890");
+  });
+
+  it("truncates results exceeding 8192 chars", async () => {
+    const content = await getSanitizedContent("x".repeat(9000));
+    expect(content).toContain("(truncated)");
+    expect(content.length).toBeLessThan(9000);
   });
 });
