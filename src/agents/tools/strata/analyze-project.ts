@@ -1,4 +1,5 @@
 import { StrataAnalyzer } from "../../../intelligence/strata-analyzer.js";
+import type { IMemoryManager } from "../../../memory/memory.interface.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 
 export class AnalyzeProjectTool implements ITool {
@@ -15,6 +16,12 @@ export class AnalyzeProjectTool implements ITool {
     required: [],
   };
 
+  private readonly memoryManager?: IMemoryManager;
+
+  constructor(memoryManager?: IMemoryManager) {
+    this.memoryManager = memoryManager;
+  }
+
   async execute(
     _input: Record<string, unknown>,
     context: ToolContext
@@ -23,6 +30,11 @@ export class AnalyzeProjectTool implements ITool {
       const analyzer = new StrataAnalyzer(context.projectPath);
       const analysis = await analyzer.analyze();
       const formatted = StrataAnalyzer.formatAnalysis(analysis);
+
+      // Cache analysis in memory for future context injection
+      if (this.memoryManager) {
+        await this.memoryManager.cacheAnalysis(analysis, context.projectPath);
+      }
 
       return { content: formatted };
     } catch {

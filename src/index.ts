@@ -14,8 +14,11 @@ import { AnalyzeProjectTool } from "./agents/tools/strata/analyze-project.js";
 import { ModuleCreateTool } from "./agents/tools/strata/module-create.js";
 import { ComponentCreateTool } from "./agents/tools/strata/component-create.js";
 import { MediatorCreateTool } from "./agents/tools/strata/mediator-create.js";
+import { FileMemoryManager } from "./memory/file-memory-manager.js";
+import { MemorySearchTool } from "./agents/tools/memory-search.js";
 import type { IChannelAdapter } from "./channels/channel.interface.js";
 import type { ITool } from "./agents/tools/tool.interface.js";
+import type { IMemoryManager } from "./memory/memory.interface.js";
 
 const program = new Command();
 
@@ -63,6 +66,15 @@ async function startBrain(channelType: string): Promise<void> {
   const provider = new ClaudeProvider(config.anthropicApiKey);
   logger.info("Claude AI provider initialized");
 
+  // Initialize memory manager
+  let memoryManager: IMemoryManager | undefined;
+  if (config.memoryEnabled) {
+    const mm = new FileMemoryManager(config.memoryDbPath);
+    await mm.initialize();
+    memoryManager = mm;
+    logger.info("Memory manager initialized", { dbPath: config.memoryDbPath });
+  }
+
   // Initialize tools
   const tools: ITool[] = [
     // File operations
@@ -73,11 +85,14 @@ async function startBrain(channelType: string): Promise<void> {
     new GrepSearchTool(),
     new ListDirectoryTool(),
     // Strata-specific tools
-    new AnalyzeProjectTool(),
+    new AnalyzeProjectTool(memoryManager),
     new ModuleCreateTool(),
     new ComponentCreateTool(),
     new MediatorCreateTool(),
   ];
+  if (memoryManager) {
+    tools.push(new MemorySearchTool(memoryManager));
+  }
   logger.info(`Registered ${tools.length} tools`);
 
   // Initialize channel
@@ -99,6 +114,7 @@ async function startBrain(channelType: string): Promise<void> {
     projectPath: config.unityProjectPath,
     readOnly: config.readOnlyMode,
     requireConfirmation: config.requireEditConfirmation,
+    memoryManager,
   });
 
   // Wire message handler
@@ -115,6 +131,9 @@ async function startBrain(channelType: string): Promise<void> {
   const shutdown = async (): Promise<void> => {
     logger.info("Shutting down Strata Brain...");
     clearInterval(cleanupInterval);
+    if (memoryManager) {
+      await memoryManager.shutdown();
+    }
     await channel.disconnect();
     logger.info("Strata Brain stopped.");
     process.exit(0);

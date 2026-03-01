@@ -118,9 +118,58 @@ You can:
 - Use proper namespaces matching folder structure
 `;
 
+import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
+
 /**
  * Build a project-specific context section to append to the system prompt.
  */
 export function buildProjectContext(projectPath: string): string {
   return `\n## Current Project\nProject path: ${projectPath}\n`;
+}
+
+/**
+ * Build a summary of cached project analysis for system prompt injection.
+ */
+export function buildAnalysisSummary(analysis: StrataProjectAnalysis): string {
+  const lines: string[] = ["\n## Cached Project Analysis"];
+
+  if (analysis.modules.length > 0) {
+    lines.push(`\nModules (${analysis.modules.length}):`);
+    for (const m of analysis.modules) {
+      lines.push(`  - ${m.name} (${m.filePath})`);
+    }
+  }
+
+  if (analysis.systems.length > 0) {
+    lines.push(`\nSystems (${analysis.systems.length}):`);
+    for (const s of analysis.systems) {
+      lines.push(`  - ${s.name} : ${s.baseClass} (${s.filePath})`);
+    }
+  }
+
+  if (analysis.components.length > 0) {
+    lines.push(`\nComponents (${analysis.components.length}):`);
+    for (const c of analysis.components) {
+      lines.push(`  - ${c.name}${c.isReadonly ? " (readonly)" : ""}`);
+    }
+  }
+
+  if (analysis.services.length > 0) {
+    lines.push(`\nServices (${analysis.services.length}):`);
+    for (const s of analysis.services) {
+      lines.push(`  - ${s.interfaceName} → ${s.implementationName}`);
+    }
+  }
+
+  if (analysis.mediators.length > 0) {
+    lines.push(`\nMediators (${analysis.mediators.length}):`);
+    for (const m of analysis.mediators) {
+      lines.push(`  - ${m.name}<${m.viewType}>`);
+    }
+  }
+
+  lines.push(`\nAnalyzed at: ${analysis.analyzedAt.toISOString()}`);
+  lines.push(`Total C# files: ${analysis.csFileCount}`);
+
+  return lines.join("\n") + "\n";
 }

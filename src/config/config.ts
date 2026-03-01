@@ -29,6 +29,13 @@ const configSchema = z.object({
   // Project
   unityProjectPath: z.string().min(1, "UNITY_PROJECT_PATH is required"),
 
+  // Memory
+  memoryEnabled: z
+    .string()
+    .transform((s) => s === "true")
+    .default("true"),
+  memoryDbPath: z.string().default(".strata-memory"),
+
   // Logging
   logLevel: z
     .enum(["error", "warn", "info", "debug"])
@@ -50,6 +57,8 @@ export function loadConfig(): Config {
     requireEditConfirmation: process.env["REQUIRE_EDIT_CONFIRMATION"],
     readOnlyMode: process.env["READ_ONLY_MODE"],
     unityProjectPath: process.env["UNITY_PROJECT_PATH"],
+    memoryEnabled: process.env["MEMORY_ENABLED"],
+    memoryDbPath: process.env["MEMORY_DB_PATH"],
     logLevel: process.env["LOG_LEVEL"],
     logFile: process.env["LOG_FILE"],
   });

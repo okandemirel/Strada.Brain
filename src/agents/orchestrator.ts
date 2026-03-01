@@ -1,7 +1,8 @@
 import type { IAIProvider, ConversationMessage, ToolCall, ToolResult } from "./providers/provider.interface.js";
 import type { ITool, ToolContext } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage } from "../channels/channel.interface.js";
-import { STRATA_SYSTEM_PROMPT, buildProjectContext } from "./context/strata-knowledge.js";
+import type { IMemoryManager } from "../memory/memory.interface.js";
+import { STRATA_SYSTEM_PROMPT, buildProjectContext, buildAnalysisSummary } from "./context/strata-knowledge.js";
 import { getLogger } from "../utils/logger.js";
 
 const MAX_TOOL_ITERATIONS = 15;
@@ -35,6 +36,7 @@ export class Orchestrator {
   private readonly projectPath: string;
   private readonly readOnly: boolean;
   private readonly requireConfirmation: boolean;
+  private readonly memoryManager?: IMemoryManager;
   private readonly sessions = new Map<string, Session>();
   private readonly sessionLocks = new Map<string, Promise<void>>();
   private readonly systemPrompt: string;
@@ -46,12 +48,14 @@ export class Orchestrator {
     projectPath: string;
     readOnly: boolean;
     requireConfirmation: boolean;
+    memoryManager?: IMemoryManager;
   }) {
     this.provider = opts.provider;
     this.channel = opts.channel;
     this.projectPath = opts.projectPath;
     this.readOnly = opts.readOnly;
     this.requireConfirmation = opts.requireConfirmation;
+    this.memoryManager = opts.memoryManager;
 
     // Build tool registry
     this.tools = new Map();
@@ -102,7 +106,17 @@ export class Orchestrator {
     session.messages.push({ role: "user", content: text });
 
     // Trim old messages to manage context window
-    this.trimSession(session, 40);
+    // Persist trimmed messages to memory before discarding
+    const trimmed = this.trimSession(session, 40);
+    if (trimmed.length > 0 && this.memoryManager) {
+      const summary = trimmed
+        .filter((m) => m.content && !m.toolResults?.length)
+        .map((m) => `[${m.role}] ${m.content}`)
+        .join("\n");
+      if (summary) {
+        await this.memoryManager.storeConversation(chatId, summary);
+      }
+    }
 
     // Start typing indicator loop
     const typingInterval = setInterval(() => {
@@ -134,9 +148,48 @@ export class Orchestrator {
   ): Promise<void> {
     const logger = getLogger();
 
+    // Retrieve relevant memory context for the first iteration
+    let systemPrompt = this.systemPrompt;
+    if (this.memoryManager && session.messages.length > 0) {
+      const lastUserMsg = [...session.messages]
+        .reverse()
+        .find((m) => m.role === "user" && m.content);
+      if (lastUserMsg) {
+        try {
+          const memories = await this.memoryManager.retrieve(lastUserMsg.content, {
+            limit: 3,
+            minScore: 0.15,
+          });
+          if (memories.length > 0) {
+            const memoryContext = memories
+              .map((m) => m.entry.content)
+              .join("\n---\n");
+            systemPrompt += `\n\n## Relevant Memory\n${memoryContext}\n`;
+            logger.debug("Injected memory context", {
+              chatId,
+              memoryCount: memories.length,
+              topScore: memories[0]!.score.toFixed(3),
+            });
+          }
+        } catch {
+          // Memory retrieval failure is non-fatal
+        }
+      }
+
+      // Inject cached analysis summary into system prompt
+      try {
+        const analysis = await this.memoryManager.getCachedAnalysis(this.projectPath);
+        if (analysis) {
+          systemPrompt += buildAnalysisSummary(analysis);
+        }
+      } catch {
+        // Analysis cache failure is non-fatal
+      }
+    }
+
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       const response = await this.provider.chat(
-        this.systemPrompt,
+        systemPrompt,
         session.messages,
         this.toolDefinitions
       );
@@ -331,9 +384,10 @@ export class Orchestrator {
   /**
    * Trim session history to keep context manageable.
    * Trims at safe boundaries to avoid orphaning tool_use/tool_result pairs.
+   * Returns the trimmed (removed) messages for persistence.
    */
-  private trimSession(session: Session, maxMessages: number): void {
-    if (session.messages.length <= maxMessages) return;
+  private trimSession(session: Session, maxMessages: number): ConversationMessage[] {
+    if (session.messages.length <= maxMessages) return [];
 
     const overflow = session.messages.length - maxMessages;
 
@@ -349,8 +403,9 @@ export class Orchestrator {
     }
 
     if (trimTo > 0) {
-      session.messages.splice(0, trimTo);
+      return session.messages.splice(0, trimTo);
     }
+    return [];
   }
 
   /**
