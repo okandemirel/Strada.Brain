@@ -53,7 +53,11 @@ async function startBrain(channelType: string): Promise<void> {
   });
 
   // Initialize security
-  const auth = new AuthManager(config.allowedTelegramUserIds ?? []);
+  const allowedIds = config.allowedTelegramUserIds ?? [];
+  if (channelType === "telegram" && allowedIds.length === 0) {
+    logger.warn("ALLOWED_TELEGRAM_USER_IDS is empty — all Telegram users will be denied access");
+  }
+  const auth = new AuthManager(allowedIds);
 
   // Initialize AI provider
   const provider = new ClaudeProvider(config.anthropicApiKey);

@@ -4,6 +4,17 @@ import { glob } from "glob";
 import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
+/**
+ * Reject glob patterns that could escape the project directory.
+ */
+function isSafeGlobPattern(pattern: string): boolean {
+  // Reject patterns with path traversal
+  if (pattern.includes("..")) return false;
+  // Reject absolute paths
+  if (pattern.startsWith("/") || /^[a-zA-Z]:/.test(pattern)) return false;
+  return true;
+}
+
 const MAX_RESULTS = 50;
 const MAX_CONTENT_RESULTS = 20;
 const MAX_REGEX_LENGTH = 500;
@@ -42,6 +53,10 @@ export class GlobSearchTool implements ITool {
     const pattern = String(input["pattern"] ?? "");
     if (!pattern) {
       return { content: "Error: 'pattern' is required", isError: true };
+    }
+
+    if (!isSafeGlobPattern(pattern)) {
+      return { content: "Error: pattern must not contain '..' or absolute paths", isError: true };
     }
 
     try {
@@ -118,6 +133,10 @@ export class GrepSearchTool implements ITool {
       return { content: "Error: pattern too long (max 500 characters)", isError: true };
     }
 
+    if (!isSafeGlobPattern(filePattern)) {
+      return { content: "Error: file_pattern must not contain '..' or absolute paths", isError: true };
+    }
+
     let regex: RegExp;
     try {
       regex = new RegExp(pattern, caseSensitive ? "g" : "gi");
@@ -137,7 +156,11 @@ export class GrepSearchTool implements ITool {
       for (const file of files) {
         if (!SEARCHABLE_EXTENSIONS.has(extname(file).toLowerCase())) continue;
 
-        const fullPath = resolve(context.projectPath, file);
+        // Validate each file path to prevent directory traversal
+        const pathCheck = await validatePath(context.projectPath, file);
+        if (!pathCheck.valid) continue;
+
+        const fullPath = pathCheck.fullPath;
         try {
           const fileStat = await stat(fullPath);
           if (fileStat.size > MAX_GREP_FILE_SIZE) continue;

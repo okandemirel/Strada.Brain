@@ -19,6 +19,15 @@ const BLOCKED_PATTERNS: RegExp[] = [
   /\.key$/i,
   /id_rsa/i,
   /id_ed25519/i,
+  /\.pfx$/i,
+  /\.p12$/i,
+  /\.keystore$/i,
+  /\.jks$/i,
+  /keystore\.properties$/i,
+  /google-services\.json$/i,
+  /GoogleService-Info\.plist$/i,
+  /\.npmrc$/i,
+  /\.netrc$/i,
 ];
 
 export interface PathValidationResult {
@@ -44,6 +53,11 @@ export async function validatePath(
 ): Promise<PathValidationResult> {
   if (!relativePath) {
     return { valid: false, fullPath: "", error: "Path is required" };
+  }
+
+  // Reject null bytes (defense-in-depth; Node.js also throws on null bytes)
+  if (relativePath.includes("\0")) {
+    return { valid: false, fullPath: "", error: "Path contains invalid characters" };
   }
 
   const rawFullPath = resolve(projectRoot, relativePath);
@@ -141,6 +155,9 @@ export function isValidCSharpType(typeName: string): boolean {
   // Block characters that could inject code
   if (/[;{}()=]/.test(typeName)) return false;
 
-  // Allow basic type names, generics, and array types
-  return /^[A-Za-z_][A-Za-z0-9_<>,\[\]\s.?]*$/.test(typeName);
+  // Reject newlines/carriage returns (prevent multi-line injection)
+  if (/[\n\r]/.test(typeName)) return false;
+
+  // Allow basic type names, generics, and array types (literal space only, not \s)
+  return /^[A-Za-z_][A-Za-z0-9_<>, \[\].?]*$/.test(typeName);
 }

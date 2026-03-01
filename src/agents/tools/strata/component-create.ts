@@ -90,8 +90,12 @@ export class ComponentCreateTool implements ITool {
       if (!isValidCSharpType(field.type)) {
         return { content: `Error: invalid field type '${field.type}'`, isError: true };
       }
-      if (field.default_value && /[;{}()=]/.test(field.default_value)) {
-        return { content: "Error: invalid default value", isError: true };
+      if (field.default_value) {
+        // Strict allowlist: only literal numbers, bools, simple identifiers, strings
+        const SAFE_DEFAULT = /^-?\d+(\.\d+)?f?$|^true$|^false$|^"[^"\\]*"$|^'[^'\\]'$|^[\w.]+$/;
+        if (!SAFE_DEFAULT.test(field.default_value)) {
+          return { content: "Error: invalid default value", isError: true };
+        }
       }
     }
 
