@@ -8,7 +8,7 @@ import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger } from "../utils/logger.js";
 
-const MAX_TOOL_ITERATIONS = 15;
+const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
 const MAX_TOOL_RESULT_LENGTH = 8192;
@@ -455,6 +455,12 @@ export class Orchestrator {
     return (
       toolName === "file_write" ||
       toolName === "file_edit" ||
+      toolName === "file_delete" ||
+      toolName === "file_rename" ||
+      toolName === "file_delete_directory" ||
+      toolName === "shell_exec" ||
+      toolName === "git_commit" ||
+      toolName === "git_push" ||
       toolName === "strata_create_module" ||
       toolName === "strata_create_component" ||
       toolName === "strata_create_mediator" ||
@@ -467,18 +473,46 @@ export class Orchestrator {
     toolName: string,
     input: Record<string, unknown>
   ): Promise<boolean> {
-    const path = String(input["path"] ?? "unknown");
-    const action =
-      toolName === "file_write" ? "create/overwrite" : "edit";
+    let question: string;
+    let details: string;
+
+    switch (toolName) {
+      case "file_delete":
+        question = `Confirm delete: \`${input["path"]}\`?`;
+        details = `Permanently deleting ${input["path"]}`;
+        break;
+      case "file_rename":
+        question = `Confirm rename: \`${input["old_path"]}\` → \`${input["new_path"]}\`?`;
+        details = `Moving ${input["old_path"]} to ${input["new_path"]}`;
+        break;
+      case "file_delete_directory":
+        question = `Confirm DELETE directory: \`${input["path"]}\`?`;
+        details = `Recursively deleting ${input["path"]} and ALL contents`;
+        break;
+      case "shell_exec":
+        question = `Confirm shell command: \`${String(input["command"]).slice(0, 100)}\`?`;
+        details = `Running: ${input["command"]}`;
+        break;
+      case "git_commit":
+        question = `Confirm git commit: "${String(input["message"]).slice(0, 80)}"?`;
+        details = `Creating git commit`;
+        break;
+      case "git_push":
+        question = "Confirm git push to remote?";
+        details = `Pushing to ${input["remote"] ?? "origin"}`;
+        break;
+      default: {
+        const path = String(input["path"] ?? "unknown");
+        question = `Confirm file ${toolName === "file_write" ? "create/overwrite" : "edit"}: \`${path}\`?`;
+        details = toolName === "file_edit" ? `Replacing text in ${path}` : `Writing to ${path}`;
+      }
+    }
 
     const response = await this.channel.requestConfirmation({
       chatId,
-      question: `Confirm file ${action}: \`${path}\`?`,
+      question,
       options: ["Yes", "No"],
-      details:
-        toolName === "file_edit"
-          ? `Replacing text in ${path}`
-          : `Writing to ${path}`,
+      details,
     });
 
     return response === "Yes";

@@ -112,6 +112,12 @@ const configSchema = z.object({
     .pipe(z.number().min(0))
     .default("0"),
 
+  // Shell Execution
+  shellEnabled: z
+    .string()
+    .transform((s) => s === "true")
+    .default("true"),
+
   // Logging
   logLevel: z
     .enum(["error", "warn", "info", "debug"])
@@ -160,6 +166,7 @@ export function loadConfig(): Config {
     rateLimitTokensPerDay: process.env["RATE_LIMIT_TOKENS_PER_DAY"],
     rateLimitDailyBudgetUsd: process.env["RATE_LIMIT_DAILY_BUDGET_USD"],
     rateLimitMonthlyBudgetUsd: process.env["RATE_LIMIT_MONTHLY_BUDGET_USD"],
+    shellEnabled: process.env["SHELL_ENABLED"],
     logLevel: process.env["LOG_LEVEL"],
     logFile: process.env["LOG_FILE"],
   });

@@ -35,6 +35,10 @@ import { CachedEmbeddingProvider } from "./rag/embeddings/embedding-cache.js";
 import { CodeSearchTool } from "./agents/tools/code-search.js";
 import { RAGIndexTool } from "./agents/tools/rag-index.js";
 import { CodeQualityTool } from "./agents/tools/code-quality.js";
+import { ShellExecTool } from "./agents/tools/shell-exec.js";
+import { GitStatusTool, GitDiffTool, GitLogTool, GitCommitTool, GitBranchTool, GitPushTool, GitStashTool } from "./agents/tools/git-tools.js";
+import { DotnetBuildTool, DotnetTestTool } from "./agents/tools/dotnet-tools.js";
+import { FileDeleteTool, FileRenameTool, FileDeleteDirectoryTool } from "./agents/tools/file-manage.js";
 import type { IRAGPipeline } from "./rag/rag.interface.js";
 import type { IEmbeddingProvider } from "./rag/rag.interface.js";
 import { RateLimiter } from "./security/rate-limiter.js";
@@ -205,6 +209,23 @@ async function startBrain(channelType: string): Promise<void> {
     new SystemCreateTool(),
     // Code quality analysis
     new CodeQualityTool(),
+    // File management
+    new FileDeleteTool(),
+    new FileRenameTool(),
+    new FileDeleteDirectoryTool(),
+    // Shell execution
+    new ShellExecTool(),
+    // Git operations
+    new GitStatusTool(),
+    new GitDiffTool(),
+    new GitLogTool(),
+    new GitCommitTool(),
+    new GitBranchTool(),
+    new GitPushTool(),
+    new GitStashTool(),
+    // .NET build & test
+    new DotnetBuildTool(),
+    new DotnetTestTool(),
   ];
   if (memoryManager) {
     tools.push(new MemorySearchTool(memoryManager));
