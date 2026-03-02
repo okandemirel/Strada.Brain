@@ -13,7 +13,7 @@ const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
-const API_KEY_PATTERN = /(?:sk-|key-|token-|api[_-]?key[=: ]+)[a-zA-Z0-9_-]{10,}/gi;
+const API_KEY_PATTERN = /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+)[a-zA-Z0-9_\-.]{10,}/gi;
 
 interface Session {
   messages: ConversationMessage[];
@@ -461,6 +461,10 @@ export class Orchestrator {
       toolName === "shell_exec" ||
       toolName === "git_commit" ||
       toolName === "git_push" ||
+      toolName === "git_branch" ||
+      toolName === "git_stash" ||
+      toolName === "dotnet_build" ||
+      toolName === "dotnet_test" ||
       toolName === "strata_create_module" ||
       toolName === "strata_create_component" ||
       toolName === "strata_create_mediator" ||

@@ -3,14 +3,51 @@ import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.j
 
 const GIT_TIMEOUT_MS = 30_000;
 
+/**
+ * Credential URL pattern: https://user:token@host or similar.
+ * Scrub tokens from git stderr/stdout to prevent leaking credentials.
+ */
+const CREDENTIAL_URL_PATTERN = /(:\/\/[^:@\s]+:)[^@\s]+(@)/g;
+
+/**
+ * Sanitize a user-supplied git argument (ref, branch name, remote, path).
+ * Rejects values that start with `-` to prevent argument injection,
+ * and rejects shell metacharacters.
+ */
+function sanitizeGitArg(value: string, label: string): { valid: true; value: string } | { valid: false; error: string } {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { valid: false, error: `${label} is required` };
+  }
+  if (trimmed.startsWith("-")) {
+    return { valid: false, error: `${label} must not start with '-'` };
+  }
+  // Reject shell metacharacters that could be exploited
+  if (/[;|&$`\\!\x00-\x1f\x7f]/.test(trimmed)) {
+    return { valid: false, error: `${label} contains invalid characters` };
+  }
+  return { valid: true, value: trimmed };
+}
+
+/** Scrub credential URLs from git output */
+function scrubCredentials(text: string): string {
+  return text.replace(CREDENTIAL_URL_PATTERN, "$1[REDACTED]$2");
+}
+
 async function runGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return runProcess({
+  const result = await runProcess({
     command: "git",
     args,
     cwd,
     timeoutMs: GIT_TIMEOUT_MS,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   });
+  // Scrub credentials from output
+  return {
+    stdout: scrubCredentials(result.stdout),
+    stderr: scrubCredentials(result.stderr),
+    exitCode: result.exitCode,
+  };
 }
 
 // ─── git_status ───────────────────────────────────────────────────────────────
@@ -74,10 +111,16 @@ export class GitDiffTool implements ITool {
   ): Promise<ToolExecutionResult> {
     const args = ["diff", "--stat", "--patch"];
     if (input["staged"]) args.push("--cached");
-    if (input["ref"]) args.push(String(input["ref"]));
+    if (input["ref"]) {
+      const ref = sanitizeGitArg(String(input["ref"]), "ref");
+      if (!ref.valid) return { content: `Error: ${ref.error}`, isError: true };
+      args.push(ref.value);
+    }
     if (input["path"]) {
+      const path = sanitizeGitArg(String(input["path"]), "path");
+      if (!path.valid) return { content: `Error: ${path.error}`, isError: true };
       args.push("--");
-      args.push(String(input["path"]));
+      args.push(path.value);
     }
 
     const result = await runGit(args, context.projectPath);
@@ -132,8 +175,10 @@ export class GitLogTool implements ITool {
     }
 
     if (input["path"]) {
+      const path = sanitizeGitArg(String(input["path"]), "path");
+      if (!path.valid) return { content: `Error: ${path.error}`, isError: true };
       args.push("--");
-      args.push(String(input["path"]));
+      args.push(path.value);
     }
 
     const result = await runGit(args, context.projectPath);
@@ -186,7 +231,12 @@ export class GitCommitTool implements ITool {
     // Stage files if provided
     const files = input["files"] as string[] | undefined;
     if (files && files.length > 0) {
-      const addResult = await runGit(["add", ...files], context.projectPath);
+      // Validate each file path and use -- to prevent flag injection
+      for (const f of files) {
+        const check = sanitizeGitArg(String(f), "file path");
+        if (!check.valid) return { content: `Error: ${check.error}`, isError: true };
+      }
+      const addResult = await runGit(["add", "--", ...files], context.projectPath);
       if (addResult.exitCode !== 0) {
         return { content: `Error staging files: ${addResult.stderr}`, isError: true };
       }
@@ -252,19 +302,24 @@ export class GitBranchTool implements ITool {
       case "create": {
         if (!name) return { content: "Error: branch name is required", isError: true };
         if (context.readOnly) return { content: "Error: branch creation disabled in read-only mode", isError: true };
-        const result = await runGit(["checkout", "-b", name], context.projectPath);
+        const nameCheck = sanitizeGitArg(name, "branch name");
+        if (!nameCheck.valid) return { content: `Error: ${nameCheck.error}`, isError: true };
+        const result = await runGit(["checkout", "-b", nameCheck.value], context.projectPath);
         if (result.exitCode !== 0) {
           return { content: `Error: ${result.stderr}`, isError: true };
         }
-        return { content: `Created and switched to branch '${name}'` };
+        return { content: `Created and switched to branch '${nameCheck.value}'` };
       }
       case "checkout": {
         if (!name) return { content: "Error: branch name is required", isError: true };
-        const result = await runGit(["checkout", name], context.projectPath);
+        if (context.readOnly) return { content: "Error: checkout is disabled in read-only mode", isError: true };
+        const nameCheck = sanitizeGitArg(name, "branch name");
+        if (!nameCheck.valid) return { content: `Error: ${nameCheck.error}`, isError: true };
+        const result = await runGit(["checkout", nameCheck.value], context.projectPath);
         if (result.exitCode !== 0) {
           return { content: `Error: ${result.stderr}`, isError: true };
         }
-        return { content: `Switched to branch '${name}'` };
+        return { content: `Switched to branch '${nameCheck.value}'` };
       }
       default:
         return { content: `Error: unknown action '${action}'. Use 'list', 'create', or 'checkout'.`, isError: true };
@@ -306,14 +361,18 @@ export class GitPushTool implements ITool {
       return { content: "Error: git push is disabled in read-only mode", isError: true };
     }
 
-    const remote = String(input["remote"] ?? "origin");
-    const args = ["push"];
+    const remoteRaw = String(input["remote"] ?? "origin");
+    const remoteCheck = sanitizeGitArg(remoteRaw, "remote");
+    if (!remoteCheck.valid) return { content: `Error: ${remoteCheck.error}`, isError: true };
 
+    const args = ["push"];
     if (input["set_upstream"]) args.push("-u");
-    args.push(remote);
+    args.push(remoteCheck.value);
 
     if (input["branch"]) {
-      args.push(String(input["branch"]));
+      const branchCheck = sanitizeGitArg(String(input["branch"]), "branch");
+      if (!branchCheck.valid) return { content: `Error: ${branchCheck.error}`, isError: true };
+      args.push(branchCheck.value);
     }
 
     const result = await runGit(args, context.projectPath);
@@ -354,8 +413,13 @@ export class GitStashTool implements ITool {
 
     switch (action) {
       case "push": {
+        if (context.readOnly) return { content: "Error: git stash is disabled in read-only mode", isError: true };
         const args = ["stash", "push"];
-        if (input["message"]) args.push("-m", String(input["message"]));
+        if (input["message"]) {
+          const msgCheck = sanitizeGitArg(String(input["message"]), "stash message");
+          if (!msgCheck.valid) return { content: `Error: ${msgCheck.error}`, isError: true };
+          args.push("-m", msgCheck.value);
+        }
         const result = await runGit(args, context.projectPath);
         return {
           content: result.exitCode === 0
@@ -365,6 +429,7 @@ export class GitStashTool implements ITool {
         };
       }
       case "pop": {
+        if (context.readOnly) return { content: "Error: git stash is disabled in read-only mode", isError: true };
         const result = await runGit(["stash", "pop"], context.projectPath);
         return {
           content: result.exitCode === 0
@@ -378,6 +443,7 @@ export class GitStashTool implements ITool {
         return { content: result.stdout || "No stashes found." };
       }
       case "drop": {
+        if (context.readOnly) return { content: "Error: git stash is disabled in read-only mode", isError: true };
         const result = await runGit(["stash", "drop"], context.projectPath);
         return {
           content: result.exitCode === 0

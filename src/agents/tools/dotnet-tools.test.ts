@@ -141,6 +141,12 @@ describe("DotnetBuildTool", () => {
     expect(tool.inputSchema.properties).toHaveProperty("configuration");
   });
 
+  it("blocks in read-only mode", async () => {
+    const result = await tool.execute({}, { ...ctx, readOnly: true });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("read-only");
+  });
+
   it("handles dotnet not installed gracefully", async () => {
     // This test verifies the tool doesn't crash when dotnet isn't available
     const result = await tool.execute({}, ctx);
@@ -157,6 +163,12 @@ describe("DotnetTestTool", () => {
     expect(tool.name).toBe("dotnet_test");
     expect(tool.inputSchema.properties).toHaveProperty("filter");
     expect(tool.inputSchema.properties).toHaveProperty("no_build");
+  });
+
+  it("blocks in read-only mode", async () => {
+    const result = await tool.execute({}, { ...ctx, readOnly: true });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("read-only");
   });
 
   it("handles dotnet not installed gracefully", async () => {

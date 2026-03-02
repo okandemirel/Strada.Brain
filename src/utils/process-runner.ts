@@ -52,14 +52,16 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
       }
     });
 
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 5000);
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
     }, opts.timeoutMs);
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       const cap = (s: string) => (s.length > maxOutput ? s.slice(-maxOutput) : s);
       resolve({
         stdout: cap(stdout),
@@ -72,6 +74,7 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       resolve({
         stdout: "",
         stderr: err.message,

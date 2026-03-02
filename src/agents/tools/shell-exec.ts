@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import { runProcess } from "../../utils/process-runner.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";

@@ -1,5 +1,5 @@
-import { resolve } from "node:path";
 import { runProcess } from "../../utils/process-runner.js";
+import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const BUILD_TIMEOUT_MS = 120_000; // 2 minutes
@@ -90,10 +90,18 @@ export class DotnetBuildTool implements ITool {
     input: Record<string, unknown>,
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
+    if (context.readOnly) {
+      return { content: "Error: dotnet build is disabled in read-only mode", isError: true };
+    }
+
     const args = ["build"];
 
     if (input["project"]) {
-      args.push(resolve(context.projectPath, String(input["project"])));
+      const pathCheck = await validatePath(context.projectPath, String(input["project"]));
+      if (!pathCheck.valid) {
+        return { content: `Error: ${pathCheck.error}`, isError: true };
+      }
+      args.push(pathCheck.fullPath);
     }
 
     const config = String(input["configuration"] ?? "Debug");
@@ -257,10 +265,18 @@ export class DotnetTestTool implements ITool {
     input: Record<string, unknown>,
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
+    if (context.readOnly) {
+      return { content: "Error: dotnet test is disabled in read-only mode", isError: true };
+    }
+
     const args = ["test"];
 
     if (input["project"]) {
-      args.push(resolve(context.projectPath, String(input["project"])));
+      const pathCheck = await validatePath(context.projectPath, String(input["project"]));
+      if (!pathCheck.valid) {
+        return { content: `Error: ${pathCheck.error}`, isError: true };
+      }
+      args.push(pathCheck.fullPath);
     }
 
     const config = String(input["configuration"] ?? "Debug");

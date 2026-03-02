@@ -201,6 +201,33 @@ describe("GitBranchTool", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain("read-only");
   });
+
+  it("blocks checkout in read-only mode", async () => {
+    const result = await tool.execute(
+      { action: "checkout", name: "master" },
+      { ...ctx, readOnly: true },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("read-only");
+  });
+
+  it("blocks branch names starting with dash", async () => {
+    const result = await tool.execute(
+      { action: "create", name: "--delete" },
+      ctx,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("must not start with '-'");
+  });
+
+  it("blocks branch names with shell metacharacters", async () => {
+    const result = await tool.execute(
+      { action: "create", name: "test;rm -rf /" },
+      ctx,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("invalid characters");
+  });
 });
 
 describe("GitStashTool", () => {
@@ -227,6 +254,42 @@ describe("GitStashTool", () => {
     );
     expect(result.content.toLowerCase()).toMatch(/stash|saved/i);
   });
+
+  it("blocks push in read-only mode", async () => {
+    const result = await tool.execute(
+      { action: "push" },
+      { ...ctx, readOnly: true },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("read-only");
+  });
+
+  it("blocks pop in read-only mode", async () => {
+    const result = await tool.execute(
+      { action: "pop" },
+      { ...ctx, readOnly: true },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("read-only");
+  });
+
+  it("blocks drop in read-only mode", async () => {
+    const result = await tool.execute(
+      { action: "drop" },
+      { ...ctx, readOnly: true },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("read-only");
+  });
+
+  it("allows list in read-only mode", async () => {
+    const result = await tool.execute(
+      { action: "list" },
+      { ...ctx, readOnly: true },
+    );
+    // list is not a write operation, should not be blocked
+    expect(result.isError).toBeUndefined();
+  });
 });
 
 describe("GitPushTool", () => {
@@ -245,5 +308,53 @@ describe("GitPushTool", () => {
     const result = await tool.execute({}, ctx);
     expect(result.isError).toBe(true);
     // No remote configured, should fail gracefully
+  });
+
+  it("blocks remote name starting with dash", async () => {
+    const result = await tool.execute(
+      { remote: "--receive-pack=evil" },
+      ctx,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("must not start with '-'");
+  });
+
+  it("blocks branch starting with dash", async () => {
+    const result = await tool.execute(
+      { branch: "-o evil" },
+      ctx,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("must not start with '-'");
+  });
+});
+
+describe("Git argument injection", () => {
+  it("blocks ref starting with dash in diff", async () => {
+    const tool = new GitDiffTool();
+    const result = await tool.execute({ ref: "--output=/etc/passwd" }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("must not start with '-'");
+  });
+
+  it("blocks file path with shell chars in commit", async () => {
+    const tool = new GitCommitTool();
+    await writeFile(join(tempDir, "test.txt"), "content");
+    const result = await tool.execute(
+      { message: "test", files: ["test;rm -rf /"] },
+      ctx,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("invalid characters");
+  });
+
+  it("blocks file path starting with dash in commit", async () => {
+    const tool = new GitCommitTool();
+    const result = await tool.execute(
+      { message: "test", files: ["--cached"] },
+      ctx,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("must not start with '-'");
   });
 });

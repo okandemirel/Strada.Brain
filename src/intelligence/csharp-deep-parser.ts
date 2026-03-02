@@ -420,15 +420,6 @@ class Parser {
     return tok;
   }
 
-  private expect(kind: TokenKind, value?: string): Token {
-    const tok = this.peek();
-    if (tok.kind !== kind || (value !== undefined && tok.value !== value)) {
-      // Skip ahead to recover
-      return tok;
-    }
-    return this.advance();
-  }
-
   private match(kind: TokenKind, value?: string): boolean {
     const tok = this.peek();
     if (tok.kind === kind && (value === undefined || tok.value === value)) {

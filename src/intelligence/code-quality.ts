@@ -21,9 +21,6 @@ import {
   deepInheritsFrom,
   deepImplements,
   type CSharpAST,
-  type ClassDecl,
-  type StructDecl,
-  type MethodDecl,
 } from "./csharp-deep-parser.js";
 import { getLogger } from "../utils/logger.js";
 
