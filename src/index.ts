@@ -34,8 +34,10 @@ import { OllamaEmbeddingProvider } from "./rag/embeddings/ollama-embeddings.js";
 import { CachedEmbeddingProvider } from "./rag/embeddings/embedding-cache.js";
 import { CodeSearchTool } from "./agents/tools/code-search.js";
 import { RAGIndexTool } from "./agents/tools/rag-index.js";
+import { CodeQualityTool } from "./agents/tools/code-quality.js";
 import type { IRAGPipeline } from "./rag/rag.interface.js";
 import type { IEmbeddingProvider } from "./rag/rag.interface.js";
+import { RateLimiter } from "./security/rate-limiter.js";
 import { join } from "node:path";
 
 const program = new Command();
@@ -201,6 +203,8 @@ async function startBrain(channelType: string): Promise<void> {
     new ComponentCreateTool(),
     new MediatorCreateTool(),
     new SystemCreateTool(),
+    // Code quality analysis
+    new CodeQualityTool(),
   ];
   if (memoryManager) {
     tools.push(new MemorySearchTool(memoryManager));
@@ -255,6 +259,22 @@ async function startBrain(channelType: string): Promise<void> {
     }
   }
 
+  // Initialize rate limiter
+  let rateLimiter: RateLimiter | undefined;
+  if (config.rateLimitEnabled) {
+    rateLimiter = new RateLimiter({
+      messagesPerMinute: config.rateLimitMessagesPerMinute,
+      messagesPerHour: config.rateLimitMessagesPerHour,
+      tokensPerDay: config.rateLimitTokensPerDay,
+      dailyBudgetUsd: config.rateLimitDailyBudgetUsd,
+      monthlyBudgetUsd: config.rateLimitMonthlyBudgetUsd,
+    });
+    logger.info("Rate limiter initialized", {
+      messagesPerMinute: config.rateLimitMessagesPerMinute,
+      dailyBudgetUsd: config.rateLimitDailyBudgetUsd,
+    });
+  }
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     provider,
@@ -266,6 +286,8 @@ async function startBrain(channelType: string): Promise<void> {
     memoryManager,
     metrics,
     ragPipeline,
+    rateLimiter,
+    streamingEnabled: config.streamingEnabled,
   });
 
   // Wire message handler

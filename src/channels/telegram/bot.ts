@@ -118,6 +118,73 @@ export class TelegramChannel implements IChannelAdapter {
     return this.bot.isInited();
   }
 
+  /**
+   * Start a streaming message by sending a placeholder.
+   * Returns the message ID for subsequent edits.
+   */
+  async startStreamingMessage(chatId: string): Promise<string | undefined> {
+    try {
+      const msg = await this.bot.api.sendMessage(
+        parseInt(chatId, 10),
+        "..."
+      );
+      return String(msg.message_id);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Update the streaming message with accumulated text.
+   * Throttled to avoid Telegram rate limits (max ~30 edits/sec per bot).
+   */
+  async updateStreamingMessage(
+    chatId: string,
+    streamId: string,
+    accumulatedText: string
+  ): Promise<void> {
+    try {
+      const text = accumulatedText || "...";
+      await this.bot.api.editMessageText(
+        parseInt(chatId, 10),
+        parseInt(streamId, 10),
+        text
+      );
+    } catch {
+      // Edit can fail if text hasn't actually changed — safe to ignore
+    }
+  }
+
+  /**
+   * Finalize the streaming message with the complete markdown text.
+   */
+  async finalizeStreamingMessage(
+    chatId: string,
+    streamId: string,
+    finalText: string
+  ): Promise<void> {
+    try {
+      await this.bot.api.editMessageText(
+        parseInt(chatId, 10),
+        parseInt(streamId, 10),
+        finalText,
+        { parse_mode: "Markdown" }
+      );
+    } catch {
+      // Fallback: try without markdown
+      try {
+        await this.bot.api.editMessageText(
+          parseInt(chatId, 10),
+          parseInt(streamId, 10),
+          finalText
+        );
+      } catch {
+        // Last resort: send a new message
+        await this.sendMarkdown(chatId, finalText);
+      }
+    }
+  }
+
   private setupMiddleware(): void {
     const logger = getLogger();
 

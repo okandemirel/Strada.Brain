@@ -67,4 +67,23 @@ export interface IChannelAdapter {
 
   /** Check if the channel is currently healthy */
   isHealthy(): boolean;
+
+  // ---- Streaming support (optional) ----
+
+  /**
+   * Start a streaming message. Returns a stream ID for subsequent updates.
+   * Channels that don't support streaming should return undefined.
+   */
+  startStreamingMessage?(chatId: string): Promise<string | undefined>;
+
+  /**
+   * Update a streaming message with accumulated text so far.
+   * Called repeatedly as chunks arrive from the LLM.
+   */
+  updateStreamingMessage?(chatId: string, streamId: string, accumulatedText: string): Promise<void>;
+
+  /**
+   * Finalize a streaming message with the complete text.
+   */
+  finalizeStreamingMessage?(chatId: string, streamId: string, finalText: string): Promise<void>;
 }

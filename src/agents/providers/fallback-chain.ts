@@ -3,6 +3,7 @@ import type {
   ConversationMessage,
   ToolDefinition,
   ProviderResponse,
+  StreamCallback,
 } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
@@ -64,6 +65,45 @@ export class FallbackChainProvider implements IAIProvider {
     }
 
     // Unreachable, but TypeScript needs it
+    throw new Error("No providers available");
+  }
+
+  async chatStream(
+    systemPrompt: string,
+    messages: ConversationMessage[],
+    tools: ToolDefinition[],
+    onChunk: StreamCallback
+  ): Promise<ProviderResponse> {
+    const logger = getLogger();
+
+    for (let i = 0; i < this.providers.length; i++) {
+      const provider = this.providers[i]!;
+      try {
+        // Use streaming if available, fall back to non-streaming
+        if (typeof provider.chatStream === "function") {
+          return await provider.chatStream(systemPrompt, messages, tools, onChunk);
+        }
+        return await provider.chat(systemPrompt, messages, tools);
+      } catch (error) {
+        const isLast = i === this.providers.length - 1;
+        const errorMsg = error instanceof Error ? error.message : String(error);
+
+        if (isLast) {
+          logger.error("All providers failed (streaming)", {
+            provider: provider.name,
+            error: errorMsg,
+          });
+          throw error;
+        }
+
+        logger.warn("Provider failed (streaming), trying next", {
+          failedProvider: provider.name,
+          nextProvider: this.providers[i + 1]!.name,
+          error: errorMsg,
+        });
+      }
+    }
+
     throw new Error("No providers available");
   }
 }

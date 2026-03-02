@@ -75,6 +75,43 @@ const configSchema = z.object({
     .pipe(z.number().int().min(500).max(16000))
     .default("4000"),
 
+  // Streaming
+  streamingEnabled: z
+    .string()
+    .transform((s) => s === "true")
+    .default("true"),
+
+  // Rate Limiting
+  rateLimitEnabled: z
+    .string()
+    .transform((s) => s === "true")
+    .default("false"),
+  rateLimitMessagesPerMinute: z
+    .string()
+    .transform((s) => parseInt(s, 10))
+    .pipe(z.number().int().min(0))
+    .default("0"),
+  rateLimitMessagesPerHour: z
+    .string()
+    .transform((s) => parseInt(s, 10))
+    .pipe(z.number().int().min(0))
+    .default("0"),
+  rateLimitTokensPerDay: z
+    .string()
+    .transform((s) => parseInt(s, 10))
+    .pipe(z.number().int().min(0))
+    .default("0"),
+  rateLimitDailyBudgetUsd: z
+    .string()
+    .transform((s) => parseFloat(s))
+    .pipe(z.number().min(0))
+    .default("0"),
+  rateLimitMonthlyBudgetUsd: z
+    .string()
+    .transform((s) => parseFloat(s))
+    .pipe(z.number().min(0))
+    .default("0"),
+
   // Logging
   logLevel: z
     .enum(["error", "warn", "info", "debug"])
@@ -116,6 +153,13 @@ export function loadConfig(): Config {
     embeddingModel: process.env["EMBEDDING_MODEL"],
     embeddingBaseUrl: process.env["EMBEDDING_BASE_URL"],
     ragContextMaxTokens: process.env["RAG_CONTEXT_MAX_TOKENS"],
+    streamingEnabled: process.env["STREAMING_ENABLED"],
+    rateLimitEnabled: process.env["RATE_LIMIT_ENABLED"],
+    rateLimitMessagesPerMinute: process.env["RATE_LIMIT_MESSAGES_PER_MINUTE"],
+    rateLimitMessagesPerHour: process.env["RATE_LIMIT_MESSAGES_PER_HOUR"],
+    rateLimitTokensPerDay: process.env["RATE_LIMIT_TOKENS_PER_DAY"],
+    rateLimitDailyBudgetUsd: process.env["RATE_LIMIT_DAILY_BUDGET_USD"],
+    rateLimitMonthlyBudgetUsd: process.env["RATE_LIMIT_MONTHLY_BUDGET_USD"],
     logLevel: process.env["LOG_LEVEL"],
     logFile: process.env["LOG_FILE"],
   });

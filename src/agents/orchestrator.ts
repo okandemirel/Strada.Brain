@@ -5,12 +5,14 @@ import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
 import { STRATA_SYSTEM_PROMPT, buildProjectContext, buildAnalysisSummary } from "./context/strata-knowledge.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
+import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger } from "../utils/logger.js";
 
 const MAX_TOOL_ITERATIONS = 15;
 const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
 const MAX_TOOL_RESULT_LENGTH = 8192;
+const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
 const API_KEY_PATTERN = /(?:sk-|key-|token-|api[_-]?key[=: ]+)[a-zA-Z0-9_-]{10,}/gi;
 
 interface Session {
@@ -41,6 +43,8 @@ export class Orchestrator {
   private readonly memoryManager?: IMemoryManager;
   private readonly metrics?: MetricsCollector;
   private readonly ragPipeline?: IRAGPipeline;
+  private readonly rateLimiter?: RateLimiter;
+  private readonly streamingEnabled: boolean;
   private readonly sessions = new Map<string, Session>();
   private readonly sessionLocks = new Map<string, Promise<void>>();
   private readonly systemPrompt: string;
@@ -55,6 +59,8 @@ export class Orchestrator {
     memoryManager?: IMemoryManager;
     metrics?: MetricsCollector;
     ragPipeline?: IRAGPipeline;
+    rateLimiter?: RateLimiter;
+    streamingEnabled?: boolean;
   }) {
     this.provider = opts.provider;
     this.channel = opts.channel;
@@ -64,6 +70,8 @@ export class Orchestrator {
     this.memoryManager = opts.memoryManager;
     this.metrics = opts.metrics;
     this.ragPipeline = opts.ragPipeline;
+    this.rateLimiter = opts.rateLimiter;
+    this.streamingEnabled = opts.streamingEnabled ?? false;
 
     // Build tool registry
     this.tools = new Map();
@@ -105,6 +113,20 @@ export class Orchestrator {
       textLength: text.length,
       channel: msg.channelType,
     });
+
+    // Check rate limits before processing
+    if (this.rateLimiter) {
+      const rateCheck = this.rateLimiter.checkMessageRate(userId);
+      if (!rateCheck.allowed) {
+        logger.warn("Rate limited", { userId, reason: rateCheck.reason });
+        const retryMsg = rateCheck.retryAfterMs
+          ? ` Please try again in ${Math.ceil(rateCheck.retryAfterMs / 1000)} seconds.`
+          : "";
+        await this.channel.sendText(chatId, `${rateCheck.reason}${retryMsg}`);
+        return;
+      }
+    }
+
     this.metrics?.recordMessage();
     this.metrics?.setActiveSessions(this.sessions.size);
 
@@ -218,11 +240,21 @@ export class Orchestrator {
     }
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-      const response = await this.provider.chat(
-        systemPrompt,
-        session.messages,
-        this.toolDefinitions
-      );
+      // Use streaming for the final response when supported
+      const canStream = this.streamingEnabled &&
+        typeof this.provider.chatStream === "function" &&
+        typeof this.channel.startStreamingMessage === "function";
+
+      let response;
+      if (canStream) {
+        response = await this.streamResponse(chatId, systemPrompt, session);
+      } else {
+        response = await this.provider.chat(
+          systemPrompt,
+          session.messages,
+          this.toolDefinitions
+        );
+      }
 
       logger.debug("LLM response", {
         chatId,
@@ -231,14 +263,21 @@ export class Orchestrator {
         toolCallCount: response.toolCalls.length,
         inputTokens: response.usage.inputTokens,
         outputTokens: response.usage.outputTokens,
+        streamed: canStream,
       });
       this.metrics?.recordTokenUsage(
         response.usage.inputTokens,
         response.usage.outputTokens,
         this.provider.name
       );
+      this.rateLimiter?.recordTokenUsage(
+        response.usage.inputTokens,
+        response.usage.outputTokens,
+        this.provider.name
+      );
 
       // If no tool calls, send the final text response
+      // (streaming already sent it, so skip for streamed end_turn)
       if (
         response.stopReason === "end_turn" ||
         response.toolCalls.length === 0
@@ -248,7 +287,10 @@ export class Orchestrator {
             role: "assistant",
             content: response.text,
           });
-          await this.channel.sendMarkdown(chatId, response.text);
+          // Only send via sendMarkdown if we didn't stream
+          if (!canStream || response.toolCalls.length > 0) {
+            await this.channel.sendMarkdown(chatId, response.text);
+          }
         }
         return;
       }
@@ -261,8 +303,8 @@ export class Orchestrator {
         toolCalls: response.toolCalls,
       });
 
-      // If there's intermediate text, send it
-      if (response.text) {
+      // If there's intermediate text and we didn't stream, send it
+      if (response.text && !canStream) {
         await this.channel.sendMarkdown(chatId, response.text);
       }
 
@@ -286,6 +328,49 @@ export class Orchestrator {
       "I've reached the maximum number of steps for this request. " +
         "Please send a follow-up message to continue."
     );
+  }
+
+  /**
+   * Stream a response from the LLM to the channel in real-time.
+   * Sends text chunks as they arrive, then returns the final ProviderResponse.
+   */
+  private async streamResponse(
+    chatId: string,
+    systemPrompt: string,
+    session: Session
+  ): Promise<import("./providers/provider.interface.js").ProviderResponse> {
+    const channel = this.channel;
+    let streamId: string | undefined;
+    let accumulated = "";
+    let lastUpdate = 0;
+
+    const onChunk = (chunk: string) => {
+      accumulated += chunk;
+
+      // Throttle updates to avoid flooding the channel
+      const now = Date.now();
+      if (now - lastUpdate >= STREAM_THROTTLE_MS && streamId) {
+        lastUpdate = now;
+        channel.updateStreamingMessage?.(chatId, streamId, accumulated)?.catch(() => {});
+      }
+    };
+
+    // Start the streaming message placeholder
+    streamId = await channel.startStreamingMessage?.(chatId) ?? undefined;
+
+    const response = await this.provider.chatStream!(
+      systemPrompt,
+      session.messages,
+      this.toolDefinitions,
+      onChunk
+    );
+
+    // Finalize the streamed message
+    if (streamId && accumulated) {
+      await channel.finalizeStreamingMessage?.(chatId, streamId, accumulated);
+    }
+
+    return response;
   }
 
   /**

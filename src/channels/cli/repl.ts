@@ -86,6 +86,23 @@ export class CLIChannel implements IChannelAdapter {
     return this.healthy;
   }
 
+  async startStreamingMessage(_chatId: string): Promise<string | undefined> {
+    process.stdout.write("\n");
+    return "cli-stream";
+  }
+
+  async updateStreamingMessage(_chatId: string, _streamId: string, accumulatedText: string): Promise<void> {
+    // Write the latest line of the accumulated text
+    const lastLine = accumulatedText.split("\n").pop() ?? "";
+    process.stdout.write(`\r\x1b[K${lastLine}`);
+  }
+
+  async finalizeStreamingMessage(_chatId: string, _streamId: string, finalText: string): Promise<void> {
+    process.stdout.write(`\r\x1b[K`);
+    console.log(finalText);
+    console.log();
+  }
+
   private promptNext(): void {
     if (!this.rl || !this.healthy) return;
 
