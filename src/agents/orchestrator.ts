@@ -7,6 +7,8 @@ import { STRATA_SYSTEM_PROMPT, buildProjectContext, buildAnalysisSummary } from 
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger } from "../utils/logger.js";
+import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
+import { WRITE_OPERATIONS } from "./autonomy/constants.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -239,6 +241,14 @@ export class Orchestrator {
       }
     }
 
+    // ─── Autonomy layer ──────────────────────────────────────────────────
+    const errorRecovery = new ErrorRecoveryEngine();
+    const taskPlanner = new TaskPlanner();
+    const selfVerification = new SelfVerification();
+    systemPrompt += taskPlanner.getPlanningPrompt();
+    let verificationRequested = false;
+    // ────────────────────────────────────────────────────────────────────
+
     const canStream = this.streamingEnabled &&
       typeof this.provider.chatStream === "function" &&
       typeof this.channel.startStreamingMessage === "function";
@@ -282,6 +292,21 @@ export class Orchestrator {
         response.stopReason === "end_turn" ||
         response.toolCalls.length === 0
       ) {
+        // ─── Verification gate: catch unverified exits ──────────────────
+        if (!verificationRequested && selfVerification.needsVerification()) {
+          verificationRequested = true;
+          if (response.text) {
+            session.messages.push({ role: "assistant", content: response.text });
+          }
+          session.messages.push({
+            role: "user",
+            content: selfVerification.getPrompt(),
+          });
+          logger.debug("Verification gate triggered", { chatId, iteration });
+          continue; // send back to LLM with verification reminder
+        }
+        // ────────────────────────────────────────────────────────────────
+
         if (response.text) {
           session.messages.push({
             role: "assistant",
@@ -314,10 +339,31 @@ export class Orchestrator {
         response.toolCalls
       );
 
+      // ─── Autonomy: track + analyze results ─────────────────────────────
+      for (let i = 0; i < response.toolCalls.length; i++) {
+        const tc = response.toolCalls[i]!;
+        const tr = toolResults[i]!;
+
+        // O(1) tracking in planner & verifier
+        taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
+        selfVerification.track(tc.name, tc.input, tr);
+
+        // Error recovery: analyze and enrich the tool result
+        const analysis = errorRecovery.analyze(tc.name, tr);
+        if (analysis) {
+          taskPlanner.recordError(analysis.summary);
+          tr.content += analysis.recoveryInjection;
+        }
+      }
+
+      // Inject state-aware context (stall detection, budget warnings)
+      const stateCtx = taskPlanner.getStateInjection();
+      // ────────────────────────────────────────────────────────────────────
+
       // Add tool results as a user message
       session.messages.push({
         role: "user",
-        content: "",
+        content: stateCtx, // empty string if no warnings (zero overhead)
         toolResults,
       });
     }
@@ -452,24 +498,7 @@ export class Orchestrator {
   }
 
   private isWriteOperation(toolName: string): boolean {
-    return (
-      toolName === "file_write" ||
-      toolName === "file_edit" ||
-      toolName === "file_delete" ||
-      toolName === "file_rename" ||
-      toolName === "file_delete_directory" ||
-      toolName === "shell_exec" ||
-      toolName === "git_commit" ||
-      toolName === "git_push" ||
-      toolName === "git_branch" ||
-      toolName === "git_stash" ||
-      toolName === "dotnet_build" ||
-      toolName === "dotnet_test" ||
-      toolName === "strata_create_module" ||
-      toolName === "strata_create_component" ||
-      toolName === "strata_create_mediator" ||
-      toolName === "strata_create_system"
-    );
+    return WRITE_OPERATIONS.has(toolName);
   }
 
   private async requestWriteConfirmation(
