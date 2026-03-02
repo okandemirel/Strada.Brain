@@ -192,6 +192,11 @@ const CS_KEYWORDS = new Set([
   "volatile", "where", "while", "yield", "async", "await", "record",
 ]);
 
+const BUILTIN_TYPES = new Set([
+  "void", "int", "string", "bool", "float", "double", "byte", "char",
+  "long", "short", "decimal", "object", "uint", "ulong", "ushort", "sbyte", "var",
+]);
+
 const MODIFIER_KEYWORDS = new Set([
   "public", "private", "protected", "internal", "static", "abstract",
   "sealed", "virtual", "override", "readonly", "const", "volatile",
@@ -1028,12 +1033,8 @@ class Parser {
       return null;
     }
 
-    // Built-in type keywords
-    const builtInTypes = new Set(["void", "int", "string", "bool", "float", "double", "byte", "char",
-      "long", "short", "decimal", "object", "uint", "ulong", "ushort", "sbyte", "var"]);
-
     const tok = this.peek();
-    if (tok.kind !== "identifier" && !builtInTypes.has(tok.value)) {
+    if (tok.kind !== "identifier" && !BUILTIN_TYPES.has(tok.value)) {
       return null;
     }
 

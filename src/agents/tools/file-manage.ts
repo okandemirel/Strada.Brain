@@ -1,5 +1,4 @@
 import { unlink, rename, stat, readdir, rm } from "node:fs/promises";
-import { dirname, basename, relative } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
@@ -42,19 +41,18 @@ export class FileDeleteTool implements ITool {
     }
 
     try {
-      const fileStat = await stat(pathCheck.fullPath);
-      if (!fileStat.isFile()) {
-        return { content: "Error: target is not a file. Use file_delete_directory for directories.", isError: true };
-      }
-
       await unlink(pathCheck.fullPath);
       return {
         content: `Deleted: ${relPath}`,
         metadata: { path: relPath },
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
         return { content: "Error: file not found", isError: true };
+      }
+      if (code === "EPERM" || code === "EISDIR") {
+        return { content: "Error: target is not a file. Use file_delete_directory for directories.", isError: true };
       }
       return { content: "Error: could not delete file", isError: true };
     }
@@ -109,29 +107,19 @@ export class FileRenameTool implements ITool {
     }
 
     try {
-      const fileStat = await stat(oldCheck.fullPath);
-      if (!fileStat.isFile()) {
-        return { content: "Error: source is not a file", isError: true };
-      }
-    } catch {
-      return { content: "Error: source file not found", isError: true };
-    }
-
-    // Check destination doesn't already exist
-    try {
-      await stat(newCheck.fullPath);
-      return { content: "Error: destination already exists", isError: true };
-    } catch {
-      // Good — destination doesn't exist
-    }
-
-    try {
       await rename(oldCheck.fullPath, newCheck.fullPath);
       return {
         content: `Renamed: ${oldPath} → ${newPath}`,
         metadata: { oldPath, newPath },
       };
     } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        return { content: "Error: source file not found", isError: true };
+      }
+      if (code === "ENOTDIR" || code === "EISDIR") {
+        return { content: "Error: source is not a file", isError: true };
+      }
       return {
         content: `Error: could not rename file — ${(error as Error).message}`,
         isError: true,

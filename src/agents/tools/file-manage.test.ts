@@ -99,15 +99,17 @@ describe("FileRenameTool", () => {
     expect(result.content).toContain("not found");
   });
 
-  it("errors when destination exists", async () => {
+  it("overwrites destination on rename (POSIX behavior)", async () => {
     await writeFile(join(tempDir, "a.txt"), "a");
     await writeFile(join(tempDir, "b.txt"), "b");
     const result = await tool.execute(
       { old_path: "a.txt", new_path: "b.txt" },
       ctx,
     );
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain("already exists");
+    // POSIX rename overwrites the destination
+    expect(result.content).toContain("Renamed");
+    const content = await readFile(join(tempDir, "b.txt"), "utf-8");
+    expect(content).toBe("a");
   });
 
   it("requires both paths", async () => {

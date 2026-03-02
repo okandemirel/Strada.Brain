@@ -112,6 +112,9 @@ const THRESHOLDS = {
   maxFileSize: 1024 * 1024,
 };
 
+/** Reference types that violate ECS component unmanaged constraint. */
+const REFERENCE_TYPES = ["string", "object", "List", "Dictionary", "Array", "Action", "Func"];
+
 // ═══════════════════════════════════════════
 // Scoring weights (issue severity -> penalty)
 // ═══════════════════════════════════════════
@@ -495,7 +498,7 @@ function checkStrataAntiPatterns(
   for (const s of structs) {
     if (deepImplements(s, "IComponent")) {
       for (const field of getFields(s)) {
-        const refTypes = ["string", "object", "List", "Dictionary", "Array", "Action", "Func"];
+        const refTypes = REFERENCE_TYPES;
         for (const rt of refTypes) {
           if (field.type.startsWith(rt)) {
             issues.push({
@@ -561,14 +564,8 @@ function checkStrataAntiPatterns(
     }
   }
 
-  // 4. Missing service interface (concrete DI injection)
+  // 4. Missing service interface
   for (const cls of classes) {
-    const deps = getDependencies(cls);
-    for (const dep of deps) {
-      // getDependencies already filters for I-prefix, so all should be interfaces
-      // But let's check for concrete class injection in constructor params
-    }
-
     // Check if service class has no interface
     if (
       cls.name.endsWith("Service") &&

@@ -1,62 +1,22 @@
-import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+import { runProcess } from "../../utils/process-runner.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const BUILD_TIMEOUT_MS = 120_000; // 2 minutes
 const TEST_TIMEOUT_MS = 300_000; // 5 minutes
-const MAX_OUTPUT = 16_384;
 
-/**
- * Run a command and capture output.
- */
 function run(
   command: string,
   args: string[],
   cwd: string,
   timeoutMs: number,
-): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
-  return new Promise((resolvePromise) => {
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-
-    const child = spawn(command, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1" },
-    });
-
-    child.stdout.on("data", (d: Buffer) => {
-      stdout += d.toString();
-      if (stdout.length > MAX_OUTPUT * 2) stdout = stdout.slice(-MAX_OUTPUT);
-    });
-
-    child.stderr.on("data", (d: Buffer) => {
-      stderr += d.toString();
-      if (stderr.length > MAX_OUTPUT * 2) stderr = stderr.slice(-MAX_OUTPUT);
-    });
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 5000);
-    }, timeoutMs);
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      const cap = (s: string) => s.length > MAX_OUTPUT ? s.slice(-MAX_OUTPUT) : s;
-      resolvePromise({
-        stdout: cap(stdout),
-        stderr: cap(stderr),
-        exitCode: code ?? (timedOut ? 124 : 1),
-        timedOut,
-      });
-    });
-
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolvePromise({ stdout: "", stderr: err.message, exitCode: 127, timedOut: false });
-    });
+) {
+  return runProcess({
+    command,
+    args,
+    cwd,
+    timeoutMs,
+    env: { ...process.env, DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1" },
   });
 }
 

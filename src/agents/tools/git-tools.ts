@@ -1,50 +1,15 @@
-import { spawn } from "node:child_process";
+import { runProcess } from "../../utils/process-runner.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const GIT_TIMEOUT_MS = 30_000;
-const MAX_OUTPUT = 16_384;
 
-/**
- * Execute a git command and return its output.
- */
-function runGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-
-    const child = spawn("git", args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-    });
-
-    child.stdout.on("data", (d: Buffer) => {
-      stdout += d.toString();
-      if (stdout.length > MAX_OUTPUT * 2) stdout = stdout.slice(-MAX_OUTPUT);
-    });
-
-    child.stderr.on("data", (d: Buffer) => {
-      stderr += d.toString();
-      if (stderr.length > MAX_OUTPUT * 2) stderr = stderr.slice(-MAX_OUTPUT);
-    });
-
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-    }, GIT_TIMEOUT_MS);
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({
-        stdout: stdout.length > MAX_OUTPUT ? stdout.slice(-MAX_OUTPUT) : stdout,
-        stderr: stderr.length > MAX_OUTPUT ? stderr.slice(-MAX_OUTPUT) : stderr,
-        exitCode: code ?? 1,
-      });
-    });
-
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({ stdout: "", stderr: err.message, exitCode: 128 });
-    });
+async function runGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return runProcess({
+    command: "git",
+    args,
+    cwd,
+    timeoutMs: GIT_TIMEOUT_MS,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   });
 }
 

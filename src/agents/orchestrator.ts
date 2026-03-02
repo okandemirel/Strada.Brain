@@ -1,4 +1,4 @@
-import type { IAIProvider, ConversationMessage, ToolCall, ToolResult } from "./providers/provider.interface.js";
+import type { IAIProvider, ConversationMessage, ToolCall, ToolResult, ProviderResponse } from "./providers/provider.interface.js";
 import type { ITool, ToolContext } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage } from "../channels/channel.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
@@ -239,11 +239,11 @@ export class Orchestrator {
       }
     }
 
+    const canStream = this.streamingEnabled &&
+      typeof this.provider.chatStream === "function" &&
+      typeof this.channel.startStreamingMessage === "function";
+
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-      // Use streaming for the final response when supported
-      const canStream = this.streamingEnabled &&
-        typeof this.provider.chatStream === "function" &&
-        typeof this.channel.startStreamingMessage === "function";
 
       let response;
       if (canStream) {
@@ -338,7 +338,7 @@ export class Orchestrator {
     chatId: string,
     systemPrompt: string,
     session: Session
-  ): Promise<import("./providers/provider.interface.js").ProviderResponse> {
+  ): Promise<ProviderResponse> {
     const channel = this.channel;
     let streamId: string | undefined;
     let accumulated = "";
