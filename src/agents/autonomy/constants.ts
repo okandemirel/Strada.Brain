@@ -17,19 +17,18 @@ export const VERIFY_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_build", "dotnet_test",
 ]);
 
-/** All tools that require user confirmation (superset of MUTATION_TOOLS + VERIFY_TOOLS). */
-export const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
-  // File mutations
-  "file_write", "file_edit", "file_delete", "file_rename",
+/** Tools with side effects beyond file mutation (not in MUTATION_TOOLS or VERIFY_TOOLS). */
+const SIDE_EFFECT_TOOLS: readonly string[] = [
   "file_delete_directory",
-  // Shell / git side effects
   "shell_exec",
   "git_commit", "git_push", "git_branch", "git_stash",
-  // Build / test
-  "dotnet_build", "dotnet_test",
-  // Strata scaffolding
-  "strata_create_module", "strata_create_component",
-  "strata_create_mediator", "strata_create_system",
+];
+
+/** All tools that require user confirmation. Composed from subsets to prevent drift. */
+export const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
+  ...MUTATION_TOOLS,
+  ...VERIFY_TOOLS,
+  ...SIDE_EFFECT_TOOLS,
 ]);
 
 /** File extensions that affect .NET compilation. */

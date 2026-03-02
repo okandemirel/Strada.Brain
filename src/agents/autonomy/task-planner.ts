@@ -46,7 +46,6 @@ export interface TaskState {
   readonly mutationsSinceVerify: number;
   readonly consecutiveErrors: number;
   readonly buildVerified: boolean;
-  readonly testsVerified: boolean;
   readonly iterationsUsed: number;
   readonly errorHistory: readonly string[];
 }
@@ -57,7 +56,6 @@ export class TaskPlanner {
   private mutationsSinceVerify = 0;
   private consecutiveErrors = 0;
   private buildVerified = false;
-  private testsVerified = false;
   private iterationsUsed = 0;
   private errorHistory: string[] = [];
 
@@ -66,7 +64,6 @@ export class TaskPlanner {
     this.mutationsSinceVerify = 0;
     this.consecutiveErrors = 0;
     this.buildVerified = false;
-    this.testsVerified = false;
     this.iterationsUsed = 0;
     this.errorHistory = [];
   }
@@ -89,14 +86,12 @@ export class TaskPlanner {
     if (MUTATION_TOOLS.has(toolName)) {
       this.mutationsSinceVerify++;
       this.buildVerified = false;
-      this.testsVerified = false;
     }
 
     // Verification tracking — O(1)
     if (VERIFY_TOOLS.has(toolName) && !isError) {
       this.mutationsSinceVerify = 0;
       if (toolName === "dotnet_build") this.buildVerified = true;
-      if (toolName === "dotnet_test") this.testsVerified = true;
       this.consecutiveErrors = 0;
     }
 
@@ -110,7 +105,7 @@ export class TaskPlanner {
 
   /**
    * Record an error summary for stall detection.
-   * Bounded array: O(1) amortized.
+   * Bounded array (max 10 entries).
    */
   recordError(summary: string): void {
     if (this.errorHistory.length >= MAX_ERROR_HISTORY) {
@@ -163,7 +158,6 @@ export class TaskPlanner {
       mutationsSinceVerify: this.mutationsSinceVerify,
       consecutiveErrors: this.consecutiveErrors,
       buildVerified: this.buildVerified,
-      testsVerified: this.testsVerified,
       iterationsUsed: this.iterationsUsed,
       errorHistory: [...this.errorHistory],
     };

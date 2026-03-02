@@ -348,11 +348,17 @@ export class Orchestrator {
         taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
         selfVerification.track(tc.name, tc.input, tr);
 
+        // Reset verification gate after build attempt so it can re-fire on failure
+        if (tc.name === "dotnet_build") {
+          verificationRequested = false;
+        }
+
         // Error recovery: analyze and enrich the tool result
         const analysis = errorRecovery.analyze(tc.name, tr);
         if (analysis) {
           taskPlanner.recordError(analysis.summary);
-          tr.content += analysis.recoveryInjection;
+          // Re-sanitize after appending (prevents API key leakage + enforces length cap)
+          tr.content = sanitizeToolResult(tr.content + analysis.recoveryInjection);
         }
       }
 

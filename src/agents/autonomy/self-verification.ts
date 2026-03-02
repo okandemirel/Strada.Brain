@@ -19,7 +19,6 @@ export interface VerificationState {
   readonly pendingFiles: ReadonlySet<string>;
   readonly hasCompilableChanges: boolean;
   readonly lastBuildOk: boolean | null;
-  readonly lastTestOk: boolean | null;
 }
 
 // ─── Verifier ───────────────────────────────────────────────────────────────────
@@ -28,14 +27,12 @@ export class SelfVerification {
   private pendingFiles = new Set<string>();
   private hasCompilableChanges = false;
   private lastBuildOk: boolean | null = null;
-  private lastTestOk: boolean | null = null;
 
   /** Reset for new task. */
   reset(): void {
     this.pendingFiles = new Set();
     this.hasCompilableChanges = false;
     this.lastBuildOk = null;
-    this.lastTestOk = null;
   }
 
   /**
@@ -60,17 +57,14 @@ export class SelfVerification {
 
     // Track build results — O(1)
     if (toolName === "dotnet_build") {
-      this.lastBuildOk = !result.isError;
-      if (!result.isError) {
+      const ok = !(result.isError ?? false);
+      this.lastBuildOk = ok;
+      if (ok) {
         this.pendingFiles.clear();
         this.hasCompilableChanges = false;
       }
     }
 
-    // Track test results — O(1)
-    if (toolName === "dotnet_test") {
-      this.lastTestOk = !result.isError;
-    }
   }
 
   /**
@@ -102,7 +96,6 @@ export class SelfVerification {
       pendingFiles: new Set(this.pendingFiles),
       hasCompilableChanges: this.hasCompilableChanges,
       lastBuildOk: this.lastBuildOk,
-      lastTestOk: this.lastTestOk,
     };
   }
 }
