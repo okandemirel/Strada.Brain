@@ -18,13 +18,7 @@ describe("checkReadOnlyBlock", () => {
   });
 
   it("should block write tools in read-only mode", () => {
-    const writeTools = [
-      "file_write",
-      "file_edit",
-      "file_delete",
-      "git_commit",
-      "shell_exec",
-    ];
+    const writeTools = ["file_write", "file_edit", "file_delete", "git_commit", "shell_exec"];
 
     for (const tool of writeTools) {
       const result = checkReadOnlyBlock(tool, true);
@@ -35,12 +29,7 @@ describe("checkReadOnlyBlock", () => {
   });
 
   it("should allow read tools in read-only mode", () => {
-    const readTools = [
-      "file_read",
-      "code_search",
-      "git_status",
-      "dotnet_build",
-    ];
+    const readTools = ["file_read", "code_search", "git_status", "dotnet_build"];
 
     for (const tool of readTools) {
       const result = checkReadOnlyBlock(tool, true);
@@ -70,7 +59,7 @@ describe("checkReadOnlyBlock", () => {
     const result1 = checkReadOnlyBlock("FILE_WRITE", true);
     const result2 = checkReadOnlyBlock("File_Write", true);
     const result3 = checkReadOnlyBlock("  file_write  ", true);
-    
+
     // Note: Current implementation does case normalization
     // If it doesn't, adjust this test
     expect(result1.allowed).toBe(false);
@@ -82,7 +71,7 @@ describe("checkReadOnlyBlock", () => {
 describe("createReadOnlyToolStub", () => {
   it("should create error result for blocked tool", () => {
     const result = createReadOnlyToolStub("file_write", "call-123");
-    
+
     expect(result.toolCallId).toBe("call-123");
     expect(result.isError).toBe(true);
     expect(result.content).toContain("disabled in read-only mode");
@@ -91,14 +80,14 @@ describe("createReadOnlyToolStub", () => {
 
   it("should include suggestion in content", () => {
     const result = createReadOnlyToolStub("shell_exec", "call-456");
-    
+
     expect(result.content).toContain("💡");
     expect(result.content).toContain("Shell commands are disabled");
   });
 
   it("should use tool name in error message", () => {
     const result = createReadOnlyToolStub("git_commit", "call-789");
-    
+
     expect(result.content).toContain("git_commit");
     expect(result.content).toContain("read-only mode");
   });
@@ -107,14 +96,14 @@ describe("createReadOnlyToolStub", () => {
 describe("getReadOnlySystemPrompt", () => {
   it("should return non-empty prompt", () => {
     const prompt = getReadOnlySystemPrompt();
-    
+
     expect(prompt.length).toBeGreaterThan(0);
     expect(prompt).toContain("READ-ONLY MODE");
   });
 
   it("should list blocked operations", () => {
     const prompt = getReadOnlySystemPrompt();
-    
+
     expect(prompt).toContain("disabled");
     expect(prompt).toContain("Blocked Operations");
     expect(prompt).toContain("Available Operations");
@@ -122,7 +111,7 @@ describe("getReadOnlySystemPrompt", () => {
 
   it("should include guidance for the LLM", () => {
     const prompt = getReadOnlySystemPrompt();
-    
+
     expect(prompt).toContain("How to Help");
     expect(prompt).toContain("Analyze");
     expect(prompt).toContain("Explain");
@@ -132,7 +121,7 @@ describe("getReadOnlySystemPrompt", () => {
 describe("getReadOnlyToolSummary", () => {
   it("should return tool lists", () => {
     const summary = getReadOnlyToolSummary();
-    
+
     expect(Array.isArray(summary.blocked)).toBe(true);
     expect(Array.isArray(summary.allowed)).toBe(true);
     expect(summary.totalBlocked).toBeGreaterThan(0);
@@ -141,7 +130,7 @@ describe("getReadOnlyToolSummary", () => {
 
   it("should include expected write tools", () => {
     const summary = getReadOnlyToolSummary();
-    
+
     expect(summary.blocked).toContain("file_write");
     expect(summary.blocked).toContain("file_edit");
     expect(summary.blocked).toContain("shell_exec");
@@ -150,7 +139,7 @@ describe("getReadOnlyToolSummary", () => {
 
   it("should include expected read tools", () => {
     const summary = getReadOnlyToolSummary();
-    
+
     expect(summary.allowed).toContain("file_read");
     expect(summary.allowed).toContain("code_search");
     expect(summary.allowed).toContain("git_status");
@@ -174,7 +163,7 @@ describe("filterToolsForReadOnly", () => {
 
   it("should return all tools when not in read-only mode", () => {
     const filtered = filterToolsForReadOnly(mockTools, false);
-    
+
     expect(filtered).toHaveLength(6);
     expect(filtered.map((t) => t.name)).toContain("file_write");
     expect(filtered.map((t) => t.name)).toContain("shell_exec");
@@ -183,7 +172,7 @@ describe("filterToolsForReadOnly", () => {
   it("should filter out write tools in read-only mode", () => {
     const filtered = filterToolsForReadOnly(mockTools, true);
     const names = filtered.map((t) => t.name);
-    
+
     expect(names).toContain("file_read");
     expect(names).toContain("code_search");
     expect(names).toContain("git_status");
@@ -200,7 +189,7 @@ describe("filterToolsForReadOnly", () => {
   it("should not modify original array", () => {
     const original = [...mockTools];
     filterToolsForReadOnly(mockTools, true);
-    
+
     expect(mockTools).toHaveLength(original.length);
   });
 });
@@ -221,7 +210,7 @@ describe("ReadOnlyGuard class", () => {
   describe("canExecute", () => {
     it("should allow all tools when disabled", () => {
       const guard = new ReadOnlyGuard(false);
-      
+
       expect(guard.canExecute("file_write")).toBe(true);
       expect(guard.canExecute("shell_exec")).toBe(true);
       expect(guard.canExecute("file_read")).toBe(true);
@@ -229,7 +218,7 @@ describe("ReadOnlyGuard class", () => {
 
     it("should block write tools when enabled", () => {
       const guard = new ReadOnlyGuard(true);
-      
+
       expect(guard.canExecute("file_write")).toBe(false);
       expect(guard.canExecute("shell_exec")).toBe(false);
       expect(guard.canExecute("git_commit")).toBe(false);
@@ -237,7 +226,7 @@ describe("ReadOnlyGuard class", () => {
 
     it("should allow read tools when enabled", () => {
       const guard = new ReadOnlyGuard(true);
-      
+
       expect(guard.canExecute("file_read")).toBe(true);
       expect(guard.canExecute("code_search")).toBe(true);
       expect(guard.canExecute("git_status")).toBe(true);
@@ -248,7 +237,7 @@ describe("ReadOnlyGuard class", () => {
     it("should return detailed results", () => {
       const guard = new ReadOnlyGuard(true);
       const result = guard.check("file_write");
-      
+
       expect(result.allowed).toBe(false);
       expect(result.error).toContain("file_write");
       expect(result.suggestion).toBeDefined();
@@ -257,7 +246,7 @@ describe("ReadOnlyGuard class", () => {
     it("should allow when disabled", () => {
       const guard = new ReadOnlyGuard(false);
       const result = guard.check("file_write");
-      
+
       expect(result.allowed).toBe(true);
     });
   });
@@ -266,7 +255,7 @@ describe("ReadOnlyGuard class", () => {
     it("should return prompt when enabled", () => {
       const guard = new ReadOnlyGuard(true);
       const prompt = guard.getSystemPrompt();
-      
+
       expect(prompt.length).toBeGreaterThan(0);
       expect(prompt).toContain("READ-ONLY");
     });
@@ -274,7 +263,7 @@ describe("ReadOnlyGuard class", () => {
     it("should return empty string when disabled", () => {
       const guard = new ReadOnlyGuard(false);
       const prompt = guard.getSystemPrompt();
-      
+
       expect(prompt).toBe("");
     });
   });
@@ -283,7 +272,7 @@ describe("ReadOnlyGuard class", () => {
     it("should create stub result", () => {
       const guard = new ReadOnlyGuard(true);
       const stub = guard.createStub("file_write", "call-1");
-      
+
       expect(stub.toolCallId).toBe("call-1");
       expect(stub.isError).toBe(true);
       expect(stub.content).toContain("disabled");
@@ -304,7 +293,7 @@ describe("ReadOnlyGuard class", () => {
     it("should filter tools when enabled", () => {
       const guard = new ReadOnlyGuard(true);
       const filtered = guard.filterTools(tools);
-      
+
       expect(filtered).toHaveLength(1);
       expect(filtered[0].name).toBe("file_read");
     });
@@ -312,7 +301,7 @@ describe("ReadOnlyGuard class", () => {
     it("should not filter when disabled", () => {
       const guard = new ReadOnlyGuard(false);
       const filtered = guard.filterTools(tools);
-      
+
       expect(filtered).toHaveLength(2);
     });
   });
@@ -320,9 +309,28 @@ describe("ReadOnlyGuard class", () => {
   describe("additional blocked tools", () => {
     it("should support custom blocked tools", () => {
       const guard = new ReadOnlyGuard(true, ["custom_dangerous_tool"]);
-      
+
       expect(guard.canExecute("custom_dangerous_tool")).toBe(false);
       expect(guard.canExecute("file_read")).toBe(true);
+    });
+  });
+
+  describe("assertWritable", () => {
+    it("should not throw when disabled", () => {
+      const guard = new ReadOnlyGuard(false);
+      expect(() => guard.assertWritable("file_write")).not.toThrow();
+    });
+
+    it("should throw when enabled", () => {
+      const guard = new ReadOnlyGuard(true);
+      expect(() => guard.assertWritable("file_write")).toThrow(
+        "Operation 'file_write' blocked: system is in read-only mode",
+      );
+    });
+
+    it("should include operation name in error message", () => {
+      const guard = new ReadOnlyGuard(true);
+      expect(() => guard.assertWritable("deploy_production")).toThrow("deploy_production");
     });
   });
 });
@@ -395,7 +403,7 @@ describe("Integration scenarios", () => {
 
   it("should handle mixed read-write operations in disabled mode", () => {
     const guard = new ReadOnlyGuard(false);
-    
+
     expect(guard.canExecute("file_read")).toBe(true);
     expect(guard.canExecute("file_write")).toBe(true);
     expect(guard.canExecute("shell_exec")).toBe(true);

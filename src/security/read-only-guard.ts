@@ -10,23 +10,54 @@ const READ_ONLY_TIMEOUT_MS = 120_000; // 2 minutes
 
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
   // File operations
-  "file_write", "file_edit", "file_delete", "file_rename", "file_delete_directory",
+  "file_write",
+  "file_edit",
+  "file_delete",
+  "file_rename",
+  "file_delete_directory",
   // Git operations
-  "git_commit", "git_push", "git_branch", "git_stash", "git_reset", "git_checkout", "git_merge", "git_rebase",
+  "git_commit",
+  "git_push",
+  "git_branch",
+  "git_stash",
+  "git_reset",
+  "git_checkout",
+  "git_merge",
+  "git_rebase",
   // Shell & Code generation
   "shell_exec",
-  "strata_create_module", "strata_create_component", "strata_create_mediator", "strata_create_system",
+  "strata_create_module",
+  "strata_create_component",
+  "strata_create_mediator",
+  "strata_create_system",
   // .NET operations
-  "dotnet_add_package", "dotnet_remove_package", "dotnet_new",
+  "dotnet_add_package",
+  "dotnet_remove_package",
+  "dotnet_new",
 ]);
 
 const READ_TOOLS: ReadonlySet<string> = new Set([
-  "file_read", "file_search", "file_list", "file_exists", "file_grep",
-  "code_search", "code_find_references", "code_find_usages",
-  "git_status", "git_log", "git_diff", "git_show",
-  "dotnet_build", "dotnet_test", "dotnet_list_packages",
-  "analyze_project", "analyze_code_quality", "strata_analyze_project",
-  "memory_search", "memory_recall", "rag_search",
+  "file_read",
+  "file_search",
+  "file_list",
+  "file_exists",
+  "file_grep",
+  "code_search",
+  "code_find_references",
+  "code_find_usages",
+  "git_status",
+  "git_log",
+  "git_diff",
+  "git_show",
+  "dotnet_build",
+  "dotnet_test",
+  "dotnet_list_packages",
+  "analyze_project",
+  "analyze_code_quality",
+  "strata_analyze_project",
+  "memory_search",
+  "memory_recall",
+  "rag_search",
 ]);
 
 const SUGGESTIONS: Record<string, string> = {
@@ -40,10 +71,14 @@ const SUGGESTIONS: Record<string, string> = {
   git_branch: "Use 'git_status' to see current branch information.",
   git_stash: "Stashing is not available in read-only mode.",
   shell_exec: "Shell commands are disabled in read-only mode. Use built-in read tools instead.",
-  strata_create_module: "Code generation is disabled in read-only mode. Use analysis tools to explore existing modules.",
-  strata_create_component: "Code generation is disabled in read-only mode. Use analysis tools to explore existing components.",
-  strata_create_mediator: "Code generation is disabled in read-only mode. Use analysis tools to explore existing mediators.",
-  strata_create_system: "Code generation is disabled in read-only mode. Use analysis tools to explore existing systems.",
+  strata_create_module:
+    "Code generation is disabled in read-only mode. Use analysis tools to explore existing modules.",
+  strata_create_component:
+    "Code generation is disabled in read-only mode. Use analysis tools to explore existing components.",
+  strata_create_mediator:
+    "Code generation is disabled in read-only mode. Use analysis tools to explore existing mediators.",
+  strata_create_system:
+    "Code generation is disabled in read-only mode. Use analysis tools to explore existing systems.",
 };
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -76,7 +111,7 @@ export function checkReadOnlyBlock(toolName: string, readOnlyMode: boolean): Rea
 
 export function createReadOnlyToolStub(toolName: string, toolCallId: string) {
   const check = checkReadOnlyBlock(toolName, true);
-  
+
   return {
     toolCallId,
     content: [
@@ -128,15 +163,18 @@ export function getReadOnlyToolSummary() {
   };
 }
 
-export function filterToolsForReadOnly<T extends { name: string }>(tools: T[], readOnlyMode: boolean): T[] {
-  return readOnlyMode ? tools.filter(t => !WRITE_TOOLS.has(t.name)) : tools;
+export function filterToolsForReadOnly<T extends { name: string }>(
+  tools: T[],
+  readOnlyMode: boolean,
+): T[] {
+  return readOnlyMode ? tools.filter((t) => !WRITE_TOOLS.has(t.name)) : tools;
 }
 
 export function wrapToolForReadOnly(tool: ITool, readOnlyMode: boolean): ITool {
   if (!readOnlyMode) return tool;
 
   const check = checkReadOnlyBlock(tool.name, true);
-  
+
   if (check.allowed) return tool;
 
   return {
@@ -183,6 +221,16 @@ export class ReadOnlyGuard {
 
   filterTools<T extends { name: string }>(tools: T[]): T[] {
     return filterToolsForReadOnly(tools, this.enabled);
+  }
+
+  /**
+   * Assert that the system is not in read-only mode.
+   * Throws if read-only mode is active.
+   */
+  assertWritable(operation: string): void {
+    if (this.enabled) {
+      throw new Error(`Operation '${operation}' blocked: system is in read-only mode`);
+    }
   }
 }
 

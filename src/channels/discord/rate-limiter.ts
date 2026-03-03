@@ -1,14 +1,20 @@
 /**
  * Discord Rate Limiter
  * Implements rate limiting to comply with Discord API limits.
- * 
+ *
  * Discord Rate Limits:
  * - Global: 50 requests per second
  * - Per-channel: 5 requests per 5 seconds
  * - Per-guild: 5 requests per 5 seconds (for non-modify operations)
  * - Per-route: Varies by endpoint
- * 
+ *
  * This implementation focuses on the global limit of 50 req/s.
+ *
+ * NOTE: This rate limiter handles outgoing Discord API request throttling
+ * (token bucket with queue). It is intentionally separate from the shared
+ * RateLimiter in src/security/rate-limiter.ts, which handles per-user
+ * message rate limiting and cost/budget tracking. The two serve different
+ * purposes and should not be consolidated.
  */
 
 import { getLogger } from "../../utils/logger.js";
@@ -91,7 +97,7 @@ export class DiscordRateLimiter {
   reportRateLimitError(retryAfterMs?: number): void {
     this.consecutiveErrors++;
     const cooldown = retryAfterMs ?? this.config.cooldownMs * this.consecutiveErrors;
-    
+
     getLogger().warn("Discord rate limit hit", {
       cooldownMs: cooldown,
       consecutiveErrors: this.consecutiveErrors,
@@ -99,7 +105,7 @@ export class DiscordRateLimiter {
 
     // Drain tokens to force a wait
     this.tokens = 0;
-    
+
     // Schedule token refill after cooldown
     setTimeout(() => {
       this.tokens = this.config.burstSize;
@@ -156,7 +162,7 @@ export class DiscordRateLimiter {
           const tokensNeeded = 1 - this.tokens;
           const msPerToken = 1000 / this.config.requestsPerSecond;
           const waitTime = Math.ceil(tokensNeeded * msPerToken);
-          
+
           await this.delay(waitTime);
         }
 

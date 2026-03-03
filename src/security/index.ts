@@ -1,6 +1,6 @@
 /**
  * Security Module for Strata.Brain
- * 
+ *
  * Centralized security exports for all security features.
  */
 
@@ -83,9 +83,15 @@ export {
 
 // Original Security Modules
 export { validatePath, isValidCSharpIdentifier, isValidCSharpType } from "./path-guard.js";
-export { RateLimiter, estimateCost, type RateLimitConfig, type RateLimitResult } from "./rate-limiter.js";
+export {
+  RateLimiter,
+  estimateCost,
+  type RateLimitConfig,
+  type RateLimitResult,
+} from "./rate-limiter.js";
 export { sanitizeSecrets, type SecretPattern } from "./secret-sanitizer.js";
 export { ReadOnlyGuard } from "./read-only-guard.js";
+export { SecretRotationWatcher } from "./secret-rotation.js";
 export { DMPolicy, createDMPolicy } from "./dm-policy.js";
 export { DMStateManager } from "./dm-state.js";
 
@@ -237,9 +243,7 @@ export function initializeSecurity(): void {
   alertManager.addRule({
     name: "Multiple Authentication Failures",
     enabled: true,
-    conditions: [
-      { field: "type", operator: "equals", value: "authentication_failure" },
-    ],
+    conditions: [{ field: "type", operator: "equals", value: "authentication_failure" }],
     severity: "high",
     channels: ["console"],
     throttleMs: 60000,
@@ -248,9 +252,7 @@ export function initializeSecurity(): void {
   alertManager.addRule({
     name: "Suspicious Activity Detected",
     enabled: true,
-    conditions: [
-      { field: "type", operator: "equals", value: "suspicious_activity" },
-    ],
+    conditions: [{ field: "type", operator: "equals", value: "suspicious_activity" }],
     severity: "critical",
     channels: ["console", "email"],
     throttleMs: 300000,
@@ -259,9 +261,7 @@ export function initializeSecurity(): void {
   alertManager.addRule({
     name: "High Severity Security Events",
     enabled: true,
-    conditions: [
-      { field: "severity", operator: "equals", value: "critical" },
-    ],
+    conditions: [{ field: "severity", operator: "equals", value: "critical" }],
     severity: "critical",
     channels: ["console", "email"],
   });
@@ -314,11 +314,11 @@ export function generateSecureId(length = 16): string {
   let result = "";
   const randomValues = new Uint8Array(length);
   crypto.getRandomValues(randomValues);
-  
+
   for (let i = 0; i < length; i++) {
     result += chars[randomValues[i]! % chars.length];
   }
-  
+
   return result;
 }
 
@@ -327,12 +327,12 @@ export function generateSecureId(length = 16): string {
  */
 export function secureCompare(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
-  
+
   let result = 0;
   for (let i = 0; i < a.length; i++) {
     result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
-  
+
   return result === 0;
 }
 
@@ -357,7 +357,7 @@ export function sanitizeLogOutput(data: unknown): unknown {
   ];
 
   const sanitized: Record<string, unknown> = {};
-  
+
   for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
     if (sensitiveKeys.some((sk) => key.toLowerCase().includes(sk))) {
       sanitized[key] = "[REDACTED]";

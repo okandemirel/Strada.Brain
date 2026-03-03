@@ -1,4 +1,11 @@
-import type { IAIProvider, ConversationMessage, ToolCall, ToolResult, ProviderResponse, IStreamingProvider } from "./providers/provider.interface.js";
+import type {
+  IAIProvider,
+  ConversationMessage,
+  ToolCall,
+  ToolResult,
+  ProviderResponse,
+  IStreamingProvider,
+} from "./providers/provider.interface.js";
 import type { ITool, ToolContext } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage } from "../channels/channel.interface.js";
 import { supportsRichMessaging } from "../channels/channel.interface.js";
@@ -6,7 +13,11 @@ import type { IMemoryManager } from "../memory/memory.interface.js";
 import { isOk, isSome } from "../types/index.js";
 import type { ChatId } from "../types/index.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
-import { STRATA_SYSTEM_PROMPT, buildProjectContext, buildAnalysisSummary } from "./context/strata-knowledge.js";
+import {
+  STRATA_SYSTEM_PROMPT,
+  buildProjectContext,
+  buildAnalysisSummary,
+} from "./context/strata-knowledge.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger } from "../utils/logger.js";
@@ -18,7 +29,8 @@ const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
-const API_KEY_PATTERN = /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+)[a-zA-Z0-9_\-.]{10,}/gi;
+const API_KEY_PATTERN =
+  /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+)[a-zA-Z0-9_\-.]{10,}/gi;
 
 interface Session {
   messages: ConversationMessage[];
@@ -90,8 +102,7 @@ export class Orchestrator {
       });
     }
 
-    this.systemPrompt =
-      STRATA_SYSTEM_PROMPT + buildProjectContext(this.projectPath);
+    this.systemPrompt = STRATA_SYSTEM_PROMPT + buildProjectContext(this.projectPath);
   }
 
   /**
@@ -104,7 +115,15 @@ export class Orchestrator {
     // Per-session concurrency lock: queue messages for the same chat
     const prev = this.sessionLocks.get(chatId) ?? Promise.resolve();
     const current = prev.then(() => this.processMessage(msg));
-    this.sessionLocks.set(chatId, current.catch(() => {}));
+    this.sessionLocks.set(
+      chatId,
+      current.catch((err) => {
+        getLogger().error("Session lock error", {
+          chatId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }),
+    );
     await current;
   }
 
@@ -154,7 +173,9 @@ export class Orchestrator {
           if (typeof m.content !== "string") return false;
           return true;
         })
-        .map((m) => `[${m.role}] ${typeof m.content === "string" ? m.content : "[complex content]"}`)
+        .map(
+          (m) => `[${m.role}] ${typeof m.content === "string" ? m.content : "[complex content]"}`,
+        )
         .join("\n");
       if (summary) {
         await this.memoryManager.storeConversation(chatId as ChatId, summary);
@@ -164,20 +185,24 @@ export class Orchestrator {
     // Start typing indicator loop
     const typingInterval = setInterval(() => {
       if (supportsRichMessaging(this.channel)) {
-        this.channel.sendTypingIndicator(chatId as string).catch(() => {});
+        this.channel.sendTypingIndicator(chatId as string).catch((err) =>
+          getLogger().error("Failed to send typing indicator", {
+            chatId,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
       }
     }, TYPING_INTERVAL_MS);
 
     try {
       await this.runAgentLoop(chatId, session);
     } catch (error) {
-      const errMsg =
-        error instanceof Error ? error.message : "Unknown error";
+      const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
       // M2: Don't leak internal details to users
       await this.channel.sendText(
         chatId,
-        "An error occurred while processing your request. Please try again."
+        "An error occurred while processing your request. Please try again.",
       );
     } finally {
       clearInterval(typingInterval);
@@ -187,10 +212,7 @@ export class Orchestrator {
   /**
    * The core agent loop: LLM → Tool calls → LLM → ... → Response
    */
-  private async runAgentLoop(
-    chatId: string,
-    session: Session
-  ): Promise<void> {
+  private async runAgentLoop(chatId: string, session: Session): Promise<void> {
     const logger = getLogger();
 
     // Retrieve relevant memory context for the first iteration
@@ -210,9 +232,7 @@ export class Orchestrator {
           if (isOk(memoriesResult)) {
             const memories = memoriesResult.value;
             if (memories.length > 0) {
-              const memoryContext = memories
-                .map((m) => m.entry.content)
-                .join("\n---\n");
+              const memoryContext = memories.map((m) => m.entry.content).join("\n---\n");
               systemPrompt += `\n\n## Relevant Memory\n${memoryContext}\n`;
               logger.debug("Injected memory context", {
                 chatId,
@@ -268,23 +288,19 @@ export class Orchestrator {
     let verificationRequested = false;
     // ────────────────────────────────────────────────────────────────────
 
-    const canStream = this.streamingEnabled &&
+    const canStream =
+      this.streamingEnabled &&
       "chatStream" in this.provider &&
       typeof this.provider.chatStream === "function" &&
       "startStreamingMessage" in this.channel &&
       typeof this.channel.startStreamingMessage === "function";
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-
       let response;
       if (canStream) {
         response = await this.streamResponse(chatId, systemPrompt, session);
       } else {
-        response = await this.provider.chat(
-          systemPrompt,
-          session.messages,
-          this.toolDefinitions
-        );
+        response = await this.provider.chat(systemPrompt, session.messages, this.toolDefinitions);
       }
 
       logger.debug("LLM response", {
@@ -299,20 +315,17 @@ export class Orchestrator {
       this.metrics?.recordTokenUsage(
         response.usage.inputTokens,
         response.usage.outputTokens,
-        this.provider.name
+        this.provider.name,
       );
       this.rateLimiter?.recordTokenUsage(
         response.usage.inputTokens,
         response.usage.outputTokens,
-        this.provider.name
+        this.provider.name,
       );
 
       // If no tool calls, send the final text response
       // (streaming already sent it, so skip for streamed end_turn)
-      if (
-        response.stopReason === "end_turn" ||
-        response.toolCalls.length === 0
-      ) {
+      if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
         // ─── Verification gate: catch unverified exits ──────────────────
         if (!verificationRequested && selfVerification.needsVerification()) {
           verificationRequested = true;
@@ -355,10 +368,7 @@ export class Orchestrator {
       }
 
       // Execute all tool calls
-      const toolResults = await this.executeToolCalls(
-        chatId,
-        response.toolCalls
-      );
+      const toolResults = await this.executeToolCalls(chatId, response.toolCalls);
 
       // ─── Autonomy: track + analyze results ─────────────────────────────
       for (let i = 0; i < response.toolCalls.length; i++) {
@@ -419,7 +429,7 @@ export class Orchestrator {
     await this.channel.sendText(
       chatId,
       "I've reached the maximum number of steps for this request. " +
-        "Please send a follow-up message to continue."
+        "Please send a follow-up message to continue.",
     );
   }
 
@@ -430,7 +440,7 @@ export class Orchestrator {
   private async streamResponse(
     chatId: string,
     systemPrompt: string,
-    session: Session
+    session: Session,
   ): Promise<ProviderResponse> {
     const channel = this.channel;
     let streamId: string | undefined;
@@ -444,23 +454,49 @@ export class Orchestrator {
       const now = Date.now();
       if (now - lastUpdate >= STREAM_THROTTLE_MS && streamId) {
         lastUpdate = now;
-        (channel as { updateStreamingMessage?: (chatId: string, streamId: string, text: string) => Promise<void> }).updateStreamingMessage?.(chatId, streamId, accumulated)?.catch(() => {});
+        (
+          channel as {
+            updateStreamingMessage?: (
+              chatId: string,
+              streamId: string,
+              text: string,
+            ) => Promise<void>;
+          }
+        )
+          .updateStreamingMessage?.(chatId, streamId, accumulated)
+          ?.catch((err) =>
+            getLogger().error("Failed to update streaming message", {
+              chatId,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
       }
     };
 
     // Start the streaming message placeholder
-    streamId = await (channel as { startStreamingMessage?: (chatId: string) => Promise<string | undefined> }).startStreamingMessage?.(chatId) ?? undefined;
+    streamId =
+      (await (
+        channel as { startStreamingMessage?: (chatId: string) => Promise<string | undefined> }
+      ).startStreamingMessage?.(chatId)) ?? undefined;
 
     const response = await (this.provider as IStreamingProvider).chatStream(
       systemPrompt,
       session.messages,
       this.toolDefinitions,
-      onChunk
+      onChunk,
     );
 
     // Finalize the streamed message
     if (streamId && accumulated) {
-      await (channel as { finalizeStreamingMessage?: (chatId: string, streamId: string, text: string) => Promise<void> }).finalizeStreamingMessage?.(chatId, streamId, accumulated);
+      await (
+        channel as {
+          finalizeStreamingMessage?: (
+            chatId: string,
+            streamId: string,
+            text: string,
+          ) => Promise<void>;
+        }
+      ).finalizeStreamingMessage?.(chatId, streamId, accumulated);
     }
 
     return response;
@@ -469,10 +505,7 @@ export class Orchestrator {
   /**
    * Execute tool calls, handling confirmations for write operations.
    */
-  private async executeToolCalls(
-    chatId: string,
-    toolCalls: ToolCall[]
-  ): Promise<ToolResult[]> {
+  private async executeToolCalls(chatId: string, toolCalls: ToolCall[]): Promise<ToolResult[]> {
     const logger = getLogger();
     const results: ToolResult[] = [];
 
@@ -501,11 +534,7 @@ export class Orchestrator {
 
       // Confirmation flow for write operations
       if (this.requireConfirmation && this.isWriteOperation(tc.name)) {
-        const confirmed = await this.requestWriteConfirmation(
-          chatId,
-          tc.name,
-          tc.input
-        );
+        const confirmed = await this.requestWriteConfirmation(chatId, tc.name, tc.input);
         if (!confirmed) {
           results.push({
             toolCallId: tc.id,
@@ -527,8 +556,7 @@ export class Orchestrator {
         });
       } catch (error) {
         this.metrics?.recordToolCall(tc.name, Date.now() - toolStart, false);
-        const errMsg =
-          error instanceof Error ? error.message : "Unknown error";
+        const errMsg = error instanceof Error ? error.message : "Unknown error";
         logger.error("Tool execution error", {
           tool: tc.name,
           error: errMsg,
@@ -551,7 +579,7 @@ export class Orchestrator {
   private async requestWriteConfirmation(
     chatId: string,
     toolName: string,
-    input: Record<string, unknown>
+    input: Record<string, unknown>,
   ): Promise<boolean> {
     let question: string;
     let details: string;
@@ -588,7 +616,16 @@ export class Orchestrator {
       }
     }
 
-    const response = await (this.channel as unknown as { requestConfirmation: (req: { chatId: string; question: string; options: string[]; details?: string }) => Promise<string> }).requestConfirmation({
+    const response = await (
+      this.channel as unknown as {
+        requestConfirmation: (req: {
+          chatId: string;
+          question: string;
+          options: string[];
+          details?: string;
+        }) => Promise<string>;
+      }
+    ).requestConfirmation({
       chatId,
       question,
       options: ["Yes", "No"],

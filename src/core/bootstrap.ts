@@ -1,6 +1,6 @@
 /**
  * Application Bootstrap
- * 
+ *
  * Handles initialization of all services and wires up dependencies.
  * Replaces the monolithic startBrain() function from index.ts.
  */
@@ -109,6 +109,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   const dashboard = await initializeDashboard(config, metrics, memoryManager, logger);
 
+  // Register services for deep readiness checks
+  if (dashboard) {
+    dashboard.registerServices({ memoryManager, channel });
+  }
+
   // Initialize rate limiter
   const rateLimiter = initializeRateLimiter(config, logger);
 
@@ -157,11 +162,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 // Private Helpers
 // ============================================================================
 
-function initializeAuth(
-  config: Config,
-  channelType: string,
-  logger: winston.Logger
-): AuthManager {
+function initializeAuth(config: Config, channelType: string, logger: winston.Logger): AuthManager {
   const allowedTelegramIds = config.telegram.allowedUserIds ?? [];
   if (channelType === "telegram" && allowedTelegramIds.length === 0) {
     logger.warn("ALLOWED_TELEGRAM_USER_IDS is empty — all Telegram users will be denied access");
@@ -171,17 +172,19 @@ function initializeAuth(
     process.env["ALLOWED_DISCORD_USER_IDS"]
       ?.split(",")
       .map((id) => id.trim())
-      .filter(Boolean) ?? []
+      .filter(Boolean) ?? [],
   );
   const allowedDiscordRoles = new Set(
     process.env["ALLOWED_DISCORD_ROLE_IDS"]
       ?.split(",")
       .map((id) => id.trim())
-      .filter(Boolean) ?? []
+      .filter(Boolean) ?? [],
   );
 
   if (channelType === "discord" && allowedDiscordIds.size === 0 && allowedDiscordRoles.size === 0) {
-    logger.warn("ALLOWED_DISCORD_USER_IDS and ALLOWED_DISCORD_ROLE_IDS are empty — all Discord users will be denied access");
+    logger.warn(
+      "ALLOWED_DISCORD_USER_IDS and ALLOWED_DISCORD_ROLE_IDS are empty — all Discord users will be denied access",
+    );
   }
 
   return new AuthManager(allowedTelegramIds, {
@@ -190,10 +193,7 @@ function initializeAuth(
   });
 }
 
-function initializeAIProvider(
-  config: Config,
-  logger: winston.Logger
-): IAIProvider {
+function initializeAIProvider(config: Config, logger: winston.Logger): IAIProvider {
   if (config.providerChain) {
     const names = config.providerChain.split(",").map((s) => s.trim());
     const apiKeys = {
@@ -222,7 +222,7 @@ function initializeAIProvider(
 
 async function initializeMemory(
   config: Config,
-  logger: winston.Logger
+  logger: winston.Logger,
 ): Promise<IMemoryManager | undefined> {
   if (!config.memory.enabled) {
     return undefined;
@@ -243,7 +243,7 @@ async function initializeMemory(
 
 async function initializeRAG(
   config: Config,
-  logger: winston.Logger
+  logger: winston.Logger,
 ): Promise<IRAGPipeline | undefined> {
   if (!config.rag.enabled) {
     return undefined;
@@ -277,7 +277,7 @@ async function initializeRAG(
 
     const vectorStore = new FileVectorStore(
       join(config.memory.dbPath, "vectors"),
-      cachedProvider.dimensions
+      cachedProvider.dimensions,
     );
 
     // HNSW configuration from environment or defaults
@@ -304,11 +304,14 @@ async function initializeRAG(
     });
 
     // Background indexing
-    pipeline.indexProject(config.unityProjectPath)
+    pipeline
+      .indexProject(config.unityProjectPath)
       .then((stats) => logger.info("Initial RAG indexing complete", stats))
-      .catch((err) => logger.warn("Initial RAG indexing failed", {
-        error: err instanceof Error ? err.message : String(err),
-      }));
+      .catch((err) =>
+        logger.warn("Initial RAG indexing failed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
 
     return pipeline;
   } catch (error) {
@@ -325,10 +328,7 @@ interface LearningResult {
   errorRecovery: ErrorRecoveryEngine;
 }
 
-async function initializeLearning(
-  config: Config,
-  logger: winston.Logger
-): Promise<LearningResult> {
+async function initializeLearning(config: Config, logger: winston.Logger): Promise<LearningResult> {
   try {
     const learningDbPath = join(config.memory.dbPath, "learning.db");
     const learningStorage = new LearningStorage(learningDbPath);
@@ -352,7 +352,7 @@ async function initializeLearning(
       pipeline,
       patternMatcher,
       confidenceScorer,
-      learningStorage
+      learningStorage,
     );
 
     const errorRecovery = new ErrorRecoveryEngine();
@@ -385,7 +385,7 @@ async function initializeChannel(
   channelType: string,
   config: Config,
   auth: AuthManager,
-  logger: winston.Logger
+  logger: winston.Logger,
 ): Promise<IChannelAdapter> {
   switch (channelType) {
     case "cli":
@@ -408,7 +408,7 @@ async function initializeChannel(
       if (!config.discord.botToken) {
         throw new AppError(
           "DISCORD_BOT_TOKEN is required when using Discord channel",
-          "MISSING_DISCORD_TOKEN"
+          "MISSING_DISCORD_TOKEN",
         );
       }
       return new DiscordChannel(config.discord.botToken, auth, {
@@ -422,7 +422,7 @@ async function initializeChannel(
       if (!config.telegram.botToken) {
         throw new AppError(
           "TELEGRAM_BOT_TOKEN is required when using Telegram channel",
-          "MISSING_TELEGRAM_TOKEN"
+          "MISSING_TELEGRAM_TOKEN",
         );
       }
       return new TelegramChannel(config.telegram.botToken, auth);
@@ -434,16 +434,14 @@ async function initializeDashboard(
   config: Config,
   metrics: MetricsCollector,
   memoryManager: IMemoryManager | undefined,
-  logger: winston.Logger
+  logger: winston.Logger,
 ): Promise<DashboardServer | undefined> {
   if (!config.dashboard.enabled) {
     return undefined;
   }
 
-  const dashboard = new DashboardServer(
-    config.dashboard.port,
-    metrics,
-    () => memoryManager?.getStats()
+  const dashboard = new DashboardServer(config.dashboard.port, metrics, () =>
+    memoryManager?.getStats(),
   );
 
   try {
@@ -457,10 +455,7 @@ async function initializeDashboard(
   }
 }
 
-function initializeRateLimiter(
-  config: Config,
-  logger: winston.Logger
-): RateLimiter | undefined {
+function initializeRateLimiter(config: Config, logger: winston.Logger): RateLimiter | undefined {
   if (!config.rateLimit.enabled) {
     return undefined;
   }
@@ -485,7 +480,7 @@ function wireMessageHandler(
   channel: IChannelAdapter,
   orchestrator: Orchestrator,
   taskPlanner: TaskPlanner,
-  learningPipeline: LearningPipeline | undefined
+  learningPipeline: LearningPipeline | undefined,
 ): void {
   channel.onMessage(async (msg) => {
     // Start task tracking
@@ -526,7 +521,8 @@ interface ShutdownOptions {
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
-  const { dashboard, ragPipeline, memoryManager, channel, cleanupInterval, learningPipeline } = options;
+  const { dashboard, ragPipeline, memoryManager, channel, cleanupInterval, learningPipeline } =
+    options;
   const logger = getLogger();
 
   return async (): Promise<void> => {

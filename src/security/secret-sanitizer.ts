@@ -1,6 +1,6 @@
 /**
  * Secret Sanitizer - Prevents accidental exposure of sensitive data
- * 
+ *
  * Detects and redacts: API keys, tokens, private keys, credentials
  */
 
@@ -39,54 +39,150 @@ export interface SanitizeResult {
 
 // ─── Pattern Builders ────────────────────────────────────────────────────────
 
-const buildKeyPattern = (prefix: string, suffix = ""): RegExp => 
+const buildKeyPattern = (prefix: string, suffix = ""): RegExp =>
   new RegExp(`${prefix}[a-zA-Z0-9_${suffix}]{${MIN_KEY_LENGTH},}`, "g");
 
 const buildEnvPattern = (keys: string[]): RegExp =>
-  new RegExp(`(?:${keys.join("|")})["']?\\s*[:=]\\s*["']?[a-zA-Z0-9_\\-\\/+=]{${MIN_KEY_LENGTH},}["']?`, "gi");
+  new RegExp(
+    `(?:${keys.join("|")})["']?\\s*[:=]\\s*["']?[a-zA-Z0-9_\\-\\/+=]{${MIN_KEY_LENGTH},}["']?`,
+    "gi",
+  );
 
 // ─── Default Patterns ────────────────────────────────────────────────────────
 
 export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
   // API Keys (specific patterns first)
   { name: "openai_api_key", pattern: buildKeyPattern("sk-"), redaction: "[REDACTED_OPENAI_KEY]" },
-  { name: "openai_project_key", pattern: buildKeyPattern("sk-proj-", "-"), redaction: "[REDACTED_OPENAI_PROJECT_KEY]" },
-  { name: "github_token", pattern: /gh[pousr]_[a-zA-Z0-9]{20,}/g, redaction: "[REDACTED_GITHUB_TOKEN]" },
-  { name: "github_pat", pattern: /github_pat_[a-zA-Z0-9]{20,}_[a-zA-Z0-9]{20,}/g, redaction: "[REDACTED_GITHUB_PAT]" },
-  { name: "slack_token", pattern: /xox[bpas]-[a-zA-Z0-9-]{10,}/g, redaction: "[REDACTED_SLACK_TOKEN]" },
+  {
+    name: "openai_project_key",
+    pattern: buildKeyPattern("sk-proj-", "-"),
+    redaction: "[REDACTED_OPENAI_PROJECT_KEY]",
+  },
+  {
+    name: "github_token",
+    pattern: /gh[pousr]_[a-zA-Z0-9]{20,}/g,
+    redaction: "[REDACTED_GITHUB_TOKEN]",
+  },
+  {
+    name: "github_pat",
+    pattern: /github_pat_[a-zA-Z0-9]{20,}_[a-zA-Z0-9]{20,}/g,
+    redaction: "[REDACTED_GITHUB_PAT]",
+  },
+  {
+    name: "slack_token",
+    pattern: /xox[bpas]-[a-zA-Z0-9-]{10,}/g,
+    redaction: "[REDACTED_SLACK_TOKEN]",
+  },
   { name: "aws_access_key", pattern: /AKIA[0-9A-Z]{16}/g, redaction: "[REDACTED_AWS_KEY]" },
-  { name: "discord_token", pattern: /[MN][A-Za-z\d]{20,}\.[\w-]{6,}\.[\w-]{20,}/g, redaction: "[REDACTED_DISCORD_TOKEN]" },
-  { name: "telegram_token", pattern: /\d{8,10}:[a-zA-Z0-9_-]{20,}/g, redaction: "[REDACTED_TELEGRAM_TOKEN]" },
-  { name: "jwt_token", pattern: /eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*/g, redaction: "[REDACTED_JWT]" },
-  
+  {
+    name: "discord_token",
+    pattern: /[MN][A-Za-z\d]{20,}\.[\w-]{6,}\.[\w-]{20,}/g,
+    redaction: "[REDACTED_DISCORD_TOKEN]",
+  },
+  {
+    name: "telegram_token",
+    pattern: /\d{8,10}:[a-zA-Z0-9_-]{20,}/g,
+    redaction: "[REDACTED_TELEGRAM_TOKEN]",
+  },
+
+  // Anthropic keys
+  {
+    name: "anthropic_api_key",
+    pattern: /sk-ant-api03-[a-zA-Z0-9_\-]{20,}/g,
+    redaction: "[REDACTED_ANTHROPIC_KEY]",
+  },
+
+  // Google/GCP keys
+  { name: "gcp_api_key", pattern: /AIza[0-9A-Za-z_\-]{35}/g, redaction: "[REDACTED_GCP_KEY]" },
+
+  // Azure keys
+  {
+    name: "azure_key",
+    pattern:
+      /(?:AZURE_[A-Z_]*KEY|azure[_-](?:storage|api|subscription)[_-]key)["']?\s*[:=]\s*["']?[a-zA-Z0-9+/=]{20,}["']?/gi,
+    redaction: "[REDACTED_AZURE_KEY]",
+  },
+
+  // WhatsApp/Meta tokens
+  { name: "whatsapp_token", pattern: /EAA[a-zA-Z0-9]{20,}/g, redaction: "[REDACTED_META_TOKEN]" },
+
+  // Firebase service account (JSON key identifier)
+  {
+    name: "firebase_private_key_id",
+    pattern: /"private_key_id"\s*:\s*"[a-f0-9]{40}"/g,
+    redaction: '"private_key_id": "[REDACTED]"',
+  },
+  {
+    name: "firebase_client_email",
+    pattern: /"client_email"\s*:\s*"[^"]*@[^"]*\.iam\.gserviceaccount\.com"/g,
+    redaction: '"client_email": "[REDACTED]"',
+  },
+
+  {
+    name: "jwt_token",
+    pattern: /eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*/g,
+    redaction: "[REDACTED_JWT]",
+  },
+
   // Auth headers
-  { name: "bearer_token", pattern: /Bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi, redaction: "Bearer [REDACTED]" },
-  { name: "basic_auth", pattern: /Basic\s+[a-zA-Z0-9+/]{20,}={0,2}/gi, redaction: "Basic [REDACTED]" },
-  
+  {
+    name: "bearer_token",
+    pattern: /Bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi,
+    redaction: "Bearer [REDACTED]",
+  },
+  {
+    name: "basic_auth",
+    pattern: /Basic\s+[a-zA-Z0-9+/]{20,}={0,2}/gi,
+    redaction: "Basic [REDACTED]",
+  },
+
   // URLs and connections
-  { 
-    name: "slack_webhook", 
+  {
+    name: "slack_webhook",
     pattern: /https:\/\/hooks\.slack\.com\/services\/T[a-zA-Z0-9]+\/B[a-zA-Z0-9]+\/[a-zA-Z0-9]+/g,
-    redaction: "[REDACTED_SLACK_WEBHOOK]"
+    redaction: "[REDACTED_SLACK_WEBHOOK]",
   },
   {
     name: "database_url",
     pattern: /(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@[^/\s]+/gi,
     redaction: (match: string) => {
       const urlMatch = match.match(/^(\w+:\/\/)[^:]+:[^@]+(@.+)$/);
-      return urlMatch ? `${urlMatch[1]}[REDACTED_CREDENTIALS]${urlMatch[2]}` : "[REDACTED_DATABASE_URL]";
+      return urlMatch
+        ? `${urlMatch[1]}[REDACTED_CREDENTIALS]${urlMatch[2]}`
+        : "[REDACTED_DATABASE_URL]";
     },
   },
-  
+
   // Credentials
-  { name: "aws_secret_key", pattern: buildEnvPattern(["aws_secret", "aws_secret_access_key"]), redaction: "[REDACTED_AWS_SECRET]" },
-  { name: "private_key", pattern: /-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----/g, redaction: "[REDACTED_PRIVATE_KEY]" },
-  { name: "connection_password", pattern: /(?:password|pwd)=([^;\s&]{4,})/gi, redaction: "password=[REDACTED]" },
-  
+  {
+    name: "aws_secret_key",
+    pattern: buildEnvPattern(["aws_secret", "aws_secret_access_key"]),
+    redaction: "[REDACTED_AWS_SECRET]",
+  },
+  {
+    name: "private_key",
+    pattern:
+      /-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----/g,
+    redaction: "[REDACTED_PRIVATE_KEY]",
+  },
+  {
+    name: "connection_password",
+    pattern: /(?:password|pwd)=([^;\s&]{4,})/gi,
+    redaction: "password=[REDACTED]",
+  },
+
   // Generic patterns (lowest priority)
-  { name: "api_key", pattern: buildEnvPattern(["api_key", "apikey", "api_secret"]), redaction: "[REDACTED_API_KEY]" },
+  {
+    name: "api_key",
+    pattern: buildEnvPattern(["api_key", "apikey", "api_secret"]),
+    redaction: "[REDACTED_API_KEY]",
+  },
   { name: "env_value", pattern: /^([A-Z_][A-Z0-9_]*)=(.+)$/gm, redaction: "$1=[REDACTED]" },
-  { name: "secret_value", pattern: buildEnvPattern(["secret", "token", "password", "key"]), redaction: "[REDACTED_SECRET]" },
+  {
+    name: "secret_value",
+    pattern: buildEnvPattern(["secret", "token", "password", "key"]),
+    redaction: "[REDACTED_SECRET]",
+  },
 ];
 
 // ─── SecretSanitizer Class ───────────────────────────────────────────────────
@@ -104,14 +200,14 @@ export class SecretSanitizer {
 
   private buildPatterns(options: SanitizeOptions): SecretPattern[] {
     let patterns = [...DEFAULT_SECRET_PATTERNS];
-    
+
     if (options.excludePatterns) {
-      patterns = patterns.filter(p => !options.excludePatterns!.includes(p.name));
+      patterns = patterns.filter((p) => !options.excludePatterns!.includes(p.name));
     }
     if (options.additionalPatterns) {
       patterns.push(...options.additionalPatterns);
     }
-    
+
     return patterns;
   }
 
@@ -131,14 +227,15 @@ export class SecretSanitizer {
 
       stats.totalMatches += matches.length;
       stats.matchesByPattern[pattern.name] = matches.length;
-      
+
       if (this.debug) {
         console.log(`[SecretSanitizer] Matched ${pattern.name}: ${matches.length} occurrence(s)`);
       }
 
-      const redaction = typeof pattern.redaction === "function" 
-        ? pattern.redaction(matches[0] ?? "") 
-        : pattern.redaction;
+      const redaction =
+        typeof pattern.redaction === "function"
+          ? pattern.redaction(matches[0] ?? "")
+          : pattern.redaction;
       result = result.replace(pattern.pattern, redaction);
     }
 
@@ -158,11 +255,11 @@ export class SecretSanitizer {
   }
 
   containsSecrets(content: string): boolean {
-    return this.patterns.some(p => p.pattern.test(content));
+    return this.patterns.some((p) => p.pattern.test(content));
   }
 
   getActivePatterns(): string[] {
-    return this.patterns.map(p => p.name);
+    return this.patterns.map((p) => p.name);
   }
 }
 
@@ -173,6 +270,11 @@ let globalSanitizer: SecretSanitizer | null = null;
 function getGlobalSanitizer(): SecretSanitizer {
   globalSanitizer ??= new SecretSanitizer();
   return globalSanitizer;
+}
+
+export function sanitizeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return sanitizeSecrets(message);
 }
 
 export function sanitizeSecrets(content: string, options?: SanitizeOptions): string {
@@ -188,7 +290,7 @@ export function hasSecrets(content: string): boolean {
 
 export function createSanitizationReport(
   results: SanitizeResult[],
-  context: string
+  context: string,
 ): Record<string, unknown> {
   const patternsHit = new Set<string>();
   let totalMatches = 0;
@@ -197,7 +299,7 @@ export function createSanitizationReport(
   for (const result of results) {
     totalMatches += result.stats.totalMatches;
     totalBytesRemoved += result.stats.bytesRemoved;
-    Object.keys(result.stats.matchesByPattern).forEach(p => patternsHit.add(p));
+    Object.keys(result.stats.matchesByPattern).forEach((p) => patternsHit.add(p));
   }
 
   return {
@@ -206,6 +308,6 @@ export function createSanitizationReport(
     totalMatches,
     totalBytesRemoved,
     uniquePatternsHit: Array.from(patternsHit),
-    sanitizationRate: results.filter(r => r.wasSanitized).length / results.length,
+    sanitizationRate: results.filter((r) => r.wasSanitized).length / results.length,
   };
 }

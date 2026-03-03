@@ -1,6 +1,12 @@
 /**
  * Tiered rate limiter for Slack API calls.
  * Implements Slack's rate limiting tiers: https://api.slack.com/docs/rate-limits
+ *
+ * NOTE: This rate limiter handles outgoing Slack API request throttling
+ * using Slack's tiered system (Tiers 1-4). It is intentionally separate
+ * from the shared RateLimiter in src/security/rate-limiter.ts, which
+ * handles per-user message rate limiting and cost/budget tracking. The
+ * two serve different purposes and should not be consolidated.
  */
 
 import { getLogger } from "../../utils/logger.js";
@@ -33,20 +39,20 @@ interface RequestRecord {
 
 /**
  * Slack Rate Limiter implementing tiered rate limiting.
- * 
+ *
  * Slack API Rate Limits:
  * - Tier 1 (PostMessage): 1+ per second per channel
  * - Tier 2 (Conversations.*): ~20 per minute
- * - Tier 3 (Dialogs, Views): ~50 per minute  
+ * - Tier 3 (Dialogs, Views): ~50 per minute
  * - Tier 4 (Other): Varies by method
  */
 export class SlackRateLimiter {
   private readonly logger = getLogger();
-  
+
   // Request history for rate tracking
   private readonly requestHistory: RequestRecord[] = [];
   private readonly historyWindowMs = 60 * 60 * 1000; // 1 hour window
-  
+
   // Pending request queues per tier
   private readonly queues: Map<number, Array<() => void>> = new Map([
     [1, []],
@@ -54,7 +60,7 @@ export class SlackRateLimiter {
     [3, []],
     [4, []],
   ]);
-  
+
   // Processing state per tier
   private readonly processing: Map<number, boolean> = new Map([
     [1, false],
@@ -113,7 +119,7 @@ export class SlackRateLimiter {
         } else {
           // Add to queue
           const queue = this.queues.get(tier)!;
-          
+
           queue.push(() => {
             clearTimeout(timeout);
             this.recordRequest(method, tier);
@@ -135,17 +141,17 @@ export class SlackRateLimiter {
   private canProceed(tier: 1 | 2 | 3 | 4): boolean {
     const config = this.getTierConfig(tier);
     const now = Date.now();
-    
+
     // Clean old history
     this.cleanHistory();
 
     // Get recent requests for this tier
     const recentRequests = this.requestHistory.filter(
-      (r) => r.tier === tier && now - r.timestamp < 60000
+      (r) => r.tier === tier && now - r.timestamp < 60000,
     );
-    
+
     const recentHourRequests = this.requestHistory.filter(
-      (r) => r.tier === tier && now - r.timestamp < 3600000
+      (r) => r.tier === tier && now - r.timestamp < 3600000,
     );
 
     // Check minute limit
@@ -184,7 +190,7 @@ export class SlackRateLimiter {
   private cleanHistory(): void {
     const cutoff = Date.now() - this.historyWindowMs;
     const index = this.requestHistory.findIndex((r) => r.timestamp > cutoff);
-    
+
     if (index > 0) {
       this.requestHistory.splice(0, index);
     }
@@ -213,7 +219,7 @@ export class SlackRateLimiter {
    */
   private processQueue(tier: 1 | 2 | 3 | 4): void {
     const queue = this.queues.get(tier)!;
-    
+
     while (queue.length > 0 && this.canProceed(tier)) {
       const next = queue.shift();
       if (next) {
@@ -235,10 +241,10 @@ export class SlackRateLimiter {
   private calculateDelay(tier: 1 | 2 | 3 | 4): number {
     const config = this.getTierConfig(tier);
     const minInterval = 60000 / config.requestsPerMinute;
-    
+
     // Add jitter to prevent thundering herd
     const jitter = Math.random() * 100;
-    
+
     return Math.max(minInterval, 100) + jitter;
   }
 
@@ -273,20 +279,9 @@ export class SlackRateLimiter {
       "reactions.remove",
     ];
 
-    const tier2Methods = [
-      "conversations.*",
-      "channels.*",
-      "groups.*",
-      "im.*",
-      "mpim.*",
-      "users.*",
-    ];
+    const tier2Methods = ["conversations.*", "channels.*", "groups.*", "im.*", "mpim.*", "users.*"];
 
-    const tier3Methods = [
-      "views.*",
-      "dialog.*",
-      "workflows.*",
-    ];
+    const tier3Methods = ["views.*", "dialog.*", "workflows.*"];
 
     if (tier1Methods.some((m) => method.match(m.replace("*", ".*")))) {
       return 1;
@@ -309,10 +304,10 @@ export class SlackRateLimiter {
    */
   handleRateLimitResponse(retryAfter: number): number {
     this.logger.warn("Slack rate limit hit", { retryAfter });
-    
+
     // Add buffer to retry-after
-    const waitTime = (retryAfter * 1000) + 1000;
-    
+    const waitTime = retryAfter * 1000 + 1000;
+
     return waitTime;
   }
 
@@ -328,7 +323,7 @@ export class SlackRateLimiter {
     for (const tier of [1, 2, 3, 4] as const) {
       const config = this.getTierConfig(tier);
       const recentRequests = this.requestHistory.filter(
-        (r) => r.tier === tier && now - r.timestamp < 60000
+        (r) => r.tier === tier && now - r.timestamp < 60000,
       );
 
       status[`tier${tier}`] = {

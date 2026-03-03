@@ -1,6 +1,6 @@
 /**
  * DM Policy (Diff/Merge Confirmation Flow)
- * 
+ *
  * Manages confirmation policy for destructive or modifying operations.
  */
 
@@ -18,8 +18,12 @@ const DEFAULT_PREVIEW_LINES = 50;
 const MAX_FULL_DIFF_LINES = 500;
 
 const DESTRUCTIVE_TOOLS = [
-  "file_delete", "file_delete_directory", "file_write", 
-  "shell_exec", "git_push", "git_reset",
+  "file_delete",
+  "file_delete_directory",
+  "file_write",
+  "shell_exec",
+  "git_push",
+  "git_reset",
 ];
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -126,7 +130,7 @@ export class DMPolicy {
   isApprovalRequired(
     prefs: SessionApprovalPrefs,
     diff: FileDiff | BatchDiff,
-    isDestructive: boolean
+    isDestructive: boolean,
   ): boolean {
     switch (prefs.level) {
       case ApprovalLevel.NEVER:
@@ -142,8 +146,10 @@ export class DMPolicy {
 
   private exceedsThreshold(prefs: SessionApprovalPrefs, diff: FileDiff | BatchDiff): boolean {
     if ("files" in diff) {
-      return diff.files.length >= prefs.smartFileThreshold || 
-             diff.totalStats.totalChanges >= prefs.smartLineThreshold;
+      return (
+        diff.files.length >= prefs.smartFileThreshold ||
+        diff.totalStats.totalChanges >= prefs.smartLineThreshold
+      );
     }
     return diff.stats.totalChanges >= prefs.smartLineThreshold;
   }
@@ -155,7 +161,7 @@ export class DMPolicy {
     userId: string,
     diff: FileDiff | BatchDiff,
     operation: string,
-    isDestructive = false
+    isDestructive = false,
   ): Promise<ApprovalResult> {
     const prefs = this.getSessionPrefs(userId, chatId);
 
@@ -165,12 +171,20 @@ export class DMPolicy {
 
     const channelType = this.detectChannelType(chatId);
     const isBatch = "files" in diff;
-    
+
     const preview = isBatch
       ? formatBatchDiffForChannel(diff, channelType, { maxLines: this.config.maxPreviewLines })
       : formatDiffForChannel(diff, channelType, { maxLines: this.config.maxPreviewLines });
 
-    return this.createConfirmation(chatId, userId, diff, operation, preview, channelType, isDestructive);
+    return this.createConfirmation(
+      chatId,
+      userId,
+      diff,
+      operation,
+      preview,
+      channelType,
+      isDestructive,
+    );
   }
 
   private createConfirmation(
@@ -180,10 +194,10 @@ export class DMPolicy {
     operation: string,
     preview: string,
     channelType: "telegram" | "whatsapp" | "cli",
-    isDestructive: boolean
+    isDestructive: boolean,
   ): Promise<ApprovalResult> {
     const confirmationId = this.generateConfirmationId();
-    
+
     return new Promise<ApprovalResult>((resolve) => {
       const confirmation: PendingConfirmation = {
         id: confirmationId,
@@ -198,11 +212,12 @@ export class DMPolicy {
 
       this.pendingConfirmations.set(confirmationId, confirmation);
 
-      this.sendConfirmationRequest(confirmation, preview, channelType, isDestructive)
-        .catch(err => {
+      this.sendConfirmationRequest(confirmation, preview, channelType, isDestructive).catch(
+        (err) => {
           getLogger().error("Failed to send confirmation request", { error: err });
           resolve({ approved: false, action: "timeout", message: "Failed to send confirmation" });
-        });
+        },
+      );
 
       setTimeout(() => this.handleTimeout(confirmationId), this.config.defaultTimeoutMs);
     });
@@ -222,7 +237,11 @@ export class DMPolicy {
         return true;
 
       case "reject":
-        this.resolveConfirmation(confirmationId, { approved: false, action: "reject", message: "User rejected" });
+        this.resolveConfirmation(confirmationId, {
+          approved: false,
+          action: "reject",
+          message: "User rejected",
+        });
         return true;
 
       case "view_full":
@@ -234,8 +253,17 @@ export class DMPolicy {
         return true;
 
       default:
-        this.channel.sendText(confirmation.chatId, "Please respond with: ✅ Approve, ❌ Reject, or 📋 View Full")
-          .catch(() => {});
+        this.channel
+          .sendText(
+            confirmation.chatId,
+            "Please respond with: ✅ Approve, ❌ Reject, or 📋 View Full",
+          )
+          .catch((err) =>
+            getLogger().error("Failed to send approval prompt", {
+              chatId: confirmation.chatId,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
         return true;
     }
   }
@@ -244,14 +272,24 @@ export class DMPolicy {
     const confirmation = this.pendingConfirmations.get(confirmationId);
     if (!confirmation) return false;
 
-    this.resolveConfirmation(confirmationId, { approved: false, action: "timeout", message: reason });
+    this.resolveConfirmation(confirmationId, {
+      approved: false,
+      action: "timeout",
+      message: reason,
+    });
     return true;
   }
 
   // ─── Getters ─────────────────────────────────────────────────────────────────
 
-  getPendingConfirmations(): Array<{ id: string; chatId: string; userId: string; requestedAt: Date; operation: string }> {
-    return Array.from(this.pendingConfirmations.values()).map(c => ({
+  getPendingConfirmations(): Array<{
+    id: string;
+    chatId: string;
+    userId: string;
+    requestedAt: Date;
+    operation: string;
+  }> {
+    return Array.from(this.pendingConfirmations.values()).map((c) => ({
       id: c.id,
       chatId: c.chatId,
       userId: c.userId,
@@ -289,20 +327,23 @@ export class DMPolicy {
     confirmation: PendingConfirmation,
     preview: string,
     channelType: "telegram" | "whatsapp" | "cli",
-    isDestructive: boolean
+    isDestructive: boolean,
   ): Promise<void> {
     const warning = isDestructive ? "⚠️ " : "";
     const header = `${warning}*Approval Required*\n\n`;
     const footer = "\n\n_Reply with: ✅ Approve, ❌ Reject, or 📋 View Full_";
 
-    const message = channelType === "cli" 
-      ? `${preview}\n\nApprove? (y/n/v for view full): `
-      : header + preview + footer;
+    const message =
+      channelType === "cli"
+        ? `${preview}\n\nApprove? (y/n/v for view full): `
+        : header + preview + footer;
 
     await this.channel.sendMarkdown(confirmation.chatId, message);
   }
 
-  private parseUserResponse(response: string): "approve" | "reject" | "edit" | "view_full" | "unknown" {
+  private parseUserResponse(
+    response: string,
+  ): "approve" | "reject" | "edit" | "view_full" | "unknown" {
     const lower = response.toLowerCase().trim();
 
     if (/^(yes|y|approve|✅|✓|ok|confirm)/i.test(lower)) return "approve";
@@ -319,29 +360,45 @@ export class DMPolicy {
     const fullDiff = confirmation.fileDiff
       ? formatDiffForChannel(confirmation.fileDiff, channelType, { maxLines: MAX_FULL_DIFF_LINES })
       : confirmation.batchDiff
-        ? formatBatchDiffForChannel(confirmation.batchDiff, channelType, { maxLines: MAX_FULL_DIFF_LINES })
+        ? formatBatchDiffForChannel(confirmation.batchDiff, channelType, {
+            maxLines: MAX_FULL_DIFF_LINES,
+          })
         : "No diff available";
 
     await this.channel.sendMarkdown(
       confirmation.chatId,
-      `*Full Diff:*\n\n${fullDiff}\n\n_Reply with: ✅ Approve or ❌ Reject_`
+      `*Full Diff:*\n\n${fullDiff}\n\n_Reply with: ✅ Approve or ❌ Reject_`,
     );
   }
 
   private handleEditRequest(confirmation: PendingConfirmation): void {
     if (!this.config.allowEditing || !confirmation.fileDiff) {
-      this.channel.sendText(confirmation.chatId, "Editing is not available for this operation.").catch(() => {});
+      this.channel
+        .sendText(confirmation.chatId, "Editing is not available for this operation.")
+        .catch((err) =>
+          getLogger().error("Failed to send editing unavailable message", {
+            chatId: confirmation.chatId,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
       return;
     }
 
-    this.channel.sendText(
-      confirmation.chatId,
-      "Please send the edited content. Reply with 'cancel' to abort."
-    ).catch(() => {});
+    this.channel
+      .sendText(
+        confirmation.chatId,
+        "Please send the edited content. Reply with 'cancel' to abort.",
+      )
+      .catch((err) =>
+        getLogger().error("Failed to send edit prompt", {
+          chatId: confirmation.chatId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
 
-    getLogger().info("Edit requested for confirmation", { 
+    getLogger().info("Edit requested for confirmation", {
       confirmationId: confirmation.id,
-      operation: confirmation.operation 
+      operation: confirmation.operation,
     });
   }
 
@@ -356,13 +413,20 @@ export class DMPolicy {
   private handleTimeout(confirmationId: string): void {
     if (!this.pendingConfirmations.has(confirmationId)) return;
 
-    this.resolveConfirmation(confirmationId, { approved: false, action: "timeout", message: "Confirmation timed out" });
+    this.resolveConfirmation(confirmationId, {
+      approved: false,
+      action: "timeout",
+      message: "Confirmation timed out",
+    });
   }
 }
 
 // ─── Factory & Utilities ─────────────────────────────────────────────────────
 
-export function createDMPolicy(channel: IChannelAdapter, config?: Partial<DMPolicyConfig>): DMPolicy {
+export function createDMPolicy(
+  channel: IChannelAdapter,
+  config?: Partial<DMPolicyConfig>,
+): DMPolicy {
   return new DMPolicy(channel, config);
 }
 
@@ -372,7 +436,7 @@ export function isDestructiveOperation(toolName: string, input: Record<string, u
   if (toolName === "shell_exec") {
     const command = String(input["command"] || "").toLowerCase();
     const dangerous = ["rm ", "del ", "rmdir", "format", "mkfs", ">", "dd ", "shutdown", "reboot"];
-    return dangerous.some(p => command.includes(p));
+    return dangerous.some((p) => command.includes(p));
   }
 
   return true;

@@ -7,16 +7,18 @@
 import { App, directMention, type SayFn } from "@slack/bolt";
 import type { WebClient } from "@slack/web-api";
 import type { KnownBlock } from "@slack/types";
-import type { IncomingMessage, IChannelAdapter, ConfirmationRequest, Attachment } from "../channel.interface.js";
+import type {
+  IncomingMessage,
+  IChannelAdapter,
+  ConfirmationRequest,
+  Attachment,
+} from "../channel.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { SlackRateLimiter, StreamingRateLimiter } from "./rate-limiter.js";
 import { registerSlashCommands } from "./commands.js";
-import {
-  createConfirmationBlocks,
-  createStreamingBlock,
-  splitLongText,
-} from "./blocks.js";
+import { createConfirmationBlocks, createStreamingBlock, splitLongText } from "./blocks.js";
 import { formatToSlackMrkdwn, truncateForSlack } from "./formatters.js";
+import { sanitizeError } from "../../security/secret-sanitizer.js";
 
 interface SlackConfig {
   botToken: string;
@@ -42,7 +44,7 @@ interface StreamingMessage {
 
 interface QueuedMessage {
   id: string;
-  type: 'text' | 'markdown' | 'blocks' | 'ephemeral' | 'thread' | 'file' | 'update';
+  type: "text" | "markdown" | "blocks" | "ephemeral" | "thread" | "file" | "update";
   priority: number;
   channelId: string;
   content?: string;
@@ -88,28 +90,28 @@ const MESSAGE_BATCH_SIZE = 5;
 
 export class SlackChannel implements IChannelAdapter {
   readonly name = "slack";
-  
+
   private app: App | null = null;
   private messageHandler: ((msg: IncomingMessage) => Promise<void>) | null = null;
   private readonly logger = getLogger();
   private readonly rateLimiter: SlackRateLimiter;
   private readonly streamingLimiter: StreamingRateLimiter;
   private readonly fileUploadLimiter: SlackRateLimiter;
-  
+
   // Pending confirmations
   private readonly pendingConfirmations: Map<string, PendingConfirmation> = new Map();
   private readonly CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
-  
+
   // Streaming messages
   private readonly streamingMessages: Map<string, StreamingMessage> = new Map();
-  
+
   // Message queue for rate limit handling
   private messageQueue: QueuedMessage[] = [];
   private queueProcessing = false;
   private queueInterval: ReturnType<typeof setInterval> | null = null;
   private rateLimited = false;
   private rateLimitResetTime = 0;
-  
+
   // Config
   private readonly config: SlackConfig;
   private isConnected = false;
@@ -140,9 +142,9 @@ export class SlackChannel implements IChannelAdapter {
 
       this.registerEventHandlers();
       registerSlashCommands(this.app);
-      
+
       await this.app.start();
-      
+
       this.isConnected = true;
       this.logger.info("Slack channel connected", {
         socketMode: this.config.socketMode ?? true,
@@ -150,16 +152,15 @@ export class SlackChannel implements IChannelAdapter {
 
       // Get bot user ID
       await this.refreshBotUserId();
-      
+
       // Start message queue processor
       this.startQueueProcessor();
-      
+
       // Start health check
       this.startHealthCheck();
-
     } catch (error) {
       this.logger.error("Failed to connect to Slack", {
-        error: error instanceof Error ? error.message : String(error),
+        error: sanitizeError(error),
       });
       throw error;
     }
@@ -170,12 +171,12 @@ export class SlackChannel implements IChannelAdapter {
    */
   async disconnect(): Promise<void> {
     this.isConnected = false;
-    
+
     if (this.queueInterval) {
       clearInterval(this.queueInterval);
       this.queueInterval = null;
     }
-    
+
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
@@ -216,10 +217,13 @@ export class SlackChannel implements IChannelAdapter {
   }
 
   private enqueueMessage(
-    type: QueuedMessage['type'],
+    type: QueuedMessage["type"],
     channelId: string,
-    data: Omit<Omit<QueuedMessage, 'id' | 'type' | 'channelId' | 'priority' | 'retries'>, 'resolve' | 'reject'>,
-    priority: number = 5
+    data: Omit<
+      Omit<QueuedMessage, "id" | "type" | "channelId" | "priority" | "retries">,
+      "resolve" | "reject"
+    >,
+    priority: number = 5,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const message: QueuedMessage = {
@@ -232,9 +236,9 @@ export class SlackChannel implements IChannelAdapter {
         resolve,
         reject,
       };
-      
+
       // Insert by priority
-      const insertIndex = this.messageQueue.findIndex(m => m.priority > priority);
+      const insertIndex = this.messageQueue.findIndex((m) => m.priority > priority);
       if (insertIndex === -1) {
         this.messageQueue.push(message);
       } else {
@@ -246,14 +250,14 @@ export class SlackChannel implements IChannelAdapter {
   private async processMessageQueue(): Promise<void> {
     if (this.queueProcessing || this.messageQueue.length === 0) return;
     if (this.rateLimited && Date.now() < this.rateLimitResetTime) return;
-    
+
     this.queueProcessing = true;
     this.rateLimited = false;
 
     // Process batch of messages
     const batchSize = Math.min(MESSAGE_BATCH_SIZE, this.messageQueue.length);
     const processedIds: string[] = [];
-    
+
     for (let i = 0; i < batchSize; i++) {
       const message = this.messageQueue[i];
       if (!message) break;
@@ -270,7 +274,7 @@ export class SlackChannel implements IChannelAdapter {
           this.logger.warn("Slack rate limited", { retryAfter });
           break;
         }
-        
+
         // Retry with exponential backoff
         message.retries++;
         if (message.retries >= MAX_RETRIES) {
@@ -279,9 +283,9 @@ export class SlackChannel implements IChannelAdapter {
         } else {
           const delay = Math.min(
             RETRY_BASE_DELAY_MS * Math.pow(2, message.retries - 1),
-            MAX_RETRY_DELAY_MS
+            MAX_RETRY_DELAY_MS,
           );
-          
+
           // Move to end of queue with delay
           setTimeout(() => {
             // Message will be retried in next cycle
@@ -297,7 +301,7 @@ export class SlackChannel implements IChannelAdapter {
     }
 
     // Remove processed messages
-    this.messageQueue = this.messageQueue.filter(m => !processedIds.includes(m.id));
+    this.messageQueue = this.messageQueue.filter((m) => !processedIds.includes(m.id));
     this.queueProcessing = false;
   }
 
@@ -305,7 +309,7 @@ export class SlackChannel implements IChannelAdapter {
     if (!this.app?.client) throw new Error("Slack client not initialized");
 
     switch (msg.type) {
-      case 'text':
+      case "text":
         await this.rateLimiter.acquire("chat.postMessage", 1);
         await this.app.client.chat.postMessage({
           channel: msg.channelId,
@@ -313,7 +317,7 @@ export class SlackChannel implements IChannelAdapter {
         });
         break;
 
-      case 'markdown':
+      case "markdown":
         await this.rateLimiter.acquire("chat.postMessage", 1);
         await this.app.client.chat.postMessage({
           channel: msg.channelId,
@@ -322,7 +326,7 @@ export class SlackChannel implements IChannelAdapter {
         });
         break;
 
-      case 'blocks':
+      case "blocks":
         await this.rateLimiter.acquire("chat.postMessage", 1);
         await this.app.client.chat.postMessage({
           channel: msg.channelId,
@@ -331,7 +335,7 @@ export class SlackChannel implements IChannelAdapter {
         });
         break;
 
-      case 'ephemeral':
+      case "ephemeral":
         await this.rateLimiter.acquire("chat.postEphemeral", 1);
         await this.app.client.chat.postEphemeral({
           channel: msg.channelId,
@@ -341,7 +345,7 @@ export class SlackChannel implements IChannelAdapter {
         });
         break;
 
-      case 'thread':
+      case "thread":
         await this.rateLimiter.acquire("chat.postMessage", 1);
         await this.app.client.chat.postMessage({
           channel: msg.channelId,
@@ -351,7 +355,7 @@ export class SlackChannel implements IChannelAdapter {
         });
         break;
 
-      case 'file': {
+      case "file": {
         await this.fileUploadLimiter.acquire("files.upload", 1);
         const fileData = {
           channel_id: msg.channelId,
@@ -361,11 +365,13 @@ export class SlackChannel implements IChannelAdapter {
           title: msg.fileData!.title,
           thread_ts: msg.threadTs,
         };
-        await this.app.client.files.uploadV2(fileData as Parameters<WebClient['files']['uploadV2']>[0]);
+        await this.app.client.files.uploadV2(
+          fileData as Parameters<WebClient["files"]["uploadV2"]>[0],
+        );
         break;
       }
 
-      case 'update':
+      case "update":
         await this.rateLimiter.acquire("chat.update", 1);
         await this.app.client.chat.update({
           channel: msg.channelId,
@@ -378,18 +384,18 @@ export class SlackChannel implements IChannelAdapter {
   }
 
   private isRateLimitError(error: unknown): boolean {
-    if (error && typeof error === 'object') {
+    if (error && typeof error === "object") {
       const code = (error as { code?: string }).code;
       const statusCode = (error as { statusCode?: number }).statusCode;
-      return code === 'slack_sdk_rate_limit_error' || statusCode === 429;
+      return code === "slack_sdk_rate_limit_error" || statusCode === 429;
     }
     return false;
   }
 
   private extractRetryAfter(error: unknown): number | null {
-    if (error && typeof error === 'object') {
+    if (error && typeof error === "object") {
       const retryAfter = (error as { retryAfter?: number }).retryAfter;
-      if (typeof retryAfter === 'number') {
+      if (typeof retryAfter === "number") {
         return retryAfter * 1000; // Convert to ms
       }
     }
@@ -400,28 +406,38 @@ export class SlackChannel implements IChannelAdapter {
 
   async sendText(chatId: string, text: string): Promise<void> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
-    await this.enqueueMessage('text', chatId, { content: text }, 5);
+    await this.enqueueMessage("text", chatId, { content: text }, 5);
   }
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
     const formattedText = formatToSlackMrkdwn(markdown);
-    await this.enqueueMessage('markdown', chatId, { content: formattedText }, 5);
+    await this.enqueueMessage("markdown", chatId, { content: formattedText }, 5);
   }
 
   async sendBlockMessage(chatId: string, blocks: KnownBlock[], text?: string): Promise<void> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
-    await this.enqueueMessage('blocks', chatId, { blocks, content: text }, 4);
+    await this.enqueueMessage("blocks", chatId, { blocks, content: text }, 4);
   }
 
-  async sendEphemeral(channelId: string, userId: string, text: string, blocks?: KnownBlock[]): Promise<void> {
+  async sendEphemeral(
+    channelId: string,
+    userId: string,
+    text: string,
+    blocks?: KnownBlock[],
+  ): Promise<void> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
-    await this.enqueueMessage('ephemeral', channelId, { content: text, blocks, userId }, 6);
+    await this.enqueueMessage("ephemeral", channelId, { content: text, blocks, userId }, 6);
   }
 
-  async sendThreadReply(channelId: string, threadTs: string, text: string, blocks?: KnownBlock[]): Promise<void> {
+  async sendThreadReply(
+    channelId: string,
+    threadTs: string,
+    text: string,
+    blocks?: KnownBlock[],
+  ): Promise<void> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
-    await this.enqueueMessage('thread', channelId, { content: text, blocks, threadTs }, 3);
+    await this.enqueueMessage("thread", channelId, { content: text, blocks, threadTs }, 3);
   }
 
   async sendTypingIndicator(_chatId: string): Promise<void> {
@@ -463,7 +479,10 @@ export class SlackChannel implements IChannelAdapter {
     });
   }
 
-  async openModal(triggerId: string, view: Parameters<WebClient["views"]["open"]>[0]["view"]): Promise<void> {
+  async openModal(
+    triggerId: string,
+    view: Parameters<WebClient["views"]["open"]>[0]["view"],
+  ): Promise<void> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
     await this.rateLimiter.acquire("views.open", 3);
     await this.app.client.views.open({ trigger_id: triggerId, view });
@@ -477,18 +496,23 @@ export class SlackChannel implements IChannelAdapter {
       threadTs?: string;
       initialComment?: string;
       title?: string;
-    }
+    },
   ): Promise<void> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
-    await this.enqueueMessage('file', channelId, {
-      fileData: {
-        file,
-        filename,
-        initialComment: options?.initialComment,
-        title: options?.title,
+    await this.enqueueMessage(
+      "file",
+      channelId,
+      {
+        fileData: {
+          file,
+          filename,
+          initialComment: options?.initialComment,
+          title: options?.title,
+        },
+        threadTs: options?.threadTs,
       },
-      threadTs: options?.threadTs,
-    }, 2);
+      2,
+    );
   }
 
   async startStreamingMessage(chatId: string): Promise<string> {
@@ -516,7 +540,11 @@ export class SlackChannel implements IChannelAdapter {
     return streamId;
   }
 
-  async updateStreamingMessage(_chatId: string, streamId: string, accumulatedText: string): Promise<void> {
+  async updateStreamingMessage(
+    _chatId: string,
+    streamId: string,
+    accumulatedText: string,
+  ): Promise<void> {
     if (!this.app?.client) return;
 
     const stream = this.streamingMessages.get(streamId);
@@ -539,13 +567,17 @@ export class SlackChannel implements IChannelAdapter {
       });
     } catch (error) {
       this.logger.warn("Failed to update streaming message", {
-        error: error instanceof Error ? error.message : String(error),
+        error: sanitizeError(error),
         streamId,
       });
     }
   }
 
-  async finalizeStreamingMessage(_chatId: string, streamId: string, finalText: string): Promise<void> {
+  async finalizeStreamingMessage(
+    _chatId: string,
+    streamId: string,
+    finalText: string,
+  ): Promise<void> {
     if (!this.app?.client) return;
 
     const stream = this.streamingMessages.get(streamId);
@@ -579,7 +611,7 @@ export class SlackChannel implements IChannelAdapter {
       this.streamingMessages.delete(streamId);
     } catch (error) {
       this.logger.error("Failed to finalize streaming message", {
-        error: error instanceof Error ? error.message : String(error),
+        error: sanitizeError(error),
         streamId,
       });
     }
@@ -617,7 +649,7 @@ export class SlackChannel implements IChannelAdapter {
 
       const actionId = (action as { action_id: string }).action_id;
       const value = (action as { value: string }).value;
-      
+
       const prefix = actionId.replace(/_(approve|deny)$/, "");
       const pending = this.pendingConfirmations.get(prefix);
 
@@ -628,20 +660,23 @@ export class SlackChannel implements IChannelAdapter {
         if (this.app?.client && "channel" in body && "message" in body) {
           const channelId = (body as { channel: { id: string } }).channel.id;
           const ts = (body as { message: { ts: string } }).message.ts;
-          
+
           await this.app.client.chat.update({
             channel: channelId,
             ts,
             text: value === "approve" ? "✅ Approved" : "❌ Denied",
-            blocks: [{
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: value === "approve" 
-                  ? "✅ *Approved* - The operation will proceed."
-                  : "❌ *Denied* - The operation was cancelled.",
+            blocks: [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text:
+                    value === "approve"
+                      ? "✅ *Approved* - The operation will proceed."
+                      : "❌ *Denied* - The operation was cancelled.",
+                },
               },
-            }],
+            ],
           });
         }
       }
@@ -649,27 +684,27 @@ export class SlackChannel implements IChannelAdapter {
 
     this.app.error(async (error) => {
       this.logger.error("Slack app error", {
-        error: error instanceof Error ? error.message : String(error),
+        error: sanitizeError(error),
       });
     });
   }
 
-  private async handleIncomingMessage(
-    message: SlackMessageEvent,
-    say: SayFn
-  ): Promise<void> {
+  private async handleIncomingMessage(message: SlackMessageEvent, say: SayFn): Promise<void> {
     if (message.subtype === "bot_message" || !message.text) return;
 
     const userId = message.user;
     const teamId = message.team || "";
-    
+
     if (this.config.allowedWorkspaces?.length && !this.config.allowedWorkspaces.includes(teamId)) {
       this.logger.warn("Unauthorized workspace", { teamId, userId });
       await say("❌ This workspace is not authorized to use Strata Brain.");
       return;
     }
 
-    if (this.config.allowedUserIds?.length && (!userId || !this.config.allowedUserIds.includes(userId))) {
+    if (
+      this.config.allowedUserIds?.length &&
+      (!userId || !this.config.allowedUserIds.includes(userId))
+    ) {
       this.logger.warn("Unauthorized user", { userId, teamId });
       await say("❌ You are not authorized to use Strata Brain.");
       return;
@@ -683,7 +718,7 @@ export class SlackChannel implements IChannelAdapter {
 
     const threadTs = message.thread_ts;
     let text = message.text;
-    
+
     if (this.botUserId) {
       text = text.replace(new RegExp(`<@${this.botUserId}>`, "g"), "").trim();
     }
@@ -709,7 +744,7 @@ export class SlackChannel implements IChannelAdapter {
         await this.messageHandler(incomingMessage);
       } catch (error) {
         this.logger.error("Error handling message", {
-          error: error instanceof Error ? error.message : String(error),
+          error: sanitizeError(error),
         });
         await say("❌ Sorry, I encountered an error processing your message.");
       }
@@ -726,7 +761,7 @@ export class SlackChannel implements IChannelAdapter {
         }
       } catch (error) {
         this.logger.error("Health check failed", {
-          error: error instanceof Error ? error.message : String(error),
+          error: sanitizeError(error),
         });
         this.isConnected = false;
       }
@@ -757,15 +792,17 @@ export function createSlackChannelFromEnv(): SlackChannel | null {
     return null;
   }
 
-  const allowedWorkspaces = process.env["ALLOWED_SLACK_WORKSPACES"]
-    ?.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean) ?? [];
+  const allowedWorkspaces =
+    process.env["ALLOWED_SLACK_WORKSPACES"]
+      ?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean) ?? [];
 
-  const allowedUserIds = process.env["ALLOWED_SLACK_USER_IDS"]
-    ?.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean) ?? [];
+  const allowedUserIds =
+    process.env["ALLOWED_SLACK_USER_IDS"]
+      ?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean) ?? [];
 
   return new SlackChannel({
     botToken,

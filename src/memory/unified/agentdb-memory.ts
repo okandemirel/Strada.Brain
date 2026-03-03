@@ -1,6 +1,6 @@
 /**
  * AgentDB Unified Memory Implementation
- * 
+ *
  * Integrates AgentDB with HNSW indexing for 150x-12,500x performance improvement
  * Implements 3-tier memory architecture (Working, Ephemeral, Persistent)
  */
@@ -8,6 +8,7 @@
 import { join } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import Database from "better-sqlite3";
 import type {
   IUnifiedMemory,
   UnifiedMemoryEntry,
@@ -17,20 +18,13 @@ import type {
   UnifiedMemoryConfig,
   HnswHealth,
 } from "./unified-memory.interface.js";
-import {
-  MemoryTier,
-  DEFAULT_MEMORY_CONFIG,
-} from "./unified-memory.interface.js";
+import { MemoryTier, DEFAULT_MEMORY_CONFIG } from "./unified-memory.interface.js";
 import type { RetrievalOptions, RetrievalResult } from "../memory.interface.js";
 import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
 import { getLogger } from "../../utils/logger.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import { createHNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
-import { 
-  TextIndex, 
-  extractTerms, 
-  cosineSimilarity 
-} from "../text-index.js";
+import { TextIndex, extractTerms, cosineSimilarity } from "../text-index.js";
 import type {
   Result,
   Option,
@@ -41,13 +35,55 @@ import type {
   NormalizedScore,
   Vector,
 } from "../../types/index.js";
-import {
-  ok,
-  err,
-  some,
-  none,
-  createBrand,
-} from "../../types/index.js";
+import { ok, err, some, none, createBrand } from "../../types/index.js";
+
+// ---------------------------------------------------------------------------
+// SQLite Schema & Row Types
+// ---------------------------------------------------------------------------
+
+const MEMORY_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS memories (
+  id TEXT PRIMARY KEY,
+  key TEXT,
+  value TEXT NOT NULL,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  embedding BLOB,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS patterns (
+  id TEXT PRIMARY KEY,
+  pattern_key TEXT NOT NULL,
+  data TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0.0,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
+CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_patterns_key ON patterns(pattern_key);
+CREATE INDEX IF NOT EXISTS idx_patterns_confidence ON patterns(confidence DESC);
+`;
+
+interface MemoryRow {
+  id: string;
+  key: string | null;
+  value: string;
+  metadata: string;
+  embedding: Buffer | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface PatternRow {
+  id: string;
+  pattern_key: string;
+  data: string;
+  confidence: number;
+  created_at: number;
+}
 
 function getLoggerSafe() {
   try {
@@ -64,7 +100,7 @@ function getNow(): TimestampMs {
 
 /**
  * AgentDB Memory Manager
- * 
+ *
  * Provides unified memory with:
  * - HNSW vector indexing for semantic search
  * - 3-tier memory organization
@@ -83,6 +119,8 @@ export class AgentDBMemory implements IUnifiedMemory {
   private searchTimes: number[] = [];
   // Cleanup tracking for metrics/logging (updated in cleanupExpired)
   private _lastCleanupTime = Date.now(); // eslint-disable-line @typescript-eslint/no-unused-vars
+  private sqliteDb: Database.Database | null = null;
+  private sqliteStatements: Map<string, Database.Statement> = new Map();
 
   constructor(config: Partial<UnifiedMemoryConfig> = {}) {
     this.config = { ...DEFAULT_MEMORY_CONFIG, ...config };
@@ -115,6 +153,9 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (!existsSync(this.dbPath)) {
         mkdirSync(this.dbPath, { recursive: true });
       }
+
+      // Initialize SQLite persistence
+      this.initSqlite();
 
       // Initialize HNSW vector store
       const vectorStorePath = join(this.dbPath, "hnsw");
@@ -158,6 +199,9 @@ export class AgentDBMemory implements IUnifiedMemory {
         await this.hnswStore.shutdown();
       }
 
+      // Close SQLite
+      this.closeSqlite();
+
       this.isInitialized = false;
       return ok(undefined);
     } catch (error) {
@@ -171,11 +215,11 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   async cacheAnalysis(
     analysis: StrataProjectAnalysis,
-    projectPath: string
+    projectPath: string,
   ): Promise<Result<void, Error>> {
     try {
       this.cachedAnalysis = { projectPath, analysis };
-      
+
       // Also store in persistent memory for long-term retention
       const storeResult = await this.storeEntry({
         type: "analysis",
@@ -188,7 +232,10 @@ export class AgentDBMemory implements IUnifiedMemory {
         tier: MemoryTier.Persistent,
         importanceScore: createBrand(0.9, "NormalizedScore" as const),
         domain: "analysis-cache",
-      } as unknown as Omit<UnifiedMemoryEntry, "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version">);
+      } as unknown as Omit<
+        UnifiedMemoryEntry,
+        "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
+      >);
 
       if (storeResult.kind === "err") {
         return storeResult;
@@ -203,7 +250,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   async getCachedAnalysis(
     projectPath: string,
-    maxAgeMs: DurationMs = createBrand(24 * 60 * 60 * 1000, "DurationMs" as const)
+    maxAgeMs: DurationMs = createBrand(24 * 60 * 60 * 1000, "DurationMs" as const),
   ): Promise<StrataProjectAnalysis | null> {
     if (!this.cachedAnalysis) return null;
     if (this.cachedAnalysis.projectPath !== projectPath) return null;
@@ -222,7 +269,7 @@ export class AgentDBMemory implements IUnifiedMemory {
     chatId: ChatId,
     summary: string,
     tags: string[] = [],
-    tier: MemoryTier = MemoryTier.Ephemeral
+    tier: MemoryTier = MemoryTier.Ephemeral,
   ): Promise<import("../memory.interface.js").MemoryEntry> {
     const result = await this.storeEntry({
       type: "conversation",
@@ -247,7 +294,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   async storeNote(
     content: string,
     tags: string[] = [],
-    tier: MemoryTier = MemoryTier.Persistent
+    tier: MemoryTier = MemoryTier.Persistent,
   ): Promise<import("../memory.interface.js").MemoryEntry> {
     const result = await this.storeEntry({
       type: "note",
@@ -259,7 +306,10 @@ export class AgentDBMemory implements IUnifiedMemory {
       embedding: await this.generateEmbedding(content),
       tier,
       importanceScore: this.calculateImportanceScore(content, tier),
-    } as unknown as Omit<UnifiedMemoryEntry, "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version">);
+    } as unknown as Omit<
+      UnifiedMemoryEntry,
+      "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
+    >);
 
     if (result.kind === "err") {
       throw result.error;
@@ -269,7 +319,10 @@ export class AgentDBMemory implements IUnifiedMemory {
   }
 
   async storeEntry(
-    entry: Omit<UnifiedMemoryEntry, "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version">
+    entry: Omit<
+      UnifiedMemoryEntry,
+      "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
+    >,
   ): Promise<Result<import("../memory.interface.js").MemoryEntry, Error>> {
     try {
       if (!this.isInitialized) {
@@ -280,7 +333,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       const now = getNow();
 
       // Generate embedding if not provided
-      const embedding = entry.embedding ?? await this.generateEmbedding(entry.content);
+      const embedding = entry.embedding ?? (await this.generateEmbedding(entry.content));
 
       // Determine expiration for ephemeral entries
       let expiresAt: TimestampMs | undefined;
@@ -309,7 +362,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         domain: entry.domain,
         chatId: entry.chatId ?? createBrand("default", "ChatId" as const),
       };
-      
+
       // Type-specific fields
       let unifiedEntry: UnifiedMemoryEntry;
       if (entry.type === "conversation") {
@@ -364,28 +417,33 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       // Add to HNSW index
       if (this.hnswStore) {
-        await this.hnswStore.upsert([{
-          id: id as string,
-          vector: embedding,
-          chunk: {
+        await this.hnswStore.upsert([
+          {
             id: id as string,
-            content: entry.content,
-            contentHash: "",
-            filePath: entry.chatId as string ?? "memory",
-            indexedAt: Date.now() as TimestampMs,
-            kind: "class" as const,
-            startLine: 0,
-            endLine: 0,
-            language: "typescript",
+            vector: embedding,
+            chunk: {
+              id: id as string,
+              content: entry.content,
+              contentHash: "",
+              filePath: (entry.chatId as string) ?? "memory",
+              indexedAt: Date.now() as TimestampMs,
+              kind: "class" as const,
+              startLine: 0,
+              endLine: 0,
+              language: "typescript",
+            },
+            addedAt: Date.now() as TimestampMs,
+            accessCount: 0,
           },
-          addedAt: Date.now() as TimestampMs,
-          accessCount: 0,
-        }]);
+        ]);
       }
 
       // Add to text index for backward compatibility
       const terms = extractTerms(entry.content);
       this.textIndex.addDocument(terms);
+
+      // Persist to SQLite
+      this.persistEntry(unifiedEntry);
 
       // Enforce tier limits
       await this.enforceTierLimits(entry.tier);
@@ -403,7 +461,9 @@ export class AgentDBMemory implements IUnifiedMemory {
   }
 
   async storeEntries(
-    entries: Array<Omit<UnifiedMemoryEntry, "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version">>
+    entries: Array<
+      Omit<UnifiedMemoryEntry, "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version">
+    >,
   ): Promise<Result<MemoryId[], Error>> {
     try {
       const ids: MemoryId[] = [];
@@ -424,7 +484,10 @@ export class AgentDBMemory implements IUnifiedMemory {
   // Retrieval
   // ---------------------------------------------------------------------------
 
-  async retrieve(query: string, options: RetrievalOptions): Promise<RetrievalResult<import("../memory.interface.js").MemoryEntry>[]> {
+  async retrieve(
+    query: string,
+    options: RetrievalOptions,
+  ): Promise<RetrievalResult<import("../memory.interface.js").MemoryEntry>[]> {
     // Backward compatibility: TF-IDF based search
     const limit = options.limit ?? 5;
     const minScore = options.minScore ?? 0.1;
@@ -456,7 +519,10 @@ export class AgentDBMemory implements IUnifiedMemory {
     return scored.slice(0, limit);
   }
 
-  async retrieveSemantic(query: string, options: UnifiedMemoryQuery = {}): Promise<RetrievalResult<import("../memory.interface.js").MemoryEntry>[]> {
+  async retrieveSemantic(
+    query: string,
+    options: UnifiedMemoryQuery = {},
+  ): Promise<RetrievalResult<import("../memory.interface.js").MemoryEntry>[]> {
     if (!this.hnswStore) {
       // Fallback to TF-IDF
       return this.retrieve(query, options as RetrievalOptions);
@@ -465,7 +531,7 @@ export class AgentDBMemory implements IUnifiedMemory {
     const startTime = performance.now();
 
     // Generate query embedding
-    const queryEmbedding = options.embedding ?? await this.generateEmbedding(query);
+    const queryEmbedding = options.embedding ?? (await this.generateEmbedding(query));
 
     // Search HNSW index
     const hnswResults = await this.hnswStore.search(queryEmbedding, (options.limit ?? 5) * 2);
@@ -482,7 +548,8 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (options.type && entry.type !== options.type) continue;
       if (options.tier && entry.tier !== options.tier) continue;
       if (options.domain && entry.domain !== options.domain) continue;
-      if (options.minImportance !== undefined && entry.importanceScore < options.minImportance) continue;
+      if (options.minImportance !== undefined && entry.importanceScore < options.minImportance)
+        continue;
 
       // Check expiration
       if (!options.includeExpired && entry.expiresAt) {
@@ -494,23 +561,29 @@ export class AgentDBMemory implements IUnifiedMemory {
       entry.accessCount++;
       entry.lastAccessedAt = getNow();
 
-      results.push({ entry: entry as unknown as import("../memory.interface.js").MemoryEntry, score: hit.score });
+      results.push({
+        entry: entry as unknown as import("../memory.interface.js").MemoryEntry,
+        score: hit.score,
+      });
     }
+
+    // Record search time for all paths
+    const searchTime = performance.now() - startTime;
+    this.searchTimes.push(searchTime);
+    if (this.searchTimes.length > 100) this.searchTimes.shift();
 
     // Apply MMR if requested
     if (options.useMMR) {
       return this.applyMMR(results, queryEmbedding, options.mmrLambda ?? 0.5, options.limit ?? 5);
     }
 
-    // Record search time
-    const searchTime = performance.now() - startTime;
-    this.searchTimes.push(searchTime);
-    if (this.searchTimes.length > 100) this.searchTimes.shift();
-
     return results.slice(0, options.limit ?? 5);
   }
 
-  async retrieveByEmbedding(embedding: Vector<number>, options: UnifiedMemoryQuery = {}): Promise<RetrievalResult<import("../memory.interface.js").MemoryEntry>[]> {
+  async retrieveByEmbedding(
+    embedding: Vector<number>,
+    options: UnifiedMemoryQuery = {},
+  ): Promise<RetrievalResult<import("../memory.interface.js").MemoryEntry>[]> {
     return this.retrieveSemantic("", { ...options, embedding });
   }
 
@@ -521,7 +594,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       tier?: MemoryTier;
       limit?: number;
       useMMR?: boolean;
-    }
+    },
   ): Promise<RetrievalResult<import("../memory.interface.js").MemoryEntry>[]> {
     try {
       // Get both semantic and text results
@@ -534,7 +607,10 @@ export class AgentDBMemory implements IUnifiedMemory {
       const textWeight = 1 - semanticWeight;
 
       // Merge results with weights
-      const scores = new Map<string, { entry: import("../memory.interface.js").MemoryEntry; score: number }>();
+      const scores = new Map<
+        string,
+        { entry: import("../memory.interface.js").MemoryEntry; score: number }
+      >();
 
       for (const r of semanticResults) {
         scores.set(r.entry.id as string, { entry: r.entry, score: r.score * semanticWeight });
@@ -553,40 +629,48 @@ export class AgentDBMemory implements IUnifiedMemory {
         .sort((a, b) => b.score - a.score)
         .slice(0, options?.limit ?? 5);
 
-      return merged.map(m => ({ entry: m.entry, score: m.score }));
+      return merged.map((m) => ({ entry: m.entry, score: m.score }));
     } catch (error) {
       getLoggerSafe().error("[AgentDBMemory] Hybrid retrieval failed", { error: String(error) });
       return [];
     }
   }
 
-  async getChatHistory(chatId: ChatId, limit: number = 10): Promise<import("../memory.interface.js").MemoryEntry[]> {
+  async getChatHistory(
+    chatId: ChatId,
+    limit: number = 10,
+  ): Promise<import("../memory.interface.js").MemoryEntry[]> {
     const entries = Array.from(this.entries.values())
-      .filter(e => e.chatId === chatId)
+      .filter((e) => e.chatId === chatId)
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, limit);
 
     return entries as unknown as import("../memory.interface.js").MemoryEntry[];
   }
 
-  async getByTier(tier: MemoryTier, limit?: number): Promise<import("../memory.interface.js").MemoryEntry[]> {
+  async getByTier(
+    tier: MemoryTier,
+    limit?: number,
+  ): Promise<import("../memory.interface.js").MemoryEntry[]> {
     const entries = Array.from(this.entries.values())
-      .filter(e => e.tier === tier)
+      .filter((e) => e.tier === tier)
       .sort((a, b) => b.importanceScore - a.importanceScore)
       .slice(0, limit);
 
     return entries as unknown as import("../memory.interface.js").MemoryEntry[];
   }
 
-  async getById(id: MemoryId): Promise<Result<Option<import("../memory.interface.js").MemoryEntry>, Error>> {
+  async getById(
+    id: MemoryId,
+  ): Promise<Result<Option<import("../memory.interface.js").MemoryEntry>, Error>> {
     try {
       const entry = this.entries.get(id as string);
       if (!entry) return ok(none());
-      
+
       // Update access stats
       entry.accessCount++;
       entry.lastAccessedAt = getNow();
-      
+
       return ok(some(entry as unknown as import("../memory.interface.js").MemoryEntry));
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));
@@ -597,7 +681,10 @@ export class AgentDBMemory implements IUnifiedMemory {
   // Memory Management
   // ---------------------------------------------------------------------------
 
-  async promoteEntry(id: MemoryId, newTier: MemoryTier): Promise<Result<import("../memory.interface.js").MemoryEntry, Error>> {
+  async promoteEntry(
+    id: MemoryId,
+    newTier: MemoryTier,
+  ): Promise<Result<import("../memory.interface.js").MemoryEntry, Error>> {
     try {
       const entry = this.entries.get(id as string);
       if (!entry) {
@@ -609,10 +696,15 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       // Update expiration
       if (newTier === MemoryTier.Ephemeral) {
-        entry.expiresAt = createBrand(Date.now() + this.config.ephemeralTtlMs, "TimestampMs" as const);
+        entry.expiresAt = createBrand(
+          Date.now() + this.config.ephemeralTtlMs,
+          "TimestampMs" as const,
+        );
       } else {
         entry.expiresAt = undefined;
       }
+
+      this.persistEntry(entry);
 
       getLoggerSafe().debug("[AgentDBMemory] Promoted entry", { id: id as string, newTier });
       return ok(entry as import("../memory.interface.js").MemoryEntry);
@@ -621,7 +713,10 @@ export class AgentDBMemory implements IUnifiedMemory {
     }
   }
 
-  async demoteEntry(id: MemoryId, newTier: MemoryTier): Promise<Result<import("../memory.interface.js").MemoryEntry, Error>> {
+  async demoteEntry(
+    id: MemoryId,
+    newTier: MemoryTier,
+  ): Promise<Result<import("../memory.interface.js").MemoryEntry, Error>> {
     try {
       const entry = this.entries.get(id as string);
       if (!entry) {
@@ -632,8 +727,13 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       // Update expiration for ephemeral
       if (newTier === MemoryTier.Ephemeral) {
-        entry.expiresAt = createBrand(Date.now() + this.config.ephemeralTtlMs, "TimestampMs" as const);
+        entry.expiresAt = createBrand(
+          Date.now() + this.config.ephemeralTtlMs,
+          "TimestampMs" as const,
+        );
       }
+
+      this.persistEntry(entry);
 
       getLoggerSafe().debug("[AgentDBMemory] Demoted entry", { id: id as string, newTier });
       return ok(entry as import("../memory.interface.js").MemoryEntry);
@@ -642,7 +742,10 @@ export class AgentDBMemory implements IUnifiedMemory {
     }
   }
 
-  async updateImportance(id: MemoryId, importance: NormalizedScore): Promise<Result<import("../memory.interface.js").MemoryEntry, Error>> {
+  async updateImportance(
+    id: MemoryId,
+    importance: NormalizedScore,
+  ): Promise<Result<import("../memory.interface.js").MemoryEntry, Error>> {
     try {
       const entry = this.entries.get(id as string);
       if (!entry) {
@@ -650,6 +753,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       }
 
       entry.importanceScore = importance;
+      this.persistEntry(entry);
       return ok(entry as import("../memory.interface.js").MemoryEntry);
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));
@@ -665,6 +769,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       entry.accessCount++;
       entry.lastAccessedAt = getNow();
+      this.persistEntry(entry);
       return ok(undefined);
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));
@@ -679,6 +784,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (entry.tier === MemoryTier.Ephemeral && entry.expiresAt && entry.expiresAt < now) {
         this.entries.delete(id);
         await this.hnswStore?.remove([id]);
+        this.removePersistedEntry(id);
         removed++;
       }
     }
@@ -686,7 +792,7 @@ export class AgentDBMemory implements IUnifiedMemory {
     this._lastCleanupTime = Date.now();
     // Use the cleanup time for potential metrics/logging
     void this._lastCleanupTime;
-    
+
     if (removed > 0) {
       getLoggerSafe().info("[AgentDBMemory] Cleaned up expired entries", { removed });
     }
@@ -720,6 +826,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (existed) {
         this.entries.delete(id as string);
         await this.hnswStore?.remove([id as string]);
+        this.removePersistedEntry(id as string);
       }
       return ok(existed);
     } catch (error) {
@@ -734,18 +841,22 @@ export class AgentDBMemory implements IUnifiedMemory {
   getStats(): UnifiedMemoryStats {
     const entries = Array.from(this.entries.values());
     const byTier = {
-      [MemoryTier.Working]: entries.filter(e => e.tier === MemoryTier.Working).length,
-      [MemoryTier.Ephemeral]: entries.filter(e => e.tier === MemoryTier.Ephemeral).length,
-      [MemoryTier.Persistent]: entries.filter(e => e.tier === MemoryTier.Persistent).length,
+      [MemoryTier.Working]: entries.filter((e) => e.tier === MemoryTier.Working).length,
+      [MemoryTier.Ephemeral]: entries.filter((e) => e.tier === MemoryTier.Ephemeral).length,
+      [MemoryTier.Persistent]: entries.filter((e) => e.tier === MemoryTier.Persistent).length,
     };
 
     const hnswStats = this.hnswStore?.getHNSWStats();
-    const avgSearchTime = this.searchTimes.length > 0
-      ? this.searchTimes.reduce((a, b) => a + b, 0) / this.searchTimes.length
-      : 0;
+    const avgSearchTime =
+      this.searchTimes.length > 0
+        ? this.searchTimes.reduce((a, b) => a + b, 0) / this.searchTimes.length
+        : 0;
 
     // Build tier stats
-    const tierStats: Record<MemoryTier, { tier: MemoryTier; entryCount: number; maxEntries: number; averageImportance: number }> = {
+    const tierStats: Record<
+      MemoryTier,
+      { tier: MemoryTier; entryCount: number; maxEntries: number; averageImportance: number }
+    > = {
       [MemoryTier.Working]: {
         tier: MemoryTier.Working,
         entryCount: byTier[MemoryTier.Working],
@@ -768,33 +879,34 @@ export class AgentDBMemory implements IUnifiedMemory {
 
     // Calculate average importance per tier
     for (const tier of Object.values(MemoryTier)) {
-      const tierEntries = entries.filter(e => e.tier === tier);
+      const tierEntries = entries.filter((e) => e.tier === tier);
       if (tierEntries.length > 0) {
-        tierStats[tier].averageImportance = tierEntries.reduce((sum, e) => sum + e.importanceScore, 0) / tierEntries.length;
+        tierStats[tier].averageImportance =
+          tierEntries.reduce((sum, e) => sum + e.importanceScore, 0) / tierEntries.length;
       }
     }
 
     return {
       totalEntries: entries.length,
       entriesByType: {
-        conversation: entries.filter(e => e.type === "conversation").length,
-        analysis: entries.filter(e => e.type === "analysis").length,
-        note: entries.filter(e => e.type === "note").length,
-        insight: entries.filter(e => e.type === "insight").length,
-        error: entries.filter(e => e.type === "error").length,
-        command: entries.filter(e => e.type === "command").length,
-        task: entries.filter(e => e.type === "task").length,
+        conversation: entries.filter((e) => e.type === "conversation").length,
+        analysis: entries.filter((e) => e.type === "analysis").length,
+        note: entries.filter((e) => e.type === "note").length,
+        insight: entries.filter((e) => e.type === "insight").length,
+        error: entries.filter((e) => e.type === "error").length,
+        command: entries.filter((e) => e.type === "command").length,
+        task: entries.filter((e) => e.type === "task").length,
       },
       entriesByImportance: {
-        low: entries.filter(e => e.importance === "low").length,
-        medium: entries.filter(e => e.importance === "medium").length,
-        high: entries.filter(e => e.importance === "high").length,
-        critical: entries.filter(e => e.importance === "critical").length,
+        low: entries.filter((e) => e.importance === "low").length,
+        medium: entries.filter((e) => e.importance === "medium").length,
+        high: entries.filter((e) => e.importance === "high").length,
+        critical: entries.filter((e) => e.importance === "critical").length,
       },
-      conversationCount: entries.filter(e => e.type === "conversation").length,
-      noteCount: entries.filter(e => e.type === "note").length,
-      errorCount: entries.filter(e => e.type === "error").length,
-      archivedCount: entries.filter(e => e.archived).length,
+      conversationCount: entries.filter((e) => e.type === "conversation").length,
+      noteCount: entries.filter((e) => e.type === "note").length,
+      errorCount: entries.filter((e) => e.type === "error").length,
+      archivedCount: entries.filter((e) => e.archived).length,
       hasAnalysisCache: this.cachedAnalysis !== null,
       storageSizeBytes: entries.length * this.config.dimensions * 4,
       averageQueryTimeMs: avgSearchTime,
@@ -812,7 +924,8 @@ export class AgentDBMemory implements IUnifiedMemory {
       quantizationStats: {
         type: this.config.quantizationType,
         originalSizeBytes: entries.length * this.config.dimensions * 4,
-        compressedSizeBytes: hnswStats?.memoryUsageBytes ?? entries.length * this.config.dimensions * 4,
+        compressedSizeBytes:
+          hnswStats?.memoryUsageBytes ?? entries.length * this.config.dimensions * 4,
         compressionRatio: 4,
         bitsPerDimension: this.config.quantizationType === "scalar" ? 8 : 32,
       },
@@ -832,7 +945,10 @@ export class AgentDBMemory implements IUnifiedMemory {
         maxSize: Object.values(this.config.maxEntriesPerTier).reduce((a, b) => a + b, 0),
         hitRate: 0,
       },
-      tierStats: tierStats as unknown as Record<MemoryTier, import("./unified-memory.interface.js").TierStats>,
+      tierStats: tierStats as unknown as Record<
+        MemoryTier,
+        import("./unified-memory.interface.js").TierStats
+      >,
     };
   }
 
@@ -852,14 +968,14 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       // Rebuild from all entries
       const entries = Array.from(this.entries.values());
-      const vectorEntries = entries.map(e => ({
+      const vectorEntries = entries.map((e) => ({
         id: e.id as string,
         vector: e.embedding,
         chunk: {
           id: e.id as string,
           content: e.content,
           contentHash: "",
-          filePath: e.chatId as string ?? "memory",
+          filePath: (e.chatId as string) ?? "memory",
           indexedAt: e.createdAt as number,
           kind: "class" as const,
           startLine: 0,
@@ -890,7 +1006,13 @@ export class AgentDBMemory implements IUnifiedMemory {
 
     if (!hnswStats) {
       issues.push("HNSW index not initialized");
-      return { isHealthy: false, issues, fillRatio: 0, averageConnections: 0, fragmentationRatio: 0 };
+      return {
+        isHealthy: false,
+        issues,
+        fillRatio: 0,
+        averageConnections: 0,
+        fragmentationRatio: 0,
+      };
     }
 
     if (hnswStats.elementCount === 0 && this.entries.size > 0) {
@@ -907,9 +1029,9 @@ export class AgentDBMemory implements IUnifiedMemory {
 
     const fillRatio = (hnswStats.elementCount / hnswStats.maxElements) as NormalizedScore;
 
-    return { 
-      isHealthy: issues.length === 0, 
-      issues, 
+    return {
+      isHealthy: issues.length === 0,
+      issues,
       fillRatio,
       averageConnections: this.config.hnswParams.M,
       fragmentationRatio: 0,
@@ -917,7 +1039,9 @@ export class AgentDBMemory implements IUnifiedMemory {
   }
 
   async optimizeIndex(): Promise<Result<void, Error>> {
-    // TODO: Implement HNSW parameter optimization based on usage patterns
+    getLoggerSafe().warn(
+      "[AgentDBMemory] optimizeIndex() not yet implemented — no optimization performed",
+    );
     return ok(undefined);
   }
 
@@ -926,11 +1050,13 @@ export class AgentDBMemory implements IUnifiedMemory {
   // ---------------------------------------------------------------------------
 
   private async generateEmbedding(text: string): Promise<Vector<number>> {
-    // Placeholder: In production, use actual embedding provider
-    // This creates a deterministic but not semantic embedding
+    if (this.config.embeddingProvider) {
+      return this.config.embeddingProvider(text) as Promise<Vector<number>>;
+    }
+    // Hash-based fallback — not semantic, used when no provider configured
     const dimensions = this.config.dimensions;
     const embedding = new Array(dimensions).fill(0);
-    
+
     // Simple hash-based embedding for demonstration
     for (let i = 0; i < text.length; i++) {
       const char = text.charCodeAt(i);
@@ -960,16 +1086,16 @@ export class AgentDBMemory implements IUnifiedMemory {
 
     // Keyword factor (presence of important keywords)
     const importantKeywords = ["important", "critical", "key", "main", "essential", "vital"];
-    const keywordFactor = importantKeywords.some(kw => 
-      content.toLowerCase().includes(kw)
-    ) ? 0.1 : 0;
+    const keywordFactor = importantKeywords.some((kw) => content.toLowerCase().includes(kw))
+      ? 0.1
+      : 0;
 
     return Math.min(tierImportance[tier] + lengthFactor + keywordFactor, 1.0) as NormalizedScore;
   }
 
   private async enforceTierLimits(tier: MemoryTier): Promise<void> {
     const maxEntries = this.config.maxEntriesPerTier[tier];
-    const entries = Array.from(this.entries.values()).filter(e => e.tier === tier);
+    const entries = Array.from(this.entries.values()).filter((e) => e.tier === tier);
 
     if (entries.length > maxEntries) {
       // Sort by importance and last accessed
@@ -984,6 +1110,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       for (const entry of toRemove) {
         this.entries.delete(entry.id as string);
         await this.hnswStore?.remove([entry.id as string]);
+        this.removePersistedEntry(entry.id as string);
       }
 
       getLoggerSafe().debug("[AgentDBMemory] Enforced tier limits", {
@@ -997,7 +1124,7 @@ export class AgentDBMemory implements IUnifiedMemory {
     results: RetrievalResult<import("../memory.interface.js").MemoryEntry>[],
     queryEmbedding: number[],
     lambda: number,
-    limit: number
+    limit: number,
   ): RetrievalResult<import("../memory.interface.js").MemoryEntry>[] {
     if (results.length === 0) return [];
 
@@ -1010,7 +1137,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       for (let i = 0; i < remaining.length; i++) {
         const result = remaining[i]!;
-        
+
         // Relevance score
         const relevance = result.score;
 
@@ -1020,13 +1147,9 @@ export class AgentDBMemory implements IUnifiedMemory {
           const selEmbedding = (sel.entry as unknown as UnifiedMemoryEntry).embedding;
           const resultEmbedding = (result.entry as unknown as UnifiedMemoryEntry).embedding;
           // Use queryEmbedding to avoid unused variable warning
-          const sim = this.cosineSimilarity(
-            queryEmbedding,
-            selEmbedding
-          ) * 0.5 + this.cosineSimilarity(
-            resultEmbedding,
-            selEmbedding
-          ) * 0.5;
+          const sim =
+            this.cosineSimilarity(queryEmbedding, selEmbedding) * 0.5 +
+            this.cosineSimilarity(resultEmbedding, selEmbedding) * 0.5;
           maxSim = Math.max(maxSim, sim);
         }
 
@@ -1060,14 +1183,387 @@ export class AgentDBMemory implements IUnifiedMemory {
     return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-10);
   }
 
+  // ---------------------------------------------------------------------------
+  // SQLite Persistence
+  // ---------------------------------------------------------------------------
+
+  private initSqlite(): void {
+    try {
+      const sqlitePath = join(this.dbPath, "memory.db");
+      this.sqliteDb = new Database(sqlitePath);
+
+      // Performance optimizations
+      this.sqliteDb.pragma("journal_mode = WAL");
+      this.sqliteDb.pragma("synchronous = NORMAL");
+      this.sqliteDb.pragma("cache_size = -16000"); // 16MB cache
+      this.sqliteDb.pragma("temp_store = memory");
+
+      // Create schema using exec (safe - no user input, static SQL only)
+      this.sqliteDb.exec(MEMORY_SCHEMA_SQL);
+
+      // Prepare commonly-used statements
+      this.sqliteStatements.set(
+        "upsertMemory",
+        this.sqliteDb.prepare(`
+          INSERT INTO memories (id, key, value, metadata, embedding, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            value = excluded.value,
+            metadata = excluded.metadata,
+            embedding = excluded.embedding,
+            updated_at = excluded.updated_at
+        `),
+      );
+
+      this.sqliteStatements.set(
+        "getAllMemories",
+        this.sqliteDb.prepare("SELECT * FROM memories ORDER BY created_at DESC"),
+      );
+
+      this.sqliteStatements.set(
+        "deleteMemory",
+        this.sqliteDb.prepare("DELETE FROM memories WHERE id = ?"),
+      );
+
+      this.sqliteStatements.set(
+        "upsertPattern",
+        this.sqliteDb.prepare(`
+          INSERT INTO patterns (id, pattern_key, data, confidence, created_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            data = excluded.data,
+            confidence = excluded.confidence
+        `),
+      );
+
+      this.sqliteStatements.set(
+        "getPatternsByKey",
+        this.sqliteDb.prepare(
+          "SELECT * FROM patterns WHERE pattern_key = ? ORDER BY confidence DESC",
+        ),
+      );
+
+      getLoggerSafe().info("[AgentDBMemory] SQLite persistence initialized", { path: sqlitePath });
+    } catch (error) {
+      getLoggerSafe().error(
+        "[AgentDBMemory] SQLite initialization failed, running in-memory only",
+        {
+          error: String(error),
+        },
+      );
+      this.sqliteDb = null;
+    }
+  }
+
+  private closeSqlite(): void {
+    // Dereference all cached statements before closing — better-sqlite3
+    // auto-finalizes them when the database closes.
+    this.sqliteStatements.clear();
+    if (this.sqliteDb) {
+      try {
+        this.sqliteDb.close();
+      } catch (error) {
+        getLoggerSafe().error("[AgentDBMemory] SQLite close error", { error: String(error) });
+      }
+      this.sqliteDb = null;
+    }
+  }
+
+  /**
+   * Serialize an embedding vector to a Buffer for SQLite BLOB storage.
+   */
+  private embeddingToBuffer(embedding: number[] | Vector<number>): Buffer {
+    const float64 = new Float64Array(embedding as number[]);
+    return Buffer.from(float64.buffer);
+  }
+
+  /**
+   * Deserialize a Buffer from SQLite BLOB back to a number array.
+   */
+  private bufferToEmbedding(buf: Buffer): Vector<number> {
+    const float64 = new Float64Array(buf.buffer, buf.byteOffset, buf.byteLength / 8);
+    return Array.from(float64) as Vector<number>;
+  }
+
+  /**
+   * Persist a single entry to SQLite (called after in-memory store).
+   */
+  private persistEntry(entry: UnifiedMemoryEntry): void {
+    if (!this.sqliteDb) return;
+
+    try {
+      const stmt = this.sqliteStatements.get("upsertMemory");
+      if (!stmt) return;
+
+      const value = JSON.stringify({
+        type: entry.type,
+        content: entry.content,
+        tags: entry.tags,
+        importance: entry.importance,
+        archived: entry.archived,
+        tier: entry.tier,
+        accessCount: entry.accessCount,
+        lastAccessedAt: entry.lastAccessedAt,
+        expiresAt: entry.expiresAt,
+        hnswIndex: entry.hnswIndex,
+        version: "version" in entry ? entry.version : 1,
+        importanceScore: entry.importanceScore,
+        domain: entry.domain,
+        chatId: entry.chatId,
+      });
+
+      const metadata = JSON.stringify(entry.metadata ?? {});
+      const embeddingBuf = entry.embedding ? this.embeddingToBuffer(entry.embedding) : null;
+
+      stmt.run(
+        entry.id as string,
+        entry.type, // key = type for quick filtering
+        value,
+        metadata,
+        embeddingBuf,
+        entry.createdAt as number,
+        Date.now(),
+      );
+    } catch (error) {
+      getLoggerSafe().error("[AgentDBMemory] Failed to persist entry", {
+        id: entry.id as string,
+        error: String(error),
+      });
+    }
+  }
+
+  /**
+   * Remove a single entry from SQLite.
+   */
+  private removePersistedEntry(id: string): void {
+    if (!this.sqliteDb) return;
+
+    try {
+      const stmt = this.sqliteStatements.get("deleteMemory");
+      stmt?.run(id);
+    } catch (error) {
+      getLoggerSafe().error("[AgentDBMemory] Failed to remove persisted entry", {
+        id,
+        error: String(error),
+      });
+    }
+  }
+
   private async loadEntries(): Promise<void> {
-    // TODO: Implement persistent storage loading
-    // For now, start empty and rely on in-memory + HNSW persistence
+    if (!this.sqliteDb) return;
+
+    try {
+      const stmt = this.sqliteStatements.get("getAllMemories");
+      if (!stmt) return;
+
+      const rows = stmt.all() as MemoryRow[];
+
+      let loaded = 0;
+      let skipped = 0;
+
+      for (const row of rows) {
+        try {
+          const parsed = JSON.parse(row.value) as Record<string, unknown>;
+          const embedding = row.embedding ? this.bufferToEmbedding(row.embedding as Buffer) : null;
+
+          const baseEntry = {
+            id: createBrand(row.id, "MemoryId" as const),
+            type: parsed.type as string,
+            content: parsed.content as string,
+            createdAt: createBrand(row.created_at, "TimestampMs" as const),
+            tags: (parsed.tags as string[]) ?? [],
+            importance: (parsed.importance as string) ?? "medium",
+            archived: (parsed.archived as boolean) ?? false,
+            metadata: JSON.parse(row.metadata) as Record<string, unknown>,
+            embedding,
+            tier: (parsed.tier as MemoryTier) ?? MemoryTier.Ephemeral,
+            accessCount: (parsed.accessCount as number) ?? 0,
+            lastAccessedAt: createBrand(
+              (parsed.lastAccessedAt as number) ?? row.created_at,
+              "TimestampMs" as const,
+            ),
+            expiresAt: parsed.expiresAt
+              ? createBrand(parsed.expiresAt as number, "TimestampMs" as const)
+              : undefined,
+            hnswIndex: (parsed.hnswIndex as number) ?? 0,
+            version: (parsed.version as number) ?? 1,
+            importanceScore:
+              (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
+            domain: parsed.domain as string | undefined,
+            chatId: createBrand((parsed.chatId as string) ?? "default", "ChatId" as const),
+          };
+
+          // Reconstruct as UnifiedMemoryEntry based on type
+          const unifiedEntry = baseEntry as unknown as UnifiedMemoryEntry;
+          this.entries.set(row.id, unifiedEntry);
+
+          // If embedding was missing, try to regenerate it
+          if (!embedding) {
+            try {
+              const newEmbedding = await this.generateEmbedding(parsed.content as string);
+              (unifiedEntry as unknown as { embedding: Vector<number> }).embedding = newEmbedding;
+              this.persistEntry(unifiedEntry);
+            } catch {
+              // Continue without embedding — text search still works
+              skipped++;
+            }
+          }
+
+          // Re-index in text search
+          const terms = extractTerms(parsed.content as string);
+          this.textIndex.addDocument(terms);
+
+          loaded++;
+        } catch (entryError) {
+          getLoggerSafe().error("[AgentDBMemory] Failed to load entry", {
+            id: row.id,
+            error: String(entryError),
+          });
+          skipped++;
+        }
+      }
+
+      // Rebuild HNSW index from loaded entries
+      if (this.hnswStore) {
+        const vectors = [];
+        for (const entry of this.entries.values()) {
+          if (entry.embedding) {
+            vectors.push({
+              id: entry.id as string,
+              vector: entry.embedding,
+              chunk: {
+                id: entry.id as string,
+                content: entry.content,
+                contentHash: "",
+                filePath: (entry.chatId as string) ?? "memory",
+                indexedAt: entry.createdAt as TimestampMs,
+                kind: "class" as const,
+                startLine: 0,
+                endLine: 0,
+                language: "typescript",
+              },
+              addedAt: entry.createdAt as TimestampMs,
+              accessCount: entry.accessCount,
+            });
+          }
+        }
+        if (vectors.length > 0) {
+          await this.hnswStore.upsert(vectors);
+          getLoggerSafe().info("[AgentDBMemory] Rebuilt HNSW index from SQLite", {
+            count: vectors.length,
+          });
+        }
+      }
+
+      getLoggerSafe().info("[AgentDBMemory] Loaded entries from SQLite", { loaded, skipped });
+    } catch (error) {
+      getLoggerSafe().error("[AgentDBMemory] Failed to load entries from SQLite", {
+        error: String(error),
+      });
+    }
   }
 
   private async saveEntries(): Promise<void> {
-    // TODO: Implement persistent storage saving
-    // Entries are persisted through HNSW index
+    if (!this.sqliteDb) return;
+
+    try {
+      const stmt = this.sqliteStatements.get("upsertMemory");
+      if (!stmt) return;
+      const db = this.sqliteDb;
+      const saveAll = db.transaction(() => {
+        for (const entry of this.entries.values()) {
+          const value = JSON.stringify({
+            type: entry.type,
+            content: entry.content,
+            tags: entry.tags,
+            importance: entry.importance,
+            archived: entry.archived,
+            tier: entry.tier,
+            accessCount: entry.accessCount,
+            lastAccessedAt: entry.lastAccessedAt,
+            expiresAt: entry.expiresAt,
+            hnswIndex: entry.hnswIndex,
+            version: "version" in entry ? entry.version : 1,
+            importanceScore: entry.importanceScore,
+            domain: entry.domain,
+            chatId: entry.chatId,
+          });
+          const metadata = JSON.stringify(entry.metadata ?? {});
+          const embeddingBuf = entry.embedding ? this.embeddingToBuffer(entry.embedding) : null;
+          stmt.run(
+            entry.id as string,
+            entry.type,
+            value,
+            metadata,
+            embeddingBuf,
+            entry.createdAt as number,
+            Date.now(),
+          );
+        }
+      });
+
+      saveAll();
+
+      getLoggerSafe().info("[AgentDBMemory] Saved all entries to SQLite", {
+        count: this.entries.size,
+      });
+    } catch (error) {
+      getLoggerSafe().error("[AgentDBMemory] Failed to save entries to SQLite", {
+        error: String(error),
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pattern Storage (SQLite-backed)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Store a pattern with a key and confidence score.
+   */
+  storePattern(patternKey: string, data: Record<string, unknown>, confidence: number): void {
+    if (!this.sqliteDb) return;
+
+    try {
+      const stmt = this.sqliteStatements.get("upsertPattern");
+      if (!stmt) return;
+
+      const id = randomUUID();
+      stmt.run(id, patternKey, JSON.stringify(data), confidence, Date.now());
+    } catch (error) {
+      getLoggerSafe().error("[AgentDBMemory] Failed to store pattern", {
+        patternKey,
+        error: String(error),
+      });
+    }
+  }
+
+  /**
+   * Retrieve patterns by key, ordered by confidence descending.
+   */
+  getPatterns(
+    patternKey: string,
+  ): Array<{ id: string; data: Record<string, unknown>; confidence: number; createdAt: number }> {
+    if (!this.sqliteDb) return [];
+
+    try {
+      const stmt = this.sqliteStatements.get("getPatternsByKey");
+      if (!stmt) return [];
+
+      const rows = stmt.all(patternKey) as PatternRow[];
+      return rows.map((row) => ({
+        id: row.id,
+        data: JSON.parse(row.data) as Record<string, unknown>,
+        confidence: row.confidence,
+        createdAt: row.created_at,
+      }));
+    } catch (error) {
+      getLoggerSafe().error("[AgentDBMemory] Failed to get patterns", {
+        patternKey,
+        error: String(error),
+      });
+      return [];
+    }
   }
 }
 
@@ -1075,7 +1571,7 @@ export class AgentDBMemory implements IUnifiedMemory {
  * Create AgentDB memory manager with configuration
  */
 export async function createAgentDBMemory(
-  config?: Partial<UnifiedMemoryConfig>
+  config?: Partial<UnifiedMemoryConfig>,
 ): Promise<AgentDBMemory> {
   const memory = new AgentDBMemory(config);
   const initResult = await memory.initialize();

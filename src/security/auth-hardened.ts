@@ -1,6 +1,6 @@
 /**
  * Hardened Authentication Module for Strata.Brain
- * 
+ *
  * Provides:
  * - Multi-factor authentication (MFA)
  * - JWT implementation with secure defaults
@@ -10,7 +10,7 @@
  * - Secure password hashing
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
 
 // =============================================================================
@@ -32,12 +32,7 @@ export interface User {
   createdAt: number;
 }
 
-export type UserRole = 
-  | "superadmin"
-  | "admin" 
-  | "developer" 
-  | "viewer" 
-  | "service";
+export type UserRole = "superadmin" | "admin" | "developer" | "viewer" | "service";
 
 export type Permission =
   | "system:full"
@@ -54,15 +49,15 @@ export type Permission =
   | "agents:manage";
 
 export interface JwtPayload {
-  sub: string;           // User ID
+  sub: string; // User ID
   username: string;
   role: UserRole;
   permissions: Permission[];
-  iat: number;           // Issued at
-  exp: number;           // Expiration
-  jti: string;           // JWT ID (for revocation)
-  iss: string;           // Issuer
-  aud: string;           // Audience
+  iat: number; // Issued at
+  exp: number; // Expiration
+  jti: string; // JWT ID (for revocation)
+  iss: string; // Issuer
+  aud: string; // Audience
 }
 
 export interface Session {
@@ -72,6 +67,7 @@ export interface Session {
   refreshToken: string;
   createdAt: number;
   expiresAt: number;
+  refreshExpiresAt: number;
   lastActivityAt: number;
   ipAddress: string;
   userAgent: string;
@@ -102,31 +98,28 @@ export interface MfaVerifyResult {
 const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   superadmin: ["system:full"],
   admin: [
-    "system:read", "system:write",
-    "files:read", "files:write", "files:delete",
+    "system:read",
+    "system:write",
+    "files:read",
+    "files:write",
+    "files:delete",
     "shell:execute",
-    "config:read", "config:write",
+    "config:read",
+    "config:write",
     "users:manage",
     "audit:read",
     "agents:manage",
   ],
   developer: [
     "system:read",
-    "files:read", "files:write",
+    "files:read",
+    "files:write",
     "shell:execute",
     "config:read",
     "agents:manage",
   ],
-  viewer: [
-    "system:read",
-    "files:read",
-    "config:read",
-  ],
-  service: [
-    "system:read",
-    "files:read",
-    "config:read",
-  ],
+  viewer: ["system:read", "files:read", "config:read"],
+  service: ["system:read", "files:read", "config:read"],
 };
 
 // =============================================================================
@@ -135,11 +128,11 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
 
 interface AuthConfig {
   jwtSecret: string;
-  jwtExpiresIn: number;           // seconds
-  jwtRefreshExpiresIn: number;    // seconds
-  sessionTimeout: number;         // milliseconds
+  jwtExpiresIn: number; // seconds
+  jwtRefreshExpiresIn: number; // seconds
+  sessionTimeout: number; // milliseconds
   maxLoginAttempts: number;
-  lockoutDuration: number;        // milliseconds
+  lockoutDuration: number; // milliseconds
   issuer: string;
   audience: string;
   requireMfa: boolean;
@@ -148,8 +141,8 @@ interface AuthConfig {
 }
 
 const DEFAULT_CONFIG: AuthConfig = {
-  jwtSecret: process.env["JWT_SECRET"] || randomBytes(32).toString("hex"),
-  jwtExpiresIn: 15 * 60,          // 15 minutes
+  jwtSecret: process.env["JWT_SECRET"] ?? "",
+  jwtExpiresIn: 15 * 60, // 15 minutes
   jwtRefreshExpiresIn: 7 * 24 * 60 * 60, // 7 days
   sessionTimeout: 30 * 60 * 1000, // 30 minutes
   maxLoginAttempts: 5,
@@ -165,57 +158,26 @@ const DEFAULT_CONFIG: AuthConfig = {
 // =============================================================================
 
 export class PasswordHasher {
-  private readonly iterations = 100000;
   private readonly saltLength = 32;
 
   /**
-   * Hash a password with salt
+   * Hash a password with salt using scrypt
    */
   async hash(password: string): Promise<string> {
     const salt = randomBytes(this.saltLength);
-    const hash = createHash("sha256")
-      .update(password + salt.toString("hex"))
-      .digest();
-    
-    // PBKDF2-like iterations
-    let result = hash;
-    for (let i = 0; i < this.iterations; i++) {
-      result = createHash("sha256")
-        .update(Buffer.concat([result, salt, Buffer.from(password)]))
-        .digest();
-    }
-
-    return `${salt.toString("hex")}:${result.toString("hex")}`;
+    const derived = scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+    return `scrypt:${salt.toString("hex")}:${derived.toString("hex")}`;
   }
 
   /**
    * Verify a password against a hash
    */
-  async verify(password: string, hash: string): Promise<boolean> {
-    const [saltHex, hashHex] = hash.split(":");
-    if (!saltHex || !hashHex) return false;
-
+  async verify(password: string, storedHash: string): Promise<boolean> {
+    const [algo, saltHex, hashHex] = storedHash.split(":");
+    if (algo !== "scrypt" || !saltHex || !hashHex) return false;
     const salt = Buffer.from(saltHex, "hex");
-    
-    let result = createHash("sha256")
-      .update(password + salt.toString("hex"))
-      .digest();
-    
-    for (let i = 0; i < this.iterations; i++) {
-      result = createHash("sha256")
-        .update(Buffer.concat([result, salt, Buffer.from(password)]))
-        .digest();
-    }
-
-    const computedHash = result.toString("hex");
-    
-    // Timing-safe comparison
-    if (computedHash.length !== hashHex.length) return false;
-    
-    const computedBuf = Buffer.from(computedHash);
-    const hashBuf = Buffer.from(hashHex);
-    
-    return timingSafeEqual(computedBuf, hashBuf);
+    const derived = scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+    return timingSafeEqual(derived, Buffer.from(hashHex, "hex"));
   }
 }
 
@@ -225,11 +187,20 @@ export class PasswordHasher {
 
 export class JwtManager {
   private readonly config: AuthConfig;
-  private readonly revokedTokens = new Set<string>(); // In production: use Redis
+  private readonly revokedTokens = new Map<string, number>(); // jti -> expiresAt
   private readonly logger = getLogger();
 
   constructor(config: Partial<AuthConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+  }
+
+  private requireSecret(): string {
+    if (!this.config.jwtSecret) {
+      throw new Error(
+        "JWT_SECRET environment variable is required. Set it before using authentication.",
+      );
+    }
+    return this.config.jwtSecret;
   }
 
   /**
@@ -253,9 +224,10 @@ export class JwtManager {
     const header = { alg: "HS256", typ: "JWT" };
     const headerB64 = Buffer.from(JSON.stringify(header)).toString("base64url");
     const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
-    
-    const signature = createHash("sha256")
-      .update(`${headerB64}.${payloadB64}.${this.config.jwtSecret}`)
+
+    const secret = this.requireSecret();
+    const signature = createHmac("sha256", secret)
+      .update(`${headerB64}.${payloadB64}`)
       .digest("base64url");
 
     return `${headerB64}.${payloadB64}.${signature}`;
@@ -277,8 +249,9 @@ export class JwtManager {
       }
 
       // Verify signature
-      const expectedSignature = createHash("sha256")
-        .update(`${headerB64}.${payloadB64}.${this.config.jwtSecret}`)
+      const secret = this.requireSecret();
+      const expectedSignature = createHmac("sha256", secret)
+        .update(`${headerB64}.${payloadB64}`)
         .digest("base64url");
 
       const sigBuf = Buffer.from(signature, "base64url");
@@ -328,16 +301,19 @@ export class JwtManager {
   /**
    * Revoke a token
    */
-  revokeToken(jti: string): void {
-    this.revokedTokens.add(jti);
+  revokeToken(jti: string, expiresAt?: number): void {
+    this.revokedTokens.set(jti, expiresAt ?? Date.now() + this.config.jwtExpiresIn * 1000);
     this.logger.info("Token revoked", { jti });
   }
 
   /**
-   * Clean up expired revoked tokens
+   * Clean up expired revoked tokens (time-based, not full clear)
    */
   cleanupRevokedTokens(): void {
-    this.revokedTokens.clear();
+    const now = Date.now();
+    for (const [jti, expiresAt] of this.revokedTokens) {
+      if (now > expiresAt) this.revokedTokens.delete(jti);
+    }
   }
 }
 
@@ -374,10 +350,10 @@ export class MfaManager {
    * Verify TOTP code (simplified implementation)
    * In production, use speakeasy or otplib
    */
-  verifyTotp(_secret: string, code: string): boolean {
-    // Simplified: In production, implement proper TOTP
-    // For now, just check the backup codes mechanism
-    return code.length === 6 && /^\d{6}$/.test(code);
+  verifyTotp(_secret: string, _code: string): boolean {
+    throw new Error(
+      "TOTP verification not implemented. Install 'otplib' for production TOTP support.",
+    );
   }
 
   /**
@@ -387,7 +363,7 @@ export class MfaManager {
     // Check rate limit
     const attempts = this.verifyAttempts.get(userId);
     const now = Date.now();
-    
+
     if (attempts && now < attempts.resetTime && attempts.count >= this.maxAttempts) {
       return {
         success: false,
@@ -404,8 +380,13 @@ export class MfaManager {
       return { success: true };
     }
 
-    // Verify TOTP
-    const isValid = this.verifyTotp(secret, code);
+    // Verify TOTP — may throw if not implemented
+    let isValid = false;
+    try {
+      isValid = this.verifyTotp(secret, code);
+    } catch {
+      // TOTP not implemented — treat as failed attempt
+    }
 
     if (!isValid) {
       const currentAttempts = attempts || { count: 0, resetTime: now + this.windowMs };
@@ -450,7 +431,7 @@ export class SessionManager {
     token: string,
     refreshToken: string,
     ipAddress: string,
-    userAgent: string
+    userAgent: string,
   ): Session {
     const now = Date.now();
     const session: Session = {
@@ -460,6 +441,7 @@ export class SessionManager {
       refreshToken,
       createdAt: now,
       expiresAt: now + this.config.sessionTimeout,
+      refreshExpiresAt: now + this.config.jwtRefreshExpiresIn * 1000,
       lastActivityAt: now,
       ipAddress,
       userAgent,
@@ -467,7 +449,7 @@ export class SessionManager {
     };
 
     this.sessions.set(session.id, session);
-    
+
     const userSessionIds = this.userSessions.get(user.id) || new Set();
     userSessionIds.add(session.id);
     this.userSessions.set(user.id, userSessionIds);
@@ -493,7 +475,7 @@ export class SessionManager {
    */
   validateSession(sessionId: string): { valid: boolean; session?: Session; error?: string } {
     const session = this.sessions.get(sessionId);
-    
+
     if (!session) {
       return { valid: false, error: "Session not found" };
     }
@@ -503,7 +485,7 @@ export class SessionManager {
     }
 
     const now = Date.now();
-    
+
     if (now > session.expiresAt) {
       this.invalidateSession(sessionId);
       return { valid: false, error: "Session expired" };
@@ -523,12 +505,14 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.isValid = false;
-      
+
       const userSessionIds = this.userSessions.get(session.userId);
       if (userSessionIds) {
         userSessionIds.delete(sessionId);
+        if (userSessionIds.size === 0) this.userSessions.delete(session.userId);
       }
 
+      this.sessions.delete(sessionId);
       this.logger.info("Session invalidated", { sessionId, userId: session.userId });
     }
   }
@@ -545,7 +529,7 @@ export class SessionManager {
       this.invalidateSession(sessionId);
       count++;
     }
-    
+
     this.userSessions.delete(userId);
     return count;
   }
@@ -560,6 +544,11 @@ export class SessionManager {
     for (const [sessionId, session] of Array.from(this.sessions.entries())) {
       if (now > session.expiresAt || !session.isValid) {
         this.sessions.delete(sessionId);
+        const userSet = this.userSessions.get(session.userId);
+        if (userSet) {
+          userSet.delete(sessionId);
+          if (userSet.size === 0) this.userSessions.delete(session.userId);
+        }
         count++;
       }
     }
@@ -605,20 +594,19 @@ export class BruteForceProtection {
       return { allowed: true };
     }
 
-    if (now < record.lockUntil) {
-      return { 
-        allowed: false, 
+    if (record.lockUntil > 0 && now < record.lockUntil) {
+      return {
+        allowed: false,
         retryAfter: Math.ceil((record.lockUntil - now) / 1000),
       };
     }
 
-    // Lock expired, reset
-    this.attempts.delete(key);
+    // Lock expired -- allow but DO NOT reset count
     return { allowed: true };
   }
 
   /**
-   * Record failed attempt
+   * Record failed attempt with escalating lockout
    */
   recordFailure(key: string): void {
     const now = Date.now();
@@ -629,7 +617,11 @@ export class BruteForceProtection {
     } else {
       record.count++;
       if (record.count >= this.maxAttempts) {
-        record.lockUntil = now + this.lockoutDuration;
+        const escalation = Math.min(
+          Math.pow(2, Math.floor(record.count / this.maxAttempts) - 1),
+          32,
+        );
+        record.lockUntil = now + this.lockoutDuration * escalation;
       }
     }
   }
@@ -677,7 +669,7 @@ export class HardenedAuthManager {
     this.mfa = new MfaManager();
     this.bruteForce = new BruteForceProtection(
       this.config.maxLoginAttempts,
-      this.config.lockoutDuration
+      this.config.lockoutDuration,
     );
     this.passwordHasher = new PasswordHasher();
   }
@@ -689,7 +681,7 @@ export class HardenedAuthManager {
     username: string,
     email: string,
     password: string,
-    role: UserRole = "viewer"
+    role: UserRole = "viewer",
   ): Promise<{ success: boolean; user?: User; error?: string }> {
     // Validate password
     if (password.length < this.config.passwordMinLength) {
@@ -701,9 +693,9 @@ export class HardenedAuthManager {
 
     // Check if user exists
     const existingUser = Array.from(this.users.values()).find(
-      (u) => u.username === username || u.email === email
+      (u) => u.username === username || u.email === email,
     );
-    
+
     if (existingUser) {
       return { success: false, error: "User already exists" };
     }
@@ -734,7 +726,7 @@ export class HardenedAuthManager {
     username: string,
     password: string,
     ipAddress: string,
-    userAgent: string
+    userAgent: string,
   ): Promise<AuthResult> {
     const bruteKey = `${ipAddress}:${username}`;
     const bruteCheck = this.bruteForce.canAttempt(bruteKey);
@@ -793,14 +785,14 @@ export class HardenedAuthManager {
     if (this.config.requireMfa || user.mfaEnabled) {
       const mfaToken = this.jwt.generateToken({
         ...user,
-        permissions: ["system:read"], // Limited permissions until MFA verified
+        permissions: [] as Permission[], // No permissions until MFA verified
       });
-      
+
       return {
         success: false, // Not fully authenticated yet
         requiresMfa: true,
         mfaToken,
-        user,
+        user: { id: user.id, username: user.username, email: user.email, role: user.role } as User,
       };
     }
 
@@ -815,22 +807,22 @@ export class HardenedAuthManager {
     mfaToken: string,
     code: string,
     ipAddress: string,
-    userAgent: string
+    userAgent: string,
   ): AuthResult {
     const tokenResult = this.jwt.verifyToken(mfaToken);
-    
+
     if (!tokenResult.valid || !tokenResult.payload) {
       return { success: false, error: "Invalid MFA token" };
     }
 
     const user = this.users.get(tokenResult.payload.sub);
-    
+
     if (!user || !user.mfaSecret) {
       return { success: false, error: "User not found or MFA not configured" };
     }
 
     const mfaResult = this.mfa.verifyMfa(user.id, user.mfaSecret, code);
-    
+
     if (!mfaResult.success) {
       return {
         success: false,
@@ -846,9 +838,15 @@ export class HardenedAuthManager {
    */
   refreshToken(refreshToken: string, sessionId: string): AuthResult {
     const session = this.sessions.getSession(sessionId);
-    
+
     if (!session || session.refreshToken !== refreshToken) {
       return { success: false, error: "Invalid refresh token" };
+    }
+
+    // Check refresh token expiry
+    if (Date.now() > session.refreshExpiresAt) {
+      this.sessions.invalidateSession(sessionId);
+      return { success: false, error: "Refresh token expired" };
     }
 
     const validation = this.sessions.validateSession(sessionId);
@@ -908,7 +906,12 @@ export class HardenedAuthManager {
   /**
    * Enable MFA for user
    */
-  enableMfa(userId: string): { success: boolean; secret?: string; backupCodes?: string[]; error?: string } {
+  enableMfa(userId: string): {
+    success: boolean;
+    secret?: string;
+    backupCodes?: string[];
+    error?: string;
+  } {
     const user = this.users.get(userId);
     if (!user) {
       return { success: false, error: "User not found" };
@@ -947,11 +950,7 @@ export class HardenedAuthManager {
     return { sessionsRemoved };
   }
 
-  private createAuthenticatedSession(
-    user: User,
-    ipAddress: string,
-    userAgent: string
-  ): AuthResult {
+  private createAuthenticatedSession(user: User, ipAddress: string, userAgent: string): AuthResult {
     const token = this.jwt.generateToken(user);
     const refreshToken = this.jwt.generateRefreshToken();
     const session = this.sessions.createSession(user, token, refreshToken, ipAddress, userAgent);
@@ -1002,4 +1001,27 @@ export function getRolePermissions(role: UserRole): Permission[] {
 // EXPORTS
 // =============================================================================
 
-export const authManager = new HardenedAuthManager();
+let _authManager: HardenedAuthManager | null = null;
+
+/**
+ * Lazy singleton — created on first call, not at import time.
+ * Throws if JWT_SECRET is not set.
+ */
+export function getAuthManager(): HardenedAuthManager {
+  if (!_authManager) {
+    if (!process.env["JWT_SECRET"]) {
+      throw new Error(
+        "JWT_SECRET environment variable is required. Set it before starting the application.",
+      );
+    }
+    _authManager = new HardenedAuthManager({ jwtSecret: process.env["JWT_SECRET"] });
+  }
+  return _authManager;
+}
+
+/** @deprecated Use getAuthManager() instead */
+export const authManager = new Proxy({} as HardenedAuthManager, {
+  get(_, prop) {
+    return (getAuthManager() as unknown as Record<string | symbol, unknown>)[prop];
+  },
+});

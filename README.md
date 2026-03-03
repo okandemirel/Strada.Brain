@@ -1,292 +1,204 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Strata.Brain Logo" width="200"/>
+  <img src="docs/assets/logo.svg" alt="Strada.Brain Logo" width="200"/>
 </p>
 
-<h1 align="center">🧠 Strata.Brain</h1>
+<h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>AI-Powered Unity Development Agent</strong><br/>
-  Automate your Strata.Core workflows with intelligent code generation, analysis, and multi-channel collaboration.
+  <strong>AI-Powered Development Agent with Multi-Channel Support</strong><br/>
+  Automate your development workflows with intelligent code generation, semantic search, and multi-channel collaboration.
 </p>
 
 <p align="center">
-  <a href="https://github.com/yourusername/strata-brain/releases"><img src="https://img.shields.io/github/v/release/yourusername/strata-brain?style=flat-square&color=blue" alt="Release"></a>
-  <a href="https://github.com/yourusername/strata-brain/actions"><img src="https://img.shields.io/github/actions/workflow/status/yourusername/strata-brain/ci.yml?style=flat-square&label=CI" alt="CI"></a>
-  <img src="https://img.shields.io/badge/tests-600%2B-green?style=flat-square" alt="Tests">
-  <img src="https://img.shields.io/badge/coverage-85%25-brightgreen?style=flat-square" alt="Coverage">
+  <a href="https://github.com/okandemirel/strada-brain/releases"><img src="https://img.shields.io/github/v/release/okandemirel/strada-brain?style=flat-square&color=blue" alt="Release"></a>
+  <a href="https://github.com/okandemirel/strada-brain/actions"><img src="https://img.shields.io/github/actions/workflow/status/okandemirel/strada-brain/ci.yml?style=flat-square&label=CI" alt="CI"></a>
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-</p>
-
-<p align="center">
-  <a href="README.zh.md">中文</a> •
-  <a href="README.ja.md">日本語</a> •
-  <a href="README.ko.md">한국어</a> •
-  <a href="README.tr.md">Türkçe</a> •
-  <a href="README.de.md">Deutsch</a> •
-  <a href="README.es.md">Español</a> •
-  <a href="README.fr.md">Français</a>
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
 ---
 
-## ✨ Features
+## Overview
 
-### 🤖 AI-Powered Development
-- **Smart Code Generation** - Automatically generates Modules, Systems, Components, and Mediators
-- **Semantic Code Search** - 150x faster with HNSW vector search (vs brute-force)
-- **Experience Replay Learning** - Learns from past interactions to improve over time
-- **Multi-Provider AI** - Claude, OpenAI, DeepSeek, Groq, and 10+ compatible providers
-
-### 💬 Multi-Channel Support
-Communicate with Strata.Brain through your favorite platform:
-- **Telegram** - Mobile-first development on the go
-- **Discord** - Team collaboration with rich embeds
-- **Slack** - Enterprise workflow integration
-- **WhatsApp** - Quick fixes and status checks
-- **CLI** - Direct terminal access
-
-### 🎮 Unity/Strata.Core Integration
-- **Project Analysis** - Maps your entire codebase structure
-- **Build Automation** - Auto-fixes compilation errors
-- **Code Quality** - Enforces Strata.Core patterns and best practices
-- **Architecture Visualization** - Understand complex systems instantly
-
-### 🔒 Enterprise Security
-- **RBAC** - Role-based access control (5 roles, 14 resource types)
-- **Secret Sanitization** - 18 pattern types automatically masked
-- **Audit Logging** - Complete activity tracking
-- **Read-Only Mode** - Safe exploration without changes
-
-### 📊 Monitoring & Operations
-- **Real-time Dashboard** - WebSocket-powered live metrics
-- **Prometheus Integration** - Export metrics to your stack
-- **Smart Alerting** - Discord, Slack, Email, Telegram, PagerDuty
-- **Automated Backups** - Scheduled + on-demand backups
+Strada.Brain is an AI-powered development agent that connects to multiple messaging channels and provides intelligent code generation, semantic code search, project analysis, and automated workflows. It features a RAG pipeline with HNSW vector search, an experience replay learning system, and enterprise-grade security.
 
 ---
 
-## 🚀 Quick Start
+## Architecture
+
+```
++------------------------------------------------------------------+
+|                     Presentation Layer                            |
+|  Slack (95%)  Discord (90%)  Telegram (90%)  WhatsApp (35%)  CLI (80%)  |
++------------------------------------------------------------------+
+         |              |             |             |           |
+         v              v             v             v           v
++------------------------------------------------------------------+
+|                   Channel Adapter Interface                       |
+|  IChannelCore + IChannelSender + IChannelReceiver                |
+|  Optional: IChannelStreaming, IChannelRichMessaging               |
++------------------------------------------------------------------+
+         |
+         v
++------------------------------------------------------------------+
+|                    Orchestration Layer                            |
+|  Orchestrator (agent loop: LLM -> Tool calls -> LLM -> Response) |
+|  Session Manager  |  Rate Limiter  |  Autonomy (PLAN-ACT-VERIFY) |
+|  Error Recovery   |  Task Planner  |  Self-Verification          |
++------------------------------------------------------------------+
+         |
+         v
++------------------------------------------------------------------+
+|                      Service Layer                               |
+|  AI Provider Chain (Claude, OpenAI, DeepSeek, Groq, Ollama)      |
+|  39 Built-in Tools  |  Plugin Loader  |  Browser Automation      |
+|  RAG Pipeline + HNSW Vector Search  |  Learning System           |
++------------------------------------------------------------------+
+         |
+         v
++------------------------------------------------------------------+
+|                   Infrastructure Layer                            |
+|  DI Container  |  Config  |  Logging (Winston)  |  Metrics       |
+|  Security: JWT Auth, RBAC, Path Guard, Secret Sanitizer          |
+|  Memory: SQLite + TF-IDF + Vector Embeddings                     |
+|  Dashboard: WebSocket real-time metrics + Prometheus              |
++------------------------------------------------------------------+
+```
+
+---
+
+## Feature Matrix
+
+| Feature                     | Status      | Description                                        |
+|-----------------------------|-------------|----------------------------------------------------|
+| Slack channel               | 95%         | Socket mode, rich messages, streaming               |
+| Discord channel             | 90%         | Bot with slash commands, embeds                     |
+| Telegram channel            | 90%         | Grammy-based, mobile-first                          |
+| WhatsApp channel            | 35%         | Baileys-based, session management                   |
+| CLI channel                 | 80%         | Readline-based local access                         |
+| AI provider chain           | Complete    | Claude, OpenAI, DeepSeek, Groq, Ollama + fallback  |
+| RAG pipeline                | Complete    | Chunking, embeddings, HNSW vector search, reranking |
+| 39 built-in tools           | Complete    | File I/O, git, shell, search, browser, code quality |
+| Learning system             | Complete    | Pattern matching, Bayesian confidence scoring       |
+| Security (RBAC)             | Complete    | JWT auth, 5 roles, 14 resource types                |
+| Secret sanitizer            | Complete    | 18 pattern types auto-masked                        |
+| Path guard                  | Complete    | Directory traversal prevention                      |
+| Rate limiter                | Complete    | Per-user, per-hour, budget tracking                 |
+| Dashboard                   | Complete    | WebSocket live metrics, Prometheus export            |
+| Autonomy layer              | Complete    | Error recovery, task planning, self-verification    |
+| Plugin system               | Complete    | Dynamic tool loading from plugins directory          |
+
+---
+
+## Quick Start
 
 ### Prerequisites
+
 - Node.js >= 20.0.0
-- Unity project with Strata.Core
-- ANTHROPIC_API_KEY (or other AI provider)
+- npm
+- An AI provider API key (Anthropic recommended)
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/strata-brain.git
-cd strata-brain
+git clone https://github.com/okandemirel/strada-brain.git
+cd strada-brain
 
 # Install dependencies
 npm install
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your settings
+# Edit .env with your API keys and settings
 
-# Start development
+# Start in development mode
 npm run dev
 ```
 
-### Docker (Recommended for Production)
+### Start with a specific channel
 
 ```bash
-# One-command deployment
-./scripts/deploy.sh
+# Start with Slack
+npm run dev -- start --channel slack
 
-# Or manually
-docker-compose up -d
+# Start with Discord
+npm run dev -- start --channel discord
+
+# Start with Telegram
+npm run dev -- start --channel telegram
+
+# Start in CLI mode
+npm run dev -- cli
 ```
 
 ---
 
-## 📖 Usage Examples
-
-### Generate a New Module
-
-**Telegram:**
-```
-@StrataBrain create an Inventory module with items, slots, and weight system
-```
-
-**Discord:**
-```
-!create-module PlayerStats with Health, Mana, Stamina attributes
-```
-
-**CLI:**
-```bash
-npm run cli -- create-module EnemyAI with patrol, attack, and flee behaviors
-```
-
-### Analyze Project
+## Project Structure
 
 ```
-@StrataBrain analyze my project and tell me about the combat system
-```
-
-Response:
-```
-📊 Project Analysis
-
-Combat System found in:
-├── 📁 Modules/Combat/
-│   ├── CombatModule.cs (entry point)
-│   ├── Systems/
-│   │   ├── DamageSystem.cs (applies damage)
-│   │   └── CombatStateSystem.cs (manages states)
-│   └── Components/
-│       ├── HealthComponent.cs
-│       └── AttackComponent.cs
-
-🔍 Key Insights:
-• Health is modified in 3 locations
-• No validation on damage values
-• Missing null checks in CombatStateSystem
-```
-
-### Semantic Search
-
-```
-@StrataBrain search "where is player health modified when taking damage"
-```
-
-Results in seconds with relevant code snippets and file locations.
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────┐
-│  Presentation Layer (5 Channels)       │
-│  Telegram • Discord • Slack • WhatsApp │
-├─────────────────────────────────────────┤
-│  Orchestration Layer                   │
-│  Session Manager • Rate Limiter        │
-│  Autonomy: PLAN-ACT-VERIFY-RESPOND     │
-├─────────────────────────────────────────┤
-│  Service Layer                         │
-│  AI Provider Chain • 25+ Tools         │
-│  HNSW Vector Search • Learning System  │
-├─────────────────────────────────────────┤
-│  Infrastructure Layer                  │
-│  DI Container • Security (RBAC)        │
-│  Auth • Config • Logging               │
-└─────────────────────────────────────────┘
+src/
+  agents/           # Orchestrator, AI providers, tools, autonomy
+  channels/         # Channel adapters (Slack, Discord, Telegram, WhatsApp, CLI)
+  config/           # Application configuration
+  core/             # Bootstrap, DI container
+  dashboard/        # Real-time metrics dashboard
+  intelligence/     # Project analysis
+  learning/         # Experience replay, pattern matching, confidence scoring
+  memory/           # Conversation memory, file-based persistence
+  rag/              # RAG pipeline, HNSW vector store, embeddings, reranker
+  security/         # Auth, RBAC, rate limiter, path guard, secret sanitizer
+  validation/       # Zod schemas, input sanitization
 ```
 
 ---
 
-## 🧪 Testing
+## Security Highlights
+
+- **JWT Authentication** with MFA support and brute-force protection
+- **RBAC** with 5 roles (superadmin, admin, developer, operator, viewer)
+- **Secret Sanitizer** detects and masks 18 pattern types (API keys, tokens, credentials)
+- **Path Guard** prevents directory traversal attacks
+- **Rate Limiter** with per-user, per-hour, and budget-based limits
+- **Read-Only Mode** for safe exploration without file system changes
+- **Input Validation** via Zod schemas at all system boundaries
+- **Audit Logging** for complete activity tracking
+
+See [SECURITY.md](SECURITY.md) for the full security hardening guide.
+
+---
+
+## Testing
 
 ```bash
 # Run all tests
 npm test
 
-# Run with coverage
-npm run test:coverage
+# Run tests in watch mode
+npm run test:watch
 
-# Run integration tests
-npm run test:integration
-```
+# Type checking
+npm run typecheck
 
-**Test Coverage:**
-- 600+ unit tests
-- 51 integration tests (E2E)
-- 85%+ code coverage
-
----
-
-## 📚 Documentation
-
-- [📖 Getting Started Guide](docs/getting-started.md)
-- [🏗️ Architecture Overview](docs/architecture.md)
-- [🔧 Configuration Reference](docs/configuration.md)
-- [🔒 Security Guide](docs/security/security-overview.md)
-- [🛠️ Tool Development](docs/tools.md)
-- [📊 API Reference](docs/api.md)
-
----
-
-## 🛡️ Security
-
-Strata.Brain implements comprehensive security measures:
-
-- ✅ **OWASP Top 10** compliance
-- ✅ **RBAC** with 5 roles (superadmin to viewer)
-- ✅ **18 Secret Patterns** detected and masked
-- ✅ **Path Traversal** protection
-- ✅ **Rate Limiting** with budget tracking
-- ✅ **Audit Logging** for all actions
-- ✅ **Pentest Scripts** included
-
-See [Security Documentation](docs/security/security-overview.md) for details.
-
----
-
-## 🌍 Multi-Language Support
-
-Strata.Brain speaks your language:
-
-| Language | File | Status |
-|----------|------|--------|
-| 🇺🇸 English | [README.md](README.md) | ✅ Complete |
-| 🇨🇳 中文 | [README.zh.md](README.zh.md) | ✅ Complete |
-| 🇯🇵 日本語 | [README.ja.md](README.ja.md) | ✅ Complete |
-| 🇰🇷 한국어 | [README.ko.md](README.ko.md) | ✅ Complete |
-| 🇹🇷 Türkçe | [README.tr.md](README.tr.md) | ✅ Complete |
-| 🇩🇪 Deutsch | [README.de.md](README.de.md) | ✅ Complete |
-| 🇪🇸 Español | [README.es.md](README.es.md) | ✅ Complete |
-| 🇫🇷 Français | [README.fr.md](README.fr.md) | ✅ Complete |
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-```bash
-# Fork and clone
-git clone https://github.com/yourusername/strata-brain.git
-
-# Create branch
-git checkout -b feature/amazing-feature
-
-# Make changes and commit
-git commit -m "Add amazing feature"
-
-# Push and create PR
-git push origin feature/amazing-feature
+# Linting
+npm run lint
 ```
 
 ---
 
-## 📜 License
+## Contributing
 
-MIT License - see [LICENSE](LICENSE) file for details.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR guidelines.
 
 ---
 
-## 💖 Acknowledgments
+## License
 
-- [Strata.Core](https://github.com/strata/core) - The ECS framework that powers it all
-- [Grammy](https://grammy.dev) - Telegram bot framework
-- [Discord.js](https://discord.js.org) - Discord integration
-- [HNSWLib](https://github.com/nmslib/hnswlib) - High-performance vector search
+MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
 <p align="center">
-  <strong>🚀 Ready to supercharge your Unity development?</strong><br/>
-  <a href="https://github.com/yourusername/strata-brain/stargazers">⭐ Star us on GitHub</a> •
-  <a href="https://twitter.com/stratabrain">🐦 Follow on Twitter</a> •
-  <a href="https://discord.gg/stratabrain">💬 Join Discord</a>
-</p>
-
-<p align="center">
-  Built with ❤️ by the Strata Team
+  Built by <a href="https://github.com/okandemirel">okandemirel</a>
 </p>

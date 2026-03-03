@@ -1,6 +1,6 @@
 /**
  * Browser Automation Tool using Playwright
- * 
+ *
  * Provides: navigation, interaction, screenshots, downloads, JS evaluation
  * Security: URL validation, rate limiting, size limits
  */
@@ -9,12 +9,15 @@ import type { Browser, BrowserContext, Page } from "playwright";
 import { chromium } from "playwright";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import {
-  validateUrlWithConfig, BrowserRateLimiter, BrowserSessionManager,
-  DEFAULT_SECURITY_CONFIG, type BrowserSecurityConfig,
+  validateUrlWithConfig,
+  BrowserRateLimiter,
+  BrowserSessionManager,
+  DEFAULT_SECURITY_CONFIG,
+  type BrowserSecurityConfig,
 } from "../../security/browser-security.js";
 import { getLogger } from "../../utils/logger.js";
 import { createWriteStream } from "node:fs";
-import { mkdir, stat, unlink } from "node:fs/promises";
+import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -22,8 +25,17 @@ import { pipeline } from "node:stream/promises";
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type BrowserAction =
-  | "navigate" | "click" | "type" | "fill" | "select" | "scroll"
-  | "screenshot" | "evaluate" | "wait" | "get_content" | "download";
+  | "navigate"
+  | "click"
+  | "type"
+  | "fill"
+  | "select"
+  | "scroll"
+  | "screenshot"
+  | "evaluate"
+  | "wait"
+  | "get_content"
+  | "download";
 
 interface BrowserInput {
   action: BrowserAction;
@@ -58,9 +70,7 @@ const MAX_CONTENT_LENGTH = 10000;
 const CLEANUP_INTERVAL_MS = 300_000; // 5 minutes
 const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-const BLOCKED_JS_PATTERNS = [
-  /eval\s*\(/i, /new\s+Function\s*\(/i, /document\.write/i, /innerHTML.*=.*script/i,
-];
+const SCRIPT_EVAL_TIMEOUT_MS = 5000;
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -80,17 +90,37 @@ function loadConfig(): BrowserSecurityConfig {
 export class BrowserAutomationTool implements ITool {
   readonly name = "browser_automation";
   readonly description = `Automate browser actions using Playwright. Actions: navigate, click, type, fill, select, scroll, screenshot, evaluate, wait, get_content, download.`;
-  
+
   readonly inputSchema = {
     type: "object",
     properties: {
-      action: { type: "string", enum: ["navigate", "click", "type", "fill", "select", "scroll", "screenshot", "evaluate", "wait", "get_content", "download"], description: "The browser action to perform" },
+      action: {
+        type: "string",
+        enum: [
+          "navigate",
+          "click",
+          "type",
+          "fill",
+          "select",
+          "scroll",
+          "screenshot",
+          "evaluate",
+          "wait",
+          "get_content",
+          "download",
+        ],
+        description: "The browser action to perform",
+      },
       url: { type: "string", description: "URL for navigate or download actions" },
       selector: { type: "string", description: "CSS selector for element interactions" },
       text: { type: "string", description: "Text to type (for type action)" },
       value: { type: "string", description: "Value to fill (for fill action)" },
       option: { type: "string", description: "Option value to select (for select action)" },
-      direction: { type: "string", enum: ["up", "down", "left", "right"], description: "Scroll direction" },
+      direction: {
+        type: "string",
+        enum: ["up", "down", "left", "right"],
+        description: "Scroll direction",
+      },
       amount: { type: "number", description: "Scroll amount in pixels or wait time in ms" },
       waitFor: { type: "string", description: "Selector to wait for (for wait action)" },
       timeout: { type: "number", description: "Timeout in milliseconds" },
@@ -98,12 +128,17 @@ export class BrowserAutomationTool implements ITool {
       script: { type: "string", description: "JavaScript to evaluate" },
       downloadPath: { type: "string", description: "Local path to save downloaded file" },
       headers: { type: "object", description: "Custom headers for navigation" },
-      viewport: { type: "object", properties: { width: { type: "number" }, height: { type: "number" } }, description: "Viewport dimensions" },
+      viewport: {
+        type: "object",
+        properties: { width: { type: "number" }, height: { type: "number" } },
+        description: "Viewport dimensions",
+      },
     },
     required: ["action"],
   };
 
   private sessions = new Map<string, SessionState>();
+  private readonly sessionLocks = new Map<string, Promise<void>>();
   private rateLimiter: BrowserRateLimiter;
   private sessionManager: BrowserSessionManager;
   private config: BrowserSecurityConfig;
@@ -117,7 +152,10 @@ export class BrowserAutomationTool implements ITool {
     this.startCleanupInterval();
   }
 
-  async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
+  async execute(
+    input: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<ToolExecutionResult> {
     const sessionId = context.workingDirectory;
     const typedInput = input as unknown as BrowserInput;
 
@@ -133,43 +171,71 @@ export class BrowserAutomationTool implements ITool {
       return await this.executeAction(typedInput, sessionId, context);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error("Browser automation error", { action: typedInput.action, error: errorMessage });
+      this.logger.error("Browser automation error", {
+        action: typedInput.action,
+        error: errorMessage,
+      });
       return { content: `Browser automation error: ${errorMessage}`, isError: true };
     }
   }
 
   // ─── Action Router ───────────────────────────────────────────────────────────
 
-  private async executeAction(input: BrowserInput, sessionId: string, context: ToolContext): Promise<ToolExecutionResult> {
+  private async executeAction(
+    input: BrowserInput,
+    sessionId: string,
+    context: ToolContext,
+  ): Promise<ToolExecutionResult> {
     switch (input.action) {
-      case "navigate": return this.handleNavigate(input, sessionId);
-      case "click": return this.handleClick(input, sessionId);
-      case "type": return this.handleType(input, sessionId);
-      case "fill": return this.handleFill(input, sessionId);
-      case "select": return this.handleSelect(input, sessionId);
-      case "scroll": return this.handleScroll(input, sessionId);
-      case "screenshot": return this.handleScreenshot(input, sessionId, context);
-      case "evaluate": return this.handleEvaluate(input, sessionId);
-      case "wait": return this.handleWait(input, sessionId);
-      case "get_content": return this.handleGetContent(sessionId);
-      case "download": return this.handleDownload(input, sessionId, context);
-      default: return { content: `Unknown action: ${String(input.action)}`, isError: true };
+      case "navigate":
+        return this.handleNavigate(input, sessionId);
+      case "click":
+        return this.handleClick(input, sessionId);
+      case "type":
+        return this.handleType(input, sessionId);
+      case "fill":
+        return this.handleFill(input, sessionId);
+      case "select":
+        return this.handleSelect(input, sessionId);
+      case "scroll":
+        return this.handleScroll(input, sessionId);
+      case "screenshot":
+        return this.handleScreenshot(input, sessionId, context);
+      case "evaluate":
+        return this.handleEvaluate(input, sessionId);
+      case "wait":
+        return this.handleWait(input, sessionId);
+      case "get_content":
+        return this.handleGetContent(sessionId);
+      case "download":
+        return this.handleDownload(input, sessionId, context);
+      default:
+        return { content: `Unknown action: ${String(input.action)}`, isError: true };
     }
   }
 
   // ─── Action Handlers ─────────────────────────────────────────────────────────
 
-  private async handleNavigate(input: BrowserInput, sessionId: string): Promise<ToolExecutionResult> {
+  private async handleNavigate(
+    input: BrowserInput,
+    sessionId: string,
+  ): Promise<ToolExecutionResult> {
     if (!input.url) return { content: "URL is required for navigate action", isError: true };
 
     const validation = validateUrlWithConfig(input.url, this.config);
-    if (!validation.valid) return { content: `URL validation failed: ${validation.reason}`, isError: true };
+    if (!validation.valid)
+      return { content: `URL validation failed: ${validation.reason}`, isError: true };
 
     if (!this.sessionManager.acquireSession(sessionId)) {
-      return { content: `Maximum concurrent browser sessions (${this.config.maxConcurrentSessions}) reached.`, isError: true };
+      return {
+        content: `Maximum concurrent browser sessions (${this.config.maxConcurrentSessions}) reached.`,
+        isError: true,
+      };
     }
 
-    const session = await this.getOrCreateSession(sessionId, input.viewport);
+    const session = await this.withSessionLock(sessionId, () =>
+      this.getOrCreateSession(sessionId, input.viewport),
+    );
     const timeout = input.timeout ?? this.config.maxNavigationTimeMs;
 
     try {
@@ -191,34 +257,37 @@ export class BrowserAutomationTool implements ITool {
   private async handleClick(input: BrowserInput, sessionId: string): Promise<ToolExecutionResult> {
     if (!input.selector) return { content: "Selector is required for click action", isError: true };
     const session = this.requireSession(sessionId);
-    
+
     await session.page.click(input.selector);
     return { content: `Clicked element: ${input.selector}` };
   }
 
   private async handleType(input: BrowserInput, sessionId: string): Promise<ToolExecutionResult> {
     if (!input.selector) return { content: "Selector is required for type action", isError: true };
-    if (input.text === undefined) return { content: "Text is required for type action", isError: true };
+    if (input.text === undefined)
+      return { content: "Text is required for type action", isError: true };
     const session = this.requireSession(sessionId);
-    
+
     await session.page.type(input.selector, input.text);
     return { content: `Typed "${input.text}" into: ${input.selector}` };
   }
 
   private async handleFill(input: BrowserInput, sessionId: string): Promise<ToolExecutionResult> {
     if (!input.selector) return { content: "Selector is required for fill action", isError: true };
-    if (input.value === undefined) return { content: "Value is required for fill action", isError: true };
+    if (input.value === undefined)
+      return { content: "Value is required for fill action", isError: true };
     const session = this.requireSession(sessionId);
-    
+
     await session.page.fill(input.selector, input.value);
     return { content: `Filled "${input.value}" into: ${input.selector}` };
   }
 
   private async handleSelect(input: BrowserInput, sessionId: string): Promise<ToolExecutionResult> {
     const session = this.requireSession(sessionId);
-    if (!input.selector) return { content: "Selector is required for select action", isError: true };
+    if (!input.selector)
+      return { content: "Selector is required for select action", isError: true };
     if (!input.option) return { content: "Option is required for select action", isError: true };
-    
+
     await session.page.selectOption(input.selector, input.option);
     return { content: `Selected "${input.option}" in: ${input.selector}` };
   }
@@ -235,10 +304,14 @@ export class BrowserAutomationTool implements ITool {
     return { content: `Scrolled ${direction} by ${amount}px` };
   }
 
-  private async handleScreenshot(input: BrowserInput, sessionId: string, context: ToolContext): Promise<ToolExecutionResult> {
+  private async handleScreenshot(
+    input: BrowserInput,
+    sessionId: string,
+    context: ToolContext,
+  ): Promise<ToolExecutionResult> {
     const session = this.requireSession(sessionId);
     const fullPage = input.fullPage ?? false;
-    
+
     const buffer = await session.page.screenshot({ fullPage, type: "png" });
     const sizeMb = buffer.length / MB_IN_BYTES;
 
@@ -248,23 +321,113 @@ export class BrowserAutomationTool implements ITool {
 
     const screenshotPath = join(context.workingDirectory, `.screenshot-${Date.now()}.png`);
     await mkdir(dirname(screenshotPath), { recursive: true });
-    await createWriteStream(screenshotPath).write(buffer);
+    await writeFile(screenshotPath, buffer);
 
-    return { content: `Screenshot saved to: ${screenshotPath} (${buffer.length} bytes)`, metadata: { path: screenshotPath, size: buffer.length } };
+    return {
+      content: `Screenshot saved to: ${screenshotPath} (${buffer.length} bytes)`,
+      metadata: { path: screenshotPath, size: buffer.length },
+    };
   }
 
-  private async handleEvaluate(input: BrowserInput, sessionId: string): Promise<ToolExecutionResult> {
+  /**
+   * Defense-in-depth script validation. This is NOT a security boundary --
+   * the browser context itself is the sandbox. This blocklist reduces the
+   * attack surface by rejecting obviously dangerous patterns before they
+   * reach the page context.
+   */
+  private validateScript(script: string): string | null {
+    const stripped = script
+      .replace(/\/\/.*$/gm, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(["'`])(?:(?!\1|\\).|\\.)*\1/g, '""');
+
+    const dangerousPatterns: [RegExp, string][] = [
+      [/\beval\s*\(/i, "eval()"],
+      [/\bnew\s+Function\s*\(/i, "new Function()"],
+      [/\bimport\s*\(/i, "dynamic import()"],
+      [/\bfetch\s*\(/i, "fetch()"],
+      [/\bXMLHttpRequest\b/i, "XMLHttpRequest"],
+      [/\bWebSocket\b/i, "WebSocket"],
+      [/\bdocument\.cookie\b/i, "document.cookie"],
+      [/\bdocument\.write\b/i, "document.write"],
+      [/\.innerHTML\s*=/i, "innerHTML assignment"],
+      [/\.outerHTML\s*=/i, "outerHTML assignment"],
+      [/\bwindow\.open\s*\(/i, "window.open()"],
+      [/\blocation\s*[.=]/i, "location manipulation"],
+      [/\bnavigator\.sendBeacon\s*\(/i, "navigator.sendBeacon()"],
+      [/\bpostMessage\s*\(/i, "postMessage()"],
+      [/__proto__/i, "__proto__ access"],
+      [/\bconstructor\s*\[/i, "constructor bracket access"],
+      // Block bracket-notation property access with string literals (bypass for dot-notation blocks)
+      [/\[['"`].*['"`]\]/i, "computed property access with string literal"],
+      // Block alternative global references that bypass 'window.' checks
+      [/\bglobalThis\b/i, "globalThis access"],
+      [/\bself\b/i, "self access"],
+      [/\btop\b/i, "top frame access"],
+      [/\bparent\b/i, "parent frame access"],
+      [/\bframes\b/i, "frames access"],
+      // Block destructuring from document/window (e.g. const { cookie } = document)
+      [/\{[^}]*\}\s*=\s*(document|window)/i, "destructuring from document/window"],
+    ];
+
+    for (const [pattern, label] of dangerousPatterns) {
+      if (pattern.test(stripped)) {
+        return `Script contains blocked pattern: ${label}`;
+      }
+    }
+
+    return null;
+  }
+
+  private async handleEvaluate(
+    input: BrowserInput,
+    sessionId: string,
+  ): Promise<ToolExecutionResult> {
     const session = this.requireSession(sessionId);
     if (!input.script) return { content: "Script is required for evaluate action", isError: true };
 
-    if (BLOCKED_JS_PATTERNS.some(p => p.test(input.script!))) {
-      return { content: "Script contains blocked patterns for security reasons", isError: true };
+    const validationError = this.validateScript(input.script);
+    if (validationError) {
+      return { content: validationError, isError: true };
     }
 
-    const result = await session.page.evaluate((code) => eval(code), input.script);
+    const timeout = input.timeout ?? SCRIPT_EVAL_TIMEOUT_MS;
+    const code = input.script;
+
+    // Use Promise.race with proper cleanup. Note: Playwright's page.evaluate
+    // does not accept a third options argument for timeout, so we use a manual
+    // timer. The timer is always cleaned up in the finally block. If the timeout
+    // fires, the page.evaluate CDP call is NOT cancelled -- consider closing and
+    // recreating the page if this becomes a problem in practice.
+    let timer: ReturnType<typeof setTimeout>;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Script evaluation timed out")), timeout);
+    });
+
+    let result: unknown;
+    try {
+      result = await Promise.race([
+        session.page.evaluate((c: string) => {
+          "use strict";
+          const fn = new Function('"use strict";' + c);
+          return fn();
+        }, code),
+        timeoutPromise,
+      ]);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("timed out")) {
+        return { content: "Script evaluation timed out", isError: true };
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer!);
+    }
     const resultStr = typeof result === "object" ? JSON.stringify(result, null, 2) : String(result);
 
-    return { content: `Script executed successfully.\nResult:\n${resultStr}`, metadata: { result } };
+    return {
+      content: `Script executed successfully.\nResult:\n${resultStr}`,
+      metadata: { result },
+    };
   }
 
   private async handleWait(input: BrowserInput, sessionId: string): Promise<ToolExecutionResult> {
@@ -275,7 +438,7 @@ export class BrowserAutomationTool implements ITool {
       await session.page.waitForSelector(input.waitFor, { timeout });
       return { content: `Waited for selector: ${input.waitFor}` };
     }
-    
+
     await session.page.waitForTimeout(input.amount ?? timeout);
     return { content: `Waited for ${input.amount ?? timeout}ms` };
   }
@@ -284,20 +447,30 @@ export class BrowserAutomationTool implements ITool {
     const session = this.requireSession(sessionId);
     const content = await session.page.content();
     const text = await session.page.evaluate(() => document.body.innerText);
-    const truncated = text.length > MAX_CONTENT_LENGTH ? text.substring(0, MAX_CONTENT_LENGTH) + "..." : text;
+    const truncated =
+      text.length > MAX_CONTENT_LENGTH ? text.substring(0, MAX_CONTENT_LENGTH) + "..." : text;
 
     return {
       content: `Page content:\n${truncated}`,
-      metadata: { textLength: text.length, htmlLength: content.length, truncated: text.length > MAX_CONTENT_LENGTH },
+      metadata: {
+        textLength: text.length,
+        htmlLength: content.length,
+        truncated: text.length > MAX_CONTENT_LENGTH,
+      },
     };
   }
 
-  private async handleDownload(input: BrowserInput, sessionId: string, context: ToolContext): Promise<ToolExecutionResult> {
+  private async handleDownload(
+    input: BrowserInput,
+    sessionId: string,
+    context: ToolContext,
+  ): Promise<ToolExecutionResult> {
     if (!input.url) return { content: "URL is required for download action", isError: true };
     if (!input.downloadPath) return { content: "Download path is required", isError: true };
 
     const validation = validateUrlWithConfig(input.url, this.config);
-    if (!validation.valid) return { content: `URL validation failed: ${validation.reason}`, isError: true };
+    if (!validation.valid)
+      return { content: `URL validation failed: ${validation.reason}`, isError: true };
 
     const session = this.requireSession(sessionId);
     const fullPath = join(context.workingDirectory, input.downloadPath);
@@ -310,38 +483,48 @@ export class BrowserAutomationTool implements ITool {
     }
   }
 
-  private async downloadViaBrowser(session: SessionState, url: string, targetPath: string): Promise<ToolExecutionResult> {
+  private async downloadViaBrowser(
+    session: SessionState,
+    url: string,
+    targetPath: string,
+  ): Promise<ToolExecutionResult> {
     const page = await session.context.newPage();
-    
-    const [download] = await Promise.all([
-      page.waitForEvent("download"),
-      page.evaluate((downloadUrl) => {
-        const a = document.createElement("a");
-        a.href = downloadUrl;
-        a.download = "";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }, url),
-    ]);
+    try {
+      const [download] = await Promise.all([
+        page.waitForEvent("download"),
+        page.evaluate((downloadUrl) => {
+          const a = document.createElement("a");
+          a.href = downloadUrl;
+          a.download = "";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }, url),
+      ]);
 
-    const suggestedFilename = download.suggestedFilename();
-    const finalPath = targetPath.endsWith("/") || (await this.isDirectory(targetPath))
-      ? join(targetPath, suggestedFilename)
-      : targetPath;
+      const suggestedFilename = download.suggestedFilename();
+      const finalPath =
+        targetPath.endsWith("/") || (await this.isDirectory(targetPath))
+          ? join(targetPath, suggestedFilename)
+          : targetPath;
 
-    await download.saveAs(finalPath);
-    await page.close();
+      await download.saveAs(finalPath);
 
-    const stats = await stat(finalPath);
-    const sizeMb = stats.size / MB_IN_BYTES;
+      const stats = await stat(finalPath);
+      const sizeMb = stats.size / MB_IN_BYTES;
 
-    if (sizeMb > this.config.maxDownloadSizeMb) {
-      await unlink(finalPath);
-      return { content: `Download size (${sizeMb.toFixed(2)}MB) exceeds limit`, isError: true };
+      if (sizeMb > this.config.maxDownloadSizeMb) {
+        await unlink(finalPath);
+        return { content: `Download size (${sizeMb.toFixed(2)}MB) exceeds limit`, isError: true };
+      }
+
+      return {
+        content: `Downloaded to: ${finalPath} (${stats.size} bytes)`,
+        metadata: { path: finalPath, size: stats.size, filename: suggestedFilename },
+      };
+    } finally {
+      await page.close().catch(() => {});
     }
-
-    return { content: `Downloaded to: ${finalPath} (${stats.size} bytes)`, metadata: { path: finalPath, size: stats.size, filename: suggestedFilename } };
   }
 
   private async fallbackDownload(url: string, targetPath: string): Promise<ToolExecutionResult> {
@@ -366,18 +549,30 @@ export class BrowserAutomationTool implements ITool {
       const body = response.body;
       if (!body) return { content: "Download failed: No response body", isError: true };
 
-      await pipeline(Readable.fromWeb(body as import("stream/web").ReadableStream), createWriteStream(targetPath));
+      await pipeline(
+        Readable.fromWeb(body as import("stream/web").ReadableStream),
+        createWriteStream(targetPath),
+      );
       const stats = await stat(targetPath);
 
-      return { content: `Downloaded to: ${targetPath} (${stats.size} bytes)`, metadata: { path: targetPath, size: stats.size } };
+      return {
+        content: `Downloaded to: ${targetPath} (${stats.size} bytes)`,
+        metadata: { path: targetPath, size: stats.size },
+      };
     } catch (error) {
-      return { content: `Download failed: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+      return {
+        content: `Download failed: ${error instanceof Error ? error.message : String(error)}`,
+        isError: true,
+      };
     }
   }
 
   // ─── Session Management ──────────────────────────────────────────────────────
 
-  private async getOrCreateSession(sessionId: string, viewport?: { width: number; height: number }): Promise<SessionState> {
+  private async getOrCreateSession(
+    sessionId: string,
+    viewport?: { width: number; height: number },
+  ): Promise<SessionState> {
     let session = this.sessions.get(sessionId);
     if (session) {
       session.lastUsed = Date.now();
@@ -385,20 +580,29 @@ export class BrowserAutomationTool implements ITool {
     }
 
     const headless = process.env["BROWSER_HEADLESS"] !== "false";
-    const browser = await chromium.launch({ headless });
+    let browser: Browser | undefined;
+    let context: BrowserContext | undefined;
+    try {
+      browser = await chromium.launch({ headless });
 
-    const context = await browser.newContext({
-      viewport: viewport ?? { width: 1280, height: 720 },
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    });
+      context = await browser.newContext({
+        viewport: viewport ?? { width: 1280, height: 720 },
+        userAgent:
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      });
 
-    const page = await context.newPage();
+      const page = await context.newPage();
 
-    session = { browser, context, page, createdAt: Date.now(), lastUsed: Date.now() };
-    this.sessions.set(sessionId, session);
-    this.logger.info("Created new browser session", { sessionId });
+      session = { browser, context, page, createdAt: Date.now(), lastUsed: Date.now() };
+      this.sessions.set(sessionId, session);
+      this.logger.info("Created new browser session", { sessionId });
 
-    return session;
+      return session;
+    } catch (error) {
+      if (context) await context.close().catch(() => {});
+      if (browser) await browser.close().catch(() => {});
+      throw error;
+    }
   }
 
   private requireSession(sessionId: string): SessionState {
@@ -406,7 +610,27 @@ export class BrowserAutomationTool implements ITool {
     if (!session) {
       throw new Error("No active browser session. Navigate to a page first.");
     }
+    session.lastUsed = Date.now();
     return session;
+  }
+
+  private async withSessionLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.sessionLocks.get(sessionId) ?? Promise.resolve();
+    let releaseLock: () => void;
+    const lock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    this.sessionLocks.set(sessionId, lock);
+    try {
+      await prev;
+      return await fn();
+    } finally {
+      releaseLock!();
+      // Clean up if no subsequent lock replaced this one
+      if (this.sessionLocks.get(sessionId) === lock) {
+        this.sessionLocks.delete(sessionId);
+      }
+    }
   }
 
   private async isDirectory(path: string): Promise<boolean> {
@@ -430,6 +654,10 @@ export class BrowserAutomationTool implements ITool {
   }
 
   async closeSession(sessionId: string): Promise<void> {
+    await this.withSessionLock(sessionId, () => this.closeSessionUnsafe(sessionId));
+  }
+
+  private async closeSessionUnsafe(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 

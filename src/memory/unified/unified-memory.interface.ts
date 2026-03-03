@@ -1,12 +1,12 @@
 /**
  * Unified Memory Interface for AgentDB + HNSW Integration
- * 
+ *
  * Implements ADR-006 (Unified Memory Service) and ADR-009 (Hybrid Memory Backend)
  * Provides 3-tier memory architecture with HNSW vector indexing for 150x-12,500x performance
  */
 
-import type { 
-  RetrievalOptions, 
+import type {
+  RetrievalOptions,
   RetrievalResult,
   MemoryStats,
   MemoryEntryType,
@@ -16,7 +16,7 @@ import type {
 } from "../memory.interface.js";
 import type { MemoryId } from "../../types/index.js";
 import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
-import type { 
+import type {
   Result,
   Option,
   ChatId,
@@ -24,7 +24,7 @@ import type {
   DurationMs,
   NormalizedScore,
   Vector,
-  VectorId 
+  VectorId,
 } from "../../types/index.js";
 
 // =============================================================================
@@ -83,11 +83,11 @@ interface BaseUnifiedMemoryEntry {
   readonly archived: boolean;
   readonly metadata: MemoryMetadata;
   readonly chatId: ChatId;
-  
+
   // Unified-specific (readonly)
   readonly embedding: Vector<number>;
   readonly domain?: string;
-  
+
   // Mutable state
   tier: MemoryTier;
   accessCount: number;
@@ -363,7 +363,7 @@ export interface UnifiedMemoryStats extends MemoryStats {
 
 /**
  * Unified Memory Manager Interface
- * 
+ *
  * Replaces legacy IMemoryManager with AgentDB + HNSW backend
  * Maintains backward compatibility while providing enhanced capabilities
  */
@@ -377,62 +377,57 @@ export interface IUnifiedMemory {
   // --- Project Analysis Cache ---
 
   /** Cache a project analysis result */
-  cacheAnalysis(
-    analysis: StrataProjectAnalysis, 
-    projectPath: string
-  ): Promise<Result<void, Error>>;
+  cacheAnalysis(analysis: StrataProjectAnalysis, projectPath: string): Promise<Result<void, Error>>;
 
   /** Get cached analysis if still valid (not older than maxAgeMs) */
   getCachedAnalysis(
-    projectPath: string, 
-    maxAgeMs?: DurationMs
+    projectPath: string,
+    maxAgeMs?: DurationMs,
   ): Promise<StrataProjectAnalysis | null>;
 
   // --- Conversation Memory ---
 
   /** Store a conversation summary with automatic tier assignment */
   storeConversation(
-    chatId: ChatId, 
-    summary: string, 
+    chatId: ChatId,
+    summary: string,
     tags?: string[],
-    tier?: MemoryTier
+    tier?: MemoryTier,
   ): Promise<MemoryEntry>;
 
   /** Store a general note or insight */
-  storeNote(
-    content: string, 
-    tags?: string[], 
-    tier?: MemoryTier
-  ): Promise<MemoryEntry>;
+  storeNote(content: string, tags?: string[], tier?: MemoryTier): Promise<MemoryEntry>;
 
   /** Store an entry with full control over metadata */
   storeEntry(
-    entry: Omit<UnifiedMemoryEntry, "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version">
+    entry: Omit<
+      UnifiedMemoryEntry,
+      "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
+    >,
   ): Promise<Result<MemoryEntry, Error>>;
 
   /** Batch store entries */
   storeEntries(
-    entries: Array<Omit<UnifiedMemoryEntry, "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version">>
+    entries: Array<
+      Omit<UnifiedMemoryEntry, "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version">
+    >,
   ): Promise<Result<MemoryId[], Error>>;
 
   // --- Retrieval ---
 
   /** Search memory using text query (TF-IDF backward compatibility) */
-  retrieve(
-    query: string, 
-    options?: RetrievalOptions
-  ): Promise<RetrievalResult<MemoryEntry>[]>;
+  retrieve(query: string, options?: RetrievalOptions): Promise<RetrievalResult<MemoryEntry>[]>;
 
   /** Semantic search using HNSW vector indexing */
   retrieveSemantic(
-    query: string, 
-    options?: UnifiedMemoryQuery
+    query: string,
+    options?: UnifiedMemoryQuery,
   ): Promise<RetrievalResult<MemoryEntry>[]>;
 
   /** Retrieve with vector embedding directly */
   retrieveByEmbedding(
-    embedding: Vector<number>, 
-    options?: UnifiedMemoryQuery
+    embedding: Vector<number>,
+    options?: UnifiedMemoryQuery,
   ): Promise<RetrievalResult<MemoryEntry>[]>;
 
   /** Hybrid search combining semantic and text */
@@ -443,20 +438,14 @@ export interface IUnifiedMemory {
       tier?: MemoryTier;
       limit?: number;
       useMMR?: boolean;
-    }
-  ): Promise<RetrievalResult<MemoryEntry>[]>
+    },
+  ): Promise<RetrievalResult<MemoryEntry>[]>;
 
   /** Get all entries for a chat (chronological) */
-  getChatHistory(
-    chatId: ChatId, 
-    limit?: number
-  ): Promise<MemoryEntry[]>;
+  getChatHistory(chatId: ChatId, limit?: number): Promise<MemoryEntry[]>;
 
   /** Get entries by tier */
-  getByTier(
-    tier: MemoryTier, 
-    limit?: number
-  ): Promise<MemoryEntry[]>;
+  getByTier(tier: MemoryTier, limit?: number): Promise<MemoryEntry[]>;
 
   /** Get entry by ID */
   getById(id: MemoryId): Promise<Result<Option<MemoryEntry>, Error>>;
@@ -464,22 +453,13 @@ export interface IUnifiedMemory {
   // --- Memory Management ---
 
   /** Promote entry to higher tier */
-  promoteEntry(
-    id: MemoryId, 
-    newTier: MemoryTier
-  ): Promise<Result<MemoryEntry, Error>>;
+  promoteEntry(id: MemoryId, newTier: MemoryTier): Promise<Result<MemoryEntry, Error>>;
 
   /** Demote entry to lower tier */
-  demoteEntry(
-    id: MemoryId, 
-    newTier: MemoryTier
-  ): Promise<Result<MemoryEntry, Error>>;
+  demoteEntry(id: MemoryId, newTier: MemoryTier): Promise<Result<MemoryEntry, Error>>;
 
   /** Update entry importance */
-  updateImportance(
-    id: MemoryId,
-    importance: NormalizedScore
-  ): Promise<Result<MemoryEntry, Error>>;
+  updateImportance(id: MemoryId, importance: NormalizedScore): Promise<Result<MemoryEntry, Error>>;
 
   /** Touch entry (update access count and timestamp) */
   touch(id: MemoryId): Promise<Result<void, Error>>;
@@ -549,6 +529,8 @@ export interface UnifiedMemoryConfig {
   readonly ephemeralTtlMs: DurationMs;
   /** Auto-compact threshold (0-1, percentage of max) */
   readonly autoCompactThreshold?: NormalizedScore;
+  /** Optional embedding provider function — when not set, a hash-based fallback is used */
+  readonly embeddingProvider?: (text: string) => Promise<number[]>;
 }
 
 /**
@@ -570,7 +552,7 @@ export const DEFAULT_MEMORY_CONFIG: UnifiedMemoryConfig = {
   quantizationType: "scalar",
   cacheSize: 1000,
   enableAutoTiering: true,
-  ephemeralTtlMs: 24 * 60 * 60 * 1000 as DurationMs, // 24 hours
+  ephemeralTtlMs: (24 * 60 * 60 * 1000) as DurationMs, // 24 hours
   autoCompactThreshold: 0.9 as NormalizedScore,
 };
 
@@ -583,7 +565,7 @@ export const DEFAULT_MEMORY_CONFIG: UnifiedMemoryConfig = {
  */
 export function determineTier(
   importance: NormalizedScore,
-  isEphemeral: boolean = false
+  isEphemeral: boolean = false,
 ): MemoryTier {
   if (importance >= 0.8) return MemoryTier.Persistent;
   if (isEphemeral || importance <= 0.3) return MemoryTier.Ephemeral;
@@ -596,10 +578,10 @@ export function determineTier(
 export function calculateTierFromAccess(
   accessCount: number,
   lastAccessedAt: TimestampMs,
-  now: TimestampMs = Date.now() as TimestampMs
+  now: TimestampMs = Date.now() as TimestampMs,
 ): MemoryTier {
   const daysSinceAccess = (now - lastAccessedAt) / (1000 * 60 * 60 * 24);
-  
+
   if (accessCount > 10 && daysSinceAccess < 1) {
     return MemoryTier.Working;
   }
@@ -614,7 +596,7 @@ export function calculateTierFromAccess(
  */
 export function isEntryExpired(
   entry: UnifiedMemoryEntry,
-  now: TimestampMs = Date.now() as TimestampMs
+  now: TimestampMs = Date.now() as TimestampMs,
 ): boolean {
   if (entry.expiresAt === undefined) return false;
   return now > entry.expiresAt;
@@ -624,14 +606,17 @@ export function isEntryExpired(
  * Create a unified memory entry
  */
 export function createUnifiedEntry(
-  baseEntry: Omit<UnifiedMemoryEntry, "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version">,
+  baseEntry: Omit<
+    UnifiedMemoryEntry,
+    "id" | "createdAt" | "accessCount" | "lastAccessedAt" | "version"
+  >,
   options: {
     embedding: Vector<number>;
     tier: MemoryTier;
     importanceScore?: NormalizedScore;
     domain?: string;
     expiresAt?: TimestampMs;
-  }
+  },
 ): Omit<UnifiedMemoryEntry, "id" | "createdAt"> {
   const now = Date.now() as TimestampMs;
   const entry = {
@@ -653,16 +638,18 @@ export function createUnifiedEntry(
  */
 export function mergeRetrievalResults(
   results: RetrievalResult<MemoryEntry>[][],
-  limit: number
+  limit: number,
 ): RetrievalResult<MemoryEntry>[] {
   const all = results.flat();
   // Sort by score descending
   all.sort((a, b) => b.score - a.score);
   // Remove duplicates by ID
   const seen = new Set<string>();
-  return all.filter((r) => {
-    if (seen.has(r.entry.id as string)) return false;
-    seen.add(r.entry.id as string);
-    return true;
-  }).slice(0, limit);
+  return all
+    .filter((r) => {
+      if (seen.has(r.entry.id as string)) return false;
+      seen.add(r.entry.id as string);
+      return true;
+    })
+    .slice(0, limit);
 }

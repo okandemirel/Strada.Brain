@@ -56,6 +56,11 @@ export class MetricsCollector {
 
   private static readonly MAX_RECENT_TOKENS = 100;
 
+  /** Get the start time in epoch milliseconds. */
+  getStartTime(): number {
+    return this.startTime;
+  }
+
   recordMessage(): void {
     this.totalMessages++;
   }
@@ -111,7 +116,10 @@ export class MetricsCollector {
     this.toolsBlocked++;
   }
 
-  getSnapshot(memoryStats?: { totalEntries: number; hasAnalysisCache: boolean }): DashboardSnapshot {
+  getSnapshot(memoryStats?: {
+    totalEntries: number;
+    hasAnalysisCache: boolean;
+  }): DashboardSnapshot {
     return {
       uptime: Date.now() - this.startTime,
       totalMessages: this.totalMessages,
