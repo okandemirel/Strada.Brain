@@ -4,7 +4,10 @@ import type {
   ToolDefinition,
   ProviderResponse,
   StreamCallback,
+  ProviderCapabilities,
+  IStreamingProvider,
 } from "./provider.interface.js";
+import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
@@ -13,8 +16,9 @@ import { getLogger } from "../../utils/logger.js";
  * Tries providers in order. If one fails, falls through to the next.
  * Logs each attempt and failure for observability.
  */
-export class FallbackChainProvider implements IAIProvider {
+export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   readonly name: string;
+  readonly capabilities: ProviderCapabilities;
   private readonly providers: IAIProvider[];
 
   constructor(providers: IAIProvider[]) {
@@ -23,6 +27,15 @@ export class FallbackChainProvider implements IAIProvider {
     }
     this.providers = providers;
     this.name = `chain(${providers.map((p) => p.name).join("→")})`;
+    // Aggregate capabilities - conservative approach
+    this.capabilities = {
+      maxTokens: Math.min(...providers.map((p) => p.capabilities.maxTokens)),
+      streaming: providers.some((p) => p.capabilities.streaming),
+      structuredStreaming: providers.some((p) => p.capabilities.structuredStreaming),
+      toolCalling: providers.every((p) => p.capabilities.toolCalling),
+      vision: providers.every((p) => p.capabilities.vision),
+      systemPrompt: providers.every((p) => p.capabilities.systemPrompt),
+    };
   }
 
   async chat(
@@ -80,7 +93,7 @@ export class FallbackChainProvider implements IAIProvider {
       const provider = this.providers[i]!;
       try {
         // Use streaming if available, fall back to non-streaming
-        if (typeof provider.chatStream === "function") {
+        if (supportsStreaming(provider)) {
           return await provider.chatStream(systemPrompt, messages, tools, onChunk);
         }
         return await provider.chat(systemPrompt, messages, tools);

@@ -1,0 +1,403 @@
+/**
+ * Slack slash command handlers for Strata Brain.
+ * Provides /strata-* commands for quick access to common operations.
+ */
+
+import type { App, AckFn, RespondFn } from "@slack/bolt";
+import type { WebClient } from "@slack/web-api";
+import { getLogger } from "../../utils/logger.js";
+import { createHelpBlocks, createProcessingBlock } from "./blocks.js";
+
+const logger = getLogger();
+
+interface CommandContext {
+  ack: AckFn<string | Record<string, unknown>>;
+  respond: RespondFn;
+  client: WebClient;
+  userId: string;
+  channelId: string;
+  teamId: string;
+  triggerId?: string;
+  text: string;
+}
+
+type CommandHandler = (ctx: CommandContext) => Promise<void>;
+
+/**
+ * Register all slash commands with the Slack app.
+ */
+export function registerSlashCommands(app: App): void {
+  // /strata-help - Show help information
+  app.command("/strata-help", async ({ ack, respond, client, body }) => {
+    await handleCommand({
+      ack,
+      respond,
+      client,
+      userId: body.user_id,
+      channelId: body.channel_id,
+      teamId: body.team_id,
+      triggerId: body.trigger_id,
+      text: body.text,
+    }, handleHelpCommand);
+  });
+
+  // /strata-ask - Ask a question to the AI
+  app.command("/strata-ask", async ({ ack, respond, client, body }) => {
+    await handleCommand({
+      ack,
+      respond,
+      client,
+      userId: body.user_id,
+      channelId: body.channel_id,
+      teamId: body.team_id,
+      triggerId: body.trigger_id,
+      text: body.text,
+    }, handleAskCommand);
+  });
+
+  // /strata-analyze - Analyze code or project
+  app.command("/strata-analyze", async ({ ack, respond, client, body }) => {
+    await handleCommand({
+      ack,
+      respond,
+      client,
+      userId: body.user_id,
+      channelId: body.channel_id,
+      teamId: body.team_id,
+      triggerId: body.trigger_id,
+      text: body.text,
+    }, handleAnalyzeCommand);
+  });
+
+  // /strata-generate - Generate code (component, system, etc.)
+  app.command("/strata-generate", async ({ ack, respond, client, body }) => {
+    await handleCommand({
+      ack,
+      respond,
+      client,
+      userId: body.user_id,
+      channelId: body.channel_id,
+      teamId: body.team_id,
+      triggerId: body.trigger_id,
+      text: body.text,
+    }, handleGenerateCommand);
+  });
+
+  logger.info("Slash commands registered");
+}
+
+/**
+ * Wrapper for command handling with common error handling.
+ */
+async function handleCommand(
+  ctx: CommandContext,
+  handler: CommandHandler
+): Promise<void> {
+  try {
+    await handler(ctx);
+  } catch (error) {
+    logger.error("Slash command error", { 
+      error: error instanceof Error ? error.message : String(error),
+      command: handler.name,
+      userId: ctx.userId 
+    });
+
+    try {
+      await ctx.respond({
+        text: "❌ An error occurred while processing your command. Please try again.",
+        response_type: "ephemeral",
+      });
+    } catch {
+      // Ignore respond errors
+    }
+  }
+}
+
+/**
+ * Handle /strata-help command.
+ */
+async function handleHelpCommand(ctx: CommandContext): Promise<void> {
+  await ctx.ack();
+
+  const helpText = `
+*🧠 Strata Brain - Available Commands*
+
+*/strata-help* - Show this help message
+*/strata-ask <question>* - Ask the AI a question
+*/strata-analyze <file|project>* - Analyze code or project structure
+*/strata-generate <type> <name>* - Generate Strata.Core code
+
+*Generation Types:*
+• \`component <Name>\` - Create a Component class
+• \`mediator <Name>\` - Create a Mediator class
+• \`system <Name>\` - Create a System class
+• \`module <Name>\` - Create a Module structure
+
+*Examples:*
+\`/strata-ask How do I create a new enemy system?\`
+\`/strata-analyze Assets/Scripts/PlayerController.cs\`
+\`/strata-generate component PlayerHealth\`
+`;
+
+  await ctx.respond({
+    blocks: createHelpBlocks(),
+    text: helpText, // Fallback text
+    response_type: "ephemeral",
+  });
+}
+
+/**
+ * Handle /strata-ask command.
+ */
+async function handleAskCommand(ctx: CommandContext): Promise<void> {
+  const question = ctx.text.trim();
+
+  if (!question) {
+    await ctx.ack({
+      text: "Please provide a question. Example: `/strata-ask How do I create a new component?`",
+      response_type: "ephemeral",
+    });
+    return;
+  }
+
+  await ctx.ack();
+
+  // Send processing indicator
+  await ctx.respond({
+    blocks: createProcessingBlock(`Processing your question: "${escapeText(question.substring(0, 100))}"...`),
+    response_type: "in_channel",
+  });
+
+  // The actual processing will be handled by the message handler
+  // This just confirms the command was received
+  // The response will come through the normal message flow
+}
+
+/**
+ * Handle /strata-analyze command.
+ */
+async function handleAnalyzeCommand(ctx: CommandContext): Promise<void> {
+  const target = ctx.text.trim();
+
+  if (!target) {
+    await ctx.ack({
+      text: "Please specify what to analyze. Examples:\n• `/strata-analyze project` - Analyze entire project\n• `/strata-analyze Assets/Scripts/Player.cs` - Analyze specific file",
+      response_type: "ephemeral",
+    });
+    return;
+  }
+
+  await ctx.ack();
+
+  const isProject = target.toLowerCase() === "project";
+  const action = isProject ? "Analyzing project structure..." : `Analyzing \`${escapeText(target)}\`...`;
+
+  await ctx.respond({
+    blocks: createProcessingBlock(action),
+    response_type: "in_channel",
+  });
+}
+
+/**
+ * Handle /strata-generate command.
+ */
+async function handleGenerateCommand(ctx: CommandContext): Promise<void> {
+  const args = ctx.text.trim().split(/\s+/);
+
+  if (args.length < 2) {
+    await ctx.ack({
+      text: `Usage: \`/strata-generate <type> <name>\`
+
+Available types:
+• \`component <Name>\` - Create a Component
+• \`mediator <Name>\` - Create a Mediator  
+• \`system <Name>\` - Create a System
+• \`module <Name>\` - Create a Module
+
+Example: \`/strata-generate component PlayerHealth\``,
+      response_type: "ephemeral",
+    });
+    return;
+  }
+
+  const type = args[0];
+  const nameParts = args.slice(1);
+  const name = nameParts.join(" ");
+
+  if (!type) {
+    await ctx.ack({
+      text: "Type is required",
+      response_type: "ephemeral",
+    });
+    return;
+  }
+
+  const validTypes = ["component", "mediator", "system", "module"];
+  
+  if (!validTypes.includes(type.toLowerCase())) {
+    await ctx.ack({
+      text: `Invalid type "${escapeText(type)}". Valid types: ${validTypes.join(", ")}`,
+      response_type: "ephemeral",
+    });
+    return;
+  }
+
+  await ctx.ack();
+
+  await ctx.respond({
+    blocks: createProcessingBlock(`Generating ${escapeText(type)} \`${escapeText(name)}\`...`),
+    response_type: "in_channel",
+  });
+}
+
+/**
+ * Create a modal for complex workflows.
+ */
+export async function openGenerateModal(
+  client: WebClient,
+  triggerId: string,
+  callbackId: string
+): Promise<void> {
+  await client.views.open({
+    trigger_id: triggerId,
+    view: {
+      type: "modal",
+      callback_id: callbackId,
+      title: {
+        type: "plain_text",
+        text: "Generate Code",
+      },
+      submit: {
+        type: "plain_text",
+        text: "Generate",
+      },
+      close: {
+        type: "plain_text",
+        text: "Cancel",
+      },
+      blocks: [
+        {
+          type: "input",
+          block_id: "type_input",
+          element: {
+            type: "static_select",
+            action_id: "type_select",
+            placeholder: {
+              type: "plain_text",
+              text: "Select type...",
+            },
+            options: [
+              { text: { type: "plain_text", text: "Component" }, value: "component" },
+              { text: { type: "plain_text", text: "Mediator" }, value: "mediator" },
+              { text: { type: "plain_text", text: "System" }, value: "system" },
+              { text: { type: "plain_text", text: "Module" }, value: "module" },
+            ],
+          },
+          label: {
+            type: "plain_text",
+            text: "Type",
+          },
+        },
+        {
+          type: "input",
+          block_id: "name_input",
+          element: {
+            type: "plain_text_input",
+            action_id: "name_text",
+            placeholder: {
+              type: "plain_text",
+              text: "e.g., PlayerHealth",
+            },
+          },
+          label: {
+            type: "plain_text",
+            text: "Name",
+          },
+        },
+        {
+          type: "input",
+          block_id: "namespace_input",
+          element: {
+            type: "plain_text_input",
+            action_id: "namespace_text",
+            placeholder: {
+              type: "plain_text",
+              text: "e.g., MyGame.Player",
+            },
+            initial_value: "MyProject",
+          },
+          label: {
+            type: "plain_text",
+            text: "Namespace (optional)",
+          },
+          optional: true,
+        },
+        {
+          type: "input",
+          block_id: "description_input",
+          element: {
+            type: "plain_text_input",
+            action_id: "description_text",
+            placeholder: {
+              type: "plain_text",
+              text: "Brief description of what this should do...",
+            },
+            multiline: true,
+          },
+          label: {
+            type: "plain_text",
+            text: "Description (optional)",
+          },
+          optional: true,
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * Parse a command string into type and arguments.
+ */
+export function parseCommand(text: string): { type: string; args: string[] } | null {
+  const parts = text.trim().split(/\s+/);
+  
+  if (parts.length === 0) {
+    return null;
+  }
+
+  // Remove the command prefix if present
+  const command = parts[0]!.replace(/^\//, "");
+  const args = parts.slice(1);
+
+  return { type: command, args };
+}
+
+/**
+ * Escape special characters for Slack text.
+ */
+function escapeText(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/**
+ * Validate workspace membership.
+ */
+export function isValidWorkspace(teamId: string, allowedWorkspaces: string[]): boolean {
+  if (allowedWorkspaces.length === 0) {
+    return true; // Allow all if no restrictions
+  }
+  return allowedWorkspaces.includes(teamId);
+}
+
+/**
+ * Validate user access.
+ */
+export function isValidUser(userId: string, allowedUsers: string[]): boolean {
+  if (allowedUsers.length === 0) {
+    return true; // Allow all if no restrictions
+  }
+  return allowedUsers.includes(userId);
+}

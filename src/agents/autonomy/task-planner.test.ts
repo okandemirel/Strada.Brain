@@ -1,0 +1,305 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { TaskPlanner, type TaskState } from "./task-planner.ts";
+import { LearningPipeline } from "../../learning/pipeline/learning-pipeline.ts";
+import { LearningStorage } from "../../learning/storage/learning-storage.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+describe("TaskPlanner", () => {
+  let planner: TaskPlanner;
+
+  beforeEach(() => {
+    planner = new TaskPlanner();
+  });
+
+  describe("Lifecycle", () => {
+    it("should reset to initial state", () => {
+      planner.trackToolCall("file_write", false);
+      planner.reset();
+      
+      const state = planner.getState();
+      expect(state.iterationsUsed).toBe(0);
+      expect(state.consecutiveErrors).toBe(0);
+    });
+
+    it("should start task with learning", () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
+      const dbPath = join(tempDir, "test.db");
+      const storage = new LearningStorage(dbPath);
+      storage.initialize();
+      const pipeline = new LearningPipeline(storage);
+      
+      planner.startTask({
+        sessionId: "test-session",
+        taskDescription: "Test task",
+        learningPipeline: pipeline,
+      });
+
+      expect(planner.isActive()).toBe(true);
+      const state = planner.getState();
+      expect(state.sessionId).toBe("test-session");
+      expect(state.taskDescription).toBe("Test task");
+
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it("should end task and record trajectory", () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
+      const dbPath = join(tempDir, "test.db");
+      const storage = new LearningStorage(dbPath);
+      storage.initialize();
+      const pipeline = new LearningPipeline(storage);
+      
+      planner.startTask({
+        sessionId: "test-session",
+        taskDescription: "Test task",
+        learningPipeline: pipeline,
+      });
+
+      planner.trackToolCall("file_write", false);
+      
+      planner.endTask({
+        success: true,
+        hadErrors: false,
+        errorCount: 0,
+      });
+
+      expect(planner.isActive()).toBe(false);
+      expect(pipeline.getStats().trajectoryCount).toBe(1);
+
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+  });
+
+  describe("Tool Call Tracking", () => {
+    it("should track mutations", () => {
+      planner.trackToolCall("file_write", false);
+      planner.trackToolCall("file_edit", false);
+      
+      const state = planner.getState();
+      expect(state.mutationsSinceVerify).toBe(2);
+    });
+
+    it("should track verifications", () => {
+      planner.trackToolCall("file_write", false);
+      planner.trackToolCall("file_write", false);
+      planner.trackToolCall("dotnet_build", false);
+      
+      const state = planner.getState();
+      expect(state.mutationsSinceVerify).toBe(0);
+      expect(state.buildVerified).toBe(true);
+    });
+
+    it("should track consecutive errors", () => {
+      planner.trackToolCall("file_write", true);
+      planner.trackToolCall("file_edit", true);
+      planner.trackToolCall("dotnet_build", true);
+      
+      const state = planner.getState();
+      expect(state.consecutiveErrors).toBe(3);
+    });
+
+    it("should reset consecutive errors on success", () => {
+      planner.trackToolCall("file_write", true);
+      planner.trackToolCall("file_write", true);
+      planner.trackToolCall("file_read", false);
+      
+      const state = planner.getState();
+      expect(state.consecutiveErrors).toBe(0);
+    });
+
+    it("should track iterations", () => {
+      planner.trackToolCall("file_read", false);
+      planner.trackToolCall("file_write", false);
+      planner.trackToolCall("dotnet_build", false);
+      
+      const state = planner.getState();
+      expect(state.iterationsUsed).toBe(3);
+    });
+  });
+
+  describe("Error Tracking", () => {
+    it("should record error summary", () => {
+      planner.recordError("missing_type error in File.cs");
+      
+      const state = planner.getState();
+      expect(state.errorHistory).toContain("missing_type error in File.cs");
+    });
+
+    it("should bound error history to 10 entries", () => {
+      for (let i = 0; i < 15; i++) {
+        planner.recordError(`Error ${i}`);
+      }
+      
+      const state = planner.getState();
+      expect(state.errorHistory.length).toBeLessThanOrEqual(10);
+    });
+  });
+
+  describe("State Injection", () => {
+    it("should return empty string when no intervention needed", () => {
+      planner.trackToolCall("file_read", false);
+      
+      const injection = planner.getStateInjection();
+      expect(injection).toBe("");
+    });
+
+    it("should warn about verification when threshold exceeded", () => {
+      planner.trackToolCall("file_write", false);
+      planner.trackToolCall("file_write", false);
+      planner.trackToolCall("file_write", false);
+      
+      const injection = planner.getStateInjection();
+      expect(injection).toContain("[VERIFY]");
+      expect(injection).toContain("Run dotnet_build");
+    });
+
+    it("should warn about stall when consecutive errors exceed threshold", () => {
+      planner.recordError("Error 1");
+      planner.recordError("Error 2");
+      planner.trackToolCall("file_write", true);
+      planner.trackToolCall("file_write", true);
+      planner.trackToolCall("file_write", true);
+      
+      const injection = planner.getStateInjection();
+      expect(injection).toContain("[STALL]");
+      expect(injection).toContain("Consider a different approach");
+    });
+
+    it("should warn about budget when iterations exceed threshold", () => {
+      // Simulate many iterations
+      for (let i = 0; i < 42; i++) {
+        planner.trackToolCall("file_read", false);
+      }
+      
+      const injection = planner.getStateInjection();
+      expect(injection).toContain("[BUDGET]");
+      expect(injection).toContain("iterations used");
+    });
+
+    it("should include multiple warnings when applicable", () => {
+      planner.recordError("Error 1");
+      planner.recordError("Error 2");
+      
+      planner.trackToolCall("file_write", true);
+      planner.trackToolCall("file_write", true);
+      planner.trackToolCall("file_write", true);
+      
+      const injection = planner.getStateInjection();
+      expect(injection).toContain("[VERIFY]");
+      expect(injection).toContain("[STALL]");
+    });
+  });
+
+  describe("Planning Prompt", () => {
+    it("should return planning prompt", () => {
+      const prompt = planner.getPlanningPrompt();
+      expect(prompt).toContain("Autonomous Execution Protocol");
+      expect(prompt).toContain("PLAN → ACT → VERIFY → RESPOND");
+    });
+  });
+
+  describe("Trajectory Tracking", () => {
+    it("should record steps during task", () => {
+      planner.startTask({
+        sessionId: "test",
+        taskDescription: "Test",
+      });
+
+      planner.trackToolCall("file_read", false, { path: "test.cs" }, "content");
+      planner.trackToolCall("file_write", true, { path: "test.cs" }, "error");
+
+      const steps = planner.getTrajectorySteps();
+      expect(steps).toHaveLength(2);
+      expect(steps[0]?.toolName).toBe("file_read");
+      expect(steps[1]?.toolName).toBe("file_write");
+    });
+
+    it("should not record steps when no task active", () => {
+      planner.trackToolCall("file_read", false, { path: "test.cs" }, "content");
+
+      const steps = planner.getTrajectorySteps();
+      expect(steps).toHaveLength(0);
+    });
+  });
+
+  describe("Correction Recording", () => {
+    it("should record corrections", () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
+      const dbPath = join(tempDir, "test.db");
+      const storage = new LearningStorage(dbPath);
+      storage.initialize();
+      const pipeline = new LearningPipeline(storage);
+      
+      planner.startTask({
+        sessionId: "test-session",
+        taskDescription: "Test task",
+        learningPipeline: pipeline,
+      });
+
+      planner.recordCorrection({
+        toolName: "file_edit",
+        originalInput: { path: "test.cs" },
+        originalOutput: "Wrong code",
+        correctedOutput: "Fixed code",
+        correction: "Add missing semicolon",
+      });
+
+      expect(pipeline.getStats().observationCount).toBe(1);
+      expect(planner.getTrajectorySteps()).toHaveLength(1);
+
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+  });
+
+  describe("Learning Integration", () => {
+    it("should enable learning", () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
+      const dbPath = join(tempDir, "test.db");
+      const storage = new LearningStorage(dbPath);
+      storage.initialize();
+      const pipeline = new LearningPipeline(storage);
+
+      planner.enableLearning(pipeline);
+
+      planner.startTask({
+        sessionId: "test",
+        taskDescription: "Test",
+      });
+
+      planner.trackToolCall("file_read", false, {}, "output");
+
+      expect(pipeline.getStats().observationCount).toBe(1);
+
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it("should disable learning", () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
+      const dbPath = join(tempDir, "test.db");
+      const storage = new LearningStorage(dbPath);
+      storage.initialize();
+      const pipeline = new LearningPipeline(storage);
+
+      planner.enableLearning(pipeline);
+      planner.disableLearning();
+
+      planner.startTask({
+        sessionId: "test",
+        taskDescription: "Test",
+      });
+
+      planner.trackToolCall("file_read", false, {}, "output");
+
+      expect(pipeline.getStats().observationCount).toBe(0);
+
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+  });
+});

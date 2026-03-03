@@ -43,7 +43,7 @@ describe("OpenAIProvider", () => {
     expect(result.text).toBe("Hi");
     expect(result.toolCalls).toEqual([]);
     expect(result.stopReason).toBe("end_turn");
-    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 20 });
+    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 20, totalTokens: 30 });
   });
 
   it("parses tool call response with JSON arguments", async () => {

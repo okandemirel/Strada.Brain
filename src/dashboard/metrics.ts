@@ -33,6 +33,11 @@ export interface DashboardSnapshot {
   toolErrorCounts: Record<string, number>;
   providerName: string;
   memoryStats: { totalEntries: number; hasAnalysisCache: boolean } | null;
+  readOnlyMode: boolean;
+  securityStats: {
+    secretsSanitized: number;
+    toolsBlocked: number;
+  } | null;
 }
 
 export class MetricsCollector {
@@ -42,6 +47,9 @@ export class MetricsCollector {
   private totalOutputTokens = 0;
   private activeSessions = 0;
   private providerName = "unknown";
+  private readOnlyMode = false;
+  private secretsSanitized = 0;
+  private toolsBlocked = 0;
   private readonly recentTokenUsage: TokenUsage[] = [];
   private readonly toolCallCounts = new Map<string, number>();
   private readonly toolErrorCounts = new Map<string, number>();
@@ -82,6 +90,27 @@ export class MetricsCollector {
     this.activeSessions = count;
   }
 
+  /**
+   * Set read-only mode status for dashboard display.
+   */
+  setReadOnlyMode(enabled: boolean): void {
+    this.readOnlyMode = enabled;
+  }
+
+  /**
+   * Record a secret sanitization event.
+   */
+  recordSecretSanitized(count: number = 1): void {
+    this.secretsSanitized += count;
+  }
+
+  /**
+   * Record a tool blocked by read-only guard.
+   */
+  recordToolBlocked(): void {
+    this.toolsBlocked++;
+  }
+
   getSnapshot(memoryStats?: { totalEntries: number; hasAnalysisCache: boolean }): DashboardSnapshot {
     return {
       uptime: Date.now() - this.startTime,
@@ -96,6 +125,11 @@ export class MetricsCollector {
       toolErrorCounts: Object.fromEntries(this.toolErrorCounts),
       providerName: this.providerName,
       memoryStats: memoryStats ?? null,
+      readOnlyMode: this.readOnlyMode,
+      securityStats: {
+        secretsSanitized: this.secretsSanitized,
+        toolsBlocked: this.toolsBlocked,
+      },
     };
   }
 }

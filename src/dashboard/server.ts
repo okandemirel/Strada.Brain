@@ -15,16 +15,20 @@ export class DashboardServer {
   private readonly port: number;
   private readonly metrics: MetricsCollector;
   private readonly getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
+  // @ts-ignore - Reserved for future read-only mode indicator in dashboard
+  private readonly _isReadOnly: () => boolean;
   private server: Server | null = null;
 
   constructor(
     port: number,
     metrics: MetricsCollector,
-    getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined
+    getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined,
+    isReadOnly: () => boolean = () => false
   ) {
     this.port = port;
     this.metrics = metrics;
     this.getMemoryStats = getMemoryStats;
+    this._isReadOnly = isReadOnly;
   }
 
   async start(): Promise<void> {
@@ -109,12 +113,26 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .badge { padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; }
   .badge-ok { background: #238636; color: #fff; }
   .badge-err { background: #da3633; color: #fff; }
+  .badge-warn { background: #f0883e; color: #000; }
+  .badge-info { background: #58a6ff; color: #fff; }
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #3fb950; margin-right: 6px; }
+  .status-dot.readonly { background: #f0883e; }
+  .readonly-banner {
+    background: linear-gradient(90deg, #f0883e 0%, #da3633 100%);
+    color: #fff;
+    padding: 12px 20px;
+    margin: -20px -20px 20px -20px;
+    font-weight: 600;
+    text-align: center;
+    display: none;
+  }
+  .readonly-banner.active { display: block; }
   #last-update { color: #484f58; font-size: 0.75rem; }
 </style>
 </head>
 <body>
-<h1><span class="status-dot"></span>Strata Brain Dashboard</h1>
+<div id="readonly-banner" class="readonly-banner">🔒 READ-ONLY MODE ACTIVE - Write operations are disabled</div>
+<h1><span id="status-dot" class="status-dot"></span>Strata Brain Dashboard</h1>
 <div class="grid" id="cards"></div>
 
 <div class="section">
@@ -161,15 +179,38 @@ async function refresh() {
     const res = await fetch('/api/metrics');
     const data = await res.json();
 
+    // Read-only mode indicator
+    const banner = document.getElementById('readonly-banner');
+    const statusDot = document.getElementById('status-dot');
+    if (data.readOnlyMode) {
+      banner.classList.add('active');
+      statusDot.classList.add('readonly');
+    } else {
+      banner.classList.remove('active');
+      statusDot.classList.remove('readonly');
+    }
+
     // Cards
-    document.getElementById('cards').innerHTML = [
+    const cards = [
       card('Uptime', fmtDuration(data.uptime)),
       card('Messages', fmt(data.totalMessages)),
       card('Input Tokens', fmt(data.totalTokens.input)),
       card('Output Tokens', fmt(data.totalTokens.output)),
       card('Active Sessions', data.activeSessions),
       card('Provider', data.providerName, data.memoryStats ? 'Memory: ' + data.memoryStats.totalEntries + ' entries' : ''),
-    ].join('');
+    ];
+    
+    // Add security stats if available
+    if (data.securityStats && (data.securityStats.secretsSanitized > 0 || data.securityStats.toolsBlocked > 0)) {
+      cards.push(card('Secrets Redacted', fmt(data.securityStats.secretsSanitized), data.securityStats.toolsBlocked > 0 ? data.securityStats.toolsBlocked + ' tools blocked' : ''));
+    }
+    
+    // Add read-only indicator card
+    if (data.readOnlyMode) {
+      cards.push(card('Mode', '🔒 Read-Only', 'Write operations disabled'));
+    }
+    
+    document.getElementById('cards').innerHTML = cards.join('');
 
     // Tool table
     const tbody = document.querySelector('#tool-table tbody');

@@ -6,7 +6,9 @@ import type {
   ProviderResponse,
   ToolCall,
   StreamCallback,
+  ProviderCapabilities,
 } from "./provider.interface.js";
+import type { MessageContent } from "./provider-core.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
@@ -15,6 +17,14 @@ import { getLogger } from "../../utils/logger.js";
  */
 export class ClaudeProvider implements IAIProvider {
   readonly name = "claude";
+  readonly capabilities: ProviderCapabilities = {
+    maxTokens: 4096,
+    streaming: true,
+    structuredStreaming: false,
+    toolCalling: true,
+    vision: false,
+    systemPrompt: true,
+  };
   private readonly client: Anthropic;
   private readonly model: string;
 
@@ -97,22 +107,30 @@ export class ClaudeProvider implements IAIProvider {
 
     for (const msg of messages) {
       if (msg.role === "user") {
-        if (msg.toolResults && msg.toolResults.length > 0) {
-          // This is a tool result message
-          const content: Anthropic.ToolResultBlockParam[] = msg.toolResults.map(
-            (tr) => ({
-              type: "tool_result" as const,
-              tool_use_id: tr.toolCallId,
-              content: tr.content,
-              is_error: tr.isError,
-            })
-          );
-          result.push({ role: "user", content });
-        } else {
+        // Handle both simple string content and MessageContent[] format
+        if (typeof msg.content === "string") {
           result.push({ role: "user", content: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          // Convert MessageContent[] to Anthropic format
+          const content: Anthropic.ContentBlockParam[] = [];
+          for (const block of msg.content as MessageContent[]) {
+            if (block.type === "text") {
+              content.push({ type: "text", text: block.text });
+            } else if (block.type === "tool_result") {
+              content.push({
+                type: "tool_result",
+                tool_use_id: block.tool_use_id,
+                content: block.content,
+                is_error: block.is_error,
+              });
+            }
+          }
+          if (content.length > 0) {
+            result.push({ role: "user", content });
+          }
         }
       } else if (msg.role === "assistant") {
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
           const content: (
             | Anthropic.TextBlockParam
             | Anthropic.ToolUseBlockParam
@@ -122,7 +140,7 @@ export class ClaudeProvider implements IAIProvider {
             content.push({ type: "text", text: msg.content });
           }
 
-          for (const tc of msg.toolCalls) {
+          for (const tc of msg.tool_calls) {
             content.push({
               type: "tool_use",
               id: tc.id,
@@ -152,7 +170,7 @@ export class ClaudeProvider implements IAIProvider {
         toolCalls.push({
           id: block.id,
           name: block.name,
-          input: block.input as Record<string, unknown>,
+          input: block.input as import("../../types/index.js").JsonObject,
         });
       }
     }
@@ -171,6 +189,7 @@ export class ClaudeProvider implements IAIProvider {
       usage: {
         inputTokens: response.usage.input_tokens,
         outputTokens: response.usage.output_tokens,
+        totalTokens: response.usage.input_tokens + response.usage.output_tokens,
       },
     };
   }

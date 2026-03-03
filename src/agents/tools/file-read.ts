@@ -1,9 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
+import { FILE_LIMITS } from "../../common/constants.js";
 
-const MAX_FILE_SIZE = 512 * 1024; // 512KB max read
-const MAX_LINES = 2000;
+const MAX_FILE_SIZE = FILE_LIMITS.MAX_FILE_SIZE;
+const MAX_LINES = FILE_LIMITS.MAX_LINES;
 
 export class FileReadTool implements ITool {
   readonly name = "file_read";

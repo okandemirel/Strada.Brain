@@ -1,7 +1,10 @@
-import type { IAIProvider, ConversationMessage, ToolCall, ToolResult, ProviderResponse } from "./providers/provider.interface.js";
+import type { IAIProvider, ConversationMessage, ToolCall, ToolResult, ProviderResponse, IStreamingProvider } from "./providers/provider.interface.js";
 import type { ITool, ToolContext } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage } from "../channels/channel.interface.js";
+import { supportsRichMessaging } from "../channels/channel.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
+import { isOk, isSome } from "../types/index.js";
+import type { ChatId } from "../types/index.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
 import { STRATA_SYSTEM_PROMPT, buildProjectContext, buildAnalysisSummary } from "./context/strata-knowledge.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
@@ -36,7 +39,7 @@ export class Orchestrator {
   private readonly toolDefinitions: Array<{
     name: string;
     description: string;
-    input_schema: Record<string, unknown>;
+    input_schema: import("../types/index.js").JsonObject;
   }>;
   private readonly channel: IChannelAdapter;
   private readonly projectPath: string;
@@ -83,7 +86,7 @@ export class Orchestrator {
       this.toolDefinitions.push({
         name: tool.name,
         description: tool.description,
-        input_schema: tool.inputSchema,
+        input_schema: tool.inputSchema as import("../types/index.js").JsonObject,
       });
     }
 
@@ -144,17 +147,25 @@ export class Orchestrator {
     const trimmed = this.trimSession(session, 40);
     if (trimmed.length > 0 && this.memoryManager) {
       const summary = trimmed
-        .filter((m) => m.content && !m.toolResults?.length)
-        .map((m) => `[${m.role}] ${m.content}`)
+        .filter((m) => {
+          if (!m.content) return false;
+          if (m.role === "assistant") return true;
+          // For user messages, check if it's a tool result message (has MessageContent array)
+          if (typeof m.content !== "string") return false;
+          return true;
+        })
+        .map((m) => `[${m.role}] ${typeof m.content === "string" ? m.content : "[complex content]"}`)
         .join("\n");
       if (summary) {
-        await this.memoryManager.storeConversation(chatId, summary);
+        await this.memoryManager.storeConversation(chatId as ChatId, summary);
       }
     }
 
     // Start typing indicator loop
     const typingInterval = setInterval(() => {
-      this.channel.sendTypingIndicator(chatId).catch(() => {});
+      if (supportsRichMessaging(this.channel)) {
+        this.channel.sendTypingIndicator(chatId as string).catch(() => {});
+      }
     }, TYPING_INTERVAL_MS);
 
     try {
@@ -188,29 +199,34 @@ export class Orchestrator {
       const lastUserMsg = [...session.messages]
         .reverse()
         .find((m) => m.role === "user" && m.content);
-      if (lastUserMsg) {
+      if (lastUserMsg && typeof lastUserMsg.content === "string") {
         try {
-          const memories = await this.memoryManager.retrieve(lastUserMsg.content, {
+          const memoriesResult = await this.memoryManager.retrieve({
+            mode: "text",
+            query: lastUserMsg.content,
             limit: 3,
             minScore: 0.15,
           });
-          if (memories.length > 0) {
-            const memoryContext = memories
-              .map((m) => m.entry.content)
-              .join("\n---\n");
-            systemPrompt += `\n\n## Relevant Memory\n${memoryContext}\n`;
-            logger.debug("Injected memory context", {
-              chatId,
-              memoryCount: memories.length,
-              topScore: memories[0]!.score.toFixed(3),
-            });
+          if (isOk(memoriesResult)) {
+            const memories = memoriesResult.value;
+            if (memories.length > 0) {
+              const memoryContext = memories
+                .map((m) => m.entry.content)
+                .join("\n---\n");
+              systemPrompt += `\n\n## Relevant Memory\n${memoryContext}\n`;
+              logger.debug("Injected memory context", {
+                chatId,
+                memoryCount: memories.length,
+                topScore: memories[0]!.score.toFixed(3),
+              });
+            }
           }
         } catch {
           // Memory retrieval failure is non-fatal
         }
 
         // Inject RAG code context
-        if (this.ragPipeline) {
+        if (this.ragPipeline && typeof lastUserMsg.content === "string") {
           try {
             const ragResults = await this.ragPipeline.search(lastUserMsg.content, {
               topK: 6,
@@ -232,9 +248,12 @@ export class Orchestrator {
 
       // Inject cached analysis summary into system prompt
       try {
-        const analysis = await this.memoryManager.getCachedAnalysis(this.projectPath);
-        if (analysis) {
-          systemPrompt += buildAnalysisSummary(analysis);
+        const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
+        if (isOk(analysisResult)) {
+          const analysisOpt = analysisResult.value;
+          if (isSome(analysisOpt)) {
+            systemPrompt += buildAnalysisSummary(analysisOpt.value);
+          }
         }
       } catch {
         // Analysis cache failure is non-fatal
@@ -250,7 +269,9 @@ export class Orchestrator {
     // ────────────────────────────────────────────────────────────────────
 
     const canStream = this.streamingEnabled &&
+      "chatStream" in this.provider &&
       typeof this.provider.chatStream === "function" &&
+      "startStreamingMessage" in this.channel &&
       typeof this.channel.startStreamingMessage === "function";
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -325,7 +346,7 @@ export class Orchestrator {
       session.messages.push({
         role: "assistant",
         content: response.text,
-        toolCalls: response.toolCalls,
+        tool_calls: response.toolCalls,
       });
 
       // If there's intermediate text and we didn't stream, send it
@@ -358,7 +379,12 @@ export class Orchestrator {
         if (analysis) {
           taskPlanner.recordError(analysis.summary);
           // Re-sanitize after appending (prevents API key leakage + enforces length cap)
-          tr.content = sanitizeToolResult(tr.content + analysis.recoveryInjection);
+          // Create new result with sanitized content (ToolResult is immutable)
+          toolResults[i] = {
+            toolCallId: tr.toolCallId,
+            content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
+            isError: tr.isError,
+          };
         }
       }
 
@@ -367,10 +393,25 @@ export class Orchestrator {
       // ────────────────────────────────────────────────────────────────────
 
       // Add tool results as a user message
+      // Build content blocks for tool results
+      const contentBlocks: Array<
+        | { type: "text"; text: string }
+        | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
+      > = [];
+      if (stateCtx) {
+        contentBlocks.push({ type: "text" as const, text: stateCtx });
+      }
+      for (const tr of toolResults) {
+        contentBlocks.push({
+          type: "tool_result" as const,
+          tool_use_id: tr.toolCallId,
+          content: tr.content,
+          is_error: tr.isError,
+        });
+      }
       session.messages.push({
         role: "user",
-        content: stateCtx, // empty string if no warnings (zero overhead)
-        toolResults,
+        content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
       });
     }
 
@@ -403,14 +444,14 @@ export class Orchestrator {
       const now = Date.now();
       if (now - lastUpdate >= STREAM_THROTTLE_MS && streamId) {
         lastUpdate = now;
-        channel.updateStreamingMessage?.(chatId, streamId, accumulated)?.catch(() => {});
+        (channel as { updateStreamingMessage?: (chatId: string, streamId: string, text: string) => Promise<void> }).updateStreamingMessage?.(chatId, streamId, accumulated)?.catch(() => {});
       }
     };
 
     // Start the streaming message placeholder
-    streamId = await channel.startStreamingMessage?.(chatId) ?? undefined;
+    streamId = await (channel as { startStreamingMessage?: (chatId: string) => Promise<string | undefined> }).startStreamingMessage?.(chatId) ?? undefined;
 
-    const response = await this.provider.chatStream!(
+    const response = await (this.provider as IStreamingProvider).chatStream(
       systemPrompt,
       session.messages,
       this.toolDefinitions,
@@ -419,7 +460,7 @@ export class Orchestrator {
 
     // Finalize the streamed message
     if (streamId && accumulated) {
-      await channel.finalizeStreamingMessage?.(chatId, streamId, accumulated);
+      await (channel as { finalizeStreamingMessage?: (chatId: string, streamId: string, text: string) => Promise<void> }).finalizeStreamingMessage?.(chatId, streamId, accumulated);
     }
 
     return response;
@@ -547,7 +588,7 @@ export class Orchestrator {
       }
     }
 
-    const response = await this.channel.requestConfirmation({
+    const response = await (this.channel as unknown as { requestConfirmation: (req: { chatId: string; question: string; options: string[]; details?: string }) => Promise<string> }).requestConfirmation({
       chatId,
       question,
       options: ["Yes", "No"],
@@ -593,7 +634,7 @@ export class Orchestrator {
     let trimTo = overflow;
     for (let i = overflow; i < session.messages.length; i++) {
       const msg = session.messages[i]!;
-      if (msg.role === "user" && !msg.toolResults?.length) {
+      if (msg.role === "user" && !("toolResults" in msg)) {
         trimTo = i;
         break;
       }

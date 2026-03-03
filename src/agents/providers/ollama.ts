@@ -4,7 +4,9 @@ import type {
   ToolDefinition,
   ProviderResponse,
   ToolCall,
+  ProviderCapabilities,
 } from "./provider.interface.js";
+import type { MessageContent } from "./provider-core.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
 
@@ -14,6 +16,14 @@ import { convertToolDefinitions } from "./openai-compat.js";
  */
 export class OllamaProvider implements IAIProvider {
   readonly name = "ollama";
+  readonly capabilities: ProviderCapabilities = {
+    maxTokens: 4096,
+    streaming: false,
+    structuredStreaming: false,
+    toolCalling: true,
+    vision: false,
+    systemPrompt: true,
+  };
   private readonly baseUrl: string;
   private readonly model: string;
 
@@ -76,19 +86,25 @@ export class OllamaProvider implements IAIProvider {
 
     for (const msg of messages) {
       if (msg.role === "user") {
-        if (msg.toolResults && msg.toolResults.length > 0) {
-          for (const tr of msg.toolResults) {
-            result.push({ role: "tool", content: tr.content });
-          }
-        } else {
+        // Handle both simple string content and MessageContent[] format
+        if (typeof msg.content === "string") {
           result.push({ role: "user", content: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          // Convert MessageContent[] to Ollama format
+          for (const block of msg.content as MessageContent[]) {
+            if (block.type === "text") {
+              result.push({ role: "user", content: block.text });
+            } else if (block.type === "tool_result") {
+              result.push({ role: "tool", content: block.content });
+            }
+          }
         }
       } else if (msg.role === "assistant") {
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
           result.push({
             role: "assistant",
             content: msg.content || "",
-            tool_calls: msg.toolCalls.map((tc) => ({
+            tool_calls: msg.tool_calls.map((tc) => ({
               function: {
                 name: tc.name,
                 arguments: tc.input,
@@ -110,7 +126,7 @@ export class OllamaProvider implements IAIProvider {
     const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc, i) => ({
       id: `ollama-tc-${i}`,
       name: tc.function.name,
-      input: tc.function.arguments as Record<string, unknown>,
+      input: tc.function.arguments as import("../../types/index.js").JsonObject,
     }));
 
     const stopReason = toolCalls.length > 0 ? "tool_use" : "end_turn";
@@ -122,6 +138,7 @@ export class OllamaProvider implements IAIProvider {
       usage: {
         inputTokens: data.prompt_eval_count ?? 0,
         outputTokens: data.eval_count ?? 0,
+        totalTokens: (data.prompt_eval_count ?? 0) + (data.eval_count ?? 0),
       },
     };
   }

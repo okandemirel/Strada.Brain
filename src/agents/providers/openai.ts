@@ -4,7 +4,9 @@ import type {
   ToolDefinition,
   ProviderResponse,
   ToolCall,
+  ProviderCapabilities,
 } from "./provider.interface.js";
+import type { MessageContent } from "./provider-core.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
 
@@ -14,6 +16,14 @@ import { convertToolDefinitions } from "./openai-compat.js";
  */
 export class OpenAIProvider implements IAIProvider {
   readonly name = "openai";
+  readonly capabilities: ProviderCapabilities = {
+    maxTokens: 4096,
+    streaming: false,
+    structuredStreaming: false,
+    toolCalling: true,
+    vision: true,
+    systemPrompt: true,
+  };
   private readonly apiKey: string;
   private readonly model: string;
   private readonly baseUrl: string;
@@ -81,23 +91,29 @@ export class OpenAIProvider implements IAIProvider {
 
     for (const msg of messages) {
       if (msg.role === "user") {
-        if (msg.toolResults && msg.toolResults.length > 0) {
-          for (const tr of msg.toolResults) {
-            result.push({
-              role: "tool",
-              tool_call_id: tr.toolCallId,
-              content: tr.content,
-            });
-          }
-        } else {
+        // Handle both simple string content and MessageContent[] format
+        if (typeof msg.content === "string") {
           result.push({ role: "user", content: msg.content });
+        } else if (Array.isArray(msg.content)) {
+          // Convert MessageContent[] to OpenAI format
+          for (const block of msg.content as MessageContent[]) {
+            if (block.type === "text") {
+              result.push({ role: "user", content: block.text });
+            } else if (block.type === "tool_result") {
+              result.push({
+                role: "tool",
+                tool_call_id: block.tool_use_id,
+                content: block.content,
+              });
+            }
+          }
         }
       } else if (msg.role === "assistant") {
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
           const assistantMsg: OpenAIMessage = {
             role: "assistant",
             content: msg.content || null,
-            tool_calls: msg.toolCalls.map((tc) => ({
+            tool_calls: msg.tool_calls.map((tc) => ({
               id: tc.id,
               type: "function" as const,
               function: {
@@ -125,9 +141,9 @@ export class OpenAIProvider implements IAIProvider {
     const message = choice.message;
     const text = message.content ?? "";
     const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc) => {
-      let input: Record<string, unknown>;
+      let input: import("../../types/index.js").JsonObject;
       try {
-        input = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+        input = JSON.parse(tc.function.arguments) as import("../../types/index.js").JsonObject;
       } catch {
         input = { _rawArguments: tc.function.arguments };
       }
@@ -148,6 +164,7 @@ export class OpenAIProvider implements IAIProvider {
       usage: {
         inputTokens: data.usage?.prompt_tokens ?? 0,
         outputTokens: data.usage?.completion_tokens ?? 0,
+        totalTokens: (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0),
       },
     };
   }

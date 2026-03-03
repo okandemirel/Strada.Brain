@@ -1,4 +1,4 @@
-import type { IEmbeddingProvider, EmbeddingResult } from "../rag.interface.js";
+import type { IEmbeddingProvider, EmbeddingBatch } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 const KNOWN_MODELS: Record<string, number> = {
@@ -40,7 +40,7 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
     this.name = `openai:${this.model}`;
   }
 
-  async embed(texts: string[]): Promise<EmbeddingResult> {
+  async embed(texts: string[]): Promise<EmbeddingBatch> {
     if (texts.length === 0) {
       return { embeddings: [], usage: { totalTokens: 0 } };
     }

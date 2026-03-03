@@ -1,4 +1,4 @@
-import type { IEmbeddingProvider, EmbeddingResult } from "../rag.interface.js";
+import type { IEmbeddingProvider, EmbeddingBatch } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 const KNOWN_MODELS: Record<string, number> = {
@@ -37,7 +37,7 @@ export class OllamaEmbeddingProvider implements IEmbeddingProvider {
     this.name = `ollama:${this.model}`;
   }
 
-  async embed(texts: string[]): Promise<EmbeddingResult> {
+  async embed(texts: string[]): Promise<EmbeddingBatch> {
     if (texts.length === 0) {
       return { embeddings: [], usage: { totalTokens: 0 } };
     }
@@ -62,7 +62,7 @@ export class OllamaEmbeddingProvider implements IEmbeddingProvider {
     }
   }
 
-  private async embedViaBatchEndpoint(texts: string[]): Promise<EmbeddingResult> {
+  private async embedViaBatchEndpoint(texts: string[]): Promise<EmbeddingBatch> {
     const url = `${this.baseUrl}/api/embed`;
     const response = await fetch(url, {
       method: "POST",
@@ -82,7 +82,7 @@ export class OllamaEmbeddingProvider implements IEmbeddingProvider {
     return { embeddings: data.embeddings, usage: { totalTokens } };
   }
 
-  private async embedViaSequentialEndpoint(texts: string[]): Promise<EmbeddingResult> {
+  private async embedViaSequentialEndpoint(texts: string[]): Promise<EmbeddingBatch> {
     const logger = getLogger();
     const url = `${this.baseUrl}/api/embeddings`;
     const embeddings: number[][] = [];

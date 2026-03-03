@@ -4,6 +4,7 @@ import { withTempDir } from "../test-helpers.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { StrataProjectAnalysis } from "../intelligence/strata-analyzer.js";
+import { unwrap, isOk, isSome, isNone, unwrapOption } from "../types/index.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
@@ -121,7 +122,9 @@ describe("FileMemoryManager", () => {
         await mm.storeConversation("chat1", "Added Health component with MaxHealth field");
         await mm.storeConversation("chat2", "Discussed inventory system design");
 
-        const history = await mm.getChatHistory("chat1");
+        const result = await mm.getChatHistory("chat1");
+        expect(isOk(result)).toBe(true);
+        const history = unwrap(result);
         expect(history).toHaveLength(2);
         expect(history[0]!.content).toContain("combat module");
 
@@ -138,9 +141,11 @@ describe("FileMemoryManager", () => {
           await mm.storeConversation("chat1", `Message ${i}`);
         }
 
-        const limited = await mm.getChatHistory("chat1", 2);
+        const result = await mm.getChatHistory("chat1", { limit: 2 });
+        expect(isOk(result)).toBe(true);
+        const limited = unwrap(result);
         expect(limited).toHaveLength(2);
-        // Should return the last 2
+        // Should return the last 2 (newest first in the loop, unshift adds to front)
         expect(limited[0]!.content).toBe("Message 3");
         expect(limited[1]!.content).toBe("Message 4");
 
@@ -175,7 +180,9 @@ describe("FileMemoryManager", () => {
         await mm.storeConversation("c1", "Added Health component with MaxHealth and CurrentHealth fields");
         await mm.storeNote("Inventory system uses ItemData ScriptableObjects");
 
-        const results = await mm.retrieve("damage system combat");
+        const result = await mm.retrieve({ mode: "text", query: "damage system combat" });
+        expect(isOk(result)).toBe(true);
+        const results = unwrap(result);
         expect(results.length).toBeGreaterThan(0);
         expect(results[0]!.entry.content).toContain("DamageSystem");
         expect(results[0]!.score).toBeGreaterThan(0);
@@ -192,7 +199,9 @@ describe("FileMemoryManager", () => {
         await mm.storeConversation("c1", "Combat module discussion");
         await mm.storeNote("Combat architecture note");
 
-        const results = await mm.retrieve("combat", { type: "note" });
+        const result = await mm.retrieve({ mode: "type", types: ["note"], query: "combat" });
+        expect(isOk(result)).toBe(true);
+        const results = unwrap(result);
         expect(results.every((r) => r.entry.type === "note")).toBe(true);
 
         await mm.shutdown();
@@ -207,8 +216,10 @@ describe("FileMemoryManager", () => {
         await mm.storeConversation("chat-a", "Combat design chat A");
         await mm.storeConversation("chat-b", "Combat design chat B");
 
-        const results = await mm.retrieve("combat design", { chatId: "chat-a" });
-        expect(results.every((r) => r.entry.chatId === "chat-a")).toBe(true);
+        const result = await mm.retrieve({ mode: "chat", chatId: "chat-a", query: "combat design" });
+        expect(isOk(result)).toBe(true);
+        const results = unwrap(result);
+        expect(results.every((r) => r.entry.type === "conversation" && r.entry.chatId === "chat-a")).toBe(true);
 
         await mm.shutdown();
       });
@@ -223,7 +234,9 @@ describe("FileMemoryManager", () => {
           await mm.storeNote(`Combat note variant ${i} with system and component`);
         }
 
-        const results = await mm.retrieve("combat system component", { limit: 3 });
+        const result = await mm.retrieve({ mode: "text", query: "combat system component", limit: 3 });
+        expect(isOk(result)).toBe(true);
+        const results = unwrap(result);
         expect(results.length).toBeLessThanOrEqual(3);
 
         await mm.shutdown();
@@ -237,7 +250,9 @@ describe("FileMemoryManager", () => {
 
         await mm.storeNote("Combat system with DamageDealer component");
 
-        const results = await mm.retrieve("inventory crafting recipe", { minScore: 0.3 });
+        const result = await mm.retrieve({ mode: "text", query: "inventory crafting recipe", minScore: 0.3 });
+        expect(isOk(result)).toBe(true);
+        const results = unwrap(result);
         expect(results).toHaveLength(0);
 
         await mm.shutdown();
@@ -250,7 +265,9 @@ describe("FileMemoryManager", () => {
         await mm.initialize();
 
         await mm.storeNote("Something");
-        const results = await mm.retrieve("");
+        const result = await mm.retrieve({ mode: "text", query: "" });
+        expect(isOk(result)).toBe(true);
+        const results = unwrap(result);
         expect(results).toHaveLength(0);
 
         await mm.shutdown();
@@ -267,31 +284,36 @@ describe("FileMemoryManager", () => {
         const analysis = createMockAnalysis();
         await mm.cacheAnalysis(analysis, "/test/project");
 
-        const cached = await mm.getCachedAnalysis("/test/project");
-        expect(cached).not.toBeNull();
-        expect(cached!.modules).toHaveLength(1);
-        expect(cached!.modules[0]!.name).toBe("Combat");
-        expect(cached!.systems).toHaveLength(1);
-        expect(cached!.csFileCount).toBe(10);
+        const result = await mm.getCachedAnalysis("/test/project");
+        expect(isOk(result)).toBe(true);
+        const option = unwrap(result);
+        expect(isSome(option)).toBe(true);
+        const cached = unwrapOption(option);
+        expect(cached.modules).toHaveLength(1);
+        expect(cached.modules[0]!.name).toBe("Combat");
+        expect(cached.systems).toHaveLength(1);
+        expect(cached.csFileCount).toBe(10);
 
         await mm.shutdown();
       });
     });
 
-    it("returns null for different project path", async () => {
+    it("returns none for different project path", async () => {
       await withTempDir(async (dir) => {
         const mm = new FileMemoryManager(join(dir, "db"));
         await mm.initialize();
 
         await mm.cacheAnalysis(createMockAnalysis(), "/project-a");
-        const cached = await mm.getCachedAnalysis("/project-b");
-        expect(cached).toBeNull();
+        const result = await mm.getCachedAnalysis("/project-b");
+        expect(isOk(result)).toBe(true);
+        const option = unwrap(result);
+        expect(isNone(option)).toBe(true);
 
         await mm.shutdown();
       });
     });
 
-    it("returns null when cache is expired", async () => {
+    it("returns none when cache is expired", async () => {
       await withTempDir(async (dir) => {
         const mm = new FileMemoryManager(join(dir, "db"));
         await mm.initialize();
@@ -301,8 +323,10 @@ describe("FileMemoryManager", () => {
         await mm.cacheAnalysis(analysis, "/test");
 
         // Max age 1 hour — should be expired
-        const cached = await mm.getCachedAnalysis("/test", 60 * 60 * 1000);
-        expect(cached).toBeNull();
+        const result = await mm.getCachedAnalysis("/test", 60 * 60 * 1000);
+        expect(isOk(result)).toBe(true);
+        const option = unwrap(result);
+        expect(isNone(option)).toBe(true);
 
         await mm.shutdown();
       });
@@ -338,9 +362,12 @@ describe("FileMemoryManager", () => {
         await mm2.initialize();
         expect(mm2.getStats().hasAnalysisCache).toBe(true);
 
-        const cached = await mm2.getCachedAnalysis("/test");
-        expect(cached).not.toBeNull();
-        expect(cached!.modules[0]!.name).toBe("Combat");
+        const result = await mm2.getCachedAnalysis("/test");
+        expect(isOk(result)).toBe(true);
+        const option = unwrap(result);
+        expect(isSome(option)).toBe(true);
+        const cached = unwrapOption(option);
+        expect(cached.modules[0]!.name).toBe("Combat");
 
         await mm2.shutdown();
       });
@@ -361,7 +388,9 @@ describe("FileMemoryManager", () => {
         expect(stats.totalEntries).toBe(5);
 
         // Should have entries 3-7 (oldest evicted)
-        const results = await mm.retrieve("entry", { limit: 10, minScore: 0 });
+        const result = await mm.retrieve({ mode: "text", query: "entry", limit: 10, minScore: 0 });
+        expect(isOk(result)).toBe(true);
+        const results = unwrap(result);
         const contents = results.map((r) => r.entry.content);
         expect(contents).not.toContain("Entry 0");
         expect(contents).not.toContain("Entry 1");

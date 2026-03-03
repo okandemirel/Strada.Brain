@@ -167,7 +167,8 @@ describe("GitBranchTool", () => {
 
   it("lists branches", async () => {
     const result = await tool.execute({ action: "list" }, ctx);
-    expect(result.content).toContain("master");
+    // Git default branch can be 'main' or 'master' depending on version
+    expect(result.content).toMatch(/main|master/);
   });
 
   it("creates a new branch", async () => {

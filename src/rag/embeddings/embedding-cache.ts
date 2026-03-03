@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
-import type { IEmbeddingProvider, EmbeddingResult } from "../rag.interface.js";
+import type { IEmbeddingProvider, EmbeddingBatch } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 const DEFAULT_MAX_CACHE_SIZE = 10_000;
@@ -124,7 +124,7 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
   // IEmbeddingProvider
   // ---------------------------------------------------------------------------
 
-  async embed(texts: string[]): Promise<EmbeddingResult> {
+  async embed(texts: string[]): Promise<EmbeddingBatch> {
     if (texts.length === 0) {
       return { embeddings: [], usage: { totalTokens: 0 } };
     }

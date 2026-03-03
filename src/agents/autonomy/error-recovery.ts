@@ -9,12 +9,25 @@
  *   - Error categorization: O(1) per error via Map lookup
  *   - File grouping: O(n) single-pass with Map accumulation
  *   - Recovery dedup: O(k) via Set where k = unique categories (bounded ≤ 14)
+ * 
+ * Learning Integration:
+ *   - Records error patterns for learning
+ *   - Suggests learned solutions
+ *   - Tracks resolution success/failure
  */
 
 import type { ToolResult } from "../providers/provider.interface.js";
+import type { ErrorLearningHooks } from "../../learning/index.js";
+import type { 
+  ErrorCategory as LearningErrorCategory,
+} from "../../learning/types.js";
+import { 
+  type JsonObject,
+} from "../../types/index.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
+/** Error categories specific to error recovery (more granular than learning categories) */
 export type ErrorCategory =
   | "missing_type"
   | "undefined_symbol"
@@ -47,6 +60,15 @@ export interface ErrorAnalysis {
   summary: string;
   /** Ready-to-append recovery context for the tool result */
   recoveryInjection: string;
+  /** Learned solutions that might help */
+  learnedSolutions?: string;
+}
+
+export interface ErrorRecoveryConfig {
+  /** Enable learning from errors */
+  enableLearning?: boolean;
+  /** Session ID for learning correlation */
+  sessionId?: string;
 }
 
 // ─── O(1) Lookup Tables ─────────────────────────────────────────────────────────
@@ -116,11 +138,34 @@ function categorizeByPrefix(code: string): ErrorCategory {
   return "unknown";
 }
 
+/** Map recovery ErrorCategory to learning ErrorCategory */
+function toLearningCategory(category: ErrorCategory): LearningErrorCategory {
+  const mapping: Record<ErrorCategory, LearningErrorCategory> = {
+    missing_type: "validation",
+    undefined_symbol: "validation",
+    missing_member: "validation",
+    type_mismatch: "validation",
+    syntax: "syntax",
+    missing_reference: "resource",
+    duplicate: "validation",
+    access: "permission",
+    override: "validation",
+    null_safety: "validation",
+    build_config: "resource",
+    dependency: "resource",
+    test_failure: "runtime",
+    runtime: "runtime",
+    unknown: "unknown",
+  };
+  return mapping[category] ?? "unknown";
+}
+
 // ─── Build output error line regex ──────────────────────────────────────────────
 
 // Matches the formatted output from DotnetBuildTool:
 //   Assets/Foo.cs(42,10): CS0103 — message here
-const BUILD_ERROR_LINE = /^\s+(.+?)\((\d+),(\d+)\):\s+(\w+)\s+—\s+(.+)$/gm;
+// Also supports lines without leading whitespace for test compatibility
+const BUILD_ERROR_LINE = /^\s*(.+?)\((\d+),(\d+)\):\s+(\w+)\s+—\s+(.+)$/gm;
 
 // Matches test failure lines from DotnetTestTool:
 //   ✗ TestName
@@ -136,6 +181,66 @@ const RUNTIME_PATTERNS: RegExp[] = [
 // ─── Engine ─────────────────────────────────────────────────────────────────────
 
 export class ErrorRecoveryEngine {
+  private learningHooks: ErrorLearningHooks | null = null;
+  private config: ErrorRecoveryConfig = {};
+
+  /**
+   * Enable learning integration
+   */
+  enableLearning(
+    hooks: ErrorLearningHooks,
+    config: ErrorRecoveryConfig = {}
+  ): void {
+    this.learningHooks = hooks;
+    this.config = { enableLearning: true, ...config };
+    hooks.enable();
+  }
+
+  /**
+   * Disable learning integration
+   */
+  disableLearning(): void {
+    this.learningHooks?.disable();
+    this.learningHooks = null;
+    this.config = {};
+  }
+
+  /**
+   * Check if learning is enabled
+   */
+  isLearningEnabled(): boolean {
+    return this.config.enableLearning === true && this.learningHooks !== null;
+  }
+
+  /**
+   * Record a successful resolution for learning
+   */
+  recordResolution(params: {
+    toolName: string;
+    errorOutput: string;
+    analysis: ErrorAnalysis;
+    action: string;
+    success: boolean;
+    resolutionTimeMs?: number;
+    attempts?: number;
+  }): void {
+    if (!this.isLearningEnabled() || !this.learningHooks) return;
+
+    this.learningHooks.onAfterErrorResolution({
+      errorContext: {
+        toolName: params.toolName,
+        errorOutput: params.errorOutput,
+        analysis: params.analysis,
+        sessionId: this.config.sessionId ?? "default",
+        timestamp: new Date(),
+      },
+      action: params.action,
+      success: params.success,
+      resolutionTimeMs: params.resolutionTimeMs,
+      attempts: params.attempts,
+    });
+  }
+
   /**
    * Analyze a tool result for actionable errors.
    * Returns null if no errors detected (fast path).
@@ -148,13 +253,42 @@ export class ErrorRecoveryEngine {
       return null; // fast path: no error signals
     }
 
-    switch (toolName) {
-      case "dotnet_build": return this.analyzeBuild(result.content);
-      case "dotnet_test":  return this.analyzeTests(result.content);
-      case "shell_exec":   return this.analyzeShell(result.content);
-      default:
-        return result.isError ? this.analyzeGeneric(toolName, result.content) : null;
+    // Get learned solutions before analysis
+    let learnedSolutions = "";
+    if (this.isLearningEnabled() && this.learningHooks) {
+      const { recoveryInjection } = this.learningHooks.onBeforeErrorAnalysis({
+        toolName,
+        errorOutput: result.content,
+        analysis: { hasErrors: true, errorCount: 0, summary: "", recoveryInjection: "" },
+        sessionId: this.config.sessionId ?? "default",
+        timestamp: new Date(),
+      });
+      learnedSolutions = recoveryInjection;
     }
+
+    let analysis: ErrorAnalysis | null;
+
+    switch (toolName) {
+      case "dotnet_build": analysis = this.analyzeBuild(result.content); break;
+      case "dotnet_test":  analysis = this.analyzeTests(result.content); break;
+      case "shell_exec":   analysis = this.analyzeShell(result.content); break;
+      default:
+        analysis = result.isError ? this.analyzeGeneric(toolName, result.content) : null;
+    }
+
+    if (analysis && this.isLearningEnabled()) {
+      analysis.learnedSolutions = learnedSolutions ?? "";
+      if (learnedSolutions) {
+        analysis.recoveryInjection += "\n" + learnedSolutions;
+      }
+    }
+
+    // Record error observation for learning
+    if (analysis && this.isLearningEnabled()) {
+      this.recordErrorObservation(toolName, result, analysis);
+    }
+
+    return analysis;
   }
 
   // ─── Private ────────────────────────────────────────────────────────────────
@@ -281,5 +415,55 @@ export class ErrorRecoveryEngine {
       summary,
       recoveryInjection: lines.join("\n"),
     };
+  }
+
+  private recordErrorObservation(
+    toolName: string, 
+    result: ToolResult, 
+    analysis: ErrorAnalysis
+  ): void {
+    // Extract structured error info for learning
+    const errorDetails = this.extractErrorDetails(result.content);
+    
+    for (const error of errorDetails) {
+      // Build metadata as JsonObject - convert error category to learning category
+      const metadata: JsonObject = {
+        errorCode: error.code,
+        errorCategory: toLearningCategory(error.category),
+        line: error.line,
+        column: error.column,
+      };
+
+      this.learningHooks?.onBeforeErrorAnalysis({
+        toolName,
+        errorOutput: result.content,
+        analysis,
+        sessionId: this.config.sessionId ?? "default",
+        timestamp: new Date(),
+        filePath: error.file,
+        metadata,
+      });
+    }
+  }
+
+  private extractErrorDetails(content: string): StructuredError[] {
+    const errors: StructuredError[] = [];
+    
+    BUILD_ERROR_LINE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = BUILD_ERROR_LINE.exec(content)) !== null) {
+      const code = m[4]!;
+      const category = CODE_CATEGORY.get(code) ?? categorizeByPrefix(code);
+      errors.push({
+        file: m[1]!,
+        line: +m[2]!,
+        column: +m[3]!,
+        code,
+        message: m[5]!,
+        category,
+      });
+    }
+
+    return errors;
   }
 }

@@ -202,8 +202,14 @@ describe("Orchestrator", () => {
     // Verify "Operation cancelled" is in the tool results sent back to provider
     const secondCallArgs = mockProvider.chat.mock.calls[1]!;
     const messages = secondCallArgs[1] as any[];
-    const toolResultMsg = messages.find((m: any) => m.toolResults?.length);
-    expect(toolResultMsg?.toolResults?.[0]?.content).toContain("Operation cancelled");
+    // Tool results are now in content array with tool_result blocks
+    const toolResultMsg = messages.find((m: any) => 
+      m.role === "user" && Array.isArray(m.content)
+    );
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) => 
+      c.type === "tool_result"
+    );
+    expect(toolResultBlock?.content).toContain("Operation cancelled");
   });
 
   it("returns error result for unknown tool", async () => {
@@ -238,9 +244,15 @@ describe("Orchestrator", () => {
 
     const secondCallArgs = mockProvider.chat.mock.calls[1]!;
     const messages = secondCallArgs[1] as any[];
-    const toolResultMsg = messages.find((m: any) => m.toolResults?.length);
-    expect(toolResultMsg?.toolResults?.[0]?.content).toContain("unknown tool");
-    expect(toolResultMsg?.toolResults?.[0]?.isError).toBe(true);
+    // Tool results are now in content array with tool_result blocks
+    const toolResultMsg = messages.find((m: any) => 
+      m.role === "user" && Array.isArray(m.content)
+    );
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) => 
+      c.type === "tool_result"
+    );
+    expect(toolResultBlock?.content).toContain("unknown tool");
+    expect(toolResultBlock?.is_error).toBe(true);
   });
 
   it("returns error result when tool execution throws", async () => {
@@ -275,9 +287,15 @@ describe("Orchestrator", () => {
 
     const secondCallArgs = mockProvider.chat.mock.calls[1]!;
     const messages = secondCallArgs[1] as any[];
-    const toolResultMsg = messages.find((m: any) => m.toolResults?.length);
-    expect(toolResultMsg?.toolResults?.[0]?.content).toContain("Tool execution failed");
-    expect(toolResultMsg?.toolResults?.[0]?.isError).toBe(true);
+    // Tool results are now in content array with tool_result blocks
+    const toolResultMsg = messages.find((m: any) => 
+      m.role === "user" && Array.isArray(m.content)
+    );
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) => 
+      c.type === "tool_result"
+    );
+    expect(toolResultBlock?.content).toContain("Tool execution failed");
+    expect(toolResultBlock?.is_error).toBe(true);
   });
 
   it("cleanupSessions removes expired sessions", async () => {
@@ -378,8 +396,8 @@ describe("Orchestrator", () => {
       expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
     });
 
-    it("treats strata_create_system as a write operation", async () => {
-      const systemTool = createMockTool("strata_create_system", true);
+    it("treats create_system as a write operation", async () => {
+      const systemTool = createMockTool("create_system", true);
       const orchWithSystemTool = new Orchestrator({
         provider: mockProvider,
         tools: [systemTool],
@@ -391,7 +409,7 @@ describe("Orchestrator", () => {
 
       const toolResponse: ProviderResponse = {
         text: "",
-        toolCalls: [{ id: "tc1", name: "strata_create_system", input: { name: "TestSystem" } }],
+        toolCalls: [{ id: "tc1", name: "create_system", input: { name: "TestSystem" } }],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 10 },
       };

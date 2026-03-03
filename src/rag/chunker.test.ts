@@ -302,11 +302,14 @@ describe("chunkCSharpFile", () => {
     }
   });
 
-  it("all chunks have a valid ISO 8601 indexedAt timestamp", () => {
+  it("all chunks have a valid indexedAt timestamp (number in ms)", () => {
     const chunks = chunkCSharpFile("Assets/Combat/DamageSystem.cs", simpleCSharp);
+    const now = Date.now();
     for (const chunk of chunks) {
-      expect(() => new Date(chunk.indexedAt)).not.toThrow();
-      expect(new Date(chunk.indexedAt).toISOString()).toBe(chunk.indexedAt);
+      expect(typeof chunk.indexedAt).toBe("number");
+      expect(chunk.indexedAt).toBeGreaterThan(0);
+      // Should be a reasonable timestamp (within last hour for this test)
+      expect(chunk.indexedAt).toBeLessThanOrEqual(now);
     }
   });
 

@@ -1,5 +1,6 @@
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
-import type { IRAGPipeline, RAGSearchOptions } from "../../rag/rag.interface.js";
+import type { IRAGPipeline, SearchOptions } from "../../rag/rag.interface.js";
+import { isCodeChunk } from "../../rag/rag.interface.js";
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 15;
@@ -61,18 +62,14 @@ export class CodeSearchTool implements ITool {
       MAX_LIMIT
     );
 
-    const kind = input["kind"] as RAGSearchOptions["kinds"] extends (infer K)[] ? K : never | undefined;
+    const kind = input["kind"] as SearchOptions["kinds"] extends (infer K)[] ? K : never | undefined;
     const filePattern = typeof input["file_pattern"] === "string" ? input["file_pattern"] : undefined;
 
-    const options: RAGSearchOptions = {
+    const options: SearchOptions = {
       topK: limit,
+      ...(kind !== undefined && { kinds: [kind as "class" | "struct" | "method" | "constructor" | "file_header"] }),
+      ...(filePattern !== undefined && { filePattern }),
     };
-    if (kind !== undefined) {
-      options.kinds = [kind as "class" | "struct" | "method" | "constructor" | "file_header"];
-    }
-    if (filePattern !== undefined) {
-      options.filePattern = filePattern;
-    }
 
     try {
       const results = await this.rag.search(query, options);
@@ -89,11 +86,13 @@ export class CodeSearchTool implements ITool {
         const { chunk, finalScore } = result;
         const score = (finalScore * 100).toFixed(1);
         const kindLabel = chunk.kind.toUpperCase();
-        const symbol = chunk.symbol ? ` — ${chunk.symbol}` : "";
-        const namespace = chunk.namespace ? ` [${chunk.namespace}]` : "";
-        const lineRange = `L${chunk.startLine}–${chunk.endLine}`;
+        
+        // Use type guard to safely access CodeChunk-specific properties
+        const symbol = isCodeChunk(chunk) && chunk.symbol ? ` — ${chunk.symbol}` : "";
+        const namespace = isCodeChunk(chunk) && chunk.namespace ? ` [${chunk.namespace}]` : "";
+        const lineRange = isCodeChunk(chunk) ? `L${chunk.startLine}–${chunk.endLine}` : "";
 
-        lines.push(`### [${kindLabel}] ${chunk.filePath}:${lineRange}${symbol}${namespace} (${score}% match)`);
+        lines.push(`### [${kindLabel}] ${chunk.filePath}${lineRange ? ":" + lineRange : ""}${symbol}${namespace} (${score}% match)`);
         lines.push("```");
         lines.push(chunk.content);
         lines.push("```");

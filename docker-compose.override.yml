@@ -1,0 +1,40 @@
+# =============================================================================
+# Strata.Brain - Docker Compose Override (Development)
+# =============================================================================
+# This file is automatically loaded by Docker Compose alongside docker-compose.yml
+# Use it for local development overrides
+#
+# To use: docker compose up -d
+# =============================================================================
+
+services:
+  strata-brain:
+    build:
+      target: development
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - DASHBOARD_ENABLED=true
+    volumes:
+      # Mount source code for hot reload
+      - ./src:/app/src:ro
+      # Mount node_modules to persist
+      - node_modules:/app/node_modules
+    # Enable interactive debugging
+    stdin_open: true
+    tty: true
+    # Override command for development
+    command: ["npm", "run", "dev"]
+
+  # Disable nginx in development (access dashboard directly)
+  nginx:
+    profiles:
+      - disabled
+
+  # Redis optional in development
+  redis:
+    profiles:
+      - optional
+
+volumes:
+  node_modules:

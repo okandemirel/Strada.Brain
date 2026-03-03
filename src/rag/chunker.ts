@@ -249,7 +249,7 @@ export function chunkCSharpFile(filePath: string, content: string): CodeChunk[] 
 
   const fileInfo: CSharpFileInfo = parseCSharpFile(content, filePath);
   const lines = content.split("\n");
-  const now = new Date().toISOString();
+  const now = Date.now();
   const chunks: CodeChunk[] = [];
 
   // Collect the earliest line at which a class or struct body begins so we
@@ -278,6 +278,7 @@ export function chunkCSharpFile(filePath: string, content: string): CodeChunk[] 
       namespace: fileInfo.namespace || undefined,
       contentHash: computeContentHash(headerContent),
       indexedAt: now,
+      language: "csharp",
     });
   }
 
@@ -301,6 +302,7 @@ export function chunkCSharpFile(filePath: string, content: string): CodeChunk[] 
       namespace: struct.namespace || undefined,
       contentHash: computeContentHash(structContent),
       indexedAt: now,
+      language: "csharp",
     });
   }
 
@@ -326,6 +328,7 @@ export function chunkCSharpFile(filePath: string, content: string): CodeChunk[] 
         namespace: cls.namespace || undefined,
         contentHash: computeContentHash(classContent),
         indexedAt: now,
+        language: "csharp",
       });
       continue;
     }
@@ -365,6 +368,7 @@ export function chunkCSharpFile(filePath: string, content: string): CodeChunk[] 
         namespace: cls.namespace || undefined,
         contentHash: computeContentHash(methodContent),
         indexedAt: now,
+        language: "csharp",
       });
     }
 
@@ -388,6 +392,7 @@ export function chunkCSharpFile(filePath: string, content: string): CodeChunk[] 
         namespace: cls.namespace || undefined,
         contentHash: computeContentHash(ctorContent),
         indexedAt: now,
+        language: "csharp",
       });
     }
   }

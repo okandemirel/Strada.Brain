@@ -6,15 +6,22 @@ import type {
   IRAGPipeline,
   IEmbeddingProvider,
   IVectorStore,
-  RAGSearchOptions,
+  SearchOptions,
+  SearchResult,
   RAGSearchResult,
   ContextBudget,
   IndexingStats,
   VectorEntry,
 } from "./rag.interface.js";
+import { isCodeChunk } from "./rag.interface.js";
+import { createBrand } from "../types/index.js";
 import { chunkCSharpFile } from "./chunker.js";
 import { rerankResults } from "./reranker.js";
 import { getLogger } from "../utils/logger.js";
+import { FileVectorStore } from "./vector-store.js";
+import { createHNSWVectorStore, type IHNSWVectorStore } from "./hnsw/hnsw-vector-store.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 const DEFAULT_TOP_K = 8;
 const DEFAULT_MIN_SCORE = 0.15;
@@ -31,9 +38,26 @@ function hashContent(content: string): string {
   return createHash("sha256").update(content).digest("hex").substring(0, 16);
 }
 
+export interface RAGPipelineConfig {
+  /** Use HNSW index for vector search (default: true) */
+  useHNSW?: boolean;
+  /** HNSW configuration options */
+  hnswConfig?: {
+    M?: number;
+    efConstruction?: number;
+    efSearch?: number;
+    maxElements?: number;
+  };
+  /** Force migration from legacy format */
+  forceMigration?: boolean;
+}
+
 export class RAGPipeline implements IRAGPipeline {
   private readonly embeddingProvider: IEmbeddingProvider;
   private readonly vectorStore: IVectorStore;
+  private useHNSW: boolean;
+  private hnswStore?: IHNSWVectorStore;
+  private legacyStore?: FileVectorStore;
 
   /** filePath → content hash of the last indexed version */
   private fileHashes: Map<string, string> = new Map();
@@ -41,13 +65,26 @@ export class RAGPipeline implements IRAGPipeline {
   private stats: IndexingStats = {
     totalFiles: 0,
     totalChunks: 0,
-    indexedAt: new Date().toISOString(),
-    durationMs: 0,
+    indexedAt: createBrand(Date.now(), "TimestampMs" as const),
+    durationMs: createBrand(0, "DurationMs" as const),
+    changedFiles: 0,
+    errors: [],
   };
 
-  constructor(embeddingProvider: IEmbeddingProvider, vectorStore: IVectorStore) {
+  private config: RAGPipelineConfig;
+
+  constructor(
+    embeddingProvider: IEmbeddingProvider, 
+    vectorStore: IVectorStore,
+    config: RAGPipelineConfig = {}
+  ) {
     this.embeddingProvider = embeddingProvider;
     this.vectorStore = vectorStore;
+    this.config = {
+      useHNSW: true,
+      ...config,
+    };
+    this.useHNSW = this.config.useHNSW ?? true;
   }
 
   // ---------------------------------------------------------------------------
@@ -55,11 +92,105 @@ export class RAGPipeline implements IRAGPipeline {
   // ---------------------------------------------------------------------------
 
   async initialize(): Promise<void> {
-    await this.vectorStore.initialize();
+    // Check if we should use HNSW
+    if (this.useHNSW && this.vectorStore instanceof FileVectorStore) {
+      const storePath = this.getStorePath();
+      
+      if (storePath) {
+        await this.initializeHNSW(storePath);
+      } else {
+        // Fall back to provided vector store
+        await this.vectorStore.initialize();
+      }
+    } else {
+      await this.vectorStore.initialize();
+    }
+  }
+
+  private getStorePath(): string | null {
+    // Try to extract path from FileVectorStore
+    // This is a bit hacky but necessary for migration
+    const store = this.vectorStore as FileVectorStore;
+    // Access private field through type assertion
+    return (store as any).storePath ?? null;
+  }
+
+  private async initializeHNSW(storePath: string): Promise<void> {
+    try {
+      const hnswPath = join(storePath, "hnsw");
+      const legacyVectorsPath = join(storePath, "vectors.bin");
+      const legacyChunksPath = join(storePath, "chunks.json");
+      const hnswIndexPath = join(hnswPath, "hnsw.index");
+
+      // Check if HNSW index exists
+      const hnswExists = existsSync(hnswIndexPath);
+      // Check if legacy format exists
+      const legacyExists = existsSync(legacyVectorsPath) && existsSync(legacyChunksPath);
+
+      if (hnswExists) {
+        // Use existing HNSW index
+        getLogger().info("[RAGPipeline] Loading existing HNSW index");
+        this.hnswStore = await createHNSWVectorStore(hnswPath, {
+          dimensions: this.embeddingProvider.dimensions,
+          maxElements: this.config.hnswConfig?.maxElements ?? 100000,
+          M: this.config.hnswConfig?.M ?? 16,
+          efConstruction: this.config.hnswConfig?.efConstruction ?? 200,
+          efSearch: this.config.hnswConfig?.efSearch ?? 128,
+          metric: "cosine",
+        });
+      } else if (legacyExists || this.config.forceMigration) {
+        // Migrate from legacy format
+        getLogger().info("[RAGPipeline] Migrating to HNSW index");
+        this.hnswStore = await createHNSWVectorStore(hnswPath, {
+          dimensions: this.embeddingProvider.dimensions,
+          maxElements: this.config.hnswConfig?.maxElements ?? 100000,
+          M: this.config.hnswConfig?.M ?? 16,
+          efConstruction: this.config.hnswConfig?.efConstruction ?? 200,
+          efSearch: this.config.hnswConfig?.efSearch ?? 128,
+          metric: "cosine",
+        });
+        
+        // Migration is handled automatically in HNSWVectorStore.initialize()
+      } else {
+        // Create new HNSW index
+        getLogger().info("[RAGPipeline] Creating new HNSW index");
+        this.hnswStore = await createHNSWVectorStore(hnswPath, {
+          dimensions: this.embeddingProvider.dimensions,
+          maxElements: this.config.hnswConfig?.maxElements ?? 100000,
+          M: this.config.hnswConfig?.M ?? 16,
+          efConstruction: this.config.hnswConfig?.efConstruction ?? 200,
+          efSearch: this.config.hnswConfig?.efSearch ?? 128,
+          metric: "cosine",
+        });
+      }
+
+      // Keep legacy store as fallback
+      this.legacyStore = this.vectorStore as FileVectorStore;
+      await this.legacyStore.initialize();
+
+      getLogger().info("[RAGPipeline] HNSW initialized", {
+        dimensions: this.embeddingProvider.dimensions,
+        storePath: hnswPath,
+      });
+    } catch (error) {
+      getLogger().warn("[RAGPipeline] HNSW initialization failed, falling back to legacy store", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.useHNSW = false;
+      await this.vectorStore.initialize();
+    }
   }
 
   async shutdown(): Promise<void> {
-    await this.vectorStore.shutdown();
+    if (this.hnswStore) {
+      await this.hnswStore.shutdown();
+    }
+    if (this.legacyStore) {
+      await this.legacyStore.shutdown();
+    }
+    if (!this.hnswStore && !this.legacyStore) {
+      await this.vectorStore.shutdown();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -81,7 +212,7 @@ export class RAGPipeline implements IRAGPipeline {
     }
 
     // Remove stale vectors for this file before re-indexing.
-    await this.vectorStore.removeByFile(filePath);
+    await this.removeByFile(filePath);
 
     // Embed all chunk contents in a single batch.
     const texts = chunks.map((c) => c.content);
@@ -91,17 +222,41 @@ export class RAGPipeline implements IRAGPipeline {
       id: chunk.id,
       vector: embeddingResult.embeddings[i]!,
       chunk,
+      addedAt: Date.now(),
+      accessCount: 0,
     }));
 
-    await this.vectorStore.upsert(entries);
+    // Upsert to both stores for consistency
+    if (this.hnswStore) {
+      await this.hnswStore.upsert(entries);
+    }
+    if (this.legacyStore) {
+      await this.legacyStore.upsert(entries);
+    }
+    if (!this.hnswStore && !this.legacyStore) {
+      await this.vectorStore.upsert(entries);
+    }
+    
     this.fileHashes.set(filePath, contentHash);
 
     return chunks.length;
   }
 
   async removeFile(filePath: string): Promise<void> {
-    await this.vectorStore.removeByFile(filePath);
+    await this.removeByFile(filePath);
     this.fileHashes.delete(filePath);
+  }
+
+  private async removeByFile(filePath: string): Promise<void> {
+    if (this.hnswStore) {
+      await this.hnswStore.removeByFile(filePath);
+    }
+    if (this.legacyStore) {
+      await this.legacyStore.removeByFile(filePath);
+    }
+    if (!this.hnswStore && !this.legacyStore) {
+      await this.vectorStore.removeByFile(filePath);
+    }
   }
 
   async indexProject(projectPath: string): Promise<IndexingStats> {
@@ -121,6 +276,7 @@ export class RAGPipeline implements IRAGPipeline {
 
     let totalChunks = 0;
     let changedFiles = 0;
+    const errors: Array<{ filePath: string; error: string }> = [];
 
     for (const filePath of files) {
       try {
@@ -131,16 +287,24 @@ export class RAGPipeline implements IRAGPipeline {
           changedFiles++;
         }
       } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
         logger.warn("[RAGPipeline] Failed to index file", { filePath, err });
+        errors.push({ filePath, error: errorMsg });
       }
     }
 
+    // Get count from appropriate store
+    const chunkCount = this.hnswStore?.count() ?? 
+                       this.legacyStore?.count() ?? 
+                       this.vectorStore.count();
+
     this.stats = {
       totalFiles: files.length,
-      totalChunks: this.vectorStore.count(),
-      indexedAt: new Date().toISOString(),
-      durationMs: Date.now() - startTime,
+      totalChunks: chunkCount,
+      indexedAt: createBrand(Date.now(), "TimestampMs" as const),
+      durationMs: createBrand(Date.now() - startTime, "DurationMs" as const),
       changedFiles,
+      errors,
     };
 
     logger.info("[RAGPipeline] Indexing complete", this.stats);
@@ -151,7 +315,7 @@ export class RAGPipeline implements IRAGPipeline {
   // Search
   // ---------------------------------------------------------------------------
 
-  async search(query: string, options?: RAGSearchOptions): Promise<RAGSearchResult[]> {
+  async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
     const topK = options?.topK ?? DEFAULT_TOP_K;
     const minScore = options?.minScore ?? DEFAULT_MIN_SCORE;
     const candidateMultiplier = options?.candidateMultiplier ?? DEFAULT_CANDIDATE_MULTIPLIER;
@@ -160,8 +324,11 @@ export class RAGPipeline implements IRAGPipeline {
     const embeddingResult = await this.embeddingProvider.embed([query]);
     const queryVector = embeddingResult.embeddings[0]!;
 
+    // Determine which store to use for search
+    const store = this.hnswStore ?? this.vectorStore;
+
     // Retrieve an oversized candidate set to allow filtering and reranking.
-    const candidates = await this.vectorStore.search(
+    const candidates = await store.search(
       queryVector,
       topK * candidateMultiplier
     );
@@ -180,8 +347,15 @@ export class RAGPipeline implements IRAGPipeline {
       return true;
     });
 
+    // Convert to RAGSearchResult format
+    const searchResults: RAGSearchResult[] = filtered.map(hit => ({
+      chunk: hit.chunk,
+      vectorScore: hit.score,
+      finalScore: hit.score,
+    }));
+
     // Rerank.
-    const reranked = rerankResults(filtered, query);
+    const reranked = rerankResults(searchResults, query);
 
     // Apply minimum score threshold and slice to topK.
     return reranked.filter((r) => r.finalScore >= minScore).slice(0, topK);
@@ -191,7 +365,7 @@ export class RAGPipeline implements IRAGPipeline {
   // Context formatting
   // ---------------------------------------------------------------------------
 
-  formatContext(results: RAGSearchResult[], budget?: ContextBudget): string {
+  formatContext(results: SearchResult[], budget?: ContextBudget): string {
     if (results.length === 0) return "";
 
     const b: ContextBudget = { ...DEFAULT_BUDGET, ...budget };
@@ -235,8 +409,11 @@ export class RAGPipeline implements IRAGPipeline {
 
     const sections = toInclude.map((result) => {
       const { chunk, finalScore } = result;
-      const location = `${chunk.filePath}:${chunk.startLine}-${chunk.endLine}`;
-      const symbolLine = chunk.symbol ? ` · ${chunk.symbol}` : "";
+      // Only CodeChunk has line numbers and symbol
+      const location = isCodeChunk(chunk) 
+        ? `${chunk.filePath}:${chunk.startLine}-${chunk.endLine}`
+        : chunk.filePath;
+      const symbolLine = isCodeChunk(chunk) && chunk.symbol ? ` · ${chunk.symbol}` : "";
       const header = `### ${chunk.kind}${symbolLine} (${location}) [score: ${finalScore.toFixed(3)}]`;
       return `${header}\n\`\`\`csharp\n${chunk.content}\n\`\`\``;
     });
@@ -250,5 +427,20 @@ export class RAGPipeline implements IRAGPipeline {
 
   getStats(): IndexingStats {
     return { ...this.stats };
+  }
+
+  /**
+   * Get HNSW statistics if HNSW is enabled
+   */
+  getHNSWStats(): import("./hnsw/hnsw-vector-store.js").HNSWStats | null {
+    if (!this.hnswStore) return null;
+    return this.hnswStore.getHNSWStats();
+  }
+
+  /**
+   * Check if HNSW is being used
+   */
+  isUsingHNSW(): boolean {
+    return this.useHNSW && !!this.hnswStore;
   }
 }

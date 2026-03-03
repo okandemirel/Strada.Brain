@@ -98,6 +98,45 @@ export async function validatePath(
       // Parent is valid; use the raw resolved path for the new file
       realFullPath = rawFullPath;
     } catch {
+      // Parent doesn't exist - check if this is because the path escapes the project
+      // Walk up the directory tree to find the first existing ancestor
+      let currentPath = resolve(rawFullPath, "..");
+      let foundExistingAncestor = false;
+      
+      while (currentPath !== resolve(currentPath, "..")) {
+        try {
+          const realCurrent = await realpath(currentPath);
+          // Found an existing ancestor - check if it's within project
+          if (realCurrent !== realRoot && !realCurrent.startsWith(realRoot + sep)) {
+            return {
+              valid: false,
+              fullPath: rawFullPath,
+              error: "Path resolves outside the project directory",
+            };
+          }
+          foundExistingAncestor = true;
+          break;
+        } catch {
+          // This path component doesn't exist, go up one level
+          currentPath = resolve(currentPath, "..");
+        }
+      }
+      
+      // If we walked all the way to root without finding anything,
+      // or ended up outside the project
+      if (!foundExistingAncestor || (currentPath !== realRoot && !currentPath.startsWith(realRoot + sep))) {
+        // Double-check: if we reached project root via walking, it's valid (just missing parent)
+        // If we ended up elsewhere, it's outside
+        if (!foundExistingAncestor && currentPath === resolve(realRoot, "..")) {
+          // Walked up past project root - path is outside
+          return {
+            valid: false,
+            fullPath: rawFullPath,
+            error: "Path resolves outside the project directory",
+          };
+        }
+      }
+      
       return {
         valid: false,
         fullPath: rawFullPath,
@@ -107,16 +146,23 @@ export async function validatePath(
   }
 
   // Check that path is within project root (with trailing separator to avoid prefix collision)
-  if (
-    realFullPath !== realRoot &&
-    !realFullPath.startsWith(realRoot + sep)
-  ) {
-    return {
-      valid: false,
-      fullPath: realFullPath,
-      error: "Path resolves outside the project directory",
-    };
+  // For new files (where realFullPath wasn't resolved via realpath), we already validated
+  // the parent directory above, so we only need to check if realFullPath was resolved.
+  // For existing paths, we need to verify they're within the project root.
+  if (realFullPath !== rawFullPath) {
+    // Path was resolved by realpath - verify it's within project root
+    if (
+      realFullPath !== realRoot &&
+      !realFullPath.startsWith(realRoot + sep)
+    ) {
+      return {
+        valid: false,
+        fullPath: realFullPath,
+        error: "Path resolves outside the project directory",
+      };
+    }
   }
+  // For new files (realFullPath === rawFullPath), parent validation above is sufficient
 
   // Check against sensitive file patterns
   for (const pattern of BLOCKED_PATTERNS) {

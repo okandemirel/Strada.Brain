@@ -1,4 +1,5 @@
-import type { VectorSearchHit, RAGSearchResult } from "./rag.interface.js";
+import type { VectorSearchHit, RAGSearchResult, Chunk } from "./rag.interface.js";
+import { isCodeChunk } from "./rag.interface.js";
 
 interface RerankerConfig {
   vectorWeight: number;
@@ -44,7 +45,7 @@ function computeKeywordScore(content: string, terms: string[]): number {
  * The total is clamped to [0, 1] so it behaves well as a weighted input.
  */
 function computeStructuralScore(
-  chunk: VectorSearchHit["chunk"],
+  chunk: Chunk,
   terms: string[]
 ): number {
   let score = 0;
@@ -53,7 +54,8 @@ function computeStructuralScore(
     score += 0.3;
   }
 
-  if (chunk.symbol) {
+  // Only CodeChunk has symbol property
+  if (isCodeChunk(chunk) && chunk.symbol) {
     const lowerSymbol = chunk.symbol.toLowerCase();
     if (terms.some((t) => lowerSymbol.includes(t))) {
       score += 0.5;
@@ -77,7 +79,7 @@ function computeStructuralScore(
  * Returns results sorted by finalScore descending.
  */
 export function rerankResults(
-  candidates: VectorSearchHit[],
+  candidates: VectorSearchHit[] | RAGSearchResult[],
   query: string,
   config?: Partial<RerankerConfig>
 ): RAGSearchResult[] {
@@ -87,16 +89,18 @@ export function rerankResults(
   const terms = extractQueryTerms(query);
 
   const results: RAGSearchResult[] = candidates.map((hit) => {
+    // Handle both VectorSearchHit (has .score) and RAGSearchResult (has .vectorScore)
+    const vectorScore = "score" in hit ? hit.score : hit.vectorScore;
     const keywordScore = computeKeywordScore(hit.chunk.content, terms);
     const structuralScore = computeStructuralScore(hit.chunk, terms);
     const finalScore =
-      cfg.vectorWeight * hit.score +
+      cfg.vectorWeight * vectorScore +
       cfg.keywordWeight * keywordScore +
       cfg.structuralWeight * structuralScore;
 
     return {
       chunk: hit.chunk,
-      vectorScore: hit.score,
+      vectorScore,
       finalScore,
     };
   });

@@ -3,6 +3,11 @@
  *
  * Injects autonomous planning behavior into the LLM via system prompt
  * and tracks execution state to detect stalls and enforce verification gates.
+ * 
+ * Learning Integration:
+ *   - Records successful trajectories
+ *   - Observes tool usage patterns
+ *   - Tracks corrections for pattern learning
  *
  * Performance:
  *   - Tool tracking: O(1) per call via Set.has()
@@ -11,6 +16,8 @@
  */
 
 import { MUTATION_TOOLS, VERIFY_TOOLS } from "./constants.js";
+import type { LearningPipeline, TrajectoryStep, TrajectoryOutcome, TrajectoryStepResult, ErrorDetails } from "../../learning/index.js";
+import { createBrand, now, durationMs } from "../../types/index.js";
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
@@ -48,6 +55,10 @@ export interface TaskState {
   readonly buildVerified: boolean;
   readonly iterationsUsed: number;
   readonly errorHistory: readonly string[];
+  /** Current session ID for learning */
+  readonly sessionId: string;
+  /** Task description */
+  readonly taskDescription: string;
 }
 
 // ─── Planner ────────────────────────────────────────────────────────────────────
@@ -58,6 +69,13 @@ export class TaskPlanner {
   private buildVerified = false;
   private iterationsUsed = 0;
   private errorHistory: string[] = [];
+  private sessionId = "";
+  private taskDescription = "";
+  private isTaskActive = false;
+
+  private learningPipeline: LearningPipeline | null = null;
+  private trajectorySteps: TrajectoryStep[] = [];
+  private trajectoryStartTime: number = 0;
 
   /** Reset for a new task. */
   reset(): void {
@@ -66,6 +84,81 @@ export class TaskPlanner {
     this.buildVerified = false;
     this.iterationsUsed = 0;
     this.errorHistory = [];
+    this.sessionId = "";
+    this.taskDescription = "";
+    this.isTaskActive = false;
+    this.trajectorySteps = [];
+    this.trajectoryStartTime = 0;
+  }
+
+  /**
+   * Start a new task with learning integration
+   */
+  startTask(params: {
+    sessionId: string;
+    taskDescription: string;
+    learningPipeline?: LearningPipeline;
+  }): void {
+    this.reset();
+    this.sessionId = params.sessionId;
+    this.taskDescription = params.taskDescription;
+    this.isTaskActive = true;
+    this.trajectoryStartTime = Date.now();
+    
+    if (params.learningPipeline) {
+      this.learningPipeline = params.learningPipeline;
+    }
+  }
+
+  /**
+   * End the current task and record trajectory
+   */
+  endTask(params: {
+    success: boolean;
+    finalOutput?: string;
+    hadErrors: boolean;
+    errorCount: number;
+  }): void {
+    if (!this.isTaskActive) return;
+
+    // Calculate completion rate (steps used / max budget of 50)
+    const completionRate = Math.min(this.iterationsUsed / 50, 1);
+    
+    const outcome: TrajectoryOutcome = {
+      success: params.success,
+      finalOutput: params.finalOutput,
+      totalSteps: this.iterationsUsed,
+      hadErrors: params.hadErrors,
+      errorCount: params.errorCount,
+      durationMs: durationMs(Date.now() - this.trajectoryStartTime),
+      completionRate: completionRate as unknown as import("../../types/index.js").NormalizedScore,
+    };
+
+    // Record trajectory for learning
+    if (this.learningPipeline) {
+      this.learningPipeline.recordTrajectory({
+        sessionId: this.sessionId,
+        taskDescription: this.taskDescription,
+        steps: this.trajectorySteps,
+        outcome,
+      });
+    }
+
+    this.isTaskActive = false;
+  }
+
+  /**
+   * Connect to learning pipeline
+   */
+  enableLearning(pipeline: LearningPipeline): void {
+    this.learningPipeline = pipeline;
+  }
+
+  /**
+   * Disconnect learning pipeline
+   */
+  disableLearning(): void {
+    this.learningPipeline = null;
   }
 
   /** One-time system prompt append. */
@@ -79,6 +172,8 @@ export class TaskPlanner {
   trackToolCall(
     toolName: string,
     isError: boolean,
+    input?: Record<string, unknown>,
+    output?: string,
   ): void {
     this.iterationsUsed++;
 
@@ -101,6 +196,100 @@ export class TaskPlanner {
     } else if (!VERIFY_TOOLS.has(toolName)) {
       this.consecutiveErrors = 0;
     }
+
+    // Record step for trajectory
+    if (this.isTaskActive) {
+      // Convert Record<string, unknown> to JsonObject
+      const jsonInput: import("../../types/index.js").JsonObject = input 
+        ? Object.fromEntries(Object.entries(input).filter(([, v]) => 
+            typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null || 
+            Array.isArray(v) || (typeof v === "object" && v !== null)
+          ).map(([k, v]) => {
+            if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+              return [k, v as import("../../types/index.js").JsonObject];
+            }
+            return [k, v as import("../../types/index.js").JsonValue];
+          })) as import("../../types/index.js").JsonObject
+        : {};
+      
+      // Build TrajectoryStepResult based on isError
+      let result: TrajectoryStepResult;
+      if (isError) {
+        const errorDetails: ErrorDetails = {
+          category: "unknown",
+          message: output ?? "Unknown error",
+        };
+        result = { kind: "error", error: errorDetails };
+      } else {
+        result = { kind: "success", output: output ?? "" };
+      }
+      
+      const step: TrajectoryStep = {
+        stepNumber: this.iterationsUsed,
+        toolName: createBrand(toolName, "ToolName"),
+        input: jsonInput,
+        result,
+        timestamp: now(),
+        durationMs: durationMs(0),
+      };
+      this.trajectorySteps.push(step);
+
+      // Observe for learning
+      if (this.learningPipeline) {
+        this.learningPipeline.observeToolUse({
+          sessionId: this.sessionId,
+          toolName,
+          input: input ?? {},
+          output: output ?? "",
+          success: !isError,
+        });
+      }
+    }
+  }
+
+  /**
+   * Record a correction for learning
+   */
+  recordCorrection(params: {
+    toolName: string;
+    originalInput: Record<string, unknown>;
+    originalOutput: string;
+    correctedOutput: string;
+    correction: string;
+  }): void {
+    if (!this.learningPipeline) return;
+
+    this.learningPipeline.observeCorrection({
+      sessionId: this.sessionId,
+      toolName: params.toolName,
+      originalInput: params.originalInput,
+      originalOutput: params.originalOutput,
+      correctedOutput: params.correctedOutput,
+      correction: params.correction,
+    });
+
+    // Also record as a step
+    // Convert Record<string, unknown> to JsonObject
+    const jsonInput: import("../../types/index.js").JsonObject = 
+      Object.fromEntries(Object.entries(params.originalInput).filter(([, v]) => 
+        typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null || 
+        Array.isArray(v) || (typeof v === "object" && v !== null)
+      ).map(([k, v]) => {
+        if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+          return [k, v as import("../../types/index.js").JsonObject];
+        }
+        return [k, v as import("../../types/index.js").JsonValue];
+      })) as import("../../types/index.js").JsonObject;
+    
+    const step: TrajectoryStep = {
+      stepNumber: this.iterationsUsed + 1,
+      toolName: createBrand("correction", "ToolName"),
+      input: jsonInput,
+      result: { kind: "success", output: params.correctedOutput },
+      timestamp: now(),
+      durationMs: durationMs(0),
+    };
+    this.trajectorySteps.push(step);
   }
 
   /**
@@ -160,6 +349,18 @@ export class TaskPlanner {
       buildVerified: this.buildVerified,
       iterationsUsed: this.iterationsUsed,
       errorHistory: [...this.errorHistory],
+      sessionId: this.sessionId,
+      taskDescription: this.taskDescription,
     };
+  }
+
+  /** Get trajectory steps recorded so far */
+  getTrajectorySteps(): readonly TrajectoryStep[] {
+    return [...this.trajectorySteps];
+  }
+
+  /** Check if a task is currently active */
+  isActive(): boolean {
+    return this.isTaskActive;
   }
 }

@@ -3,6 +3,14 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolContext } from "../tool.interface.js";
+import { vi } from "vitest";
+
+vi.mock("../../../security/path-guard.js", () => ({
+  validatePath: vi.fn(),
+  isValidCSharpIdentifier: vi.fn(),
+}));
+
+import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
 
 describe("SystemCreateTool", () => {
   let tool: SystemCreateTool;
@@ -14,6 +22,14 @@ describe("SystemCreateTool", () => {
     tempDir = mkdtempSync(join(tmpdir(), "strata-system-test-"));
     mkdirSync(join(tempDir, "Assets", "Systems"), { recursive: true });
     ctx = { projectPath: tempDir, workingDirectory: tempDir, readOnly: false };
+    
+    // Default mock: return valid path based on the input path
+    vi.mocked(validatePath).mockImplementation(async (_projectRoot: string, relPath: string) => {
+      return { valid: true, fullPath: join(tempDir, relPath) };
+    });
+    
+    // Default: all identifiers valid
+    vi.mocked(isValidCSharpIdentifier).mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -128,6 +144,7 @@ describe("SystemCreateTool", () => {
   });
 
   it("returns error for invalid system name", async () => {
+    vi.mocked(isValidCSharpIdentifier).mockReturnValue(false);
     const result = await tool.execute(
       {
         name: "123Bad",
@@ -142,6 +159,8 @@ describe("SystemCreateTool", () => {
   });
 
   it("returns error for invalid namespace", async () => {
+    // First call (name) returns true, second call (namespace with allowDots) returns false
+    vi.mocked(isValidCSharpIdentifier).mockReturnValue(true).mockReturnValueOnce(true).mockReturnValueOnce(false);
     const result = await tool.execute(
       {
         name: "ValidSystem",
@@ -174,6 +193,13 @@ describe("SystemCreateTool", () => {
   });
 
   it("returns error for invalid component name in query_components", async () => {
+    // Name valid, namespace valid, first component valid, second component invalid
+    vi.mocked(isValidCSharpIdentifier)
+      .mockReturnValue(true)
+      .mockReturnValueOnce(true)   // name
+      .mockReturnValueOnce(true)   // namespace
+      .mockReturnValueOnce(true)   // ValidComponent
+      .mockReturnValueOnce(false); // 123Invalid
     const result = await tool.execute(
       {
         name: "BadQuerySystem",
@@ -190,6 +216,13 @@ describe("SystemCreateTool", () => {
   });
 
   it("returns error for invalid service name in inject_services", async () => {
+    // Name valid, namespace valid, first service valid, second service invalid
+    vi.mocked(isValidCSharpIdentifier)
+      .mockReturnValue(true)
+      .mockReturnValueOnce(true)   // name
+      .mockReturnValueOnce(true)   // namespace
+      .mockReturnValueOnce(true)   // IValid
+      .mockReturnValueOnce(false); // not valid!
     const result = await tool.execute(
       {
         name: "BadServiceSystem",
@@ -231,6 +264,7 @@ describe("SystemCreateTool", () => {
   });
 
   it("returns error for path traversal attempts", async () => {
+    vi.mocked(validatePath).mockResolvedValueOnce({ valid: false, fullPath: "", error: "Path resolves outside the project directory" });
     const result = await tool.execute(
       {
         name: "EvilSystem",

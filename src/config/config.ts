@@ -1,10 +1,276 @@
+/**
+ * Type-safe Configuration for Strata.Brain
+ * 
+ * Provides:
+ * - Deep partial types
+ * - Config validators
+ * - Environment type mapping
+ * - Zod schema integration
+ */
+
 import { realpathSync, statSync } from "node:fs";
 import { z } from "zod";
-import dotenv from "dotenv";
+import * as dotenv from "dotenv";
+import type { SecretPattern } from "../security/secret-sanitizer.js";
+import type { 
+  DeepPartial, 
+  Result,
+  ValidationResult,
+  ValidationError 
+} from "../types/index.js";
 
 dotenv.config();
 
-const configSchema = z.object({
+// =============================================================================
+// ENVIRONMENT VARIABLE TYPES
+// =============================================================================
+
+/** Environment variable names used by the application */
+export type EnvVarName =
+  | "ANTHROPIC_API_KEY"
+  | "OPENAI_API_KEY"
+  | "DEEPSEEK_API_KEY"
+  | "QWEN_API_KEY"
+  | "KIMI_API_KEY"
+  | "MINIMAX_API_KEY"
+  | "GROQ_API_KEY"
+  | "MISTRAL_API_KEY"
+  | "TOGETHER_API_KEY"
+  | "FIREWORKS_API_KEY"
+  | "GEMINI_API_KEY"
+  | "PROVIDER_CHAIN"
+  | "TELEGRAM_BOT_TOKEN"
+  | "DISCORD_BOT_TOKEN"
+  | "DISCORD_GUILD_ID"
+  | "SLACK_BOT_TOKEN"
+  | "SLACK_SIGNING_SECRET"
+  | "SLACK_APP_TOKEN"
+  | "SLACK_SOCKET_MODE"
+  | "ALLOWED_SLACK_WORKSPACES"
+  | "ALLOWED_SLACK_USER_IDS"
+  | "ALLOWED_TELEGRAM_USER_IDS"
+  | "REQUIRE_EDIT_CONFIRMATION"
+  | "READ_ONLY_MODE"
+  | "UNITY_PROJECT_PATH"
+  | "DASHBOARD_ENABLED"
+  | "DASHBOARD_PORT"
+  | "ENABLE_WEBSOCKET_DASHBOARD"
+  | "WEBSOCKET_DASHBOARD_PORT"
+  | "ENABLE_PROMETHEUS"
+  | "PROMETHEUS_PORT"
+  | "MEMORY_ENABLED"
+  | "MEMORY_DB_PATH"
+  | "RAG_ENABLED"
+  | "EMBEDDING_PROVIDER"
+  | "EMBEDDING_MODEL"
+  | "EMBEDDING_BASE_URL"
+  | "RAG_CONTEXT_MAX_TOKENS"
+  | "STREAMING_ENABLED"
+  | "RATE_LIMIT_ENABLED"
+  | "RATE_LIMIT_MESSAGES_PER_MINUTE"
+  | "RATE_LIMIT_MESSAGES_PER_HOUR"
+  | "RATE_LIMIT_TOKENS_PER_DAY"
+  | "RATE_LIMIT_DAILY_BUDGET_USD"
+  | "RATE_LIMIT_MONTHLY_BUDGET_USD"
+  | "SHELL_ENABLED"
+  | "LOG_LEVEL"
+  | "LOG_FILE"
+  | "PLUGIN_DIRS";
+
+/** Environment variable map type */
+export type EnvVarMap = Record<EnvVarName, string | undefined>;
+
+// =============================================================================
+// CONFIG VALUE TYPES
+// =============================================================================
+
+/** Log level options */
+export type LogLevel = "error" | "warn" | "info" | "debug";
+
+/** Embedding provider options */
+export type EmbeddingProvider = "openai" | "ollama";
+
+/** AI provider names */
+export type AIProviderName = 
+  | "claude"
+  | "openai"
+  | "deepseek"
+  | "qwen"
+  | "kimi"
+  | "minimax"
+  | "groq"
+  | "mistral"
+  | "together"
+  | "fireworks"
+  | "gemini"
+  | "ollama";
+
+/** Rate limit configuration */
+export interface RateLimitConfig {
+  readonly enabled: boolean;
+  readonly messagesPerMinute: number;
+  readonly messagesPerHour: number;
+  readonly tokensPerDay: number;
+  readonly dailyBudgetUsd: number;
+  readonly monthlyBudgetUsd: number;
+}
+
+/** Memory configuration */
+export interface MemoryConfig {
+  readonly enabled: boolean;
+  readonly dbPath: string;
+}
+
+/** RAG configuration */
+export interface RAGConfig {
+  readonly enabled: boolean;
+  readonly provider: EmbeddingProvider;
+  readonly model?: string;
+  readonly baseUrl?: string;
+  readonly contextMaxTokens: number;
+}
+
+/** Dashboard configuration */
+export interface DashboardConfig {
+  readonly enabled: boolean;
+  readonly port: number;
+}
+
+/** Prometheus configuration */
+export interface PrometheusConfig {
+  readonly enabled: boolean;
+  readonly port: number;
+}
+
+/** WebSocket dashboard configuration */
+export interface WebSocketDashboardConfig {
+  readonly enabled: boolean;
+  readonly port: number;
+}
+
+/** Slack configuration */
+export interface SlackConfig {
+  readonly botToken?: string;
+  readonly signingSecret?: string;
+  readonly appToken?: string;
+  readonly socketMode: boolean;
+  readonly allowedWorkspaces?: string[];
+  readonly allowedUserIds?: string[];
+}
+
+/** Discord configuration */
+export interface DiscordConfig {
+  readonly botToken?: string;
+  readonly guildId?: string;
+}
+
+/** Telegram configuration */
+export interface TelegramConfig {
+  readonly botToken?: string;
+  readonly allowedUserIds: number[];
+}
+
+/** Security configuration */
+export interface SecurityConfig {
+  readonly requireEditConfirmation: boolean;
+  readonly readOnlyMode: boolean;
+}
+
+// =============================================================================
+// MAIN CONFIG TYPE
+// =============================================================================
+
+/** Complete application configuration */
+export interface Config {
+  // AI Providers
+  readonly anthropicApiKey: string;
+  readonly openaiApiKey?: string;
+  readonly deepseekApiKey?: string;
+  readonly qwenApiKey?: string;
+  readonly kimiApiKey?: string;
+  readonly minimaxApiKey?: string;
+  readonly groqApiKey?: string;
+  readonly mistralApiKey?: string;
+  readonly togetherApiKey?: string;
+  readonly fireworksApiKey?: string;
+  readonly geminiApiKey?: string;
+  /** Comma-separated provider names for fallback chain */
+  readonly providerChain?: string;
+
+  // Channels
+  readonly telegram: TelegramConfig;
+  readonly discord: DiscordConfig;
+  readonly slack: SlackConfig;
+
+  // Security
+  readonly security: SecurityConfig;
+
+  // Project
+  readonly unityProjectPath: string;
+
+  // Dashboard
+  readonly dashboard: DashboardConfig;
+  readonly websocketDashboard: WebSocketDashboardConfig;
+  readonly prometheus: PrometheusConfig;
+
+  // Memory
+  readonly memory: MemoryConfig;
+
+  // RAG
+  readonly rag: RAGConfig;
+
+  // Features
+  readonly streamingEnabled: boolean;
+  readonly shellEnabled: boolean;
+
+  // Rate Limiting
+  readonly rateLimit: RateLimitConfig;
+
+  // Logging
+  readonly logLevel: LogLevel;
+  readonly logFile: string;
+
+  // Plugins
+  readonly pluginDirs: string[];
+}
+
+/** Partial config for updates */
+export type PartialConfig = DeepPartial<Config>;
+
+// =============================================================================
+// ZOD SCHEMAS
+// =============================================================================
+
+/** Log level schema */
+const logLevelSchema = z.enum(["error", "warn", "info", "debug"]);
+
+/** Embedding provider schema */
+const embeddingProviderSchema = z.enum(["openai", "ollama"]);
+
+/** Port number schema */
+const portSchema = z.string()
+  .transform((s) => parseInt(s, 10))
+  .pipe(z.number().int().min(1024).max(65535));
+
+/** Boolean from string schema */
+const boolFromString = (defaultValue: boolean) => z
+  .string()
+  .transform((s) => s === "true")
+  .default(String(defaultValue));
+
+/** Comma-separated list schema */
+const commaSeparatedList = z.string()
+  .transform((s) => s.split(",").map((id) => id.trim()).filter(Boolean))
+  .optional();
+
+/** Comma-separated number list schema */
+const commaSeparatedNumberList = z.string()
+  .transform((s) => s.split(",").map((id) => parseInt(id.trim(), 10)))
+  .pipe(z.array(z.number().int()))
+  .optional();
+
+/** Config schema for validation */
+export const configSchema = z.object({
   // AI Providers
   anthropicApiKey: z.string().min(1, "ANTHROPIC_API_KEY is required"),
   openaiApiKey: z.string().optional(),
@@ -17,122 +283,422 @@ const configSchema = z.object({
   togetherApiKey: z.string().optional(),
   fireworksApiKey: z.string().optional(),
   geminiApiKey: z.string().optional(),
-  // Comma-separated provider names for fallback chain: "claude,deepseek,ollama"
   providerChain: z.string().optional(),
 
-  // Telegram (optional — only required when using telegram channel)
+  // Telegram
   telegramBotToken: z.string().optional(),
+  allowedTelegramUserIds: commaSeparatedNumberList,
+
+  // Discord
+  discordBotToken: z.string().optional(),
+  discordGuildId: z.string().optional(),
+
+  // Slack
+  slackBotToken: z.string().optional(),
+  slackSigningSecret: z.string().optional(),
+  slackAppToken: z.string().optional(),
+  slackSocketMode: boolFromString(true),
+  allowedSlackWorkspaces: commaSeparatedList,
+  allowedSlackUserIds: commaSeparatedList,
 
   // Security
-  allowedTelegramUserIds: z
-    .string()
-    .transform((s) => s.split(",").map((id) => parseInt(id.trim(), 10)))
-    .pipe(z.array(z.number().int().positive()))
-    .optional(),
-  requireEditConfirmation: z
-    .string()
-    .transform((s) => s === "true")
-    .default("true"),
-  readOnlyMode: z
-    .string()
-    .transform((s) => s === "true")
-    .default("false"),
+  requireEditConfirmation: boolFromString(true),
+  readOnlyMode: boolFromString(false),
 
   // Project
   unityProjectPath: z.string().min(1, "UNITY_PROJECT_PATH is required"),
 
   // Dashboard
-  dashboardEnabled: z
-    .string()
-    .transform((s) => s === "true")
-    .default("false"),
-  dashboardPort: z
-    .string()
-    .transform((s) => parseInt(s, 10))
-    .pipe(z.number().int().min(1024).max(65535))
-    .default("3100"),
+  dashboardEnabled: boolFromString(false),
+  dashboardPort: portSchema.default("3100"),
+
+  // WebSocket Dashboard
+  websocketDashboardEnabled: boolFromString(false),
+  websocketDashboardPort: portSchema.default("3100"),
+
+  // Prometheus
+  prometheusEnabled: boolFromString(false),
+  prometheusPort: portSchema.default("9090"),
 
   // Memory
-  memoryEnabled: z
-    .string()
-    .transform((s) => s === "true")
-    .default("true"),
+  memoryEnabled: boolFromString(true),
   memoryDbPath: z.string().default(".strata-memory"),
 
-  // RAG / Embeddings
-  ragEnabled: z
-    .string()
-    .transform((s) => s === "true")
-    .default("true"),
-  embeddingProvider: z
-    .enum(["openai", "ollama"])
-    .default("openai"),
+  // RAG
+  ragEnabled: boolFromString(true),
+  embeddingProvider: embeddingProviderSchema.default("openai"),
   embeddingModel: z.string().optional(),
   embeddingBaseUrl: z.string().optional(),
-  ragContextMaxTokens: z
-    .string()
+  ragContextMaxTokens: z.string()
     .transform((s) => parseInt(s, 10))
     .pipe(z.number().int().min(500).max(16000))
     .default("4000"),
 
-  // Streaming
-  streamingEnabled: z
-    .string()
-    .transform((s) => s === "true")
-    .default("true"),
+  // Features
+  streamingEnabled: boolFromString(true),
+  shellEnabled: boolFromString(true),
 
   // Rate Limiting
-  rateLimitEnabled: z
-    .string()
-    .transform((s) => s === "true")
-    .default("false"),
-  rateLimitMessagesPerMinute: z
-    .string()
+  rateLimitEnabled: boolFromString(false),
+  rateLimitMessagesPerMinute: z.string()
     .transform((s) => parseInt(s, 10))
     .pipe(z.number().int().min(0))
     .default("0"),
-  rateLimitMessagesPerHour: z
-    .string()
+  rateLimitMessagesPerHour: z.string()
     .transform((s) => parseInt(s, 10))
     .pipe(z.number().int().min(0))
     .default("0"),
-  rateLimitTokensPerDay: z
-    .string()
+  rateLimitTokensPerDay: z.string()
     .transform((s) => parseInt(s, 10))
     .pipe(z.number().int().min(0))
     .default("0"),
-  rateLimitDailyBudgetUsd: z
-    .string()
+  rateLimitDailyBudgetUsd: z.string()
     .transform((s) => parseFloat(s))
     .pipe(z.number().min(0))
     .default("0"),
-  rateLimitMonthlyBudgetUsd: z
-    .string()
+  rateLimitMonthlyBudgetUsd: z.string()
     .transform((s) => parseFloat(s))
     .pipe(z.number().min(0))
     .default("0"),
-
-  // Shell Execution
-  shellEnabled: z
-    .string()
-    .transform((s) => s === "true")
-    .default("true"),
 
   // Logging
-  logLevel: z
-    .enum(["error", "warn", "info", "debug"])
-    .default("info"),
+  logLevel: logLevelSchema.default("info"),
   logFile: z.string().default("strata-brain.log"),
+
+  // Plugins
+  pluginDirs: commaSeparatedList.transform((arr) => arr ?? []),
 });
 
-export type Config = z.infer<typeof configSchema>;
+/** Raw config type from Zod */
+export type RawConfig = z.infer<typeof configSchema>;
 
-let cachedConfig: Config | null = null;
+// =============================================================================
+// CONFIG VALIDATION
+// =============================================================================
 
-export function loadConfig(): Config {
-  if (cachedConfig) return cachedConfig;
+/** Config validation error */
+export interface ConfigValidationError {
+  readonly path: string;
+  readonly message: string;
+  readonly code: string;
+}
 
-  const result = configSchema.safeParse({
+/** Config validation result */
+export type ConfigValidationResult = ValidationResult<Config>;
+
+/**
+ * Validate raw config values
+ */
+export function validateConfig(raw: unknown): ConfigValidationResult {
+  const result = configSchema.safeParse(raw);
+  
+  if (!result.success) {
+    const errors: ValidationError[] = result.error.issues.map((issue) => ({
+      path: issue.path.join("."),
+      message: issue.message,
+      code: issue.code,
+    }));
+    return { kind: "invalid", errors };
+  }
+
+  // Transform to structured config
+  const rawConfig = result.data;
+  const config: Config = {
+    anthropicApiKey: rawConfig.anthropicApiKey,
+    openaiApiKey: rawConfig.openaiApiKey,
+    deepseekApiKey: rawConfig.deepseekApiKey,
+    qwenApiKey: rawConfig.qwenApiKey,
+    kimiApiKey: rawConfig.kimiApiKey,
+    minimaxApiKey: rawConfig.minimaxApiKey,
+    groqApiKey: rawConfig.groqApiKey,
+    mistralApiKey: rawConfig.mistralApiKey,
+    togetherApiKey: rawConfig.togetherApiKey,
+    fireworksApiKey: rawConfig.fireworksApiKey,
+    geminiApiKey: rawConfig.geminiApiKey,
+    providerChain: rawConfig.providerChain,
+    
+    telegram: {
+      botToken: rawConfig.telegramBotToken,
+      allowedUserIds: rawConfig.allowedTelegramUserIds ?? [],
+    },
+    
+    discord: {
+      botToken: rawConfig.discordBotToken,
+      guildId: rawConfig.discordGuildId,
+    },
+    
+    slack: {
+      botToken: rawConfig.slackBotToken,
+      signingSecret: rawConfig.slackSigningSecret,
+      appToken: rawConfig.slackAppToken,
+      socketMode: rawConfig.slackSocketMode,
+      allowedWorkspaces: rawConfig.allowedSlackWorkspaces,
+      allowedUserIds: rawConfig.allowedSlackUserIds,
+    },
+    
+    security: {
+      requireEditConfirmation: rawConfig.requireEditConfirmation,
+      readOnlyMode: rawConfig.readOnlyMode,
+    },
+    
+    unityProjectPath: rawConfig.unityProjectPath,
+    
+    dashboard: {
+      enabled: rawConfig.dashboardEnabled,
+      port: rawConfig.dashboardPort,
+    },
+    
+    websocketDashboard: {
+      enabled: rawConfig.websocketDashboardEnabled,
+      port: rawConfig.websocketDashboardPort,
+    },
+    
+    prometheus: {
+      enabled: rawConfig.prometheusEnabled,
+      port: rawConfig.prometheusPort,
+    },
+    
+    memory: {
+      enabled: rawConfig.memoryEnabled,
+      dbPath: rawConfig.memoryDbPath,
+    },
+    
+    rag: {
+      enabled: rawConfig.ragEnabled,
+      provider: rawConfig.embeddingProvider,
+      model: rawConfig.embeddingModel,
+      baseUrl: rawConfig.embeddingBaseUrl,
+      contextMaxTokens: rawConfig.ragContextMaxTokens,
+    },
+    
+    streamingEnabled: rawConfig.streamingEnabled,
+    shellEnabled: rawConfig.shellEnabled,
+    
+    rateLimit: {
+      enabled: rawConfig.rateLimitEnabled,
+      messagesPerMinute: rawConfig.rateLimitMessagesPerMinute,
+      messagesPerHour: rawConfig.rateLimitMessagesPerHour,
+      tokensPerDay: rawConfig.rateLimitTokensPerDay,
+      dailyBudgetUsd: rawConfig.rateLimitDailyBudgetUsd,
+      monthlyBudgetUsd: rawConfig.rateLimitMonthlyBudgetUsd,
+    },
+    
+    logLevel: rawConfig.logLevel,
+    logFile: rawConfig.logFile,
+    pluginDirs: rawConfig.pluginDirs,
+  };
+
+  return { kind: "valid", value: config };
+}
+
+/**
+ * Validate project path exists and is a directory
+ */
+export function validateProjectPath(projectPath: string): Result<string, string> {
+  try {
+    const realPath = realpathSync(projectPath);
+    const stats = statSync(realPath);
+    
+    if (!stats.isDirectory()) {
+      return { kind: "err", error: `UNITY_PROJECT_PATH is not a directory: ${projectPath}` };
+    }
+    
+    return { kind: "ok", value: realPath };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { kind: "err", error: `UNITY_PROJECT_PATH does not exist: ${projectPath} (${message})` };
+  }
+}
+
+// =============================================================================
+// SECRET PATTERNS
+// =============================================================================
+
+/** Redaction function type */
+export type RedactionFunction = (match: string) => string;
+
+/** Enhanced secret pattern with typed redaction */
+export interface TypedSecretPattern {
+  readonly name: string;
+  readonly pattern: RegExp;
+  readonly redaction: string | RedactionFunction;
+  readonly severity: "low" | "medium" | "high" | "critical";
+  readonly description: string;
+}
+
+/**
+ * Secret patterns for sanitization.
+ * Loaded from environment variable or uses defaults.
+ */
+export const secretPatterns: SecretPattern[] = [
+  // OpenAI API keys
+  {
+    name: "openai_api_key",
+    pattern: /sk-[a-zA-Z0-9]{48,}/g,
+    redaction: "[REDACTED_OPENAI_KEY]",
+  },
+  {
+    name: "openai_project_key",
+    pattern: /sk-proj-[a-zA-Z0-9_-]{48,}/g,
+    redaction: "[REDACTED_OPENAI_PROJECT_KEY]",
+  },
+  // GitHub tokens
+  {
+    name: "github_token",
+    pattern: /gh[pousr]_[a-zA-Z0-9]{36,}/g,
+    redaction: "[REDACTED_GITHUB_TOKEN]",
+  },
+  {
+    name: "github_pat",
+    pattern: /github_pat_[a-zA-Z0-9]{22,}_[a-zA-Z0-9]{59,}/g,
+    redaction: "[REDACTED_GITHUB_PAT]",
+  },
+  // Slack tokens
+  {
+    name: "slack_token",
+    pattern: /xox[bpas]-[a-zA-Z0-9-]{10,}/g,
+    redaction: "[REDACTED_SLACK_TOKEN]",
+  },
+  {
+    name: "slack_webhook",
+    pattern: /https:\/\/hooks\.slack\.com\/services\/T[a-zA-Z0-9]+\/B[a-zA-Z0-9]+\/[a-zA-Z0-9]+/g,
+    redaction: "[REDACTED_SLACK_WEBHOOK]",
+  },
+  // Authorization tokens
+  {
+    name: "bearer_token",
+    pattern: /Bearer\s+[a-zA-Z0_\-\.]{20,}/gi,
+    redaction: "Bearer [REDACTED]",
+  },
+  {
+    name: "basic_auth",
+    pattern: /Basic\s+[a-zA-Z0-9+/]{20,}={0,2}/gi,
+    redaction: "Basic [REDACTED]",
+  },
+  // Private keys
+  {
+    name: "private_key",
+    pattern: /-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----/g,
+    redaction: "[REDACTED_PRIVATE_KEY]",
+  },
+  // Database credentials
+  {
+    name: "connection_password",
+    pattern: /(?:password|pwd)=([^;\s&]{4,})/gi,
+    redaction: "password=[REDACTED]",
+  },
+  {
+    name: "database_url",
+    pattern: /(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@[^/\s]+/gi,
+    redaction: (match: string) => {
+      const urlMatch = match.match(/^(\w+:\/\/)[^:]+:[^@]+(@.+)$/);
+      if (urlMatch) {
+        return `${urlMatch[1]}[REDACTED_CREDENTIALS]${urlMatch[2]}`;
+      }
+      return "[REDACTED_DATABASE_URL]";
+    },
+  },
+  // JWT tokens
+  {
+    name: "jwt_token",
+    pattern: /eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*/g,
+    redaction: "[REDACTED_JWT]",
+  },
+  // .env values
+  {
+    name: "env_value",
+    pattern: /^([A-Z_][A-Z0-9_]*)=(.+)$/gm,
+    redaction: "$1=[REDACTED]",
+  },
+  // Platform tokens
+  {
+    name: "discord_token",
+    pattern: /[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}/g,
+    redaction: "[REDACTED_DISCORD_TOKEN]",
+  },
+  {
+    name: "telegram_token",
+    pattern: /\d{8,10}:[a-zA-Z0-9_-]{35}/g,
+    redaction: "[REDACTED_TELEGRAM_TOKEN]",
+  },
+  // AWS credentials
+  {
+    name: "aws_access_key",
+    pattern: /AKIA[0-9A-Z]{16}/g,
+    redaction: "[REDACTED_AWS_KEY]",
+  },
+  // Generic secrets
+  {
+    name: "secret_value",
+    pattern: /(?:secret|token|password|key)["']?\s*[:=]\s*["']?[a-zA-Z0-9_\-\/+=]{20,}["']?/gi,
+    redaction: "[REDACTED_SECRET]",
+  },
+];
+
+// =============================================================================
+// ENVIRONMENT LOADING
+// =============================================================================
+
+/**
+ * Raw environment values - all values are strings or undefined
+ */
+interface EnvVars {
+  anthropicApiKey: string | undefined;
+  openaiApiKey: string | undefined;
+  deepseekApiKey: string | undefined;
+  qwenApiKey: string | undefined;
+  kimiApiKey: string | undefined;
+  minimaxApiKey: string | undefined;
+  groqApiKey: string | undefined;
+  mistralApiKey: string | undefined;
+  togetherApiKey: string | undefined;
+  fireworksApiKey: string | undefined;
+  geminiApiKey: string | undefined;
+  providerChain: string | undefined;
+  telegramBotToken: string | undefined;
+  allowedTelegramUserIds: string | undefined;
+  discordBotToken: string | undefined;
+  discordGuildId: string | undefined;
+  slackBotToken: string | undefined;
+  slackSigningSecret: string | undefined;
+  slackAppToken: string | undefined;
+  slackSocketMode: string | undefined;
+  allowedSlackWorkspaces: string | undefined;
+  allowedSlackUserIds: string | undefined;
+  requireEditConfirmation: string | undefined;
+  readOnlyMode: string | undefined;
+  unityProjectPath: string | undefined;
+  dashboardEnabled: string | undefined;
+  dashboardPort: string | undefined;
+  websocketDashboardEnabled: string | undefined;
+  websocketDashboardPort: string | undefined;
+  prometheusEnabled: string | undefined;
+  prometheusPort: string | undefined;
+  memoryEnabled: string | undefined;
+  memoryDbPath: string | undefined;
+  ragEnabled: string | undefined;
+  embeddingProvider: string | undefined;
+  embeddingModel: string | undefined;
+  embeddingBaseUrl: string | undefined;
+  ragContextMaxTokens: string | undefined;
+  streamingEnabled: string | undefined;
+  shellEnabled: string | undefined;
+  rateLimitEnabled: string | undefined;
+  rateLimitMessagesPerMinute: string | undefined;
+  rateLimitMessagesPerHour: string | undefined;
+  rateLimitTokensPerDay: string | undefined;
+  rateLimitDailyBudgetUsd: string | undefined;
+  rateLimitMonthlyBudgetUsd: string | undefined;
+  logLevel: string | undefined;
+  logFile: string | undefined;
+  pluginDirs: string | undefined;
+}
+
+/**
+ * Load configuration from environment variables
+ */
+function loadFromEnv(): EnvVars {
+  return {
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
     openaiApiKey: process.env["OPENAI_API_KEY"],
     deepseekApiKey: process.env["DEEPSEEK_API_KEY"],
@@ -145,13 +711,25 @@ export function loadConfig(): Config {
     fireworksApiKey: process.env["FIREWORKS_API_KEY"],
     geminiApiKey: process.env["GEMINI_API_KEY"],
     providerChain: process.env["PROVIDER_CHAIN"],
-    dashboardEnabled: process.env["DASHBOARD_ENABLED"],
-    dashboardPort: process.env["DASHBOARD_PORT"],
     telegramBotToken: process.env["TELEGRAM_BOT_TOKEN"],
     allowedTelegramUserIds: process.env["ALLOWED_TELEGRAM_USER_IDS"],
+    discordBotToken: process.env["DISCORD_BOT_TOKEN"],
+    discordGuildId: process.env["DISCORD_GUILD_ID"],
+    slackBotToken: process.env["SLACK_BOT_TOKEN"],
+    slackSigningSecret: process.env["SLACK_SIGNING_SECRET"],
+    slackAppToken: process.env["SLACK_APP_TOKEN"],
+    slackSocketMode: process.env["SLACK_SOCKET_MODE"],
+    allowedSlackWorkspaces: process.env["ALLOWED_SLACK_WORKSPACES"],
+    allowedSlackUserIds: process.env["ALLOWED_SLACK_USER_IDS"],
     requireEditConfirmation: process.env["REQUIRE_EDIT_CONFIRMATION"],
     readOnlyMode: process.env["READ_ONLY_MODE"],
     unityProjectPath: process.env["UNITY_PROJECT_PATH"],
+    dashboardEnabled: process.env["DASHBOARD_ENABLED"],
+    dashboardPort: process.env["DASHBOARD_PORT"],
+    websocketDashboardEnabled: process.env["ENABLE_WEBSOCKET_DASHBOARD"],
+    websocketDashboardPort: process.env["WEBSOCKET_DASHBOARD_PORT"],
+    prometheusEnabled: process.env["ENABLE_PROMETHEUS"],
+    prometheusPort: process.env["PROMETHEUS_PORT"],
     memoryEnabled: process.env["MEMORY_ENABLED"],
     memoryDbPath: process.env["MEMORY_DB_PATH"],
     ragEnabled: process.env["RAG_ENABLED"],
@@ -160,50 +738,172 @@ export function loadConfig(): Config {
     embeddingBaseUrl: process.env["EMBEDDING_BASE_URL"],
     ragContextMaxTokens: process.env["RAG_CONTEXT_MAX_TOKENS"],
     streamingEnabled: process.env["STREAMING_ENABLED"],
+    shellEnabled: process.env["SHELL_ENABLED"],
     rateLimitEnabled: process.env["RATE_LIMIT_ENABLED"],
     rateLimitMessagesPerMinute: process.env["RATE_LIMIT_MESSAGES_PER_MINUTE"],
     rateLimitMessagesPerHour: process.env["RATE_LIMIT_MESSAGES_PER_HOUR"],
     rateLimitTokensPerDay: process.env["RATE_LIMIT_TOKENS_PER_DAY"],
     rateLimitDailyBudgetUsd: process.env["RATE_LIMIT_DAILY_BUDGET_USD"],
     rateLimitMonthlyBudgetUsd: process.env["RATE_LIMIT_MONTHLY_BUDGET_USD"],
-    shellEnabled: process.env["SHELL_ENABLED"],
     logLevel: process.env["LOG_LEVEL"],
     logFile: process.env["LOG_FILE"],
-  });
+    pluginDirs: process.env["PLUGIN_DIRS"],
+  };
+}
 
-  if (!result.success) {
-    const errors = result.error.issues
-      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+// =============================================================================
+// CONFIG LOADING
+// =============================================================================
+
+let cachedConfig: Config | null = null;
+
+/**
+ * Load and validate configuration from environment
+ */
+export function loadConfig(): Config {
+  if (cachedConfig) return cachedConfig;
+
+  const raw = loadFromEnv();
+  const validation = validateConfig(raw);
+
+  if (validation.kind === "invalid") {
+    const errors = validation.errors
+      .map((e) => `  - ${e.path}: ${e.message}`)
       .join("\n");
     throw new Error(`Invalid configuration:\n${errors}`);
   }
 
-  const config = result.data;
+  const config = validation.value;
 
-  // Validate project path is a real directory
-  let realPath: string;
-  try {
-    realPath = realpathSync(config.unityProjectPath);
-  } catch {
-    throw new Error(`UNITY_PROJECT_PATH does not exist: ${config.unityProjectPath}`);
+  // Validate project path
+  const pathResult = validateProjectPath(config.unityProjectPath);
+  if (pathResult.kind === "err") {
+    throw new Error(pathResult.error);
   }
-  try {
-    const stats = statSync(realPath);
-    if (!stats.isDirectory()) {
-      throw new Error(`UNITY_PROJECT_PATH is not a directory: ${config.unityProjectPath}`);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOTDIR") {
-      throw new Error(`UNITY_PROJECT_PATH is not a directory: ${config.unityProjectPath}`);
-    }
-    throw error;
-  }
-  config.unityProjectPath = realPath;
-
-  cachedConfig = config;
+  
+  // Update with resolved path
+  cachedConfig = {
+    ...config,
+    unityProjectPath: pathResult.value,
+  };
+  
   return cachedConfig;
 }
 
+/**
+ * Load config without throwing (returns Result)
+ */
+export function loadConfigSafe(): Result<Config, string> {
+  try {
+    return { kind: "ok", value: loadConfig() };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { kind: "err", error: message };
+  }
+}
+
+/**
+ * Reset config cache (useful for testing)
+ */
 export function resetConfigCache(): void {
   cachedConfig = null;
+}
+
+/**
+ * Get cached config or undefined
+ */
+export function getCachedConfig(): Config | undefined {
+  return cachedConfig ?? undefined;
+}
+
+/**
+ * Check if required API keys are present
+ */
+export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: string[] } {
+  const missing: string[] = [];
+  
+  if (!config.anthropicApiKey) {
+    missing.push("ANTHROPIC_API_KEY");
+  }
+  
+  return {
+    valid: missing.length === 0,
+    missing,
+  };
+}
+
+/**
+ * Check channel-specific configuration
+ */
+export function checkChannelConfig(
+  config: Config, 
+  channelType: "telegram" | "discord" | "slack" | "cli"
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  switch (channelType) {
+    case "telegram":
+      if (!config.telegram.botToken) {
+        errors.push("TELEGRAM_BOT_TOKEN is required");
+      }
+      if (config.telegram.allowedUserIds.length === 0) {
+        errors.push("ALLOWED_TELEGRAM_USER_IDS is empty - all users will be denied");
+      }
+      break;
+      
+    case "discord":
+      if (!config.discord.botToken) {
+        errors.push("DISCORD_BOT_TOKEN is required");
+      }
+      break;
+      
+    case "slack":
+      if (!config.slack.botToken) {
+        errors.push("SLACK_BOT_TOKEN is required");
+      }
+      if (!config.slack.socketMode && !config.slack.signingSecret) {
+        errors.push("SLACK_SIGNING_SECRET is required when not using socket mode");
+      }
+      break;
+      
+    case "cli":
+      // CLI doesn't require any special config
+      break;
+  }
+  
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Create a partial config from environment subset
+ */
+export function createPartialConfig(env: Partial<EnvVarMap>): PartialConfig {
+  const raw: Record<string, unknown> = {};
+  
+  if (env.ANTHROPIC_API_KEY) raw.anthropicApiKey = env.ANTHROPIC_API_KEY;
+  if (env.OPENAI_API_KEY) raw.openaiApiKey = env.OPENAI_API_KEY;
+  if (env.LOG_LEVEL) raw.logLevel = env.LOG_LEVEL;
+  if (env.READ_ONLY_MODE) raw.security = { readOnlyMode: env.READ_ONLY_MODE === "true" };
+  
+  return raw as PartialConfig;
+}
+
+/**
+ * Merge partial configs
+ */
+export function mergeConfigs(base: Config, partial: PartialConfig): Config {
+  return {
+    ...base,
+    ...partial,
+    telegram: { ...base.telegram, ...partial.telegram },
+    discord: { ...base.discord, ...partial.discord },
+    slack: { ...base.slack, ...partial.slack },
+    security: { ...base.security, ...partial.security },
+    dashboard: { ...base.dashboard, ...partial.dashboard },
+    websocketDashboard: { ...base.websocketDashboard, ...partial.websocketDashboard },
+    prometheus: { ...base.prometheus, ...partial.prometheus },
+    memory: { ...base.memory, ...partial.memory },
+    rag: { ...base.rag, ...partial.rag },
+    rateLimit: { ...base.rateLimit, ...partial.rateLimit },
+  } as Config;
 }

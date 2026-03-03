@@ -137,10 +137,12 @@ export class PluginLoader {
     }
 
     // Prefix tool names with plugin namespace to avoid collisions
+    // Mark tools as plugin-loaded for filtering
     const namespacedTools: ITool[] = tools.map((tool) => ({
       ...tool,
       name: `plugin_${manifest.name}_${tool.name}`,
       execute: tool.execute.bind(tool),
+      isPlugin: true,
     }));
 
     return { manifest, tools: namespacedTools, path: pluginPath };
@@ -169,5 +171,47 @@ export class PluginLoader {
 
     this.loadedPlugins.set(name, reloaded);
     return reloaded.tools;
+  }
+
+  /**
+   * Reload all loaded plugins.
+   */
+  async reloadAll(): Promise<ITool[]> {
+    const logger = getLogger();
+    const allTools: ITool[] = [];
+    
+    // Clear existing plugins
+    const pluginPaths = new Map(this.loadedPlugins);
+    this.loadedPlugins.clear();
+    
+    // Reload each plugin
+    for (const [name, existing] of pluginPaths) {
+      try {
+        const reloaded = await this.loadPlugin(existing.path);
+        if (reloaded) {
+          this.loadedPlugins.set(name, reloaded);
+          allTools.push(...reloaded.tools);
+          logger.info(`Plugin reloaded: ${name} v${reloaded.manifest.version}`);
+        }
+      } catch (error) {
+        logger.error(`Failed to reload plugin '${name}': ${error instanceof Error ? error.message : error}`);
+        // Keep the old version on error
+        this.loadedPlugins.set(name, existing);
+        allTools.push(...existing.tools);
+      }
+    }
+    
+    // Also scan for new plugins
+    const newTools = await this.loadAll();
+    
+    // Merge and deduplicate
+    const seenNames = new Set(allTools.map(t => t.name));
+    for (const tool of newTools) {
+      if (!seenNames.has(tool.name)) {
+        allTools.push(tool);
+      }
+    }
+    
+    return allTools;
   }
 }

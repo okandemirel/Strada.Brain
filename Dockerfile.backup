@@ -1,0 +1,40 @@
+FROM node:20-alpine
+
+# Install required packages
+RUN apk add --no-cache \
+    bash \
+    curl \
+    tar \
+    gzip \
+    postgresql-client \
+    sqlite \
+    aws-cli \
+    rclone \
+    ca-certificates
+
+# Create backup user
+RUN addgroup -g 1000 backup && \
+    adduser -D -u 1000 -G backup backup
+
+# Create directories
+RUN mkdir -p /backups /app /var/log/backup && \
+    chown -R backup:backup /backups /var/log/backup
+
+WORKDIR /app
+
+# Copy backup scripts
+COPY --chown=backup:backup scripts/backup.sh /app/backup.sh
+COPY --chown=backup:backup scripts/backup-scheduler.js /app/backup-scheduler.js
+
+RUN chmod +x /app/backup.sh
+
+# Switch to backup user
+USER backup
+
+# Environment variables
+ENV BACKUP_DIR=/backups \
+    RETENTION_DAYS=30 \
+    LOG_FILE=/var/log/backup/backup.log
+
+# Default command runs the backup scheduler
+CMD ["node", "backup-scheduler.js"]

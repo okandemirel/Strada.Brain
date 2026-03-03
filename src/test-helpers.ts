@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IChannelAdapter, ConfirmationRequest } from "./channels/channel.interface.js";
+import type { IChannelAdapter } from "./channels/channel.interface.js";
 import type { IAIProvider, ConversationMessage, ToolDefinition, ProviderResponse } from "./agents/providers/provider.interface.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./agents/tools/tool.interface.js";
 
@@ -29,8 +29,6 @@ export function createMockChannel(): IChannelAdapter {
     onMessage: vi.fn(),
     sendText: vi.fn<(chatId: string, text: string) => Promise<void>>().mockResolvedValue(undefined),
     sendMarkdown: vi.fn<(chatId: string, markdown: string) => Promise<void>>().mockResolvedValue(undefined),
-    sendTypingIndicator: vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined),
-    requestConfirmation: vi.fn<(req: ConfirmationRequest) => Promise<string>>().mockResolvedValue("Yes"),
     isHealthy: vi.fn<() => boolean>().mockReturnValue(true),
   };
 }
@@ -43,12 +41,20 @@ export function createMockProvider(response?: Partial<ProviderResponse>): IAIPro
     text: "Mock response",
     toolCalls: [],
     stopReason: "end_turn",
-    usage: { inputTokens: 100, outputTokens: 50 },
+    usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
     ...response,
   };
 
   return {
     name: "mock-provider",
+    capabilities: {
+      maxTokens: 4096,
+      streaming: false,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+    },
     chat: vi.fn<(sp: string, msgs: ConversationMessage[], tools: ToolDefinition[]) => Promise<ProviderResponse>>()
       .mockResolvedValue(defaultResponse),
   };

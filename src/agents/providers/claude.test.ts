@@ -134,6 +134,7 @@ describe("ClaudeProvider", () => {
     expect(result.usage).toEqual({
       inputTokens: 100,
       outputTokens: 50,
+      totalTokens: 150,
     });
   });
 
@@ -174,9 +175,8 @@ describe("ClaudeProvider", () => {
       [
         {
           role: "user",
-          content: "",
-          toolResults: [
-            { toolCallId: "tc_1", content: "file contents here", isError: false },
+          content: [
+            { type: "tool_result", tool_use_id: "tc_1", content: "file contents here", is_error: false },
           ],
         },
       ],
@@ -210,7 +210,7 @@ describe("ClaudeProvider", () => {
         {
           role: "assistant",
           content: "Let me check.",
-          toolCalls: [
+          tool_calls: [
             { id: "tc_1", name: "file_read", input: { path: "test.cs" } },
           ],
         },

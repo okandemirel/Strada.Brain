@@ -7,8 +7,36 @@ import type {
 } from "../channel.interface.js";
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
+import type { FileDiff, BatchDiff } from "../../utils/diff-generator.js";
+import { formatDiffForTelegram, formatBatchDiffForTelegram } from "../../utils/diff-formatter.js";
+
+/**
+ * Options for diff confirmation requests
+ */
+export interface DiffConfirmationOptions {
+  /** Maximum lines to show in diff preview */
+  maxPreviewLines?: number;
+  /** Whether this is a destructive operation */
+  isDestructive?: boolean;
+  /** Operation description */
+  operation?: string;
+  /** Additional context message */
+  contextMessage?: string;
+}
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
+
+/**
+ * Pending diff confirmation state
+ */
+interface PendingDiffConfirmation {
+  resolve: (value: boolean) => void;
+  timeout: ReturnType<typeof setTimeout>;
+  diffType: "single" | "batch";
+  fullDiff?: string;
+  chatId: string;
+  operation?: string;
+}
 
 /**
  * Telegram channel adapter using grammy.
@@ -24,6 +52,7 @@ export class TelegramChannel implements IChannelAdapter {
     string,
     { resolve: (value: string) => void; timeout: ReturnType<typeof setTimeout> }
   >();
+  private readonly pendingDiffConfirmations = new Map<string, PendingDiffConfirmation>();
 
   constructor(token: string, auth: AuthManager) {
     this.bot = new Bot(token);
@@ -65,6 +94,13 @@ export class TelegramChannel implements IChannelAdapter {
       pending.resolve("cancelled");
     }
     this.pendingConfirmations.clear();
+
+    // Clean up pending diff confirmations
+    for (const [, pending] of this.pendingDiffConfirmations) {
+      clearTimeout(pending.timeout);
+      pending.resolve(false);
+    }
+    this.pendingDiffConfirmations.clear();
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
@@ -116,6 +152,143 @@ export class TelegramChannel implements IChannelAdapter {
 
   isHealthy(): boolean {
     return this.bot.isInited();
+  }
+
+  /**
+   * Request confirmation for a single file diff with inline preview.
+   * Shows the diff in a code block with approve/reject buttons.
+   */
+  async requestDiffConfirmation(
+    chatId: string,
+    diff: FileDiff,
+    options: DiffConfirmationOptions = {}
+  ): Promise<boolean> {
+    const chatIdNum = parseInt(chatId, 10);
+    const confirmId = `diff_${randomUUID()}`;
+    const { 
+      maxPreviewLines = 50, 
+      isDestructive = false,
+      operation = "Apply changes",
+      contextMessage
+    } = options;
+
+    // Format the diff for Telegram
+    const formattedDiff = formatDiffForTelegram(diff, {
+      maxLines: maxPreviewLines,
+    });
+
+    // Store full diff for "view full" functionality
+    const fullDiff = formatDiffForTelegram(diff, { maxLines: 500 });
+
+    // Build message
+    let message = "";
+    if (isDestructive) {
+      message += "⚠️ *Destructive Operation*\n\n";
+    }
+    if (contextMessage) {
+      message += `${contextMessage}\n\n`;
+    }
+    message += `*${operation}*\n\n`;
+    message += formattedDiff;
+
+    // Create inline keyboard with diff-specific actions
+    const keyboard = new InlineKeyboard()
+      .text("✅ Approve", `${confirmId}:approve`)
+      .text("❌ Reject", `${confirmId}:reject`)
+      .row()
+      .text("📋 View Full", `${confirmId}:view_full`);
+
+    await this.bot.api.sendMessage(chatIdNum, message, {
+      parse_mode: "MarkdownV2",
+      reply_markup: keyboard,
+    });
+
+    return new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingDiffConfirmations.delete(confirmId);
+        resolve(false);
+      }, 300_000); // 5 minute timeout for diffs
+
+      this.pendingDiffConfirmations.set(confirmId, {
+        resolve,
+        timeout,
+        diffType: "single",
+        fullDiff,
+        chatId,
+        operation,
+      });
+    });
+  }
+
+  /**
+   * Request confirmation for a batch of file changes.
+   * Shows summary and allows viewing individual files.
+   */
+  async requestBatchDiffConfirmation(
+    chatId: string,
+    batchDiff: BatchDiff,
+    options: DiffConfirmationOptions = {}
+  ): Promise<boolean> {
+    const chatIdNum = parseInt(chatId, 10);
+    const confirmId = `batch_${randomUUID()}`;
+    const { 
+      maxPreviewLines = 40, 
+      isDestructive = false,
+      operation = "Apply changes",
+      contextMessage
+    } = options;
+
+    // Format batch diff
+    const formattedBatch = formatBatchDiffForTelegram(batchDiff, {
+      maxLines: maxPreviewLines,
+    });
+
+    // Build message
+    let message = "";
+    if (isDestructive) {
+      message += "⚠️ *Batch Operation*\n\n";
+    }
+    if (contextMessage) {
+      message += `${contextMessage}\n\n`;
+    }
+    message += `*${operation}*\n\n`;
+    message += formattedBatch;
+
+    // For batches, add options to view individual files
+    const keyboard = new InlineKeyboard()
+      .text("✅ Approve All", `${confirmId}:approve`)
+      .text("❌ Reject", `${confirmId}:reject`)
+      .row();
+
+    // Add buttons for first 3 individual files
+    batchDiff.files.slice(0, 3).forEach((file, index) => {
+      const emoji = file.isNew ? "➕" : file.isDeleted ? "🗑️" : "📝";
+      keyboard.text(`${emoji} ${file.newPath.split("/").pop()}`, `${confirmId}:file_${index}`);
+    });
+
+    if (batchDiff.files.length > 3) {
+      keyboard.row().text(`📁 View All ${batchDiff.files.length} Files`, `${confirmId}:view_all`);
+    }
+
+    await this.bot.api.sendMessage(chatIdNum, message, {
+      parse_mode: "MarkdownV2",
+      reply_markup: keyboard,
+    });
+
+    return new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingDiffConfirmations.delete(confirmId);
+        resolve(false);
+      }, 300_000);
+
+      this.pendingDiffConfirmations.set(confirmId, {
+        resolve,
+        timeout,
+        diffType: "batch",
+        chatId,
+        operation,
+      });
+    });
   }
 
   /**
@@ -226,12 +399,20 @@ export class TelegramChannel implements IChannelAdapter {
       const confirmId = data.substring(0, separatorIndex);
       const selectedOption = data.substring(separatorIndex + 1);
 
+      // Handle regular confirmations
       const pending = this.pendingConfirmations.get(confirmId);
       if (pending) {
         clearTimeout(pending.timeout);
         this.pendingConfirmations.delete(confirmId);
         pending.resolve(selectedOption);
         await ctx.answerCallbackQuery({ text: `Selected: ${selectedOption}` });
+        return;
+      }
+
+      // Handle diff confirmations
+      const diffPending = this.pendingDiffConfirmations.get(confirmId);
+      if (diffPending) {
+        await this.handleDiffCallback(ctx, confirmId, selectedOption, diffPending);
       }
     });
 
@@ -268,6 +449,56 @@ export class TelegramChannel implements IChannelAdapter {
     this.bot.on("message:text", async (ctx) => {
       await this.routeMessage(ctx);
     });
+  }
+
+  private async handleDiffCallback(
+    ctx: Context,
+    confirmId: string,
+    action: string,
+    pending: PendingDiffConfirmation
+  ): Promise<void> {
+    switch (action) {
+      case "approve":
+        clearTimeout(pending.timeout);
+        this.pendingDiffConfirmations.delete(confirmId);
+        pending.resolve(true);
+        await ctx.answerCallbackQuery({ text: "✅ Approved" });
+        await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
+        await ctx.editMessageText(`✅ *${pending.operation}* approved\.`);
+        break;
+
+      case "reject":
+        clearTimeout(pending.timeout);
+        this.pendingDiffConfirmations.delete(confirmId);
+        pending.resolve(false);
+        await ctx.answerCallbackQuery({ text: "❌ Rejected" });
+        await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
+        await ctx.editMessageText(`❌ *${pending.operation}* rejected\.`);
+        break;
+
+      case "view_full":
+        await ctx.answerCallbackQuery({ text: "Loading full diff..." });
+        if (pending.fullDiff) {
+          // Send full diff as a new message
+          await ctx.reply(pending.fullDiff, { parse_mode: "MarkdownV2" });
+        }
+        break;
+
+      case "view_all":
+        await ctx.answerCallbackQuery({ text: "Loading all files..." });
+        // This would need the batch diff stored - for now just acknowledge
+        await ctx.reply("📁 All files would be shown here in full implementation");
+        break;
+
+      default:
+        if (action.startsWith("file_")) {
+          await ctx.answerCallbackQuery({ text: "Loading file details..." });
+          // Handle individual file view
+          await ctx.reply(`📄 File details would be shown here`);
+        } else {
+          await ctx.answerCallbackQuery({ text: "Unknown action" });
+        }
+    }
   }
 
   private async routeMessage(ctx: Context): Promise<void> {

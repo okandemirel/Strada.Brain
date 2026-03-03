@@ -3,7 +3,13 @@
  *
  * Single source of truth for tool classification and input extraction.
  * All lookups are O(1) via ReadonlySet.has().
+ * 
+ * NOTE: WRITE_OPERATIONS is now defined in common/constants.ts
+ * and re-exported here for backward compatibility.
  */
+
+// Re-export from common/constants for backward compatibility
+export { WRITE_OPERATIONS } from "../../common/constants.js";
 
 /** Tools that mutate source files (subset of WRITE_OPERATIONS). */
 export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
@@ -15,20 +21,6 @@ export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
 /** Tools that verify correctness. */
 export const VERIFY_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_build", "dotnet_test",
-]);
-
-/** Tools with side effects beyond file mutation (not in MUTATION_TOOLS or VERIFY_TOOLS). */
-const SIDE_EFFECT_TOOLS: readonly string[] = [
-  "file_delete_directory",
-  "shell_exec",
-  "git_commit", "git_push", "git_branch", "git_stash",
-];
-
-/** All tools that require user confirmation. Composed from subsets to prevent drift. */
-export const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
-  ...MUTATION_TOOLS,
-  ...VERIFY_TOOLS,
-  ...SIDE_EFFECT_TOOLS,
 ]);
 
 /** File extensions that affect .NET compilation. */

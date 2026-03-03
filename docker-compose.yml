@@ -1,0 +1,405 @@
+# =============================================================================
+# Strata.Brain - Production Docker Compose Configuration
+# =============================================================================
+# Usage:
+#   docker compose up -d                    # Start all services
+#   docker compose -f docker-compose.yml up -d  # Production mode
+#   docker compose down                     # Stop all services
+#   docker compose logs -f strata-brain     # View logs
+#
+# Environment Variables (create .env file):
+#   ANTHROPIC_API_KEY=sk-ant-...
+#   TELEGRAM_BOT_TOKEN=123456:ABC...
+#   DISCORD_BOT_TOKEN=...
+#   SLACK_BOT_TOKEN=xoxb-...
+# =============================================================================
+
+version: "3.8"
+
+services:
+  # ===========================================================================
+  # Main Application - Strata.Brain
+  # ===========================================================================
+  strata-brain:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - NODE_ENV=production
+    container_name: strata-brain
+    hostname: strata-brain
+    environment:
+      # Core
+      - NODE_ENV=production
+      
+      # AI Providers (Required)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - PROVIDER_CHAIN=${PROVIDER_CHAIN:-claude}
+      
+      # Bot Tokens
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - SLACK_SOCKET_MODE=${SLACK_SOCKET_MODE:-true}
+      
+      # Security
+      - ALLOWED_TELEGRAM_USER_IDS=${ALLOWED_TELEGRAM_USER_IDS:-}
+      - ALLOWED_SLACK_WORKSPACES=${ALLOWED_SLACK_WORKSPACES:-}
+      - ALLOWED_SLACK_USER_IDS=${ALLOWED_SLACK_USER_IDS:-}
+      - REQUIRE_EDIT_CONFIRMATION=${REQUIRE_EDIT_CONFIRMATION:-true}
+      - READ_ONLY_MODE=${READ_ONLY_MODE:-false}
+      
+      # Project Paths
+      - UNITY_PROJECT_PATH=/app/project
+      
+      # Dashboard & Monitoring
+      - DASHBOARD_ENABLED=${DASHBOARD_ENABLED:-true}
+      - DASHBOARD_PORT=3100
+      - METRICS_PORT=9090
+      
+      # Memory
+      - MEMORY_ENABLED=${MEMORY_ENABLED:-true}
+      - MEMORY_DB_PATH=/app/.strata-memory
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FILE=/app/logs/strata-brain.log
+      
+      # Redis (optional - for distributed rate limiting)
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      
+      # Health check
+      - HEALTH_CHECK_PORT=3100
+    
+    volumes:
+      # Unity project (read-only for security)
+      - type: bind
+        source: ${UNITY_PROJECT_PATH:-./project}
+        target: /app/project
+        read_only: true
+      
+      # Persistent memory storage
+      - type: volume
+        source: strata-memory
+        target: /app/.strata-memory
+      
+      # Log files
+      - type: volume
+        source: strata-logs
+        target: /app/logs
+      
+      # Optional: Custom plugins
+      - type: bind
+        source: ${PLUGINS_PATH:-./plugins}
+        target: /app/plugins
+        read_only: true
+        bind:
+          create_host_path: true
+    
+    ports:
+      - "${DASHBOARD_PORT:-3100}:3100"  # Dashboard UI
+      - "${METRICS_PORT:-9090}:9090"    # Prometheus metrics
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '${CPU_LIMIT:-2}'
+          memory: ${MEMORY_LIMIT:-2G}
+        reservations:
+          cpus: '${CPU_RESERVATION:-0.5}'
+          memory: ${MEMORY_RESERVATION:-512M}
+      restart_policy:
+        condition: unless-stopped
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+      start_interval: 5s
+    
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    
+    # Networking
+    networks:
+      - strata-network
+    
+    # Dependencies
+    depends_on:
+      redis:
+        condition: service_healthy
+    
+    # Graceful shutdown
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+
+  # ===========================================================================
+  # Redis - Distributed Rate Limiting & Caching
+  # ===========================================================================
+  redis:
+    image: redis:7.4-alpine
+    container_name: strata-redis
+    hostname: redis
+    restart: unless-stopped
+    
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --no-appendfsync-on-rewrite yes
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+    
+    volumes:
+      - type: volume
+        source: redis-data
+        target: /data
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=10m
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+    
+    networks:
+      - strata-network
+    
+    # No external exposure
+    expose:
+      - "6379"
+
+  # ===========================================================================
+  # Nginx - Reverse Proxy & SSL Termination
+  # ===========================================================================
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: strata-nginx
+    hostname: nginx
+    restart: unless-stopped
+    
+    environment:
+      - NGINX_ENTRYPOINT_QUIET_LOGS=1
+    
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    
+    volumes:
+      # Nginx configuration
+      - type: bind
+        source: ./nginx/nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+      
+      # SSL certificates
+      - type: bind
+        source: ${SSL_CERT_PATH:-./nginx/ssl}
+        target: /etc/nginx/ssl
+        read_only: true
+        bind:
+          create_host_path: true
+      
+      # Let's Encrypt (optional)
+      - type: volume
+        source: letsencrypt-data
+        target: /etc/letsencrypt
+      
+      # Nginx cache
+      - type: volume
+        source: nginx-cache
+        target: /var/cache/nginx
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/run:noexec,nosuid,size=10m
+      - /tmp:noexec,nosuid,size=10m
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    
+    networks:
+      - strata-network
+    
+    depends_on:
+      strata-brain:
+        condition: service_healthy
+
+  # ===========================================================================
+  # Prometheus - Metrics Collection (Optional)
+  # ===========================================================================
+  prometheus:
+    image: prom/prometheus:v3.0.0
+    container_name: strata-prometheus
+    hostname: prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--storage.tsdb.retention.size=10GB'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    
+    volumes:
+      - type: bind
+        source: ./monitoring/prometheus.yml
+        target: /etc/prometheus/prometheus.yml
+        read_only: true
+      - type: volume
+        source: prometheus-data
+        target: /prometheus
+    
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    
+    networks:
+      - strata-network
+    
+    depends_on:
+      - strata-brain
+
+  # ===========================================================================
+  # Grafana - Visualization (Optional)
+  # ===========================================================================
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: strata-grafana
+    hostname: grafana
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+    
+    volumes:
+      - type: volume
+        source: grafana-data
+        target: /var/lib/grafana
+      - type: bind
+        source: ./grafana-dashboard.json
+        target: /etc/grafana/provisioning/dashboards/strata-dashboard.json
+        read_only: true
+      - type: bind
+        source: ./monitoring/grafana-datasource.yml
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+        read_only: true
+    
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    
+    networks:
+      - strata-network
+    
+    depends_on:
+      - prometheus
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  strata-memory:
+    driver: local
+  strata-logs:
+    driver: local
+  redis-data:
+    driver: local
+  nginx-cache:
+    driver: local
+  letsencrypt-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  strata-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

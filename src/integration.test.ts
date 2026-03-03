@@ -2,7 +2,7 @@ import { vi, beforeEach, afterEach } from "vitest";
 import { Orchestrator } from "./agents/orchestrator.js";
 import { createMockChannel, createMockTool } from "./test-helpers.js";
 import type { IChannelAdapter } from "./channels/channel.interface.js";
-import type { IAIProvider, ProviderResponse } from "./agents/providers/provider.interface.js";
+import type { IAIProvider, ProviderResponse, MessageContent } from "./agents/providers/provider.interface.js";
 import type { ITool } from "./agents/tools/tool.interface.js";
 
 vi.mock("./utils/logger.js", () => ({
@@ -20,10 +20,20 @@ vi.mock("./agents/context/strata-knowledge.js", () => ({
   buildAnalysisSummary: vi.fn().mockReturnValue(""),
 }));
 
+const defaultCapabilities = {
+  maxTokens: 4096,
+  streaming: false,
+  structuredStreaming: false,
+  toolCalling: true,
+  vision: false,
+  systemPrompt: true,
+};
+
 function createMockProvider() {
   let callCount = 0;
   return {
     name: "mock-integration",
+    capabilities: defaultCapabilities,
     chat: vi.fn(async () => {
       callCount++;
       if (callCount === 1) {
@@ -31,14 +41,14 @@ function createMockProvider() {
           text: "Let me read that file.",
           toolCalls: [{ id: "tc-1", name: "file_read", input: { path: "test.cs" } }],
           stopReason: "tool_use" as const,
-          usage: { inputTokens: 50, outputTokens: 30 },
+          usage: { inputTokens: 50, outputTokens: 30, totalTokens: 80 },
         };
       }
       return {
         text: "Here is the content of the file.",
         toolCalls: [],
         stopReason: "end_turn" as const,
-        usage: { inputTokens: 80, outputTokens: 40 },
+        usage: { inputTokens: 80, outputTokens: 40, totalTokens: 120 },
       };
     }),
   };
@@ -47,11 +57,12 @@ function createMockProvider() {
 function createSimpleProvider() {
   return {
     name: "mock-simple",
+    capabilities: defaultCapabilities,
     chat: vi.fn(async (): Promise<ProviderResponse> => ({
       text: "Hello! How can I help you?",
       toolCalls: [],
       stopReason: "end_turn",
-      usage: { inputTokens: 20, outputTokens: 15 },
+      usage: { inputTokens: 20, outputTokens: 15, totalTokens: 35 },
     })),
   };
 }
@@ -60,6 +71,7 @@ function createUnknownToolProvider() {
   let callCount = 0;
   return {
     name: "mock-unknown-tool",
+    capabilities: defaultCapabilities,
     chat: vi.fn(async (): Promise<ProviderResponse> => {
       callCount++;
       if (callCount === 1) {
@@ -67,17 +79,32 @@ function createUnknownToolProvider() {
           text: "Let me try that.",
           toolCalls: [{ id: "tc-bad", name: "nonexistent_tool", input: {} }],
           stopReason: "tool_use",
-          usage: { inputTokens: 30, outputTokens: 20 },
+          usage: { inputTokens: 30, outputTokens: 20, totalTokens: 50 },
         };
       }
       return {
         text: "Sorry, I could not find that tool.",
         toolCalls: [],
         stopReason: "end_turn",
-        usage: { inputTokens: 60, outputTokens: 25 },
+        usage: { inputTokens: 60, outputTokens: 25, totalTokens: 85 },
       };
     }),
   };
+}
+
+// Helper to find tool result content blocks in messages
+function findToolResultContent(messages: { content?: string | MessageContent[] }[]): Array<{ tool_use_id: string; content: string; is_error?: boolean }> {
+  const results: Array<{ tool_use_id: string; content: string; is_error?: boolean }> = [];
+  for (const msg of messages) {
+    if (msg.content && typeof msg.content !== "string") {
+      for (const block of msg.content) {
+        if (block.type === "tool_result") {
+          results.push(block);
+        }
+      }
+    }
+  }
+  return results;
 }
 
 describe("Integration: full message flow", () => {
@@ -98,7 +125,7 @@ describe("Integration: full message flow", () => {
     const provider = createMockProvider();
 
     const orchestrator = new Orchestrator({
-      provider,
+      provider: provider as unknown as IAIProvider,
       tools: [fileReadTool],
       channel,
       projectPath: "/test/project",
@@ -127,9 +154,9 @@ describe("Integration: full message flow", () => {
 
     // The second provider call should include the tool result in messages
     const secondCallMessages = vi.mocked(provider.chat).mock.calls[1]![1];
-    const toolResultMsg = secondCallMessages.find((m) => m.toolResults?.length);
-    expect(toolResultMsg).toBeDefined();
-    expect(toolResultMsg!.toolResults![0]!.content).toContain("using UnityEngine");
+    const toolResults = findToolResultContent(secondCallMessages);
+    expect(toolResults.length).toBeGreaterThan(0);
+    expect(toolResults[0]!.content).toContain("using UnityEngine");
 
     // Final response should be sent to the channel
     expect(channel.sendMarkdown).toHaveBeenCalledWith(
@@ -142,7 +169,7 @@ describe("Integration: full message flow", () => {
     const provider = createSimpleProvider();
 
     const orchestrator = new Orchestrator({
-      provider,
+      provider: provider as unknown as IAIProvider,
       tools: [fileReadTool],
       channel,
       projectPath: "/test/project",
@@ -177,7 +204,7 @@ describe("Integration: full message flow", () => {
     const provider = createUnknownToolProvider();
 
     const orchestrator = new Orchestrator({
-      provider,
+      provider: provider as unknown as IAIProvider,
       tools: [fileReadTool],
       channel,
       projectPath: "/test/project",
@@ -203,10 +230,10 @@ describe("Integration: full message flow", () => {
 
     // Verify the error result was sent back in the second call
     const secondCallMessages = vi.mocked(provider.chat).mock.calls[1]![1];
-    const toolResultMsg = secondCallMessages.find((m) => m.toolResults?.length);
-    expect(toolResultMsg).toBeDefined();
-    expect(toolResultMsg!.toolResults![0]!.content).toContain("unknown tool");
-    expect(toolResultMsg!.toolResults![0]!.isError).toBe(true);
+    const toolResults = findToolResultContent(secondCallMessages);
+    expect(toolResults.length).toBeGreaterThan(0);
+    expect(toolResults[0]!.content).toContain("unknown tool");
+    expect(toolResults[0]!.is_error).toBe(true);
 
     // Final response acknowledging the error is sent to the channel
     expect(channel.sendMarkdown).toHaveBeenCalledWith(

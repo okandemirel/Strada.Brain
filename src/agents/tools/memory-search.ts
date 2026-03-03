@@ -51,18 +51,27 @@ export class MemorySearchTool implements ITool {
       return { content: "Error: 'query' is required", isError: true };
     }
 
-    const type = input["type"] as "conversation" | "analysis" | "note" | undefined;
+    const memoryType = input["type"] as "conversation" | "analysis" | "note" | undefined;
     const rawLimit = input["limit"];
     const limit = Math.min(Math.max(typeof rawLimit === "number" ? rawLimit : 5, 1), 10);
 
     try {
-      const results = await this.memory.retrieve(query, {
-        type,
+      const result = await this.memory.retrieve({
+        mode: "text",
+        query,
         limit,
         minScore: 0.1,
+        ...(memoryType ? { types: [memoryType] } : {}),
       });
 
-      if (results.length === 0) {
+      if (result.kind === "err") {
+        const errorMsg = result.error instanceof Error ? result.error.message : String(result.error);
+        return { content: `Error searching memory: ${errorMsg}`, isError: true };
+      }
+
+      const memories = result.value;
+
+      if (memories.length === 0) {
         const stats = this.memory.getStats();
         return {
           content: `No relevant memories found for: "${query}"\n\n` +
@@ -71,12 +80,12 @@ export class MemorySearchTool implements ITool {
         };
       }
 
-      const lines = results.map((r, i) => {
+      const lines = memories.map((r, i) => {
         const entry = r.entry;
         const score = (r.score * 100).toFixed(1);
-        const date = entry.createdAt.toISOString().split("T")[0];
+        const date = new Date(entry.createdAt).toISOString().split("T")[0];
         const typeLabel = entry.type.toUpperCase();
-        const chatLabel = entry.chatId ? ` [chat: ${entry.chatId}]` : "";
+        const chatLabel = "chatId" in entry && entry.chatId ? ` [chat: ${entry.chatId}]` : "";
         const tags = entry.tags.length > 0 ? ` tags: ${entry.tags.join(", ")}` : "";
         const preview = entry.content.length > 300
           ? entry.content.substring(0, 300) + "..."
@@ -86,7 +95,7 @@ export class MemorySearchTool implements ITool {
       });
 
       return {
-        content: `Found ${results.length} relevant memory(s):\n\n${lines.join("\n\n")}`,
+        content: `Found ${memories.length} relevant memory(s):\n\n${lines.join("\n\n")}`,
       };
     } catch {
       return { content: "Error: memory search failed", isError: true };

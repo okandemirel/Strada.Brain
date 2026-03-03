@@ -8,7 +8,7 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("dotenv", () => ({
-  default: { config: vi.fn() },
+  config: vi.fn(),
 }));
 
 function setEnv(overrides: Record<string, string | undefined> = {}) {
@@ -70,20 +70,20 @@ describe("loadConfig", () => {
   it("sets telegramBotToken when provided", () => {
     setEnv({ TELEGRAM_BOT_TOKEN: "bot-token-123" });
     const config = loadConfig();
-    expect(config.telegramBotToken).toBe("bot-token-123");
+    expect(config.telegram.botToken).toBe("bot-token-123");
   });
 
   it("parses CSV user IDs correctly", () => {
     setEnv({ ALLOWED_TELEGRAM_USER_IDS: "1,2,3" });
     const config = loadConfig();
-    expect(config.allowedTelegramUserIds).toEqual([1, 2, 3]);
+    expect(config.telegram.allowedUserIds).toEqual([1, 2, 3]);
   });
 
   it("applies default values", () => {
     setEnv();
     const config = loadConfig();
-    expect(config.requireEditConfirmation).toBe(true);
-    expect(config.readOnlyMode).toBe(false);
+    expect(config.security.requireEditConfirmation).toBe(true);
+    expect(config.security.readOnlyMode).toBe(false);
     expect(config.logLevel).toBe("info");
     expect(config.logFile).toBe("strata-brain.log");
   });
@@ -94,8 +94,8 @@ describe("loadConfig", () => {
       READ_ONLY_MODE: "true",
     });
     const config = loadConfig();
-    expect(config.requireEditConfirmation).toBe(false);
-    expect(config.readOnlyMode).toBe(true);
+    expect(config.security.requireEditConfirmation).toBe(false);
+    expect(config.security.readOnlyMode).toBe(true);
   });
 
   it("caches config on subsequent calls", () => {
