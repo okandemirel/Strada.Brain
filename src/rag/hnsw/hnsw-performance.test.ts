@@ -15,7 +15,10 @@ import type { VectorEntry, CodeChunk } from "../rag.interface.js";
 describe("HNSWVectorStore Performance", () => {
   const dimensions = 384; // MiniLM dimensions
 
-  async function runBenchmark(vectorCount: number, topK: number = 10): Promise<{
+  async function runBenchmark(
+    vectorCount: number,
+    topK: number = 10,
+  ): Promise<{
     insertTimeMs: number;
     searchTimeMs: number;
     vectorsPerSecond: number;
@@ -37,7 +40,7 @@ describe("HNSWVectorStore Performance", () => {
     for (let i = 0; i < vectorCount; i++) {
       const vec = new Array(dimensions).fill(0).map(() => Math.random() - 0.5);
       const norm = Math.sqrt(vec.reduce((a, b) => a + b * b, 0));
-      const normalized = vec.map(v => v / (norm + 1e-10));
+      const normalized = vec.map((v) => v / (norm + 1e-10));
 
       entries.push({
         id: `bench-${i}`,
@@ -70,7 +73,7 @@ describe("HNSWVectorStore Performance", () => {
     for (let i = 0; i < numSearches; i++) {
       const query = new Array(dimensions).fill(0).map(() => Math.random() - 0.5);
       const norm = Math.sqrt(query.reduce((a, b) => a + b * b, 0));
-      const normalizedQuery = query.map(v => v / (norm + 1e-10));
+      const normalizedQuery = query.map((v) => v / (norm + 1e-10));
 
       const searchStart = performance.now();
       await store.search(normalizedQuery, topK);
@@ -104,7 +107,8 @@ describe("HNSWVectorStore Performance", () => {
     expect(results.searchTimeMs).toBeLessThan(10); // Should search in < 10ms
   }, 60000);
 
-  it("should handle 100K vectors efficiently", async () => {
+  // Skip in CI — too slow for standard test runs
+  it.skip("should handle 100K vectors efficiently", async () => {
     const results = await runBenchmark(100000);
 
     console.log("\n=== 100K Vectors Performance ===");
@@ -156,7 +160,7 @@ describe("HNSWVectorStore Recall Accuracy", () => {
     for (let i = 0; i < vectorCount; i++) {
       const vec = new Array(dimensions).fill(0).map(() => Math.random() - 0.5);
       const norm = Math.sqrt(vec.reduce((a, b) => a + b * b, 0));
-      const normalized = vec.map(v => v / (norm + 1e-10));
+      const normalized = vec.map((v) => v / (norm + 1e-10));
 
       vectors.push(normalized);
       entries.push({
@@ -187,7 +191,7 @@ describe("HNSWVectorStore Recall Accuracy", () => {
     for (let q = 0; q < numQueries; q++) {
       const query = new Array(dimensions).fill(0).map(() => Math.random() - 0.5);
       const norm = Math.sqrt(query.reduce((a, b) => a + b * b, 0));
-      const normalizedQuery = query.map(v => v / (norm + 1e-10));
+      const normalizedQuery = query.map((v) => v / (norm + 1e-10));
 
       // Brute force search
       const bruteForceResults = vectors
@@ -197,14 +201,14 @@ describe("HNSWVectorStore Recall Accuracy", () => {
         }))
         .sort((a, b) => b.score - a.score)
         .slice(0, topK)
-        .map(r => r.id);
+        .map((r) => r.id);
 
       // HNSW search
       const hnswResults = await store.search(normalizedQuery, topK);
-      const hnswIds = hnswResults.map(r => r.id);
+      const hnswIds = hnswResults.map((r) => r.id);
 
       // Calculate recall
-      const matches = hnswIds.filter(id => bruteForceResults.includes(id)).length;
+      const matches = hnswIds.filter((id) => bruteForceResults.includes(id)).length;
       totalRecall += matches / topK;
     }
 
