@@ -194,17 +194,23 @@ Read-only mode is a global setting that disables all write operations. It's usef
 // src/security/read-only-guard.ts
 export class ReadOnlyGuard {
   private readonly enabled: boolean;
+  private readonly blockedTools: Set<string>;
 
-  constructor(enabled: boolean) {
+  constructor(enabled: boolean, additionalBlockedTools: string[] = []) {
     this.enabled = enabled;
+    this.blockedTools = new Set([...Array.from(WRITE_TOOLS), ...additionalBlockedTools]);
   }
 
   canExecute(toolName: string): boolean {
-    return !this.enabled || !WRITE_TOOLS.has(toolName);
+    return !this.enabled || !this.blockedTools.has(toolName);
   }
 
   check(toolName: string): ReadOnlyCheckResult {
     return checkReadOnlyBlock(toolName, this.enabled);
+  }
+
+  filterTools<T extends { name: string }>(tools: T[]): T[] {
+    return filterToolsForReadOnly(tools, this.enabled);
   }
 }
 ```
@@ -342,7 +348,7 @@ const DEFAULT_CONFIG: DMPolicyConfig = {
 ```typescript
 // src/security/read-only-guard.ts
 export function checkReadOnlyBlock(
-  toolName: string, 
+  toolName: string,
   readOnlyMode: boolean
 ): ReadOnlyCheckResult {
   if (!readOnlyMode) {
@@ -355,7 +361,7 @@ export function checkReadOnlyBlock(
     return {
       allowed: false,
       error: `Tool '${toolName}' is disabled in read-only mode.`,
-      suggestion: SUGGESTIONS[normalizedName] ?? "Use read-only tools.",
+      suggestion: SUGGESTIONS[normalizedName] ?? "Use read-only tools to explore the codebase.",
     };
   }
 

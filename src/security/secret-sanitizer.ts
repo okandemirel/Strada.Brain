@@ -6,6 +6,8 @@
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
+import { getLogger } from "../utils/logger.js";
+
 const MIN_KEY_LENGTH = 20;
 const MAX_OUTPUT_LENGTH = 8192;
 const TRUNCATION_MARKER = "\n... (truncated)";
@@ -229,7 +231,9 @@ export class SecretSanitizer {
       stats.matchesByPattern[pattern.name] = matches.length;
 
       if (this.debug) {
-        console.log(`[SecretSanitizer] Matched ${pattern.name}: ${matches.length} occurrence(s)`);
+        getLogger().info(
+          `[SecretSanitizer] Matched ${pattern.name}: ${matches.length} occurrence(s)`,
+        );
       }
 
       const redaction =

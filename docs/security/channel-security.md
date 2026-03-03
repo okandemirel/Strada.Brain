@@ -17,28 +17,28 @@ This document describes security considerations and controls for Telegram, Whats
 Strata Brain supports multiple messaging channels, each with its own security model and considerations. This document covers security best practices and implementation details for each channel.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Channel Security Model                       │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │  Telegram   │  │   Discord   │  │    Slack    │             │
-│  │             │  │             │  │             │             │
-│  │ • Bot Token │  │ • Bot Token │  │ • Bot Token │             │
-│  │ • User ID   │  │ • User ID   │  │ • Sign Secret│            │
-│  │   Whitelist │  │ • Role-based│  │ • Workspace │             │
-│  │             │  │   Access    │  │   Whitelist │             │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘             │
-│         │                │                │                    │
-│         └────────────────┴────────────────┘                    │
-│                          │                                      │
-│                          ▼                                      │
-│               ┌─────────────────────┐                          │
-│               │   AuthManager       │                          │
-│               │   (Unified Auth)    │                          │
-│               └─────────────────────┘                          │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         Channel Security Model                            │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
+│  │  Telegram   │  │   Discord   │  │    Slack    │  │  WhatsApp   │    │
+│  │             │  │             │  │             │  │             │    │
+│  │ • Bot Token │  │ • Bot Token │  │ • Bot Token │  │ • QR Code   │    │
+│  │ • User ID   │  │ • User ID   │  │ • Sign Secret│ │ • Session   │    │
+│  │   Whitelist │  │ • Role-based│  │ • Workspace │  │ • Number    │    │
+│  │             │  │   Access    │  │   Whitelist │  │   Whitelist │    │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘    │
+│         │                │                │                │           │
+│         └────────────────┴────────────────┘                │           │
+│                          │                                 │           │
+│                          ▼                                 ▼           │
+│               ┌─────────────────────┐          ┌──────────────────┐    │
+│               │   AuthManager       │          │ Allowed Numbers  │    │
+│               │   (Unified Auth)    │          │ (Built-in Auth)  │    │
+│               └─────────────────────┘          └──────────────────┘    │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Telegram Security
@@ -62,7 +62,6 @@ private setupMiddleware(): void {
     if (!userId) return;
 
     if (!this.auth.isTelegramUserAllowed(userId)) {
-      getLogger().warn("Unauthorized Telegram access", { userId });
       await ctx.reply(
         "You are not authorized to use Strata Brain. Contact the administrator."
       );
@@ -136,8 +135,9 @@ this.client.on(Events.MessageCreate, async (message) => {
 
   const userId = message.author.id;
   if (!this.auth.isDiscordUserAllowed(userId)) {
-    getLogger().warn("Unauthorized Discord access", { userId });
-    await message.reply("You are not authorized.");
+    await message.reply(
+      "You are not authorized to use Strata Brain. Contact the administrator."
+    );
     return;
   }
 
@@ -150,14 +150,22 @@ this.client.on(Events.MessageCreate, async (message) => {
 ```typescript
 // src/security/auth.ts
 isDiscordUserAllowed(userId: string, userRoles?: string[]): boolean {
-  // Explicit user whitelist
+  // If no restrictions set, deny all (Discord requires explicit configuration)
+  if (this.allowedDiscordUserIds.size === 0 && this.allowedDiscordRoleIds.size === 0) {
+    return false;
+  }
+
+  // Check if user ID is explicitly allowed
   if (this.allowedDiscordUserIds.has(userId)) {
     return true;
   }
 
-  // Role-based access
-  if (userRoles?.some(role => this.allowedDiscordRoleIds.has(role))) {
-    return true;
+  // Check if user has an allowed role
+  if (userRoles && userRoles.length > 0) {
+    const hasAllowedRole = userRoles.some((role) => this.allowedDiscordRoleIds.has(role));
+    if (hasAllowedRole) {
+      return true;
+    }
   }
 
   return false;
@@ -200,7 +208,7 @@ this.client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    // GatewayIntentBits.GuildMembers, // Only if needed
+    GatewayIntentBits.DirectMessages,
   ],
 });
 ```
@@ -273,26 +281,25 @@ function verifySlackRequest(
 ### Security Controls
 
 ```typescript
-private async handleIncomingMessage(
-  message: SlackMessageEvent,
-  say: SayFn
-): Promise<void> {
-  const teamId = message.team || "";
+private async handleIncomingMessage(message: SlackMessageEvent, say: SayFn): Promise<void> {
+  if (message.subtype === "bot_message" || !message.text) return;
+
   const userId = message.user;
+  const teamId = message.team || "";
 
   // Workspace check
-  if (this.config.allowedWorkspaces?.length && 
+  if (this.config.allowedWorkspaces?.length &&
       !this.config.allowedWorkspaces.includes(teamId)) {
-    getLogger().warn("Unauthorized Slack workspace", { teamId, userId });
-    await say("❌ This workspace is not authorized.");
+    this.logger.warn("Unauthorized workspace", { teamId, userId });
+    await say("❌ This workspace is not authorized to use Strata Brain.");
     return;
   }
 
   // User check
-  if (this.config.allowedUserIds?.length && 
+  if (this.config.allowedUserIds?.length &&
       (!userId || !this.config.allowedUserIds.includes(userId))) {
-    getLogger().warn("Unauthorized Slack user", { userId, teamId });
-    await say("❌ You are not authorized.");
+    this.logger.warn("Unauthorized user", { userId, teamId });
+    await say("❌ You are not authorized to use Strata Brain.");
     return;
   }
 
@@ -379,38 +386,64 @@ ALLOWED_SLACK_USER_IDS=U1234567890
 
 ### Authentication Model
 
-WhatsApp Business API (via WhatsApp Business Platform):
+WhatsApp Web via Baileys library (`@whiskeysockets/baileys`):
 
-1. **Access Token**: API authentication
-2. **Phone Number ID**: Business phone identifier
-3. **Webhook Verification**: Verify webhook authenticity
+1. **QR Code Authentication**: On first run, scan the QR code from the terminal
+2. **Session Persistence**: Session is saved to disk for automatic reconnection
+3. **Allowed Numbers Whitelist**: Only explicitly allowed phone numbers can interact
+4. **Per-user Rate Limiting**: Shared `RateLimiter` instance enforces message rate limits
+
+### Security Controls
+
+```typescript
+// src/channels/whatsapp/client.ts
+// Auth check in message handler
+if (this.allowedNumbers.size > 0) {
+  const normalized = senderId.replace(/@.*$/, "");
+  if (!this.allowedNumbers.has(normalized)) {
+    logger.warn("WhatsApp: unauthorized number", { senderId });
+    void this.sendText(chatId, "Unauthorized. Contact the admin.");
+    continue;
+  }
+}
+
+// Rate limit check
+const rateResult = this.rateLimiter.checkMessageRate(senderId);
+if (!rateResult.allowed) {
+  logger.warn("WhatsApp: rate limited", { senderId, reason: rateResult.reason });
+  void this.sendText(
+    chatId,
+    `Rate limited. ${rateResult.reason ?? "Please wait before sending more messages."}`,
+  );
+  continue;
+}
+```
 
 ### Security Considerations
 
 | Aspect | Security Level | Notes |
 |--------|---------------|-------|
-| Transport | High | TLS 1.2+ required |
+| Transport | High | TLS via WhatsApp Web protocol |
 | E2E Encryption | Very High | WhatsApp E2E encryption |
-| API Security | High | Meta Business verification |
-| Message Access | Medium | Meta has access |
+| Authentication | Medium | QR code + session file |
+| Number Whitelist | High | Explicit allowed numbers |
+| Rate Limiting | High | Per-user rate limiting via shared RateLimiter |
 
 ### Configuration
 
 ```bash
-# WhatsApp Business API
-WHATSAPP_ACCESS_TOKEN=...
-WHATSAPP_PHONE_NUMBER_ID=...
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=...
-WHATSAPP_BUSINESS_ACCOUNT_ID=...
+# WhatsApp Web (Baileys)
+WHATSAPP_SESSION_PATH=.whatsapp-session  # Session storage directory (default: .whatsapp-session)
+WHATSAPP_ALLOWED_NUMBERS=1234567890,0987654321  # Comma-separated phone numbers
 ```
 
 ### Best Practices
 
-1. **Verify Business Account**: Complete Meta verification
-2. **Use Official API**: Don't use unofficial libraries
-3. **Secure Webhooks**: Validate verify tokens
-4. **Rate Limit**: Respect WhatsApp rate limits
-5. **Opt-in Required**: Users must opt-in to messages
+1. **Restrict Allowed Numbers**: Set `WHATSAPP_ALLOWED_NUMBERS` to limit access
+2. **Secure Session Files**: Protect the session directory (`WHATSAPP_SESSION_PATH`) with filesystem permissions
+3. **Monitor Reconnections**: WhatsApp uses exponential backoff reconnection (max 10 attempts)
+4. **Rate Limit**: Per-user rate limiting is enforced (default: 20 messages/minute, 200/hour)
+5. **Session Timeouts**: Inactive sessions auto-expire after 30 minutes
 
 ## Common Security Features
 
@@ -422,18 +455,26 @@ All channels implement rate limiting:
 // src/security/rate-limiter.ts
 export class RateLimiter {
   checkMessageRate(userId: string): RateLimitResult {
-    // Per-user rate limiting
-    const bucket = this.getBucket(userId);
-    
-    if (bucket.count > this.maxPerMinute) {
+    const now = Date.now();
+    const bucket = this.getOrCreateBucket(userId);
+
+    // Prune expired timestamps
+    bucket.minuteTimestamps = bucket.minuteTimestamps.filter((t) => t > now - 60_000);
+    bucket.hourTimestamps = bucket.hourTimestamps.filter((t) => t > now - 3_600_000);
+
+    // Check per-minute limit
+    if (this.config.messagesPerMinute > 0 &&
+        bucket.minuteTimestamps.length >= this.config.messagesPerMinute) {
       return {
         allowed: false,
-        reason: "Rate limit exceeded",
-        retryAfterMs: bucket.resetTime - Date.now(),
+        reason: `Rate limit: max ${this.config.messagesPerMinute} messages/minute`,
+        retryAfterMs: Math.max(bucket.minuteTimestamps[0]! + 60_000 - now, 1000),
       };
     }
 
-    bucket.count++;
+    // Also checks: per-hour, daily token quota, daily/monthly budget
+    bucket.minuteTimestamps.push(now);
+    bucket.hourTimestamps.push(now);
     return { allowed: true };
   }
 }
@@ -453,15 +494,14 @@ function truncateMessage(text: string, maxLength: number): string {
 ### Confirmation Timeouts
 
 ```typescript
-const CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+// Slack: 5-minute timeout for confirmations
+private readonly CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-// Auto-expire pending confirmations
-setTimeout(() => {
-  if (pendingConfirmations.has(id)) {
-    pendingConfirmations.delete(id);
-    reject(new Error("Confirmation timeout"));
-  }
-}, CONFIRMATION_TIMEOUT_MS);
+// Telegram/Discord: 2-minute timeout for confirmations
+const timeout = setTimeout(() => {
+  this.pendingConfirmations.delete(confirmId);
+  resolve("timeout");
+}, 120_000); // 2 minutes
 ```
 
 ### Secret Sanitization
@@ -495,19 +535,25 @@ Choose the right channel for your security requirements:
 When using multiple channels:
 
 ```typescript
-// Enable only needed channels
-const channels: IChannelAdapter[] = [];
-
-if (process.env["TELEGRAM_BOT_TOKEN"]) {
-  channels.push(createTelegramChannel());
+// src/core/bootstrap.ts selects a single channel via channelType
+// Each channel type is initialized with its own auth checks
+async function initializeChannel(
+  channelType: string,
+  config: Config,
+  auth: AuthManager,
+  logger: winston.Logger,
+): Promise<IChannelAdapter> {
+  switch (channelType) {
+    case "telegram":
+      return new TelegramChannel(config.telegram.botToken!, auth);
+    case "discord":
+      return new DiscordChannel(config.discord.botToken!, auth, { ... });
+    case "whatsapp":
+      return new WhatsAppChannel(sessionPath, allowedNumbers);
+    case "cli":
+      return new CLIChannel();
+  }
 }
-
-if (process.env["SLACK_BOT_TOKEN"]) {
-  channels.push(createSlackChannel());
-}
-
-// Each channel has its own auth
-const auth = createAuthManagerFromEnv();
 ```
 
 ### 3. Monitoring
@@ -543,4 +589,4 @@ const config = {
 
 ---
 
-Last updated: 2026-03-02
+Last updated: 2026-03-03

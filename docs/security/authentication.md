@@ -15,7 +15,7 @@ This document describes the authentication mechanisms, token management, and ses
 
 ## Overview
 
-Strata Brain implements a multi-channel authentication system that supports Telegram, Discord, and Slack. Each channel has its own authentication mechanism while sharing a common authorization framework.
+Strata Brain implements a multi-channel authentication system that supports Telegram, Discord, Slack, and WhatsApp. Each channel has its own authentication mechanism while sharing a common authorization framework.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -71,7 +71,9 @@ private setupMiddleware(): void {
     if (!userId) return;
 
     if (!this.auth.isTelegramUserAllowed(userId)) {
-      await ctx.reply("You are not authorized to use Strata Brain.");
+      await ctx.reply(
+        "You are not authorized to use Strata Brain. Contact the administrator."
+      );
       return;
     }
 
@@ -142,18 +144,20 @@ private async handleIncomingMessage(
   message: SlackMessageEvent,
   say: SayFn
 ): Promise<void> {
-  const teamId = message.team || "";
+  if (message.subtype === "bot_message" || !message.text) return;
+
   const userId = message.user;
+  const teamId = message.team || "";
 
   // Check workspace
-  if (this.config.allowedWorkspaces?.length && 
+  if (this.config.allowedWorkspaces?.length &&
       !this.config.allowedWorkspaces.includes(teamId)) {
-    await say("❌ This workspace is not authorized.");
+    await say("❌ This workspace is not authorized to use Strata Brain.");
     return;
   }
 
   // Check user
-  if (this.config.allowedUserIds?.length && 
+  if (this.config.allowedUserIds?.length &&
       (!userId || !this.config.allowedUserIds.includes(userId))) {
     await say("❌ You are not authorized to use Strata Brain.");
     return;
@@ -266,11 +270,15 @@ Each incoming message includes authentication context:
 
 ```typescript
 // src/channels/channel-messages.interface.ts
+type ChannelType = "telegram" | "whatsapp" | "cli" | "web" | "discord" | "slack";
+
 interface IncomingMessage {
-  channelType: "telegram" | "discord" | "slack" | "whatsapp";
+  channelType: ChannelType;
   chatId: string;
   userId: string;
   text: string;
+  attachments?: Attachment[];
+  replyTo?: string;
   timestamp: Date;
   // No session ID - stateless
 }
@@ -319,17 +327,19 @@ export class TelegramChannel implements IChannelAdapter {
     this.bot = new Bot(token);
     this.auth = auth;
     this.setupMiddleware();
+    this.setupHandlers();
   }
 
   private setupMiddleware(): void {
-    // Auth middleware - first line of defense
+    // Auth middleware - block unauthorized users
     this.bot.use(async (ctx, next) => {
       const userId = ctx.from?.id;
       if (!userId) return;
 
       if (!this.auth.isTelegramUserAllowed(userId)) {
-        getLogger().warn("Unauthorized Telegram access", { userId });
-        await ctx.reply("You are not authorized.");
+        await ctx.reply(
+          "You are not authorized to use Strata Brain. Contact the administrator."
+        );
         return;
       }
 
@@ -356,21 +366,26 @@ private setupEventHandlers(): void {
     // Authorization check
     const userId = message.author.id;
     if (!this.auth.isDiscordUserAllowed(userId)) {
-      await message.reply("You are not authorized.");
+      await message.reply(
+        "You are not authorized to use Strata Brain. Contact the administrator."
+      );
       return;
     }
 
     // Process message...
   });
 
+  // Button interactions (confirmations, etc.)
   this.client.on(Events.InteractionCreate, async (interaction) => {
-    // Check authorization for interactions
-    if (!this.auth.isDiscordUserAllowed(interaction.user.id)) {
-      await interaction.reply({
-        content: "Unauthorized",
-        ephemeral: true
-      });
-      return;
+    if (interaction.isButton()) {
+      if (!this.auth.isDiscordUserAllowed(interaction.user.id)) {
+        await interaction.reply({
+          content: "Unauthorized",
+          ephemeral: true
+        });
+        return;
+      }
+      // Handle button interaction...
     }
   });
 }
@@ -388,13 +403,16 @@ private registerEventHandlers(): void {
   this.app.action(/confirm_.*/, async ({ ack, body, action }) => {
     await ack();
 
-    // Auth check on actions
-    const userId = body.user?.id;
-    if (!userId || !this.auth.isSlackUserAllowed(userId)) {
-      return;
-    }
+    // Resolve pending confirmation
+    const actionId = (action as { action_id: string }).action_id;
+    const value = (action as { value: string }).value;
+    const prefix = actionId.replace(/_(approve|deny)$/, "");
+    const pending = this.pendingConfirmations.get(prefix);
 
-    // Process action...
+    if (pending) {
+      this.pendingConfirmations.delete(prefix);
+      pending.resolve(value === "approve" ? "approve" : "deny");
+    }
   });
 }
 ```

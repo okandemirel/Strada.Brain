@@ -170,7 +170,7 @@ case $INCIDENT_TYPE in
     echo "READ_ONLY_MODE=true" >> .env
     
     # Restart service
-    docker-compose restart
+    docker compose restart
     ;;
     
   "unauthorized_access")
@@ -181,18 +181,18 @@ case $INCIDENT_TYPE in
     echo "EMERGENCY_LOCKDOWN=true" >> .env
     
     # Restart service
-    docker-compose restart
+    docker compose restart
     ;;
     
   "data_exfiltration")
     # Isolate instance
-    docker-compose stop
+    docker compose stop
     
     # Create forensic snapshot
     tar -czf "forensics_$(date +%s).tar.gz" logs/ .strata-memory/
     
     # Disable network
-    docker network disconnect bridge strata-brain
+    docker network disconnect strata-network strata-brain
     ;;
 esac
 ```
@@ -272,7 +272,7 @@ export READ_ONLY_MODE=true
 
 # 3. Audit recent activity
 # Check last 24 hours of logs
-grep "$(date -d '24 hours ago' '+%Y-%m-%d')" logs/strata-brain.log
+grep "$(date -d '24 hours ago' '+%Y-%m-%d')" logs/strata-brain.log  # or configured via LOG_FILE env var
 
 # 4. Generate new tokens
 # Follow token rotation procedure
@@ -338,7 +338,7 @@ tar -czf evidence_$(date +%s).tar.gz \
 
 # 3. Analyze access patterns
 # Check what files were accessed
-grep "file_read" logs/strata-brain.log | \
+grep "file_read" logs/strata-brain.log  # or configured via LOG_FILE env var | \
   awk '{print $NF}' | sort | uniq -c | sort -rn
 ```
 
@@ -361,10 +361,10 @@ tar -xzf backups/memory_20260301_120000.tar.gz
 
 # 4. Apply security patches
 npm audit fix
-docker pull node:20-alpine
+docker pull node:22-alpine
 
 # 5. Restart with monitoring
-docker-compose up -d
+docker compose up -d
 ./scripts/enable-enhanced-monitoring.sh
 
 # 6. Verify integrity
@@ -525,4 +525,4 @@ Incident Commander: {name}
 
 ---
 
-Last updated: 2026-03-02
+Last updated: 2026-03-03

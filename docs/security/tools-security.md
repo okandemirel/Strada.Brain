@@ -65,7 +65,7 @@ async execute(input: Record<string, unknown>, context: ToolContext) {
   const relPath = String(input["path"] ?? "");
   
   // Validate path before any operation
-  const pathCheck = await validatePath(context.projectRoot, relPath);
+  const pathCheck = await validatePath(context.projectPath, relPath);
   if (!pathCheck.valid) {
     return { content: `Error: ${pathCheck.error}`, isError: true };
   }
@@ -111,24 +111,42 @@ async execute(input: Record<string, unknown>, context: ToolContext) {
 // src/security/path-guard.ts
 const BLOCKED_PATTERNS: RegExp[] = [
   // Environment files
-  /\\.env$/i,
-  /\\.env\\.[a-z]+$/i,
-  
+  /\.env$/i,
+  /\.env\.[a-z]+$/i,
+
   // Git credentials
-  /\\.git[/\\\\]config$/i,
-  /\\.git[/\\\\]credentials$/i,
-  
+  /\.git[/\\]config$/i,
+  /\.git[/\\]credentials$/i,
+
+  // Credential files
+  /credentials\.json$/i,
+  /secrets?\.json$/i,
+  /secrets?\.ya?ml$/i,
+
   // SSH keys
-  /\\.ssh[/\\\\]/i,
-  /\\.pem$/i,
-  /\\.key$/i,
+  /\.ssh[/\\]/i,
+  /\.pem$/i,
+  /\.key$/i,
   /id_rsa/i,
   /id_ed25519/i,
-  
+
   // Keystores
-  /\\.pfx$/i,
-  /\\.p12$/i,
-  /\\.keystore$/i,
+  /\.pfx$/i,
+  /\.p12$/i,
+  /\.keystore$/i,
+  /\.jks$/i,
+  /keystore\.properties$/i,
+
+  // Mobile credentials
+  /google-services\.json$/i,
+  /GoogleService-Info\.plist$/i,
+
+  // Config files with potential tokens
+  /\.npmrc$/i,
+  /\.netrc$/i,
+
+  // Dependencies
+  /node_modules[/\\]/i,
 ];
 ```
 
@@ -220,12 +238,12 @@ const BLOCKED_COMMANDS = [
 
 ```typescript
 const DANGEROUS_PIPE_PATTERNS = [
-  /\\|\\s*sh\\b/,        // Pipe to sh
-  /\\|\\s*bash\\b/,      // Pipe to bash
-  /\\|\\s*zsh\\b/,       // Pipe to zsh
-  /\\|\\s*rm\\b/,        // Pipe to rm
-  />\\s*\\/dev\\/sd/,    // Write to block device
-  />\\s*\\/dev\\/nvme/,  // Write to NVMe
+  /\|\s*sh\b/,        // Pipe to sh
+  /\|\s*bash\b/,      // Pipe to bash
+  /\|\s*zsh\b/,       // Pipe to zsh
+  /\|\s*rm\b/,        // Pipe to rm
+  />\s*\/dev\/sd/,    // Write to block device
+  />\s*\/dev\/nvme/,  // Write to NVMe
 ];
 ```
 
@@ -509,31 +527,30 @@ Tools are registered in a central registry with their security metadata:
 // src/core/tool-registry.ts
 interface ToolMetadata {
   name: string;
-  category: "read" | "write" | "dangerous";
+  description: string;
+  category: ToolCategory; // "file" | "code" | "search" | "strata" | "shell" | "git" | "dotnet" | "memory" | "browser"
+  dangerous: boolean;
   requiresConfirmation: boolean;
-  readOnlyCompatible: boolean;
+  readOnly: boolean;
+  dependencies?: string[];
 }
 
-const toolRegistry = new Map<string, ToolMetadata>([
-  ["file_read", { category: "read", requiresConfirmation: false, readOnlyCompatible: true }],
-  ["file_write", { category: "write", requiresConfirmation: true, readOnlyCompatible: false }],
-  ["shell_exec", { category: "dangerous", requiresConfirmation: true, readOnlyCompatible: false }],
-]);
+// Example registrations
+// { name: "file_read",  category: "file",  dangerous: false, requiresConfirmation: false, readOnly: true }
+// { name: "file_write", category: "file",  dangerous: false, requiresConfirmation: true,  readOnly: false }
+// { name: "shell_exec", category: "shell", dangerous: true,  requiresConfirmation: true,  readOnly: false }
 ```
 
 ### Tool Filtering
 
 ```typescript
-// Filter tools based on mode
-function getAvailableTools(readOnlyMode: boolean): ITool[] {
-  if (!readOnlyMode) {
-    return allTools;
-  }
-  
-  return allTools.filter(tool => {
-    const metadata = toolRegistry.get(tool.name);
-    return metadata?.readOnlyCompatible ?? false;
-  });
+// src/security/read-only-guard.ts
+// Filter tools based on read-only mode
+function filterToolsForReadOnly<T extends { name: string }>(
+  tools: T[],
+  readOnlyMode: boolean,
+): T[] {
+  return readOnlyMode ? tools.filter((t) => !WRITE_TOOLS.has(t.name)) : tools;
 }
 ```
 
@@ -589,7 +606,7 @@ return {
     "Reason: Attempted to use 'rm -rf /'",
     "",
     "💡 Use 'file_delete' for safe file removal",
-  ].join("\\n"),
+  ].join("\n"),
   isError: true,
 };
 ```

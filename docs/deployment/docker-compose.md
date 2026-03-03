@@ -380,13 +380,14 @@ deploy:
 ### Redis Tuning
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yml (defaults shown, adjust for high traffic)
 redis:
   command: >
     redis-server
-    --maxmemory 512mb
+    --maxmemory 256mb
     --maxmemory-policy allkeys-lru
-    --tcp-keepalive 300
+    --appendonly yes
+    --appendfsync everysec
 ```
 
 ## Uninstall
@@ -396,7 +397,7 @@ redis:
 docker compose down -v --rmi all
 
 # Remove volumes
-docker volume rm strata-memory strata-logs redis-data
+docker volume rm strata-memory strata-logs redis-data nginx-cache letsencrypt-data prometheus-data grafana-data
 
 # Clean up
 rm -rf logs/ backups/ .strata-memory/

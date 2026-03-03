@@ -91,7 +91,7 @@ For development and simple deployments:
 ```bash
 # .env file - Restrict permissions immediately
 chmod 600 .env
-chown strata-brain:strata-brain .env
+chown strata:strata .env
 
 # Contents
 # Telegram
@@ -155,7 +155,7 @@ docker secret ls
 ### HashiCorp Vault Integration
 
 ```typescript
-// src/config/vault.ts
+// Example: Vault integration (not included by default)
 import { client } from "@hashicorp/vault-client";
 
 export async function loadSecretsFromVault(): Promise<void> {
@@ -176,7 +176,7 @@ export async function loadSecretsFromVault(): Promise<void> {
 ### AWS Secrets Manager
 
 ```typescript
-// src/config/aws-secrets.ts
+// Example: AWS Secrets Manager integration (not included by default)
 import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 
 const client = new SecretsManagerClient({ region: "us-east-1" });
@@ -306,43 +306,43 @@ SLACK_SOCKET_MODE=false
 ### Dockerfile Best Practices
 
 ```dockerfile
-# Use minimal base image
-FROM node:20-alpine
+# Multi-stage build
+# Stage 1: Builder
+FROM node:22.12-alpine AS builder
+WORKDIR /app
+COPY package*.json tsconfig.json ./
+RUN npm ci --include=dev && npm cache clean --force
+COPY src/ ./src/
+RUN npm run build
+RUN npm prune --production && npm cache clean --force
+
+# Stage 2: Production
+FROM node:22.12-alpine AS production
+RUN apk add --no-cache dumb-init wget ca-certificates
 
 # Create non-root user
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S strata-brain -u 1001
+RUN addgroup -g 1000 -S strata && \
+    adduser -u 1000 -S strata -G strata
 
-# Set working directory
 WORKDIR /app
+RUN mkdir -p /app/.strata-memory /app/logs /app/plugins /app/project && \
+    chown -R strata:strata /app
 
-# Copy package files
-COPY package*.json ./
+COPY --from=builder --chown=strata:strata /app/node_modules ./node_modules
+COPY --from=builder --chown=strata:strata /app/dist ./dist
+COPY --from=builder --chown=strata:strata /app/package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+USER strata
 
-# Copy application code
-COPY --chown=strata-brain:nodejs . .
-
-# Build application
-RUN npm run build
-
-# Remove dev dependencies
-RUN npm prune --production
-
-# Switch to non-root user
-USER strata-brain
-
-# Expose port
-EXPOSE 3000
+# Expose ports: 3100 (Dashboard), 9090 (Prometheus metrics)
+EXPOSE 3100 9090
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node healthcheck.js
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD wget -q --spider http://localhost:3100/health || exit 1
 
-# Run application
-CMD ["node", "dist/index.js"]
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "dist/index.js", "start", "--channel", "telegram"]
 ```
 
 ### Docker Security Options
@@ -352,31 +352,44 @@ CMD ["node", "dist/index.js"]
 version: '3.8'
 services:
   strata-brain:
-    image: strata-brain:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: strata-brain
     read_only: true  # Read-only root filesystem
-    user: "1001:1001"  # Non-root user
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     cap_add:
-      - NET_BIND_SERVICE  # Only if binding to low ports
+      - CHOWN
+      - SETGID
+      - SETUID
     tmpfs:
       - /tmp:noexec,nosuid,size=100m
     volumes:
-      - ./data:/app/data:rw
-      - ./logs:/app/logs:rw
+      - type: bind
+        source: ${UNITY_PROJECT_PATH:-./project}
+        target: /app/project
+        read_only: true
+      - type: volume
+        source: strata-memory
+        target: /app/.strata-memory
+      - type: volume
+        source: strata-logs
+        target: /app/logs
     environment:
       - NODE_ENV=production
-    restart: unless-stopped
     deploy:
       resources:
         limits:
-          cpus: '2'
-          memory: 2G
+          cpus: '${CPU_LIMIT:-2}'
+          memory: ${MEMORY_LIMIT:-2G}
         reservations:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '${CPU_RESERVATION:-0.5}'
+          memory: ${MEMORY_RESERVATION:-512M}
+      restart_policy:
+        condition: unless-stopped
 ```
 
 ### Kubernetes Security
@@ -399,8 +412,8 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1001
-        fsGroup: 1001
+        runAsUser: 1000
+        fsGroup: 1000
       containers:
         - name: strata-brain
           image: strata-brain:latest
@@ -470,7 +483,7 @@ ClientAliveInterval 300
 ClientAliveCountMax 2
 Protocol 2
 X11Forwarding no
-AllowUsers strata-brain
+AllowUsers strata
 ```
 
 ### Automatic Updates
@@ -494,33 +507,35 @@ sudo dpkg-reconfigure -plow unattended-upgrades
 // src/utils/logger.ts
 import winston from "winston";
 
-export const logger = winston.createLogger({
-  level: process.env["LOG_LEVEL"] || "info",
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.File({ 
-      filename: "logs/error.log", 
-      level: "error" 
-    }),
-    new winston.transports.File({ 
-      filename: "logs/combined.log" 
-    }),
-    new winston.transports.Console({
-      format: winston.format.simple(),
-    }),
-  ],
-});
-
-// Sanitize logs
-logger.addTransform((info) => {
-  if (info.message) {
-    info.message = sanitizeSecrets(info.message);
-  }
-  return info;
-});
+export function createLogger(level: string, logFile: string): winston.Logger {
+  return winston.createLogger({
+    level,
+    format: winston.format.combine(
+      winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
+      winston.format.errors({ stack: true }),
+      winston.format.json()
+    ),
+    defaultMeta: { service: "strata-brain" },
+    transports: [
+      new winston.transports.Console({
+        format: winston.format.combine(
+          winston.format.colorize(),
+          winston.format.printf(({ timestamp, level, message, ...meta }) => {
+            const metaStr = Object.keys(meta).length > 1
+              ? ` ${JSON.stringify(meta, null, 0)}`
+              : "";
+            return `${String(timestamp)} [${level}] ${String(message)}${metaStr}`;
+          })
+        ),
+      }),
+      new winston.transports.File({
+        filename: logFile,
+        maxsize: 10 * 1024 * 1024, // 10MB
+        maxFiles: 3,
+      }),
+    ],
+  });
+}
 ```
 
 ### Security Monitoring
@@ -548,24 +563,30 @@ if (!auth.isUserAllowed(userId)) {
 
 ```typescript
 // src/dashboard/prometheus.ts
-import prometheus from "prom-client";
+import { Registry, Counter, Gauge, Histogram, collectDefaultMetrics } from "prom-client";
 
-// Security metrics
-const unauthorizedAttempts = new prometheus.Counter({
-  name: "strata_brain_unauthorized_attempts_total",
-  help: "Total unauthorized access attempts",
-  labelNames: ["channel"],
+// PrometheusMetrics class - custom metrics
+const messagesTotal = new Counter({
+  name: "strata_messages_total",
+  help: "Total number of messages processed",
+  labelNames: ["status"],
 });
 
-const blockedCommands = new prometheus.Counter({
-  name: "strata_brain_blocked_commands_total",
-  help: "Total blocked dangerous commands",
+const toolCallsTotal = new Counter({
+  name: "strata_tool_calls_total",
+  help: "Total number of tool calls",
+  labelNames: ["tool", "status"],
 });
 
-const rateLimitHits = new prometheus.Counter({
-  name: "strata_brain_rate_limit_hits_total",
-  help: "Total rate limit hits",
-  labelNames: ["user_id"],
+const tokensTotal = new Counter({
+  name: "strata_tokens_total",
+  help: "Total number of tokens used",
+  labelNames: ["type"],
+});
+
+const activeSessions = new Gauge({
+  name: "strata_active_sessions",
+  help: "Number of active sessions",
 });
 ```
 
@@ -610,7 +631,7 @@ if [ -z "$BACKUP_FILE" ]; then
 fi
 
 # Stop service
-docker-compose down
+docker compose down
 
 # Restore memory database
 tar -xzf "$BACKUP_FILE" -C /
@@ -619,7 +640,7 @@ tar -xzf "$BACKUP_FILE" -C /
 cp .env.backup .env
 
 # Start service
-docker-compose up -d
+docker compose up -d
 
 # Verify health
 curl -f http://localhost:3000/health || exit 1
@@ -627,4 +648,4 @@ curl -f http://localhost:3000/health || exit 1
 
 ---
 
-Last updated: 2026-03-02
+Last updated: 2026-03-03

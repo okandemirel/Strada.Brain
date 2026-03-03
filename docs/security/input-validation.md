@@ -149,41 +149,42 @@ export async function validatePath(
 // src/security/path-guard.ts
 const BLOCKED_PATTERNS: RegExp[] = [
   // Environment files
-  /\\.env$/i,
-  /\\.env\\.[a-z]+$/i,
-  
+  /\.env$/i,
+  /\.env\.[a-z]+$/i,
+
   // Git credentials
-  /\\.git[/\\\\]config$/i,
-  /\\.git[/\\\\]credentials$/i,
-  
+  /\.git[/\\]config$/i,
+  /\.git[/\\]credentials$/i,
+
   // Credential files
-  /credentials\\.json$/i,
-  /secrets?\\.json$/i,
-  /secrets?\\.ya?ml$/i,
-  
+  /credentials\.json$/i,
+  /secrets?\.json$/i,
+  /secrets?\.ya?ml$/i,
+
   // SSH keys
-  /\\.ssh[/\\\\]/i,
-  /\\.pem$/i,
-  /\\.key$/i,
+  /\.ssh[/\\]/i,
+  /\.pem$/i,
+  /\.key$/i,
   /id_rsa/i,
   /id_ed25519/i,
-  
+
   // Keystores
-  /\\.pfx$/i,
-  /\\.p12$/i,
-  /\\.keystore$/i,
-  /\\.jks$/i,
-  
+  /\.pfx$/i,
+  /\.p12$/i,
+  /\.keystore$/i,
+  /\.jks$/i,
+  /keystore\.properties$/i,
+
   // Mobile credentials
-  /google-services\\.json$/i,
-  /GoogleService-Info\\.plist$/i,
-  
+  /google-services\.json$/i,
+  /GoogleService-Info\.plist$/i,
+
   // npm config (may contain auth tokens)
-  /\\.npmrc$/i,
-  /\\.netrc$/i,
-  
+  /\.npmrc$/i,
+  /\.netrc$/i,
+
   // Dependencies
-  /node_modules[/\\\\]/i,
+  /node_modules[/\\]/i,
 ];
 ```
 
@@ -235,6 +236,8 @@ const BLOCKED_COMMANDS = [
   "reboot",
   "halt",
   "poweroff",
+  "init 0",
+  "init 6",
   "chmod -R 777 /",
   "chown -R",
   "wget|sh",        // Pipe to shell
@@ -244,12 +247,12 @@ const BLOCKED_COMMANDS = [
 ] as const;
 
 const DANGEROUS_PIPE_PATTERNS = [
-  /\\|\\s*sh\\b/,        // | sh
-  /\\|\\s*bash\\b/,      // | bash
-  /\\|\\s*zsh\\b/,       // | zsh
-  /\\|\\s*rm\\b/,        // | rm
-  />\\s*\\/dev\\/sd/,    // > /dev/sd
-  />\\s*\\/dev\\/nvme/,  // > /dev/nvme
+  /\|\s*sh\b/,        // | sh
+  /\|\s*bash\b/,      // | bash
+  /\|\s*zsh\b/,       // | zsh
+  /\|\s*rm\b/,        // | rm
+  />\s*\/dev\/sd/,    // > /dev/sd
+  />\s*\/dev\/nvme/,  // > /dev/nvme
 ];
 ```
 
@@ -297,14 +300,14 @@ function checkCommandSafety(command: string): { safe: boolean; reason?: string }
   // Check blocked commands
   for (const blocked of BLOCKED_COMMANDS) {
     if (lower.includes(blocked.toLowerCase())) {
-      return { safe: false, reason: `blocked command: ${blocked}` };
+      return { safe: false, reason: `blocked command pattern: ${blocked}` };
     }
   }
 
   // Check pipe patterns
   for (const pattern of DANGEROUS_PIPE_PATTERNS) {
     if (pattern.test(command)) {
-      return { safe: false, reason: "dangerous pipe pattern" };
+      return { safe: false, reason: "dangerous pipe pattern detected" };
     }
   }
 
@@ -327,20 +330,20 @@ export function isValidCSharpIdentifier(
   if (!name || name.length > 256) return false;
 
   const pattern = allowDots
-    ? /^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$/
+    ? /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/
     : /^[A-Za-z_][A-Za-z0-9_]*$/;
 
   return pattern.test(name);
 }
 
 export function isValidCSharpType(typeName: string): boolean {
-  if (!name || name.length > 256) return false;
+  if (!typeName || typeName.length > 256) return false;
 
   // Block characters that could inject code
   if (/[;{}()=]/.test(typeName)) return false;
-  if (/[\\n\\r]/.test(typeName)) return false;
+  if (/[\n\r]/.test(typeName)) return false;
 
-  return /^[A-Za-z_][A-Za-z0-9_<>, \\[\\].?]*$/.test(typeName);
+  return /^[A-Za-z_][A-Za-z0-9_<>, \[\].?]*$/.test(typeName);
 }
 ```
 
@@ -393,7 +396,7 @@ export interface SecretPattern {
 ```typescript
 export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
   // API Keys
-  { name: "openai_api_key", pattern: /sk-[a-zA-Z0-9]{20,}/g, 
+  { name: "openai_api_key", pattern: /sk-[a-zA-Z0-9]{20,}/g,
     redaction: "[REDACTED_OPENAI_KEY]" },
   { name: "github_token", pattern: /gh[pousr]_[a-zA-Z0-9]{20,}/g,
     redaction: "[REDACTED_GITHUB_TOKEN]" },
@@ -401,27 +404,27 @@ export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
     redaction: "[REDACTED_SLACK_TOKEN]" },
   { name: "aws_access_key", pattern: /AKIA[0-9A-Z]{16}/g,
     redaction: "[REDACTED_AWS_KEY]" },
-  { name: "discord_token", pattern: /[MN][A-Za-z\\d]{20,}\\.[\\w-]{6,}\\.[\\w-]{20,}/g,
+  { name: "discord_token", pattern: /[MN][A-Za-z\d]{20,}\.[\w-]{6,}\.[\w-]{20,}/g,
     redaction: "[REDACTED_DISCORD_TOKEN]" },
-  
+
   // Auth tokens
-  { name: "jwt_token", pattern: /eyJ[a-zA-Z0-9_-]*\\.eyJ[a-zA-Z0-9_-]*\\.[a-zA-Z0-9_-]*/g,
+  { name: "jwt_token", pattern: /eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*/g,
     redaction: "[REDACTED_JWT]" },
-  { name: "bearer_token", pattern: /Bearer\\s+[a-zA-Z0-9_\\-\\.]{20,}/gi,
+  { name: "bearer_token", pattern: /Bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi,
     redaction: "Bearer [REDACTED]" },
-  
+
   // Private keys
-  { name: "private_key", 
-    pattern: /-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----[\\s\\S]*?-----END (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----/g,
+  { name: "private_key",
+    pattern: /-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----/g,
     redaction: "[REDACTED_PRIVATE_KEY]" },
-  
+
   // Database URLs
   { name: "database_url",
-    pattern: /(?:postgres|mysql|mongodb|redis):\\/\\/[^:]+:[^@]+@[^/\\s]+/gi,
+    pattern: /(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@[^/\s]+/gi,
     redaction: (match: string) => {
-      const urlMatch = match.match(/^(\\w+:\\/\\/)[^:]+:[^@]+(@.+)$/);
-      return urlMatch 
-        ? `${urlMatch[1]}[REDACTED_CREDENTIALS]${urlMatch[2]}` 
+      const urlMatch = match.match(/^(\w+:\/\/)[^:]+:[^@]+(@.+)$/);
+      return urlMatch
+        ? `${urlMatch[1]}[REDACTED_CREDENTIALS]${urlMatch[2]}`
         : "[REDACTED_DATABASE_URL]";
     }
   },
@@ -431,7 +434,7 @@ export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
 ### Usage Example
 
 ```typescript
-import { SecretSanitizer } from "./security/secret-sanitizer.js";
+import { SecretSanitizer, sanitizeSecrets } from "./security/secret-sanitizer.js";
 
 const sanitizer = new SecretSanitizer();
 
@@ -441,11 +444,15 @@ OPENAI_API_KEY=sk-abc123def456ghi789
 DATABASE_URL=postgres://user:password@localhost/db
 `;
 
-const safeOutput = sanitizer.sanitize(unsafeOutput);
-// Result:
+// Class method returns SanitizeResult { content, wasSanitized, stats }
+const result = sanitizer.sanitize(unsafeOutput);
+console.log(result.content);
 // Here is your config:
 // OPENAI_API_KEY=[REDACTED_OPENAI_KEY]
 // DATABASE_URL=postgres://[REDACTED_CREDENTIALS]@localhost/db
+
+// Convenience function returns string directly
+const safeOutput = sanitizeSecrets(unsafeOutput);
 ```
 
 ### Output Truncation
@@ -454,7 +461,7 @@ Prevent log injection and excessive output:
 
 ```typescript
 const MAX_OUTPUT_LENGTH = 8192;
-const TRUNCATION_MARKER = "\\n... (truncated)";
+const TRUNCATION_MARKER = "\n... (truncated)";
 
 if (result.length > MAX_OUTPUT_LENGTH) {
   result = result.substring(0, MAX_OUTPUT_LENGTH) + TRUNCATION_MARKER;
@@ -475,7 +482,7 @@ const FileWriteSchema = z.object({
   path: z.string()
     .min(1, "Path is required")
     .max(1024, "Path too long")
-    .regex(/^[\\w\\-\\/.]+$/, "Invalid path characters"),
+    .regex(/^[\w\-\/.]+$/, "Invalid path characters"),
   content: z.string()
     .max(256 * 1024, "Content exceeds 256KB"),
 });
@@ -497,7 +504,7 @@ if (!result.success) {
 const SafeString = z.string()
   .min(1)
   .max(1000)
-  .regex(/^[\\w\\s\\-_.]+$/)  // Whitelist characters
+  .regex(/^[\w\s\-_.]+$/)  // Whitelist characters
   .transform(s => s.trim());   // Normalize
 
 // Number validation

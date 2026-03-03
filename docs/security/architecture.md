@@ -418,15 +418,20 @@ function sanitizeSecrets(content: string): string
 // src/security/rate-limiter.ts
 class RateLimiter {
   checkMessageRate(userId: string): RateLimitResult
-  recordTokenUsage(input: number, output: number, provider: string)
+  recordTokenUsage(inputTokens: number, outputTokens: number, provider: string)
   getSnapshot(): QuotaSnapshot
 }
 
 // src/security/browser-security.ts
 class BrowserSessionManager {
   acquireSession(sessionId: string): boolean
-  validateUrl(url: string): ValidationResult
+  releaseSession(sessionId: string): void
 }
+
+function validateUrlWithConfig(
+  url: string,
+  config?: Partial<BrowserSecurityConfig>
+): UrlValidationResult
 ```
 
 **Responsibilities:**
