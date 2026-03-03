@@ -1,0 +1,80 @@
+# src/core/
+
+Application bootstrap, dependency injection, and tool registration. These three files wire every subsystem together at startup.
+
+## Bootstrap (`bootstrap.ts`)
+
+The main entry point that replaces a monolithic `startBrain()`. The exported `bootstrap()` function accepts `BootstrapOptions` (channel type, config, optional DI container) and returns a `BootstrapResult` with the orchestrator, channel, container, and a `shutdown()` handler.
+
+Initialization sequence (order matters):
+
+1. Logger (via `createLogger`)
+2. `AuthManager` — per-channel allow-lists (Telegram user IDs, Discord user/role IDs, WhatsApp numbers)
+3. AI provider — single `ClaudeProvider` or a multi-provider chain built from `config.providerChain` (comma-separated names mapped to API keys)
+4. `FileMemoryManager` — optional, gated on `config.memory.enabled`
+5. `RAGPipeline` — optional, gated on `config.rag.enabled`; selects `OllamaEmbeddingProvider` or `OpenAIEmbeddingProvider`, wraps it in `CachedEmbeddingProvider`, configures HNSW params from env vars, triggers background `indexProject()`
+6. Learning system — `LearningStorage` + `LearningPipeline` + `ErrorRecoveryEngine` + `TaskPlanner`; falls back to bare `TaskPlanner`/`ErrorRecoveryEngine` on failure
+7. `ToolRegistry.initialize()` — receives `memoryManager` and `ragPipeline` as optional deps
+8. Channel adapter — `CLIChannel`, `TelegramChannel`, `DiscordChannel`, or `WhatsAppChannel` based on `channelType`
+9. `MetricsCollector` + optional `DashboardServer`
+10. `RateLimiter` — optional, configured from `DEFAULT_RATE_LIMITS` and config overrides
+11. `Orchestrator` — receives provider, tools, channel, memory, metrics, RAG, rate limiter, streaming flag
+12. Message handler wiring — `channel.onMessage` delegates to `orchestrator.handleMessage` with `TaskPlanner` start/end tracking
+13. Session cleanup interval (`SESSION_CLEANUP_INTERVAL_MS`)
+
+Shutdown handler tears down in reverse: clears cleanup interval, stops learning pipeline, stops dashboard, shuts down RAG, shuts down memory, disconnects channel.
+
+## DI Container (`di-container.ts`)
+
+A string-keyed dependency injection container with three lifecycles: `singleton`, `transient`, and `scoped`.
+
+- `Map<string, Registration<unknown>>` stores registrations keyed by interface name
+- `Map<string, unknown>` caches singleton instances separately
+- `resolutionStack: string[]` tracks the current resolution chain for circular dependency detection
+- Registration methods: `registerTransient()`, `registerSingleton()`, `registerSingletonFactory()`, `registerScoped()`, `registerInstance()`
+- `resolve<T>(name)` checks the resolution stack, returns cached singletons, or creates via constructor/factory
+- `tryResolve<T>(name)` swallows errors and returns `undefined`
+- `createScope()` copies registrations to a child container; scoped registrations get fresh copies, singletons are shared
+- Custom errors: `ServiceNotFoundError`, `CircularDependencyError` (includes the full resolution chain in the message)
+- Global container: `getContainer()` (lazy singleton), `resetContainer()`, `createContainer()`
+- `Services` const object defines typed string keys for all known services (Logger, Config, AuthManager, RateLimiter, AIProvider, MemoryManager, RAGPipeline, ToolRegistry, Orchestrator, LearningPipeline, etc.)
+- `ServiceKey` type is derived from `typeof Services`
+
+Note: `bootstrap.ts` does not currently use `DIContainer` for resolution. The container is passed through but services are wired manually.
+
+## Tool Registry (`tool-registry.ts`)
+
+Centralized registry for all tools available to the orchestrator.
+
+- `Map<string, ITool>` stores tool instances by name
+- `Map<string, ToolMetadata>` stores per-tool metadata (category, dangerous, requiresConfirmation, readOnly, dependencies)
+- `Map<ToolCategory, Set<string>>` provides a category-to-tool-names index
+- `ToolCategories` const: `file`, `code`, `search`, `strata`, `shell`, `git`, `dotnet`, `memory`, `browser`
+- `initialize(config, options)` is idempotent (guarded by `initialized` flag); calls `registerBuiltinTools()` then loads plugin tools via `PluginLoader`
+- `register(tool, metadata)` throws `ValidationError` on duplicate names
+- Query methods: `get()`, `getAllTools()`, `getToolsByCategory()`, `getDangerousTools()`, `getReadOnlyTools()`, `has()`, `getMetadata()`, `getToolNames()`
+- `createFiltered(allowedNames)` returns a new `ToolRegistry` containing only the specified tools
+- `execute(name, input, context)` is a convenience wrapper around `tool.execute()`
+
+Built-in tools registered in `registerBuiltinTools()`:
+
+| Category | Tools |
+|----------|-------|
+| `file` | FileReadTool, FileWriteTool, FileEditTool, FileDeleteTool, FileRenameTool, FileDeleteDirectoryTool |
+| `search` | GlobSearchTool, GrepSearchTool, ListDirectoryTool, CodeSearchTool (if RAG), RAGIndexTool (if RAG) |
+| `strata` | AnalyzeProjectTool, ModuleCreateTool, ComponentCreateTool, MediatorCreateTool, SystemCreateTool |
+| `code` | CodeQualityTool |
+| `shell` | ShellExecTool |
+| `git` | GitStatusTool, GitDiffTool, GitLogTool, GitCommitTool, GitBranchTool, GitPushTool, GitStashTool |
+| `dotnet` | DotnetBuildTool, DotnetTestTool |
+| `memory` | MemorySearchTool (if memoryManager provided) |
+
+Static const objects (`FileTools`, `SearchTools`, `StrataTools`, `GitTools`, `DotnetTools`, `ShellTools`) export tool name strings for type-safe references elsewhere.
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `bootstrap.ts` | Application startup sequence, service wiring, shutdown handler |
+| `di-container.ts` | String-keyed DI container with singleton/transient/scoped lifecycles and circular dependency detection |
+| `tool-registry.ts` | Tool registration, categorization, metadata, plugin loading, and filtered registry creation |

@@ -1,133 +1,118 @@
-# Strata.Brain Type System
+# src/types/
 
-This directory contains the core type definitions for Strata.Brain.
-
-## Overview
-
-The type system provides:
-
-1. **Brand Types** - Type-safe identifiers (UserId, ChatId, etc.)
-2. **Result Type** - Explicit error handling
-3. **Option Type** - Nullable handling
-4. **Vector Types** - Type-safe vector operations with dimension constraints
-5. **Validation Types** - Structured validation results
-6. **Utility Types** - DeepPartial, DeepReadonly, etc.
-
-## Usage
-
-```typescript
-import { 
-  UserId, 
-  toUserId,
-  Result, 
-  ok, 
-  err,
-  Vector,
-  createVector 
-} from "@/types";
-
-// Brand types
-const userId: UserId = toUserId("user123");
-
-// Result type for error handling
-function divide(a: number, b: number): Result<number, string> {
-  if (b === 0) return err("Cannot divide by zero");
-  return ok(a / b);
-}
-
-// Vector with dimension safety
-const vector = createVector([1, 2, 3], 3);
-if (vector.kind === "ok") {
-  // vector.value is Vector<3>
-}
-```
+Core type definitions providing branded IDs, functional programming primitives, and utility types used across Strata.Brain.
 
 ## Brand Types
 
-Brand types prevent accidental mixing of different identifier types:
+`Brand<K, T>` creates nominal types from structural types, preventing accidental mixing of IDs.
 
-```typescript
-function processUser(id: UserId): void;
-function processChat(id: ChatId): void;
+| Type | Underlying | Purpose |
+|------|-----------|---------|
+| `UserId` | `Brand<string, "UserId">` | Unique user identifier |
+| `ChatId` | `Brand<string, "ChatId">` | Conversation identifier |
+| `MessageId` | `Brand<string, "MessageId">` | Message identifier |
+| `SessionId` | `Brand<string, "SessionId">` | Session identifier |
+| `MemoryId` | `Brand<string, "MemoryId">` | Memory entry identifier |
+| `VectorId` | `Brand<string, "VectorId">` | Vector identifier |
+| `ToolName` | `Brand<string, "ToolName">` | Registered tool name |
+| `ProviderName` | `Brand<string, "ProviderName">` | Provider name |
+| `AbsolutePath` | `Brand<string, "AbsolutePath">` | Absolute file path |
+| `FilePath` | `string` | File path (validated against traversal) |
 
-const userId = toUserId("123");
-const chatId = toChatId("456");
-
-processUser(userId); // ✓ OK
-processUser(chatId); // ✗ Type error!
-```
+Constructors `toUserId()`, `toChatId()`, `toFilePath()` validate input and return branded values. Validators `isValidUserId()`, `isValidChatId()`, `isValidFilePath()` serve as type guards.
 
 ## Result Type
 
-Use `Result<T, E>` instead of throwing exceptions:
+`Result<T, E = Error>` -- discriminated union for explicit error handling instead of exceptions.
 
-```typescript
-async function fetchData(): Promise<Result<Data, FetchError>> {
-  try {
-    const response = await fetch("/api/data");
-    if (!response.ok) {
-      return err({ code: "HTTP_ERROR", status: response.status });
-    }
-    return ok(await response.json());
-  } catch (e) {
-    return err({ code: "NETWORK_ERROR", cause: e });
-  }
-}
-```
+| Variant | Shape | Description |
+|---------|-------|-------------|
+| `ok` | `{ kind: "ok"; value: T }` | Success with value |
+| `err` | `{ kind: "err"; error: E }` | Failure with error |
 
-## File Structure
+Helpers: `ok()`, `err()`, `isOk()`, `isErr()`, `unwrap()`, `unwrapOr()`, `mapResult()`, `mapErr()`, `flatMapResult()`.
 
-- `index.ts` - Main type exports
-- `README.md` - This file
+`AsyncResult<T, E>` is `Promise<Result<T, E>>`.
 
-## Migration Guide
+## Option Type
 
-### From `Record<string, unknown>`
+`Option<T>` -- discriminated union for explicit null/undefined handling.
 
-Before:
-```typescript
-interface Tool {
-  inputSchema: Record<string, unknown>;
-  execute(input: Record<string, unknown>): Promise<unknown>;
-}
-```
+| Variant | Shape | Description |
+|---------|-------|-------------|
+| `some` | `{ kind: "some"; value: T }` | Present value |
+| `none` | `{ kind: "none" }` | Absent value |
 
-After:
-```typescript
-interface Tool<TInput extends JsonObject> {
-  inputSchema: z.ZodType<TInput>;
-  execute(input: TInput): Promise<ToolExecutionResult>;
-}
-```
+Helpers: `some()`, `none()`, `fromNullable()`, `isSome()`, `isNone()`, `unwrapOption()`, `unwrapOrOption()`, `mapOption()`, `filterOption()`.
 
-### From `any`
+## Validation Types
 
-Before:
-```typescript
-function process(data: any): any {
-  return data.value;
-}
-```
+`ValidationResult<T>` -- discriminated union with structured error details.
 
-After:
-```typescript
-function process<T>(data: T): T {
-  return data;
-}
-```
+- `{ kind: "valid"; value: T }` or `{ kind: "invalid"; errors: ValidationError[] }`
+- `ValidationError` has fields: `path: string`, `message: string`, `code: string`
+- `fromZodResult()` converts `z.SafeParseReturnType` to `ValidationResult`
 
-### From nullable types
+## Vector Types
 
-Before:
-```typescript
-function findUser(id: string): User | null {
-  // ...
-}
-```
+| Type | Definition | Purpose |
+|------|-----------|---------|
+| `Vector<D>` | `number[]` (dimension-parameterized) | Generic vector with runtime dimension check |
+| `Embedding<D>` | `number[]` (dimension-parameterized) | Semantic embedding vector |
 
-After:
-```typescript
-function findUser(id: string): Option<User> {
-  // ...
-}
-```
+- `createVector(values, expectedDimension)` returns `Result<Vector<D>, string>` -- fails on dimension mismatch
+- `createEmbedding(vector)` wraps a `Vector<D>` as `Embedding<D>`
+- `cosineSimilarity(a, b)` computes cosine similarity, returns `Result<number, string>`
+
+## Chunk Types
+
+`Chunk<T extends ChunkType>` represents document chunks with type-discriminated metadata.
+
+`ChunkType` = `"code" | "documentation" | "conversation" | "analysis" | "note"`
+
+| Metadata Interface | Extends | Extra Fields |
+|-------------------|---------|--------------|
+| `ChunkMetadata<T>` | -- | `source`, `createdAt`, `chunkType` |
+| `CodeChunkMetadata` | `ChunkMetadata<"code">` | `filePath`, `startLine`, `endLine`, `language`, `symbol?`, `parentSymbol?` |
+| `DocumentationChunkMetadata` | `ChunkMetadata<"documentation">` | `title?`, `section?` |
+| `ConversationChunkMetadata` | `ChunkMetadata<"conversation">` | `chatId: ChatId`, `userId: UserId`, `messageId: MessageId` |
+
+## Utility Types
+
+| Type | Definition | Purpose |
+|------|-----------|---------|
+| `DeepPartial<T>` | Recursive `Partial` | All nested properties optional |
+| `DeepReadonly<T>` | Recursive `Readonly` | All nested properties readonly |
+| `NonEmptyArray<T>` | `[T, ...T[]]` | Array guaranteed to have at least one element |
+| `JsonValue` | Union of primitives, arrays, objects | JSON-compatible value |
+| `JsonObject` | `Record<string, JsonValue>` | JSON-compatible object |
+| `JsonArray` | `JsonValue[]` | JSON-compatible array |
+| `Dictionary<T>` | `Record<string, T>` | Typed string-keyed map |
+| `StringDictionary` | `Record<string, string>` | String-to-string map |
+| `TimestampMs` | `number` | Timestamp in milliseconds |
+| `DurationMs` | `Brand<number, "DurationMs">` | Duration in milliseconds |
+| `Percentage` | `Brand<number, "Percentage">` | Constrained 0-100 |
+| `NormalizedScore` | `number` | Constrained 0-1 |
+
+## Async Types
+
+| Type/Interface | Purpose |
+|---------------|---------|
+| `CancellationToken` | `{ isCancelled: boolean; onCancel(cb) }` for cooperative cancellation |
+| `Disposable` | `dispose(): void \| Promise<void>` resource cleanup |
+| `AsyncDisposable` | `dispose(): Promise<void>` async resource cleanup |
+| `using(resource, fn)` | Try-with-resources pattern for `AsyncDisposable` |
+
+## Type Guards
+
+Runtime type checks returning TypeScript type predicates:
+
+`isString`, `isNumber`, `isBoolean`, `isObject`, `isArray`, `isNonNull`, `isError`, `isDate`, `isFunction`, `isNonEmptyArray`
+
+Assertion helpers: `assertDefined(value, msg?)`, `assertType(value, guard, msg?)`.
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `index.ts` | All type definitions, brand constructors, FP primitives, type guards |

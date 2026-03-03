@@ -1,359 +1,236 @@
-# Strata Brain - AI Agent Documentation
+# Strada.Brain — Technical Reference
 
-## Project Overview
+## Overview
 
-**Strata Brain** is an AI-powered Unity development assistant specifically designed for Strada.Core framework projects. It provides an intelligent agent that can understand, analyze, and modify Unity/C# codebases through multiple communication channels (Telegram, WhatsApp, CLI).
-
-The project implements a modular agent architecture with:
-- Multi-provider AI support (Claude, OpenAI, DeepSeek, Ollama, and more)
-- Tool-based interaction model for file operations
-- Retrieval-Augmented Generation (RAG) for code search
-- Persistent memory for conversations and project analysis
-- Comprehensive security controls
+Strada.Brain is an AI-powered development agent for Unity / Strada.Core projects. It runs as a Node.js application (TypeScript, ESM), connects to chat platforms (Telegram, Discord, Slack, WhatsApp, CLI), and operates autonomously: reading code, writing files, running builds, fixing errors, and learning from outcomes.
 
 ## Technology Stack
 
 | Component | Technology |
 |-----------|------------|
-| Runtime | Node.js 20+ |
-| Language | TypeScript 5.7 |
-| Module System | ESM (ES Modules) |
-| AI SDK | @anthropic-ai/sdk |
-| Bot Framework | grammy (Telegram) |
+| Runtime | Node.js 20+ (ESM) |
+| Language | TypeScript 5.7 (strict mode) |
+| AI SDK | `@anthropic-ai/sdk` (Claude primary) |
+| Chat | Grammy (Telegram), discord.js, @slack/bolt, @whiskeysockets/baileys |
+| Vector Search | `hnswlib-node` (native C++ bindings) |
+| Database | `better-sqlite3` (SQLite) |
 | Validation | Zod |
-| Testing | Vitest |
-| Linting | ESLint 9 |
+| Testing | Vitest (94 test files, 1560+ tests) |
 | Logging | Winston |
+| Monitoring | `prom-client` (Prometheus) |
 
-## Project Structure
+---
 
-```
-src/
-├── index.ts                    # Application entry point
-├── config/
-│   └── config.ts               # Environment configuration with Zod validation
-├── agents/
-│   ├── orchestrator.ts         # Core agent loop (LLM → Tools → Response)
-│   ├── autonomy/               # Self-improvement and error recovery
-│   ├── context/                # System prompts and framework knowledge
-│   ├── providers/              # AI provider implementations
-│   ├── tools/                  # Tool implementations
-│   │   ├── tool.interface.ts   # Base tool interface
-│   │   ├── file-*.ts           # File operation tools
-│   │   ├── git-*.ts            # Git operation tools
-│   │   ├── dotnet-*.ts         # .NET build/test tools
-│   │   ├── strata/             # Strada-specific code generators
-│   │   └── ...
-│   └── plugins/                # Plugin loader for custom tools
-├── channels/
-│   ├── channel.interface.ts    # Channel adapter contract
-│   ├── telegram/bot.ts         # Telegram bot implementation
-│   ├── whatsapp/client.ts      # WhatsApp implementation
-│   └── cli/repl.ts             # CLI/REPL interface
-├── security/
-│   ├── auth.ts                 # User authentication
-│   ├── path-guard.ts           # Path traversal protection
-│   └── rate-limiter.ts         # Usage rate limiting
-├── memory/
-│   ├── memory.interface.ts     # Memory manager contract
-│   └── file-memory-manager.ts  # File-based memory implementation
-├── rag/                        # Retrieval-Augmented Generation
-│   ├── rag.interface.ts        # RAG contracts
-│   ├── rag-pipeline.ts         # Main RAG orchestration
-│   ├── vector-store.ts         # File-based vector storage
-│   ├── chunker.ts              # Code chunking for indexing
-│   ├── embeddings/             # Embedding providers
-│   └── ...
-├── intelligence/               # Code analysis
-│   ├── strata-analyzer.ts      # Strada project analysis
-│   ├── csharp-parser.ts        # C# parsing utilities
-│   └── code-quality.ts         # Code quality analysis
-├── dashboard/                  # Monitoring dashboard
-│   ├── server.ts               # HTTP dashboard server
-│   └── metrics.ts              # Metrics collection
-├── gateway/
-│   └── daemon.ts               # Daemon process management
-├── utils/
-│   └── logger.ts               # Winston logger configuration
-└── test-helpers.ts             # Shared test utilities
-```
-
-## Build and Run Commands
+## Build and Run
 
 ```bash
-# Development (watch mode)
-npm run dev
-
-# Build for production
-npm run build
-
-# Start production build
-npm start
-
-# Run all tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Type checking (no emit)
-npm run typecheck
-
-# Linting
-npm run lint
-
-# CLI mode (for local testing)
-npm run cli
-
-# Start with specific channel
-node dist/index.js start --channel telegram
-node dist/index.js start --channel whatsapp
-node dist/index.js start --channel cli
-
-# Daemon mode (auto-restart)
-node dist/index.js daemon --channel telegram
+npm install          # Install dependencies
+npm run dev          # Development mode (tsx watch)
+npm run build        # Compile TypeScript to dist/
+npm start            # Run compiled version
+npm test             # Run all tests
+npm run typecheck    # Type checking only
+npm run lint         # ESLint
 ```
+
+### Start Modes
+
+```bash
+npm run dev -- cli                        # Interactive CLI
+npm run dev -- start --channel telegram   # Telegram bot
+npm run dev -- start --channel discord    # Discord bot
+npm run dev -- start --channel slack      # Slack bot
+npm run dev -- start --channel whatsapp   # WhatsApp client
+node dist/index.js daemon --channel telegram  # Daemon (auto-restart)
+```
+
+---
 
 ## Configuration
 
-Copy `.env.example` to `.env` and configure:
+Copy `.env.example` to `.env`. Required variables:
 
-**Required:**
-- `ANTHROPIC_API_KEY` - Primary AI provider API key
-- `UNITY_PROJECT_PATH` - Absolute path to Unity project (containing Assets/)
-
-**For Telegram:**
-- `TELEGRAM_BOT_TOKEN` - Bot token from @BotFather
-- `ALLOWED_TELEGRAM_USER_IDS` - Comma-separated user IDs (security)
-
-**Optional Features:**
-- `PROVIDER_CHAIN` - Fallback chain: `claude,deepseek,ollama`
-- `MEMORY_ENABLED` - Enable conversation persistence (default: true)
-- `RAG_ENABLED` - Enable semantic code search (default: true)
-- `DASHBOARD_ENABLED` - Enable monitoring dashboard (default: false)
-- `DASHBOARD_PORT` - Dashboard port (default: 3100)
-- `RATE_LIMIT_ENABLED` - Enable usage limits (default: false)
-
-See `.env.example` for all available options.
-
-## Testing Guidelines
-
-### Test Framework: Vitest
-
-- Tests are co-located with source files: `*.test.ts`
-- Tests exclude: `src/index.ts` (integration entry point)
-- Globals enabled (no need to import `describe`, `it`, `expect`)
-- Timeout: 10 seconds per test
-
-### Test Patterns
-
-```typescript
-// Use test-helpers.ts for common mocks
-import { createMockChannel, createMockProvider, createToolContext, withTempDir } from "../test-helpers.js";
-
-// Tool testing pattern
-let tempDir: string;
-let ctx: ToolContext;
-
-beforeAll(() => {
-  tempDir = mkdtempSync(join(tmpdir(), "test-"));
-  ctx = { projectPath: tempDir, workingDirectory: tempDir, readOnly: false };
-});
-
-afterAll(() => {
-  rmSync(tempDir, { recursive: true, force: true });
-});
-
-// Use withTempDir for isolated filesystem tests
-await withTempDir(async (dir) => {
-  // Test with temporary directory
-});
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+UNITY_PROJECT_PATH=/path/to/UnityProject
+JWT_SECRET=<openssl rand -hex 64>
 ```
 
-### Running Tests
+See the [Configuration Reference in README.md](README.md#configuration-reference) for all variables.
 
-```bash
-# All tests
-npm test
+---
 
-# With coverage
-npm test -- --coverage
+## Architecture
 
-# Specific file
-npm test -- src/agents/tools/file-read.test.ts
+### Bootstrap Sequence (`src/core/bootstrap.ts`)
 
-# Watch mode
-npm run test:watch
+The `bootstrap()` function wires everything in this order:
+
+```
+1.  loadConfig()          — Zod-validated environment parsing
+2.  initializeAuth()      — AuthManager with platform allowlists
+3.  initializeAIProvider() — Claude, or FallbackChainProvider from PROVIDER_CHAIN (supports 11+ providers)
+4.  initializeMemory()    — FileMemoryManager (JSON + TF-IDF)
+5.  initializeRAG()       — Embedding provider + HNSW vector store + background indexing
+6.  initializeLearning()  — LearningStorage + LearningPipeline + ErrorRecovery + TaskPlanner
+7.  ToolRegistry.init()   — Register all 30+ built-in tools + plugins
+8.  initializeChannel()   — Create channel adapter based on --channel flag
+9.  MetricsCollector()    — In-memory counters
+10. initializeDashboard() — HTTP/WS/Prometheus servers (if enabled)
+11. initializeRateLimiter()
+12. new Orchestrator()    — Wire everything together
+13. wireMessageHandler()  — channel.onMessage → orchestrator.handleMessage
+14. channel.connect()     — Start receiving messages
 ```
 
-## Code Style Guidelines
+Shutdown reverses the order: stop cleanup interval, learning pipeline, dashboard, save RAG index, flush memory, disconnect channel.
 
-### TypeScript Conventions
+### Agent Loop (`src/agents/orchestrator.ts`)
 
-- **Strict mode enabled** - All strict compiler options are on
-- **ESM modules** - Use `.js` extensions in imports
-- **Path aliases** - Use `@/` for src imports: `import { x } from "@/config/config.js"`
-- **Explicit types** on public interfaces
-- **No unchecked indexed access** - Must handle undefined cases
+```
+Message arrives
+  → Session lock (per-chat serialization)
+  → Memory retrieval (top 3 matches, TF-IDF, score >= 0.15)
+  → RAG retrieval (top 6 C# code chunks, HNSW, score >= 0.2)
+  → Cached project analysis injection
+  → Autonomy layer: TaskPlanner provides PLAN-ACT-VERIFY protocol
 
-### Naming Conventions
+For up to 50 iterations:
+  → LLM call (streaming if provider + channel both support it)
+  → If end_turn:
+      → Self-verification gate: if .cs files were modified and no
+        successful dotnet_build, inject verification reminder and continue
+      → Otherwise: send response to channel, exit loop
+  → If tool calls:
+      → Execute tools serially
+      → ErrorRecoveryEngine analyzes failures (categorizes C# errors)
+      → TaskPlanner tracks mutations, detects stalls, warns on budget
+      → SelfVerification tracks compilable file changes
+      → Feed tool results back to LLM
 
-- **Files**: kebab-case.ts
-- **Classes**: PascalCase
-- **Interfaces**: PascalCase with `I` prefix for public contracts (`IChannelAdapter`, `ITool`)
-- **Functions/Variables**: camelCase
-- **Constants**: UPPER_SNAKE_CASE for true constants
+After loop: send timeout message
+```
 
-### Code Patterns
+**Key constants:**
+- `MAX_TOOL_ITERATIONS = 50` per message
+- `MAX_SESSIONS = 100` (LRU eviction)
+- Session trim at 40 messages (trimmed content saved to memory)
+- Tool result max: 8192 characters
+- Streaming update throttle: 500ms
 
-**Tool Implementation:**
+---
+
+## Tool System
+
+### Interface
+
 ```typescript
-export class MyTool implements ITool {
-  readonly name = "my_tool";
-  readonly description = "Clear description for LLM";
-  readonly inputSchema = {
-    type: "object",
-    properties: { /* ... */ },
-    required: ["param"]
-  };
-
-  async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
-    // Validate with validatePath() for file operations
-    // Return { content: string, isError?: boolean }
-  }
+interface ITool {
+  name: string;
+  description: string;       // Shown to the LLM
+  inputSchema: object;       // JSON Schema
+  execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult>;
 }
 ```
 
-**Provider Implementation:**
-```typescript
-export class MyProvider implements IAIProvider {
-  readonly name = "my-provider";
-  
-  async chat(
-    systemPrompt: string,
-    messages: ConversationMessage[],
-    tools: ToolDefinition[]
-  ): Promise<ProviderResponse> {
-    // Implementation
-  }
-}
-```
+`ToolContext` provides: `projectPath`, `workingDirectory`, `readOnly`, `userId?`, `chatId?`
 
-### Security Requirements
+### Security Invariants
 
-**All file operations MUST:**
-1. Use `validatePath()` from `security/path-guard.ts`
-2. Check result: `if (!pathCheck.valid) return { content: `Error: ${pathCheck.error}`, isError: true }`
-3. Respect `context.readOnly` for write operations
-
-**Sensitive file patterns are blocked** (see `BLOCKED_PATTERNS` in path-guard.ts):
-- `.env` files
-- `.git/config`, `.git/credentials`
-- SSH keys, certificates
-- `node_modules/`
-
-### Error Handling
-
-```typescript
-try {
-  // Operation
-} catch (error) {
-  const errMsg = error instanceof Error ? error.message : "Unknown error";
-  logger.error("Context", { error: errMsg });
-  return { content: "User-friendly error", isError: true };
-}
-```
-
-## Architecture Overview
-
-### Agent Loop (Orchestrator)
-
-```
-User Message → Memory Retrieval → RAG Context → LLM → 
-  ├─→ Tool Call(s) → Execute → Back to LLM
-  └─→ Final Response → Channel
-```
-
-Key constants:
-- `MAX_TOOL_ITERATIONS = 50` - Maximum tool calls per conversation
-- Session limit: 100 concurrent sessions (LRU eviction)
-- Message trim at 40 messages (old messages archived to memory)
-
-### Tool Categories
-
-1. **File Operations**: file_read, file_write, file_edit, file_delete, file_rename
-2. **Search**: glob_search, grep_search, list_directory, code_search (RAG)
-3. **Strada Codegen**: analyze_project, module_create, component_create, mediator_create, system_create
-4. **Git**: git_status, git_diff, git_log, git_commit, git_push, git_branch, git_stash
-5. **.NET**: dotnet_build, dotnet_test
-6. **Shell**: shell_exec
-
-### Channel Adapters
-
-All channels implement `IChannelAdapter`:
-- Telegram: Full feature support including streaming
-- WhatsApp: Basic messaging (via Baileys)
-- CLI: REPL interface for local development
-
-### Memory System
-
-Three-layer memory:
-1. **Session Memory** - In-conversation context (trimmed at 40 msgs)
-2. **Persistent Memory** - TF-IDF searchable conversation history
-3. **RAG Index** - Vector search over codebase
-
-### RAG Pipeline
-
-- **Chunking**: Structural (classes, methods, constructors)
-- **Embeddings**: OpenAI or Ollama
-- **Vector Store**: File-based with HNSW-like search
-- **Re-ranking**: Cross-encoder style scoring
-
-## Adding New Features
+- All file tools call `validatePath()` before disk I/O (symlink resolution + project root check)
+- All tool outputs are scrubbed for API key patterns before feeding back to LLM
+- Shell commands are checked against a blocklist of dangerous patterns
+- Git arguments are sanitized against injection and shell metacharacters
+- Strata codegen tools validate C# identifiers and types before generating code
+- Write operations require user confirmation when `requireConfirmation` is enabled
 
 ### Adding a New Tool
 
-1. Create file in `src/agents/tools/` or appropriate subdirectory
-2. Implement `ITool` interface
-3. Export from file and add to `src/index.ts` tools array
-4. Add corresponding `.test.ts` file
-5. Follow existing patterns for validation and error handling
+1. Create `src/agents/tools/my-tool.ts` implementing `ITool`
+2. Register in `src/core/tool-registry.ts` inside `registerBuiltinTools()`
+3. Write tests in `src/agents/tools/my-tool.test.ts`
 
 ### Adding a New Provider
 
-1. Create file in `src/agents/providers/`
-2. Implement `IAIProvider` interface
-3. Add to `provider-registry.ts` and `config.ts`
+1. Create `src/agents/providers/my-provider.ts` implementing `IAIProvider`
+2. Optionally implement `IStreamingProvider` for streaming support
+3. Add to `PROVIDER_PRESETS` in `src/agents/providers/provider-registry.ts`
+4. Add env var handling to `src/core/bootstrap.ts`
 
 ### Adding a New Channel
 
-1. Create directory in `src/channels/<name>/`
-2. Implement `IChannelAdapter` interface
-3. Add initialization in `src/index.ts` startBrain function
+1. Create `src/channels/my-channel/` directory
+2. Implement `IChannelAdapter` (extends `IChannelCore + IChannelSender + IChannelReceiver`)
+3. Optionally implement `IChannelStreaming`, `IChannelRichMessaging`, `IChannelInteractive`
+4. Add initialization case to `initializeChannel()` in `src/core/bootstrap.ts`
 
-## Security Considerations
+---
 
-- **Path Guard**: All file paths validated against directory traversal
-- **Auth**: Telegram user ID whitelist required
-- **Rate Limiting**: Optional per-user and budget controls
-- **Confirmation**: Write operations require user confirmation (configurable)
-- **Read-Only Mode**: Complete file modification lockdown option
-- **Secret Sanitization**: API keys redacted from tool outputs
+## Autonomy Layer
 
-## Deployment Notes
+Three components run inside the orchestrator per-message:
 
-- Requires Node.js 20+ 
-- Memory persistence stored in `.strata-memory/` (configurable)
-- WhatsApp requires session persistence (stored in `.whatsapp-session/`)
-- Graceful shutdown handles SIGINT/SIGTERM
+### ErrorRecoveryEngine (`src/agents/autonomy/error-recovery.ts`)
+Analyzes tool failures. For `dotnet_build`, parses MSBuild error format and categorizes into 14 C# error classes (missing_type, undefined_symbol, type_mismatch, etc.). Produces `[RECOVERY STEPS]` injected into tool result content.
 
-## Key Files Reference
+### TaskPlanner (`src/agents/autonomy/task-planner.ts`)
+Tracks execution state. Injects warnings when:
+- 2+ file mutations without a build → `[VERIFY]`
+- 3+ consecutive errors → `[STALL]`
+- 40+ iterations used → `[BUDGET]`
+
+### SelfVerification (`src/agents/autonomy/self-verification.ts`)
+Tracks `.cs` / `.csproj` / `.sln` file modifications. If compilable files were changed and no successful `dotnet_build` has run, blocks the final response and injects a verification prompt.
+
+---
+
+## Testing Conventions
+
+- **Framework:** Vitest with globals (`describe`, `it`, `expect` available without imports)
+- **Co-located:** Tests next to source files: `foo.ts` / `foo.test.ts`
+- **Timeout:** 10 seconds per test
+- **Helpers:** `src/test-helpers.ts` provides `createMockChannel()`, `createMockProvider()`, `createToolContext()`, `withTempDir()`
+
+```typescript
+import { createToolContext, withTempDir } from "../test-helpers.js";
+
+await withTempDir(async (dir) => {
+  const ctx = createToolContext(dir);
+  const result = await tool.execute({ path: "test.cs" }, ctx);
+  expect(result.isError).toBeFalsy();
+});
+```
+
+---
+
+## Code Conventions
+
+- **Strict TypeScript** — all strict compiler options enabled, `noUncheckedIndexedAccess: true`
+- **ESM modules** — use `.js` extensions in imports
+- **Path aliases** — `@/` maps to `src/`
+- **Files:** `kebab-case.ts`
+- **Classes:** `PascalCase`
+- **Interfaces:** `I` prefix for public contracts (`IChannelAdapter`, `ITool`)
+- **Functions/variables:** `camelCase`
+- **Constants:** `UPPER_SNAKE_CASE`
+
+---
+
+## Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | Application bootstrap, DI container |
-| `src/agents/orchestrator.ts` | Core agent logic |
-| `src/config/config.ts` | Environment validation |
-| `src/security/path-guard.ts` | Path security |
-| `src/agents/context/strata-knowledge.ts` | LLM system prompt |
-| `src/test-helpers.ts` | Test utilities |
+| `src/index.ts` | CLI entry point (Commander.js commands) |
+| `src/core/bootstrap.ts` | All initialization and wiring |
+| `src/core/tool-registry.ts` | Tool instantiation and registration |
+| `src/agents/orchestrator.ts` | Agent loop, sessions, streaming |
+| `src/agents/context/strata-knowledge.ts` | System prompt with Strada.Core knowledge |
+| `src/agents/providers/claude.ts` | Primary AI provider (Anthropic SDK) |
+| `src/agents/providers/fallback-chain.ts` | Multi-provider failover |
+| `src/config/config.ts` | Zod schema, env loading |
+| `src/security/path-guard.ts` | Directory traversal prevention |
+| `src/security/secret-sanitizer.ts` | Credential masking (24 patterns) |
+| `src/memory/file-memory-manager.ts` | Active memory backend |
+| `src/rag/rag-pipeline.ts` | RAG orchestration |
+| `src/rag/hnsw/hnsw-vector-store.ts` | HNSW vector store (hnswlib-node) |
+| `src/test-helpers.ts` | Shared test utilities |

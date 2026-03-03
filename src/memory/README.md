@@ -1,62 +1,80 @@
 # src/memory/
 
-Persistent memory systems for Strada.Brain, providing conversation recall, project analysis caching, and semantic retrieval across sessions.
+Persistent conversation memory with text search. The memory system stores past conversations, project analyses, and notes, making them available to the agent as context for future interactions.
 
-## Memory Systems Overview
+## Active Backend: FileMemoryManager
 
-The memory module implements two backends behind a shared `IMemoryManager` interface:
+`FileMemoryManager` is the production backend, wired in `src/core/bootstrap.ts`.
 
-1. **FileMemoryManager** (`file-memory-manager.ts`) -- File-based JSON storage with TF-IDF retrieval. Lightweight, zero-dependency option suitable for single-instance deployments.
-2. **AgentDBMemory** (`unified/agentdb-memory.ts`) -- SQLite + HNSW vector-indexed backend with 3-tier memory architecture. Higher performance for semantic search and large memory stores.
+**Storage:** JSON files in `MEMORY_DB_PATH` directory (default: `.strata-memory/`):
+- `memory.json` — all memory entries + TF-IDF index state (`{ df, docCount }`)
+- `analysis.json` — cached project analysis
 
-A `BackwardCompatibleMemory` wrapper and `MemoryMigrator` handle migration from the legacy TF-IDF backend to the unified vector backend.
+**Search:** TF-IDF text indexing via `TextIndex`. Term extraction with stop-word filtering. Cosine similarity scoring for retrieval.
 
-## IMemoryManager Interface
+**Write behavior:** Debounced flush — 5-second delay after last write, hard 30-second deadline. This batches multiple writes into a single disk I/O.
 
-Defined in `memory.interface.ts`, the core interface provides:
+**Entry types:** conversation, analysis, note, error, learning, context, system.
 
-- **Project analysis cache** -- `cacheAnalysis()` / `getCachedAnalysis()` with TTL-based invalidation (default 24h).
-- **Conversation memory** -- `storeConversation()` saves trimmed session messages for later recall.
-- **Typed entries** -- 7 entry types: `conversation`, `analysis`, `note`, `insight`, `error`, `command`, `task`. Each has a dedicated TypeScript interface with type guards.
-- **Retrieval** -- Text (TF-IDF), semantic (vector), hybrid, chat-scoped, and type-filtered search modes. All return scored `RetrievalResult` objects.
+**How the agent uses memory:**
+1. At the start of each message, the orchestrator calls `retrieve({ mode: "text", query, limit: 3, minScore: 0.15 })` and injects results into the system prompt
+2. When session history exceeds 40 messages, trimmed content is summarized and stored via `storeConversation(chatId, summary)`
+3. `strata_analyze_project` caches project structure via `cacheAnalysis()`
+4. The agent can explicitly call `memory_search` tool during conversations
 
-## RAG Pipeline (src/rag/)
+## Advanced Backend: AgentDBMemory (Not Yet Wired)
 
-The RAG (Retrieval-Augmented Generation) pipeline lives in `src/rag/` and is consumed by the orchestrator. It indexes project source code into vector embeddings and retrieves relevant chunks at query time.
+`AgentDBMemory` in `unified/agentdb-memory.ts` is fully implemented but **not connected to bootstrap**. It provides:
 
-- **`rag-pipeline.ts`** -- `IRAGPipeline` implementation: indexes files, searches by query, formats context for LLM injection.
-- **`chunker.ts`** -- Code-aware chunking that respects language boundaries (classes, methods, functions).
-- **`reranker.ts`** -- Cross-encoder reranking for improved relevance after initial vector search.
-- **`vector-store.ts`** -- Flat vector store with cosine similarity search.
-- **Embedding providers** -- `embeddings/openai-embeddings.ts` (OpenAI API), `embeddings/ollama-embeddings.ts` (local Ollama), `embeddings/embedding-cache.ts` (LRU caching layer).
+### Three-Tier Memory
 
-## HNSW Vector Indexing (src/rag/hnsw/)
+| Tier | Max Entries | TTL | Assignment |
+|------|-------------|-----|------------|
+| Working | 100 | None | `importance >= 0.8` |
+| Ephemeral | 1,000 | 24h | `importance <= 0.3` or marked ephemeral |
+| Persistent | 10,000 | None | Everything else |
 
-The HNSW (Hierarchical Navigable Small World) module provides high-performance approximate nearest-neighbor search:
+Tier enforcement is automatic — when a tier exceeds capacity, entries with the lowest combined score (`importance * 0.7 + accessFrequency * 0.3`) are evicted.
 
-- **`hnsw-vector-store.ts`** -- `HNSWVectorStore` implementing `IVectorStore`. Supports cosine/euclidean/dot-product metrics, configurable `M`, `efConstruction`, and `efSearch` parameters.
-- **`quantization.ts`** -- Binary, scalar, and product quantization for memory-efficient storage (up to 32x compression with binary quantization).
-- **`hnsw-mock.ts`** -- In-memory mock for testing without native dependencies.
-- Default parameters: `M=16`, `efConstruction=200`, `efSearch=128`, max 11,100 elements.
+### SQLite Persistence
 
-## AgentDB Unified Memory (unified/)
+```sql
+CREATE TABLE memories (id, key, value, metadata, embedding, created_at, updated_at);
+CREATE TABLE patterns (id, pattern_key, data, confidence, created_at);
+```
 
-The unified memory system integrates AgentDB with HNSW vector indexing:
+WAL mode, 16MB page cache, temp tables in memory. Every write immediately persists. Bulk save wraps in a transaction.
 
-- **3-tier architecture**: Working (active context, 100 entries), Ephemeral (short-term, 1000 entries, 24h TTL), Persistent (long-term knowledge, 10,000 entries).
-- **Automatic tier management** -- entries are promoted/demoted based on access patterns and importance scores.
-- **Hybrid search** -- combines HNSW semantic search with TF-IDF text search using configurable weights (default 70/30 semantic/text).
-- **MMR diversity** -- Maximal Marginal Relevance reranking to avoid redundant results.
-- **Migration** -- `MemoryMigrator` converts legacy `FileMemoryManager` data with backup/rollback support.
+### HNSW Vector Search
+
+Vectors stored alongside entries. Dual-path retrieval:
+- `retrieveSemantic()` — HNSW nearest-neighbor search
+- `retrieve()` — TF-IDF text search (backward compatible)
+- `retrieveHybrid()` — 70% semantic + 30% text scores combined
+
+### Embedding Fallback
+
+When no embedding provider is configured, `generateEmbedding()` uses a character-position hash. This produces vectors that occupy HNSW space but have no semantic meaning — semantic search silently degrades.
+
+## Migration Path
+
+`unified/migration.ts` provides:
+- `MemoryMigrator` — migrates FileMemoryManager data to AgentDB format
+- `BackwardCompatibleMemory` — wraps `IUnifiedMemory` with `IMemoryManager` interface
+
+## Interfaces
+
+**`IMemoryManager`** (`memory.interface.ts`): Legacy interface. 7 entry types, 5 retrieval modes, full CRUD, import/export, compact, stats. Returns `Result<T, Error>`.
+
+**`IUnifiedMemory`** (`unified/unified-memory.interface.ts`): Advanced interface. Adds batch writes, direct vector search, hybrid retrieval with semantic weight, tier promotion/demotion, access tracking, expired entry cleanup, HNSW lifecycle (rebuild, health, optimize).
 
 ## Key Files
 
 | File | Purpose |
-|---|---|
-| `memory.interface.ts` | `IMemoryManager` interface, entry types, retrieval options |
-| `file-memory-manager.ts` | JSON-based memory with TF-IDF (legacy backend) |
-| `text-index.ts` | TF-IDF index, term extraction, cosine similarity |
-| `unified/unified-memory.interface.ts` | `IUnifiedMemory`, tier/HNSW types, config |
-| `unified/agentdb-memory.ts` | SQLite + HNSW unified memory implementation |
-| `unified/migration.ts` | `MemoryMigrator`, `BackwardCompatibleMemory` |
-| `unified/index.ts` | Barrel exports for unified memory module |
+|------|---------|
+| `memory.interface.ts` | `IMemoryManager`, entry types, retrieval options |
+| `file-memory-manager.ts` | Active production backend (JSON + TF-IDF) |
+| `text-index.ts` | TF-IDF engine: term extraction, cosine similarity |
+| `unified/unified-memory.interface.ts` | `IUnifiedMemory`, tier enum, HNSW types |
+| `unified/agentdb-memory.ts` | SQLite + HNSW backend (not yet wired) |
+| `unified/migration.ts` | Legacy-to-AgentDB migration, backward-compatible wrapper |

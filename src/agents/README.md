@@ -1,83 +1,96 @@
 # src/agents/
 
-The agents directory contains the orchestrator (the "brain"), AI providers, tools, the autonomy layer, and the plugin system.
+The agents subsystem contains the orchestrator (agent loop), AI providers, tools, the autonomy layer, and the plugin system.
 
-## Agent Orchestration System Overview
+## Orchestrator (`orchestrator.ts`)
 
-The `Orchestrator` class implements a standard agent loop with per-session concurrency control. Each incoming message is routed through:
+The `Orchestrator` class implements a single-agent, multi-tool loop. There is one orchestrator instance — the tool set defines what it can do.
+
+**Message processing:**
+1. Messages are serialized per-chat via `sessionLocks` (concurrent messages for the same chat are queued)
+2. Memory retrieval: top 3 matches (TF-IDF, score >= 0.15)
+3. RAG retrieval: top 6 C# code chunks (HNSW vectors, score >= 0.2)
+4. Cached project analysis injection
+5. LLM call with system prompt + all context + tool definitions
+6. Tool execution with autonomy layer analysis (error recovery, stall detection)
+7. Self-verification gate: forces `dotnet_build` before responding if `.cs` files were modified
+8. Loop repeats up to `MAX_TOOL_ITERATIONS = 50`
+
+**Session management:** LRU map capped at 100 sessions. Trim at 40 messages — trimmed content is summarized and saved to persistent memory.
+
+**Streaming:** When both the provider (`IStreamingProvider`) and channel (`IChannelStreaming`) support it, responses stream edit-in-place with 500ms throttled updates.
+
+**Confirmation flow:** Write operations (defined in `WRITE_OPERATIONS`) trigger a confirmation dialog via the channel's interactive UI when `requireConfirmation` is enabled.
+
+## Providers (`providers/`)
+
+All providers implement `IAIProvider`. Streaming providers additionally implement `IStreamingProvider`.
+
+| Provider | File | Library | Default Model | Streaming |
+|----------|------|---------|---------------|-----------|
+| Claude | `claude.ts` | `@anthropic-ai/sdk` | `claude-sonnet-4-20250514` | Yes |
+| OpenAI | `openai.ts` | `fetch()` | `gpt-4o` | No |
+| Ollama | `ollama.ts` | `fetch()` | `llama3.1` | No |
+| Fallback Chain | `fallback-chain.ts` | wraps others | chain name | inherits |
+
+`FallbackChainProvider` tries providers in order, swallows errors from non-last providers. Built via `buildProviderChain()` from `PROVIDER_CHAIN` env var.
+
+`PROVIDER_PRESETS` in `provider-registry.ts` maps names to `{ baseUrl, defaultModel }` for: openai, deepseek, qwen, kimi, minimax, groq, mistral, together, fireworks, gemini.
+
+## Tools (`tools/`)
+
+30+ tools implementing `ITool`. Key categories:
+
+- **File I/O:** `file_read`, `file_write`, `file_edit`, `file_delete`, `file_rename`, `file_delete_directory`
+- **Search:** `glob_search`, `grep_search`, `list_directory`, `code_search` (RAG), `memory_search`
+- **Strata codegen:** `strata_analyze_project`, `strata_create_module`, `strata_create_component`, `strata_create_mediator`, `strata_create_system`
+- **Git:** `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_branch`, `git_stash`
+- **.NET:** `dotnet_build`, `dotnet_test`
+- **Shell:** `shell_exec`
+- **Code quality:** `code_quality`
+- **RAG:** `rag_index`
+- **Browser:** `browser_automation` (Playwright — not in default registry)
+- **HTTP:** `http_client` (not in default registry)
+
+**Security invariants:** All file tools call `validatePath()`. Shell commands pass through a blocklist. Git arguments are injection-safe. Tool outputs are scrubbed for credentials and capped at 8192 chars.
+
+## Autonomy (`autonomy/`)
+
+Three components instantiated fresh per-message:
+
+- **ErrorRecoveryEngine** — Categorizes C# build errors into 14 classes with recovery guidance
+- **TaskPlanner** — Detects stalls (3+ consecutive errors), missing verification (2+ mutations without build), budget warnings (40+ iterations)
+- **SelfVerification** — Tracks `.cs`/`.csproj`/`.sln` modifications and blocks final response until `dotnet_build` succeeds
+
+## Plugins (`plugins/plugin-loader.ts`)
+
+External tools loaded from directories specified in `PLUGIN_DIRS`:
 
 ```
-User message
-  -> Check rate limits
-  -> Retrieve memory + RAG context
-  -> Inject system prompt + context
-  -> LLM call (with tool definitions)
-  -> If tool calls: execute tools, feed results back to LLM
-  -> Autonomy layer: error recovery, stall detection, self-verification
-  -> Repeat until LLM returns end_turn or max iterations (50)
-  -> Send final response to channel
+plugins/my-plugin/
+  plugin.json    # { name, version, description, entry }
+  index.js       # exports { tools: ITool[] }
 ```
 
-Session management uses an LRU map capped at 100 concurrent sessions. Messages within the same chat are serialized via per-session locks to prevent race conditions. Streaming is supported when both the provider and channel implement their respective streaming interfaces.
+Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All tools get `isPlugin: true`.
 
-## Tool Registration and Interface
+## Context (`context/strata-knowledge.ts`)
 
-Tools implement the `ITool` interface defined in `tools/tool.interface.ts`:
+`STRATA_SYSTEM_PROMPT` — hardcoded system prompt establishing agent identity and deep Strada.Core framework knowledge (architecture pillars, code conventions, file structure, behavioral guidelines). Augmented at runtime with project context, memory, RAG results, and cached analysis.
 
-```typescript
-interface ITool {
-  name: string;
-  description: string;
-  inputSchema: object;         // JSON Schema for input validation
-  execute(input, context): Promise<ToolResult>;
-}
-```
+## Key Files
 
-The `ToolContext` provides `projectPath`, `workingDirectory`, and a `readOnly` flag. Tools that modify the file system must check `readOnly` before proceeding. Write operations require user confirmation when `requireConfirmation` is enabled.
-
-All tool outputs are sanitized before being fed back to the LLM -- API key patterns are redacted and content is capped at 8192 characters.
-
-## Key Files and Their Purposes
-
-```
-agents/
-  orchestrator.ts          # Core agent loop, session management, streaming
-  autonomy/                # Error recovery, task planner, self-verification
-    error-recovery.ts      # Analyzes tool failures, suggests recovery actions
-    task-planner.ts        # Tracks tool calls, detects stalls, budget warnings
-    self-verification.ts   # Verification gate before final response
-    constants.ts           # Write operation set, shared constants
-  context/
-    strata-knowledge.ts    # System prompt, project context builder
-  plugins/
-    plugin-loader.ts       # Dynamic tool loading from plugins directory
-  providers/               # AI provider implementations
-    claude.ts              # Anthropic Claude (primary)
-    openai.ts              # OpenAI-compatible
-    openai-compat.ts       # Generic OpenAI-compatible adapter
-    ollama.ts              # Local Ollama models
-    fallback-chain.ts      # Provider chain with automatic failover
-    provider.interface.ts  # IAIProvider, IStreamingProvider interfaces
-  tools/                   # Built-in tools
-    tool.interface.ts      # ITool interface and ToolContext
-    file-read.ts           # Read files
-    file-write.ts          # Write files
-    file-edit.ts           # Search-and-replace editing
-    file-manage.ts         # Rename, delete, list directories
-    git-tools.ts           # Git operations
-    shell-exec.ts          # Shell command execution
-    code-search.ts         # Grep/glob search
-    browser-automation.ts  # Playwright-based browser tools
-    memory-search.ts       # Memory retrieval tool
-    rag-index.ts           # RAG indexing tool
-    dotnet-tools.ts        # .NET/Unity build tools
-    strata/                # Strata.Core-specific tools
-```
-
-## How to Add New Tools
-
-1. Create a file in `src/agents/tools/` implementing the `ITool` interface.
-2. Define `name`, `description`, and `inputSchema` (JSON Schema).
-3. Implement `execute(input, context)` -- return `{ content, isError }`.
-4. Register the tool in `src/core/bootstrap.ts`.
-5. Write tests in a co-located `*.test.ts` file.
+| File | Purpose |
+|------|---------|
+| `orchestrator.ts` | Agent loop, session management, streaming, tool dispatch |
+| `autonomy/error-recovery.ts` | C# error categorization and recovery injection |
+| `autonomy/task-planner.ts` | Stall detection, budget warnings, learning trajectory |
+| `autonomy/self-verification.ts` | Build verification gate |
+| `autonomy/constants.ts` | MUTATION_TOOLS, VERIFY_TOOLS, COMPILABLE_EXT |
+| `context/strata-knowledge.ts` | System prompt, project context builder |
+| `plugins/plugin-loader.ts` | External plugin discovery and loading |
+| `providers/claude.ts` | Primary provider (Anthropic SDK) |
+| `providers/fallback-chain.ts` | Multi-provider failover |
+| `providers/provider-registry.ts` | Provider presets and chain builder |
+| `tools/tool.interface.ts` | ITool, IEnhancedTool interfaces |
+| `tools/tool-core.interface.ts` | ToolContext, ToolExecutionResult types |
