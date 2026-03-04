@@ -147,6 +147,8 @@ export interface Instinct {
   readonly sourceTrajectoryIds: TrajectoryId[];
   /** Tags for categorization */
   readonly tags: string[];
+  /** Optional pre-computed embedding vector for semantic search */
+  readonly embedding?: number[];
 }
 
 // =============================================================================

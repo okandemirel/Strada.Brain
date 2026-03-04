@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS instincts (
   action TEXT NOT NULL,
   context_conditions TEXT NOT NULL, -- JSON array
   stats TEXT NOT NULL, -- JSON object
+  embedding TEXT, -- JSON-serialized float array for semantic search
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   evolved_to TEXT
@@ -476,6 +477,13 @@ export class LearningStorage {
     this.db!.prepare("DELETE FROM instincts WHERE id = ?").run(id);
   }
 
+  /** Update the embedding vector for an instinct (for semantic search) */
+  updateInstinctEmbedding(id: string, embedding: number[]): void {
+    this.ensureConnection();
+    this.db!.prepare("UPDATE instincts SET embedding = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(embedding), Date.now(), id);
+  }
+
   // ─── Trajectory Operations ───────────────────────────────────────────────────
 
   /** Create a new trajectory (batched for performance) */
@@ -748,6 +756,7 @@ export class LearningStorage {
       evolvedTo: row.evolved_to ? row.evolved_to as InstinctId : undefined,
       sourceTrajectoryIds: [], // Default empty array for missing field
       tags: [], // Default empty array for missing field
+      embedding: row.embedding ? JSON.parse(row.embedding) as number[] : undefined,
     };
   }
 
@@ -809,6 +818,7 @@ interface InstinctRow {
   action: string;
   context_conditions: string;
   stats: string;
+  embedding: string | null;
   created_at: number;
   updated_at: number;
   evolved_to: string | null;

@@ -72,15 +72,57 @@ function cosineSimilarity(a: string, b: string): number {
   return intersection.size / Math.sqrt(tokensA.size * tokensB.size) || 0;
 }
 
+// ─── Vector Cosine Similarity ────────────────────────────────────────────────────
+
+/**
+ * Calculate cosine similarity between two numeric vectors.
+ * Returns a value between -1 and 1 (1 = identical direction, 0 = orthogonal).
+ * Returns 0 if either vector has zero magnitude.
+ */
+export function vectorCosineSimilarity(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+
+  for (let i = 0; i < len; i++) {
+    dot += a[i]! * b[i]!;
+    magA += a[i]! * a[i]!;
+    magB += b[i]! * b[i]!;
+  }
+
+  const denom = Math.sqrt(magA) * Math.sqrt(magB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+// ─── Embedder Interface ──────────────────────────────────────────────────────────
+
+/**
+ * Minimal interface for an embedding provider.
+ * Compatible with IEmbeddingProvider.embedOne() but kept intentionally narrow
+ * to avoid coupling PatternMatcher to the RAG module.
+ */
+export interface EmbedderLike {
+  embed(text: string): Promise<{ vector: number[]; dimensions: number }>;
+}
+
+/** Options for PatternMatcher constructor */
+export interface PatternMatcherOptions {
+  /** Optional embedder for semantic instinct search */
+  embedder?: EmbedderLike;
+}
+
 // ─── Pattern Matcher Class ──────────────────────────────────────────────────────
 
 export class PatternMatcher {
   private storage: LearningStorage;
+  private readonly embedder?: EmbedderLike;
   private readonly FUZZY_THRESHOLD = 0.7;
   private readonly CONTEXTUAL_THRESHOLD = 0.5;
 
-  constructor(storage: LearningStorage) {
+  constructor(storage: LearningStorage, options?: PatternMatcherOptions) {
     this.storage = storage;
+    this.embedder = options?.embedder;
   }
 
   /**
@@ -183,6 +225,64 @@ export class PatternMatcher {
     }
 
     // Sort by combined score
+    matches.sort((a, b) => b.confidence - a.confidence);
+    return matches.slice(0, maxResults);
+  }
+
+  /**
+   * Find similar instincts using vector embedding cosine similarity.
+   * Requires an embedder to be configured; returns empty array otherwise.
+   *
+   * @param query - The text to embed and search for
+   * @param options - Matching options
+   * @returns Array of semantically similar instincts sorted by score
+   */
+  async findSimilarInstinctsSemantic(
+    query: string,
+    options: {
+      maxResults?: number;
+      minScore?: number;
+    } = {}
+  ): Promise<PatternMatch[]> {
+    if (!this.embedder) {
+      return [];
+    }
+
+    const {
+      maxResults = 10,
+      minScore = 0.6,
+    } = options;
+
+    // Embed the query
+    const { vector: queryVector } = await this.embedder.embed(query);
+
+    // Get all instincts
+    const candidates = this.storage.getInstincts();
+
+    const matches: PatternMatch[] = [];
+
+    for (const instinct of candidates) {
+      // Skip instincts without pre-computed embeddings
+      if (!instinct.embedding || instinct.embedding.length === 0) {
+        continue;
+      }
+
+      const similarity = vectorCosineSimilarity(queryVector, instinct.embedding);
+
+      if (similarity >= minScore) {
+        matches.push({
+          id: instinct.id,
+          type: "semantic",
+          confidence: similarity * instinct.confidence,
+          relevance: similarity,
+          instinct,
+          matchReason: `Semantic similarity: ${(similarity * 100).toFixed(1)}%`,
+          matchedFields: ["embedding"],
+          priority: Math.round(similarity * 100),
+        });
+      }
+    }
+
     matches.sort((a, b) => b.confidence - a.confidence);
     return matches.slice(0, maxResults);
   }

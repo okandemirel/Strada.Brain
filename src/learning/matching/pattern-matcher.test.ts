@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { PatternMatcher, extractKeywords, jaccardSimilarity } from "./pattern-matcher.ts";
+import { PatternMatcher, extractKeywords, jaccardSimilarity, vectorCosineSimilarity } from "./pattern-matcher.ts";
 import type { LearningStorage } from "../storage/learning-storage.ts";
 import type { Instinct, PatternMatchInput } from "../types.ts";
+import type { EmbedderLike } from "./pattern-matcher.ts";
 
 // Mock LearningStorage
 const createMockStorage = (): LearningStorage => {
@@ -197,6 +198,181 @@ describe("PatternMatcher", () => {
       const bestMatch = matcher.getBestMatch(input, 0.99);
       expect(bestMatch).toBeNull();
     });
+  });
+
+  describe("findSimilarInstinctsSemantic", () => {
+    const createMockEmbedder = (): EmbedderLike => ({
+      embed: vi.fn(async (text: string) => ({
+        vector: text.includes("missing type")
+          ? [1, 0, 0]
+          : text.includes("undefined")
+            ? [0, 1, 0]
+            : [0.9, 0.1, 0], // query vector close to "missing type"
+        dimensions: 3,
+      })),
+    });
+
+    const createStorageWithEmbeddings = (): LearningStorage => {
+      const instincts: Instinct[] = [
+        {
+          id: "instinct-emb-1",
+          name: "Missing Type Fix",
+          type: "error_fix",
+          status: "active",
+          confidence: 0.85,
+          triggerPattern: "missing type error",
+          action: "Add using MyNamespace;",
+          contextConditions: [],
+          stats: { timesSuggested: 10, timesApplied: 9, timesFailed: 1, successRate: 0.9 },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          embedding: [1, 0, 0], // unit vector along x-axis
+        },
+        {
+          id: "instinct-emb-2",
+          name: "Undefined Symbol Fix",
+          type: "error_fix",
+          status: "active",
+          confidence: 0.75,
+          triggerPattern: "undefined symbol error",
+          action: "Declare the variable",
+          contextConditions: [],
+          stats: { timesSuggested: 5, timesApplied: 4, timesFailed: 1, successRate: 0.8 },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          embedding: [0, 1, 0], // unit vector along y-axis
+        },
+        {
+          id: "instinct-emb-3",
+          name: "No Embedding Instinct",
+          type: "error_fix",
+          status: "active",
+          confidence: 0.9,
+          triggerPattern: "no embedding here",
+          action: "No action",
+          contextConditions: [],
+          stats: { timesSuggested: 1, timesApplied: 1, timesFailed: 0, successRate: 1 },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          // no embedding field
+        },
+      ];
+
+      return {
+        getInstincts: vi.fn(() => instincts),
+        getInstinct: vi.fn((id: string) => instincts.find(i => i.id === id) ?? null),
+        getErrorPatterns: vi.fn(() => []),
+      } as unknown as LearningStorage;
+    };
+
+    it("should return empty array when no embedder is configured", async () => {
+      // matcher has no embedder (default constructor)
+      const results = await matcher.findSimilarInstinctsSemantic("some query");
+      expect(results).toEqual([]);
+    });
+
+    it("should find semantically similar instincts using vector embeddings", async () => {
+      const embStorage = createStorageWithEmbeddings();
+      const embedder = createMockEmbedder();
+      const semanticMatcher = new PatternMatcher(embStorage, { embedder });
+
+      // Query vector [0.9, 0.1, 0] is close to instinct-emb-1 [1, 0, 0]
+      const results = await semanticMatcher.findSimilarInstinctsSemantic("some query");
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]!.instinct!.id).toBe("instinct-emb-1");
+      expect(results[0]!.type).toBe("semantic");
+      expect(results[0]!.matchedFields).toContain("embedding");
+    });
+
+    it("should skip instincts without embeddings", async () => {
+      const embStorage = createStorageWithEmbeddings();
+      const embedder = createMockEmbedder();
+      const semanticMatcher = new PatternMatcher(embStorage, { embedder });
+
+      const results = await semanticMatcher.findSimilarInstinctsSemantic("some query", {
+        minScore: 0,
+      });
+
+      // instinct-emb-3 has no embedding, should be excluded
+      const ids = results.map(r => r.id);
+      expect(ids).not.toContain("instinct-emb-3");
+    });
+
+    it("should respect minScore option", async () => {
+      const embStorage = createStorageWithEmbeddings();
+      const embedder = createMockEmbedder();
+      const semanticMatcher = new PatternMatcher(embStorage, { embedder });
+
+      // Query [0.9, 0.1, 0] vs [0, 1, 0] should have low similarity
+      const results = await semanticMatcher.findSimilarInstinctsSemantic("some query", {
+        minScore: 0.9,
+      });
+
+      // Only instinct-emb-1 should pass (cosine ~0.994), instinct-emb-2 should not
+      expect(results.length).toBe(1);
+      expect(results[0]!.instinct!.id).toBe("instinct-emb-1");
+    });
+
+    it("should respect maxResults option", async () => {
+      const embStorage = createStorageWithEmbeddings();
+      const embedder = createMockEmbedder();
+      const semanticMatcher = new PatternMatcher(embStorage, { embedder });
+
+      const results = await semanticMatcher.findSimilarInstinctsSemantic("some query", {
+        maxResults: 1,
+        minScore: 0,
+      });
+
+      expect(results.length).toBe(1);
+    });
+
+    it("should sort results by similarity score descending", async () => {
+      const embStorage = createStorageWithEmbeddings();
+      const embedder = createMockEmbedder();
+      const semanticMatcher = new PatternMatcher(embStorage, { embedder });
+
+      const results = await semanticMatcher.findSimilarInstinctsSemantic("some query", {
+        minScore: 0,
+      });
+
+      // Results should be sorted by confidence (similarity * instinct.confidence) descending
+      for (let i = 1; i < results.length; i++) {
+        expect(results[i - 1]!.confidence).toBeGreaterThanOrEqual(results[i]!.confidence);
+      }
+    });
+  });
+});
+
+describe("vectorCosineSimilarity", () => {
+  it("should return 1 for identical vectors", () => {
+    expect(vectorCosineSimilarity([1, 0, 0], [1, 0, 0])).toBeCloseTo(1.0);
+  });
+
+  it("should return 0 for orthogonal vectors", () => {
+    expect(vectorCosineSimilarity([1, 0, 0], [0, 1, 0])).toBeCloseTo(0.0);
+  });
+
+  it("should return -1 for opposite vectors", () => {
+    expect(vectorCosineSimilarity([1, 0], [-1, 0])).toBeCloseTo(-1.0);
+  });
+
+  it("should handle non-unit vectors correctly", () => {
+    // [3, 4] and [6, 8] are parallel → cosine = 1
+    expect(vectorCosineSimilarity([3, 4], [6, 8])).toBeCloseTo(1.0);
+  });
+
+  it("should return 0 for zero-length vectors", () => {
+    expect(vectorCosineSimilarity([0, 0, 0], [1, 2, 3])).toBe(0);
+    expect(vectorCosineSimilarity([1, 2, 3], [0, 0, 0])).toBe(0);
+  });
+
+  it("should compute correct similarity for arbitrary vectors", () => {
+    // [1, 2, 3] dot [4, 5, 6] = 4 + 10 + 18 = 32
+    // |[1,2,3]| = sqrt(14), |[4,5,6]| = sqrt(77)
+    // cosine = 32 / sqrt(14*77) = 32 / sqrt(1078)
+    const expected = 32 / Math.sqrt(14 * 77);
+    expect(vectorCosineSimilarity([1, 2, 3], [4, 5, 6])).toBeCloseTo(expected);
   });
 });
 
