@@ -239,6 +239,7 @@ export class PatternMatcher {
     // Get all instincts
     const candidates = this.storage.getInstincts();
 
+    const { denseCosineSimilarity } = await import("../../rag/vector-math.js");
     const matches: PatternMatch[] = [];
 
     for (const instinct of candidates) {
@@ -247,7 +248,11 @@ export class PatternMatcher {
         continue;
       }
 
-      const { denseCosineSimilarity } = await import("../../rag/vector-math.js");
+      // Skip dimension-mismatched embeddings
+      if (instinct.embedding.length !== queryVector.length) {
+        continue;
+      }
+
       const similarity = denseCosineSimilarity(queryVector, instinct.embedding);
 
       if (similarity >= minScore) {

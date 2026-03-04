@@ -112,10 +112,10 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
                     IChannelAdapter-Interface
                                |
 +------------------------------v----------------------------------+
-|  Orchestrator (Agent-Schleife)                                   |
-|  System-Prompt + Speicher + RAG-Kontext -> LLM -> Tool-Aufrufe   |
-|  Bis zu 50 Tool-Iterationen pro Nachricht                        |
-|  Autonomie: Fehlerbehebung, Stall-Erkennung, Build-Verifikation |
+|  Orchestrator (PAOR-Agentenschleife)                             |
+|  Planen -> Handeln -> Beobachten -> Reflektieren Zustandsmaschine|
+|  Bis zu 50 Werkzeug-Iterationen pro Nachricht                   |
+|  Instinktabruf, Fehlerklassifikation, automatische Neuplanung   |
 +------------------------------+----------------------------------+
                                |
           +--------------------+--------------------+
@@ -133,15 +133,17 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 
 ### Wie die Agent-Schleife funktioniert
 
-1. **Nachricht trifft ein** von einem Chat-Kanal
-2. **Speicherabruf** -- findet die 3 relevantesten vergangenen Konversationen (TF-IDF)
+1. **Nachricht eingeht** -- vom Chat-Kanal
+2. **Gedaechtnisabruf** -- findet die 3 relevantesten vergangenen Gespraeche (TF-IDF)
 3. **RAG-Abruf** -- semantische Suche ueber Ihre C#-Codebasis (HNSW-Vektoren, Top 6 Ergebnisse)
-4. **Zwischengespeicherte Analyse** -- fuegt Projektstruktur ein, falls zuvor analysiert
-5. **LLM-Aufruf** mit System-Prompt + Kontext + Tool-Definitionen
-6. **Tool-Ausfuehrung** -- wenn das LLM Tools aufruft, werden diese ausgefuehrt und die Ergebnisse an das LLM zurueckgegeben
-7. **Autonomie-Pruefungen** -- Fehlerbehebung analysiert Fehler, Stall-Detektor warnt bei Blockaden, Selbst-Verifikation erzwingt einen `dotnet build` vor der Antwort, wenn `.cs`-Dateien geaendert wurden
-8. **Wiederholung** bis zu 50 Iterationen, bis das LLM eine finale Textantwort produziert
-9. **Antwort wird gesendet** an den Benutzer ueber den Kanal (Streaming, falls unterstuetzt)
+4. **Instinktabruf** -- fragt proaktiv aufgabenrelevante gelernte Muster ab
+5. **PLAN-Phase** -- LLM erstellt einen nummerierten Plan, informiert durch gelernte Erkenntnisse und vergangene Fehler
+6. **HANDELN-Phase** -- LLM fuehrt Werkzeugaufrufe gemaess dem Plan aus
+7. **BEOBACHTEN** -- Ergebnisse werden aufgezeichnet; Fehlerwiederherstellung analysiert Ausfaelle; Fehlerklassifikator kategorisiert Fehler
+8. **REFLEKTIEREN** -- alle 3 Schritte (oder bei Fehler) entscheidet LLM: **FORTFAHREN**, **NEU PLANEN** oder **FERTIG**
+9. **Automatische Neuplanung** -- bei 3+ aufeinanderfolgenden gleichartigen Fehlern wird ein neuer Ansatz erzwungen
+10. **Wiederholung** bis zu 50 Iterationen bis zur Fertigstellung
+11. **Antwort gesendet** -- ueber den Kanal an den Benutzer (Streaming wenn unterstuetzt)
 
 ---
 
@@ -380,6 +382,8 @@ Das Lernsystem beobachtet das Agentenverhalten und lernt aus Fehlern:
 - **Trajektorien** zeichnen Sequenzen von Tool-Aufrufen mit Ergebnissen auf
 - Konfidenzwerte verwenden **Elo-Rating** und **Wilson-Score-Intervalle** fuer statistische Validitaet
 - Instinkte unter 0.3 Konfidenz werden als veraltet markiert; ueber 0.9 werden zur Befoerderung vorgeschlagen
+- **Aktiver Abruf (neu):** Instinkte werden zu Beginn jeder Aufgabe proaktiv ueber den `InstinctRetriever` abgefragt. Er sucht mit Schluesselwort-Aehnlichkeit und HNSW-Vektor-Einbettungen nach relevanten gelernten Mustern und injiziert sie in den PLAN-Phasen-Prompt.
+- **Aufgabenzerlegung:** Komplexe mehrstufige Anfragen werden durch heuristische Analyse automatisch erkannt und vor der Ausfuehrung ueber das LLM in 3-8 geordnete Teilaufgaben zerlegt.
 
 Die Lern-Pipeline laeuft auf Timern: Mustererkennung alle 5 Minuten, Evolutionsvorschlaege jede Stunde. Die Daten werden in einer separaten SQLite-Datenbank (`learning.db`) gespeichert.
 
@@ -463,7 +467,7 @@ node dist/index.js daemon --channel telegram
 ## Testen
 
 ```bash
-npm test                         # Alle 1560+ Tests ausfuehren
+npm test                         # Alle 1730+ Tests ausfuehren
 npm run test:watch               # Watch-Modus
 npm test -- --coverage           # Mit Coverage
 npm test -- src/agents/tools/file-read.test.ts  # Einzelne Datei
@@ -471,7 +475,7 @@ npm run typecheck                # TypeScript-Typpruefung
 npm run lint                     # ESLint
 ```
 
-94 Testdateien, die abdecken: Agenten, Kanaele, Sicherheit, RAG, Speicher, Lernen, Dashboard, Integrationsablaeufe.
+110 Testdateien, die abdecken: Agenten, Kanaele, Sicherheit, RAG, Speicher, Lernen, Dashboard, Integrationsablaeufe.
 
 ---
 
@@ -485,8 +489,12 @@ src/
     di-container.ts     # DI-Container (verfuegbar, aber manuelle Verdrahtung dominiert)
     tool-registry.ts    # Tool-Instanziierung und -Registrierung
   agents/
-    orchestrator.ts     # Kern-Agent-Schleife, Sitzungsverwaltung, Streaming
-    autonomy/           # Fehlerbehebung, Aufgabenplanung, Selbst-Verifikation
+    orchestrator.ts     # PAOR-Agentenschleife, Sitzungsverwaltung, Streaming
+    agent-state.ts      # Phasen-Zustandsmaschine (Planen/Handeln/Beobachten/Reflektieren)
+    paor-prompts.ts     # Phasenbewusste Prompt-Builder
+    instinct-retriever.ts # Proaktiver Abruf gelernter Muster
+    failure-classifier.ts # Fehlerkategorisierung und Auto-Neuplanungs-Trigger
+    autonomy/           # Fehlerwiederherstellung, Aufgabenplanung, Selbstverifizierung
     context/            # System-Prompt (Strada.Core-Wissensbasis)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq + weitere
     tools/              # 30+ Tool-Implementierungen
@@ -507,7 +515,7 @@ src/
     embeddings/         # OpenAI- und Ollama-Embedding-Anbieter
     reranker.ts         # Gewichtetes Reranking (Vektor + Schluesselwort + Struktur)
   security/             # Auth, RBAC, Pfadschutz, Ratenbegrenzer, Geheimnis-Bereinigung
-  learning/             # Mustererkennung, Konfidenzbewertung, Instinkt-Lebenszyklus
+  learning/             # Mustererkennung, Konfidenzbewertung, Instinkt-Lebenszyklus, HNSW-semantische Suche
   intelligence/         # C#-Parsing, Projektanalyse, Code-Qualitaet
   dashboard/            # HTTP-, WebSocket-, Prometheus-Dashboards
   config/               # Zod-validierte Umgebungskonfiguration

@@ -71,10 +71,12 @@ export function buildReflectionPrompt(state: AgentState): string {
   }
 
   lines.push(
-    "Based on the results above, respond with one of:",
+    "Based on the results above, state your reasoning then end with EXACTLY one of these on its own line:",
     "- **CONTINUE** - proceed with the current plan",
     "- **REPLAN** - the current approach needs a new plan",
     "- **DONE** - the task is complete",
+    "",
+    "Your final line MUST be one of: **CONTINUE**, **REPLAN**, or **DONE**",
   );
 
   return lines.join("\n");

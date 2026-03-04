@@ -112,10 +112,10 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
                     IChannelAdapter arayuzu
                                |
 +------------------------------v----------------------------------+
-|  Orkestrator (Ajan Dongusu)                                      |
-|  Sistem istemi + Hafiza + RAG baglami -> LLM -> Arac cagrilari   |
-|  Mesaj basina 50 arac yinelemesine kadar                         |
-|  Ozerklik: hata kurtarma, durma algilama, derleme dogrulama      |
+|  Orkestratör (PAOR Ajan Döngüsü)                                |
+|  Plan -> Eylem -> Gözlem -> Yansıma durum makinesi               |
+|  Mesaj başına 50 araç iterasyonuna kadar                         |
+|  İçgüdü getirme, hata sınıflandırma, otomatik yeniden planlama  |
 +------------------------------+----------------------------------+
                                |
           +--------------------+--------------------+
@@ -133,15 +133,17 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 
 ### Ajan Dongusu Nasil Calisir
 
-1. **Mesaj gelir** -- bir sohbet kanalindan
-2. **Hafiza getirme** -- en alakali 3 gecmis konusmayi bulur (TF-IDF)
-3. **RAG getirme** -- C# kod tabaniniz uzerinde semantik arama (HNSW vektorleri, en iyi 6 sonuc)
-4. **Onbellekli analiz** -- daha once analiz edilmisse proje yapisini enjekte eder
-5. **LLM cagrisi** -- sistem istemi + baglam + arac tanimlari ile
-6. **Arac yurutme** -- LLM arac cagirirsa, calistirilir ve sonuclar LLM'e geri beslenir
-7. **Ozerklik kontrolleri** -- hata kurtarma basarisizliklari analiz eder, durma algalayici takilirsa uyarir, oto-dogrulama `.cs` dosyalari degistirildiyse yanit vermeden once `dotnet build` zorlar
-8. **Tekrar** -- LLM nihai bir metin yaniti uretemye kadar 50 yinelemeye kadar
-9. **Yanit gonderilir** -- kanal uzerinden kullaniciya (destekleniyorsa akis halinde)
+1. **Mesaj gelir** -- sohbet kanalından
+2. **Hafıza getirme** -- en alakalı 3 geçmiş sohbeti bulur (TF-IDF)
+3. **RAG getirme** -- C# kod tabanında anlamsal arama (HNSW vektörler, ilk 6 sonuç)
+4. **İçgüdü getirme** -- göreve uygun öğrenilmiş kalıpları proaktif olarak sorgular
+5. **PLAN aşaması** -- LLM öğrenilmiş içgörüler ve geçmiş hatalarla bilgilendirilmiş numaralı bir plan oluşturur
+6. **EYLEM aşaması** -- LLM plana göre araç çağrıları yürütür
+7. **GÖZLEM** -- sonuçlar kaydedilir; hata kurtarma başarısızlıkları analiz eder; hata sınıflandırıcı hataları kategorize eder
+8. **YANSIMA** -- her 3 adımda (veya hata durumunda), LLM karar verir: **DEVAM**, **YENİDEN PLANLA** veya **TAMAMLANDI**
+9. **Otomatik yeniden planlama** -- 3+ ardışık aynı türde hata oluşursa, başarısız stratejilerden kaçınan yeni bir yaklaşım zorlar
+10. **50 iterasyona kadar tekrarla**
+11. **Yanıt** kullanıcıya kanal üzerinden gönderilir (destekleniyorsa akış halinde)
 
 ---
 
@@ -383,6 +385,10 @@ Ogrenme sistemi ajan davranisini gozlemler ve hatalardan ogrenir:
 
 Ogrenme boru hatti zamanlayicilarla calisir: her 5 dakikada kalip algilama, her saatte evrim onerileri. Veriler ayri bir SQLite veritabaninda (`learning.db`) saklanir.
 
+**Aktif getirme (yeni):** İçgüdüler, her görevin başında `InstinctRetriever` kullanılarak proaktif olarak sorgulanır. Anahtar kelime benzerliği ve HNSW vektör gömmeleri ile alakalı öğrenilmiş kalıpları arar ve bunlar PLAN aşaması promptuna enjekte edilir.
+
+**Görev ayrıştırma:** Karmaşık çok adımlı istekler, sezgisel analiz ile otomatik olarak tespit edilir ve yürütülmeden önce LLM aracılığıyla 3-8 sıralı alt göreve ayrıştırılır.
+
 ---
 
 ## Guvenlik
@@ -463,7 +469,7 @@ node dist/index.js daemon --channel telegram
 ## Test
 
 ```bash
-npm test                         # Tum 1560+ testi calistir
+npm test                         # Tum 1730+ testi calistir
 npm run test:watch               # Izleme modu
 npm test -- --coverage           # Kapsam ile
 npm test -- src/agents/tools/file-read.test.ts  # Tekli dosya
@@ -471,7 +477,7 @@ npm run typecheck                # TypeScript tip kontrolu
 npm run lint                     # ESLint
 ```
 
-94 test dosyasi kapsam alani: ajanlar, kanallar, guvenlik, RAG, hafiza, ogrenme, panel, entegrasyon akislari.
+110 test dosyasi kapsam alani: ajanlar, kanallar, guvenlik, RAG, hafiza, ogrenme, panel, entegrasyon akislari.
 
 ---
 
@@ -485,8 +491,12 @@ src/
     di-container.ts     # DI konteyneri (mevcut ama manuel baglanti baskin)
     tool-registry.ts    # Arac ornekleme ve kayit
   agents/
-    orchestrator.ts     # Cekirdek ajan dongusu, oturum yonetimi, akis
-    autonomy/           # Hata kurtarma, gorev planlama, oto-dogrulama
+    orchestrator.ts     # PAOR ajan döngüsü, oturum yönetimi, akış
+    agent-state.ts      # Aşama durum makinesi (Plan/Eylem/Gözlem/Yansıma)
+    paor-prompts.ts     # Aşama-farkında prompt oluşturucular
+    instinct-retriever.ts # Proaktif öğrenilmiş kalıp getirme
+    failure-classifier.ts # Hata kategorilendirme ve otomatik yeniden planlama tetikleyicileri
+    autonomy/           # Hata kurtarma, görev planlama, öz-doğrulama
     context/            # Sistem istemi (Strada.Core bilgi tabanli)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + dahasi
     tools/              # 30+ arac uygulamasi
@@ -507,7 +517,7 @@ src/
     embeddings/         # OpenAI ve Ollama gomme saglayicilari
     reranker.ts         # Agirlikli yeniden siralama (vektor + anahtar kelime + yapisal)
   security/             # Kimlik dogrulama, RBAC, yol korumasi, hiz sinirlamasi, gizli bilgi temizleyici
-  learning/             # Kalip esleme, guven puanlama, icgudu yasam dongusu
+  learning/             # Kalıp eşleme, güven puanlama, içgüdü yaşam döngüsü, HNSW anlamsal arama
   intelligence/         # C# ayristirma, proje analizi, kod kalitesi
   dashboard/            # HTTP, WebSocket, Prometheus panelleri
   config/               # Zod ile dogrulanmis ortam yapilandirmasi

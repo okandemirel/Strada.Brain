@@ -112,11 +112,10 @@ Une fois lance, envoyez un message via votre canal configure :
                     Interface IChannelAdapter
                                |
 +------------------------------v----------------------------------+
-|  Orchestrateur (Boucle Agent)                                    |
-|  Prompt systeme + Memoire + Contexte RAG -> LLM -> Appels outils|
-|  Jusqu'a 50 iterations d'outils par message                      |
-|  Autonomie : recuperation d'erreurs, detection de blocage,       |
-|  verification de build                                           |
+|  Orchestrateur (Boucle d'Agent PAOR)                             |
+|  Planifier -> Agir -> Observer -> Réfléchir machine à états      |
+|  Jusqu'à 50 itérations d'outils par message                     |
+|  Récupération d'instincts, classification des pannes, replanification automatique |
 +------------------------------+----------------------------------+
                                |
           +--------------------+--------------------+
@@ -134,15 +133,17 @@ Une fois lance, envoyez un message via votre canal configure :
 
 ### Fonctionnement de la Boucle Agent
 
-1. **Un message arrive** depuis un canal de chat
-2. **Recuperation memoire** -- trouve les 3 conversations passees les plus pertinentes (TF-IDF)
-3. **Recuperation RAG** -- recherche semantique sur votre base de code C# (vecteurs HNSW, top 6 resultats)
-4. **Analyse en cache** -- injecte la structure du projet si elle a ete analysee precedemment
-5. **Appel LLM** avec prompt systeme + contexte + definitions d'outils
-6. **Execution des outils** -- si le LLM appelle des outils, ils s'executent et les resultats sont renvoyes au LLM
-7. **Controles d'autonomie** -- la recuperation d'erreurs analyse les echecs, le detecteur de blocage avertit si l'agent est coince, l'auto-verification force un `dotnet build` avant de repondre si des fichiers `.cs` ont ete modifies
-8. **Repetition** jusqu'a 50 iterations jusqu'a ce que le LLM produise une reponse textuelle finale
-9. **Reponse envoyee** a l'utilisateur via le canal (streaming si supporte)
+1. **Message reçu** — du canal de chat
+2. **Récupération mémoire** — trouve les 3 conversations passées les plus pertinentes (TF-IDF)
+3. **Récupération RAG** — recherche sémantique sur votre code C# (vecteurs HNSW, top 6 résultats)
+4. **Récupération d'instincts** — interroge proactivement les motifs appris pertinents pour la tâche
+5. **Phase PLAN** — LLM crée un plan numéroté, informé par les connaissances apprises et les échecs passés
+6. **Phase AGIR** — LLM exécute les appels d'outils selon le plan
+7. **OBSERVER** — les résultats sont enregistrés ; la récupération d'erreurs analyse les échecs ; le classificateur catégorise les erreurs
+8. **RÉFLÉCHIR** — tous les 3 pas (ou en cas d'erreur), LLM décide : **CONTINUER**, **REPLANIFIER** ou **TERMINÉ**
+9. **Replanification automatique** — si 3+ échecs consécutifs du même type, force une nouvelle approche
+10. **Répéter** jusqu'à 50 itérations jusqu'à complétion
+11. **Réponse envoyée** — à l'utilisateur via le canal (streaming si supporté)
 
 ---
 
@@ -384,6 +385,10 @@ Le systeme d'apprentissage observe le comportement de l'agent et apprend de ses 
 
 Le pipeline d'apprentissage s'execute sur des minuteurs : detection de modeles toutes les 5 minutes, propositions d'evolution toutes les heures. Les donnees sont stockees dans une base de donnees SQLite separee (`learning.db`).
 
+**Récupération active (nouveau) :** Les instincts sont interrogés proactivement au début de chaque tâche via l'`InstinctRetriever`. Il recherche les motifs appris pertinents par similarité de mots-clés et embeddings vectoriels HNSW, et les injecte dans le prompt de la phase PLAN.
+
+**Décomposition de tâches :** Les requêtes complexes multi-étapes sont automatiquement détectées par analyse heuristique et décomposées en 3-8 sous-tâches ordonnées via le LLM avant exécution.
+
 ---
 
 ## Securite
@@ -464,7 +469,7 @@ node dist/index.js daemon --channel telegram
 ## Tests
 
 ```bash
-npm test                         # Lancer les 1560+ tests
+npm test                         # Lancer les 1730+ tests
 npm run test:watch               # Mode watch
 npm test -- --coverage           # Avec couverture
 npm test -- src/agents/tools/file-read.test.ts  # Fichier unique
@@ -472,7 +477,7 @@ npm run typecheck                # Verification de types TypeScript
 npm run lint                     # ESLint
 ```
 
-94 fichiers de test couvrant : agents, canaux, securite, RAG, memoire, apprentissage, tableau de bord, flux d'integration.
+110 fichiers de test couvrant : agents, canaux, securite, RAG, memoire, apprentissage, tableau de bord, flux d'integration.
 
 ---
 
@@ -486,8 +491,12 @@ src/
     di-container.ts     # Conteneur DI (disponible mais le cablage manuel domine)
     tool-registry.ts    # Instanciation et enregistrement des outils
   agents/
-    orchestrator.ts     # Boucle agent principale, gestion de sessions, streaming
-    autonomy/           # Recuperation d'erreurs, planification de taches, auto-verification
+    orchestrator.ts     # Boucle d'agent PAOR, gestion de sessions, streaming
+    agent-state.ts      # Machine à états de phase (Planifier/Agir/Observer/Réfléchir)
+    paor-prompts.ts     # Constructeurs de prompts conscients des phases
+    instinct-retriever.ts # Récupération proactive de motifs appris
+    failure-classifier.ts # Catégorisation des erreurs et déclencheurs de replanification automatique
+    autonomy/           # Récupération d'erreurs, planification de tâches, auto-vérification
     context/            # Prompt systeme (base de connaissances Strada.Core)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + autres
     tools/              # 30+ implementations d'outils
@@ -508,7 +517,7 @@ src/
     embeddings/         # Fournisseurs d'embeddings OpenAI et Ollama
     reranker.ts         # Re-classement pondere (vectoriel + mots-cles + structurel)
   security/             # Auth, RBAC, gardien de chemin, limiteur de debit, assainisseur de secrets
-  learning/             # Correspondance de modeles, score de confiance, cycle de vie des instincts
+  learning/             # Correspondance de modèles, score de confiance, cycle de vie des instincts, recherche sémantique HNSW
   intelligence/         # Analyse C#, analyse de projet, qualite de code
   dashboard/            # Tableaux de bord HTTP, WebSocket, Prometheus
   config/               # Configuration d'environnement validee par Zod

@@ -79,9 +79,13 @@ export class TaskDecomposer {
         text = fenceMatch[1].trim();
       }
 
+      const MAX_SUBTASKS = 8;
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed.subtasks) && parsed.subtasks.length > 0) {
-        return parsed.subtasks;
+        const valid = parsed.subtasks
+          .filter((s: unknown): s is string => typeof s === "string")
+          .slice(0, MAX_SUBTASKS);
+        if (valid.length > 0) return valid;
       }
       return [prompt];
     } catch {

@@ -112,10 +112,10 @@ Once running, send a message through your configured channel:
                     IChannelAdapter interface
                                |
 +------------------------------v----------------------------------+
-|  Orchestrator (Agent Loop)                                       |
-|  System prompt + Memory + RAG context -> LLM -> Tool calls       |
+|  Orchestrator (PAOR Agent Loop)                                  |
+|  Plan -> Act -> Observe -> Reflect state machine                 |
 |  Up to 50 tool iterations per message                            |
-|  Autonomy: error recovery, stall detection, build verification   |
+|  Instinct retrieval, failure classification, auto-replan         |
 +------------------------------+----------------------------------+
                                |
           +--------------------+--------------------+
@@ -136,12 +136,14 @@ Once running, send a message through your configured channel:
 1. **Message arrives** from a chat channel
 2. **Memory retrieval** — finds the 3 most relevant past conversations (TF-IDF)
 3. **RAG retrieval** — semantic search over your C# codebase (HNSW vectors, top 6 results)
-4. **Cached analysis** — injects project structure if previously analyzed
-5. **LLM call** with system prompt + context + tool definitions
-6. **Tool execution** — if the LLM calls tools, they execute and results feed back to the LLM
-7. **Autonomy checks** — error recovery analyzes failures, stall detector warns if stuck, self-verification forces a `dotnet build` before responding if `.cs` files were modified
-8. **Repeat** up to 50 iterations until the LLM produces a final text response
-9. **Response sent** to the user through the channel (streaming if supported)
+4. **Instinct retrieval** — proactively queries learned patterns relevant to the task (semantic + keyword matching)
+5. **PLAN phase** — LLM creates a numbered plan, informed by learned insights and past failures
+6. **ACT phase** — LLM executes tool calls following the plan
+7. **OBSERVE** — results are recorded; error recovery analyzes failures; failure classifier categorizes errors
+8. **REFLECT** — every 3 steps (or on error), LLM decides: **CONTINUE**, **REPLAN**, or **DONE**
+9. **Auto-replan** — if 3+ consecutive same-type failures occur, forces a new approach avoiding failed strategies
+10. **Repeat** up to 50 iterations until complete
+11. **Response sent** to the user through the channel (streaming if supported)
 
 ---
 
@@ -381,6 +383,10 @@ The learning system observes agent behavior and learns from errors:
 - Confidence scores use **Elo rating** and **Wilson score intervals** for statistical validity
 - Instincts below 0.3 confidence are deprecated; above 0.9 are proposed for promotion
 
+**Active retrieval (new):** Instincts are proactively queried at the start of each task using the `InstinctRetriever`. It searches by keyword similarity and HNSW vector embeddings to find relevant learned patterns, which are injected into the PLAN phase prompt. This means the agent improves with use — past solutions inform future planning.
+
+**Task decomposition:** Complex multi-step requests are automatically detected by heuristic analysis and decomposed into 3-8 ordered subtasks via the LLM before execution.
+
 The learning pipeline runs on timers: pattern detection every 5 minutes, evolution proposals every hour. Data is stored in a separate SQLite database (`learning.db`).
 
 ---
@@ -463,7 +469,7 @@ node dist/index.js daemon --channel telegram
 ## Testing
 
 ```bash
-npm test                         # Run all 1560+ tests
+npm test                         # Run all 1730+ tests
 npm run test:watch               # Watch mode
 npm test -- --coverage           # With coverage
 npm test -- src/agents/tools/file-read.test.ts  # Single file
@@ -471,7 +477,7 @@ npm run typecheck                # TypeScript type checking
 npm run lint                     # ESLint
 ```
 
-94 test files covering: agents, channels, security, RAG, memory, learning, dashboard, integration flows.
+110 test files covering: agents, channels, security, RAG, memory, learning, dashboard, integration flows.
 
 ---
 
@@ -485,7 +491,11 @@ src/
     di-container.ts     # DI container (available but manual wiring dominates)
     tool-registry.ts    # Tool instantiation and registration
   agents/
-    orchestrator.ts     # Core agent loop, session management, streaming
+    orchestrator.ts     # PAOR agent loop, session management, streaming
+    agent-state.ts      # Phase state machine (Plan/Act/Observe/Reflect)
+    paor-prompts.ts     # Phase-aware prompt builders
+    instinct-retriever.ts # Proactive learned-pattern retrieval
+    failure-classifier.ts # Error categorization and auto-replan triggers
     autonomy/           # Error recovery, task planning, self-verification
     context/            # System prompt (Strada.Core knowledge base)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + more
@@ -507,7 +517,7 @@ src/
     embeddings/         # OpenAI and Ollama embedding providers
     reranker.ts         # Weighted reranking (vector + keyword + structural)
   security/             # Auth, RBAC, path guard, rate limiter, secret sanitizer
-  learning/             # Pattern matching, confidence scoring, instinct lifecycle
+  learning/             # Pattern matching, HNSW semantic search, confidence scoring, instinct lifecycle
   intelligence/         # C# parsing, project analysis, code quality
   dashboard/            # HTTP, WebSocket, Prometheus dashboards
   config/               # Zod-validated environment configuration

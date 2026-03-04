@@ -112,11 +112,10 @@ Una vez en ejecucion, envia un mensaje a traves de tu canal configurado:
                     Interfaz IChannelAdapter
                                |
 +------------------------------v----------------------------------+
-|  Orchestrator (Bucle del Agente)                                 |
-|  System prompt + Memoria + Contexto RAG -> LLM -> Llamadas Tool  |
+|  Orquestador (Bucle de Agente PAOR)                              |
+|  Planificar -> Actuar -> Observar -> Reflexionar máquina estados |
 |  Hasta 50 iteraciones de herramientas por mensaje                |
-|  Autonomia: recuperacion de errores, deteccion de bloqueos,      |
-|  verificacion de builds                                          |
+|  Recuperación de instintos, clasificación de fallos, replanificación automática |
 +------------------------------+----------------------------------+
                                |
           +--------------------+--------------------+
@@ -134,15 +133,17 @@ Una vez en ejecucion, envia un mensaje a traves de tu canal configurado:
 
 ### Como funciona el bucle del agente
 
-1. **Llega un mensaje** desde un canal de chat
+1. **Mensaje recibido** -- del canal de chat
 2. **Recuperacion de memoria** -- encuentra las 3 conversaciones pasadas mas relevantes (TF-IDF)
 3. **Recuperacion RAG** -- busqueda semantica sobre tu codigo C# (vectores HNSW, top 6 resultados)
-4. **Analisis en cache** -- inyecta la estructura del proyecto si fue analizada previamente
-5. **Llamada LLM** con system prompt + contexto + definiciones de herramientas
-6. **Ejecucion de herramientas** -- si el LLM llama herramientas, se ejecutan y los resultados se devuelven al LLM
-7. **Verificaciones de autonomia** -- la recuperacion de errores analiza fallos, el detector de bloqueos advierte si esta atascado, la auto-verificacion fuerza un `dotnet build` antes de responder si se modificaron archivos `.cs`
-8. **Repeticion** hasta 50 iteraciones hasta que el LLM produzca una respuesta de texto final
-9. **La respuesta se envia** al usuario a traves del canal (streaming si esta soportado)
+4. **Recuperacion de instintos** -- consulta proactivamente patrones aprendidos relevantes para la tarea
+5. **Fase PLAN** -- LLM crea un plan numerado, informado por conocimientos aprendidos y fallos pasados
+6. **Fase ACTUAR** -- LLM ejecuta llamadas de herramientas siguiendo el plan
+7. **OBSERVAR** -- se registran resultados; recuperacion de errores analiza fallos; clasificador categoriza errores
+8. **REFLEXIONAR** -- cada 3 pasos (o en error), LLM decide: **CONTINUAR**, **REPLANIFICAR** o **HECHO**
+9. **Replanificacion automatica** -- si ocurren 3+ fallos consecutivos del mismo tipo, fuerza un nuevo enfoque
+10. **Repetir** hasta 50 iteraciones hasta completar
+11. **Respuesta enviada** -- al usuario a traves del canal (streaming si es compatible)
 
 ---
 
@@ -384,6 +385,10 @@ El sistema de aprendizaje observa el comportamiento del agente y aprende de los 
 
 La pipeline de aprendizaje se ejecuta con temporizadores: deteccion de patrones cada 5 minutos, propuestas de evolucion cada hora. Los datos se almacenan en una base de datos SQLite separada (`learning.db`).
 
+**Recuperacion activa (nuevo):** Los instintos se consultan proactivamente al inicio de cada tarea usando el `InstinctRetriever`. Busca patrones aprendidos relevantes mediante similitud de palabras clave y embeddings vectoriales HNSW, inyectandolos en el prompt de la fase PLAN.
+
+**Descomposicion de tareas:** Las solicitudes complejas de multiples pasos se detectan automaticamente mediante analisis heuristico y se descomponen en 3-8 subtareas ordenadas a traves del LLM antes de la ejecucion.
+
 ---
 
 ## Seguridad
@@ -464,7 +469,7 @@ node dist/index.js daemon --channel telegram
 ## Pruebas
 
 ```bash
-npm test                         # Ejecutar las 1560+ pruebas
+npm test                         # Ejecutar las 1730+ pruebas
 npm run test:watch               # Modo observacion
 npm test -- --coverage           # Con cobertura
 npm test -- src/agents/tools/file-read.test.ts  # Archivo individual
@@ -472,7 +477,7 @@ npm run typecheck                # Verificacion de tipos TypeScript
 npm run lint                     # ESLint
 ```
 
-94 archivos de prueba que cubren: agentes, canales, seguridad, RAG, memoria, aprendizaje, dashboard, flujos de integracion.
+110 archivos de prueba que cubren: agentes, canales, seguridad, RAG, memoria, aprendizaje, dashboard, flujos de integracion.
 
 ---
 
@@ -486,7 +491,11 @@ src/
     di-container.ts     # Contenedor DI (disponible pero la configuracion manual predomina)
     tool-registry.ts    # Instanciacion y registro de herramientas
   agents/
-    orchestrator.ts     # Bucle principal del agente, gestion de sesiones, streaming
+    orchestrator.ts     # Bucle de agente PAOR, gestion de sesiones, streaming
+    agent-state.ts      # Maquina de estados de fase (Planificar/Actuar/Observar/Reflexionar)
+    paor-prompts.ts     # Constructores de prompts conscientes de fase
+    instinct-retriever.ts # Recuperacion proactiva de patrones aprendidos
+    failure-classifier.ts # Categorizacion de errores y disparadores de replanificacion automatica
     autonomy/           # Recuperacion de errores, planificacion de tareas, auto-verificacion
     context/            # System prompt (base de conocimiento Strada.Core)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq + mas
@@ -508,7 +517,7 @@ src/
     embeddings/         # Proveedores de embeddings OpenAI y Ollama
     reranker.ts         # Reranking ponderado (vector + palabra clave + estructura)
   security/             # Auth, RBAC, proteccion de rutas, limitador de tasa, sanitizacion de secretos
-  learning/             # Coincidencia de patrones, puntuacion de confianza, ciclo de vida de instintos
+  learning/             # Coincidencia de patrones, busqueda semantica HNSW, puntuacion de confianza, ciclo de vida de instintos
   intelligence/         # Parsing C#, analisis de proyecto, calidad de codigo
   dashboard/            # Dashboards HTTP, WebSocket, Prometheus
   config/               # Configuracion de entorno validada con Zod

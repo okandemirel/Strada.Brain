@@ -1119,11 +1119,16 @@ export class Orchestrator {
   }
 }
 
+const REFLECTION_DECISION_RE = /\*\*\s*(DONE|REPLAN|CONTINUE)\s*\*\*/;
+
 function parseReflectionDecision(text: string | null | undefined): "CONTINUE" | "REPLAN" | "DONE" {
   if (!text) return "CONTINUE";
-  const upper = text.toUpperCase();
-  if (upper.includes("DONE")) return "DONE";
-  if (upper.includes("REPLAN")) return "REPLAN";
+  const match = text.match(REFLECTION_DECISION_RE);
+  if (match) return match[1] as "DONE" | "REPLAN" | "CONTINUE";
+  // Fallback: check last line for bare keyword
+  const lastLine = text.trim().split("\n").pop()?.toUpperCase() ?? "";
+  if (lastLine === "DONE") return "DONE";
+  if (lastLine === "REPLAN") return "REPLAN";
   return "CONTINUE";
 }
 
