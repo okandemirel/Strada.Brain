@@ -5,22 +5,22 @@
  * Replaces the monolithic startBrain() function from index.ts.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
 import { createLogger, getLogger } from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
 import { ClaudeProvider } from "../agents/providers/claude.js";
-import { buildProviderChain, PROVIDER_PRESETS } from "../agents/providers/provider-registry.js";
+import { buildProviderChain } from "../agents/providers/provider-registry.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { DashboardServer } from "../dashboard/server.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
-import { OpenAIEmbeddingProvider } from "../rag/embeddings/openai-embeddings.js";
-import { OllamaEmbeddingProvider } from "../rag/embeddings/ollama-embeddings.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
+import { resolveEmbeddingProvider, collectApiKeys } from "../rag/embeddings/embedding-resolver.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 import type { DIContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -65,7 +65,7 @@ import {
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
-import type { IRAGPipeline, IEmbeddingProvider } from "../rag/rag.interface.js";
+import type { IRAGPipeline } from "../rag/rag.interface.js";
 
 export interface BootstrapOptions {
   channelType: string;
@@ -239,24 +239,6 @@ function initializeAuth(config: Config, channelType: string, logger: winston.Log
   });
 }
 
-/** Build a map of provider name -> API key from config. */
-function collectApiKeys(config: Config): Record<string, string | undefined> {
-  return {
-    claude: config.anthropicApiKey,
-    anthropic: config.anthropicApiKey,
-    openai: config.openaiApiKey,
-    deepseek: config.deepseekApiKey,
-    qwen: config.qwenApiKey,
-    kimi: config.kimiApiKey,
-    minimax: config.minimaxApiKey,
-    groq: config.groqApiKey,
-    mistral: config.mistralApiKey,
-    together: config.togetherApiKey,
-    fireworks: config.fireworksApiKey,
-    gemini: config.geminiApiKey,
-  };
-}
-
 async function initializeAIProvider(config: Config, logger: winston.Logger): Promise<IAIProvider> {
   const apiKeys = collectApiKeys(config);
 
@@ -334,64 +316,48 @@ async function initializeRAG(
   }
 
   try {
-    let embeddingProvider: IEmbeddingProvider;
-
-    if (config.rag.provider === "ollama") {
-      embeddingProvider = new OllamaEmbeddingProvider({
-        model: config.rag.model,
-        baseUrl: config.rag.baseUrl,
-      });
-      logger.info("RAG: using Ollama for embeddings");
-    } else {
-      // Fallback chain for embedding API key:
-      // 1. Explicit OPENAI_API_KEY
-      // 2. Provider chain's first OpenAI-compatible provider
-      let apiKey = config.openaiApiKey;
-      let baseUrl = config.rag.baseUrl;
-      let embeddingLabel = "OpenAI";
-
-      if (!apiKey && config.providerChain) {
-        // Try to use the first OpenAI-compatible provider from the chain
-        const chainNames = config.providerChain.split(",").map((s) => s.trim().toLowerCase());
-        const apiKeys = collectApiKeys(config);
-
-        for (const name of chainNames) {
-          const key = apiKeys[name];
-          const preset = PROVIDER_PRESETS[name];
-          if (key && preset) {
-            apiKey = key;
-            baseUrl = baseUrl ?? preset.baseUrl;
-            embeddingLabel = preset.label;
-            logger.info(`RAG: using ${preset.label} for embeddings (from provider chain)`);
-            break;
-          }
-        }
-      }
-
-      if (!apiKey) {
-        logger.warn(
-          "RAG: disabled — no compatible embedding provider (set OPENAI_API_KEY or use Ollama)",
-        );
-        return undefined;
-      }
-
-      embeddingProvider = new OpenAIEmbeddingProvider({
-        apiKey,
-        model: config.rag.model,
-        baseUrl,
-        label: embeddingLabel,
-      });
+    const resolution = resolveEmbeddingProvider(config);
+    if (!resolution) {
+      logger.warn("RAG: disabled — no compatible embedding provider found");
+      return undefined;
     }
 
-    const cachedProvider = new CachedEmbeddingProvider(embeddingProvider, {
+    logger.info(`RAG: using ${resolution.provider.name} for embeddings`, {
+      source: resolution.source,
+    });
+
+    const cachedProvider = new CachedEmbeddingProvider(resolution.provider, {
       persistPath: join(config.memory.dbPath, "cache"),
     });
     await cachedProvider.initialize();
 
-    const vectorStore = new FileVectorStore(
-      join(config.memory.dbPath, "vectors"),
-      cachedProvider.dimensions,
-    );
+    const vectorStorePath = join(config.memory.dbPath, "vectors");
+    const vectorStore = new FileVectorStore(vectorStorePath, cachedProvider.dimensions);
+
+    // Dimension mismatch detection: check existing data before initializing
+    const chunksPath = join(vectorStorePath, "chunks.json");
+    const vectorsPath = join(vectorStorePath, "vectors.bin");
+    if (existsSync(chunksPath) && existsSync(vectorsPath)) {
+      try {
+        const vectorsBuf = readFileSync(vectorsPath);
+        const chunksRaw = readFileSync(chunksPath, "utf8");
+        const chunks = JSON.parse(chunksRaw) as unknown[];
+        if (chunks.length > 0 && vectorsBuf.byteLength > 0) {
+          const storedDims = vectorsBuf.byteLength / 4 / chunks.length;
+          if (storedDims !== cachedProvider.dimensions) {
+            logger.warn(
+              `RAG: dimension mismatch (stored: ${storedDims}, provider: ${cachedProvider.dimensions}). Clearing vector index for re-indexing.`,
+            );
+            // Remove the files so FileVectorStore starts empty
+            const { unlinkSync } = await import("node:fs");
+            unlinkSync(chunksPath);
+            unlinkSync(vectorsPath);
+          }
+        }
+      } catch {
+        // If we can't read existing data, FileVectorStore will handle it
+      }
+    }
 
     // HNSW configuration from environment or defaults
     const hnswConfig = {

@@ -91,13 +91,38 @@ export const RAG_DEFAULTS = {
   CHUNK_SIZE: 1000,
   /** Chunk overlap */
   CHUNK_OVERLAP: 200,
-  /** Default embedding provider */
-  EMBEDDING_PROVIDER: "openai" as const,
+  /** Default embedding provider — "auto" scans the provider chain */
+  EMBEDDING_PROVIDER: "auto" as const,
   /** Default embedding model */
   OPENAI_EMBEDDING_MODEL: "text-embedding-3-small",
   /** Default Ollama embedding model */
   OLLAMA_EMBEDDING_MODEL: "nomic-embed-text",
 } as const;
+
+/** Embedding preset configuration for a single provider */
+export interface EmbeddingPreset {
+  readonly supported: boolean;
+  readonly model: string;
+  readonly dimensions: number;
+  readonly maxBatchSize: number;
+  readonly label: string;
+}
+
+/** Embedding presets for all known providers */
+export const EMBEDDING_PRESETS: Record<string, EmbeddingPreset> = {
+  openai:    { supported: true,  model: "text-embedding-3-small",                    dimensions: 1536, maxBatchSize: 100, label: "OpenAI" },
+  deepseek:  { supported: true,  model: "deepseek-embedding-v2",                     dimensions: 768,  maxBatchSize: 100, label: "DeepSeek" },
+  mistral:   { supported: true,  model: "mistral-embed",                             dimensions: 1024, maxBatchSize: 100, label: "Mistral" },
+  together:  { supported: true,  model: "togethercomputer/m2-bert-80M-8k-retrieval", dimensions: 768,  maxBatchSize: 100, label: "Together AI" },
+  fireworks: { supported: true,  model: "nomic-ai/nomic-embed-text-v1.5",            dimensions: 768,  maxBatchSize: 100, label: "Fireworks AI" },
+  qwen:      { supported: true,  model: "text-embedding-v3",                         dimensions: 1024, maxBatchSize: 100, label: "Qwen" },
+  gemini:    { supported: true,  model: "gemini-embedding-001",                      dimensions: 768,  maxBatchSize: 1,   label: "Gemini" },
+  claude:    { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "Claude" },
+  kimi:      { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "Kimi" },
+  minimax:   { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "MiniMax" },
+  groq:      { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "Groq" },
+  ollama:    { supported: true,  model: "nomic-embed-text",                          dimensions: 768,  maxBatchSize: 100, label: "Ollama" },
+};
 
 // ============================================================================
 // Learning System Defaults

@@ -14,6 +14,7 @@ vi.mock("./context/strata-knowledge.js", () => ({
   STRATA_SYSTEM_PROMPT: "Test system prompt.",
   buildProjectContext: () => "",
   buildAnalysisSummary: () => "",
+  buildDepsContext: () => "",
 }));
 
 function createMockProvider() {

@@ -83,7 +83,16 @@ export type EnvVarMap = Record<EnvVarName, string | undefined>;
 export type LogLevel = "error" | "warn" | "info" | "debug";
 
 /** Embedding provider options */
-export type EmbeddingProvider = "openai" | "ollama";
+export type EmbeddingProvider =
+  | "auto"
+  | "openai"
+  | "deepseek"
+  | "mistral"
+  | "together"
+  | "fireworks"
+  | "qwen"
+  | "gemini"
+  | "ollama";
 
 /** AI provider names */
 export type AIProviderName =
@@ -178,7 +187,7 @@ export interface SecurityConfig {
 /** Complete application configuration */
 export interface Config {
   // AI Providers
-  readonly anthropicApiKey: string;
+  readonly anthropicApiKey?: string;
   readonly openaiApiKey?: string;
   readonly deepseekApiKey?: string;
   readonly qwenApiKey?: string;
@@ -243,7 +252,10 @@ export type PartialConfig = DeepPartial<Config>;
 const logLevelSchema = z.enum(["error", "warn", "info", "debug"]);
 
 /** Embedding provider schema */
-const embeddingProviderSchema = z.enum(["openai", "ollama"]);
+const embeddingProviderSchema = z.enum([
+  "auto", "openai", "deepseek", "mistral", "together",
+  "fireworks", "qwen", "gemini", "ollama",
+]);
 
 /** Port number schema */
 const portSchema = z
@@ -277,113 +289,140 @@ const commaSeparatedNumberList = z
   .optional();
 
 /** Config schema for validation */
-export const configSchema = z.object({
-  // AI Providers
-  anthropicApiKey: z.string().min(1, "ANTHROPIC_API_KEY is required"),
-  openaiApiKey: z.string().optional(),
-  deepseekApiKey: z.string().optional(),
-  qwenApiKey: z.string().optional(),
-  kimiApiKey: z.string().optional(),
-  minimaxApiKey: z.string().optional(),
-  groqApiKey: z.string().optional(),
-  mistralApiKey: z.string().optional(),
-  togetherApiKey: z.string().optional(),
-  fireworksApiKey: z.string().optional(),
-  geminiApiKey: z.string().optional(),
-  providerChain: z.string().optional(),
+export const configSchema = z
+  .object({
+    // AI Providers
+    anthropicApiKey: z.string().optional(),
+    openaiApiKey: z.string().optional(),
+    deepseekApiKey: z.string().optional(),
+    qwenApiKey: z.string().optional(),
+    kimiApiKey: z.string().optional(),
+    minimaxApiKey: z.string().optional(),
+    groqApiKey: z.string().optional(),
+    mistralApiKey: z.string().optional(),
+    togetherApiKey: z.string().optional(),
+    fireworksApiKey: z.string().optional(),
+    geminiApiKey: z.string().optional(),
+    providerChain: z.string().optional(),
 
-  // Telegram
-  telegramBotToken: z.string().optional(),
-  allowedTelegramUserIds: commaSeparatedNumberList,
+    // Telegram
+    telegramBotToken: z.string().optional(),
+    allowedTelegramUserIds: commaSeparatedNumberList,
 
-  // Discord
-  discordBotToken: z.string().optional(),
-  discordGuildId: z.string().optional(),
+    // Discord
+    discordBotToken: z.string().optional(),
+    discordGuildId: z.string().optional(),
 
-  // Slack
-  slackBotToken: z.string().optional(),
-  slackSigningSecret: z.string().optional(),
-  slackAppToken: z.string().optional(),
-  slackSocketMode: boolFromString(true),
-  allowedSlackWorkspaces: commaSeparatedList,
-  allowedSlackUserIds: commaSeparatedList,
+    // Slack
+    slackBotToken: z.string().optional(),
+    slackSigningSecret: z.string().optional(),
+    slackAppToken: z.string().optional(),
+    slackSocketMode: boolFromString(true),
+    allowedSlackWorkspaces: commaSeparatedList,
+    allowedSlackUserIds: commaSeparatedList,
 
-  // Security
-  requireEditConfirmation: boolFromString(true),
-  readOnlyMode: boolFromString(false),
+    // Security
+    requireEditConfirmation: boolFromString(true),
+    readOnlyMode: boolFromString(false),
 
-  // Project
-  unityProjectPath: z.string().min(1, "UNITY_PROJECT_PATH is required"),
+    // Project
+    unityProjectPath: z.string().min(1, "UNITY_PROJECT_PATH is required"),
 
-  // Dashboard
-  dashboardEnabled: boolFromString(false),
-  dashboardPort: portSchema.default("3100"),
+    // Dashboard
+    dashboardEnabled: boolFromString(false),
+    dashboardPort: portSchema.default("3100"),
 
-  // WebSocket Dashboard
-  websocketDashboardEnabled: boolFromString(false),
-  websocketDashboardPort: portSchema.default("3100"),
+    // WebSocket Dashboard
+    websocketDashboardEnabled: boolFromString(false),
+    websocketDashboardPort: portSchema.default("3100"),
 
-  // Prometheus
-  prometheusEnabled: boolFromString(false),
-  prometheusPort: portSchema.default("9090"),
+    // Prometheus
+    prometheusEnabled: boolFromString(false),
+    prometheusPort: portSchema.default("9090"),
 
-  // Memory
-  memoryEnabled: boolFromString(true),
-  memoryDbPath: z.string().default(".strata-memory"),
+    // Memory
+    memoryEnabled: boolFromString(true),
+    memoryDbPath: z.string().default(".strata-memory"),
 
-  // RAG
-  ragEnabled: boolFromString(true),
-  embeddingProvider: embeddingProviderSchema.default("openai"),
-  embeddingModel: z.string().optional(),
-  embeddingBaseUrl: z.string().optional(),
-  ragContextMaxTokens: z
-    .string()
-    .transform((s) => parseInt(s, 10))
-    .pipe(z.number().int().min(500).max(16000))
-    .default("4000"),
+    // RAG
+    ragEnabled: boolFromString(true),
+    embeddingProvider: embeddingProviderSchema.default("auto"),
+    embeddingModel: z.string().optional(),
+    embeddingBaseUrl: z.string().optional(),
+    ragContextMaxTokens: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(500).max(16000))
+      .default("4000"),
 
-  // Features
-  streamingEnabled: boolFromString(true),
-  shellEnabled: boolFromString(true),
+    // Features
+    streamingEnabled: boolFromString(true),
+    shellEnabled: boolFromString(true),
 
-  // Rate Limiting
-  rateLimitEnabled: boolFromString(false),
-  rateLimitMessagesPerMinute: z
-    .string()
-    .transform((s) => parseInt(s, 10))
-    .pipe(z.number().int().min(0))
-    .default("0"),
-  rateLimitMessagesPerHour: z
-    .string()
-    .transform((s) => parseInt(s, 10))
-    .pipe(z.number().int().min(0))
-    .default("0"),
-  rateLimitTokensPerDay: z
-    .string()
-    .transform((s) => parseInt(s, 10))
-    .pipe(z.number().int().min(0))
-    .default("0"),
-  rateLimitDailyBudgetUsd: z
-    .string()
-    .transform((s) => parseFloat(s))
-    .pipe(z.number().min(0))
-    .default("0"),
-  rateLimitMonthlyBudgetUsd: z
-    .string()
-    .transform((s) => parseFloat(s))
-    .pipe(z.number().min(0))
-    .default("0"),
+    // Rate Limiting
+    rateLimitEnabled: boolFromString(false),
+    rateLimitMessagesPerMinute: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0))
+      .default("0"),
+    rateLimitMessagesPerHour: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0))
+      .default("0"),
+    rateLimitTokensPerDay: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0))
+      .default("0"),
+    rateLimitDailyBudgetUsd: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0))
+      .default("0"),
+    rateLimitMonthlyBudgetUsd: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0))
+      .default("0"),
 
-  // Logging
-  logLevel: logLevelSchema.default("info"),
-  logFile: z.string().default("strata-brain.log"),
+    // Logging
+    logLevel: logLevelSchema.default("info"),
+    logFile: z.string().default("strata-brain.log"),
 
-  // Web Channel
-  webChannelPort: portSchema.default("3000"),
+    // Web Channel
+    webChannelPort: portSchema.default("3000"),
 
-  // Plugins
-  pluginDirs: commaSeparatedList.transform((arr) => arr ?? []),
-});
+    // Plugins
+    pluginDirs: commaSeparatedList.transform((arr) => arr ?? []),
+  })
+  .superRefine((data, ctx) => {
+    // At least one AI provider key must be present, or ollama must be in the chain
+    const hasAnyKey = [
+      data.anthropicApiKey,
+      data.openaiApiKey,
+      data.deepseekApiKey,
+      data.qwenApiKey,
+      data.kimiApiKey,
+      data.minimaxApiKey,
+      data.groqApiKey,
+      data.mistralApiKey,
+      data.togetherApiKey,
+      data.fireworksApiKey,
+      data.geminiApiKey,
+    ].some((k) => k && k.length > 0);
+
+    const hasOllama = data.providerChain?.includes("ollama") ?? false;
+
+    if (!hasAnyKey && !hasOllama) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one AI provider API key is required (or use Ollama)",
+        path: ["anthropicApiKey"],
+      });
+    }
+  });
 
 /** Raw config type from Zod */
 export type RawConfig = z.infer<typeof configSchema>;
@@ -843,8 +882,47 @@ export function getCachedConfig(): Config | undefined {
 export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: string[] } {
   const missing: string[] = [];
 
-  if (!config.anthropicApiKey) {
-    missing.push("ANTHROPIC_API_KEY");
+  // If a provider chain is specified, check that each provider in the chain has its key
+  if (config.providerChain) {
+    const names = config.providerChain.split(",").map((s) => s.trim());
+    const keyMap: Record<string, string | undefined> = {
+      claude: config.anthropicApiKey,
+      anthropic: config.anthropicApiKey,
+      openai: config.openaiApiKey,
+      deepseek: config.deepseekApiKey,
+      qwen: config.qwenApiKey,
+      kimi: config.kimiApiKey,
+      minimax: config.minimaxApiKey,
+      groq: config.groqApiKey,
+      mistral: config.mistralApiKey,
+      together: config.togetherApiKey,
+      fireworks: config.fireworksApiKey,
+      gemini: config.geminiApiKey,
+    };
+    for (const name of names) {
+      if (name === "ollama") continue; // no key needed
+      if (!keyMap[name]) {
+        missing.push(`${name.toUpperCase()}_API_KEY`);
+      }
+    }
+  } else if (!config.anthropicApiKey) {
+    // No chain specified and no Anthropic key — check if any key exists
+    const hasAny = [
+      config.openaiApiKey,
+      config.deepseekApiKey,
+      config.qwenApiKey,
+      config.kimiApiKey,
+      config.minimaxApiKey,
+      config.groqApiKey,
+      config.mistralApiKey,
+      config.togetherApiKey,
+      config.fireworksApiKey,
+      config.geminiApiKey,
+    ].some((k) => k && k.length > 0);
+
+    if (!hasAny) {
+      missing.push("ANTHROPIC_API_KEY");
+    }
   }
 
   return {

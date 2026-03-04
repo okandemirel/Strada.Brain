@@ -18,6 +18,7 @@ vi.mock("./agents/context/strata-knowledge.js", () => ({
   STRATA_SYSTEM_PROMPT: "Test system prompt",
   buildProjectContext: vi.fn().mockReturnValue("\nProject context"),
   buildAnalysisSummary: vi.fn().mockReturnValue(""),
+  buildDepsContext: vi.fn().mockReturnValue(""),
 }));
 
 const defaultCapabilities = {

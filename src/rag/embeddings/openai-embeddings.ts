@@ -7,7 +7,7 @@ const KNOWN_MODELS: Record<string, number> = {
   "text-embedding-ada-002": 1536,
 };
 
-const BATCH_SIZE = 100;
+const DEFAULT_BATCH_SIZE = 100;
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 500;
 
@@ -17,6 +17,7 @@ interface OpenAIEmbeddingOptions {
   baseUrl?: string;
   dimensions?: number;
   label?: string;
+  batchSize?: number;
 }
 
 interface OpenAIEmbeddingResponse {
@@ -31,12 +32,14 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
   private readonly apiKey: string;
   private readonly model: string;
   private readonly baseUrl: string;
+  private readonly batchSize: number;
 
   constructor(opts: OpenAIEmbeddingOptions) {
     this.apiKey = opts.apiKey;
     this.model = opts.model ?? "text-embedding-3-small";
     this.baseUrl = opts.baseUrl ?? "https://api.openai.com/v1";
     this.dimensions = opts.dimensions ?? KNOWN_MODELS[this.model] ?? 1536;
+    this.batchSize = opts.batchSize ?? DEFAULT_BATCH_SIZE;
     const providerLabel = opts.label ?? "OpenAI";
     this.name = `${providerLabel}:${this.model}`;
   }
@@ -48,8 +51,8 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
 
     const logger = getLogger();
     const batches: string[][] = [];
-    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-      batches.push(texts.slice(i, i + BATCH_SIZE));
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      batches.push(texts.slice(i, i + this.batchSize));
     }
 
     logger.debug("OpenAI embed: starting", {

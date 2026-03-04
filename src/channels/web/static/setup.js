@@ -236,6 +236,13 @@ function updateProviderConfigs() {
   });
 }
 
+// Providers that support embeddings — must mirror backend EMBEDDING_PRESETS.
+// When adding a new provider, add its id here if it supports embeddings.
+const EMBEDDING_CAPABLE = new Set([
+  "openai", "deepseek", "mistral", "together",
+  "fireworks", "qwen", "gemini", "ollama",
+]);
+
 function updateRagInfo() {
   const infoEl = document.getElementById("ragInfo");
   const ragCheckbox = document.getElementById("ragEnabled");
@@ -247,23 +254,20 @@ function updateRagInfo() {
     return;
   }
 
-  // Check if any selected provider includes OpenAI (which natively supports embeddings)
   const checked = getCheckedProviders().map((cb) => cb.value);
-  const hasOpenAI = checked.includes("openai");
-  const hasOllama = checked.includes("ollama");
 
-  if (hasOpenAI) {
-    infoEl.textContent = "RAG will use OpenAI for embeddings.";
-    infoEl.className = "rag-info";
-  } else if (hasOllama) {
-    infoEl.textContent = "RAG will use Ollama for local embeddings.";
+  // Find first embedding-capable provider from selection
+  const embeddingProvider = checked.find((id) => EMBEDDING_CAPABLE.has(id));
+
+  if (embeddingProvider) {
+    const name = PROVIDER_MAP[embeddingProvider]?.name ?? embeddingProvider;
+    infoEl.textContent = "RAG will use " + name + " for embeddings.";
     infoEl.className = "rag-info";
   } else if (checked.length > 0) {
-    const firstName = PROVIDER_MAP[checked[0]]?.name ?? checked[0];
+    const names = checked.map((id) => PROVIDER_MAP[id]?.name ?? id).join(", ");
     infoEl.textContent =
-      "RAG will use " +
-      firstName +
-      " for embeddings. If this provider does not support embeddings, add an OpenAI key or use Ollama.";
+      names +
+      " does not support embeddings. Add OpenAI, DeepSeek, Mistral, or Ollama for code search.";
     infoEl.className = "rag-info warning";
   } else {
     infoEl.textContent = "Select a provider to enable RAG.";
@@ -455,7 +459,17 @@ function buildReview() {
 
   items.push(["Project Path", config.UNITY_PROJECT_PATH]);
   items.push(["Channel", config._channel]);
-  items.push(["RAG (Code Search)", config.RAG_ENABLED === "false" ? "Disabled" : "Enabled"]);
+  // Show RAG status with embedding provider info
+  if (config.RAG_ENABLED === "false") {
+    items.push(["RAG (Code Search)", "Disabled"]);
+  } else {
+    const chain = config.PROVIDER_CHAIN ? config.PROVIDER_CHAIN.split(",") : [];
+    const embProvider = chain.find((id) => EMBEDDING_CAPABLE.has(id.trim()));
+    const embName = embProvider
+      ? PROVIDER_MAP[embProvider.trim()]?.name ?? embProvider.trim()
+      : null;
+    items.push(["RAG (Code Search)", embName ? "Enabled (" + embName + " embeddings)" : "Enabled"]);
+  }
 
   items.forEach(([key, value]) => {
     const div = document.createElement("div");

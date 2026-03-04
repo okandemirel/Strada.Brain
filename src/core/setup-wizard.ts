@@ -354,8 +354,18 @@ export class SetupWizard {
     }
 
     // RAG configuration
+    const KNOWN_EMBEDDING_PROVIDERS = new Set([
+      "auto", "openai", "deepseek", "mistral", "together",
+      "fireworks", "qwen", "gemini", "ollama",
+    ]);
     if (config.RAG_ENABLED === "false") {
       lines.push("", "# RAG (Code Search)", "RAG_ENABLED=false");
+    } else if (config.EMBEDDING_PROVIDER && config.EMBEDDING_PROVIDER !== "auto") {
+      if (!KNOWN_EMBEDDING_PROVIDERS.has(String(config.EMBEDDING_PROVIDER))) {
+        this.json(res, 400, { success: false, error: "Invalid EMBEDDING_PROVIDER value" });
+        return;
+      }
+      lines.push("", "# RAG (Code Search)", `EMBEDDING_PROVIDER=${sanitizeEnvValue(config.EMBEDDING_PROVIDER)}`);
     }
 
     // Always add some defaults
