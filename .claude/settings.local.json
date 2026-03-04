@@ -33,7 +33,8 @@
       "WebFetch(domain:openclawcn.com)",
       "WebFetch(domain:www.together.ai)",
       "WebFetch(domain:console.groq.com)",
-      "WebFetch(domain:docs.mistral.ai)"
+      "WebFetch(domain:docs.mistral.ai)",
+      "WebFetch(domain:api-docs.deepseek.com)"
     ]
   },
   "enableAllProjectMcpServers": true
