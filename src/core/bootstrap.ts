@@ -25,6 +25,7 @@ import { RateLimiter } from "../security/rate-limiter.js";
 import type { DIContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { AppError } from "../common/errors.js";
+import { checkStradaDeps } from "../config/strada-deps.js";
 import {
   SESSION_CLEANUP_INTERVAL_MS,
   DEFAULT_RATE_LIMITS,
@@ -93,6 +94,18 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     readOnly: config.security.readOnlyMode,
   });
 
+  // Check Strada framework dependencies
+  const stradaDeps = checkStradaDeps(config.unityProjectPath);
+  if (!stradaDeps.coreInstalled) {
+    logger.warn("Strada.Core not found in project Packages/", {
+      projectPath: config.unityProjectPath,
+      searchedNames: ["strada.core", "com.strada.core", "Strada.Core"],
+    });
+  }
+  for (const warning of stradaDeps.warnings) {
+    logger.warn(warning);
+  }
+
   // Initialize security
   const auth = initializeAuth(config, channelType, logger);
 
@@ -141,6 +154,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     ragPipeline,
     rateLimiter,
     streamingEnabled: config.streamingEnabled,
+    stradaDeps,
   });
 
   // Initialize task system

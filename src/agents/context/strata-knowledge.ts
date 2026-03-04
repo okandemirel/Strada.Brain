@@ -119,6 +119,7 @@ You can:
 `;
 
 import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
+import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
 /**
  * Build a project-specific context section to append to the system prompt.
@@ -171,5 +172,27 @@ export function buildAnalysisSummary(analysis: StrataProjectAnalysis): string {
   lines.push(`\nAnalyzed at: ${analysis.analyzedAt.toISOString()}`);
   lines.push(`Total C# files: ${analysis.csFileCount}`);
 
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Build a context section describing which Strada packages are available.
+ * Prevents the LLM from hallucinating APIs that aren't installed.
+ */
+export function buildDepsContext(status?: StradaDepsStatus): string {
+  if (!status) return "";
+  const lines: string[] = ["\n## Strada Package Status"];
+  lines.push(
+    `- strada.core: ${status.coreInstalled ? "INSTALLED (" + status.corePath + ")" : "NOT INSTALLED"}`,
+  );
+  lines.push(
+    `- strada.modules: ${status.modulesInstalled ? "INSTALLED (" + status.modulesPath + ")" : "NOT INSTALLED"}`,
+  );
+  if (!status.coreInstalled) {
+    lines.push("\nWARNING: Strada.Core is not installed. Limited assistance available.");
+  }
+  if (!status.modulesInstalled) {
+    lines.push("\nNote: Strada.Modules is not available. Do not reference Strada.Modules APIs.");
+  }
   return lines.join("\n") + "\n";
 }

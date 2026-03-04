@@ -17,7 +17,10 @@ import {
   STRATA_SYSTEM_PROMPT,
   buildProjectContext,
   buildAnalysisSummary,
+  buildDepsContext,
 } from "./context/strata-knowledge.js";
+import type { StradaDepsStatus } from "../config/strada-deps.js";
+import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger } from "../utils/logger.js";
@@ -65,7 +68,11 @@ export class Orchestrator {
   private readonly streamingEnabled: boolean;
   private readonly sessions = new Map<string, Session>();
   private readonly sessionLocks = new Map<string, Promise<void>>();
-  private readonly systemPrompt: string;
+  private systemPrompt: string;
+  private stradaDeps: StradaDepsStatus | undefined;
+  private depsSetupComplete: boolean = false;
+  private pendingDepsPrompt: boolean = false;
+  private pendingModulesPrompt: boolean = false;
 
   constructor(opts: {
     provider: IAIProvider;
@@ -79,6 +86,7 @@ export class Orchestrator {
     ragPipeline?: IRAGPipeline;
     rateLimiter?: RateLimiter;
     streamingEnabled?: boolean;
+    stradaDeps?: StradaDepsStatus;
   }) {
     this.provider = opts.provider;
     this.channel = opts.channel;
@@ -103,7 +111,12 @@ export class Orchestrator {
       });
     }
 
-    this.systemPrompt = STRATA_SYSTEM_PROMPT + buildProjectContext(this.projectPath);
+    this.stradaDeps = opts.stradaDeps;
+    this.depsSetupComplete = !opts.stradaDeps || opts.stradaDeps.coreInstalled;
+    this.systemPrompt =
+      STRATA_SYSTEM_PROMPT +
+      buildProjectContext(this.projectPath) +
+      buildDepsContext(opts.stradaDeps);
   }
 
   /**
@@ -112,6 +125,18 @@ export class Orchestrator {
    */
   async handleMessage(msg: IncomingMessage): Promise<void> {
     const { chatId } = msg;
+
+    // Intercept messages if Strada.Core is missing and setup not complete
+    if (!this.depsSetupComplete && this.stradaDeps && !this.stradaDeps.coreInstalled) {
+      await this.handleDepsSetup(msg);
+      return;
+    }
+
+    // Handle pending modules prompt after core installation
+    if (this.pendingModulesPrompt) {
+      await this.handleModulesPrompt(msg);
+      return;
+    }
 
     // Per-session concurrency lock: queue messages for the same chat
     const prev = this.sessionLocks.get(chatId) ?? Promise.resolve();
@@ -296,6 +321,87 @@ export class Orchestrator {
     }
 
     return "Task reached maximum iterations. The work done so far has been saved.";
+  }
+
+  /**
+   * Handle the dependency setup flow when Strada.Core is missing.
+   * Prompts the user on first message, processes their response on subsequent messages.
+   */
+  private async handleDepsSetup(msg: IncomingMessage): Promise<void> {
+    const { chatId } = msg;
+    const text = msg.text?.toLowerCase() ?? "";
+
+    if (this.pendingDepsPrompt) {
+      // User is responding to our install prompt
+      if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
+        await this.channel.sendText(chatId, "Strada.Core kuruluyor...");
+        const result = await installStradaDep(this.projectPath, "core");
+        if (result.kind === "ok") {
+          this.stradaDeps = checkStradaDeps(this.projectPath);
+          this.systemPrompt =
+            STRATA_SYSTEM_PROMPT +
+            buildProjectContext(this.projectPath) +
+            buildDepsContext(this.stradaDeps);
+          this.depsSetupComplete = true;
+          await this.channel.sendText(chatId, "Strada.Core kuruldu! Artık kullanabilirsiniz.");
+
+          if (!this.stradaDeps.modulesInstalled) {
+            this.pendingModulesPrompt = true;
+            await this.channel.sendText(
+              chatId,
+              "Strada.Modules da kurulu değil. Kurmamı ister misiniz? (evet/hayır)",
+            );
+            return;
+          }
+        } else {
+          await this.channel.sendText(chatId, `Kurulum başarısız: ${result.error}`);
+          this.depsSetupComplete = true;
+        }
+      } else {
+        this.depsSetupComplete = true;
+        await this.channel.sendText(
+          chatId,
+          "Anlaşıldı. Strada.Core olmadan sınırlı destek sunabilirim.",
+        );
+      }
+      return;
+    }
+
+    // First message — send the install prompt
+    this.pendingDepsPrompt = true;
+    await this.channel.sendText(
+      chatId,
+      "⚠️ Strada.Core projenizde bulunamadı.\n\n" +
+        `Proje: ${this.projectPath}\n` +
+        "Arama yapılan konumlar: Packages/strada.core, Packages/com.strada.core, Packages/Strada.Core\n\n" +
+        "Git submodule olarak kurmamı ister misiniz? (evet/hayır)",
+    );
+  }
+
+  /**
+   * Handle the optional Strada.Modules installation prompt.
+   */
+  private async handleModulesPrompt(msg: IncomingMessage): Promise<void> {
+    const { chatId } = msg;
+    const text = msg.text?.toLowerCase() ?? "";
+    this.pendingModulesPrompt = false;
+
+    if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
+      await this.channel.sendText(chatId, "Strada.Modules kuruluyor...");
+      const result = await installStradaDep(this.projectPath, "modules");
+      if (result.kind === "ok") {
+        this.stradaDeps = checkStradaDeps(this.projectPath);
+        this.systemPrompt =
+          STRATA_SYSTEM_PROMPT +
+          buildProjectContext(this.projectPath) +
+          buildDepsContext(this.stradaDeps);
+        await this.channel.sendText(chatId, "Strada.Modules kuruldu!");
+      } else {
+        await this.channel.sendText(chatId, `Modules kurulumu başarısız: ${result.error}`);
+      }
+    } else {
+      await this.channel.sendText(chatId, "Anlaşıldı. Strada.Modules olmadan devam ediyoruz.");
+    }
   }
 
   private async processMessage(msg: IncomingMessage): Promise<void> {
