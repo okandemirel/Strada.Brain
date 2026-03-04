@@ -518,6 +518,12 @@ public class NullSafety : MonoBehaviour
           stopReason: "tool_use",
         },
         {
+          // PAOR reflection response — build error triggers REFLECTING phase
+          text: "CONTINUE — the build had issues, let me report the results.",
+          toolCalls: [],
+          stopReason: "end_turn",
+        },
+        {
           text: "The build timed out. This might be due to a large project or complex dependencies. Try building in smaller chunks or check for circular dependencies.",
           toolCalls: [],
           stopReason: "end_turn",
@@ -539,6 +545,12 @@ public class NullSafety : MonoBehaviour
           text: "Attempting to build...",
           toolCalls: [createMockToolCall("tool-1", "dotnet_build", {})],
           stopReason: "tool_use",
+        },
+        {
+          // PAOR reflection response — build error triggers REFLECTING phase
+          text: "CONTINUE — the build failed, let me analyze the situation.",
+          toolCalls: [],
+          stopReason: "end_turn",
         },
         {
           text: "This error requires manual intervention. The project file is corrupted and needs to be restored from version control or recreated.",

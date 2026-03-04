@@ -97,7 +97,7 @@ describe("RAG Search Flow Integration", () => {
       }),
       search: vi.fn().mockImplementation(async (query: string) => {
         const results = createMockSearchResults(query, 5);
-        return { success: true, value: results };
+        return results;
       }),
       formatContext: vi.fn().mockImplementation((results: RAGSearchResult[]) => {
         if (results.length === 0) return { text: "", sources: [], tokenCount: 0, budgetUsed: 0 };
@@ -267,10 +267,7 @@ describe("RAG Search Flow Integration", () => {
         },
       ];
 
-      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce({
-        success: true,
-        value: mockResults,
-      });
+      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce(mockResults);
 
       mockProvider.simulateToolCallFlow(
         [
@@ -288,7 +285,7 @@ describe("RAG Search Flow Integration", () => {
       const searchCall = toolCalls.find((tc) => tc.name === "code_search");
       expect(searchCall).toBeDefined();
 
-      // Results should have been formatted with scores
+      // Results should have been formatted with scores in the final response
       const markdown = channel.getLastMarkdown("chat-rag-rerank");
       expect(markdown?.text).toMatch(/\d+% match|score/i);
     });
@@ -330,10 +327,7 @@ describe("RAG Search Flow Integration", () => {
         },
       ];
 
-      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce({
-        success: true,
-        value: mixedResults,
-      });
+      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce(mixedResults);
 
       mockProvider.simulateToolCallFlow(
         [
@@ -397,10 +391,7 @@ describe("RAG Search Flow Integration", () => {
     it("should format RAG results for LLM context", async () => {
       // Configure search to return results
       const mockResults = createMockSearchResults("damage formula", 2);
-      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce({
-        success: true,
-        value: mockResults,
-      });
+      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce(mockResults);
 
       mockProvider.simulateToolCallFlow(
         [
@@ -428,10 +419,7 @@ describe("RAG Search Flow Integration", () => {
   describe("RAG Tool Error Handling", () => {
     it("should handle empty search results gracefully", async () => {
       // Configure search to return empty results
-      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce({
-        success: true,
-        value: [],
-      });
+      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce([]);
 
       mockProvider.simulateToolCallFlow(
         [
@@ -500,10 +488,7 @@ describe("RAG Search Flow Integration", () => {
         },
       ];
 
-      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce({
-        success: true,
-        value: ragResults,
-      });
+      vi.mocked(mockRagPipeline.search).mockResolvedValueOnce(ragResults);
 
       // Provider: search → then read file
       mockProvider.queueResponses([
@@ -550,10 +535,7 @@ describe("RAG Search Flow Integration", () => {
 
       vi.mocked(mockRagPipeline.search).mockImplementation(async (query: string) => {
         searchQueries.push(query);
-        return {
-          success: true,
-          value: createMockSearchResults(query, 3),
-        };
+        return createMockSearchResults(query, 3);
       });
 
       // First search: combat system
