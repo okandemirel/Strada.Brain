@@ -237,11 +237,99 @@ body {
 /* Single button centering */
 .step:first-of-type .btn-primary { display: block; margin: 0 auto; flex: unset; }
 
+/* ===== Provider Grid ===== */
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.provider-option input { display: none; }
+
+.provider-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 8px;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+
+.provider-option:hover .provider-card { border-color: var(--accent); }
+
+.provider-option input:checked + .provider-card {
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.1);
+}
+
+.provider-name { font-weight: 600; font-size: 13px; }
+.provider-badge {
+  font-size: 10px;
+  color: var(--accent);
+  background: rgba(88, 166, 255, 0.15);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-top: 2px;
+}
+
+.provider-configs {
+  margin-top: 8px;
+}
+
+.provider-config-item {
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.provider-config-item label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.provider-config-item input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.provider-config-item input:focus { border-color: var(--accent); }
+
+.provider-config-item small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.provider-config-item small a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.provider-config-item small a:hover { text-decoration: underline; }
+
 /* ===== Channel Grid ===== */
 .channel-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
   margin-bottom: 16px;
 }
 
@@ -262,7 +350,6 @@ body {
 
 .channel-option:hover .channel-card { border-color: var(--accent); }
 
-.channel-option.selected .channel-card,
 .channel-option input:checked + .channel-card {
   border-color: var(--accent);
   background: rgba(88, 166, 255, 0.1);

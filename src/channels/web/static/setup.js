@@ -4,16 +4,108 @@
 let currentStep = 1;
 const totalSteps = 5;
 let csrfToken = null;
+let csrfReady = false;
+
+// Provider registry — mirrors backend PROVIDER_PRESETS + claude + ollama
+const PROVIDERS = [
+  {
+    id: "claude",
+    name: "Claude",
+    envKey: "ANTHROPIC_API_KEY",
+    placeholder: "sk-ant-...",
+    recommended: true,
+    helpUrl: "https://console.anthropic.com",
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    envKey: "OPENAI_API_KEY",
+    placeholder: "sk-...",
+    helpUrl: "https://platform.openai.com/api-keys",
+  },
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    envKey: "DEEPSEEK_API_KEY",
+    placeholder: "sk-...",
+    helpUrl: "https://platform.deepseek.com",
+  },
+  {
+    id: "kimi",
+    name: "Kimi",
+    envKey: "KIMI_API_KEY",
+    placeholder: "sk-...",
+    helpUrl: "https://platform.moonshot.cn",
+  },
+  {
+    id: "qwen",
+    name: "Qwen",
+    envKey: "QWEN_API_KEY",
+    placeholder: "sk-...",
+    helpUrl: "https://dashscope.console.aliyun.com",
+  },
+  {
+    id: "gemini",
+    name: "Gemini",
+    envKey: "GEMINI_API_KEY",
+    placeholder: "...",
+    helpUrl: "https://aistudio.google.com/apikey",
+  },
+  {
+    id: "groq",
+    name: "Groq",
+    envKey: "GROQ_API_KEY",
+    placeholder: "gsk_...",
+    helpUrl: "https://console.groq.com/keys",
+  },
+  {
+    id: "mistral",
+    name: "Mistral",
+    envKey: "MISTRAL_API_KEY",
+    placeholder: "...",
+    helpUrl: "https://console.mistral.ai/api-keys",
+  },
+  {
+    id: "together",
+    name: "Together",
+    envKey: "TOGETHER_API_KEY",
+    placeholder: "...",
+    helpUrl: "https://api.together.xyz/settings/api-keys",
+  },
+  {
+    id: "fireworks",
+    name: "Fireworks",
+    envKey: "FIREWORKS_API_KEY",
+    placeholder: "...",
+    helpUrl: "https://fireworks.ai/account/api-keys",
+  },
+  {
+    id: "minimax",
+    name: "MiniMax",
+    envKey: "MINIMAX_API_KEY",
+    placeholder: "...",
+    helpUrl: "https://www.minimaxi.com",
+  },
+  { id: "ollama", name: "Ollama", envKey: null, placeholder: null, helpUrl: "https://ollama.com" },
+];
+
+// O(1) lookup map for provider metadata
+const PROVIDER_MAP = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
+
+function getCheckedProviders() {
+  return Array.from(document.querySelectorAll('input[name="provider"]:checked'));
+}
 
 // Fetch CSRF token on page load
 fetch("/api/setup/csrf")
   .then((r) => r.json())
   .then((d) => {
     csrfToken = d.token;
+    csrfReady = true;
   })
   .catch(() => {});
 
-// Initialize step indicators
+// Initialize step indicators and provider grid
 (function init() {
   const container = document.getElementById("stepIndicators");
   for (let i = 1; i <= totalSteps; i++) {
@@ -23,11 +115,121 @@ fetch("/api/setup/csrf")
     container.appendChild(dot);
   }
 
+  // Build provider grid
+  buildProviderGrid();
+
   // Channel selection listeners
   document.querySelectorAll('input[name="channel"]').forEach((radio) => {
     radio.addEventListener("change", onChannelChange);
   });
+
+  // Wire up all button event listeners (CSP blocks inline onclick)
+  document.getElementById("btnGetStarted").addEventListener("click", nextStep);
+  document.getElementById("btnBack2").addEventListener("click", prevStep);
+  document.getElementById("btnNext2").addEventListener("click", nextStep);
+  document.getElementById("btnBrowse").addEventListener("click", openBrowser);
+  document.getElementById("btnValidate").addEventListener("click", validatePath);
+  document.getElementById("btnBack3").addEventListener("click", prevStep);
+  document.getElementById("btnNext3").addEventListener("click", nextStep);
+  document.getElementById("btnBack4").addEventListener("click", prevStep);
+  document.getElementById("btnNext4").addEventListener("click", nextStep);
+  document.getElementById("btnBack5").addEventListener("click", prevStep);
+  document.getElementById("saveBtn").addEventListener("click", saveConfig);
+  document.getElementById("btnBrowserClose").addEventListener("click", closeBrowser);
+  document.getElementById("btnBrowserCancel").addEventListener("click", closeBrowser);
+  document.getElementById("browserSelectBtn").addEventListener("click", selectFolder);
 })();
+
+function buildProviderGrid() {
+  const grid = document.getElementById("providerGrid");
+
+  PROVIDERS.forEach((p) => {
+    const label = document.createElement("label");
+    label.className = "provider-option";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.name = "provider";
+    input.value = p.id;
+    if (p.recommended) input.checked = true;
+    input.addEventListener("change", onProviderToggle);
+
+    const card = document.createElement("div");
+    card.className = "provider-card";
+
+    const name = document.createElement("span");
+    name.className = "provider-name";
+    name.textContent = p.name;
+    card.appendChild(name);
+
+    if (p.recommended) {
+      const badge = document.createElement("span");
+      badge.className = "provider-badge";
+      badge.textContent = "recommended";
+      card.appendChild(badge);
+    }
+
+    label.appendChild(input);
+    label.appendChild(card);
+    grid.appendChild(label);
+  });
+
+  // Show config for pre-checked providers
+  updateProviderConfigs();
+}
+
+function onProviderToggle() {
+  updateProviderConfigs();
+}
+
+function updateProviderConfigs() {
+  const container = document.getElementById("providerConfigs");
+  const checked = getCheckedProviders();
+  const checkedIds = new Set(checked.map((cb) => cb.value));
+
+  // Remove configs for unchecked providers
+  container.querySelectorAll(".provider-config-item").forEach((el) => {
+    if (!checkedIds.has(el.dataset.providerId)) {
+      el.remove();
+    }
+  });
+
+  // Add configs for newly checked providers
+  checked.forEach((cb) => {
+    const p = PROVIDER_MAP[cb.value];
+    if (!p || !p.envKey) return; // Ollama doesn't need a key
+    if (container.querySelector(`[data-provider-id="${p.id}"]`)) return; // already exists
+
+    const item = document.createElement("div");
+    item.className = "provider-config-item";
+    item.dataset.providerId = p.id;
+
+    const lbl = document.createElement("label");
+    lbl.setAttribute("for", "key_" + p.id);
+    lbl.textContent = p.name + " API Key";
+    item.appendChild(lbl);
+
+    const input = document.createElement("input");
+    input.type = "password";
+    input.id = "key_" + p.id;
+    input.placeholder = p.placeholder;
+    input.autocomplete = "off";
+    item.appendChild(input);
+
+    if (p.helpUrl) {
+      const small = document.createElement("small");
+      const link = document.createElement("a");
+      link.href = p.helpUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Get API key";
+      small.appendChild(link);
+      item.appendChild(small);
+    }
+
+    container.appendChild(item);
+  });
+}
 
 function showStep(step) {
   document.querySelectorAll(".step").forEach((el) => el.classList.remove("active"));
@@ -66,9 +268,25 @@ function prevStep() {
 
 function validateCurrentStep() {
   if (currentStep === 2) {
-    const key = document.getElementById("anthropicKey").value.trim();
-    if (!key) {
-      alert("Anthropic API Key is required.");
+    const checked = getCheckedProviders();
+    if (checked.length === 0) {
+      alert("Please select at least one AI provider.");
+      return false;
+    }
+    // Verify at least one checked provider has a key (or is Ollama)
+    let hasKey = false;
+    checked.forEach((cb) => {
+      const p = PROVIDER_MAP[cb.value];
+      if (!p) return;
+      if (!p.envKey) {
+        hasKey = true;
+        return;
+      } // Ollama
+      const input = document.getElementById("key_" + p.id);
+      if (input && input.value.trim()) hasKey = true;
+    });
+    if (!hasKey) {
+      alert("Please enter an API key for at least one selected provider.");
       return false;
     }
   }
@@ -85,16 +303,11 @@ function validateCurrentStep() {
 function onChannelChange() {
   const selected = document.querySelector('input[name="channel"]:checked').value;
 
-  // Update selected class
-  document.querySelectorAll(".channel-option").forEach((opt) => {
-    opt.classList.toggle("selected", opt.querySelector("input").value === selected);
-  });
-
   // Show/hide config
-  document.getElementById("telegramConfig").style.display =
-    selected === "telegram" ? "block" : "none";
-  document.getElementById("discordConfig").style.display =
-    selected === "discord" ? "block" : "none";
+  ["telegram", "discord", "slack"].forEach((ch) => {
+    const el = document.getElementById(ch + "Config");
+    if (el) el.style.display = selected === ch ? "block" : "none";
+  });
 }
 
 async function validatePath() {
@@ -129,12 +342,26 @@ async function validatePath() {
 function getConfig() {
   const channel = document.querySelector('input[name="channel"]:checked').value;
   const config = {
-    ANTHROPIC_API_KEY: document.getElementById("anthropicKey").value.trim(),
     UNITY_PROJECT_PATH: document.getElementById("projectPath").value.trim(),
   };
 
-  const openaiKey = document.getElementById("openaiKey").value.trim();
-  if (openaiKey) config.OPENAI_API_KEY = openaiKey;
+  // Collect all checked provider keys
+  const providerChain = [];
+  const checked = getCheckedProviders();
+  checked.forEach((cb) => {
+    const p = PROVIDER_MAP[cb.value];
+    if (!p) return;
+    providerChain.push(p.id);
+    if (p.envKey) {
+      const input = document.getElementById("key_" + p.id);
+      const val = input ? input.value.trim() : "";
+      if (val) config[p.envKey] = val;
+    }
+  });
+
+  if (providerChain.length > 1) {
+    config.PROVIDER_CHAIN = providerChain.join(",");
+  }
 
   if (channel === "telegram") {
     const token = document.getElementById("telegramToken").value.trim();
@@ -144,6 +371,11 @@ function getConfig() {
   } else if (channel === "discord") {
     const token = document.getElementById("discordToken").value.trim();
     if (token) config.DISCORD_BOT_TOKEN = token;
+  } else if (channel === "slack") {
+    const bot = document.getElementById("slackBotToken").value.trim();
+    const app = document.getElementById("slackAppToken").value.trim();
+    if (bot) config.SLACK_BOT_TOKEN = bot;
+    if (app) config.SLACK_APP_TOKEN = app;
   }
 
   config._channel = channel;
@@ -158,15 +390,25 @@ function maskKey(key) {
 function buildReview() {
   const config = getConfig();
   const list = document.getElementById("reviewList");
-  // Clear previous review items safely
   while (list.firstChild) list.removeChild(list.firstChild);
 
-  const items = [
-    ["Anthropic Key", maskKey(config.ANTHROPIC_API_KEY)],
-    ["OpenAI Key", config.OPENAI_API_KEY ? maskKey(config.OPENAI_API_KEY) : "Not set"],
-    ["Project Path", config.UNITY_PROJECT_PATH],
-    ["Channel", config._channel],
-  ];
+  const items = [];
+
+  // Derive provider display from config (no redundant DOM query)
+  PROVIDERS.forEach((p) => {
+    if (p.envKey && config[p.envKey]) {
+      items.push([p.name + " Key", maskKey(config[p.envKey])]);
+    } else if (!p.envKey && config.PROVIDER_CHAIN?.includes(p.id)) {
+      items.push([p.name, "Local (no key)"]);
+    }
+  });
+
+  if (config.PROVIDER_CHAIN) {
+    items.push(["Provider Chain", config.PROVIDER_CHAIN]);
+  }
+
+  items.push(["Project Path", config.UNITY_PROJECT_PATH]);
+  items.push(["Channel", config._channel]);
 
   items.forEach(([key, value]) => {
     const div = document.createElement("div");
@@ -300,6 +542,12 @@ async function saveConfig() {
   const status = document.getElementById("saveStatus");
   const btn = document.getElementById("saveBtn");
 
+  if (!csrfReady) {
+    status.textContent = "Security token not loaded. Please refresh.";
+    status.className = "save-status error";
+    return;
+  }
+
   btn.disabled = true;
   status.textContent = "Saving configuration...";
   status.className = "save-status saving";
@@ -307,7 +555,10 @@ async function saveConfig() {
   try {
     const res = await fetch("/api/setup", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken,
+      },
       body: JSON.stringify(config),
     });
 

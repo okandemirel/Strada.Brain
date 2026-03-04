@@ -20,26 +20,18 @@
         <div class="step-icon">&#9889;</div>
         <h1>Welcome to Strada.Brain</h1>
         <p class="subtitle">AI-powered Unity development assistant. Let's set things up in a few steps.</p>
-        <button class="btn-primary" onclick="nextStep()">Get Started</button>
+        <button class="btn-primary" id="btnGetStarted">Get Started</button>
       </div>
 
-      <!-- Step 2: API Keys -->
+      <!-- Step 2: AI Providers -->
       <div class="step" data-step="2">
-        <h2>API Keys</h2>
-        <p class="subtitle">Enter your AI provider keys. At minimum, an Anthropic key is required.</p>
-        <div class="form-group">
-          <label for="anthropicKey">Anthropic API Key <span class="required">*</span></label>
-          <input type="password" id="anthropicKey" placeholder="sk-ant-..." autocomplete="off">
-          <small>Get one at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a></small>
-        </div>
-        <div class="form-group">
-          <label for="openaiKey">OpenAI API Key <span class="optional">(optional)</span></label>
-          <input type="password" id="openaiKey" placeholder="sk-..." autocomplete="off">
-          <small>Used for RAG embeddings if provided.</small>
-        </div>
+        <h2>AI Providers</h2>
+        <p class="subtitle">Select your AI providers. At least one is required.</p>
+        <div class="provider-grid" id="providerGrid"></div>
+        <div class="provider-configs" id="providerConfigs"></div>
         <div class="btn-row">
-          <button class="btn-secondary" onclick="prevStep()">Back</button>
-          <button class="btn-primary" onclick="nextStep()">Continue</button>
+          <button class="btn-secondary" id="btnBack2">Back</button>
+          <button class="btn-primary" id="btnNext2">Continue</button>
         </div>
       </div>
 
@@ -51,14 +43,14 @@
           <label for="projectPath">Project Path <span class="required">*</span></label>
           <div class="input-with-btn">
             <input type="text" id="projectPath" placeholder="/Users/you/MyUnityProject">
-            <button class="btn-small" onclick="openBrowser()">Browse</button>
-            <button class="btn-small" onclick="validatePath()">Validate</button>
+            <button class="btn-small" id="btnBrowse">Browse</button>
+            <button class="btn-small" id="btnValidate">Validate</button>
           </div>
           <div id="pathStatus" class="validation-status"></div>
         </div>
         <div class="btn-row">
-          <button class="btn-secondary" onclick="prevStep()">Back</button>
-          <button class="btn-primary" onclick="nextStep()">Continue</button>
+          <button class="btn-secondary" id="btnBack3">Back</button>
+          <button class="btn-primary" id="btnNext3">Continue</button>
         </div>
       </div>
 
@@ -67,7 +59,7 @@
         <h2>Communication Channels</h2>
         <p class="subtitle">Choose how you want to interact with Strada.Brain.</p>
         <div class="channel-grid">
-          <label class="channel-option selected">
+          <label class="channel-option">
             <input type="radio" name="channel" value="web" checked>
             <div class="channel-card">
               <span class="channel-icon">&#127760;</span>
@@ -89,6 +81,22 @@
               <span class="channel-icon">&#128172;</span>
               <span class="channel-name">Discord</span>
               <span class="channel-desc">Requires bot token</span>
+            </div>
+          </label>
+          <label class="channel-option">
+            <input type="radio" name="channel" value="slack">
+            <div class="channel-card">
+              <span class="channel-icon">&#128488;</span>
+              <span class="channel-name">Slack</span>
+              <span class="channel-desc">Requires bot token</span>
+            </div>
+          </label>
+          <label class="channel-option">
+            <input type="radio" name="channel" value="whatsapp">
+            <div class="channel-card">
+              <span class="channel-icon">&#128241;</span>
+              <span class="channel-name">WhatsApp</span>
+              <span class="channel-desc">Business API</span>
             </div>
           </label>
           <label class="channel-option">
@@ -121,9 +129,21 @@
           </div>
         </div>
 
+        <!-- Slack config -->
+        <div class="channel-config" id="slackConfig" style="display:none">
+          <div class="form-group">
+            <label for="slackBotToken">Slack Bot Token</label>
+            <input type="password" id="slackBotToken" placeholder="xoxb-..." autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="slackAppToken">Slack App Token</label>
+            <input type="password" id="slackAppToken" placeholder="xapp-..." autocomplete="off">
+          </div>
+        </div>
+
         <div class="btn-row">
-          <button class="btn-secondary" onclick="prevStep()">Back</button>
-          <button class="btn-primary" onclick="nextStep()">Continue</button>
+          <button class="btn-secondary" id="btnBack4">Back</button>
+          <button class="btn-primary" id="btnNext4">Continue</button>
         </div>
       </div>
 
@@ -134,8 +154,8 @@
         <div class="review-list" id="reviewList"></div>
         <div id="saveStatus" class="save-status"></div>
         <div class="btn-row">
-          <button class="btn-secondary" onclick="prevStep()">Back</button>
-          <button class="btn-primary" id="saveBtn" onclick="saveConfig()">Save & Start</button>
+          <button class="btn-secondary" id="btnBack5">Back</button>
+          <button class="btn-primary" id="saveBtn">Save & Start</button>
         </div>
       </div>
     </div>
@@ -146,15 +166,15 @@
     <div class="browser-dialog">
       <div class="browser-header">
         <h3>Browse for Unity Project</h3>
-        <button class="browser-close" onclick="closeBrowser()">&times;</button>
+        <button class="browser-close" id="btnBrowserClose">&times;</button>
       </div>
       <div class="browser-breadcrumb" id="browserBreadcrumb"></div>
       <div class="browser-list" id="browserList"></div>
       <div class="browser-footer">
         <div class="browser-unity-status" id="browserUnityStatus"></div>
         <div class="browser-actions">
-          <button class="btn-secondary" onclick="closeBrowser()">Cancel</button>
-          <button class="btn-primary" id="browserSelectBtn" onclick="selectFolder()" disabled>Select This Folder</button>
+          <button class="btn-secondary" id="btnBrowserCancel">Cancel</button>
+          <button class="btn-primary" id="browserSelectBtn" disabled>Select This Folder</button>
         </div>
       </div>
     </div>
