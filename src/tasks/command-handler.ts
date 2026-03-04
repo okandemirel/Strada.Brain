@@ -9,11 +9,13 @@ import type { IChannelSender } from "../channels/channel-core.interface.js";
 import type { TaskCommand, Task, TaskId } from "./types.js";
 import { TaskStatus, ACTIVE_STATUSES } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
+import type { ProviderManager } from "../agents/providers/provider-manager.js";
 
 export class CommandHandler {
   constructor(
     private readonly taskManager: TaskManager,
     private readonly channel: IChannelSender,
+    private readonly providerManager?: ProviderManager,
   ) {}
 
   async handle(chatId: string, command: TaskCommand, args: string[]): Promise<void> {
@@ -38,6 +40,9 @@ export class CommandHandler {
         break;
       case "resume":
         await this.handleResume(chatId, args[0] as TaskId | undefined);
+        break;
+      case "model":
+        await this.handleModel(chatId, args);
         break;
     }
   }
@@ -123,7 +128,15 @@ export class CommandHandler {
       "`/resume [id]` - Resume a paused task",
       "`/help` - Show this help",
       "",
-      "You can also use Turkish: /durum, /iptal, /gorevler, /detay, /yardim",
+      "*Model Commands*",
+      "",
+      "`/model` - Show current provider/model",
+      "`/model list` - List available providers",
+      "`/model <provider>` - Switch provider",
+      "`/model <provider>/<model>` - Switch provider and model",
+      "`/model reset` - Return to system default",
+      "",
+      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /model listele, /model sıfırla",
       "",
       "Send any other message to start a new background task.",
     ].join("\n");
@@ -157,6 +170,77 @@ export class CommandHandler {
     }
 
     await this.channel.sendText(chatId, `Resume is not yet supported. Please start a new task.`);
+  }
+
+  private async handleModel(chatId: string, args: string[]): Promise<void> {
+    if (!this.providerManager) {
+      await this.channel.sendText(chatId, "Model switching is not available.");
+      return;
+    }
+
+    const subcommand = args[0]?.toLowerCase();
+
+    // No args → show current
+    if (!subcommand) {
+      const info = this.providerManager.getActiveInfo(chatId);
+      const status = info.isDefault ? " (system default)" : "";
+      await this.channel.sendMarkdown(
+        chatId,
+        `*Current Model*\nProvider: \`${info.providerName}\`\nModel: \`${info.model}\`${status}`,
+      );
+      return;
+    }
+
+    // list / listele
+    if (subcommand === "list" || subcommand === "listele") {
+      const available = this.providerManager.listAvailable();
+      const lines = available.map(
+        (p) => `\`${p.name}\` — ${p.label} (${p.defaultModel})`,
+      );
+      await this.channel.sendMarkdown(
+        chatId,
+        `*Available Providers*\n\n${lines.join("\n")}\n\nUsage: \`/model provider\` or \`/model provider/model\``,
+      );
+      return;
+    }
+
+    // reset / sıfırla
+    if (subcommand === "reset" || subcommand === "sıfırla") {
+      this.providerManager.clearPreference(chatId);
+      const info = this.providerManager.getActiveInfo(chatId);
+      await this.channel.sendMarkdown(
+        chatId,
+        `Model reset to system default: \`${info.providerName}\``,
+      );
+      return;
+    }
+
+    // provider/model or just provider
+    const slashIndex = subcommand.indexOf("/");
+    let providerName: string;
+    let model: string | undefined;
+
+    if (slashIndex > 0) {
+      providerName = subcommand.slice(0, slashIndex);
+      model = subcommand.slice(slashIndex + 1);
+    } else {
+      providerName = subcommand;
+    }
+
+    if (!this.providerManager.isAvailable(providerName)) {
+      await this.channel.sendText(
+        chatId,
+        `Provider "${providerName}" is not available. Use \`/model list\` to see options.`,
+      );
+      return;
+    }
+
+    this.providerManager.setPreference(chatId, providerName, model);
+    const info = this.providerManager.getActiveInfo(chatId);
+    await this.channel.sendMarkdown(
+      chatId,
+      `Switched to \`${info.providerName}\` (model: \`${info.model}\`)`,
+    );
   }
 
   // ─── Formatting ─────────────────────────────────────────────────────────────

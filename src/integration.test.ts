@@ -126,7 +126,7 @@ describe("Integration: full message flow", () => {
     const provider = createMockProvider();
 
     const orchestrator = new Orchestrator({
-      provider: provider as unknown as IAIProvider,
+      providerManager: { getProvider: () => provider, shutdown: vi.fn() } as any,
       tools: [fileReadTool],
       channel,
       projectPath: "/test/project",
@@ -170,7 +170,7 @@ describe("Integration: full message flow", () => {
     const provider = createSimpleProvider();
 
     const orchestrator = new Orchestrator({
-      provider: provider as unknown as IAIProvider,
+      providerManager: { getProvider: () => provider, shutdown: vi.fn() } as any,
       tools: [fileReadTool],
       channel,
       projectPath: "/test/project",
@@ -205,7 +205,7 @@ describe("Integration: full message flow", () => {
     const provider = createUnknownToolProvider();
 
     const orchestrator = new Orchestrator({
-      provider: provider as unknown as IAIProvider,
+      providerManager: { getProvider: () => provider, shutdown: vi.fn() } as any,
       tools: [fileReadTool],
       channel,
       projectPath: "/test/project",

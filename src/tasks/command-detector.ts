@@ -18,6 +18,7 @@ const PREFIX_COMMANDS: Record<string, TaskCommand> = {
   "/help": "help",
   "/pause": "pause",
   "/resume": "resume",
+  "/model": "model",
   "/iptal": "cancel",
   "/durum": "status",
   "/gorevler": "tasks",

@@ -70,7 +70,7 @@ describe("Orchestrator", () => {
     writeTool = createMockTool("file_write", true);
 
     orch = new Orchestrator({
-      provider: mockProvider,
+      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
       tools: [readTool, writeTool],
       channel: mockChannel,
       projectPath: "/tmp/test-project",
@@ -400,7 +400,7 @@ describe("Orchestrator", () => {
     it("treats create_system as a write operation", async () => {
       const systemTool = createMockTool("create_system", true);
       const orchWithSystemTool = new Orchestrator({
-        provider: mockProvider,
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
         tools: [systemTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",

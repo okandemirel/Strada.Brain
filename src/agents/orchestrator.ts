@@ -6,6 +6,7 @@ import type {
   ProviderResponse,
   IStreamingProvider,
 } from "./providers/provider.interface.js";
+import type { ProviderManager } from "./providers/provider-manager.js";
 import type { ITool, ToolContext } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage } from "../channels/channel.interface.js";
 import { supportsRichMessaging } from "../channels/channel.interface.js";
@@ -50,7 +51,7 @@ interface Session {
  * Manages conversation sessions per chat and routes tool calls.
  */
 export class Orchestrator {
-  private readonly provider: IAIProvider;
+  private readonly providerManager: ProviderManager;
   private readonly tools: Map<string, ITool>;
   private readonly toolDefinitions: Array<{
     name: string;
@@ -75,7 +76,7 @@ export class Orchestrator {
   private pendingModulesPrompt: boolean = false;
 
   constructor(opts: {
-    provider: IAIProvider;
+    providerManager: ProviderManager;
     tools: ITool[];
     channel: IChannelAdapter;
     projectPath: string;
@@ -88,7 +89,7 @@ export class Orchestrator {
     streamingEnabled?: boolean;
     stradaDeps?: StradaDepsStatus;
   }) {
-    this.provider = opts.provider;
+    this.providerManager = opts.providerManager;
     this.channel = opts.channel;
     this.projectPath = opts.projectPath;
     this.readOnly = opts.readOnly;
@@ -160,6 +161,7 @@ export class Orchestrator {
   async runBackgroundTask(prompt: string, options: BackgroundTaskOptions): Promise<string> {
     const logger = getLogger();
     const { signal, onProgress, chatId } = options;
+    const provider = this.providerManager.getProvider(chatId);
 
     // Isolated session for this task
     const session: Session = {
@@ -225,7 +227,7 @@ export class Orchestrator {
         throw new Error("Task cancelled");
       }
 
-      const response = await this.provider.chat(
+      const response = await provider.chat(
         systemPrompt,
         session.messages,
         this.toolDefinitions,
@@ -240,12 +242,12 @@ export class Orchestrator {
       this.metrics?.recordTokenUsage(
         response.usage.inputTokens,
         response.usage.outputTokens,
-        this.provider.name,
+        provider.name,
       );
       this.rateLimiter?.recordTokenUsage(
         response.usage.inputTokens,
         response.usage.outputTokens,
-        this.provider.name,
+        provider.name,
       );
 
       // Final response — return text
@@ -491,6 +493,7 @@ export class Orchestrator {
    */
   private async runAgentLoop(chatId: string, session: Session): Promise<void> {
     const logger = getLogger();
+    const provider = this.providerManager.getProvider(chatId);
 
     // Retrieve relevant memory context for the first iteration
     let systemPrompt = this.systemPrompt;
@@ -567,17 +570,17 @@ export class Orchestrator {
 
     const canStream =
       this.streamingEnabled &&
-      "chatStream" in this.provider &&
-      typeof this.provider.chatStream === "function" &&
+      "chatStream" in provider &&
+      typeof provider.chatStream === "function" &&
       "startStreamingMessage" in this.channel &&
       typeof this.channel.startStreamingMessage === "function";
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       let response;
       if (canStream) {
-        response = await this.streamResponse(chatId, systemPrompt, session);
+        response = await this.streamResponse(chatId, systemPrompt, session, provider);
       } else {
-        response = await this.provider.chat(systemPrompt, session.messages, this.toolDefinitions);
+        response = await provider.chat(systemPrompt, session.messages, this.toolDefinitions);
       }
 
       logger.debug("LLM response", {
@@ -592,12 +595,12 @@ export class Orchestrator {
       this.metrics?.recordTokenUsage(
         response.usage.inputTokens,
         response.usage.outputTokens,
-        this.provider.name,
+        provider.name,
       );
       this.rateLimiter?.recordTokenUsage(
         response.usage.inputTokens,
         response.usage.outputTokens,
-        this.provider.name,
+        provider.name,
       );
 
       // If no tool calls, send the final text response
@@ -718,6 +721,7 @@ export class Orchestrator {
     chatId: string,
     systemPrompt: string,
     session: Session,
+    provider: IAIProvider,
   ): Promise<ProviderResponse> {
     const channel = this.channel;
     let streamId: string | undefined;
@@ -756,7 +760,7 @@ export class Orchestrator {
         channel as { startStreamingMessage?: (chatId: string) => Promise<string | undefined> }
       ).startStreamingMessage?.(chatId)) ?? undefined;
 
-    const response = await (this.provider as IStreamingProvider).chatStream(
+    const response = await (provider as IStreamingProvider).chatStream(
       systemPrompt,
       session.messages,
       this.toolDefinitions,
@@ -958,6 +962,10 @@ export class Orchestrator {
       return session.messages.splice(0, trimTo);
     }
     return [];
+  }
+
+  getProviderManager(): ProviderManager {
+    return this.providerManager;
   }
 
   /**

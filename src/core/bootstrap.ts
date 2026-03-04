@@ -13,6 +13,7 @@ import { createLogger, getLogger } from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
 import { ClaudeProvider } from "../agents/providers/claude.js";
 import { buildProviderChain } from "../agents/providers/provider-registry.js";
+import { ProviderManager } from "../agents/providers/provider-manager.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { DashboardServer } from "../dashboard/server.js";
@@ -110,8 +111,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Initialize security
   const auth = initializeAuth(config, channelType, logger);
 
-  // Initialize AI provider
-  const provider = await initializeAIProvider(config, logger);
+  // Initialize AI provider manager
+  const providerManager = await initializeAIProvider(config, logger);
 
   // Initialize memory manager
   const memoryManager = await initializeMemory(config, logger);
@@ -144,7 +145,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
-    provider,
+    providerManager,
     tools: toolRegistry.getAllTools(),
     channel,
     projectPath: config.unityProjectPath,
@@ -165,7 +166,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   backgroundExecutor.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
 
-  const commandHandler = new CommandHandler(taskManager, channel);
+  const commandHandler = new CommandHandler(taskManager, channel, providerManager);
   const messageRouter = new MessageRouter(taskManager, commandHandler);
   // ProgressReporter subscribes to taskManager events in constructor
   new ProgressReporter(channel, taskManager);
@@ -200,6 +201,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       cleanupInterval,
       learningPipeline: learningResult.pipeline,
       taskStorage,
+      providerManager,
     }),
   };
 }
@@ -239,23 +241,23 @@ function initializeAuth(config: Config, channelType: string, logger: winston.Log
   });
 }
 
-async function initializeAIProvider(config: Config, logger: winston.Logger): Promise<IAIProvider> {
+async function initializeAIProvider(config: Config, logger: winston.Logger): Promise<ProviderManager> {
   const apiKeys = collectApiKeys(config);
 
-  let provider: IAIProvider;
+  let defaultProvider: IAIProvider;
 
   // 1) Explicit provider chain
   if (config.providerChain) {
     const names = config.providerChain.split(",").map((s) => s.trim());
-    provider = buildProviderChain(names, apiKeys, {
+    defaultProvider = buildProviderChain(names, apiKeys, {
       models: config.providerModels,
     });
     logger.info("AI provider chain initialized", { chain: names });
   }
   // 2) Anthropic key present — use ClaudeProvider directly
   else if (config.anthropicApiKey) {
-    provider = new ClaudeProvider(config.anthropicApiKey);
-    logger.info("AI provider initialized", { name: provider.name });
+    defaultProvider = new ClaudeProvider(config.anthropicApiKey);
+    logger.info("AI provider initialized", { name: defaultProvider.name });
   }
   // 3) No explicit chain and no Anthropic key — auto-detect from available keys
   else {
@@ -270,23 +272,31 @@ async function initializeAIProvider(config: Config, logger: winston.Logger): Pro
       );
     }
 
-    provider = buildProviderChain(detectedNames, apiKeys, {
+    defaultProvider = buildProviderChain(detectedNames, apiKeys, {
       models: config.providerModels,
     });
     logger.info("AI provider auto-detected from available keys", { chain: detectedNames });
   }
 
   // Run health check (non-blocking — warn only)
-  if (provider.healthCheck) {
-    const healthy = await provider.healthCheck();
+  if (defaultProvider.healthCheck) {
+    const healthy = await defaultProvider.healthCheck();
     const logMethod = healthy ? "info" : "warn";
     const message = healthy
       ? "AI provider health check passed"
       : "AI provider health check failed — API may be unreachable or key invalid";
-    logger[logMethod](message, { name: provider.name });
+    logger[logMethod](message, { name: defaultProvider.name });
   }
 
-  return provider;
+  const providerManager = new ProviderManager(
+    defaultProvider,
+    apiKeys,
+    config.providerModels,
+    config.memory.dbPath,
+  );
+  logger.info("ProviderManager initialized with per-chat switching support");
+
+  return providerManager;
 }
 
 async function initializeMemory(
@@ -615,6 +625,7 @@ interface ShutdownOptions {
   cleanupInterval: ReturnType<typeof setInterval>;
   learningPipeline?: LearningPipeline;
   taskStorage?: TaskStorage;
+  providerManager?: ProviderManager;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -633,6 +644,10 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
 
     if (options.taskStorage) {
       options.taskStorage.close();
+    }
+
+    if (options.providerManager) {
+      options.providerManager.shutdown();
     }
 
     if (dashboard) {
