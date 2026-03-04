@@ -241,7 +241,8 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    expect(mockProvider.chat).toHaveBeenCalledTimes(2);
+    // PAOR reflection may add extra calls after error
+    expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(2);
 
     const secondCallArgs = mockProvider.chat.mock.calls[1]!;
     const messages = secondCallArgs[1] as any[];
@@ -436,6 +437,102 @@ describe("Orchestrator", () => {
       await promise;
 
       expect(mockChannel.requestConfirmation).toHaveBeenCalled();
+    });
+  });
+
+  describe("PAOR State Machine", () => {
+    it("injects planning prompt on first call", async () => {
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce({
+          text: "Plan:\n1. Read file\n2. Fix error",
+          toolCalls: [{ id: "tc1", name: "file_read", input: { path: "test.cs" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Done!",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
+
+      mockProvider.chat = chatSpy;
+
+      const promise = orch.handleMessage({
+        channelType: "cli",
+        chatId: "paor1",
+        userId: "user1",
+        text: "Fix the error",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      const firstCallPrompt = chatSpy.mock.calls[0]![0] as string;
+      expect(firstCallPrompt).toContain("PLAN");
+    });
+
+    it("transitions to reflecting after tool errors", async () => {
+      const buildTool = createMockTool("dotnet_build");
+      buildTool.execute = vi.fn().mockResolvedValue({
+        content: "error CS0103: 'Foo' does not exist",
+        isError: true,
+      });
+
+      const orchWithBuild = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool, writeTool, buildTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce({
+          text: "Plan: 1. Build project",
+          toolCalls: [{ id: "tc1", name: "dotnet_build", input: {} }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "CONTINUE - let me try a different fix",
+          toolCalls: [{ id: "tc2", name: "file_read", input: { path: "test.cs" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Fixed!",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
+
+      mockProvider.chat = chatSpy;
+
+      const promise = orchWithBuild.handleMessage({
+        channelType: "cli",
+        chatId: "paor2",
+        userId: "user1",
+        text: "Build the project",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      const secondCallMessages = chatSpy.mock.calls[1]![1] as any[];
+      const hasReflection = secondCallMessages.some(
+        (m: any) =>
+          (typeof m.content === "string" && m.content.includes("Reflection Phase")) ||
+          (Array.isArray(m.content) &&
+            m.content.some((c: any) => c.text?.includes?.("Reflection Phase"))),
+      );
+      expect(hasReflection).toBe(true);
+      expect(chatSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
   });
 });

@@ -25,6 +25,10 @@ import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger } from "../utils/logger.js";
+import { AgentPhase, createInitialState, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
+import { buildPlanningPrompt, buildReflectionPrompt, buildReplanningPrompt, buildExecutionContext } from "./paor-prompts.js";
+import type { InstinctRetriever } from "./instinct-retriever.js";
+import { shouldForceReplan } from "./failure-classifier.js";
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
 import { WRITE_OPERATIONS } from "./autonomy/constants.js";
 import type { BackgroundTaskOptions } from "../tasks/types.js";
@@ -74,6 +78,7 @@ export class Orchestrator {
   private depsSetupComplete: boolean = false;
   private pendingDepsPrompt: boolean = false;
   private pendingModulesPrompt: boolean = false;
+  private readonly instinctRetriever: InstinctRetriever | null;
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -88,6 +93,7 @@ export class Orchestrator {
     rateLimiter?: RateLimiter;
     streamingEnabled?: boolean;
     stradaDeps?: StradaDepsStatus;
+    instinctRetriever?: InstinctRetriever;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -99,6 +105,7 @@ export class Orchestrator {
     this.ragPipeline = opts.ragPipeline;
     this.rateLimiter = opts.rateLimiter;
     this.streamingEnabled = opts.streamingEnabled ?? false;
+    this.instinctRetriever = opts.instinctRetriever ?? null;
 
     // Build tool registry
     this.tools = new Map();
@@ -568,6 +575,22 @@ export class Orchestrator {
     let verificationRequested = false;
     // ────────────────────────────────────────────────────────────────────
 
+    // ─── PAOR State Machine ──────────────────────────────────────────────
+    const lastUserMessage = this.extractLastUserMessage(session);
+    let agentState = createInitialState(lastUserMessage);
+
+    if (this.instinctRetriever) {
+      try {
+        const insights = await this.instinctRetriever.getInsightsForTask(lastUserMessage);
+        agentState = { ...agentState, learnedInsights: insights };
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    const REFLECT_INTERVAL = 3;
+    // ────────────────────────────────────────────────────────────────────
+
     const canStream =
       this.streamingEnabled &&
       "chatStream" in provider &&
@@ -576,11 +599,26 @@ export class Orchestrator {
       typeof this.channel.startStreamingMessage === "function";
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+      // ─── PAOR: Build phase-aware system prompt ──────────────────────
+      let activePrompt = systemPrompt;
+      switch (agentState.phase) {
+        case AgentPhase.PLANNING:
+          activePrompt += "\n\n" + buildPlanningPrompt(agentState.taskDescription, agentState.learnedInsights);
+          break;
+        case AgentPhase.EXECUTING:
+          activePrompt += buildExecutionContext(agentState);
+          break;
+        case AgentPhase.REPLANNING:
+          activePrompt += "\n\n" + buildReplanningPrompt(agentState);
+          break;
+      }
+      // ────────────────────────────────────────────────────────────────
+
       let response;
       if (canStream) {
-        response = await this.streamResponse(chatId, systemPrompt, session, provider);
+        response = await this.streamResponse(chatId, activePrompt, session, provider);
       } else {
-        response = await provider.chat(systemPrompt, session.messages, this.toolDefinitions);
+        response = await provider.chat(activePrompt, session.messages, this.toolDefinitions);
       }
 
       logger.debug("LLM response", {
@@ -602,6 +640,51 @@ export class Orchestrator {
         response.usage.outputTokens,
         provider.name,
       );
+
+      // ─── PAOR: Handle REFLECTING phase response ─────────────────────
+      if (agentState.phase === AgentPhase.REFLECTING) {
+        const decision = parseReflectionDecision(response.text);
+
+        if (decision === "DONE") {
+          if (response.text) {
+            session.messages.push({ role: "assistant", content: response.text });
+            if (!canStream) await this.channel.sendMarkdown(chatId, response.text);
+          }
+          return;
+        }
+
+        if (decision === "REPLAN") {
+          agentState = {
+            ...agentState,
+            failedApproaches: [...agentState.failedApproaches, extractApproachSummary(agentState)],
+            lastReflection: response.text ?? null,
+            reflectionCount: agentState.reflectionCount + 1,
+          };
+          agentState = transitionPhase(agentState, AgentPhase.REPLANNING);
+          if (response.text) {
+            session.messages.push({ role: "assistant", content: response.text });
+          }
+          session.messages.push({ role: "user", content: "Please create a new plan." });
+          continue;
+        }
+
+        // CONTINUE
+        agentState = {
+          ...agentState,
+          reflectionCount: agentState.reflectionCount + 1,
+          consecutiveErrors: 0,
+        };
+        agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+
+        if (response.toolCalls.length === 0) {
+          if (response.text) {
+            session.messages.push({ role: "assistant", content: response.text });
+          }
+          session.messages.push({ role: "user", content: "Please continue." });
+          continue;
+        }
+      }
+      // ────────────────────────────────────────────────────────────────
 
       // If no tool calls, send the final text response
       // (streaming already sent it, so skip for streamed end_turn)
@@ -633,6 +716,17 @@ export class Orchestrator {
         }
         return;
       }
+
+      // ─── PAOR: Phase transitions ────────────────────────────────────
+      if (agentState.phase === AgentPhase.PLANNING) {
+        agentState = { ...agentState, plan: response.text ?? null };
+        agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+      }
+      if (agentState.phase === AgentPhase.REPLANNING) {
+        agentState = { ...agentState, plan: response.text ?? null };
+        agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+      }
+      // ────────────────────────────────────────────────────────────────
 
       // Handle tool calls
       // First, add the assistant message with tool calls
@@ -682,6 +776,36 @@ export class Orchestrator {
       const stateCtx = taskPlanner.getStateInjection();
       // ────────────────────────────────────────────────────────────────────
 
+      // ─── PAOR: Record step results ──────────────────────────────────
+      for (let i = 0; i < response.toolCalls.length; i++) {
+        const tc = response.toolCalls[i]!;
+        const tr = toolResults[i]!;
+        const stepResult: StepResult = {
+          toolName: tc.name,
+          success: !(tr.isError ?? false),
+          summary: tr.content.slice(0, 200),
+          timestamp: Date.now(),
+        };
+        agentState = {
+          ...agentState,
+          stepResults: [...agentState.stepResults, stepResult],
+          iteration: agentState.iteration + 1,
+          consecutiveErrors: tr.isError ? agentState.consecutiveErrors + 1 : 0,
+        };
+      }
+
+      const hasErrors = toolResults.some(tr => tr.isError);
+      const failedSteps = agentState.stepResults.filter(s => !s.success);
+      const shouldReflect =
+        hasErrors ||
+        (agentState.stepResults.length > 0 && agentState.stepResults.length % REFLECT_INTERVAL === 0) ||
+        shouldForceReplan(failedSteps);
+
+      if (shouldReflect && agentState.phase === AgentPhase.EXECUTING) {
+        agentState = transitionPhase(agentState, AgentPhase.REFLECTING);
+      }
+      // ────────────────────────────────────────────────────────────────
+
       // Add tool results as a user message
       // Build content blocks for tool results
       const contentBlocks: Array<
@@ -690,6 +814,9 @@ export class Orchestrator {
       > = [];
       if (stateCtx) {
         contentBlocks.push({ type: "text" as const, text: stateCtx });
+      }
+      if (agentState.phase === AgentPhase.REFLECTING) {
+        contentBlocks.push({ type: "text" as const, text: buildReflectionPrompt(agentState) });
       }
       for (const tr of toolResults) {
         contentBlocks.push({
@@ -916,6 +1043,16 @@ export class Orchestrator {
     return response === "Yes";
   }
 
+  private extractLastUserMessage(session: Session): string {
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      const msg = session.messages[i]!;
+      if (msg.role === "user" && typeof msg.content === "string") {
+        return msg.content;
+      }
+    }
+    return "";
+  }
+
   private getOrCreateSession(chatId: string): Session {
     let session = this.sessions.get(chatId);
     if (session) {
@@ -980,6 +1117,20 @@ export class Orchestrator {
       }
     }
   }
+}
+
+function parseReflectionDecision(text: string | null | undefined): "CONTINUE" | "REPLAN" | "DONE" {
+  if (!text) return "CONTINUE";
+  const upper = text.toUpperCase();
+  if (upper.includes("DONE")) return "DONE";
+  if (upper.includes("REPLAN")) return "REPLAN";
+  return "CONTINUE";
+}
+
+function extractApproachSummary(state: AgentState): string {
+  const recentSteps = state.stepResults.slice(-5);
+  const tools = recentSteps.map(s => s.toolName + "(" + (s.success ? "OK" : "FAIL") + ")").join(" → ");
+  return (state.plan?.slice(0, 100) ?? "Unknown plan") + ": " + tools;
 }
 
 /**
