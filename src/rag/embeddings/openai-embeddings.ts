@@ -22,7 +22,7 @@ interface OpenAIEmbeddingOptions {
 
 interface OpenAIEmbeddingResponse {
   data: Array<{ embedding: number[]; index: number }>;
-  usage: { prompt_tokens: number; total_tokens: number };
+  usage?: { prompt_tokens: number; total_tokens: number };
 }
 
 export class OpenAIEmbeddingProvider implements IEmbeddingProvider {

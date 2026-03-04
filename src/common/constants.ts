@@ -111,7 +111,7 @@ export interface EmbeddingPreset {
 /** Embedding presets for all known providers */
 export const EMBEDDING_PRESETS: Record<string, EmbeddingPreset> = {
   openai:    { supported: true,  model: "text-embedding-3-small",                    dimensions: 1536, maxBatchSize: 100, label: "OpenAI" },
-  deepseek:  { supported: true,  model: "deepseek-embedding-v2",                     dimensions: 768,  maxBatchSize: 100, label: "DeepSeek" },
+  deepseek:  { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "DeepSeek" },
   mistral:   { supported: true,  model: "mistral-embed",                             dimensions: 1024, maxBatchSize: 100, label: "Mistral" },
   together:  { supported: true,  model: "togethercomputer/m2-bert-80M-8k-retrieval", dimensions: 768,  maxBatchSize: 100, label: "Together AI" },
   fireworks: { supported: true,  model: "nomic-ai/nomic-embed-text-v1.5",            dimensions: 768,  maxBatchSize: 100, label: "Fireworks AI" },

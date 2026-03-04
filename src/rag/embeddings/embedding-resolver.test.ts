@@ -58,9 +58,10 @@ describe("resolveEmbeddingProvider", () => {
 
     const result = resolveEmbeddingProvider(config);
     expect(result).not.toBeNull();
-    expect(result!.source).toBe("auto:deepseek");
+    // DeepSeek no longer supports embeddings, so OpenAI should be selected
+    expect(result!.source).toBe("auto:openai");
     expect(result!.provider).toBeInstanceOf(OpenAIEmbeddingProvider);
-    expect(result!.provider.name).toContain("DeepSeek");
+    expect(result!.provider.name).toContain("OpenAI");
   });
 
   it("auto mode: returns null when chain has only unsupported providers", () => {

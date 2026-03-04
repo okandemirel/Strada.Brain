@@ -30,7 +30,7 @@ export const PROVIDER_PRESETS: Record<
   },
   kimi: {
     baseUrl: "https://api.kimi.com/coding/v1",
-    defaultModel: "moonshot-v1-128k",
+    defaultModel: "kimi-for-coding",
     label: "Kimi (Moonshot)",
   },
   minimax: {

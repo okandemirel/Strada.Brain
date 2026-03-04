@@ -239,7 +239,7 @@ function updateProviderConfigs() {
 // Providers that support embeddings — must mirror backend EMBEDDING_PRESETS.
 // When adding a new provider, add its id here if it supports embeddings.
 const EMBEDDING_CAPABLE = new Set([
-  "openai", "deepseek", "mistral", "together",
+  "openai", "mistral", "together",
   "fireworks", "qwen", "gemini", "ollama",
 ]);
 
@@ -267,7 +267,7 @@ function updateRagInfo() {
     const names = checked.map((id) => PROVIDER_MAP[id]?.name ?? id).join(", ");
     infoEl.textContent =
       names +
-      " does not support embeddings. Add OpenAI, DeepSeek, Mistral, or Ollama for code search.";
+      " does not support embeddings. Add OpenAI, Mistral, or Ollama for code search.";
     infoEl.className = "rag-info warning";
   } else {
     infoEl.textContent = "Select a provider to enable RAG.";
