@@ -71,7 +71,7 @@ export interface Task {
 
 // ─── Commands ────────────────────────────────────────────────────────────────────
 
-export type TaskCommand = "status" | "cancel" | "tasks" | "detail" | "help" | "pause" | "resume";
+export type TaskCommand = "status" | "cancel" | "tasks" | "detail" | "help" | "pause" | "resume" | "model";
 
 export interface ParsedCommand {
   type: "command";
