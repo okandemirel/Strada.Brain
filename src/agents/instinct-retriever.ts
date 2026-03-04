@@ -34,7 +34,6 @@ export class InstinctRetriever {
     const matches = this.matcher.findSimilarInstincts(taskDescription, {
       minSimilarity: 0.4,
       maxResults: maxInsights,
-      statusFilter: ["active", "proposed"],
     });
 
     // 3. Format each match, filter out failures

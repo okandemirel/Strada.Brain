@@ -59,7 +59,7 @@ export function classifyFailure(step: StepResult): FailureClassification {
       const codeMatch = text.match(ERROR_CODE_REGEX);
       return {
         type: pattern.type,
-        errorCode: codeMatch ? codeMatch[1] : null,
+        errorCode: codeMatch?.[1] ?? null,
         suggestion: pattern.suggestion,
       };
     }

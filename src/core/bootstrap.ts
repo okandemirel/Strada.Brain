@@ -52,6 +52,7 @@ import {
 } from "../learning/index.js";
 import { ErrorRecoveryEngine } from "../agents/autonomy/error-recovery.js";
 import { TaskPlanner } from "../agents/autonomy/task-planner.js";
+import { InstinctRetriever } from "../agents/instinct-retriever.js";
 
 // Task system imports
 import {
@@ -143,6 +144,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Initialize rate limiter
   const rateLimiter = initializeRateLimiter(config, logger);
 
+  // Create InstinctRetriever for proactive learning
+  const instinctRetriever = learningResult.pipeline && learningResult.storage
+    ? new InstinctRetriever(
+        new PatternMatcher(learningResult.storage),
+        learningResult.storage,
+      )
+    : undefined;
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -157,6 +166,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     rateLimiter,
     streamingEnabled: config.streamingEnabled,
     stradaDeps,
+    instinctRetriever,
   });
 
   // Initialize task system
@@ -417,6 +427,7 @@ async function initializeRAG(
 
 interface LearningResult {
   pipeline?: LearningPipeline;
+  storage?: LearningStorage;
   taskPlanner: TaskPlanner;
   errorRecovery: ErrorRecoveryEngine;
 }
@@ -462,7 +473,7 @@ async function initializeLearning(config: Config, logger: winston.Logger): Promi
       stats: pipeline.getStats(),
     });
 
-    return { pipeline, taskPlanner, errorRecovery };
+    return { pipeline, storage: learningStorage, taskPlanner, errorRecovery };
   } catch (error) {
     logger.warn("Learning pipeline initialization failed", {
       error: error instanceof Error ? error.message : String(error),

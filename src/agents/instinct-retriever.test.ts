@@ -116,7 +116,7 @@ describe("InstinctRetriever", () => {
     expect(result).toHaveLength(3);
     expect(mockMatcher.findSimilarInstincts).toHaveBeenCalledWith(
       "some task",
-      { minSimilarity: 0.4, maxResults: 3, statusFilter: ["active", "proposed"] },
+      { minSimilarity: 0.4, maxResults: 3 },
     );
   });
 
