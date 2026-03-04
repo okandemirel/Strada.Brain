@@ -23,6 +23,7 @@ import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger } from "../utils/logger.js";
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
 import { WRITE_OPERATIONS } from "./autonomy/constants.js";
+import type { BackgroundTaskOptions } from "../tasks/types.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -125,6 +126,176 @@ export class Orchestrator {
       }),
     );
     await current;
+  }
+
+  /**
+   * Run a task in the background with abort support and progress reporting.
+   * Used by the task system for async execution.
+   */
+  async runBackgroundTask(prompt: string, options: BackgroundTaskOptions): Promise<string> {
+    const logger = getLogger();
+    const { signal, onProgress, chatId } = options;
+
+    // Isolated session for this task
+    const session: Session = {
+      messages: [{ role: "user", content: prompt }],
+      lastActivity: new Date(),
+    };
+
+    // Build system prompt with memory/RAG context
+    let systemPrompt = this.systemPrompt;
+    if (this.memoryManager) {
+      try {
+        const memoriesResult = await this.memoryManager.retrieve({
+          mode: "text",
+          query: prompt,
+          limit: 3,
+          minScore: 0.15,
+        });
+        if (isOk(memoriesResult)) {
+          const memories = memoriesResult.value;
+          if (memories.length > 0) {
+            const memoryContext = memories.map((m) => m.entry.content).join("\n---\n");
+            systemPrompt += `\n\n## Relevant Memory\n${memoryContext}\n`;
+          }
+        }
+      } catch {
+        // Memory retrieval failure is non-fatal
+      }
+
+      if (this.ragPipeline) {
+        try {
+          const ragResults = await this.ragPipeline.search(prompt, { topK: 6, minScore: 0.2 });
+          if (ragResults.length > 0) {
+            systemPrompt += this.ragPipeline.formatContext(ragResults);
+          }
+        } catch {
+          // RAG failure is non-fatal
+        }
+      }
+
+      try {
+        const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
+        if (isOk(analysisResult)) {
+          const analysisOpt = analysisResult.value;
+          if (isSome(analysisOpt)) {
+            systemPrompt += buildAnalysisSummary(analysisOpt.value);
+          }
+        }
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    // Autonomy layer
+    const errorRecovery = new ErrorRecoveryEngine();
+    const taskPlanner = new TaskPlanner();
+    const selfVerification = new SelfVerification();
+    systemPrompt += taskPlanner.getPlanningPrompt();
+    let verificationRequested = false;
+
+    for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+      // Check cancellation
+      if (signal.aborted) {
+        throw new Error("Task cancelled");
+      }
+
+      const response = await this.provider.chat(
+        systemPrompt,
+        session.messages,
+        this.toolDefinitions,
+      );
+
+      logger.debug("Background task LLM response", {
+        chatId,
+        iteration,
+        stopReason: response.stopReason,
+        toolCallCount: response.toolCalls.length,
+      });
+      this.metrics?.recordTokenUsage(
+        response.usage.inputTokens,
+        response.usage.outputTokens,
+        this.provider.name,
+      );
+      this.rateLimiter?.recordTokenUsage(
+        response.usage.inputTokens,
+        response.usage.outputTokens,
+        this.provider.name,
+      );
+
+      // Final response — return text
+      if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
+        if (!verificationRequested && selfVerification.needsVerification()) {
+          verificationRequested = true;
+          if (response.text) {
+            session.messages.push({ role: "assistant", content: response.text });
+          }
+          session.messages.push({ role: "user", content: selfVerification.getPrompt() });
+          continue;
+        }
+
+        if (response.text) {
+          session.messages.push({ role: "assistant", content: response.text });
+        }
+        return response.text || "Task completed without output.";
+      }
+
+      // Handle tool calls
+      session.messages.push({
+        role: "assistant",
+        content: response.text,
+        tool_calls: response.toolCalls,
+      });
+
+      const toolResults = await this.executeToolCalls(chatId, response.toolCalls);
+
+      // Autonomy tracking
+      for (let i = 0; i < response.toolCalls.length; i++) {
+        const tc = response.toolCalls[i]!;
+        const tr = toolResults[i]!;
+        taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
+        selfVerification.track(tc.name, tc.input, tr);
+        if (tc.name === "dotnet_build") verificationRequested = false;
+
+        const analysis = errorRecovery.analyze(tc.name, tr);
+        if (analysis) {
+          taskPlanner.recordError(analysis.summary);
+          toolResults[i] = {
+            toolCallId: tr.toolCallId,
+            content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
+            isError: tr.isError,
+          };
+        }
+      }
+
+      // Progress report: summarize tool calls
+      const toolNames = response.toolCalls.map((tc) => tc.name).join(", ");
+      onProgress(`Running tools: ${toolNames}`);
+
+      // Add tool results
+      const stateCtx = taskPlanner.getStateInjection();
+      const contentBlocks: Array<
+        | { type: "text"; text: string }
+        | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
+      > = [];
+      if (stateCtx) {
+        contentBlocks.push({ type: "text" as const, text: stateCtx });
+      }
+      for (const tr of toolResults) {
+        contentBlocks.push({
+          type: "tool_result" as const,
+          tool_use_id: tr.toolCallId,
+          content: tr.content,
+          is_error: tr.isError,
+        });
+      }
+      session.messages.push({
+        role: "user",
+        content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
+      });
+    }
+
+    return "Task reached maximum iterations. The work done so far has been saved.";
   }
 
   private async processMessage(msg: IncomingMessage): Promise<void> {

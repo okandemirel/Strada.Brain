@@ -1,6 +1,6 @@
 /**
  * Core Channel Interface - Segregated
- * 
+ *
  * Split from IChannelAdapter for better segregation of concerns.
  * This module contains only essential channel operations.
  */
@@ -84,11 +84,16 @@ export interface IChannelStreaming {
 }
 
 /**
+ * Message editing capability (for in-place progress updates)
+ */
+export interface IChannelMessageEditor {
+  editMessage(chatId: string, messageId: string, newContent: string): Promise<void>;
+}
+
+/**
  * Type guard for streaming support
  */
-export function supportsStreaming(
-  channel: unknown
-): channel is IChannelStreaming {
+export function supportsStreaming(channel: unknown): channel is IChannelStreaming {
   return (
     typeof (channel as IChannelStreaming).startStreamingMessage === "function" &&
     typeof (channel as IChannelStreaming).updateStreamingMessage === "function" &&
@@ -99,21 +104,20 @@ export function supportsStreaming(
 /**
  * Type guard for rich messaging
  */
-export function supportsRichMessaging(
-  channel: unknown
-): channel is IChannelRichMessaging {
-  return (
-    typeof (channel as IChannelRichMessaging).sendTypingIndicator === "function"
-  );
+export function supportsRichMessaging(channel: unknown): channel is IChannelRichMessaging {
+  return typeof (channel as IChannelRichMessaging).sendTypingIndicator === "function";
 }
 
 /**
  * Type guard for interactive features
  */
-export function supportsInteractivity(
-  channel: unknown
-): channel is IChannelInteractive {
-  return (
-    typeof (channel as IChannelInteractive).requestConfirmation === "function"
-  );
+export function supportsInteractivity(channel: unknown): channel is IChannelInteractive {
+  return typeof (channel as IChannelInteractive).requestConfirmation === "function";
+}
+
+/**
+ * Type guard for message editing
+ */
+export function supportsMessageEditing(channel: unknown): channel is IChannelMessageEditor {
+  return typeof (channel as IChannelMessageEditor).editMessage === "function";
 }

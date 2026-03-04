@@ -50,6 +50,16 @@ import {
 import { ErrorRecoveryEngine } from "../agents/autonomy/error-recovery.js";
 import { TaskPlanner } from "../agents/autonomy/task-planner.js";
 
+// Task system imports
+import {
+  TaskStorage,
+  TaskManager,
+  BackgroundExecutor,
+  MessageRouter,
+  CommandHandler,
+  ProgressReporter,
+} from "../tasks/index.js";
+
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
@@ -63,6 +73,7 @@ export interface BootstrapOptions {
 
 export interface BootstrapResult {
   orchestrator: Orchestrator;
+  messageRouter: MessageRouter;
   channel: IChannelAdapter;
   container: DIContainer;
   shutdown: () => Promise<void>;
@@ -132,8 +143,26 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     streamingEnabled: config.streamingEnabled,
   });
 
+  // Initialize task system
+  const taskStorage = initializeTaskStorage(config, logger);
+  const backgroundExecutor = new BackgroundExecutor(orchestrator);
+  const taskManager = new TaskManager(taskStorage, backgroundExecutor);
+  backgroundExecutor.setTaskManager(taskManager);
+  taskManager.recoverOnStartup();
+
+  const commandHandler = new CommandHandler(taskManager, channel);
+  const messageRouter = new MessageRouter(taskManager, commandHandler);
+  // ProgressReporter subscribes to taskManager events in constructor
+  new ProgressReporter(channel, taskManager);
+
   // Wire up message handler
-  wireMessageHandler(channel, orchestrator, learningResult.taskPlanner, learningResult.pipeline);
+  wireMessageHandler(
+    channel,
+    messageRouter,
+    orchestrator,
+    learningResult.taskPlanner,
+    learningResult.pipeline,
+  );
 
   // Setup cleanup
   const cleanupInterval = setupCleanup(orchestrator);
@@ -145,6 +174,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Return result with shutdown function
   return {
     orchestrator,
+    messageRouter,
     channel,
     container,
     shutdown: createShutdownHandler({
@@ -154,6 +184,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       channel,
       cleanupInterval,
       learningPipeline: learningResult.pipeline,
+      taskStorage,
     }),
   };
 }
@@ -476,14 +507,23 @@ function initializeRateLimiter(config: Config, logger: winston.Logger): RateLimi
   return rateLimiter;
 }
 
+function initializeTaskStorage(config: Config, logger: winston.Logger): TaskStorage {
+  const dbPath = join(config.memory.dbPath, "tasks.db");
+  const storage = new TaskStorage(dbPath);
+  storage.initialize();
+  logger.info("Task storage initialized", { dbPath });
+  return storage;
+}
+
 function wireMessageHandler(
   channel: IChannelAdapter,
-  orchestrator: Orchestrator,
+  messageRouter: MessageRouter,
+  _orchestrator: Orchestrator,
   taskPlanner: TaskPlanner,
   learningPipeline: LearningPipeline | undefined,
 ): void {
   channel.onMessage(async (msg) => {
-    // Start task tracking
+    // Start task tracking for learning system
     if (taskPlanner) {
       taskPlanner.startTask({
         sessionId: msg.chatId ?? generateSessionId(),
@@ -492,7 +532,8 @@ function wireMessageHandler(
       });
     }
 
-    await orchestrator.handleMessage(msg);
+    // Route through the message router (handles commands and task submission)
+    await messageRouter.route(msg);
 
     // End task tracking
     if (taskPlanner?.isActive()) {
@@ -518,6 +559,7 @@ interface ShutdownOptions {
   channel: IChannelAdapter;
   cleanupInterval: ReturnType<typeof setInterval>;
   learningPipeline?: LearningPipeline;
+  taskStorage?: TaskStorage;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -532,6 +574,10 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
 
     if (learningPipeline) {
       learningPipeline.stop();
+    }
+
+    if (options.taskStorage) {
+      options.taskStorage.close();
     }
 
     if (dashboard) {
