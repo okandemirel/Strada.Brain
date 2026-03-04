@@ -288,7 +288,7 @@ export class RAGPipeline implements IRAGPipeline {
         }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        logger.warn("[RAGPipeline] Failed to index file", { filePath, err });
+        logger.warn("[RAGPipeline] Failed to index file", { filePath, error: errorMsg });
         errors.push({ filePath, error: errorMsg });
       }
     }

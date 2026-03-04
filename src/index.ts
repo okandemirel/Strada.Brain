@@ -7,7 +7,8 @@
  */
 
 import { Command } from "commander";
-import { loadConfig, loadConfigSafe } from "./config/config.js";
+import * as dotenv from "dotenv";
+import { loadConfig, loadConfigSafe, resetConfigCache } from "./config/config.js";
 import { createLogger } from "./utils/logger.js";
 import { Daemon } from "./gateway/daemon.js";
 import { bootstrap } from "./core/bootstrap.js";
@@ -81,18 +82,39 @@ program.parse();
 // ============================================================================
 
 async function startApp(channelType: string): Promise<void> {
+  const MAX_WIZARD_ATTEMPTS = 3;
+
   // Try loading config — if invalid and using web channel, launch setup wizard
-  const configResult = loadConfigSafe();
+  let configResult = loadConfigSafe();
   if (configResult.kind === "err") {
     if (channelType === "web") {
-      console.log("Configuration missing or invalid. Starting setup wizard...");
-      console.log("Open http://localhost:3000 in your browser to configure.");
-      const wizard = new SetupWizard({ port: 3000 });
-      await wizard.start();
-      return;
+      for (let attempt = 1; attempt <= MAX_WIZARD_ATTEMPTS; attempt++) {
+        console.log(
+          attempt === 1
+            ? "Configuration missing or invalid. Starting setup wizard..."
+            : `Configuration still invalid. Retrying setup wizard (attempt ${attempt}/${MAX_WIZARD_ATTEMPTS})...`,
+        );
+        console.log("Open http://localhost:3000 in your browser to configure.");
+        const wizard = new SetupWizard({ port: 3000 });
+        await wizard.start();
+        console.log("Setup complete! Validating configuration...");
+        // Reload .env into process.env and reset config cache
+        dotenv.config({ override: true });
+        resetConfigCache();
+        configResult = loadConfigSafe();
+        if (configResult.kind === "ok") break;
+        console.error(`Configuration invalid: ${configResult.error}`);
+      }
+      if (configResult.kind === "err") {
+        console.error(
+          `Configuration still invalid after ${MAX_WIZARD_ATTEMPTS} attempts: ${configResult.error}`,
+        );
+        process.exit(1);
+      }
+    } else {
+      console.error(`Configuration error: ${configResult.error}`);
+      process.exit(1);
     }
-    console.error(`Configuration error: ${configResult.error}`);
-    process.exit(1);
   }
 
   const config = configResult.value;

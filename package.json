@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && cp -r src/channels/web/static dist/channels/web/static",
+    "build": "tsc && rm -rf dist/channels/web/static && cp -r src/channels/web/static dist/channels/web/static",
     "start": "node dist/index.js",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",

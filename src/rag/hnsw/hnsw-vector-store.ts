@@ -110,7 +110,7 @@ export interface HNSWStats {
 export class HNSWVectorStore implements IHNSWVectorStore {
   private config: HNSWConfig;
   private storePath: string;
-  private hnswIndex: HierarchicalNSW | null = null;
+  private hnswIndex: InstanceType<typeof HierarchicalNSW> | null = null;
   private chunks: Map<number, CodeChunk> = new Map();
   private idToIndex: Map<string, number> = new Map();
   private indexToId: Map<number, string> = new Map();

@@ -29,7 +29,7 @@ export const PROVIDER_PRESETS: Record<
     label: "Qwen (Alibaba)",
   },
   kimi: {
-    baseUrl: "https://api.moonshot.cn/v1",
+    baseUrl: "https://api.kimi.com/coding/v1",
     defaultModel: "moonshot-v1-128k",
     label: "Kimi (Moonshot)",
   },

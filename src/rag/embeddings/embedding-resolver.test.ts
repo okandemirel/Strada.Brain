@@ -144,7 +144,7 @@ describe("resolveEmbeddingProvider", () => {
     const result = resolveEmbeddingProvider(config);
     expect(result).not.toBeNull();
     expect(result!.provider.name).toContain("Gemini");
-    expect(result!.provider.dimensions).toBe(768);
+    expect(result!.provider.dimensions).toBe(3072);
   });
 
   it("auto mode without chain: falls back to any available key", () => {

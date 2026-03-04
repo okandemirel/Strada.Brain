@@ -100,7 +100,7 @@ export class WebChannel
     this.wss.on("connection", (ws) => this.handleWsConnection(ws));
 
     await new Promise<void>((res, rej) => {
-      this.server!.listen(this.port, "127.0.0.1", () => res());
+      this.server!.listen(this.port, "localhost", () => res());
       this.server!.once("error", rej);
     });
 

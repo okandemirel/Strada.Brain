@@ -116,7 +116,7 @@ export const EMBEDDING_PRESETS: Record<string, EmbeddingPreset> = {
   together:  { supported: true,  model: "togethercomputer/m2-bert-80M-8k-retrieval", dimensions: 768,  maxBatchSize: 100, label: "Together AI" },
   fireworks: { supported: true,  model: "nomic-ai/nomic-embed-text-v1.5",            dimensions: 768,  maxBatchSize: 100, label: "Fireworks AI" },
   qwen:      { supported: true,  model: "text-embedding-v3",                         dimensions: 1024, maxBatchSize: 100, label: "Qwen" },
-  gemini:    { supported: true,  model: "gemini-embedding-001",                      dimensions: 768,  maxBatchSize: 1,   label: "Gemini" },
+  gemini:    { supported: true,  model: "gemini-embedding-001",                      dimensions: 3072, maxBatchSize: 1,   label: "Gemini" },
   claude:    { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "Claude" },
   kimi:      { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "Kimi" },
   minimax:   { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "MiniMax" },

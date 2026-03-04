@@ -72,7 +72,7 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
       for (const item of sorted) {
         allEmbeddings.push(item.embedding);
       }
-      totalTokens += response.usage.total_tokens;
+      totalTokens += response.usage?.total_tokens ?? 0;
     }
 
     logger.debug("OpenAI embed: done", { totalTokens });
