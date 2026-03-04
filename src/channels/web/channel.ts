@@ -30,6 +30,10 @@ type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 interface WsClient {
   ws: WebSocket;
   chatId: string;
+  /** Message count in current rate-limit window. */
+  msgCount: number;
+  /** Timestamp (ms) when current rate-limit window started. */
+  windowStart: number;
 }
 
 interface PendingConfirmation {
@@ -48,6 +52,11 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 const STATIC_DIR = new URL("static/", import.meta.url).pathname;
+
+/** Rate limit: max messages per window. */
+const WS_RATE_LIMIT = 20;
+/** Rate limit window duration in ms (10 seconds). */
+const WS_RATE_WINDOW_MS = 10_000;
 
 export class WebChannel
   implements IChannelAdapter, IChannelStreaming, IChannelRichMessaging, IChannelInteractive
@@ -267,7 +276,7 @@ export class WebChannel
 
   private handleWsConnection(ws: WebSocket): void {
     const chatId = randomUUID();
-    this.clients.set(chatId, { ws, chatId });
+    this.clients.set(chatId, { ws, chatId, msgCount: 0, windowStart: Date.now() });
 
     // Send welcome with chatId
     this.sendJson(ws, { type: "connected", chatId });
@@ -291,6 +300,26 @@ export class WebChannel
   }
 
   private handleWsMessage(chatId: string, data: Record<string, unknown>): void {
+    const client = this.clients.get(chatId);
+    if (client) {
+      const now = Date.now();
+      if (now - client.windowStart > WS_RATE_WINDOW_MS) {
+        client.msgCount = 0;
+        client.windowStart = now;
+      }
+      client.msgCount++;
+      if (client.msgCount > WS_RATE_LIMIT) {
+        this.sendToClient(chatId, {
+          type: "text",
+          text: "Rate limit exceeded. Please slow down.",
+          messageId: randomUUID(),
+        });
+        client.ws.close(1008, "Rate limit exceeded");
+        this.clients.delete(chatId);
+        return;
+      }
+    }
+
     switch (data.type) {
       case "message": {
         const text = String(data.text ?? "").trim();

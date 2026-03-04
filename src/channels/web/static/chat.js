@@ -65,8 +65,12 @@
 
   function renderMarkdown(text) {
     if (typeof marked !== "undefined") {
-      // Use marked.parse which returns sanitized HTML by default in v12+
-      return marked.parse(text);
+      const html = marked.parse(text);
+      // Sanitize rendered HTML to prevent XSS from malicious markdown
+      if (typeof DOMPurify !== "undefined") {
+        return DOMPurify.sanitize(html);
+      }
+      return html;
     }
     // Fallback: escape HTML and convert newlines
     return escapeHtml(text).replace(/\n/g, "<br>");

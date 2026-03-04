@@ -3,6 +3,15 @@
 
 let currentStep = 1;
 const totalSteps = 5;
+let csrfToken = null;
+
+// Fetch CSRF token on page load
+fetch("/api/setup/csrf")
+  .then((r) => r.json())
+  .then((d) => {
+    csrfToken = d.token;
+  })
+  .catch(() => {});
 
 // Initialize step indicators
 (function init() {
@@ -82,8 +91,10 @@ function onChannelChange() {
   });
 
   // Show/hide config
-  document.getElementById("telegramConfig").style.display = selected === "telegram" ? "block" : "none";
-  document.getElementById("discordConfig").style.display = selected === "discord" ? "block" : "none";
+  document.getElementById("telegramConfig").style.display =
+    selected === "telegram" ? "block" : "none";
+  document.getElementById("discordConfig").style.display =
+    selected === "discord" ? "block" : "none";
 }
 
 async function validatePath() {
@@ -173,6 +184,115 @@ function buildReview() {
     div.appendChild(valSpan);
     list.appendChild(div);
   });
+}
+
+// ===== Directory Browser =====
+let browserCurrentPath = "";
+
+function openBrowser() {
+  document.getElementById("browserOverlay").style.display = "flex";
+  browseTo(""); // empty = server defaults to homedir
+}
+
+function closeBrowser() {
+  document.getElementById("browserOverlay").style.display = "none";
+}
+
+async function browseTo(path) {
+  const list = document.getElementById("browserList");
+  list.textContent = "Loading...";
+
+  try {
+    const url = path ? `/api/setup/browse?path=${encodeURIComponent(path)}` : "/api/setup/browse";
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.error && !data.entries) {
+      list.textContent = data.error;
+      return;
+    }
+
+    browserCurrentPath = data.path;
+    renderBreadcrumb(data.path);
+    renderEntries(data.entries);
+
+    // Unity project detection
+    const statusEl = document.getElementById("browserUnityStatus");
+    if (data.isUnityProject) {
+      statusEl.textContent = "Unity project detected";
+      statusEl.className = "browser-unity-status detected";
+    } else {
+      statusEl.textContent = "Not a Unity project";
+      statusEl.className = "browser-unity-status";
+    }
+    document.getElementById("browserSelectBtn").disabled = false;
+  } catch {
+    list.textContent = "Could not reach server.";
+  }
+}
+
+function renderBreadcrumb(fullPath) {
+  const container = document.getElementById("browserBreadcrumb");
+  while (container.firstChild) container.removeChild(container.firstChild);
+
+  const parts = fullPath.split("/").filter(Boolean);
+  // Root
+  const rootSpan = document.createElement("span");
+  rootSpan.className = "breadcrumb-segment";
+  rootSpan.textContent = "/";
+  rootSpan.onclick = () => browseTo("/");
+  container.appendChild(rootSpan);
+
+  let accumulated = "";
+  parts.forEach((part) => {
+    accumulated += "/" + part;
+    const sep = document.createElement("span");
+    sep.className = "breadcrumb-sep";
+    sep.textContent = "/";
+    container.appendChild(sep);
+
+    const span = document.createElement("span");
+    span.className = "breadcrumb-segment";
+    span.textContent = part;
+    const target = accumulated;
+    span.onclick = () => browseTo(target);
+    container.appendChild(span);
+  });
+}
+
+function renderEntries(entries) {
+  const list = document.getElementById("browserList");
+  while (list.firstChild) list.removeChild(list.firstChild);
+
+  if (entries.length === 0) {
+    list.textContent = "Empty directory";
+    return;
+  }
+
+  entries.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "browser-entry directory";
+
+    const icon = document.createElement("span");
+    icon.className = "browser-entry-icon";
+    icon.textContent = "\uD83D\uDCC1"; // folder emoji
+
+    const name = document.createElement("span");
+    name.className = "browser-entry-name";
+    name.textContent = entry.name;
+
+    row.appendChild(icon);
+    row.appendChild(name);
+
+    row.onclick = () => browseTo(browserCurrentPath + "/" + entry.name);
+    list.appendChild(row);
+  });
+}
+
+function selectFolder() {
+  document.getElementById("projectPath").value = browserCurrentPath;
+  closeBrowser();
+  validatePath();
 }
 
 async function saveConfig() {

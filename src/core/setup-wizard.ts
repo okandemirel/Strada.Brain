@@ -6,8 +6,10 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFile, writeFile, stat } from "node:fs/promises";
+import { readFile, writeFile, stat, readdir, realpath } from "node:fs/promises";
 import { join, extname, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 
 const STATIC_DIR = new URL("../channels/web/static/", import.meta.url).pathname;
 
@@ -47,6 +49,7 @@ function sanitizeEnvValue(value: string): string {
 export class SetupWizard {
   private server: Server | null = null;
   private readonly port: number;
+  private readonly csrfToken = randomUUID();
 
   constructor(opts?: { port?: number }) {
     this.port = opts?.port ?? 3000;
@@ -82,12 +85,27 @@ export class SetupWizard {
 
     try {
       // API endpoints
+      if (url.startsWith("/api/setup/browse") && method === "GET") {
+        await this.handleBrowse(url, res);
+        return;
+      }
+
       if (url.startsWith("/api/setup/validate-path") && method === "GET") {
         await this.handleValidatePath(url, res);
         return;
       }
 
+      if (url === "/api/setup/csrf" && method === "GET") {
+        this.json(res, 200, { token: this.csrfToken });
+        return;
+      }
+
       if (url === "/api/setup" && method === "POST") {
+        const token = req.headers["x-csrf-token"];
+        if (token !== this.csrfToken) {
+          this.json(res, 403, { success: false, error: "Invalid CSRF token" });
+          return;
+        }
         await this.handleSaveConfig(req, res);
         return;
       }
@@ -138,26 +156,35 @@ export class SetupWizard {
     }
   }
 
+  /**
+   * Validate that a path is absolute and contains no traversal sequences.
+   * Returns an error string if invalid, or null if the path is safe.
+   */
+  private validatePathSafety(path: string): string | null {
+    if (path.includes("..")) return "Invalid path: directory traversal not allowed";
+    if (!path.startsWith("/")) return "Only absolute paths are accepted";
+    return null;
+  }
+
   private async handleValidatePath(url: string, res: ServerResponse): Promise<void> {
     const params = new URL(url, "http://localhost").searchParams;
     const rawPath = params.get("path") ?? "";
 
-    // Block directory traversal sequences
-    if (rawPath.includes("..")) {
-      this.json(res, 400, { valid: false, error: "Invalid path: directory traversal not allowed" });
-      return;
-    }
-
-    // Only allow absolute paths that begin with a filesystem root.
-    // This prevents the endpoint from being used to probe relative paths or
-    // enumerate arbitrary parts of the filesystem via crafted inputs.
-    if (!rawPath.startsWith("/")) {
-      this.json(res, 400, { valid: false, error: "Only absolute paths are accepted" });
+    const pathError = this.validatePathSafety(rawPath);
+    if (pathError) {
+      this.json(res, 400, { valid: false, error: pathError });
       return;
     }
 
     try {
-      const stats = await stat(rawPath);
+      const resolved = await realpath(rawPath);
+      const home = homedir();
+      if (resolved !== home && !resolved.startsWith(home + "/")) {
+        this.json(res, 400, { valid: false, error: "Path must be inside your home directory" });
+        return;
+      }
+
+      const stats = await stat(resolved);
       if (stats.isDirectory()) {
         this.json(res, 200, { valid: true });
       } else {
@@ -165,6 +192,64 @@ export class SetupWizard {
       }
     } catch {
       this.json(res, 200, { valid: false, error: "Path does not exist" });
+    }
+  }
+
+  private async handleBrowse(url: string, res: ServerResponse): Promise<void> {
+    const params = new URL(url, "http://localhost").searchParams;
+    const rawPath = params.get("path") || homedir();
+    const showHidden = params.get("hidden") === "1";
+
+    const pathError = this.validatePathSafety(rawPath);
+    if (pathError) {
+      this.json(res, 400, { error: pathError });
+      return;
+    }
+
+    let resolved: string;
+    try {
+      resolved = await realpath(rawPath);
+    } catch {
+      this.json(res, 200, {
+        path: rawPath,
+        entries: [],
+        isUnityProject: false,
+        error: "Path does not exist",
+      });
+      return;
+    }
+
+    const home = homedir();
+    if (resolved !== home && !resolved.startsWith(home + "/")) {
+      this.json(res, 403, { error: "Browsing outside your home directory is not permitted" });
+      return;
+    }
+
+    try {
+      const stats = await stat(resolved);
+      if (!stats.isDirectory()) {
+        this.json(res, 400, { error: "Path is not a directory" });
+        return;
+      }
+
+      const dirents = await readdir(resolved, { withFileTypes: true });
+      const entries = dirents
+        .filter((d) => d.isDirectory())
+        .filter((d) => showHidden || !d.name.startsWith("."))
+        .map((d) => ({ name: d.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      const entryNames = new Set(dirents.map((d) => d.name));
+      const isUnityProject = entryNames.has("Assets") && entryNames.has("ProjectSettings");
+
+      this.json(res, 200, { path: resolved, entries, isUnityProject });
+    } catch {
+      this.json(res, 200, {
+        path: rawPath,
+        entries: [],
+        isUnityProject: false,
+        error: "Cannot read directory",
+      });
     }
   }
 
@@ -204,9 +289,7 @@ export class SetupWizard {
     if (config.TELEGRAM_BOT_TOKEN)
       lines.push(`TELEGRAM_BOT_TOKEN=${sanitizeEnvValue(config.TELEGRAM_BOT_TOKEN)}`);
     if (config.ALLOWED_TELEGRAM_USER_IDS)
-      lines.push(
-        `ALLOWED_TELEGRAM_USER_IDS=${sanitizeEnvValue(config.ALLOWED_TELEGRAM_USER_IDS)}`,
-      );
+      lines.push(`ALLOWED_TELEGRAM_USER_IDS=${sanitizeEnvValue(config.ALLOWED_TELEGRAM_USER_IDS)}`);
     if (config.DISCORD_BOT_TOKEN)
       lines.push(`DISCORD_BOT_TOKEN=${sanitizeEnvValue(config.DISCORD_BOT_TOKEN)}`);
 

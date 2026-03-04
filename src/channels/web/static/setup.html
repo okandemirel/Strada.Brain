@@ -51,6 +51,7 @@
           <label for="projectPath">Project Path <span class="required">*</span></label>
           <div class="input-with-btn">
             <input type="text" id="projectPath" placeholder="/Users/you/MyUnityProject">
+            <button class="btn-small" onclick="openBrowser()">Browse</button>
             <button class="btn-small" onclick="validatePath()">Validate</button>
           </div>
           <div id="pathStatus" class="validation-status"></div>
@@ -135,6 +136,25 @@
         <div class="btn-row">
           <button class="btn-secondary" onclick="prevStep()">Back</button>
           <button class="btn-primary" id="saveBtn" onclick="saveConfig()">Save & Start</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Directory Browser Modal -->
+  <div class="browser-overlay" id="browserOverlay" style="display:none">
+    <div class="browser-dialog">
+      <div class="browser-header">
+        <h3>Browse for Unity Project</h3>
+        <button class="browser-close" onclick="closeBrowser()">&times;</button>
+      </div>
+      <div class="browser-breadcrumb" id="browserBreadcrumb"></div>
+      <div class="browser-list" id="browserList"></div>
+      <div class="browser-footer">
+        <div class="browser-unity-status" id="browserUnityStatus"></div>
+        <div class="browser-actions">
+          <button class="btn-secondary" onclick="closeBrowser()">Cancel</button>
+          <button class="btn-primary" id="browserSelectBtn" onclick="selectFolder()" disabled>Select This Folder</button>
         </div>
       </div>
     </div>
