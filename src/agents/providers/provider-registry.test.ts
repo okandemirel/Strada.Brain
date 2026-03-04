@@ -1,5 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
 import { createProvider, buildProviderChain, PROVIDER_PRESETS } from "./provider-registry.js";
+import { GeminiProvider } from "./gemini.js";
+import { DeepSeekProvider } from "./deepseek.js";
+import { QwenProvider } from "./qwen.js";
+import { KimiProvider } from "./kimi.js";
+import { MiniMaxProvider } from "./minimax.js";
+import { GroqProvider } from "./groq.js";
+import { MistralProvider } from "./mistral.js";
+import { TogetherProvider } from "./together.js";
+import { FireworksProvider } from "./fireworks.js";
+import { OpenAIProvider } from "./openai.js";
 
 vi.mock("../../utils/logger.js", () => ({
   getLogger: () => ({
@@ -71,6 +81,26 @@ describe("createProvider", () => {
   it("uses correct label for OpenAI provider", () => {
     const provider = createProvider({ name: "openai", apiKey: "sk-test" });
     expect(provider.name).toBe("OpenAI");
+  });
+
+  it("returns correct class instances for each provider", () => {
+    const cases: Array<[string, new (...args: unknown[]) => unknown]> = [
+      ["openai", OpenAIProvider],
+      ["gemini", GeminiProvider],
+      ["deepseek", DeepSeekProvider],
+      ["qwen", QwenProvider],
+      ["kimi", KimiProvider],
+      ["minimax", MiniMaxProvider],
+      ["groq", GroqProvider],
+      ["mistral", MistralProvider],
+      ["together", TogetherProvider],
+      ["fireworks", FireworksProvider],
+    ];
+
+    for (const [name, ExpectedClass] of cases) {
+      const provider = createProvider({ name, apiKey: "sk-test" });
+      expect(provider, `${name} should be instance of ${ExpectedClass.name}`).toBeInstanceOf(ExpectedClass);
+    }
   });
 });
 

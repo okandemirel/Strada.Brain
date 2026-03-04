@@ -65,6 +65,7 @@ export interface ToolCall {
   readonly id: string;
   readonly name: string;
   readonly input: JsonObject;
+  readonly providerMetadata?: Record<string, unknown>;
 }
 
 /** Tool execution result */
@@ -273,9 +274,10 @@ export function createToolDefinition(
 export function createToolCall(
   id: string,
   name: string,
-  input: JsonObject
+  input: JsonObject,
+  providerMetadata?: Record<string, unknown>,
 ): ToolCall {
-  return { id, name, input };
+  return providerMetadata ? { id, name, input, providerMetadata } : { id, name, input };
 }
 
 /**

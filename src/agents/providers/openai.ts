@@ -24,9 +24,9 @@ export class OpenAIProvider implements IAIProvider {
     vision: true,
     systemPrompt: true,
   };
-  private readonly apiKey: string;
-  private readonly model: string;
-  private readonly baseUrl: string;
+  protected readonly apiKey: string;
+  protected readonly model: string;
+  protected readonly baseUrl: string;
 
   constructor(
     apiKey: string,
@@ -56,14 +56,7 @@ export class OpenAIProvider implements IAIProvider {
       toolCount: tools.length,
     });
 
-    const body: Record<string, unknown> = {
-      model: this.model,
-      max_tokens: 4096,
-      messages: openaiMessages,
-    };
-    if (openaiTools) {
-      body["tools"] = openaiTools;
-    }
+    const body = this.buildRequestBody(openaiMessages, openaiTools);
 
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
@@ -83,7 +76,7 @@ export class OpenAIProvider implements IAIProvider {
     return this.parseResponse(data);
   }
 
-  private buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
+  protected buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
     const result: OpenAIMessage[] = [{ role: "system", content: systemPrompt }];
 
     for (const msg of messages) {
@@ -129,6 +122,21 @@ export class OpenAIProvider implements IAIProvider {
     return result;
   }
 
+  protected buildRequestBody(
+    messages: OpenAIMessage[],
+    tools: unknown,
+  ): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model: this.model,
+      max_tokens: 4096,
+      messages,
+    };
+    if (tools) {
+      body["tools"] = tools;
+    }
+    return body;
+  }
+
   async healthCheck(): Promise<boolean> {
     const logger = getLogger();
     try {
@@ -150,7 +158,7 @@ export class OpenAIProvider implements IAIProvider {
     }
   }
 
-  private parseResponse(data: OpenAIResponse): ProviderResponse {
+  protected parseResponse(data: OpenAIResponse): ProviderResponse {
     const choice = data.choices[0];
     if (!choice) {
       throw new Error(`${this.name} returned empty choices`);
@@ -189,18 +197,19 @@ export class OpenAIProvider implements IAIProvider {
 
 // --- OpenAI API types ---
 
-interface OpenAIMessage {
+export interface OpenAIMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
   tool_calls?: Array<{
     id: string;
     type: "function";
     function: { name: string; arguments: string };
+    [key: string]: unknown;
   }>;
   tool_call_id?: string;
 }
 
-interface OpenAIResponse {
+export interface OpenAIResponse {
   choices: Array<{
     message: {
       content: string | null;
@@ -208,6 +217,7 @@ interface OpenAIResponse {
         id: string;
         type: "function";
         function: { name: string; arguments: string };
+        [key: string]: unknown;
       }>;
     };
     finish_reason: string;

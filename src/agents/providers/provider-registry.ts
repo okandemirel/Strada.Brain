@@ -3,7 +3,36 @@ import { ClaudeProvider } from "./claude.js";
 import { OpenAIProvider } from "./openai.js";
 import { OllamaProvider } from "./ollama.js";
 import { FallbackChainProvider } from "./fallback-chain.js";
+import { GeminiProvider } from "./gemini.js";
+import { DeepSeekProvider } from "./deepseek.js";
+import { QwenProvider } from "./qwen.js";
+import { KimiProvider } from "./kimi.js";
+import { MiniMaxProvider } from "./minimax.js";
+import { GroqProvider } from "./groq.js";
+import { MistralProvider } from "./mistral.js";
+import { TogetherProvider } from "./together.js";
+import { FireworksProvider } from "./fireworks.js";
 import { getLogger } from "../../utils/logger.js";
+
+/**
+ * Maps provider names to their dedicated class constructors.
+ * Each class extends OpenAIProvider with provider-specific defaults.
+ */
+const PROVIDER_CLASS_MAP: Record<
+  string,
+  new (apiKey: string, model?: string, baseUrl?: string) => OpenAIProvider
+> = {
+  openai: OpenAIProvider,
+  gemini: GeminiProvider,
+  deepseek: DeepSeekProvider,
+  qwen: QwenProvider,
+  kimi: KimiProvider,
+  minimax: MiniMaxProvider,
+  groq: GroqProvider,
+  mistral: MistralProvider,
+  together: TogetherProvider,
+  fireworks: FireworksProvider,
+};
 
 /**
  * Known provider presets with their default base URLs and models.
@@ -97,7 +126,7 @@ export function createProvider(config: ProviderConfig): IAIProvider {
     );
   }
 
-  // OpenAI-compatible provider (use preset if available)
+  // OpenAI-compatible provider (use preset or class map)
   const preset = PROVIDER_PRESETS[name];
   const baseUrl = config.baseUrl ?? preset?.baseUrl;
   const model = config.model ?? preset?.defaultModel ?? "gpt-4o";
@@ -110,6 +139,12 @@ export function createProvider(config: ProviderConfig): IAIProvider {
 
   if (!config.apiKey) {
     throw new Error(`${preset?.label ?? name} provider requires an API key`);
+  }
+
+  // Use dedicated class if available, otherwise fall back to generic OpenAIProvider
+  const ProviderClass = PROVIDER_CLASS_MAP[name];
+  if (ProviderClass) {
+    return new ProviderClass(config.apiKey, model, baseUrl);
   }
 
   return new OpenAIProvider(config.apiKey, model, baseUrl, preset?.label ?? name);
