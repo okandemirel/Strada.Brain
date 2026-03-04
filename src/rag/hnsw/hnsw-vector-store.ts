@@ -1,21 +1,17 @@
 /**
  * HNSW Vector Store Implementation using hnswlib-node
- * 
+ *
  * Provides 150x-12,500x faster vector search using HNSW indexing
  * Replaces brute-force O(n) search with O(log n) approximate nearest neighbors
  */
 
 import { join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
-import type {
-  IVectorStore,
-  VectorEntry,
-  VectorSearchHit,
-  CodeChunk,
-} from "../rag.interface.js";
+import type { IVectorStore, VectorEntry, VectorSearchHit, CodeChunk } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import type { QuantizationType, QuantizedVector } from "./quantization.js";
-import { HierarchicalNSW } from "hnswlib-node";
+import hnswlib from "hnswlib-node";
+const { HierarchicalNSW } = hnswlib;
 
 function getLoggerSafe() {
   try {
@@ -73,7 +69,7 @@ export interface IHNSWVectorStore extends IVectorStore {
   searchFiltered(
     queryVector: number[],
     topK: number,
-    filter: (chunk: CodeChunk) => boolean
+    filter: (chunk: CodeChunk) => boolean,
   ): Promise<VectorSearchHit[]>;
   /** Get approximate memory usage in bytes */
   getMemoryUsage(): number;
@@ -143,7 +139,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       }
 
       // Initialize HNSW index
-      // For cosine similarity, we use "ip" (inner product) space 
+      // For cosine similarity, we use "ip" (inner product) space
       // because cosine = dot product of normalized vectors
       const spaceName = this.config.metric === "cosine" ? "ip" : this.config.metric;
       this.hnswIndex = new HierarchicalNSW(spaceName, this.config.dimensions);
@@ -162,7 +158,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
         // Check for legacy format and migrate
         const legacyVectorsPath = join(this.storePath, "vectors.bin");
         const legacyChunksPath = join(this.storePath, "chunks.json");
-        
+
         if (existsSync(legacyVectorsPath) && existsSync(legacyChunksPath)) {
           getLoggerSafe().info("[HNSWVectorStore] Found legacy format, migrating...");
           await this.migrateFromLegacy(this.storePath);
@@ -172,10 +168,10 @@ export class HNSWVectorStore implements IHNSWVectorStore {
             this.config.maxElements,
             this.config.M,
             this.config.efConstruction,
-            this.config.seed ?? 42
+            this.config.seed ?? 42,
           );
           this.hnswIndex.setEf(this.config.efSearch);
-          
+
           getLoggerSafe().info("[HNSWVectorStore] Initialized new index", {
             dimensions: this.config.dimensions,
             maxElements: this.config.maxElements,
@@ -202,7 +198,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     } catch (error) {
       getLoggerSafe().error("[HNSWVectorStore] Failed to save index", { error });
     }
-    
+
     this.isInitialized = false;
   }
 
@@ -232,13 +228,13 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     // Handle updates (mark old as deleted + insert new)
     for (const entry of updates) {
       const oldIndex = this.idToIndex.get(entry.id)!;
-      
+
       // Mark old entry as deleted (HNSW doesn't support true updates)
       this.hnswIndex.markDelete(oldIndex);
       this.deletedIndices.add(oldIndex);
       this.chunks.delete(oldIndex);
       this.quantizedVectors.delete(oldIndex);
-      
+
       // Insert as new
       const newIndex = this.nextIndex++;
       const normalizedVector = this.normalizeVector(entry.vector);
@@ -246,7 +242,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       this.chunks.set(newIndex, entry.chunk as CodeChunk);
       this.idToIndex.set(entry.id, newIndex);
       this.indexToId.set(newIndex, entry.id);
-      
+
       // Store quantized version if enabled
       if (this.config.quantization && this.config.quantization !== "none") {
         const { quantizeBatch } = await import("./quantization.js");
@@ -274,7 +270,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     // Check capacity
     if (this.nextIndex + entries.length > this.config.maxElements) {
       throw new Error(
-        `Index capacity exceeded: ${this.nextIndex + entries.length} > ${this.config.maxElements}`
+        `Index capacity exceeded: ${this.nextIndex + entries.length} > ${this.config.maxElements}`,
       );
     }
 
@@ -292,7 +288,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     // Quantize if enabled
     if (this.config.quantization && this.config.quantization !== "none") {
       const { quantizeBatch } = await import("./quantization.js");
-      const vectors = entries.map(e => new Float32Array(e.vector));
+      const vectors = entries.map((e) => new Float32Array(e.vector));
       const quantized = quantizeBatch(vectors, this.config.quantization);
       for (let i = 0; i < entries.length; i++) {
         const index = this.nextIndex - entries.length + i;
@@ -322,7 +318,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   async removeByFile(filePath: string): Promise<void> {
     const idsToRemove: string[] = [];
-    
+
     for (const [index, chunk] of this.chunks) {
       if (chunk.filePath === filePath) {
         const id = this.indexToId.get(index);
@@ -348,7 +344,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       // Normalize query vector for cosine similarity
       const normalizedQuery = this.normalizeVector(queryVector);
       const k = Math.min(topK, this.chunks.size);
-      
+
       // Search HNSW index
       const result = this.hnswIndex.searchKnn(normalizedQuery, k);
       const neighbors = result.neighbors as number[];
@@ -356,20 +352,20 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
       // Build results
       const hits: VectorSearchHit[] = [];
-      
+
       for (let i = 0; i < neighbors.length; i++) {
         const index = neighbors[i]!;
-        
+
         // Skip deleted indices
         if (this.deletedIndices.has(index)) continue;
-        
+
         const chunk = this.chunks.get(index);
-        
+
         if (chunk) {
           // Convert distance to similarity score
           const distance = distances[i]!;
           let score: number;
-          
+
           if (this.config.metric === "cosine" || this.config.metric === "ip") {
             // For inner product space with normalized vectors: similarity = 1 - distance
             // (when distance is computed as 1 - dot product)
@@ -381,12 +377,16 @@ export class HNSWVectorStore implements IHNSWVectorStore {
             score = distance;
           }
 
-          hits.push({ 
+          hits.push({
             id: this.indexToId.get(index) ?? String(index),
-            chunk, 
+            chunk,
             score,
-            distanceMetric: this.config.metric === "cosine" ? "cosine" : 
-                           this.config.metric === "ip" ? "dot" : "euclidean"
+            distanceMetric:
+              this.config.metric === "cosine"
+                ? "cosine"
+                : this.config.metric === "ip"
+                  ? "dot"
+                  : "euclidean",
           });
         }
       }
@@ -408,14 +408,14 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   async searchFiltered(
     queryVector: number[],
     topK: number,
-    filter: (chunk: CodeChunk) => boolean
+    filter: (chunk: CodeChunk) => boolean,
   ): Promise<VectorSearchHit[]> {
     // Get more candidates to filter from
     const candidates = await this.search(queryVector, topK * 3);
-    
+
     // Apply filter
-    const filtered = candidates.filter(hit => filter(hit.chunk as CodeChunk));
-    
+    const filtered = candidates.filter((hit) => filter(hit.chunk as CodeChunk));
+
     // Return topK filtered results
     return filtered.slice(0, topK);
   }
@@ -430,7 +430,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   getFileChunkIds(filePath: string): string[] {
     const ids: string[] = [];
-    
+
     for (const [index, chunk] of this.chunks) {
       if (chunk.filePath === filePath) {
         const id = this.indexToId.get(index);
@@ -446,9 +446,10 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   // ---------------------------------------------------------------------------
 
   getHNSWStats(): HNSWStats {
-    const avgSearchTime = this.searchTimes.length > 0
-      ? this.searchTimes.reduce((a, b) => a + b, 0) / this.searchTimes.length
-      : 0;
+    const avgSearchTime =
+      this.searchTimes.length > 0
+        ? this.searchTimes.reduce((a, b) => a + b, 0) / this.searchTimes.length
+        : 0;
 
     const memoryUsage = this.getMemoryUsage();
 
@@ -536,9 +537,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       idToIndex: Array.from(this.idToIndex.entries()),
       indexToId: Array.from(this.indexToId.entries()),
       deletedIndices: Array.from(this.deletedIndices),
-      quantizedVectors: this.config.quantization
-        ? Array.from(this.quantizedVectors.entries())
-        : [],
+      quantizedVectors: this.config.quantization ? Array.from(this.quantizedVectors.entries()) : [],
     };
 
     const metadataPath = join(path, "metadata.json");
@@ -547,7 +546,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   async loadIndex(path: string): Promise<void> {
     if (!this.hnswIndex) throw new Error("HNSW index not initialized");
-    
+
     const indexPath = join(path, "hnsw.index");
     const metadataPath = join(path, "metadata.json");
 
@@ -562,11 +561,11 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     this.chunks = new Map(metadata.chunks);
     this.idToIndex = new Map(metadata.idToIndex);
     this.indexToId = new Map(metadata.indexToId);
-    
+
     if (metadata.deletedIndices) {
       this.deletedIndices = new Set(metadata.deletedIndices);
     }
-    
+
     if (metadata.quantizedVectors) {
       this.quantizedVectors = new Map(metadata.quantizedVectors);
     }
@@ -618,13 +617,13 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       // Initialize new HNSW index
       const requiredCapacity = Math.max(this.config.maxElements, chunks.length + 1000);
       const spaceName = this.config.metric === "cosine" ? "ip" : this.config.metric;
-      
+
       this.hnswIndex = new HierarchicalNSW(spaceName, this.config.dimensions);
       this.hnswIndex.initIndex(
         requiredCapacity,
         this.config.M,
         this.config.efConstruction,
-        this.config.seed ?? 42
+        this.config.seed ?? 42,
       );
       this.hnswIndex.setEf(this.config.efSearch);
 
@@ -640,12 +639,14 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         if (!chunk) continue;
-        
+
         const vectorStart = i * dimensions;
         const vectorEnd = vectorStart + dimensions;
-        
+
         if (vectorEnd > vectors.length) {
-          getLoggerSafe().warn("[HNSWVectorStore] Vector data incomplete, skipping remaining entries");
+          getLoggerSafe().warn(
+            "[HNSWVectorStore] Vector data incomplete, skipping remaining entries",
+          );
           break;
         }
 
@@ -667,17 +668,10 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       if (!existsSync(backupDir)) {
         mkdirSync(backupDir, { recursive: true });
       }
-      
+
       const timestamp = Date.now();
-      writeFileSync(
-        join(backupDir, `chunks-${timestamp}.json`),
-        chunksRaw,
-        "utf8"
-      );
-      writeFileSync(
-        join(backupDir, `vectors-${timestamp}.bin`),
-        Buffer.from(vectorsBuf)
-      );
+      writeFileSync(join(backupDir, `chunks-${timestamp}.json`), chunksRaw, "utf8");
+      writeFileSync(join(backupDir, `vectors-${timestamp}.bin`), Buffer.from(vectorsBuf));
 
       // Remove legacy files
       rmSync(chunksPath);
@@ -709,7 +703,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
     const norm = Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0));
     if (norm === 0) return vector;
-    return vector.map(v => v / norm);
+    return vector.map((v) => v / norm);
   }
 }
 
@@ -718,7 +712,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
  */
 export async function createHNSWVectorStore(
   storePath: string,
-  config?: Partial<HNSWConfig>
+  config?: Partial<HNSWConfig>,
 ): Promise<HNSWVectorStore> {
   const store = new HNSWVectorStore(storePath, config);
   await store.initialize();
