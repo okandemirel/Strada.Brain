@@ -18,6 +18,8 @@ export interface ProviderActiveInfo {
   isDefault: boolean;
 }
 
+const MAX_CACHED_PROVIDERS = 50;
+
 export class ProviderManager {
   private readonly preferences: ProviderPreferenceStore;
   private readonly providerCache = new Map<string, IAIProvider>();
@@ -52,6 +54,10 @@ export class ProviderManager {
         apiKey: this.apiKeys[pref.providerName],
         model: pref.model ?? this.modelOverrides?.[pref.providerName],
       });
+      if (this.providerCache.size >= MAX_CACHED_PROVIDERS) {
+        const oldest = this.providerCache.keys().next().value as string;
+        this.providerCache.delete(oldest);
+      }
       this.providerCache.set(cacheKey, provider);
       return provider;
     } catch (error) {
@@ -95,17 +101,14 @@ export class ProviderManager {
   listAvailable(): Array<{ name: string; label: string; defaultModel: string }> {
     const available: Array<{ name: string; label: string; defaultModel: string }> = [];
 
-    // Claude/Anthropic
-    if (this.apiKeys["claude"] || this.apiKeys["anthropic"]) {
+    if (this.isAvailable("claude")) {
       available.push({ name: "claude", label: "Anthropic Claude", defaultModel: this.modelOverrides?.["claude"] ?? "claude-sonnet-4-20250514" });
     }
 
-    // Ollama (no key needed)
     available.push({ name: "ollama", label: "Ollama (Local)", defaultModel: this.modelOverrides?.["ollama"] ?? "llama3.3" });
 
-    // All preset-based providers
     for (const [name, preset] of Object.entries(PROVIDER_PRESETS)) {
-      if (this.apiKeys[name]) {
+      if (this.isAvailable(name)) {
         available.push({
           name,
           label: preset.label,
