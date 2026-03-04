@@ -46,7 +46,7 @@ describe("File Write → Build Flow Integration", () => {
     tools = [new FileWriteTool(), new FileEditTool(), new DotnetBuildTool()];
 
     orchestrator = new Orchestrator({
-      provider: mockProvider,
+      providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
       tools,
       channel,
       projectPath: tempDir,
@@ -176,7 +176,7 @@ public class PlayerController : MonoBehaviour
       // Disable auto-confirm to test manual confirmation
       const manualChannel = createMockTelegramChannel({ autoConfirm: false });
       const manualOrchestrator = new Orchestrator({
-        provider: mockProvider,
+        providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools,
         channel: manualChannel,
         projectPath: tempDir,
@@ -218,7 +218,7 @@ public class PlayerController : MonoBehaviour
     it("should cancel operation when user declines confirmation", async () => {
       const declineChannel = createMockTelegramChannel({ autoConfirm: false });
       const declineOrchestrator = new Orchestrator({
-        provider: mockProvider,
+        providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools,
         channel: declineChannel,
         projectPath: tempDir,
@@ -268,7 +268,7 @@ public class PlayerController : MonoBehaviour
     it("should require confirmation for different write operations", async () => {
       const testChannel = createMockTelegramChannel({ autoConfirm: false });
       const testOrchestrator = new Orchestrator({
-        provider: mockProvider,
+        providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools,
         channel: testChannel,
         projectPath: tempDir,
@@ -507,7 +507,7 @@ public class PlayerController : MonoBehaviour
   describe("Read-only Mode", () => {
     it("should reject write operations in read-only mode", async () => {
       const readOnlyOrchestrator = new Orchestrator({
-        provider: mockProvider,
+        providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools,
         channel,
         projectPath: tempDir,

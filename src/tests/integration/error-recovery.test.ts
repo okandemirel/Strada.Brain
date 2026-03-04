@@ -43,7 +43,7 @@ describe("Error Recovery Flow Integration", () => {
     tools = [new FileWriteTool(), new FileEditTool(), new DotnetBuildTool()];
 
     orchestrator = new Orchestrator({
-      provider: mockProvider,
+      providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
       tools,
       channel,
       projectPath: tempDir,

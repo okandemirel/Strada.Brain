@@ -48,7 +48,7 @@ describe("Telegram Flow Integration", () => {
 
     // Create orchestrator
     orchestrator = new Orchestrator({
-      provider: mockProvider,
+      providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
       tools,
       channel: telegramChannel,
       projectPath: tempDir,

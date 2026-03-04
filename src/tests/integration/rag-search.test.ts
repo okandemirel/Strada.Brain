@@ -135,7 +135,7 @@ describe("RAG Search Flow Integration", () => {
     tools = [new CodeSearchTool(mockRagPipeline), new FileReadTool()];
 
     orchestrator = new Orchestrator({
-      provider: mockProvider,
+      providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
       tools,
       channel,
       projectPath: tempDir,

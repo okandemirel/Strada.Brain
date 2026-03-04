@@ -96,7 +96,7 @@ describe("Multi-Channel Flow Integration", () => {
 
     // Create separate orchestrators for each channel (but sharing provider)
     telegramOrchestrator = new Orchestrator({
-      provider: mockProvider,
+      providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
       tools,
       channel: telegramChannel,
       projectPath: tempDir,
@@ -106,7 +106,7 @@ describe("Multi-Channel Flow Integration", () => {
     });
 
     discordOrchestrator = new Orchestrator({
-      provider: mockProvider,
+      providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
       tools,
       channel: discordChannel,
       projectPath: tempDir,
@@ -347,7 +347,7 @@ describe("Multi-Channel Flow Integration", () => {
       // Create new orchestrator with streaming
       const streamingDiscordChannel = createMockDiscordChannel({ supportsStreaming: true });
       const streamingOrchestrator = new Orchestrator({
-        provider: mockProvider,
+        providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools: [],
         channel: streamingDiscordChannel,
         projectPath: tempDir,
@@ -388,7 +388,7 @@ describe("Multi-Channel Flow Integration", () => {
 
       // Create orchestrators
       const tgOrchestrator = new Orchestrator({
-        provider: mockProvider,
+        providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools: [new FileReadTool(), new FileWriteTool()],
         channel: confirmTelegram,
         projectPath: tempDir,
@@ -398,7 +398,7 @@ describe("Multi-Channel Flow Integration", () => {
       });
 
       const discordOrchestrator = new Orchestrator({
-        provider: mockProvider,
+        providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools: [new FileReadTool(), new FileWriteTool()],
         channel: confirmDiscord,
         projectPath: tempDir,
