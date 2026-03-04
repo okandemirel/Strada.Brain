@@ -246,9 +246,9 @@ export class LearningStorage {
     // Commonly used statements
     const stmts = {
       insertInstinct: `
-        INSERT INTO instincts 
-        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, created_at, updated_at, evolved_to)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO instincts
+        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       updateInstinct: `
         UPDATE instincts SET
@@ -409,6 +409,7 @@ export class LearningStorage {
       instinct.action,
       JSON.stringify(instinct.contextConditions),
       JSON.stringify(instinct.stats),
+      instinct.embedding ? JSON.stringify(instinct.embedding) : null,
       instinct.createdAt,
       instinct.updatedAt,
       instinct.evolvedTo ?? null

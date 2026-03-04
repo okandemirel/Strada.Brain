@@ -55,18 +55,17 @@ describe("InstinctRetriever", () => {
       findSimilarInstincts: vi.fn().mockReturnValue(matches),
     } as unknown as PatternMatcher;
 
-    const retriever = new InstinctRetriever(mockMatcher, mockStorage);
+    const retriever = new InstinctRetriever(mockMatcher);
     return { retriever, mockStorage, mockMatcher };
   }
 
   it("returns empty array when no active instincts exist", async () => {
-    const { retriever, mockStorage, mockMatcher } = setup([], []);
+    const { retriever, mockMatcher } = setup([], []);
 
     const result = await retriever.getInsightsForTask("fix null pointer");
 
     expect(result).toEqual([]);
-    expect(mockStorage.getInstincts).toHaveBeenCalledWith({ minConfidence: 0.5 });
-    expect(mockMatcher.findSimilarInstincts).not.toHaveBeenCalled();
+    expect(mockMatcher.findSimilarInstincts).toHaveBeenCalled();
   });
 
   it("returns formatted insights when matches found", async () => {

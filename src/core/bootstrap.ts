@@ -144,12 +144,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Initialize rate limiter
   const rateLimiter = initializeRateLimiter(config, logger);
 
-  // Create InstinctRetriever for proactive learning
-  const instinctRetriever = learningResult.pipeline && learningResult.storage
-    ? new InstinctRetriever(
-        new PatternMatcher(learningResult.storage),
-        learningResult.storage,
-      )
+  // Create InstinctRetriever for proactive learning (reuse existing PatternMatcher)
+  const instinctRetriever = learningResult.patternMatcher
+    ? new InstinctRetriever(learningResult.patternMatcher)
     : undefined;
 
   // Initialize orchestrator
@@ -171,7 +168,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Initialize task system
   const taskStorage = initializeTaskStorage(config, logger);
-  const backgroundExecutor = new BackgroundExecutor(orchestrator);
+  const { TaskDecomposer } = await import("../tasks/task-decomposer.js");
+  const decomposer = new TaskDecomposer(providerManager.getProvider(""));
+  const backgroundExecutor = new BackgroundExecutor(orchestrator, 3, decomposer);
   const taskManager = new TaskManager(taskStorage, backgroundExecutor);
   backgroundExecutor.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
@@ -428,6 +427,7 @@ async function initializeRAG(
 interface LearningResult {
   pipeline?: LearningPipeline;
   storage?: LearningStorage;
+  patternMatcher?: PatternMatcher;
   taskPlanner: TaskPlanner;
   errorRecovery: ErrorRecoveryEngine;
 }
@@ -473,7 +473,7 @@ async function initializeLearning(config: Config, logger: winston.Logger): Promi
       stats: pipeline.getStats(),
     });
 
-    return { pipeline, storage: learningStorage, taskPlanner, errorRecovery };
+    return { pipeline, storage: learningStorage, patternMatcher, taskPlanner, errorRecovery };
   } catch (error) {
     logger.warn("Learning pipeline initialization failed", {
       error: error instanceof Error ? error.message : String(error),

@@ -6,13 +6,11 @@
  */
 
 import type { PatternMatcher } from "../learning/matching/pattern-matcher.js";
-import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { PatternMatch } from "../learning/types.js";
 
 export class InstinctRetriever {
   constructor(
     private readonly matcher: PatternMatcher,
-    private readonly storage: LearningStorage,
   ) {}
 
   /**
@@ -23,14 +21,7 @@ export class InstinctRetriever {
    * @returns Array of human-readable insight strings
    */
   async getInsightsForTask(taskDescription: string, maxInsights: number = 5): Promise<string[]> {
-    // 1. Check if there are any active/proposed instincts worth querying
-    const activeInstincts = this.storage.getInstincts({ minConfidence: 0.5 });
-
-    if (activeInstincts.length === 0) {
-      return [];
-    }
-
-    // 2. Find similar instincts using the pattern matcher
+    // Find similar instincts using the pattern matcher (single scan)
     const matches = this.matcher.findSimilarInstincts(taskDescription, {
       minSimilarity: 0.4,
       maxResults: maxInsights,

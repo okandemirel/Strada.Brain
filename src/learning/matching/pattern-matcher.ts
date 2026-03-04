@@ -72,28 +72,8 @@ function cosineSimilarity(a: string, b: string): number {
   return intersection.size / Math.sqrt(tokensA.size * tokensB.size) || 0;
 }
 
-// ─── Vector Cosine Similarity ────────────────────────────────────────────────────
-
-/**
- * Calculate cosine similarity between two numeric vectors.
- * Returns a value between -1 and 1 (1 = identical direction, 0 = orthogonal).
- * Returns 0 if either vector has zero magnitude.
- */
-export function vectorCosineSimilarity(a: number[], b: number[]): number {
-  const len = Math.min(a.length, b.length);
-  let dot = 0;
-  let magA = 0;
-  let magB = 0;
-
-  for (let i = 0; i < len; i++) {
-    dot += a[i]! * b[i]!;
-    magA += a[i]! * a[i]!;
-    magB += b[i]! * b[i]!;
-  }
-
-  const denom = Math.sqrt(magA) * Math.sqrt(magB);
-  return denom === 0 ? 0 : dot / denom;
-}
+// Re-export for backward compat (tests import from here)
+export { denseCosineSimilarity as vectorCosineSimilarity } from "../../rag/vector-math.js";
 
 // ─── Embedder Interface ──────────────────────────────────────────────────────────
 
@@ -267,7 +247,8 @@ export class PatternMatcher {
         continue;
       }
 
-      const similarity = vectorCosineSimilarity(queryVector, instinct.embedding);
+      const { denseCosineSimilarity } = await import("../../rag/vector-math.js");
+      const similarity = denseCosineSimilarity(queryVector, instinct.embedding);
 
       if (similarity >= minScore) {
         matches.push({
