@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth:*)",
+      "Bash(git remote:*)",
+      "Bash(GIT_TERMINAL_PROMPT=0 git push:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npx eslint:*)",
+      "Bash(done)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "Bash(/opt/homebrew/Library/Homebrew/shims/shared/git status:*)",
+      "Bash(brew install:*)",
+      "Bash(git:*)",
+      "Bash(npm run:*)",
+      "Bash(gh run:*)",
+      "Bash(tmux:*)",
+      "Bash(npx tsx:*)",
+      "Bash(npm start:*)",
+      "Bash(rm:*)",
+      "Bash(pgrep:*)",
+      "Bash(node:*)",
+      "Bash(claude plugin:*)",
+      "WebFetch(domain:www.kimi.com)",
+      "WebFetch(domain:platform.moonshot.ai)",
+      "WebFetch(domain:ai.google.dev)",
+      "WebFetch(domain:www.minimax.io)",
+      "WebFetch(domain:fireworks.ai)",
+      "WebFetch(domain:platform.minimax.io)",
+      "WebFetch(domain:docs.openclaw.ai)",
+      "WebFetch(domain:openclawcn.com)",
+      "WebFetch(domain:www.together.ai)",
+      "WebFetch(domain:console.groq.com)",
+      "WebFetch(domain:docs.mistral.ai)"
+    ]
+  },
+  "enableAllProjectMcpServers": true
+}
