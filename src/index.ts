@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 /**
  * Strata Brain - AI-powered Unity development assistant
- * 
+ *
  * Entry point for the application.
  * All initialization logic has been moved to bootstrap.ts
  */
 
 import { Command } from "commander";
-import { loadConfig } from "./config/config.js";
+import { loadConfig, loadConfigSafe } from "./config/config.js";
 import { createLogger } from "./utils/logger.js";
 import { Daemon } from "./gateway/daemon.js";
 import { bootstrap } from "./core/bootstrap.js";
 import { createContainer } from "./core/di-container.js";
+import { SetupWizard } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
 import { CHANNEL_DEFAULTS, type SupportedChannelType } from "./common/constants.js";
 
@@ -23,7 +24,7 @@ setupGlobalErrorHandlers(
   },
   () => {
     // Cleanup will be handled by the bootstrap shutdown
-  }
+  },
 );
 
 // CLI Setup
@@ -40,7 +41,7 @@ program
   .option(
     "--channel <type>",
     `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
-    CHANNEL_DEFAULTS.DEFAULT_TYPE
+    CHANNEL_DEFAULTS.DEFAULT_TYPE,
   )
   .action(async (opts: { channel: string }) => {
     await startApp(opts.channel);
@@ -59,7 +60,7 @@ program
   .option(
     "--channel <type>",
     `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
-    CHANNEL_DEFAULTS.DEFAULT_TYPE
+    CHANNEL_DEFAULTS.DEFAULT_TYPE,
   )
   .action(async (opts: { channel: string }) => {
     const config = loadConfig();
@@ -80,7 +81,21 @@ program.parse();
 // ============================================================================
 
 async function startApp(channelType: string): Promise<void> {
-  const config = loadConfig();
+  // Try loading config — if invalid and using web channel, launch setup wizard
+  const configResult = loadConfigSafe();
+  if (configResult.kind === "err") {
+    if (channelType === "web") {
+      console.log("Configuration missing or invalid. Starting setup wizard...");
+      console.log("Open http://localhost:3000 in your browser to configure.");
+      const wizard = new SetupWizard({ port: 3000 });
+      await wizard.start();
+      return;
+    }
+    console.error(`Configuration error: ${configResult.error}`);
+    process.exit(1);
+  }
+
+  const config = configResult.value;
   const logger = createLogger(config.logLevel, config.logFile);
 
   try {
@@ -89,7 +104,7 @@ async function startApp(channelType: string): Promise<void> {
       throw new AppError(
         `Invalid channel type: ${channelType}. Supported: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
         "INVALID_CHANNEL_TYPE",
-        400
+        400,
       );
     }
 
@@ -102,7 +117,7 @@ async function startApp(channelType: string): Promise<void> {
       config,
       container,
     });
-    
+
     // Register container services after bootstrap creates them
     container.registerInstance("Logger", logger);
     container.registerInstance("Config", config);
@@ -150,7 +165,7 @@ function setupShutdownHandlers(shutdown: () => Promise<void>): void {
     isShuttingDown = true;
 
     console.log(`\nReceived ${signal}, shutting down gracefully...`);
-    
+
     try {
       await shutdown();
       console.log("Shutdown complete.");
@@ -163,13 +178,13 @@ function setupShutdownHandlers(shutdown: () => Promise<void>): void {
 
   process.on("SIGTERM", () => void handleShutdown("SIGTERM"));
   process.on("SIGINT", () => void handleShutdown("SIGINT"));
-  
+
   // Handle uncaught errors
   process.on("uncaughtException", (error) => {
     console.error("Uncaught exception:", error);
     void handleShutdown("uncaughtException");
   });
-  
+
   process.on("unhandledRejection", (reason) => {
     console.error("Unhandled rejection:", reason);
     void handleShutdown("unhandledRejection");

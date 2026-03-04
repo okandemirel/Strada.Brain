@@ -1,6 +1,6 @@
 /**
  * Type-safe Configuration for Strata.Brain
- * 
+ *
  * Provides:
  * - Deep partial types
  * - Config validators
@@ -12,12 +12,7 @@ import { realpathSync, statSync } from "node:fs";
 import { z } from "zod";
 import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
-import type { 
-  DeepPartial, 
-  Result,
-  ValidationResult,
-  ValidationError 
-} from "../types/index.js";
+import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
 
 dotenv.config();
 
@@ -91,7 +86,7 @@ export type LogLevel = "error" | "warn" | "info" | "debug";
 export type EmbeddingProvider = "openai" | "ollama";
 
 /** AI provider names */
-export type AIProviderName = 
+export type AIProviderName =
   | "claude"
   | "openai"
   | "deepseek"
@@ -226,6 +221,9 @@ export interface Config {
   // Rate Limiting
   readonly rateLimit: RateLimitConfig;
 
+  // Web Channel
+  readonly web: { readonly port: number };
+
   // Logging
   readonly logLevel: LogLevel;
   readonly logFile: string;
@@ -248,23 +246,32 @@ const logLevelSchema = z.enum(["error", "warn", "info", "debug"]);
 const embeddingProviderSchema = z.enum(["openai", "ollama"]);
 
 /** Port number schema */
-const portSchema = z.string()
+const portSchema = z
+  .string()
   .transform((s) => parseInt(s, 10))
   .pipe(z.number().int().min(1024).max(65535));
 
 /** Boolean from string schema */
-const boolFromString = (defaultValue: boolean) => z
-  .string()
-  .transform((s) => s === "true")
-  .default(String(defaultValue));
+const boolFromString = (defaultValue: boolean) =>
+  z
+    .string()
+    .transform((s) => s === "true")
+    .default(String(defaultValue));
 
 /** Comma-separated list schema */
-const commaSeparatedList = z.string()
-  .transform((s) => s.split(",").map((id) => id.trim()).filter(Boolean))
+const commaSeparatedList = z
+  .string()
+  .transform((s) =>
+    s
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean),
+  )
   .optional();
 
 /** Comma-separated number list schema */
-const commaSeparatedNumberList = z.string()
+const commaSeparatedNumberList = z
+  .string()
   .transform((s) => s.split(",").map((id) => parseInt(id.trim(), 10)))
   .pipe(z.array(z.number().int()))
   .optional();
@@ -329,7 +336,8 @@ export const configSchema = z.object({
   embeddingProvider: embeddingProviderSchema.default("openai"),
   embeddingModel: z.string().optional(),
   embeddingBaseUrl: z.string().optional(),
-  ragContextMaxTokens: z.string()
+  ragContextMaxTokens: z
+    .string()
     .transform((s) => parseInt(s, 10))
     .pipe(z.number().int().min(500).max(16000))
     .default("4000"),
@@ -340,23 +348,28 @@ export const configSchema = z.object({
 
   // Rate Limiting
   rateLimitEnabled: boolFromString(false),
-  rateLimitMessagesPerMinute: z.string()
+  rateLimitMessagesPerMinute: z
+    .string()
     .transform((s) => parseInt(s, 10))
     .pipe(z.number().int().min(0))
     .default("0"),
-  rateLimitMessagesPerHour: z.string()
+  rateLimitMessagesPerHour: z
+    .string()
     .transform((s) => parseInt(s, 10))
     .pipe(z.number().int().min(0))
     .default("0"),
-  rateLimitTokensPerDay: z.string()
+  rateLimitTokensPerDay: z
+    .string()
     .transform((s) => parseInt(s, 10))
     .pipe(z.number().int().min(0))
     .default("0"),
-  rateLimitDailyBudgetUsd: z.string()
+  rateLimitDailyBudgetUsd: z
+    .string()
     .transform((s) => parseFloat(s))
     .pipe(z.number().min(0))
     .default("0"),
-  rateLimitMonthlyBudgetUsd: z.string()
+  rateLimitMonthlyBudgetUsd: z
+    .string()
     .transform((s) => parseFloat(s))
     .pipe(z.number().min(0))
     .default("0"),
@@ -364,6 +377,9 @@ export const configSchema = z.object({
   // Logging
   logLevel: logLevelSchema.default("info"),
   logFile: z.string().default("strata-brain.log"),
+
+  // Web Channel
+  webChannelPort: portSchema.default("3000"),
 
   // Plugins
   pluginDirs: commaSeparatedList.transform((arr) => arr ?? []),
@@ -391,7 +407,7 @@ export type ConfigValidationResult = ValidationResult<Config>;
  */
 export function validateConfig(raw: unknown): ConfigValidationResult {
   const result = configSchema.safeParse(raw);
-  
+
   if (!result.success) {
     const errors: ValidationError[] = result.error.issues.map((issue) => ({
       path: issue.path.join("."),
@@ -416,17 +432,17 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     fireworksApiKey: rawConfig.fireworksApiKey,
     geminiApiKey: rawConfig.geminiApiKey,
     providerChain: rawConfig.providerChain,
-    
+
     telegram: {
       botToken: rawConfig.telegramBotToken,
       allowedUserIds: rawConfig.allowedTelegramUserIds ?? [],
     },
-    
+
     discord: {
       botToken: rawConfig.discordBotToken,
       guildId: rawConfig.discordGuildId,
     },
-    
+
     slack: {
       botToken: rawConfig.slackBotToken,
       signingSecret: rawConfig.slackSigningSecret,
@@ -435,34 +451,34 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       allowedWorkspaces: rawConfig.allowedSlackWorkspaces,
       allowedUserIds: rawConfig.allowedSlackUserIds,
     },
-    
+
     security: {
       requireEditConfirmation: rawConfig.requireEditConfirmation,
       readOnlyMode: rawConfig.readOnlyMode,
     },
-    
+
     unityProjectPath: rawConfig.unityProjectPath,
-    
+
     dashboard: {
       enabled: rawConfig.dashboardEnabled,
       port: rawConfig.dashboardPort,
     },
-    
+
     websocketDashboard: {
       enabled: rawConfig.websocketDashboardEnabled,
       port: rawConfig.websocketDashboardPort,
     },
-    
+
     prometheus: {
       enabled: rawConfig.prometheusEnabled,
       port: rawConfig.prometheusPort,
     },
-    
+
     memory: {
       enabled: rawConfig.memoryEnabled,
       dbPath: rawConfig.memoryDbPath,
     },
-    
+
     rag: {
       enabled: rawConfig.ragEnabled,
       provider: rawConfig.embeddingProvider,
@@ -470,10 +486,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       baseUrl: rawConfig.embeddingBaseUrl,
       contextMaxTokens: rawConfig.ragContextMaxTokens,
     },
-    
+
     streamingEnabled: rawConfig.streamingEnabled,
     shellEnabled: rawConfig.shellEnabled,
-    
+
     rateLimit: {
       enabled: rawConfig.rateLimitEnabled,
       messagesPerMinute: rawConfig.rateLimitMessagesPerMinute,
@@ -482,7 +498,11 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       dailyBudgetUsd: rawConfig.rateLimitDailyBudgetUsd,
       monthlyBudgetUsd: rawConfig.rateLimitMonthlyBudgetUsd,
     },
-    
+
+    web: {
+      port: rawConfig.webChannelPort,
+    },
+
     logLevel: rawConfig.logLevel,
     logFile: rawConfig.logFile,
     pluginDirs: rawConfig.pluginDirs,
@@ -498,11 +518,11 @@ export function validateProjectPath(projectPath: string): Result<string, string>
   try {
     const realPath = realpathSync(projectPath);
     const stats = statSync(realPath);
-    
+
     if (!stats.isDirectory()) {
       return { kind: "err", error: `UNITY_PROJECT_PATH is not a directory: ${projectPath}` };
     }
-    
+
     return { kind: "ok", value: realPath };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -578,7 +598,8 @@ export const secretPatterns: SecretPattern[] = [
   // Private keys
   {
     name: "private_key",
-    pattern: /-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----/g,
+    pattern:
+      /-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----/g,
     redaction: "[REDACTED_PRIVATE_KEY]",
   },
   // Database credentials
@@ -691,6 +712,7 @@ interface EnvVars {
   rateLimitMonthlyBudgetUsd: string | undefined;
   logLevel: string | undefined;
   logFile: string | undefined;
+  webChannelPort: string | undefined;
   pluginDirs: string | undefined;
 }
 
@@ -747,6 +769,7 @@ function loadFromEnv(): EnvVars {
     rateLimitMonthlyBudgetUsd: process.env["RATE_LIMIT_MONTHLY_BUDGET_USD"],
     logLevel: process.env["LOG_LEVEL"],
     logFile: process.env["LOG_FILE"],
+    webChannelPort: process.env["WEB_CHANNEL_PORT"],
     pluginDirs: process.env["PLUGIN_DIRS"],
   };
 }
@@ -767,9 +790,7 @@ export function loadConfig(): Config {
   const validation = validateConfig(raw);
 
   if (validation.kind === "invalid") {
-    const errors = validation.errors
-      .map((e) => `  - ${e.path}: ${e.message}`)
-      .join("\n");
+    const errors = validation.errors.map((e) => `  - ${e.path}: ${e.message}`).join("\n");
     throw new Error(`Invalid configuration:\n${errors}`);
   }
 
@@ -780,13 +801,13 @@ export function loadConfig(): Config {
   if (pathResult.kind === "err") {
     throw new Error(pathResult.error);
   }
-  
+
   // Update with resolved path
   cachedConfig = {
     ...config,
     unityProjectPath: pathResult.value,
   };
-  
+
   return cachedConfig;
 }
 
@@ -821,11 +842,11 @@ export function getCachedConfig(): Config | undefined {
  */
 export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: string[] } {
   const missing: string[] = [];
-  
+
   if (!config.anthropicApiKey) {
     missing.push("ANTHROPIC_API_KEY");
   }
-  
+
   return {
     valid: missing.length === 0,
     missing,
@@ -836,11 +857,11 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
  * Check channel-specific configuration
  */
 export function checkChannelConfig(
-  config: Config, 
-  channelType: "telegram" | "discord" | "slack" | "cli"
+  config: Config,
+  channelType: "telegram" | "discord" | "slack" | "cli" | "web",
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
-  
+
   switch (channelType) {
     case "telegram":
       if (!config.telegram.botToken) {
@@ -850,13 +871,13 @@ export function checkChannelConfig(
         errors.push("ALLOWED_TELEGRAM_USER_IDS is empty - all users will be denied");
       }
       break;
-      
+
     case "discord":
       if (!config.discord.botToken) {
         errors.push("DISCORD_BOT_TOKEN is required");
       }
       break;
-      
+
     case "slack":
       if (!config.slack.botToken) {
         errors.push("SLACK_BOT_TOKEN is required");
@@ -865,12 +886,13 @@ export function checkChannelConfig(
         errors.push("SLACK_SIGNING_SECRET is required when not using socket mode");
       }
       break;
-      
+
     case "cli":
-      // CLI doesn't require any special config
+    case "web":
+      // CLI and Web don't require any special config
       break;
   }
-  
+
   return { valid: errors.length === 0, errors };
 }
 
@@ -879,12 +901,12 @@ export function checkChannelConfig(
  */
 export function createPartialConfig(env: Partial<EnvVarMap>): PartialConfig {
   const raw: Record<string, unknown> = {};
-  
+
   if (env.ANTHROPIC_API_KEY) raw.anthropicApiKey = env.ANTHROPIC_API_KEY;
   if (env.OPENAI_API_KEY) raw.openaiApiKey = env.OPENAI_API_KEY;
   if (env.LOG_LEVEL) raw.logLevel = env.LOG_LEVEL;
   if (env.READ_ONLY_MODE) raw.security = { readOnlyMode: env.READ_ONLY_MODE === "true" };
-  
+
   return raw as PartialConfig;
 }
 

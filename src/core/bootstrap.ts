@@ -39,6 +39,7 @@ import { CLIChannel } from "../channels/cli/repl.js";
 import { DiscordChannel } from "../channels/discord/bot.js";
 import { getDefaultSlashCommands } from "../channels/discord/commands.js";
 import { WhatsAppChannel } from "../channels/whatsapp/client.js";
+import { WebChannel } from "../channels/web/channel.js";
 
 // Learning system imports
 import {
@@ -461,6 +462,9 @@ async function initializeChannel(
         slashCommands: getDefaultSlashCommands(),
       });
     }
+
+    case "web":
+      return new WebChannel(config.web.port);
 
     case "telegram":
     default: {

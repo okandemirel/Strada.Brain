@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Strada.Brain</title>
+  <link rel="stylesheet" href="/chat.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" id="hljs-theme">
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <span class="header-logo">Strada.Brain</span>
+      <div class="connection-status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting...</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <button class="theme-toggle" id="themeToggle" title="Toggle theme">Dark</button>
+    </div>
+  </div>
+
+  <!-- Messages -->
+  <div class="messages" id="messages">
+    <div class="empty-state" id="emptyState">
+      <h2>Strada.Brain</h2>
+      <p>AI-powered Unity development assistant. Send a message to get started.</p>
+    </div>
+  </div>
+
+  <!-- Confirmation overlay -->
+  <div class="confirmation-overlay" id="confirmOverlay">
+    <div class="confirmation-dialog">
+      <h3 id="confirmQuestion"></h3>
+      <div class="details" id="confirmDetails"></div>
+      <div class="confirmation-options" id="confirmOptions"></div>
+    </div>
+  </div>
+
+  <!-- Input -->
+  <div class="input-area">
+    <textarea id="userInput" placeholder="Send a message... (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+    <button class="send-btn" id="sendBtn">Send</button>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="/chat.js"></script>
+</body>
+</html>

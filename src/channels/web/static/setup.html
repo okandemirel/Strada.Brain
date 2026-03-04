@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Strada.Brain - Setup</title>
+  <link rel="stylesheet" href="/setup.css">
+</head>
+<body>
+  <div class="setup-container">
+    <div class="setup-card">
+      <!-- Progress Bar -->
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="step-indicators" id="stepIndicators"></div>
+
+      <!-- Step 1: Welcome -->
+      <div class="step active" data-step="1">
+        <div class="step-icon">&#9889;</div>
+        <h1>Welcome to Strada.Brain</h1>
+        <p class="subtitle">AI-powered Unity development assistant. Let's set things up in a few steps.</p>
+        <button class="btn-primary" onclick="nextStep()">Get Started</button>
+      </div>
+
+      <!-- Step 2: API Keys -->
+      <div class="step" data-step="2">
+        <h2>API Keys</h2>
+        <p class="subtitle">Enter your AI provider keys. At minimum, an Anthropic key is required.</p>
+        <div class="form-group">
+          <label for="anthropicKey">Anthropic API Key <span class="required">*</span></label>
+          <input type="password" id="anthropicKey" placeholder="sk-ant-..." autocomplete="off">
+          <small>Get one at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a></small>
+        </div>
+        <div class="form-group">
+          <label for="openaiKey">OpenAI API Key <span class="optional">(optional)</span></label>
+          <input type="password" id="openaiKey" placeholder="sk-..." autocomplete="off">
+          <small>Used for RAG embeddings if provided.</small>
+        </div>
+        <div class="btn-row">
+          <button class="btn-secondary" onclick="prevStep()">Back</button>
+          <button class="btn-primary" onclick="nextStep()">Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Unity Project -->
+      <div class="step" data-step="3">
+        <h2>Unity Project Path</h2>
+        <p class="subtitle">Point to your Unity project that uses the Strada framework.</p>
+        <div class="form-group">
+          <label for="projectPath">Project Path <span class="required">*</span></label>
+          <div class="input-with-btn">
+            <input type="text" id="projectPath" placeholder="/Users/you/MyUnityProject">
+            <button class="btn-small" onclick="validatePath()">Validate</button>
+          </div>
+          <div id="pathStatus" class="validation-status"></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn-secondary" onclick="prevStep()">Back</button>
+          <button class="btn-primary" onclick="nextStep()">Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Channel Selection -->
+      <div class="step" data-step="4">
+        <h2>Communication Channels</h2>
+        <p class="subtitle">Choose how you want to interact with Strada.Brain.</p>
+        <div class="channel-grid">
+          <label class="channel-option selected">
+            <input type="radio" name="channel" value="web" checked>
+            <div class="channel-card">
+              <span class="channel-icon">&#127760;</span>
+              <span class="channel-name">Web</span>
+              <span class="channel-desc">Browser-based (recommended)</span>
+            </div>
+          </label>
+          <label class="channel-option">
+            <input type="radio" name="channel" value="telegram">
+            <div class="channel-card">
+              <span class="channel-icon">&#9992;</span>
+              <span class="channel-name">Telegram</span>
+              <span class="channel-desc">Requires bot token</span>
+            </div>
+          </label>
+          <label class="channel-option">
+            <input type="radio" name="channel" value="discord">
+            <div class="channel-card">
+              <span class="channel-icon">&#128172;</span>
+              <span class="channel-name">Discord</span>
+              <span class="channel-desc">Requires bot token</span>
+            </div>
+          </label>
+          <label class="channel-option">
+            <input type="radio" name="channel" value="cli">
+            <div class="channel-card">
+              <span class="channel-icon">&#128187;</span>
+              <span class="channel-name">CLI</span>
+              <span class="channel-desc">Terminal interface</span>
+            </div>
+          </label>
+        </div>
+
+        <!-- Telegram config (shown when selected) -->
+        <div class="channel-config" id="telegramConfig" style="display:none">
+          <div class="form-group">
+            <label for="telegramToken">Telegram Bot Token</label>
+            <input type="password" id="telegramToken" placeholder="123456:ABC-DEF..." autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="telegramUsers">Allowed User IDs</label>
+            <input type="text" id="telegramUsers" placeholder="12345,67890">
+          </div>
+        </div>
+
+        <!-- Discord config -->
+        <div class="channel-config" id="discordConfig" style="display:none">
+          <div class="form-group">
+            <label for="discordToken">Discord Bot Token</label>
+            <input type="password" id="discordToken" placeholder="Bot token..." autocomplete="off">
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn-secondary" onclick="prevStep()">Back</button>
+          <button class="btn-primary" onclick="nextStep()">Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 5: Review & Save -->
+      <div class="step" data-step="5">
+        <h2>Review & Save</h2>
+        <p class="subtitle">Review your configuration before saving.</p>
+        <div class="review-list" id="reviewList"></div>
+        <div id="saveStatus" class="save-status"></div>
+        <div class="btn-row">
+          <button class="btn-secondary" onclick="prevStep()">Back</button>
+          <button class="btn-primary" id="saveBtn" onclick="saveConfig()">Save & Start</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/setup.js"></script>
+</body>
+</html>

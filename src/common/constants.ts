@@ -1,6 +1,6 @@
 /**
  * Application Constants
- * 
+ *
  * Centralized location for all magic numbers, default values,
  * limits, and thresholds used throughout the application.
  */
@@ -224,15 +224,15 @@ export const TIMEOUTS = {
 
 export const CHANNEL_DEFAULTS = {
   /** Default channel type */
-  DEFAULT_TYPE: "telegram" as const,
+  DEFAULT_TYPE: "web" as const,
   /** Supported channels */
-  SUPPORTED_TYPES: ["telegram", "discord", "whatsapp", "cli", "slack"] as const,
+  SUPPORTED_TYPES: ["web", "telegram", "discord", "whatsapp", "cli", "slack"] as const,
   /** WhatsApp session path */
   WHATSAPP_SESSION_PATH: ".whatsapp-session",
 } as const;
 
 /** Supported channel type */
-export type SupportedChannelType = typeof CHANNEL_DEFAULTS.SUPPORTED_TYPES[number];
+export type SupportedChannelType = (typeof CHANNEL_DEFAULTS.SUPPORTED_TYPES)[number];
 
 // ============================================================================
 // Retry Configuration
