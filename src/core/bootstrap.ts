@@ -247,7 +247,9 @@ async function initializeAIProvider(config: Config, logger: winston.Logger): Pro
   // 1) Explicit provider chain
   if (config.providerChain) {
     const names = config.providerChain.split(",").map((s) => s.trim());
-    provider = buildProviderChain(names, apiKeys);
+    provider = buildProviderChain(names, apiKeys, {
+      models: config.providerModels,
+    });
     logger.info("AI provider chain initialized", { chain: names });
   }
   // 2) Anthropic key present — use ClaudeProvider directly
@@ -268,7 +270,9 @@ async function initializeAIProvider(config: Config, logger: winston.Logger): Pro
       );
     }
 
-    provider = buildProviderChain(detectedNames, apiKeys);
+    provider = buildProviderChain(detectedNames, apiKeys, {
+      models: config.providerModels,
+    });
     logger.info("AI provider auto-detected from available keys", { chain: detectedNames });
   }
 

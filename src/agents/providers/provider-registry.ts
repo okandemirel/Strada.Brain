@@ -15,7 +15,7 @@ export const PROVIDER_PRESETS: Record<
 > = {
   openai: {
     baseUrl: "https://api.openai.com/v1",
-    defaultModel: "gpt-4o",
+    defaultModel: "gpt-5.2",
     label: "OpenAI",
   },
   deepseek: {
@@ -34,13 +34,13 @@ export const PROVIDER_PRESETS: Record<
     label: "Kimi (Moonshot)",
   },
   minimax: {
-    baseUrl: "https://api.minimax.chat/v1",
-    defaultModel: "abab6.5s-chat",
+    baseUrl: "https://api.minimax.io/v1",
+    defaultModel: "MiniMax-M2.5",
     label: "MiniMax",
   },
   groq: {
     baseUrl: "https://api.groq.com/openai/v1",
-    defaultModel: "llama-3.3-70b-versatile",
+    defaultModel: "openai/gpt-oss-120b",
     label: "Groq",
   },
   mistral: {
@@ -50,17 +50,17 @@ export const PROVIDER_PRESETS: Record<
   },
   together: {
     baseUrl: "https://api.together.xyz/v1",
-    defaultModel: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+    defaultModel: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     label: "Together AI",
   },
   fireworks: {
     baseUrl: "https://api.fireworks.ai/inference/v1",
-    defaultModel: "accounts/fireworks/models/llama-v3p1-70b-instruct",
+    defaultModel: "accounts/fireworks/models/llama4-maverick-instruct-basic",
     label: "Fireworks AI",
   },
   gemini: {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    defaultModel: "gemini-2.0-flash",
+    defaultModel: "gemini-3-flash-preview",
     label: "Google Gemini",
   },
 };
@@ -92,7 +92,7 @@ export function createProvider(config: ProviderConfig): IAIProvider {
 
   if (name === "ollama") {
     return new OllamaProvider(
-      config.model ?? "llama3.1",
+      config.model ?? "llama3.3",
       config.baseUrl ?? "http://localhost:11434",
     );
   }

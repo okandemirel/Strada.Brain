@@ -70,7 +70,10 @@ export type EnvVarName =
   | "SHELL_ENABLED"
   | "LOG_LEVEL"
   | "LOG_FILE"
-  | "PLUGIN_DIRS";
+  | "PLUGIN_DIRS"
+  | "OPENAI_MODEL" | "DEEPSEEK_MODEL" | "QWEN_MODEL" | "KIMI_MODEL"
+  | "MINIMAX_MODEL" | "GROQ_MODEL" | "MISTRAL_MODEL" | "TOGETHER_MODEL"
+  | "FIREWORKS_MODEL" | "GEMINI_MODEL" | "CLAUDE_MODEL" | "OLLAMA_MODEL";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -200,6 +203,8 @@ export interface Config {
   readonly geminiApiKey?: string;
   /** Comma-separated provider names for fallback chain */
   readonly providerChain?: string;
+  /** Per-provider model overrides (env: {PROVIDER}_MODEL) */
+  readonly providerModels?: Record<string, string>;
 
   // Channels
   readonly telegram: TelegramConfig;
@@ -841,10 +846,18 @@ export function loadConfig(): Config {
     throw new Error(pathResult.error);
   }
 
+  // Parse per-provider model overrides
+  const providerModels: Record<string, string> = {};
+  for (const p of ["openai", "deepseek", "qwen", "kimi", "minimax", "groq", "mistral", "together", "fireworks", "gemini", "claude", "ollama"]) {
+    const val = process.env[`${p.toUpperCase()}_MODEL`];
+    if (val) providerModels[p] = val;
+  }
+
   // Update with resolved path
   cachedConfig = {
     ...config,
     unityProjectPath: pathResult.value,
+    providerModels,
   };
 
   return cachedConfig;
