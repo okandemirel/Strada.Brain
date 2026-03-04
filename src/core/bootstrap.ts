@@ -11,7 +11,7 @@ import { type DurationMs } from "../types/index.js";
 import { createLogger, getLogger } from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
 import { ClaudeProvider } from "../agents/providers/claude.js";
-import { buildProviderChain } from "../agents/providers/provider-registry.js";
+import { buildProviderChain, PROVIDER_PRESETS } from "../agents/providers/provider-registry.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { DashboardServer } from "../dashboard/server.js";
@@ -111,7 +111,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const auth = initializeAuth(config, channelType, logger);
 
   // Initialize AI provider
-  const provider = initializeAIProvider(config, logger);
+  const provider = await initializeAIProvider(config, logger);
 
   // Initialize memory manager
   const memoryManager = await initializeMemory(config, logger);
@@ -239,30 +239,67 @@ function initializeAuth(config: Config, channelType: string, logger: winston.Log
   });
 }
 
-function initializeAIProvider(config: Config, logger: winston.Logger): IAIProvider {
+/** Build a map of provider name -> API key from config. */
+function collectApiKeys(config: Config): Record<string, string | undefined> {
+  return {
+    claude: config.anthropicApiKey,
+    anthropic: config.anthropicApiKey,
+    openai: config.openaiApiKey,
+    deepseek: config.deepseekApiKey,
+    qwen: config.qwenApiKey,
+    kimi: config.kimiApiKey,
+    minimax: config.minimaxApiKey,
+    groq: config.groqApiKey,
+    mistral: config.mistralApiKey,
+    together: config.togetherApiKey,
+    fireworks: config.fireworksApiKey,
+    gemini: config.geminiApiKey,
+  };
+}
+
+async function initializeAIProvider(config: Config, logger: winston.Logger): Promise<IAIProvider> {
+  const apiKeys = collectApiKeys(config);
+
+  let provider: IAIProvider;
+
+  // 1) Explicit provider chain
   if (config.providerChain) {
     const names = config.providerChain.split(",").map((s) => s.trim());
-    const apiKeys = {
-      claude: config.anthropicApiKey,
-      anthropic: config.anthropicApiKey,
-      openai: config.openaiApiKey,
-      deepseek: config.deepseekApiKey,
-      qwen: config.qwenApiKey,
-      kimi: config.kimiApiKey,
-      minimax: config.minimaxApiKey,
-      groq: config.groqApiKey,
-      mistral: config.mistralApiKey,
-      together: config.togetherApiKey,
-      fireworks: config.fireworksApiKey,
-      gemini: config.geminiApiKey,
-    };
-    const provider = buildProviderChain(names, apiKeys);
+    provider = buildProviderChain(names, apiKeys);
     logger.info("AI provider chain initialized", { chain: names });
-    return provider;
+  }
+  // 2) Anthropic key present — use ClaudeProvider directly
+  else if (config.anthropicApiKey) {
+    provider = new ClaudeProvider(config.anthropicApiKey);
+    logger.info("AI provider initialized", { name: provider.name });
+  }
+  // 3) No explicit chain and no Anthropic key — auto-detect from available keys
+  else {
+    const detectedNames = Object.entries(apiKeys)
+      .filter(([name, key]) => name !== "claude" && name !== "anthropic" && key)
+      .map(([name]) => name);
+
+    if (detectedNames.length === 0) {
+      throw new AppError(
+        "No AI provider configured. Please set at least one provider API key.",
+        "NO_AI_PROVIDER",
+      );
+    }
+
+    provider = buildProviderChain(detectedNames, apiKeys);
+    logger.info("AI provider auto-detected from available keys", { chain: detectedNames });
   }
 
-  const provider = new ClaudeProvider(config.anthropicApiKey);
-  logger.info("AI provider initialized", { name: provider.name });
+  // Run health check (non-blocking — warn only)
+  if (provider.healthCheck) {
+    const healthy = await provider.healthCheck();
+    const logMethod = healthy ? "info" : "warn";
+    const message = healthy
+      ? "AI provider health check passed"
+      : "AI provider health check failed — API may be unreachable or key invalid";
+    logger[logMethod](message, { name: provider.name });
+  }
+
   return provider;
 }
 
@@ -292,6 +329,7 @@ async function initializeRAG(
   logger: winston.Logger,
 ): Promise<IRAGPipeline | undefined> {
   if (!config.rag.enabled) {
+    logger.info("RAG: disabled by configuration");
     return undefined;
   }
 
@@ -303,16 +341,45 @@ async function initializeRAG(
         model: config.rag.model,
         baseUrl: config.rag.baseUrl,
       });
+      logger.info("RAG: using Ollama for embeddings");
     } else {
-      const apiKey = config.openaiApiKey;
+      // Fallback chain for embedding API key:
+      // 1. Explicit OPENAI_API_KEY
+      // 2. Provider chain's first OpenAI-compatible provider
+      let apiKey = config.openaiApiKey;
+      let baseUrl = config.rag.baseUrl;
+      let embeddingLabel = "OpenAI";
+
+      if (!apiKey && config.providerChain) {
+        // Try to use the first OpenAI-compatible provider from the chain
+        const chainNames = config.providerChain.split(",").map((s) => s.trim().toLowerCase());
+        const apiKeys = collectApiKeys(config);
+
+        for (const name of chainNames) {
+          const key = apiKeys[name];
+          const preset = PROVIDER_PRESETS[name];
+          if (key && preset) {
+            apiKey = key;
+            baseUrl = baseUrl ?? preset.baseUrl;
+            embeddingLabel = preset.label;
+            logger.info(`RAG: using ${preset.label} for embeddings (from provider chain)`);
+            break;
+          }
+        }
+      }
+
       if (!apiKey) {
-        logger.warn("RAG disabled: OPENAI_API_KEY required for OpenAI embeddings");
+        logger.warn(
+          "RAG: disabled — no compatible embedding provider (set OPENAI_API_KEY or use Ollama)",
+        );
         return undefined;
       }
+
       embeddingProvider = new OpenAIEmbeddingProvider({
         apiKey,
         model: config.rag.model,
-        baseUrl: config.rag.baseUrl,
+        baseUrl,
+        label: embeddingLabel,
       });
     }
 

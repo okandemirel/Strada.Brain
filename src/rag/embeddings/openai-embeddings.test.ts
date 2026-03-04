@@ -22,10 +22,7 @@ function makeEmbedding(dims: number, seed: number): number[] {
   return Array.from({ length: dims }, (_, i) => (seed + i) / 1000);
 }
 
-function makeFetchResponse(
-  body: unknown,
-  status = 200
-): Response {
+function makeFetchResponse(body: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -34,10 +31,7 @@ function makeFetchResponse(
   } as unknown as Response;
 }
 
-function makeOpenAIResponse(
-  embeddings: number[][],
-  totalTokens = 10
-): object {
+function makeOpenAIResponse(embeddings: number[][], totalTokens = 10): object {
   return {
     data: embeddings.map((embedding, index) => ({ embedding, index })),
     usage: { prompt_tokens: totalTokens, total_tokens: totalTokens },
@@ -65,7 +59,7 @@ describe("OpenAIEmbeddingProvider", () => {
 
   it("uses default model and dimensions when none are supplied", () => {
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
-    expect(provider.name).toBe("openai:text-embedding-3-small");
+    expect(provider.name).toBe("OpenAI:text-embedding-3-small");
     expect(provider.dimensions).toBe(1536);
   });
 
@@ -113,7 +107,7 @@ describe("OpenAIEmbeddingProvider", () => {
   it("embeds a single text successfully", async () => {
     const embedding = makeEmbedding(1536, 1);
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      makeFetchResponse(makeOpenAIResponse([embedding], 7))
+      makeFetchResponse(makeOpenAIResponse([embedding], 7)),
     );
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -127,7 +121,7 @@ describe("OpenAIEmbeddingProvider", () => {
   it("embeds multiple texts within a single batch", async () => {
     const embeddings = [makeEmbedding(1536, 1), makeEmbedding(1536, 2)];
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      makeFetchResponse(makeOpenAIResponse(embeddings, 14))
+      makeFetchResponse(makeOpenAIResponse(embeddings, 14)),
     );
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -141,9 +135,9 @@ describe("OpenAIEmbeddingProvider", () => {
 
   it("sends correct Authorization header and Content-Type", async () => {
     const embedding = makeEmbedding(1536, 1);
-    const mockFetch = vi.fn().mockResolvedValueOnce(
-      makeFetchResponse(makeOpenAIResponse([embedding]))
-    );
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeFetchResponse(makeOpenAIResponse([embedding])));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-abc123" });
@@ -159,9 +153,9 @@ describe("OpenAIEmbeddingProvider", () => {
 
   it("uses a custom baseUrl when provided", async () => {
     const embedding = makeEmbedding(1536, 1);
-    const mockFetch = vi.fn().mockResolvedValueOnce(
-      makeFetchResponse(makeOpenAIResponse([embedding]))
-    );
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeFetchResponse(makeOpenAIResponse([embedding])));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({
@@ -180,20 +174,13 @@ describe("OpenAIEmbeddingProvider", () => {
 
   it("splits 150 texts into two batches of 100 and 50", async () => {
     const texts = Array.from({ length: 150 }, (_, i) => `text-${i}`);
-    const batch1Embeddings = Array.from({ length: 100 }, (_, i) =>
-      makeEmbedding(1536, i)
-    );
-    const batch2Embeddings = Array.from({ length: 50 }, (_, i) =>
-      makeEmbedding(1536, i + 100)
-    );
+    const batch1Embeddings = Array.from({ length: 100 }, (_, i) => makeEmbedding(1536, i));
+    const batch2Embeddings = Array.from({ length: 50 }, (_, i) => makeEmbedding(1536, i + 100));
 
-    const mockFetch = vi.fn()
-      .mockResolvedValueOnce(
-        makeFetchResponse(makeOpenAIResponse(batch1Embeddings, 500))
-      )
-      .mockResolvedValueOnce(
-        makeFetchResponse(makeOpenAIResponse(batch2Embeddings, 250))
-      );
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeFetchResponse(makeOpenAIResponse(batch1Embeddings, 500)))
+      .mockResolvedValueOnce(makeFetchResponse(makeOpenAIResponse(batch2Embeddings, 250)));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -205,10 +192,10 @@ describe("OpenAIEmbeddingProvider", () => {
 
     // Verify the request bodies contain the right batch sizes
     const firstBody = JSON.parse(
-      (mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string
+      (mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string,
     ) as { input: string[] };
     const secondBody = JSON.parse(
-      (mockFetch.mock.calls[1] as [string, RequestInit])[1].body as string
+      (mockFetch.mock.calls[1] as [string, RequestInit])[1].body as string,
     ) as { input: string[] };
     expect(firstBody.input).toHaveLength(100);
     expect(secondBody.input).toHaveLength(50);
@@ -216,17 +203,12 @@ describe("OpenAIEmbeddingProvider", () => {
 
   it("splits exactly 200 texts into two batches of 100 each", async () => {
     const texts = Array.from({ length: 200 }, (_, i) => `t${i}`);
-    const batchEmbeddings = Array.from({ length: 100 }, (_, i) =>
-      makeEmbedding(1536, i)
-    );
+    const batchEmbeddings = Array.from({ length: 100 }, (_, i) => makeEmbedding(1536, i));
 
-    const mockFetch = vi.fn()
-      .mockResolvedValueOnce(
-        makeFetchResponse(makeOpenAIResponse(batchEmbeddings, 100))
-      )
-      .mockResolvedValueOnce(
-        makeFetchResponse(makeOpenAIResponse(batchEmbeddings, 100))
-      );
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeFetchResponse(makeOpenAIResponse(batchEmbeddings, 100)))
+      .mockResolvedValueOnce(makeFetchResponse(makeOpenAIResponse(batchEmbeddings, 100)));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -243,11 +225,10 @@ describe("OpenAIEmbeddingProvider", () => {
 
   it("retries on HTTP 429 and succeeds on the second attempt", async () => {
     const embedding = makeEmbedding(1536, 1);
-    const mockFetch = vi.fn()
+    const mockFetch = vi
+      .fn()
       .mockResolvedValueOnce(makeFetchResponse({ error: "rate limited" }, 429))
-      .mockResolvedValueOnce(
-        makeFetchResponse(makeOpenAIResponse([embedding], 5))
-      );
+      .mockResolvedValueOnce(makeFetchResponse(makeOpenAIResponse([embedding], 5)));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -264,12 +245,11 @@ describe("OpenAIEmbeddingProvider", () => {
 
   it("retries on HTTP 429 and succeeds on the third attempt", async () => {
     const embedding = makeEmbedding(1536, 1);
-    const mockFetch = vi.fn()
+    const mockFetch = vi
+      .fn()
       .mockResolvedValueOnce(makeFetchResponse({ error: "rate limited" }, 429))
       .mockResolvedValueOnce(makeFetchResponse({ error: "rate limited" }, 429))
-      .mockResolvedValueOnce(
-        makeFetchResponse(makeOpenAIResponse([embedding], 5))
-      );
+      .mockResolvedValueOnce(makeFetchResponse(makeOpenAIResponse([embedding], 5)));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -288,13 +268,10 @@ describe("OpenAIEmbeddingProvider", () => {
 
   it("retries on HTTP 500 and succeeds on the second attempt", async () => {
     const embedding = makeEmbedding(1536, 1);
-    const mockFetch = vi.fn()
-      .mockResolvedValueOnce(
-        makeFetchResponse({ error: "internal server error" }, 500)
-      )
-      .mockResolvedValueOnce(
-        makeFetchResponse(makeOpenAIResponse([embedding], 5))
-      );
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeFetchResponse({ error: "internal server error" }, 500))
+      .mockResolvedValueOnce(makeFetchResponse(makeOpenAIResponse([embedding], 5)));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -308,9 +285,9 @@ describe("OpenAIEmbeddingProvider", () => {
   });
 
   it("throws after exhausting all retries on persistent HTTP 500", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      makeFetchResponse({ error: "internal server error" }, 500)
-    );
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ error: "internal server error" }, 500));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -327,9 +304,7 @@ describe("OpenAIEmbeddingProvider", () => {
   });
 
   it("throws after exhausting all retries on persistent HTTP 429", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      makeFetchResponse({ error: "rate limited" }, 429)
-    );
+    const mockFetch = vi.fn().mockResolvedValue(makeFetchResponse({ error: "rate limited" }, 429));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -347,9 +322,7 @@ describe("OpenAIEmbeddingProvider", () => {
   // -------------------------------------------------------------------------
 
   it("throws immediately on HTTP 401 without retrying", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      makeFetchResponse({ error: "unauthorized" }, 401)
-    );
+    const mockFetch = vi.fn().mockResolvedValue(makeFetchResponse({ error: "unauthorized" }, 401));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-bad" });
@@ -360,9 +333,7 @@ describe("OpenAIEmbeddingProvider", () => {
   });
 
   it("throws immediately on HTTP 400 without retrying", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      makeFetchResponse({ error: "bad request" }, 400)
-    );
+    const mockFetch = vi.fn().mockResolvedValue(makeFetchResponse({ error: "bad request" }, 400));
     globalThis.fetch = mockFetch;
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
@@ -388,7 +359,7 @@ describe("OpenAIEmbeddingProvider", () => {
     };
 
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      makeFetchResponse(shuffledResponse)
+      makeFetchResponse(shuffledResponse),
     );
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });

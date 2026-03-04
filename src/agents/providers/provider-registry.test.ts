@@ -44,14 +44,19 @@ describe("createProvider", () => {
     expect(provider.name).toBe("ollama");
   });
 
-  it("creates OpenAI-compatible provider from preset", () => {
+  it("creates OpenAI-compatible provider from preset with correct label", () => {
     const provider = createProvider({ name: "deepseek", apiKey: "sk-deep" });
-    expect(provider.name).toBe("openai");
+    expect(provider.name).toBe("DeepSeek");
+  });
+
+  it("uses preset label for Kimi provider", () => {
+    const provider = createProvider({ name: "kimi", apiKey: "sk-kimi" });
+    expect(provider.name).toBe("Kimi (Moonshot)");
   });
 
   it("throws for unknown provider without baseUrl", () => {
     expect(() => createProvider({ name: "unknown", apiKey: "x" })).toThrow(
-      'Unknown provider "unknown"'
+      'Unknown provider "unknown"',
     );
   });
 
@@ -62,6 +67,11 @@ describe("createProvider", () => {
   it("throws when API key missing for OpenAI-compatible", () => {
     expect(() => createProvider({ name: "openai" })).toThrow("requires an API key");
   });
+
+  it("uses correct label for OpenAI provider", () => {
+    const provider = createProvider({ name: "openai", apiKey: "sk-test" });
+    expect(provider.name).toBe("OpenAI");
+  });
 });
 
 describe("buildProviderChain", () => {
@@ -71,33 +81,30 @@ describe("buildProviderChain", () => {
   });
 
   it("builds fallback chain from multiple providers", () => {
-    const provider = buildProviderChain(
-      ["claude", "deepseek"],
-      { claude: "sk-ant", deepseek: "sk-deep" }
-    );
-    expect(provider.name).toBe("chain(claude→openai)");
+    const provider = buildProviderChain(["claude", "deepseek"], {
+      claude: "sk-ant",
+      deepseek: "sk-deep",
+    });
+    expect(provider.name).toBe("chain(claude→DeepSeek)");
   });
 
   it("skips providers with missing keys", () => {
     const provider = buildProviderChain(
       ["claude", "openai", "deepseek"],
-      { claude: "sk-ant" } // openai and deepseek keys missing
+      { claude: "sk-ant" }, // openai and deepseek keys missing
     );
     // Only claude should remain (single provider, no chain)
     expect(provider.name).toBe("claude");
   });
 
   it("throws when no valid providers", () => {
-    expect(() =>
-      buildProviderChain(["openai", "deepseek"], {})
-    ).toThrow("No valid providers configured");
+    expect(() => buildProviderChain(["openai", "deepseek"], {})).toThrow(
+      "No valid providers configured",
+    );
   });
 
   it("includes ollama without API key", () => {
-    const provider = buildProviderChain(
-      ["claude", "ollama"],
-      { claude: "sk-ant" }
-    );
+    const provider = buildProviderChain(["claude", "ollama"], { claude: "sk-ant" });
     expect(provider.name).toBe("chain(claude→ollama)");
   });
 });

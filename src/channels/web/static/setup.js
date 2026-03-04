@@ -138,6 +138,10 @@ fetch("/api/setup/csrf")
   document.getElementById("btnBrowserClose").addEventListener("click", closeBrowser);
   document.getElementById("btnBrowserCancel").addEventListener("click", closeBrowser);
   document.getElementById("browserSelectBtn").addEventListener("click", selectFolder);
+
+  // RAG toggle + provider-aware info
+  document.getElementById("ragEnabled").addEventListener("change", updateRagInfo);
+  updateRagInfo();
 })();
 
 function buildProviderGrid() {
@@ -180,6 +184,7 @@ function buildProviderGrid() {
 
 function onProviderToggle() {
   updateProviderConfigs();
+  updateRagInfo();
 }
 
 function updateProviderConfigs() {
@@ -229,6 +234,41 @@ function updateProviderConfigs() {
 
     container.appendChild(item);
   });
+}
+
+function updateRagInfo() {
+  const infoEl = document.getElementById("ragInfo");
+  const ragCheckbox = document.getElementById("ragEnabled");
+  if (!infoEl || !ragCheckbox) return;
+
+  if (!ragCheckbox.checked) {
+    infoEl.textContent = "RAG is disabled. Code search will not be available.";
+    infoEl.className = "rag-info";
+    return;
+  }
+
+  // Check if any selected provider includes OpenAI (which natively supports embeddings)
+  const checked = getCheckedProviders().map((cb) => cb.value);
+  const hasOpenAI = checked.includes("openai");
+  const hasOllama = checked.includes("ollama");
+
+  if (hasOpenAI) {
+    infoEl.textContent = "RAG will use OpenAI for embeddings.";
+    infoEl.className = "rag-info";
+  } else if (hasOllama) {
+    infoEl.textContent = "RAG will use Ollama for local embeddings.";
+    infoEl.className = "rag-info";
+  } else if (checked.length > 0) {
+    const firstName = PROVIDER_MAP[checked[0]]?.name ?? checked[0];
+    infoEl.textContent =
+      "RAG will use " +
+      firstName +
+      " for embeddings. If this provider does not support embeddings, add an OpenAI key or use Ollama.";
+    infoEl.className = "rag-info warning";
+  } else {
+    infoEl.textContent = "Select a provider to enable RAG.";
+    infoEl.className = "rag-info warning";
+  }
 }
 
 function showStep(step) {
@@ -359,7 +399,7 @@ function getConfig() {
     }
   });
 
-  if (providerChain.length > 1) {
+  if (providerChain.length > 0) {
     config.PROVIDER_CHAIN = providerChain.join(",");
   }
 
@@ -376,6 +416,12 @@ function getConfig() {
     const app = document.getElementById("slackAppToken").value.trim();
     if (bot) config.SLACK_BOT_TOKEN = bot;
     if (app) config.SLACK_APP_TOKEN = app;
+  }
+
+  // RAG configuration
+  const ragEnabled = document.getElementById("ragEnabled");
+  if (ragEnabled && !ragEnabled.checked) {
+    config.RAG_ENABLED = "false";
   }
 
   config._channel = channel;
@@ -409,6 +455,7 @@ function buildReview() {
 
   items.push(["Project Path", config.UNITY_PROJECT_PATH]);
   items.push(["Channel", config._channel]);
+  items.push(["RAG (Code Search)", config.RAG_ENABLED === "false" ? "Disabled" : "Enabled"]);
 
   items.forEach(([key, value]) => {
     const div = document.createElement("div");

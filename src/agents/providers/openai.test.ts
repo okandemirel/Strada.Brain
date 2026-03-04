@@ -34,11 +34,7 @@ describe("OpenAIProvider", () => {
     });
 
     const provider = new OpenAIProvider("sk-test");
-    const result = await provider.chat(
-      "system",
-      [{ role: "user", content: "Hello" }],
-      []
-    );
+    const result = await provider.chat("system", [{ role: "user", content: "Hello" }], []);
 
     expect(result.text).toBe("Hi");
     expect(result.toolCalls).toEqual([]);
@@ -77,7 +73,7 @@ describe("OpenAIProvider", () => {
     const result = await provider.chat(
       "system",
       [{ role: "user", content: "Read file" }],
-      [{ name: "file_read", description: "Read a file", input_schema: { type: "object" } }]
+      [{ name: "file_read", description: "Read a file", input_schema: { type: "object" } }],
     );
 
     expect(result.toolCalls).toHaveLength(1);
@@ -120,7 +116,7 @@ describe("OpenAIProvider", () => {
     const result = await provider.chat(
       "system",
       [{ role: "user", content: "Read file" }],
-      [{ name: "file_read", description: "Read a file", input_schema: { type: "object" } }]
+      [{ name: "file_read", description: "Read a file", input_schema: { type: "object" } }],
     );
 
     expect(result.toolCalls).toHaveLength(1);
@@ -137,9 +133,9 @@ describe("OpenAIProvider", () => {
     });
 
     const provider = new OpenAIProvider("sk-test");
-    await expect(
-      provider.chat("system", [{ role: "user", content: "Hi" }], [])
-    ).rejects.toThrow("OpenAI API error 429");
+    await expect(provider.chat("system", [{ role: "user", content: "Hi" }], [])).rejects.toThrow(
+      "OpenAI API error 429 at https://api.openai.com/v1",
+    );
   });
 
   it("maps stop reasons: tool_calls->tool_use, length->max_tokens, stop->end_turn", async () => {
@@ -165,11 +161,7 @@ describe("OpenAIProvider", () => {
       });
 
       const provider = new OpenAIProvider("sk-test");
-      const result = await provider.chat(
-        "system",
-        [{ role: "user", content: "x" }],
-        []
-      );
+      const result = await provider.chat("system", [{ role: "user", content: "x" }], []);
 
       expect(result.stopReason).toBe(expected);
     }

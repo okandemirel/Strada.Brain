@@ -16,6 +16,7 @@ interface OpenAIEmbeddingOptions {
   model?: string;
   baseUrl?: string;
   dimensions?: number;
+  label?: string;
 }
 
 interface OpenAIEmbeddingResponse {
@@ -35,9 +36,9 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
     this.apiKey = opts.apiKey;
     this.model = opts.model ?? "text-embedding-3-small";
     this.baseUrl = opts.baseUrl ?? "https://api.openai.com/v1";
-    this.dimensions =
-      opts.dimensions ?? KNOWN_MODELS[this.model] ?? 1536;
-    this.name = `openai:${this.model}`;
+    this.dimensions = opts.dimensions ?? KNOWN_MODELS[this.model] ?? 1536;
+    const providerLabel = opts.label ?? "OpenAI";
+    this.name = `${providerLabel}:${this.model}`;
   }
 
   async embed(texts: string[]): Promise<EmbeddingBatch> {
@@ -64,9 +65,7 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
       const batch = batches[batchIdx]!;
       const response = await this.embedBatchWithRetry(batch, batchIdx);
       // Re-sort by index to preserve original order within the batch
-      const sorted = response.data
-        .slice()
-        .sort((a, b) => a.index - b.index);
+      const sorted = response.data.slice().sort((a, b) => a.index - b.index);
       for (const item of sorted) {
         allEmbeddings.push(item.embedding);
       }
@@ -80,7 +79,7 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
 
   private async embedBatchWithRetry(
     texts: string[],
-    batchIdx: number
+    batchIdx: number,
   ): Promise<OpenAIEmbeddingResponse> {
     const logger = getLogger();
     const url = `${this.baseUrl}/embeddings`;
@@ -127,9 +126,9 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
       }
 
       const status = response.status;
-      const body = await response.text().catch(() => "(unreadable)");
+      const body = (await response.text().catch(() => "(unreadable)")).slice(0, 200);
       lastError = new Error(
-        `OpenAI embedding request failed: HTTP ${status} — ${body}`
+        `${this.name} embedding request failed: HTTP ${status} at ${this.baseUrl} — ${body}`,
       );
 
       if (status === 429 || status >= 500) {
@@ -145,7 +144,7 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
       throw lastError;
     }
 
-    throw lastError ?? new Error("OpenAI embed: unknown error after retries");
+    throw lastError ?? new Error(`${this.name} embed: unknown error after retries`);
   }
 }
 

@@ -27,10 +27,7 @@ export class OllamaProvider implements IAIProvider {
   private readonly baseUrl: string;
   private readonly model: string;
 
-  constructor(
-    model = "llama3.1",
-    baseUrl = "http://localhost:11434"
-  ) {
+  constructor(model = "llama3.1", baseUrl = "http://localhost:11434") {
     this.model = model;
     this.baseUrl = baseUrl;
   }
@@ -38,7 +35,7 @@ export class OllamaProvider implements IAIProvider {
   async chat(
     systemPrompt: string,
     messages: ConversationMessage[],
-    tools: ToolDefinition[]
+    tools: ToolDefinition[],
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
@@ -76,13 +73,28 @@ export class OllamaProvider implements IAIProvider {
     return this.parseResponse(data);
   }
 
-  private buildMessages(
-    systemPrompt: string,
-    messages: ConversationMessage[]
-  ): OllamaMessage[] {
-    const result: OllamaMessage[] = [
-      { role: "system", content: systemPrompt },
-    ];
+  async healthCheck(): Promise<boolean> {
+    const logger = getLogger();
+    try {
+      const response = await fetch(`${this.baseUrl}/api/tags`, {
+        method: "GET",
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) {
+        logger.warn(`Ollama health check failed: HTTP ${response.status}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      logger.warn("Ollama health check failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  private buildMessages(systemPrompt: string, messages: ConversationMessage[]): OllamaMessage[] {
+    const result: OllamaMessage[] = [{ role: "system", content: systemPrompt }];
 
     for (const msg of messages) {
       if (msg.role === "user") {

@@ -1,6 +1,6 @@
 /**
  * AI Provider Interface
- * 
+ *
  * Common interface for AI providers (Claude, OpenAI, Ollama).
  * For streaming support, check capabilities or use IStreamingProvider.
  */
@@ -29,8 +29,11 @@ export interface IAIProvider {
   chat(
     systemPrompt: string,
     messages: ConversationMessage[],
-    tools: ToolDefinition[]
+    tools: ToolDefinition[],
   ): Promise<ProviderResponse>;
+
+  /** Optional health check to verify API connectivity on startup */
+  healthCheck?(): Promise<boolean>;
 }
 
 /**
@@ -42,7 +45,7 @@ export interface IStreamingProvider extends IAIProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    onChunk: StreamCallback
+    onChunk: StreamCallback,
   ): Promise<ProviderResponse>;
 }
 
@@ -55,16 +58,14 @@ export interface IStructuredStreamingProvider extends IAIProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    onChunk: StructuredStreamCallback
+    onChunk: StructuredStreamCallback,
   ): Promise<ProviderResponse>;
 }
 
 /**
  * Type guard for streaming support.
  */
-export function supportsStreaming(
-  provider: IAIProvider
-): provider is IStreamingProvider {
+export function supportsStreaming(provider: IAIProvider): provider is IStreamingProvider {
   return (
     provider.capabilities.streaming &&
     typeof (provider as IStreamingProvider).chatStream === "function"
@@ -75,12 +76,9 @@ export function supportsStreaming(
  * Type guard for structured streaming support.
  */
 export function supportsStructuredStreaming(
-  provider: IAIProvider
+  provider: IAIProvider,
 ): provider is IStructuredStreamingProvider {
-  return (
-    typeof (provider as IStructuredStreamingProvider).chatStreamStructured ===
-    "function"
-  );
+  return typeof (provider as IStructuredStreamingProvider).chatStreamStructured === "function";
 }
 
 // Re-export all types

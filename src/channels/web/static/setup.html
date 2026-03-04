@@ -54,10 +54,12 @@
         </div>
       </div>
 
-      <!-- Step 4: Channel Selection -->
+      <!-- Step 4: Channel & RAG -->
       <div class="step" data-step="4">
-        <h2>Communication Channels</h2>
-        <p class="subtitle">Choose how you want to interact with Strada.Brain.</p>
+        <h2>Communication &amp; Features</h2>
+        <p class="subtitle">Choose your channel and configure optional features.</p>
+
+        <h3 class="section-heading">Channel</h3>
         <div class="channel-grid">
           <label class="channel-option">
             <input type="radio" name="channel" value="web" checked>
@@ -139,6 +141,17 @@
             <label for="slackAppToken">Slack App Token</label>
             <input type="password" id="slackAppToken" placeholder="xapp-..." autocomplete="off">
           </div>
+        </div>
+
+        <!-- RAG Configuration -->
+        <div class="rag-config" id="ragConfig">
+          <h3 class="section-heading">Code Search (RAG)</h3>
+          <label class="toggle-row">
+            <span class="toggle-label">Enable RAG for code-aware answers</span>
+            <input type="checkbox" id="ragEnabled" checked>
+            <span class="toggle-switch"></span>
+          </label>
+          <div class="rag-info" id="ragInfo"></div>
         </div>
 
         <div class="btn-row">

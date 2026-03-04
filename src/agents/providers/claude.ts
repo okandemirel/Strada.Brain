@@ -36,7 +36,7 @@ export class ClaudeProvider implements IAIProvider {
   async chat(
     systemPrompt: string,
     messages: ConversationMessage[],
-    tools: ToolDefinition[]
+    tools: ToolDefinition[],
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
@@ -68,7 +68,7 @@ export class ClaudeProvider implements IAIProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    onChunk: StreamCallback
+    onChunk: StreamCallback,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
@@ -100,9 +100,25 @@ export class ClaudeProvider implements IAIProvider {
     return this.parseResponse(response);
   }
 
-  private buildMessages(
-    messages: ConversationMessage[]
-  ): Anthropic.MessageParam[] {
+  async healthCheck(): Promise<boolean> {
+    const logger = getLogger();
+    try {
+      // Use a minimal API call to verify the key works
+      await this.client.messages.create({
+        model: this.model,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      });
+      return true;
+    } catch (err) {
+      logger.warn("Claude health check failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  private buildMessages(messages: ConversationMessage[]): Anthropic.MessageParam[] {
     const result: Anthropic.MessageParam[] = [];
 
     for (const msg of messages) {
@@ -131,10 +147,7 @@ export class ClaudeProvider implements IAIProvider {
         }
       } else if (msg.role === "assistant") {
         if (msg.tool_calls && msg.tool_calls.length > 0) {
-          const content: (
-            | Anthropic.TextBlockParam
-            | Anthropic.ToolUseBlockParam
-          )[] = [];
+          const content: (Anthropic.TextBlockParam | Anthropic.ToolUseBlockParam)[] = [];
 
           if (msg.content) {
             content.push({ type: "text", text: msg.content });
@@ -175,12 +188,12 @@ export class ClaudeProvider implements IAIProvider {
       }
     }
 
+    const STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
+      tool_use: "tool_use",
+      max_tokens: "max_tokens",
+    };
     const stopReason =
-      response.stop_reason === "tool_use"
-        ? "tool_use"
-        : response.stop_reason === "max_tokens"
-          ? "max_tokens"
-          : "end_turn";
+      (response.stop_reason ? STOP_REASON_MAP[response.stop_reason] : undefined) ?? "end_turn";
 
     return {
       text,

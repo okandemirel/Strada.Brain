@@ -15,7 +15,7 @@ import { convertToolDefinitions } from "./openai-compat.js";
  * Works with OpenAI API and any compatible endpoint (Azure, Together, etc.).
  */
 export class OpenAIProvider implements IAIProvider {
-  readonly name = "openai";
+  readonly name: string;
   readonly capabilities: ProviderCapabilities = {
     maxTokens: 4096,
     streaming: false,
@@ -31,8 +31,10 @@ export class OpenAIProvider implements IAIProvider {
   constructor(
     apiKey: string,
     model = "gpt-4o",
-    baseUrl = "https://api.openai.com/v1"
+    baseUrl = "https://api.openai.com/v1",
+    label = "OpenAI",
   ) {
+    this.name = label;
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = baseUrl;
@@ -41,14 +43,14 @@ export class OpenAIProvider implements IAIProvider {
   async chat(
     systemPrompt: string,
     messages: ConversationMessage[],
-    tools: ToolDefinition[]
+    tools: ToolDefinition[],
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
     const openaiMessages = this.buildMessages(systemPrompt, messages);
     const openaiTools = convertToolDefinitions(tools);
 
-    logger.debug("OpenAI API call", {
+    logger.debug(`${this.name} API call`, {
       model: this.model,
       messageCount: openaiMessages.length,
       toolCount: tools.length,
@@ -74,20 +76,15 @@ export class OpenAIProvider implements IAIProvider {
 
     if (!response.ok) {
       const errorText = (await response.text()).slice(0, 200);
-      throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+      throw new Error(`${this.name} API error ${response.status} at ${this.baseUrl}: ${errorText}`);
     }
 
     const data = (await response.json()) as OpenAIResponse;
     return this.parseResponse(data);
   }
 
-  private buildMessages(
-    systemPrompt: string,
-    messages: ConversationMessage[]
-  ): OpenAIMessage[] {
-    const result: OpenAIMessage[] = [
-      { role: "system", content: systemPrompt },
-    ];
+  private buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
+    const result: OpenAIMessage[] = [{ role: "system", content: systemPrompt }];
 
     for (const msg of messages) {
       if (msg.role === "user") {
@@ -132,10 +129,31 @@ export class OpenAIProvider implements IAIProvider {
     return result;
   }
 
+  async healthCheck(): Promise<boolean> {
+    const logger = getLogger();
+    try {
+      const response = await fetch(`${this.baseUrl}/models`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) {
+        logger.warn(`${this.name} health check failed: HTTP ${response.status}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      logger.warn(`${this.name} health check failed`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
   private parseResponse(data: OpenAIResponse): ProviderResponse {
     const choice = data.choices[0];
     if (!choice) {
-      throw new Error("OpenAI returned empty choices");
+      throw new Error(`${this.name} returned empty choices`);
     }
 
     const message = choice.message;
@@ -150,12 +168,11 @@ export class OpenAIProvider implements IAIProvider {
       return { id: tc.id, name: tc.function.name, input };
     });
 
-    const stopReason =
-      choice.finish_reason === "tool_calls"
-        ? "tool_use"
-        : choice.finish_reason === "length"
-          ? "max_tokens"
-          : "end_turn";
+    const STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
+      tool_calls: "tool_use",
+      length: "max_tokens",
+    };
+    const stopReason = STOP_REASON_MAP[choice.finish_reason] ?? "end_turn";
 
     return {
       text,

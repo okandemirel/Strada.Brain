@@ -93,7 +93,7 @@ export function createProvider(config: ProviderConfig): IAIProvider {
   if (name === "ollama") {
     return new OllamaProvider(
       config.model ?? "llama3.1",
-      config.baseUrl ?? "http://localhost:11434"
+      config.baseUrl ?? "http://localhost:11434",
     );
   }
 
@@ -104,7 +104,7 @@ export function createProvider(config: ProviderConfig): IAIProvider {
 
   if (!baseUrl) {
     throw new Error(
-      `Unknown provider "${name}". Available: claude, ollama, ${Object.keys(PROVIDER_PRESETS).join(", ")}`
+      `Unknown provider "${name}". Available: claude, ollama, ${Object.keys(PROVIDER_PRESETS).join(", ")}`,
     );
   }
 
@@ -112,7 +112,7 @@ export function createProvider(config: ProviderConfig): IAIProvider {
     throw new Error(`${preset?.label ?? name} provider requires an API key`);
   }
 
-  return new OpenAIProvider(config.apiKey, model, baseUrl);
+  return new OpenAIProvider(config.apiKey, model, baseUrl, preset?.label ?? name);
 }
 
 /**
@@ -127,7 +127,7 @@ export function createProvider(config: ProviderConfig): IAIProvider {
 export function buildProviderChain(
   providerNames: string[],
   apiKeys: Record<string, string | undefined>,
-  overrides?: { models?: Record<string, string>; baseUrls?: Record<string, string> }
+  overrides?: { models?: Record<string, string>; baseUrls?: Record<string, string> },
 ): IAIProvider {
   const logger = getLogger();
   const providers: IAIProvider[] = [];
@@ -142,11 +142,17 @@ export function buildProviderChain(
         baseUrl: overrides?.baseUrls?.[trimmed],
       });
       providers.push(provider);
-      logger.info(`Provider registered: ${trimmed}`, {
-        provider: provider.name,
+
+      const preset = PROVIDER_PRESETS[trimmed];
+      const keyPrefix = apiKeys[trimmed]?.slice(0, 6);
+      logger.info(`Provider ready: ${provider.name}`, {
+        model: overrides?.models?.[trimmed] ?? preset?.defaultModel ?? "default",
+        keyPrefix: keyPrefix ? `${keyPrefix}...` : "(none)",
       });
     } catch (error) {
-      logger.warn(`Skipping provider "${trimmed}": ${error instanceof Error ? error.message : error}`);
+      logger.warn(
+        `Skipping provider "${trimmed}": ${error instanceof Error ? error.message : error}`,
+      );
     }
   }
 
@@ -154,7 +160,5 @@ export function buildProviderChain(
     throw new Error("No valid providers configured");
   }
 
-  return providers.length === 1
-    ? providers[0]!
-    : new FallbackChainProvider(providers);
+  return providers.length === 1 ? providers[0]! : new FallbackChainProvider(providers);
 }

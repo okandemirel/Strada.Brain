@@ -53,32 +53,37 @@ export class SetupWizard {
   private server: Server | null = null;
   private readonly port: number;
   private readonly csrfToken = randomUUID();
+  private onComplete: (() => void) | null = null;
 
   constructor(opts?: { port?: number }) {
     this.port = opts?.port ?? 3000;
   }
 
+  /** Starts the wizard and resolves when the user completes setup. */
   async start(): Promise<void> {
     this.server = createServer((req, res) => this.handleRequest(req, res));
 
     await new Promise<void>((resolve, reject) => {
-      this.server!.listen(this.port, "127.0.0.1", () => resolve());
+      this.server!.listen(this.port, "localhost", () => resolve());
       this.server!.once("error", reject);
     });
 
     console.log(`Setup wizard running at http://localhost:${this.port}`);
 
-    // Keep alive
-    await new Promise<void>(() => {});
+    // Wait until config is saved
+    await new Promise<void>((resolve) => {
+      this.onComplete = resolve;
+    });
+
+    // Stop the wizard server
+    await this.stop();
   }
 
-  async stop(): Promise<void> {
+  private stop(): Promise<void> {
     return new Promise((resolve) => {
-      if (this.server) {
-        this.server.close(() => resolve());
-      } else {
-        resolve();
-      }
+      if (!this.server) return resolve();
+      this.server.closeAllConnections();
+      this.server.close(() => resolve());
     });
   }
 
@@ -337,23 +342,30 @@ export class SetupWizard {
     }
 
     // Channel-specific config
-    if (config.TELEGRAM_BOT_TOKEN)
-      lines.push(`TELEGRAM_BOT_TOKEN=${sanitizeEnvValue(config.TELEGRAM_BOT_TOKEN)}`);
-    if (config.ALLOWED_TELEGRAM_USER_IDS)
-      lines.push(`ALLOWED_TELEGRAM_USER_IDS=${sanitizeEnvValue(config.ALLOWED_TELEGRAM_USER_IDS)}`);
-    if (config.DISCORD_BOT_TOKEN)
-      lines.push(`DISCORD_BOT_TOKEN=${sanitizeEnvValue(config.DISCORD_BOT_TOKEN)}`);
-    if (config.SLACK_BOT_TOKEN)
-      lines.push(`SLACK_BOT_TOKEN=${sanitizeEnvValue(config.SLACK_BOT_TOKEN)}`);
-    if (config.SLACK_APP_TOKEN)
-      lines.push(`SLACK_APP_TOKEN=${sanitizeEnvValue(config.SLACK_APP_TOKEN)}`);
+    const channelKeys = [
+      "TELEGRAM_BOT_TOKEN",
+      "ALLOWED_TELEGRAM_USER_IDS",
+      "DISCORD_BOT_TOKEN",
+      "SLACK_BOT_TOKEN",
+      "SLACK_APP_TOKEN",
+    ];
+    for (const key of channelKeys) {
+      if (config[key]) lines.push(`${key}=${sanitizeEnvValue(config[key])}`);
+    }
+
+    // RAG configuration
+    if (config.RAG_ENABLED === "false") {
+      lines.push("", "# RAG (Code Search)", "RAG_ENABLED=false");
+    }
 
     // Always add some defaults
-    lines.push("");
-    lines.push("# Defaults");
-    lines.push("STREAMING_ENABLED=true");
-    lines.push("REQUIRE_EDIT_CONFIRMATION=true");
-    lines.push("LOG_LEVEL=info");
+    lines.push(
+      "",
+      "# Defaults",
+      "STREAMING_ENABLED=true",
+      "REQUIRE_EDIT_CONFIRMATION=true",
+      "LOG_LEVEL=info",
+    );
 
     const envPath = join(process.cwd(), ".env");
 
@@ -367,9 +379,10 @@ export class SetupWizard {
 
     this.json(res, 200, { success: true });
 
-    // Exit after a short delay so the response can be sent.
-    // In daemon mode, the process will auto-restart with the new config.
-    setTimeout(() => process.exit(0), 500);
+    // Signal completion after a short delay so the response can be sent
+    setTimeout(() => {
+      if (this.onComplete) this.onComplete();
+    }, 500);
   }
 
   private readBody(req: IncomingMessage): Promise<string> {
