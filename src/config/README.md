@@ -41,6 +41,7 @@ The `Config` type groups settings into nested sub-configs:
 | `memory` | `MemoryConfig` | `MEMORY_ENABLED` (default true), `MEMORY_DB_PATH` (default `.strata-memory`) |
 | `rag` | `RAGConfig` | `RAG_ENABLED` (default true), `EMBEDDING_PROVIDER` (default `openai`), `RAG_CONTEXT_MAX_TOKENS` (default 4000, range 500..16000) |
 | `rateLimit` | `RateLimitConfig` | `RATE_LIMIT_ENABLED`, `RATE_LIMIT_MESSAGES_PER_MINUTE`, `RATE_LIMIT_DAILY_BUDGET_USD`, etc. |
+| `web` | Web config | `WEB_CHANNEL_PORT` (default 3000) |
 
 - `PROVIDER_CHAIN` - comma-separated provider names for fallback ordering
 - `PLUGIN_DIRS` - comma-separated directory paths for plugin loading
@@ -56,6 +57,7 @@ The `Config` type groups settings into nested sub-configs:
   - Discord: requires bot token
   - Slack: requires bot token; requires signing secret when not in socket mode
   - CLI: no requirements
+  - Web: no requirements
 
 ### Secret Patterns
 

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Agent de Developpement Propulse par l'IA pour les Projets Unity / Strada.Core</strong><br/>
-  Un agent de programmation autonome qui se connecte a Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, ecrit du code, lance les builds et apprend de ses erreurs.
+  Un agent de programmation autonome qui se connecte a un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, ecrit du code, lance les builds et apprend de ses erreurs.
 </p>
 
 <p align="center">
@@ -69,6 +69,13 @@ JWT_SECRET=<generer avec : openssl rand -hex 64>
 ### 3. Lancement
 
 ```bash
+# Canal web (defaut) - l'assistant de configuration s'ouvre sur localhost:3000
+# Si aucun .env n'existe, l'assistant vous guide a travers la configuration initiale
+npm start
+
+# Ou explicitement avec le canal web
+npm run dev -- start --channel web
+
 # Mode CLI interactif (moyen le plus rapide pour tester)
 npm run dev -- cli
 
@@ -90,6 +97,8 @@ Une fois lance, envoyez un message via votre canal configure :
 > Lance le build et corrige les erreurs
 ```
 
+**Canal web :** Pas de terminal necessaire -- interagissez via le tableau de bord web sur `localhost:3000`.
+
 ---
 
 ## Architecture
@@ -97,7 +106,7 @@ Une fois lance, envoyez un message via votre canal configure :
 ```
 +-----------------------------------------------------------------+
 |  Canaux de Chat                                                  |
-|  Telegram | Discord | Slack | WhatsApp | CLI                    |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
 +------------------------------+----------------------------------+
                                |
                     Interface IChannelAdapter
@@ -173,6 +182,11 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 
 ### Canaux de Chat
 
+**Web :**
+| Variable | Description |
+|----------|-------------|
+| `WEB_CHANNEL_PORT` | Port du tableau de bord web (defaut : `3000`) |
+
 **Telegram :**
 | Variable | Description |
 |----------|-------------|
@@ -210,6 +224,7 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `EMBEDDING_PROVIDER` | `openai` | Fournisseur d'embeddings : `openai` ou `ollama` |
 | `MEMORY_ENABLED` | `true` | Active la memoire persistante des conversations |
 | `MEMORY_DB_PATH` | `.strata-memory` | Repertoire des fichiers de la base de donnees memoire |
+| `WEB_CHANNEL_PORT` | `3000` | Port du tableau de bord web |
 | `DASHBOARD_ENABLED` | `false` | Active le tableau de bord de surveillance HTTP |
 | `DASHBOARD_PORT` | `3001` | Port du serveur du tableau de bord |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Active le tableau de bord en temps reel WebSocket |
@@ -298,15 +313,15 @@ L'agent dispose de plus de 30 outils integres organises par categorie :
 
 ## Capacites des Canaux
 
-| Capacite | Telegram | Discord | Slack | WhatsApp | CLI |
-|----------|----------|---------|-------|----------|-----|
-| Messagerie texte | Oui | Oui | Oui | Oui | Oui |
-| Streaming (edition en place) | Oui | Oui | Oui | Oui | Oui |
-| Indicateur de saisie | Oui | Oui | No-op | Oui | Non |
-| Dialogues de confirmation | Oui (clavier inline) | Oui (boutons) | Oui (Block Kit) | Oui (reponse numerotee) | Oui (readline) |
-| Envoi de fichiers | Non | Non | Oui | Oui | Non |
-| Support des fils | Non | Oui | Oui | Non | Non |
-| Limiteur de debit (sortant) | Non | Oui (token bucket) | Oui (fenetre glissante 4 niveaux) | Limitation en ligne | Non |
+| Capacite | Web | Telegram | Discord | Slack | WhatsApp | CLI |
+|----------|-----|----------|---------|-------|----------|-----|
+| Messagerie texte | Oui | Oui | Oui | Oui | Oui | Oui |
+| Streaming (edition en place) | Oui | Oui | Oui | Oui | Oui | Oui |
+| Indicateur de saisie | Oui | Oui | Oui | No-op | Oui | Non |
+| Dialogues de confirmation | Oui (modal) | Oui (clavier inline) | Oui (boutons) | Oui (Block Kit) | Oui (reponse numerotee) | Oui (readline) |
+| Envoi de fichiers | Oui | Non | Non | Oui | Oui | Non |
+| Support des fils | Non | Non | Oui | Oui | Non | Non |
+| Limiteur de debit (sortant) | Oui (par-session) | Non | Oui (token bucket) | Oui (fenetre glissante 4 niveaux) | Limitation en ligne | Non |
 
 ### Streaming
 

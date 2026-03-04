@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>AI-Powered Development Agent for Unity / Strada.Core Projects</strong><br/>
-  An autonomous coding agent that connects to Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, and learns from its mistakes.
+  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, and learns from its mistakes.
 </p>
 
 <p align="center">
@@ -69,10 +69,17 @@ JWT_SECRET=<generate with: openssl rand -hex 64>
 ### 3. Run
 
 ```bash
+# Web channel (default) - setup wizard opens at localhost:3000
+# If no .env exists, the wizard guides you through initial setup
+npm start
+
+# Or explicitly with web channel
+npm run dev -- start --channel web
+
 # Interactive CLI mode (fastest way to test)
 npm run dev -- cli
 
-# Or with a chat channel
+# Or with other chat channels
 npm run dev -- start --channel telegram
 npm run dev -- start --channel discord
 npm run dev -- start --channel slack
@@ -90,6 +97,8 @@ Once running, send a message through your configured channel:
 > Run the build and fix any errors
 ```
 
+**Web channel:** No terminal needed — interact through the web dashboard at `localhost:3000`.
+
 ---
 
 ## Architecture
@@ -97,7 +106,7 @@ Once running, send a message through your configured channel:
 ```
 +-----------------------------------------------------------------+
 |  Chat Channels                                                   |
-|  Telegram | Discord | Slack | WhatsApp | CLI                    |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter interface
@@ -172,6 +181,11 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 
 ### Chat Channels
 
+**Web:**
+| Variable | Description |
+|----------|-------------|
+| `WEB_CHANNEL_PORT` | Port for web dashboard (default: `3000`) |
+
 **Telegram:**
 | Variable | Description |
 |----------|-------------|
@@ -209,6 +223,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `EMBEDDING_PROVIDER` | `openai` | Embedding provider: `openai` or `ollama` |
 | `MEMORY_ENABLED` | `true` | Enable persistent conversation memory |
 | `MEMORY_DB_PATH` | `.strata-memory` | Directory for memory database files |
+| `WEB_CHANNEL_PORT` | `3000` | Web dashboard port |
 | `DASHBOARD_ENABLED` | `false` | Enable HTTP monitoring dashboard |
 | `DASHBOARD_PORT` | `3001` | Dashboard server port |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Enable WebSocket real-time dashboard |
@@ -297,15 +312,15 @@ The agent has 30+ built-in tools organized by category:
 
 ## Channel Capabilities
 
-| Capability | Telegram | Discord | Slack | WhatsApp | CLI |
-|------------|----------|---------|-------|----------|-----|
-| Text messaging | Yes | Yes | Yes | Yes | Yes |
-| Streaming (edit-in-place) | Yes | Yes | Yes | Yes | Yes |
-| Typing indicator | Yes | Yes | No-op | Yes | No |
-| Confirmation dialogs | Yes (inline keyboard) | Yes (buttons) | Yes (Block Kit) | Yes (numbered reply) | Yes (readline) |
-| File uploads | No | No | Yes | Yes | No |
-| Thread support | No | Yes | Yes | No | No |
-| Rate limiter (outbound) | No | Yes (token bucket) | Yes (4-tier sliding window) | Inline throttle | No |
+| Capability | Web | Telegram | Discord | Slack | WhatsApp | CLI |
+|------------|-----|----------|---------|-------|----------|-----|
+| Text messaging | Yes | Yes | Yes | Yes | Yes | Yes |
+| Streaming (edit-in-place) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Typing indicator | Yes | Yes | Yes | No-op | Yes | No |
+| Confirmation dialogs | Yes (modal) | Yes (inline keyboard) | Yes (buttons) | Yes (Block Kit) | Yes (numbered reply) | Yes (readline) |
+| File uploads | Yes | No | No | Yes | Yes | No |
+| Thread support | No | No | Yes | Yes | No | No |
+| Rate limiter (outbound) | Yes (per-session) | No | Yes (token bucket) | Yes (4-tier sliding window) | Inline throttle | No |
 
 ### Streaming
 

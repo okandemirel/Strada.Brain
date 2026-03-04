@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Unity / Strada.Core 프로젝트를 위한 AI 개발 에이전트</strong><br/>
-  Telegram, Discord, Slack, WhatsApp 또는 터미널에 연결되는 자율 코딩 에이전트 &mdash; 코드베이스를 읽고, 코드를 작성하고, 빌드를 실행하고, 실수로부터 학습합니다.
+  웹 대시보드, Telegram, Discord, Slack, WhatsApp 또는 터미널에 연결되는 자율 코딩 에이전트 &mdash; 코드베이스를 읽고, 코드를 작성하고, 빌드를 실행하고, 실수로부터 학습합니다.
 </p>
 
 <p align="center">
@@ -69,10 +69,17 @@ JWT_SECRET=<생성 방법: openssl rand -hex 64>
 ### 3. 실행
 
 ```bash
+# 웹 채널 (기본값) - 설정 마법사가 localhost:3000에서 열림
+# .env가 없으면 마법사가 초기 설정을 안내합니다
+npm start
+
+# 또는 웹 채널을 명시적으로 사용
+npm run dev -- start --channel web
+
 # 인터랙티브 CLI 모드 (가장 빠른 테스트 방법)
 npm run dev -- cli
 
-# 또는 채팅 채널로
+# 또는 다른 채팅 채널로
 npm run dev -- start --channel telegram
 npm run dev -- start --channel discord
 npm run dev -- start --channel slack
@@ -90,6 +97,8 @@ npm run dev -- start --channel whatsapp
 > 빌드를 실행하고 에러를 수정해줘
 ```
 
+**웹 채널:** 터미널이 필요 없습니다 &mdash; `localhost:3000`에서 웹 대시보드를 통해 상호작용합니다.
+
 ---
 
 ## 아키텍처
@@ -97,7 +106,7 @@ npm run dev -- start --channel whatsapp
 ```
 +-----------------------------------------------------------------+
 |  채팅 채널                                                       |
-|  Telegram | Discord | Slack | WhatsApp | CLI                    |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter 인터페이스
@@ -172,6 +181,11 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 
 ### 채팅 채널
 
+**Web:**
+| 변수 | 설명 |
+|------|------|
+| `WEB_CHANNEL_PORT` | 웹 대시보드 포트 (기본값: `3000`) |
+
 **Telegram:**
 | 변수 | 설명 |
 |------|------|
@@ -209,6 +223,7 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 | `EMBEDDING_PROVIDER` | `openai` | 임베딩 공급자: `openai` 또는 `ollama` |
 | `MEMORY_ENABLED` | `true` | 영구 대화 메모리 활성화 |
 | `MEMORY_DB_PATH` | `.strata-memory` | 메모리 데이터베이스 파일 디렉터리 |
+| `WEB_CHANNEL_PORT` | `3000` | 웹 대시보드 포트 |
 | `DASHBOARD_ENABLED` | `false` | HTTP 모니터링 대시보드 활성화 |
 | `DASHBOARD_PORT` | `3001` | 대시보드 서버 포트 |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket 실시간 대시보드 활성화 |

@@ -10,6 +10,7 @@ Channel adapters connect Strada.Brain to messaging platforms. Each adapter trans
 | Discord | `DiscordChannel` | discord.js | Deny-all (must set allowlist) |
 | Slack | `SlackChannel` | @slack/bolt | **Open-all** (must set allowlist for production) |
 | WhatsApp | `WhatsAppChannel` | @whiskeysockets/baileys | Deny-all (must set allowlist) |
+| Web | `WebChannel` | ws (WebSocket) | Localhost-only binding |
 | CLI | `CLIChannel` | node:readline | No auth needed |
 
 ## Interface Architecture
@@ -95,7 +96,102 @@ Two distinct systems coexist intentionally:
 | Discord | Yes (message.edit) | Yes (sendTyping) | Yes (ButtonBuilder) | No | Yes |
 | Slack | Yes (chat.update) | No-op | Yes (Block Kit) | Yes (uploadFile) | Yes |
 | WhatsApp | Yes (edit-in-place) | Yes (composing/paused) | Yes (numbered reply) | Yes (sendImage/sendDocument) | No |
+| Web | Yes (stream_update) | Yes (typing) | Yes (JSON dialog) | Yes (metadata) | No |
 | CLI | Yes (stdout rewrite) | No | Yes (readline) | No | No |
+
+## Web Channel
+
+Browser-based chat interface using HTTP static file serving and WebSocket for real-time bidirectional communication.
+
+**Class:** `WebChannel`
+**Library:** `ws` (Node.js WebSocket server)
+**Location:** `src/channels/web/`
+
+### Architecture
+
+The Web channel combines HTTP and WebSocket transports:
+
+1. **HTTP Server** — Serves static files (HTML, CSS, JS) with strict security headers
+2. **WebSocket Server** — Handles real-time message and confirmation exchange
+
+All communication is localhost-only (`127.0.0.1`). WebSocket connections validate the `Origin` header to block cross-origin hijacking, allowing only `localhost` and `127.0.0.1`.
+
+### Key Features
+
+**Static File Serving:**
+- Serves `src/channels/web/static/` directory with content-type detection
+- Supports HTML, CSS, JavaScript, JSON, images (PNG, SVG, ICO)
+- Path traversal attacks prevented via `resolve()` normalization + directory confinement check
+- Only GET requests allowed; 405 for other methods
+
+**WebSocket Communication:**
+- Assigns each connection a unique `chatId` (UUID)
+- Bidirectional JSON messaging: server sends `type: "text" | "markdown" | "confirmation" | "stream_*" | "typing"`, client sends `type: "message" | "confirmation_response"`
+- Maximum payload: 1 MiB (prevents memory exhaustion)
+
+**Streaming Support:**
+- `startStreamingMessage()` — Send placeholder, return `streamId`
+- `updateStreamingMessage()` — Edit message with accumulated text (no throttle, real-time)
+- `finalizeStreamingMessage()` — Send final complete text
+
+**Confirmation Dialogs:**
+- `requestConfirmation()` — Send dialog with question, options, and details
+- 5-minute timeout with automatic cleanup
+- Client responds with selected option via WebSocket
+- Falls back to "timeout" if no response received
+
+**Typing Indicator:**
+- `sendTypingIndicator()` — Send `{type: "typing", active: true}` to UI
+
+**Attachment Metadata:**
+- `sendAttachment()` — Sends text representation `[Attachment: filename]`
+
+### Security
+
+**HTTP Response Headers:**
+- `X-Content-Type-Options: nosniff` — Prevent MIME type sniffing
+- `X-Frame-Options: DENY` — Block iframe embedding
+- `Referrer-Policy: no-referrer` — Prevent referrer leakage
+- `Content-Security-Policy` — Restrict scripts/styles to self + Cloudflare CDN, allow WebSocket to localhost only, block inline scripts and unsafe-eval
+
+**WebSocket Validation:**
+- `verifyClient` hook validates `Origin` header before accepting connection
+- Only `localhost` and `127.0.0.1` allowed (blocks CSRF from different hosts)
+- Non-browser clients (CLI tools, tests) without Origin header are accepted
+
+**Path Traversal Protection:**
+- Uses `path.resolve()` to normalize paths and eliminate `../` and URL-encoded variants (`%2e%2e`)
+- Validates resolved path is still within `STATIC_DIR` before reading
+- Returns 403 Forbidden if path escapes directory
+
+### Configuration
+
+Constructor parameter:
+```typescript
+new WebChannel(port?: number = 3000)
+```
+
+Default port is 3000. Server binds to `127.0.0.1:3000` (localhost).
+
+### Message Protocol
+
+**Server → Client:**
+```typescript
+{ type: "connected", chatId: string }
+{ type: "text", text: string, messageId: string }
+{ type: "markdown", text: string, messageId: string }
+{ type: "typing", active: boolean }
+{ type: "confirmation", confirmId: string, question: string, options: string[], details?: string }
+{ type: "stream_start", streamId: string, text: string }
+{ type: "stream_update", streamId: string, text: string }
+{ type: "stream_end", streamId: string, text: string }
+```
+
+**Client → Server:**
+```typescript
+{ type: "message", text: string }
+{ type: "confirmation_response", confirmId: string, option: string }
+```
 
 ## Adding a New Channel
 

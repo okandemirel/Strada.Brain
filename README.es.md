@@ -69,10 +69,17 @@ JWT_SECRET=<generar con: openssl rand -hex 64>
 ### 3. Ejecutar
 
 ```bash
+# Canal web (por defecto) - asistente de configuracion se abre en localhost:3000
+# Si no existe .env, el asistente te guia a traves de la configuracion inicial
+npm start
+
+# O explicitamente con canal web
+npm run dev -- start --channel web
+
 # Modo CLI interactivo (la forma mas rapida de probar)
 npm run dev -- cli
 
-# O con un canal de chat
+# O con otros canales de chat
 npm run dev -- start --channel telegram
 npm run dev -- start --channel discord
 npm run dev -- start --channel slack
@@ -89,6 +96,8 @@ Una vez en ejecucion, envia un mensaje a traves de tu canal configurado:
 > Encuentra todos los sistemas que consultan PositionComponent
 > Ejecuta el build y corrige cualquier error
 ```
+
+**Canal web:** Sin necesidad de terminal -- interactua a traves del dashboard web en `localhost:3000`.
 
 ---
 
@@ -173,6 +182,11 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 
 ### Canales de Chat
 
+**Web:**
+| Variable | Descripcion |
+|----------|-------------|
+| `WEB_CHANNEL_PORT` | Puerto para el dashboard web (por defecto: `3000`) |
+
 **Telegram:**
 | Variable | Descripcion |
 |----------|-------------|
@@ -210,6 +224,7 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | `EMBEDDING_PROVIDER` | `openai` | Proveedor de embeddings: `openai` u `ollama` |
 | `MEMORY_ENABLED` | `true` | Habilitar memoria persistente de conversaciones |
 | `MEMORY_DB_PATH` | `.strata-memory` | Directorio para archivos de base de datos de memoria |
+| `WEB_CHANNEL_PORT` | `3000` | Puerto del dashboard web |
 | `DASHBOARD_ENABLED` | `false` | Habilitar dashboard HTTP de monitoreo |
 | `DASHBOARD_PORT` | `3001` | Puerto del servidor del dashboard |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Habilitar dashboard en tiempo real via WebSocket |
@@ -298,15 +313,15 @@ El agente tiene mas de 30 herramientas integradas organizadas por categoria:
 
 ## Capacidades de Canal
 
-| Capacidad | Telegram | Discord | Slack | WhatsApp | CLI |
-|-----------|----------|---------|-------|----------|-----|
-| Mensajes de texto | Si | Si | Si | Si | Si |
-| Streaming (edicion in situ) | Si | Si | Si | Si | Si |
-| Indicador de escritura | Si | Si | No | Si | No |
-| Dialogos de confirmacion | Si (teclado inline) | Si (botones) | Si (Block Kit) | Si (respuesta numerada) | Si (readline) |
-| Carga de archivos | No | No | Si | Si | No |
-| Soporte de hilos | No | Si | Si | No | No |
-| Limitador de tasa (salida) | No | Si (token bucket) | Si (ventana deslizante 4 niveles) | Limitacion inline | No |
+| Capacidad | Web | Telegram | Discord | Slack | WhatsApp | CLI |
+|-----------|-----|----------|---------|-------|----------|-----|
+| Mensajes de texto | Si | Si | Si | Si | Si | Si |
+| Streaming (edicion in situ) | Si | Si | Si | Si | Si | Si |
+| Indicador de escritura | Si | Si | Si | No | Si | No |
+| Dialogos de confirmacion | Si (modal) | Si (teclado inline) | Si (botones) | Si (Block Kit) | Si (respuesta numerada) | Si (readline) |
+| Carga de archivos | Si | No | No | Si | Si | No |
+| Soporte de hilos | No | No | Si | Si | No | No |
+| Limitador de tasa (salida) | Si (por sesion) | No | Si (token bucket) | Si (ventana deslizante 4 niveles) | Limitacion inline | No |
 
 ### Streaming
 

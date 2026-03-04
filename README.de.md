@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>KI-gesteuerter Entwicklungs-Agent fuer Unity / Strada.Core-Projekte</strong><br/>
-  Ein autonomer Coding-Agent, der sich mit Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt und aus seinen Fehlern lernt.
+  Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt und aus seinen Fehlern lernt.
 </p>
 
 <p align="center">
@@ -69,10 +69,17 @@ JWT_SECRET=<generieren mit: openssl rand -hex 64>
 ### 3. Starten
 
 ```bash
+# Web-Kanal (Standard) -- Setup-Assistent wird unter localhost:3000 oeffnet
+# Falls keine .env vorhanden ist, leitet der Assistent Sie durch die Ersteinrichtung
+npm start
+
+# Oder explizit mit Web-Kanal
+npm run dev -- start --channel web
+
 # Interaktiver CLI-Modus (schnellster Weg zum Testen)
 npm run dev -- cli
 
-# Oder mit einem Chat-Kanal
+# Oder mit anderen Chat-Kanaelen
 npm run dev -- start --channel telegram
 npm run dev -- start --channel discord
 npm run dev -- start --channel slack
@@ -90,6 +97,8 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 > Fuehre den Build aus und behebe alle Fehler
 ```
 
+**Web-Kanal:** Kein Terminal erforderlich -- interagieren Sie ueber das Web-Dashboard unter `localhost:3000`.
+
 ---
 
 ## Architektur
@@ -97,7 +106,7 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 ```
 +-----------------------------------------------------------------+
 |  Chat-Kanaele                                                    |
-|  Telegram | Discord | Slack | WhatsApp | CLI                    |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter-Interface
@@ -172,6 +181,11 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 
 ### Chat-Kanaele
 
+**Web:**
+| Variable | Beschreibung |
+|----------|-------------|
+| `WEB_CHANNEL_PORT` | Port fuer Web-Dashboard (Standard: `3000`) |
+
 **Telegram:**
 | Variable | Beschreibung |
 |----------|-------------|
@@ -209,6 +223,7 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | `EMBEDDING_PROVIDER` | `openai` | Embedding-Anbieter: `openai` oder `ollama` |
 | `MEMORY_ENABLED` | `true` | Persistenten Konversationsspeicher aktivieren |
 | `MEMORY_DB_PATH` | `.strata-memory` | Verzeichnis fuer Speicher-Datenbankdateien |
+| `WEB_CHANNEL_PORT` | `3000` | Port fuer Web-Dashboard |
 | `DASHBOARD_ENABLED` | `false` | HTTP-Monitoring-Dashboard aktivieren |
 | `DASHBOARD_PORT` | `3001` | Dashboard-Server-Port |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket-Echtzeit-Dashboard aktivieren |
@@ -297,15 +312,15 @@ Der Agent verfuegt ueber mehr als 30 integrierte Tools, organisiert nach Kategor
 
 ## Kanal-Funktionen
 
-| Funktion | Telegram | Discord | Slack | WhatsApp | CLI |
-|----------|----------|---------|-------|----------|-----|
-| Textnachrichten | Ja | Ja | Ja | Ja | Ja |
-| Streaming (In-Place-Bearbeitung) | Ja | Ja | Ja | Ja | Ja |
-| Tipp-Anzeige | Ja | Ja | Nein | Ja | Nein |
-| Bestaetigungsdialoge | Ja (Inline-Tastatur) | Ja (Buttons) | Ja (Block Kit) | Ja (nummerierte Antwort) | Ja (Readline) |
-| Datei-Uploads | Nein | Nein | Ja | Ja | Nein |
-| Thread-Unterstuetzung | Nein | Ja | Ja | Nein | Nein |
-| Ratenbegrenzer (ausgehend) | Nein | Ja (Token Bucket) | Ja (4-stufiges Schiebefenster) | Inline-Drosselung | Nein |
+| Funktion | Web | Telegram | Discord | Slack | WhatsApp | CLI |
+|----------|-----|----------|---------|-------|----------|-----|
+| Textnachrichten | Ja | Ja | Ja | Ja | Ja | Ja |
+| Streaming (In-Place-Bearbeitung) | Ja | Ja | Ja | Ja | Ja | Ja |
+| Tipp-Anzeige | Ja | Ja | Ja | Nein | Ja | Nein |
+| Bestaetigungsdialoge | Ja (Modal) | Ja (Inline-Tastatur) | Ja (Buttons) | Ja (Block Kit) | Ja (nummerierte Antwort) | Ja (Readline) |
+| Datei-Uploads | Ja | Nein | Nein | Ja | Ja | Nein |
+| Thread-Unterstuetzung | Nein | Nein | Ja | Ja | Nein | Nein |
+| Ratenbegrenzer (ausgehend) | Ja (pro-Sitzung) | Nein | Ja (Token Bucket) | Ja (4-stufiges Schiebefenster) | Inline-Drosselung | Nein |
 
 ### Streaming
 

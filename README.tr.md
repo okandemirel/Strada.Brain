@@ -69,10 +69,17 @@ JWT_SECRET=<su sekilde olusturun: openssl rand -hex 64>
 ### 3. Calistirma
 
 ```bash
+# Web kanali (varsayilan) - kurulum asistani localhost:3000 adresinde acilir
+# Eger .env yoksa, asistan sizi ilk kurulumda yonlendirir
+npm start
+
+# Veya web kanali ile acikca
+npm run dev -- start --channel web
+
 # Etkilesimli CLI modu (test etmenin en hizli yolu)
 npm run dev -- cli
 
-# Veya bir sohbet kanali ile
+# Veya diger sohbet kanallari ile
 npm run dev -- start --channel telegram
 npm run dev -- start --channel discord
 npm run dev -- start --channel slack
@@ -90,6 +97,8 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 > Derlemeyi calistir ve hatalari duzelt
 ```
 
+**Web kanali:** Terminal gerekmez -- web paneli uzerinden `localhost:3000` adresinde etkilesim kurun.
+
 ---
 
 ## Mimari
@@ -97,7 +106,7 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 ```
 +-----------------------------------------------------------------+
 |  Sohbet Kanallari                                                |
-|  Telegram | Discord | Slack | WhatsApp | CLI                    |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter arayuzu
@@ -172,6 +181,11 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 
 ### Sohbet Kanallari
 
+**Web:**
+| Degisken | Aciklama |
+|----------|----------|
+| `WEB_CHANNEL_PORT` | Web paneli icin port (varsayilan: `3000`) |
+
 **Telegram:**
 | Degisken | Aciklama |
 |----------|----------|
@@ -209,6 +223,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `EMBEDDING_PROVIDER` | `openai` | Gomme saglayici: `openai` veya `ollama` |
 | `MEMORY_ENABLED` | `true` | Kalici konusma hafizasini etkinlestir |
 | `MEMORY_DB_PATH` | `.strata-memory` | Hafiza veritabani dosyalari icin dizin |
+| `WEB_CHANNEL_PORT` | `3000` | Web paneli portu |
 | `DASHBOARD_ENABLED` | `false` | HTTP izleme panelini etkinlestir |
 | `DASHBOARD_PORT` | `3001` | Panel sunucu portu |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket gercek zamanli paneli etkinlestir |
@@ -297,15 +312,15 @@ Ajan, kategorilere gore duzenlenmis 30'dan fazla yerlesik araca sahiptir:
 
 ## Kanal Yetenekleri
 
-| Yetenek | Telegram | Discord | Slack | WhatsApp | CLI |
-|---------|----------|---------|-------|----------|-----|
-| Metin mesajlasma | Evet | Evet | Evet | Evet | Evet |
-| Akis (yerinde duzenleme) | Evet | Evet | Evet | Evet | Evet |
-| Yazma gostergesi | Evet | Evet | Islemsiz | Evet | Hayir |
-| Onay diyaloglari | Evet (satirici klavye) | Evet (butonlar) | Evet (Block Kit) | Evet (numarali yanit) | Evet (readline) |
-| Dosya yukleme | Hayir | Hayir | Evet | Evet | Hayir |
-| Konu destegi | Hayir | Evet | Evet | Hayir | Hayir |
-| Hiz sinirlamasi (giden) | Hayir | Evet (token bucket) | Evet (4 katmanli kayar pencere) | Satirici kisitlama | Hayir |
+| Yetenek | Web | Telegram | Discord | Slack | WhatsApp | CLI |
+|---------|-----|----------|---------|-------|----------|-----|
+| Metin mesajlasma | Evet | Evet | Evet | Evet | Evet | Evet |
+| Akis (yerinde duzenleme) | Evet | Evet | Evet | Evet | Evet | Evet |
+| Yazma gostergesi | Evet | Evet | Evet | Islemsiz | Evet | Hayir |
+| Onay diyaloglari | Evet (modal) | Evet (satirici klavye) | Evet (butonlar) | Evet (Block Kit) | Evet (numarali yanit) | Evet (readline) |
+| Dosya yukleme | Evet | Hayir | Hayir | Evet | Evet | Hayir |
+| Konu destegi | Hayir | Hayir | Evet | Evet | Hayir | Hayir |
+| Hiz sinirlamasi (giden) | Evet (oturum basina) | Hayir | Evet (token bucket) | Evet (4 katmanli kayar pencere) | Satirici kisitlama | Hayir |
 
 ### Akis
 

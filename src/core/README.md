@@ -71,10 +71,41 @@ Built-in tools registered in `registerBuiltinTools()`:
 
 Static const objects (`FileTools`, `SearchTools`, `StrataTools`, `GitTools`, `DotnetTools`, `ShellTools`) export tool name strings for type-safe references elsewhere.
 
+## Setup Wizard (`setup-wizard.ts`)
+
+A minimal HTTP server that runs during first-time configuration when no valid `.env` file exists (on the web channel). It provides a web UI for users to configure required settings and automatically generates the `.env` file.
+
+**When it launches:** Bootstrap detects invalid configuration and starts SetupWizard instead of the normal Orchestrator. The wizard blocks the main application from running until configuration is complete.
+
+**HTTP Endpoints:**
+
+- `GET /` — Serves the setup UI (`setup.html`)
+- `POST /api/setup` — Accepts JSON-encoded configuration, validates required fields (`ANTHROPIC_API_KEY`, `UNITY_PROJECT_PATH`), sanitizes all values, writes `.env` file, and exits the process (daemon restarts with new config)
+- `GET /api/setup/validate-path` — Query parameter `path` (must be absolute, no `..` sequences); returns `{ valid: true }` if directory exists, or `{ valid: false, error: "..." }` otherwise
+
+**Security Measures:**
+
+- **Newline injection prevention:** All `.env` values are sanitized via `sanitizeEnvValue()` to strip carriage returns and newlines, blocking log injection and key overwriting attacks
+- **Directory traversal blocking:** Path validation rejects relative paths, `..` sequences, and URL-encoded traversals using `path.resolve()` normalization
+- **HTTP security headers:** Every response includes:
+  - `X-Content-Type-Options: nosniff` — prevents MIME sniffing
+  - `X-Frame-Options: DENY` — blocks framing in other sites
+  - `Referrer-Policy: no-referrer`
+  - `Content-Security-Policy` — restrictive CSP allowing only `self` for scripts/styles/connects, no `eval`, no external objects
+- **Request size limit:** Request body limited to 64KB to prevent memory exhaustion
+- **Static file containment:** Serves only files from `../channels/web/static/`, with normalized path checks preventing escape
+
+**Supported Configuration Keys:**
+
+- Required: `ANTHROPIC_API_KEY`, `UNITY_PROJECT_PATH`
+- Optional: `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_IDS`, `DISCORD_BOT_TOKEN`
+- Auto-populated defaults: `STREAMING_ENABLED=true`, `REQUIRE_EDIT_CONFIRMATION=true`, `LOG_LEVEL=info`
+
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `bootstrap.ts` | Application startup sequence, service wiring, shutdown handler |
 | `di-container.ts` | String-keyed DI container with singleton/transient/scoped lifecycles and circular dependency detection |
+| `setup-wizard.ts` | Minimal HTTP server for first-time `.env` configuration with security hardening |
 | `tool-registry.ts` | Tool registration, categorization, metadata, plugin loading, and filtered registry creation |

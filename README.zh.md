@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>面向 Unity / Strada.Core 项目的 AI 驱动开发代理</strong><br/>
-  一个连接 Telegram、Discord、Slack、WhatsApp 或终端的自主编码代理 &mdash; 读取您的代码库、编写代码、运行构建，并从错误中学习。
+  一个连接到 Web 仪表板、Telegram、Discord、Slack、WhatsApp 或终端的自主编码代理 &mdash; 读取您的代码库、编写代码、运行构建，并从错误中学习。
 </p>
 
 <p align="center">
@@ -69,10 +69,17 @@ JWT_SECRET=<使用以下命令生成: openssl rand -hex 64>
 ### 3. 运行
 
 ```bash
+# Web 频道（默认）- 设置向导在 localhost:3000 打开
+# 如果不存在 .env 文件，向导将指导您完成初始设置
+npm start
+
+# 或显式使用 Web 频道
+npm run dev -- start --channel web
+
 # 交互式 CLI 模式（最快的测试方式）
 npm run dev -- cli
 
-# 或通过聊天频道
+# 或通过其他聊天频道
 npm run dev -- start --channel telegram
 npm run dev -- start --channel discord
 npm run dev -- start --channel slack
@@ -89,6 +96,8 @@ npm run dev -- start --channel whatsapp
 > 查找所有查询 PositionComponent 的系统
 > 运行构建并修复所有错误
 ```
+
+**Web 频道：** 无需终端 &mdash; 通过 `localhost:3000` 的 Web 仪表板进行交互。
 
 ---
 
@@ -172,6 +181,11 @@ npm run dev -- start --channel whatsapp
 
 ### 聊天频道
 
+**Web：**
+| 变量 | 说明 |
+|------|------|
+| `WEB_CHANNEL_PORT` | Web 仪表板端口（默认：`3000`） |
+
 **Telegram：**
 | 变量 | 说明 |
 |------|------|
@@ -209,6 +223,7 @@ npm run dev -- start --channel whatsapp
 | `EMBEDDING_PROVIDER` | `openai` | 嵌入提供商：`openai` 或 `ollama` |
 | `MEMORY_ENABLED` | `true` | 启用持久对话记忆 |
 | `MEMORY_DB_PATH` | `.strata-memory` | 记忆数据库文件目录 |
+| `WEB_CHANNEL_PORT` | `3000` | Web 仪表板端口 |
 | `DASHBOARD_ENABLED` | `false` | 启用 HTTP 监控仪表板 |
 | `DASHBOARD_PORT` | `3001` | 仪表板服务器端口 |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | 启用 WebSocket 实时仪表板 |
