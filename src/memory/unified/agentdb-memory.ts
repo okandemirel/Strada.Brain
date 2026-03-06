@@ -788,7 +788,10 @@ export class AgentDBMemory implements IUnifiedMemory {
     for (const [id, entry] of this.entries) {
       if (entry.tier === MemoryTier.Ephemeral && entry.expiresAt && entry.expiresAt < now) {
         this.entries.delete(id);
-        await this.hnswStore?.remove([id]);
+        if (this.hnswStore) {
+          const store = this.hnswStore;
+          await this.writeMutex.withLock(() => store.remove([id]));
+        }
         this.removePersistedEntry(id);
         removed++;
       }
@@ -830,7 +833,10 @@ export class AgentDBMemory implements IUnifiedMemory {
       const existed = this.entries.has(id as string);
       if (existed) {
         this.entries.delete(id as string);
-        await this.hnswStore?.remove([id as string]);
+        if (this.hnswStore) {
+          const store = this.hnswStore;
+          await this.writeMutex.withLock(() => store.remove([id as string]));
+        }
         this.removePersistedEntry(id as string);
       }
       return ok(existed);
@@ -1114,9 +1120,17 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       // Remove lowest scoring entries
       const toRemove = entries.slice(0, entries.length - maxEntries);
+      if (this.hnswStore) {
+        const store = this.hnswStore;
+        const ids = toRemove.map(e => e.id as string);
+        await this.writeMutex.withLock(async () => {
+          for (const id of ids) {
+            await store.remove([id]);
+          }
+        });
+      }
       for (const entry of toRemove) {
         this.entries.delete(entry.id as string);
-        await this.hnswStore?.remove([entry.id as string]);
         this.removePersistedEntry(entry.id as string);
       }
 
