@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-02-PLAN.md (Phase 1 complete)
-last_updated: "2026-03-06T11:13:16Z"
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-03-06T12:01:36Z"
 progress:
   total_phases: 9
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 3
+  completed_plans: 3
   percent: 100
 ---
 
@@ -19,19 +19,19 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 1 complete. Phase 2 (Migration & HNSW Hardening) is next.
+**Current Focus:** Phase 2 in progress. Plan 01 (HNSW Write Mutex + Semantic Routing) complete.
 
 ## Current Position
 
 **Milestone:** Phase 2 — Agent Evolution (Level 3 → 4)
-**Phase:** 1 of 9 (AgentDB Activation)
-**Plan:** 2 of 2 complete (Phase 1 done)
-**Status:** Phase 1 complete. Ready for Phase 2.
+**Phase:** 2 of 9 (Migration & HNSW Hardening)
+**Plan:** 1 of 1 complete (02-01 done)
+**Status:** Executing
 
 **Progress:**
 [██████████] 100%
 Phase 1  [██████████] 100%  AgentDB Activation
-Phase 2  [ . . . . . . . . . . ] 0%  Migration & HNSW Hardening
+Phase 2  [█████.....] 50%   Migration & HNSW Hardening
 Phase 3  [ . . . . . . . . . . ] 0%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [ . . . . . . . . . . ] 0%  Event-Driven Learning
 Phase 5  [ . . . . . . . . . . ] 0%  Metrics Instrumentation
@@ -48,12 +48,13 @@ Phase 9  [ . . . . . . . . . . ] 0%  Tool Chain Synthesis
 | Metric | Value |
 |--------|-------|
 | Phases completed | 1/9 |
-| Plans completed | 2/2 (Phase 1) |
-| Requirements delivered | 3/32 (MEM-01, MEM-05, MEM-07) |
-| Tests added | 49/50+ target |
+| Plans completed | 3 (2 Phase 1 + 1 Phase 2) |
+| Requirements delivered | 5/32 (MEM-01, MEM-03, MEM-05, MEM-06, MEM-07) |
+| Tests added | 63/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
+| Phase 02 P01 | 5min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,10 @@ Phase 9  [ . . . . . . . . . . ] 0%  Tool Chain Synthesis
 - [P1-02] initializeMemory exported for unit testing (was private function)
 - [P1-02] Schema repair opens SQLite directly to validate memories table before retry
 - [P1-02] Hash-based embedding warning logged at startup when RAG is disabled
+- [P2-01] Mutex uses Promise-chain pattern (zero dependencies, ~30 lines)
+- [P2-01] shutdown() not wrapped in mutex (lifecycle method, not concurrent write)
+- [P2-01] Chat/type modes retain TF-IDF path (structural filters, not similarity)
+- [P2-01] Empty query falls back to TF-IDF (no embedding to search against)
 - Fine granularity (9 phases) chosen for complex brownfield changes
 - Memory phases split into 3 (activation, migration, auto-tiering) due to interface drift risk
 - Embedding infrastructure placed in Phase 3 (after HNSW hardening) as bridge between memory and learning
@@ -91,17 +96,19 @@ Phase 9  [ . . . . . . . . . . ] 0%  Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-06T11:13:16Z
-**Stopped at:** Completed 01-02-PLAN.md (Phase 1 complete)
+**Last session:** 2026-03-06T12:01:36Z
+**Stopped at:** Completed 02-01-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
-- Dormant code: AgentDB (51KB), MemoryMigrator (14KB), CachedEmbeddingProvider, ConfidenceScorer
+- Dormant code: MemoryMigrator (14KB), CachedEmbeddingProvider, ConfidenceScorer
 - Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts
-- All 1779 tests pass (was 1730, +49 from Phase 1)
+- All 1790 tests pass (was 1779, +11 from Phase 2 Plan 01)
 - Quality gates: /simplify + /security-review after each implementation phase
+- HnswWriteMutex now serializes all HNSW writes in agentdb-memory.ts
+- AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-06T11:13:16Z*
+*Last updated: 2026-03-06T12:01:36Z*
