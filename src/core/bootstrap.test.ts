@@ -9,21 +9,15 @@
  * - Disabled memory
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-
-// We test the private initializeMemory function indirectly through module internals.
-// Since initializeMemory is not exported, we mock dependencies and test via bootstrap
-// or we extract it for testing. For this plan, we test the function by extracting it.
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock modules before imports
 vi.mock("../memory/unified/agentdb-memory.js", () => {
-  const mockInitialize = vi.fn();
-  const mockShutdown = vi.fn();
   const MockAgentDBMemory = vi.fn().mockImplementation(() => ({
-    initialize: mockInitialize,
-    shutdown: mockShutdown,
+    initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
+    shutdown: vi.fn(),
   }));
-  return { AgentDBMemory: MockAgentDBMemory, __mockInitialize: mockInitialize };
+  return { AgentDBMemory: MockAgentDBMemory };
 });
 
 vi.mock("../memory/unified/agentdb-adapter.js", () => {
@@ -35,27 +29,23 @@ vi.mock("../memory/unified/agentdb-adapter.js", () => {
 });
 
 vi.mock("../memory/file-memory-manager.js", () => {
-  const mockInit = vi.fn().mockResolvedValue(undefined);
   const MockFileMemoryManager = vi.fn().mockImplementation(() => ({
-    initialize: mockInit,
+    initialize: vi.fn().mockResolvedValue(undefined),
     _isFileManager: true,
   }));
-  return { FileMemoryManager: MockFileMemoryManager, __mockInit: mockInit };
+  return { FileMemoryManager: MockFileMemoryManager };
 });
 
 vi.mock("better-sqlite3", () => {
-  const mockPragma = vi.fn();
-  const mockPrepare = vi.fn().mockReturnValue({ get: vi.fn() });
-  const mockClose = vi.fn();
   const MockDatabase = vi.fn().mockImplementation(() => ({
-    pragma: mockPragma,
-    prepare: mockPrepare,
-    close: mockClose,
+    pragma: vi.fn(),
+    prepare: vi.fn().mockReturnValue({ get: vi.fn() }),
+    close: vi.fn(),
   }));
   return { default: MockDatabase };
 });
 
-// Import the function under test (we export it for testing)
+// Import the function under test
 import { initializeMemory } from "./bootstrap.js";
 import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
 import { AgentDBAdapter } from "../memory/unified/agentdb-adapter.js";
@@ -103,16 +93,31 @@ function createTestConfig(overrides: {
   } as Config;
 }
 
+// Helper to reset mocks to default successful behavior
+function resetMocksToDefaults(): void {
+  vi.mocked(AgentDBMemory).mockImplementation(() => ({
+    initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
+    shutdown: vi.fn(),
+  }) as unknown as InstanceType<typeof AgentDBMemory>);
+
+  vi.mocked(AgentDBAdapter).mockImplementation((agentdb: unknown) => ({
+    _agentdb: agentdb,
+    _isAdapter: true,
+  }) as unknown as InstanceType<typeof AgentDBAdapter>);
+
+  vi.mocked(FileMemoryManager).mockImplementation(() => ({
+    initialize: vi.fn().mockResolvedValue(undefined),
+    _isFileManager: true,
+  }) as unknown as InstanceType<typeof FileMemoryManager>);
+}
+
 describe("initializeMemory", () => {
   let logger: winston.Logger;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetMocksToDefaults();
     logger = createMockLogger();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
   });
 
   it("should return undefined when memory is disabled", async () => {
@@ -122,13 +127,6 @@ describe("initializeMemory", () => {
   });
 
   it("should create AgentDBMemory + AgentDBAdapter when backend is 'agentdb'", async () => {
-    const mockInit = vi.mocked(AgentDBMemory).mock.results[0];
-    // Setup: AgentDBMemory.initialize returns ok
-    vi.mocked(AgentDBMemory).mockImplementation(() => ({
-      initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
-      shutdown: vi.fn(),
-    }) as unknown as InstanceType<typeof AgentDBMemory>);
-
     const config = createTestConfig({ backend: "agentdb" });
     const result = await initializeMemory(config, logger);
 
@@ -199,11 +197,6 @@ describe("initializeMemory", () => {
   });
 
   it("should pass correct config values to AgentDBMemory constructor", async () => {
-    vi.mocked(AgentDBMemory).mockImplementation(() => ({
-      initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
-      shutdown: vi.fn(),
-    }) as unknown as InstanceType<typeof AgentDBMemory>);
-
     const config = createTestConfig({ backend: "agentdb" });
     await initializeMemory(config, logger);
 
@@ -222,11 +215,6 @@ describe("initializeMemory", () => {
   });
 
   it("should log hash-based embedding warning when RAG is not enabled", async () => {
-    vi.mocked(AgentDBMemory).mockImplementation(() => ({
-      initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
-      shutdown: vi.fn(),
-    }) as unknown as InstanceType<typeof AgentDBMemory>);
-
     const config = createTestConfig({ backend: "agentdb", ragEnabled: false });
     await initializeMemory(config, logger);
 
@@ -235,7 +223,7 @@ describe("initializeMemory", () => {
     );
   });
 
-  it("should return undefined when memory enabled but FileMemoryManager init fails on file backend", async () => {
+  it("should return undefined when FileMemoryManager init fails on file backend", async () => {
     vi.mocked(FileMemoryManager).mockImplementation(() => ({
       initialize: vi.fn().mockRejectedValue(new Error("file init failed")),
       _isFileManager: true,

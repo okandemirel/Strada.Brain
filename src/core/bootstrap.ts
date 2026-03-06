@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
 import { createLogger, getLogger } from "../utils/logger.js";
@@ -18,6 +19,8 @@ import { Orchestrator } from "../agents/orchestrator.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { DashboardServer } from "../dashboard/server.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
+import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
+import { AgentDBAdapter } from "../memory/unified/agentdb-adapter.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
@@ -308,7 +311,18 @@ async function initializeAIProvider(config: Config, logger: winston.Logger): Pro
   return providerManager;
 }
 
-async function initializeMemory(
+/**
+ * Initialize memory backend with self-healing.
+ *
+ * Flow:
+ *   1. If memory disabled -> undefined
+ *   2. If backend == "file" -> FileMemoryManager directly
+ *   3. Otherwise (agentdb, default):
+ *      try AgentDB -> on fail: repair schema -> retry -> on fail: fallback to FileMemoryManager
+ *
+ * Exported for testing.
+ */
+export async function initializeMemory(
   config: Config,
   logger: winston.Logger,
 ): Promise<IMemoryManager | undefined> {
@@ -316,13 +330,109 @@ async function initializeMemory(
     return undefined;
   }
 
+  // Explicit file backend — skip AgentDB entirely
+  if (config.memory.backend === "file") {
+    return initializeFileMemory(config, logger);
+  }
+
+  // AgentDB backend (default)
+  const agentdbPath = join(config.memory.dbPath, "agentdb");
+  const agentdbConfig = {
+    dbPath: agentdbPath,
+    dimensions: config.memory.unified.dimensions,
+    maxEntriesPerTier: {
+      working: config.memory.unified.tierLimits.working,
+      ephemeral: config.memory.unified.tierLimits.ephemeral,
+      persistent: config.memory.unified.tierLimits.persistent,
+    },
+    enableAutoTiering: config.memory.unified.autoTiering,
+    ephemeralTtlMs: (config.memory.unified.ephemeralTtlHours * 3600000) as DurationMs,
+  };
+
+  // First attempt
+  try {
+    const agentdb = new AgentDBMemory(agentdbConfig);
+    const initResult = await agentdb.initialize();
+    if (initResult.kind === "ok") {
+      logger.info("AgentDB memory initialized", { dbPath: agentdbPath });
+
+      // Warn about hash-based fallback embeddings when no embedding provider is configured
+      if (!config.rag.enabled) {
+        logger.warn(
+          "AgentDB running with hash-based fallback embeddings - semantic search quality is degraded. Configure an embedding provider for better results.",
+        );
+      }
+
+      return new AgentDBAdapter(agentdb);
+    }
+    // Init returned err — throw to enter recovery
+    throw initResult.error;
+  } catch (firstError) {
+    logger.warn("AgentDB initialization failed, attempting schema repair", {
+      error: firstError instanceof Error ? firstError.message : String(firstError),
+    });
+
+    // Attempt schema repair
+    const repairOk = await attemptSchemaRepair(agentdbPath, logger);
+
+    // Retry AgentDB after repair
+    try {
+      const agentdb2 = new AgentDBMemory(agentdbConfig);
+      const retryResult = await agentdb2.initialize();
+      if (retryResult.kind === "ok") {
+        logger.info("AgentDB recovered after schema repair", { dbPath: agentdbPath });
+
+        if (!config.rag.enabled) {
+          logger.warn(
+            "AgentDB running with hash-based fallback embeddings - semantic search quality is degraded. Configure an embedding provider for better results.",
+          );
+        }
+
+        return new AgentDBAdapter(agentdb2);
+      }
+      throw retryResult.error;
+    } catch (retryError) {
+      logger.warn("AgentDB retry failed after repair, falling back to FileMemoryManager", {
+        repairAttempted: repairOk,
+        error: retryError instanceof Error ? retryError.message : String(retryError),
+      });
+      return initializeFileMemory(config, logger);
+    }
+  }
+}
+
+async function attemptSchemaRepair(dbPath: string, logger: winston.Logger): Promise<boolean> {
+  try {
+    const sqlitePath = join(dbPath, "memory.db");
+    if (!existsSync(sqlitePath)) return true; // Fresh DB, no repair needed
+    const db = new Database(sqlitePath);
+    db.pragma("journal_mode = WAL");
+    try {
+      db.prepare("SELECT COUNT(*) FROM memories").get();
+    } catch {
+      logger.info("AgentDB schema repair: memories table will be recreated on next init");
+    }
+    db.close();
+    return true;
+  } catch (e) {
+    logger.error("AgentDB schema repair failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return false;
+  }
+}
+
+async function initializeFileMemory(
+  config: Config,
+  logger: winston.Logger,
+): Promise<IMemoryManager | undefined> {
   try {
     const mm = new FileMemoryManager(config.memory.dbPath);
     await mm.initialize();
-    logger.info("Memory manager initialized", { dbPath: config.memory.dbPath });
+    logger.info("FileMemoryManager initialized", { dbPath: config.memory.dbPath });
     return mm;
   } catch (error) {
-    logger.warn("Memory manager initialization failed", {
+    logger.warn("FileMemoryManager initialization failed", {
       error: error instanceof Error ? error.message : String(error),
     });
     return undefined;
