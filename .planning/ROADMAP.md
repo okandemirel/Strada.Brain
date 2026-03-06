@@ -69,7 +69,10 @@ Plans:
   2. Confidence scores update immediately from real tool outcomes (not deferred to next batch)
   3. An event bus decouples the orchestrator, learning pipeline, and memory subsystems (no direct cross-references)
   4. Multiple rapid tool results do not cause lost updates or SQLite lock errors (serial async queue handles ordering)
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 04-01-PLAN.md — TypedEventBus + LearningQueue infrastructure (event bus with typed interfaces, serial async queue)
+- [ ] 04-02-PLAN.md — Wire event-driven learning (orchestrator emission, pipeline subscription, confidence attribution, bootstrap wiring)
 
 ### Phase 5: Metrics Instrumentation
 **Goal**: The agent's performance is measurable through objective metrics
@@ -131,7 +134,7 @@ Plans:
 | 1. AgentDB Activation | 2/2 | Complete | 2026-03-06 |
 | 2. Memory Migration & HNSW Hardening | 3/3 | Complete | 2026-03-06 |
 | 3. Auto-Tiering & Embedding Infrastructure | 3/3 | Complete | 2026-03-06 |
-| 4. Event-Driven Learning | 0/? | Not started | - |
+| 4. Event-Driven Learning | 0/2 | Planning complete | - |
 | 5. Metrics Instrumentation | 0/? | Not started | - |
 | 6. Bayesian Confidence System | 0/? | Not started | - |
 | 7. Recursive Goal Decomposition | 0/? | Not started | - |
@@ -193,4 +196,4 @@ Phase 1 (AgentDB Activation)
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-06 (Phase 3 complete: 3/3 plans done)*
+*Last updated: 2026-03-06 (Phase 4 planned: 2 plans)*
