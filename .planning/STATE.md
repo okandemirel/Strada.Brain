@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-03-06T12:10:30Z"
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-03-06T13:03:04Z"
 progress:
   total_phases: 9
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 5
+  completed_plans: 5
   percent: 100
 ---
 
@@ -19,13 +19,13 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 2 complete. Both plans done (HNSW mutex + migration). Ready for Phase 3.
+**Current Focus:** Phase 2 fully complete. All 3 plans done (HNSW mutex + migration + gap closure). Ready for Phase 3.
 
 ## Current Position
 
 **Milestone:** Phase 2 — Agent Evolution (Level 3 → 4)
 **Phase:** 2 of 9 (Migration & HNSW Hardening)
-**Plan:** 2 of 2 complete (02-01, 02-02 done)
+**Plan:** 3 of 3 complete (02-01, 02-02, 02-03 done)
 **Status:** Executing
 
 **Progress:**
@@ -46,14 +46,15 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Metric | Value |
 |--------|-------|
 | Phases completed | 2/9 |
-| Plans completed | 4 (2 Phase 1 + 2 Phase 2) |
+| Plans completed | 5 (2 Phase 1 + 3 Phase 2) |
 | Requirements delivered | 6/32 (MEM-01, MEM-02, MEM-03, MEM-05, MEM-06, MEM-07) |
-| Tests added | 74/50+ target |
+| Tests added | 75/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
 | Phase 02 P01 | 5min | 2 tasks | 6 files |
 | Phase 02 P02 | 5min | 2 tasks | 4 files |
+| Phase 02 P03 | 2min | 1 task | 2 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P2-02] triggerLegacyMigration() extracted as helper to keep initializeMemory clean
 - [P2-02] Migration runs in both primary and repair AgentDB init paths
 - [P2-02] File backend excluded from migration (already on legacy system)
+- [P2-03] enforceTierLimits uses batched removes in single withLock (fewer lock acquisitions, matches rebuildIndex pattern)
 - Fine granularity (9 phases) chosen for complex brownfield changes
 - Memory phases split into 3 (activation, migration, auto-tiering) due to interface drift risk
 - Embedding infrastructure placed in Phase 3 (after HNSW hardening) as bridge between memory and learning
@@ -100,8 +102,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-06T12:10:30Z
-**Stopped at:** Completed 02-02-PLAN.md
+**Last session:** 2026-03-06T13:03:04Z
+**Stopped at:** Completed 02-03-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
@@ -114,8 +116,9 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
 - Migration idempotency marker prevents duplicate runs
 - Bootstrap triggers runAutomaticMigration() after AgentDB init (both paths)
-- Phase 2 complete, ready for Phase 3 (Auto-Tiering & Embedding Infrastructure)
+- Phase 2 fully complete (all 3 plans), all 6 HNSW write sites mutex-protected
+- Ready for Phase 3 (Auto-Tiering & Embedding Infrastructure)
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-06T12:10:30Z*
+*Last updated: 2026-03-06T13:03:04Z*
