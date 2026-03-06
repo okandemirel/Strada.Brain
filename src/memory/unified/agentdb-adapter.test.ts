@@ -186,35 +186,60 @@ describe("AgentDBAdapter", () => {
   // =========================================================================
 
   describe("retrieve()", () => {
-    it("extracts query from options, calls agentdb.retrieve, wraps return in ok()", async () => {
+    // -----------------------------------------------------------------------
+    // Semantic routing tests (text queries go through HNSW vector search)
+    // -----------------------------------------------------------------------
+
+    it("routes text-mode query to agentdb.retrieveSemantic() instead of agentdb.retrieve()", async () => {
       const mockResults: RetrievalResult[] = [
         {
           entry: { id: "mem_1" as MemoryId, type: "conversation", content: "hello" } as unknown as MemoryEntry,
           score: 0.95 as NormalizedScore,
         },
       ];
-      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue(mockResults);
+      (mockDb.retrieveSemantic as ReturnType<typeof vi.fn>).mockResolvedValue(mockResults);
 
       const options = { mode: "text" as const, query: "hello", limit: 5, minScore: 0.1 as NormalizedScore };
       const result = await adapter.retrieve(options);
 
       expect(result).toEqual({ kind: "ok", value: mockResults });
-      expect(mockDb.retrieve).toHaveBeenCalledWith("hello", options);
+      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("hello", { limit: 5 });
+      expect(mockDb.retrieve).not.toHaveBeenCalled();
     });
 
-    it("returns err() when agentdb.retrieve throws", async () => {
-      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("retrieval failed"));
+    it("routes semantic-mode query to agentdb.retrieveSemantic()", async () => {
+      const mockResults: RetrievalResult[] = [
+        {
+          entry: { id: "mem_2" as MemoryId, type: "note", content: "relevant" } as unknown as MemoryEntry,
+          score: 0.88 as NormalizedScore,
+        },
+      ];
+      (mockDb.retrieveSemantic as ReturnType<typeof vi.fn>).mockResolvedValue(mockResults);
 
-      const options = { mode: "text" as const, query: "hello" };
+      const options = { mode: "semantic" as const, query: "relevant topic", limit: 10 };
       const result = await adapter.retrieve(options);
 
-      expect(result.kind).toBe("err");
-      if (result.kind === "err") {
-        expect(result.error.message).toBe("retrieval failed");
-      }
+      expect(result).toEqual({ kind: "ok", value: mockResults });
+      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("relevant topic", { limit: 10 });
+      expect(mockDb.retrieve).not.toHaveBeenCalled();
     });
 
-    it("handles chat mode with optional query", async () => {
+    it("falls back to agentdb.retrieve() when query is empty", async () => {
+      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      const options = { mode: "text" as const, query: "" };
+      const result = await adapter.retrieve(options);
+
+      expect(result).toEqual({ kind: "ok", value: [] });
+      expect(mockDb.retrieve).toHaveBeenCalledWith("", options);
+      expect(mockDb.retrieveSemantic).not.toHaveBeenCalled();
+    });
+
+    // -----------------------------------------------------------------------
+    // Chat/type modes keep existing TF-IDF behavior
+    // -----------------------------------------------------------------------
+
+    it("keeps existing TF-IDF behavior for chat mode", async () => {
       (mockDb.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
       const options = { mode: "chat" as const, chatId: "chat_1" as ChatId };
@@ -222,6 +247,78 @@ describe("AgentDBAdapter", () => {
 
       expect(result).toEqual({ kind: "ok", value: [] });
       expect(mockDb.retrieve).toHaveBeenCalledWith("", options);
+      expect(mockDb.retrieveSemantic).not.toHaveBeenCalled();
+    });
+
+    it("keeps existing TF-IDF behavior for type mode", async () => {
+      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      const options = { mode: "type" as const, types: ["conversation" as const], query: "test" };
+      const result = await adapter.retrieve(options);
+
+      expect(result).toEqual({ kind: "ok", value: [] });
+      expect(mockDb.retrieve).toHaveBeenCalledWith("test", options);
+      expect(mockDb.retrieveSemantic).not.toHaveBeenCalled();
+    });
+
+    // -----------------------------------------------------------------------
+    // Error handling
+    // -----------------------------------------------------------------------
+
+    it("returns err() when agentdb.retrieveSemantic throws", async () => {
+      (mockDb.retrieveSemantic as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("semantic failed"));
+
+      const options = { mode: "text" as const, query: "hello" };
+      const result = await adapter.retrieve(options);
+
+      expect(result.kind).toBe("err");
+      if (result.kind === "err") {
+        expect(result.error.message).toBe("semantic failed");
+      }
+    });
+
+    it("returns err() when agentdb.retrieve throws (TF-IDF path)", async () => {
+      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("retrieval failed"));
+
+      const options = { mode: "chat" as const, chatId: "chat_1" as ChatId };
+      const result = await adapter.retrieve(options);
+
+      expect(result.kind).toBe("err");
+      if (result.kind === "err") {
+        expect(result.error.message).toBe("retrieval failed");
+      }
+    });
+  });
+
+  // =========================================================================
+  // Core method: retrieveSemantic
+  // =========================================================================
+
+  describe("retrieveSemantic()", () => {
+    it("delegates to agentdb.retrieveSemantic() and returns results wrapped in ok()", async () => {
+      const mockResults: RetrievalResult[] = [
+        {
+          entry: { id: "mem_3" as MemoryId, type: "note", content: "semantic result" } as unknown as MemoryEntry,
+          score: 0.92 as NormalizedScore,
+        },
+      ];
+      (mockDb.retrieveSemantic as ReturnType<typeof vi.fn>).mockResolvedValue(mockResults);
+
+      const result = await adapter.retrieveSemantic("semantic query", { limit: 3 });
+
+      expect(result).toEqual({ kind: "ok", value: mockResults });
+      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("semantic query", { limit: 3 });
+    });
+
+    it("returns err() when agentdb.retrieveSemantic() throws", async () => {
+      (mockDb.retrieveSemantic as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("search broke"));
+
+      const result = await adapter.retrieveSemantic("query");
+
+      expect(result.kind).toBe("err");
+      if (result.kind === "err") {
+        expect(result.error.message).toBe("search broke");
+      }
     });
   });
 

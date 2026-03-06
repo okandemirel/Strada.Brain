@@ -72,7 +72,18 @@ export class AgentDBAdapter implements IMemoryManager {
       if ("query" in options && options.query) {
         query = options.query;
       }
-      const results = await this.agentdb.retrieve(query, options);
+
+      // Chat and type modes are structural filters — keep TF-IDF path.
+      // All other modes (text, semantic, hybrid) with a non-empty query
+      // route through HNSW vector similarity search.
+      const mode = "mode" in options ? options.mode : undefined;
+      if (mode === "chat" || mode === "type" || query.length === 0) {
+        const results = await this.agentdb.retrieve(query, options);
+        return ok(results);
+      }
+
+      // Semantic-first retrieval via HNSW
+      const results = await this.agentdb.retrieveSemantic(query, { limit: options.limit });
       return ok(results);
     } catch (e) {
       return err(e instanceof Error ? e : new Error(String(e)));
@@ -232,11 +243,15 @@ export class AgentDBAdapter implements IMemoryManager {
   }
 
   async retrieveSemantic(
-    _query: string,
-    _options?: Omit<SemanticRetrievalOptions, "mode" | "query">,
+    query: string,
+    options?: Omit<SemanticRetrievalOptions, "mode" | "query">,
   ): Promise<Result<RetrievalResult[], Error>> {
-    getLoggerSafe().debug("[AgentDBAdapter] retrieveSemantic stub called");
-    return ok([]);
+    try {
+      const results = await this.agentdb.retrieveSemantic(query, options);
+      return ok(results);
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
   }
 
   async retrieveFromChat(
