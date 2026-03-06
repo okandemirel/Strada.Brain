@@ -54,6 +54,8 @@ import {
   PatternMatcher,
   ConfidenceScorer,
 } from "../learning/index.js";
+import { TypedEventBus, type IEventBus, type LearningEventMap } from "./event-bus.js";
+import { LearningQueue } from "../learning/pipeline/learning-queue.js";
 import { ErrorRecoveryEngine } from "../agents/autonomy/error-recovery.js";
 import { TaskPlanner } from "../agents/autonomy/task-planner.js";
 import { InstinctRetriever } from "../agents/instinct-retriever.js";
@@ -170,6 +172,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     streamingEnabled: config.streamingEnabled,
     stradaDeps,
     instinctRetriever,
+    eventEmitter: learningResult.eventBus,
   });
 
   // Initialize task system
@@ -217,6 +220,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       learningPipeline: learningResult.pipeline,
       taskStorage,
       providerManager,
+      eventBus: learningResult.eventBus,
+      learningQueue: learningResult.learningQueue,
     }),
   };
 }
@@ -588,6 +593,8 @@ interface LearningResult {
   patternMatcher?: PatternMatcher;
   taskPlanner: TaskPlanner;
   errorRecovery: ErrorRecoveryEngine;
+  eventBus?: IEventBus<LearningEventMap>;
+  learningQueue?: LearningQueue;
 }
 
 async function initializeLearning(config: Config, logger: winston.Logger, embeddingProvider?: CachedEmbeddingProvider): Promise<LearningResult> {
@@ -626,12 +633,23 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
     const taskPlanner = new TaskPlanner();
     taskPlanner.enableLearning(pipeline);
 
+    // Create event bus for decoupled learning
+    const eventBus = new TypedEventBus<LearningEventMap>();
+    const learningQueue = new LearningQueue();
+
+    // Subscribe learning pipeline to tool result events via serial queue
+    eventBus.on("tool:result", (event) => {
+      learningQueue.enqueue(async () => {
+        pipeline.handleToolResult(event);
+      });
+    });
+
     logger.info("Learning pipeline initialized", {
       dbPath: learningDbPath,
       stats: pipeline.getStats(),
     });
 
-    return { pipeline, storage: learningStorage, patternMatcher, taskPlanner, errorRecovery };
+    return { pipeline, storage: learningStorage, patternMatcher, taskPlanner, errorRecovery, eventBus, learningQueue };
   } catch (error) {
     logger.warn("Learning pipeline initialization failed", {
       error: error instanceof Error ? error.message : String(error),
@@ -795,6 +813,8 @@ interface ShutdownOptions {
   learningPipeline?: LearningPipeline;
   taskStorage?: TaskStorage;
   providerManager?: ProviderManager;
+  eventBus?: IEventBus<LearningEventMap>;
+  learningQueue?: LearningQueue;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -807,6 +827,15 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
 
     clearInterval(cleanupInterval);
 
+    // Drain event bus and learning queue before stopping pipeline
+    if (options.eventBus) {
+      await options.eventBus.shutdown();
+    }
+    if (options.learningQueue) {
+      await options.learningQueue.shutdown();
+    }
+
+    // Then stop the pipeline (clears evolution timer, shuts down embedding queue)
     if (learningPipeline) {
       learningPipeline.stop();
     }
