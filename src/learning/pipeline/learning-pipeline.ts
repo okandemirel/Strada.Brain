@@ -8,6 +8,8 @@ import { randomUUID } from "node:crypto";
 import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer } from "../scoring/confidence-scorer.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
+import { EmbeddingQueue } from "./embedding-queue.js";
+import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import {
   DEFAULT_LEARNING_CONFIG,
   type Instinct,
@@ -57,15 +59,20 @@ export class LearningPipeline {
   private confidenceScorer: ConfidenceScorer;
   private patternMatcher: PatternMatcher;
   private config: LearningConfig;
+  private embeddingQueue: EmbeddingQueue | null = null;
   private detectionTimer: ReturnType<typeof setInterval> | null = null;
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
 
-  constructor(storage: LearningStorage, config: Partial<LearningConfig> = {}) {
+  constructor(storage: LearningStorage, config: Partial<LearningConfig> = {}, embeddingProvider?: IEmbeddingProvider) {
     this.storage = storage;
     this.config = { ...DEFAULT_LEARNING_CONFIG, ...config };
     this.confidenceScorer = new ConfidenceScorer();
     this.patternMatcher = new PatternMatcher(storage);
+
+    if (embeddingProvider) {
+      this.embeddingQueue = new EmbeddingQueue(embeddingProvider, storage);
+    }
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -79,6 +86,9 @@ export class LearningPipeline {
   }
 
   stop(): void {
+    if (this.embeddingQueue) {
+      this.embeddingQueue.shutdown();
+    }
     this.isRunning = false;
     if (this.detectionTimer) {
       clearInterval(this.detectionTimer);
@@ -230,6 +240,9 @@ export class LearningPipeline {
       const instinct = this.extractInstinctFromTrajectory(trajectory);
       if (instinct) {
         this.storage.createInstinct(instinct);
+        if (this.embeddingQueue) {
+          this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
+        }
         instinctsCreated++;
       }
     }
@@ -272,6 +285,9 @@ export class LearningPipeline {
     };
 
     this.storage.createInstinct(instinct);
+    if (this.embeddingQueue) {
+      this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
+    }
     return instinct;
   }
 
@@ -287,6 +303,9 @@ export class LearningPipeline {
     };
 
     this.storage.createInstinct(instinct);
+    if (this.embeddingQueue) {
+      this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
+    }
     return instinct;
   }
 

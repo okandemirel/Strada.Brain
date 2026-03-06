@@ -123,10 +123,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const memoryManager = await initializeMemory(config, logger);
 
   // Initialize RAG pipeline
-  const ragPipeline = await initializeRAG(config, logger);
+  const ragResult = await initializeRAG(config, logger);
+  const ragPipeline = ragResult?.pipeline;
+  const cachedEmbeddingProvider = ragResult?.cachedProvider;
 
-  // Initialize learning system
-  const learningResult = await initializeLearning(config, logger);
+  // Initialize learning system (pass shared embedding provider if available)
+  const learningResult = await initializeLearning(config, logger, cachedEmbeddingProvider);
 
   // Initialize tools
   const toolRegistry = new ToolRegistry();
@@ -477,10 +479,15 @@ async function initializeFileMemory(
   }
 }
 
+interface RAGResult {
+  pipeline: IRAGPipeline;
+  cachedProvider: CachedEmbeddingProvider;
+}
+
 async function initializeRAG(
   config: Config,
   logger: winston.Logger,
-): Promise<IRAGPipeline | undefined> {
+): Promise<RAGResult | undefined> {
   if (!config.rag.enabled) {
     logger.info("RAG: disabled by configuration");
     return undefined;
@@ -563,7 +570,7 @@ async function initializeRAG(
         }),
       );
 
-    return pipeline;
+    return { pipeline, cachedProvider };
   } catch (error) {
     logger.warn("RAG initialization failed", {
       error: error instanceof Error ? error.message : String(error),
@@ -580,7 +587,7 @@ interface LearningResult {
   errorRecovery: ErrorRecoveryEngine;
 }
 
-async function initializeLearning(config: Config, logger: winston.Logger): Promise<LearningResult> {
+async function initializeLearning(config: Config, logger: winston.Logger, embeddingProvider?: CachedEmbeddingProvider): Promise<LearningResult> {
   try {
     const learningDbPath = join(config.memory.dbPath, "learning.db");
     const learningStorage = new LearningStorage(learningDbPath);
@@ -594,7 +601,7 @@ async function initializeLearning(config: Config, logger: winston.Logger): Promi
       evolutionIntervalMs: LEARNING_DEFAULTS.evolutionIntervalMs as DurationMs,
       minConfidenceForCreation: LEARNING_DEFAULTS.minConfidenceForCreation,
       maxInstincts: LEARNING_DEFAULTS.maxInstincts,
-    });
+    }, embeddingProvider);
 
     pipeline.start();
 
