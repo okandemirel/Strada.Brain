@@ -61,7 +61,6 @@ export class LearningPipeline {
   private patternMatcher: PatternMatcher;
   private config: LearningConfig;
   private embeddingQueue: EmbeddingQueue | null = null;
-  private detectionTimer: ReturnType<typeof setInterval> | null = null;
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
 
@@ -91,10 +90,6 @@ export class LearningPipeline {
       this.embeddingQueue.shutdown();
     }
     this.isRunning = false;
-    if (this.detectionTimer) {
-      clearInterval(this.detectionTimer);
-      this.detectionTimer = null;
-    }
     if (this.evolutionTimer) {
       clearInterval(this.evolutionTimer);
       this.evolutionTimer = null;
@@ -171,22 +166,30 @@ export class LearningPipeline {
    * Replaces the batch detection timer for per-event learning.
    */
   handleToolResult(event: ToolResultEvent): void {
-    // 1. Store observation (reuse existing observeToolUse logic)
-    this.observeToolUse({
-      sessionId: event.sessionId,
-      toolName: event.toolName,
-      input: event.input,
+    // 1. Build observation in-memory (avoids write→read DB round-trip)
+    const observation: Observation = {
+      id: `obs_${randomUUID()}` as ObservationId,
+      type: event.success ? "success" : "error",
+      sessionId: createBrand(event.sessionId, "SessionId" as const),
+      toolName: createBrand(event.toolName, "ToolName" as const),
+      input: event.input as JsonObject,
       output: event.output,
       success: event.success,
       errorDetails: event.errorDetails as ErrorDetails | undefined,
-    });
+      timestamp: Date.now() as TimestampMs,
+      processed: false,
+    };
 
-    // 2. Process the observation immediately (replaces batch detection)
-    const observations = this.storage.getUnprocessedObservations(1);
-    for (const obs of observations) {
-      this.processObservation(obs);
+    // 2. Persist and process in-memory (skip getUnprocessedObservations read-back)
+    this.storage.recordObservation(observation);
+    this.storage.flush();
+
+    if (!event.success && event.errorDetails) {
+      this.recordErrorPattern(event.errorDetails as ErrorDetails, event.toolName);
     }
-    this.storage.markObservationsProcessed(observations.map(o => o.id));
+
+    this.processObservation(observation);
+    this.storage.markObservationsProcessed([observation.id]);
 
     // 3. Update confidence for relevant instincts
     if (event.appliedInstinctIds && event.appliedInstinctIds.length > 0) {

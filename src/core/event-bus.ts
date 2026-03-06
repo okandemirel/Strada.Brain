@@ -93,8 +93,8 @@ export class TypedEventBus<
   private inflight = 0;
   private drainResolvers: Array<() => void> = [];
 
-  /** Map original listener -> wrapped listener so off() can find the right one */
-  private readonly listenerMap = new Map<Function, AnyListener>();
+  /** Map [event][listener] -> wrapped listener so off() can find the right one */
+  private readonly listenerMap = new Map<string, Map<Function, AnyListener>>();
 
   constructor() {
     this.emitter.setMaxListeners(20);
@@ -135,7 +135,12 @@ export class TypedEventBus<
       }
     };
 
-    this.listenerMap.set(listener, wrapped);
+    let eventMap = this.listenerMap.get(event);
+    if (!eventMap) {
+      eventMap = new Map();
+      this.listenerMap.set(event, eventMap);
+    }
+    eventMap.set(listener, wrapped);
     this.emitter.on(event, wrapped);
   }
 
@@ -143,10 +148,11 @@ export class TypedEventBus<
     event: K,
     listener: (payload: TMap[K]) => void | Promise<void>,
   ): void {
-    const wrapped = this.listenerMap.get(listener);
+    const eventMap = this.listenerMap.get(event);
+    const wrapped = eventMap?.get(listener);
     if (wrapped) {
       this.emitter.off(event, wrapped);
-      this.listenerMap.delete(listener);
+      eventMap!.delete(listener);
     }
     // If listener was never registered, silently ignore (no throw)
   }

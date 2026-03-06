@@ -305,18 +305,7 @@ export class Orchestrator {
           };
         }
 
-        // Emit learning event (fire-and-forget, non-blocking)
-        if (this.eventEmitter) {
-          this.eventEmitter.emit("tool:result", {
-            sessionId: chatId,
-            toolName: tc.name,
-            input: tc.input as Record<string, unknown>,
-            output: toolResults[i]!.content.slice(0, 500),
-            success: !(toolResults[i]!.isError ?? false),
-            retryCount: 0,
-            timestamp: Date.now(),
-          });
-        }
+        this.emitToolResult(chatId, tc, toolResults[i]!);
       }
 
       // Progress report: summarize tool calls
@@ -788,18 +777,7 @@ export class Orchestrator {
           };
         }
 
-        // Emit learning event (fire-and-forget, non-blocking)
-        if (this.eventEmitter) {
-          this.eventEmitter.emit("tool:result", {
-            sessionId: chatId,
-            toolName: tc.name,
-            input: tc.input as Record<string, unknown>,
-            output: toolResults[i]!.content.slice(0, 500),
-            success: !(toolResults[i]!.isError ?? false),
-            retryCount: 0,
-            timestamp: Date.now(),
-          });
-        }
+        this.emitToolResult(chatId, tc, toolResults[i]!);
       }
 
       // Inject state-aware context (stall detection, budget warnings)
@@ -1147,6 +1125,19 @@ export class Orchestrator {
       }
     }
   }
+
+  private emitToolResult(chatId: string, tc: { name: string; input: unknown }, tr: { content: string; isError?: boolean }): void {
+    if (!this.eventEmitter) return;
+    this.eventEmitter.emit("tool:result", {
+      sessionId: chatId,
+      toolName: tc.name,
+      input: sanitizeEventInput(tc.input as Record<string, unknown>),
+      output: tr.content.slice(0, 500),
+      success: !(tr.isError ?? false),
+      retryCount: 0,
+      timestamp: Date.now(),
+    });
+  }
 }
 
 const REFLECTION_DECISION_RE = /\*\*\s*(DONE|REPLAN|CONTINUE)\s*\*\*/;
@@ -1166,6 +1157,16 @@ function extractApproachSummary(state: AgentState): string {
   const recentSteps = state.stepResults.slice(-5);
   const tools = recentSteps.map(s => s.toolName + "(" + (s.success ? "OK" : "FAIL") + ")").join(" → ");
   return (state.plan?.slice(0, 100) ?? "Unknown plan") + ": " + tools;
+}
+
+/** Sanitize tool input for learning events: cap size, strip API keys */
+function sanitizeEventInput(input: Record<string, unknown>): Record<string, unknown> {
+  const serialized = JSON.stringify(input);
+  if (serialized.length > 2048) {
+    return { _truncated: true, _keys: Object.keys(input) };
+  }
+  const scrubbed = serialized.replace(API_KEY_PATTERN, "[REDACTED]");
+  return JSON.parse(scrubbed) as Record<string, unknown>;
 }
 
 /**
