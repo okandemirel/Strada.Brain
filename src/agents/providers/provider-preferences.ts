@@ -8,6 +8,7 @@
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
+import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 
 export interface ChatProviderPreference {
   chatId: string;
@@ -32,8 +33,8 @@ export class ProviderPreferenceStore {
 
     try {
       this.db = new Database(this.dbPath);
-      this.db.pragma("journal_mode = WAL");
-      this.db.pragma("synchronous = NORMAL");
+      // Standardized pragma configuration (2MB cache, 5s busy_timeout)
+      configureSqlitePragmas(this.db, "preferences");
 
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS provider_preferences (

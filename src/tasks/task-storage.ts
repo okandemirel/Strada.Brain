@@ -7,6 +7,7 @@
  */
 
 import Database from "better-sqlite3";
+import { configureSqlitePragmas } from "../memory/unified/sqlite-pragmas.js";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Task, TaskId, ProgressEntry } from "./types.js";
@@ -84,9 +85,8 @@ export class TaskStorage {
     }
 
     this.db = new Database(this.dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = NORMAL");
-    this.db.pragma("foreign_keys = ON");
+    // Standardized pragma configuration (8MB cache, 5s busy_timeout)
+    configureSqlitePragmas(this.db, "tasks");
     this.db.exec(SCHEMA_SQL);
     this.prepareStatements();
   }

@@ -10,6 +10,7 @@
  */
 
 import Database from "better-sqlite3";
+import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { 
@@ -209,12 +210,8 @@ export class LearningStorage {
 
     this.db = new Database(this.dbPath);
     
-    // Performance optimizations
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = NORMAL");
-    this.db.pragma("cache_size = -64000"); // 64MB cache
-    this.db.pragma("temp_store = memory");
-    this.db.pragma("mmap_size = 268435456"); // 256MB memory mapping
+    // Standardized pragma configuration (16MB cache, 5s busy_timeout)
+    configureSqlitePragmas(this.db, "learning");
     
     // Execute schema
     this.db.exec(SCHEMA_SQL);

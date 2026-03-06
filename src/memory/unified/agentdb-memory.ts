@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
+import { configureSqlitePragmas } from "./sqlite-pragmas.js";
 import type {
   IUnifiedMemory,
   UnifiedMemoryEntry,
@@ -1213,11 +1214,8 @@ export class AgentDBMemory implements IUnifiedMemory {
       const sqlitePath = join(this.dbPath, "memory.db");
       this.sqliteDb = new Database(sqlitePath);
 
-      // Performance optimizations
-      this.sqliteDb.pragma("journal_mode = WAL");
-      this.sqliteDb.pragma("synchronous = NORMAL");
-      this.sqliteDb.pragma("cache_size = -16000"); // 16MB cache
-      this.sqliteDb.pragma("temp_store = memory");
+      // Standardized pragma configuration (16MB cache, 5s busy_timeout)
+      configureSqlitePragmas(this.sqliteDb, "memory");
 
       // Create schema using exec (safe - no user input, static SQL only)
       this.sqliteDb.exec(MEMORY_SCHEMA_SQL);
