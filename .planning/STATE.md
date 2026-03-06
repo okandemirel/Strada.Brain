@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-03-06T13:03:04Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-03-06T14:56:34.342Z"
 progress:
   total_phases: 9
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
-  percent: 100
+  total_plans: 8
+  completed_plans: 7
+  percent: 88
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,19 +19,19 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 2 fully complete. All 3 plans done (HNSW mutex + migration + gap closure). Ready for Phase 3.
+**Current Focus:** Phase 3 in progress. Plans 01-02 complete. Plan 03 next.
 
 ## Current Position
 
-**Milestone:** Phase 2 — Agent Evolution (Level 3 → 4)
-**Phase:** 2 of 9 (Migration & HNSW Hardening)
-**Plan:** 3 of 3 complete (02-01, 02-02, 02-03 done)
+**Milestone:** Phase 3 — Agent Evolution (Level 3 -> 4)
+**Phase:** 3 of 9 (Auto-Tiering & Embedding Infrastructure)
+**Plan:** 2 of 3 complete (03-01, 03-02 done)
 **Status:** Executing
 
 **Progress:**
-Phase 1  [##########] 100%  AgentDB Activation
+[█████████░] 88%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
-Phase 3  [..........] 0%    Auto-Tiering & Embedding Infrastructure
+Phase 3  [######....] 67%   Auto-Tiering & Embedding Infrastructure
 Phase 4  [..........] 0%    Event-Driven Learning
 Phase 5  [..........] 0%    Metrics Instrumentation
 Phase 6  [..........] 0%    Bayesian Confidence System
@@ -46,8 +46,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Metric | Value |
 |--------|-------|
 | Phases completed | 2/9 |
-| Plans completed | 5 (2 Phase 1 + 3 Phase 2) |
-| Requirements delivered | 6/32 (MEM-01, MEM-02, MEM-03, MEM-05, MEM-06, MEM-07) |
+| Plans completed | 7 (2 Phase 1 + 3 Phase 2 + 2 Phase 3) |
+| Requirements delivered | 9/32 (MEM-01, MEM-02, MEM-03, MEM-05, MEM-06, MEM-07, LRN-03, LRN-04, LRN-07) |
 | Tests added | 75/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
@@ -55,6 +55,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 02 P01 | 5min | 2 tasks | 6 files |
 | Phase 02 P02 | 5min | 2 tasks | 4 files |
 | Phase 02 P03 | 2min | 1 task | 2 files |
+| Phase 03 P01 | 3min | 2 tasks | 6 files |
+| Phase 03 P02 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -77,6 +79,14 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P2-02] Migration runs in both primary and repair AgentDB init paths
 - [P2-02] File backend excluded from migration (already on legacy system)
 - [P2-03] enforceTierLimits uses batched removes in single withLock (fewer lock acquisitions, matches rebuildIndex pattern)
+- [P3-01] Profile-based SqliteProfile union type for pragma config (memory/learning/tasks/preferences)
+- [P3-01] foreign_keys=ON added to all SQLite profiles (was only TaskStorage)
+- [P3-01] LearningStorage cache reduced 64MB->16MB, 256MB mmap_size removed per locked budget
+- [P3-02] Fire-and-forget embedding: failures logged at debug level, never rethrown
+- [P3-02] 500ms default batch window balances latency vs. API efficiency
+- [P3-02] Shared CachedEmbeddingProvider: single instance for RAG and learning
+- [P3-02] Optional provider pattern: when RAG disabled, embeddingQueue stays null
+- [P3-02] Embedding text = triggerPattern + " " + action concatenation
 - Fine granularity (9 phases) chosen for complex brownfield changes
 - Memory phases split into 3 (activation, migration, auto-tiering) due to interface drift risk
 - Embedding infrastructure placed in Phase 3 (after HNSW hardening) as bridge between memory and learning
@@ -102,8 +112,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-06T13:03:04Z
-**Stopped at:** Completed 02-03-PLAN.md
+**Last session:** 2026-03-06T14:56:34.338Z
+**Stopped at:** Completed 03-02-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis

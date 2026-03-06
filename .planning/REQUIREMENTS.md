@@ -21,11 +21,11 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 
 - [ ] **LRN-01**: Learning pipeline uses event-driven triggers instead of 5-minute batch timer
 - [ ] **LRN-02**: Tool success/failure emits events that trigger immediate pattern storage
-- [ ] **LRN-03**: CachedEmbeddingProvider wired to learning pipeline for instinct HNSW embedding generation
-- [ ] **LRN-04**: Instinct embedding column populated on every pattern store operation
+- [x] **LRN-03**: CachedEmbeddingProvider wired to learning pipeline for instinct HNSW embedding generation
+- [x] **LRN-04**: Instinct embedding column populated on every pattern store operation
 - [ ] **LRN-05**: Confidence updates happen online from real tool outcomes (no batch delay)
 - [ ] **LRN-06**: Event bus decouples orchestrator, learning pipeline, and memory subsystems
-- [ ] **LRN-07**: SQLite pragma standardization (WAL mode, cache_size, busy_timeout) across all databases
+- [x] **LRN-07**: SQLite pragma standardization (WAL mode, cache_size, busy_timeout) across all databases
 
 ### Recursive Goal Decomposition
 
@@ -101,9 +101,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | MEM-03 | Phase 2: Memory Migration & HNSW Hardening | Complete |
 | MEM-06 | Phase 2: Memory Migration & HNSW Hardening | Complete |
 | MEM-04 | Phase 3: Auto-Tiering & Embedding Infrastructure | Pending |
-| LRN-03 | Phase 3: Auto-Tiering & Embedding Infrastructure | Pending |
-| LRN-04 | Phase 3: Auto-Tiering & Embedding Infrastructure | Pending |
-| LRN-07 | Phase 3: Auto-Tiering & Embedding Infrastructure | Pending |
+| LRN-03 | Phase 3: Auto-Tiering & Embedding Infrastructure | Complete |
+| LRN-04 | Phase 3: Auto-Tiering & Embedding Infrastructure | Complete |
+| LRN-07 | Phase 3: Auto-Tiering & Embedding Infrastructure | Complete |
 | LRN-01 | Phase 4: Event-Driven Learning | Pending |
 | LRN-02 | Phase 4: Event-Driven Learning | Pending |
 | LRN-05 | Phase 4: Event-Driven Learning | Pending |
