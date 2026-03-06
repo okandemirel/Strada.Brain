@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-03-06T12:01:36Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-03-06T12:10:30Z"
 progress:
   total_phases: 9
-  completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  completed_phases: 2
+  total_plans: 4
+  completed_plans: 4
   percent: 100
 ---
 
@@ -19,42 +19,41 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 2 in progress. Plan 01 (HNSW Write Mutex + Semantic Routing) complete.
+**Current Focus:** Phase 2 complete. Both plans done (HNSW mutex + migration). Ready for Phase 3.
 
 ## Current Position
 
 **Milestone:** Phase 2 — Agent Evolution (Level 3 → 4)
 **Phase:** 2 of 9 (Migration & HNSW Hardening)
-**Plan:** 1 of 1 complete (02-01 done)
+**Plan:** 2 of 2 complete (02-01, 02-02 done)
 **Status:** Executing
 
 **Progress:**
-[██████████] 100%
-Phase 1  [██████████] 100%  AgentDB Activation
-Phase 2  [█████.....] 50%   Migration & HNSW Hardening
-Phase 3  [ . . . . . . . . . . ] 0%  Auto-Tiering & Embedding Infrastructure
-Phase 4  [ . . . . . . . . . . ] 0%  Event-Driven Learning
-Phase 5  [ . . . . . . . . . . ] 0%  Metrics Instrumentation
-Phase 6  [ . . . . . . . . . . ] 0%  Bayesian Confidence System
-Phase 7  [ . . . . . . . . . . ] 0%  Recursive Goal Decomposition
-Phase 8  [ . . . . . . . . . . ] 0%  Goal Progress & Execution
-Phase 9  [ . . . . . . . . . . ] 0%  Tool Chain Synthesis
-```
+Phase 1  [##########] 100%  AgentDB Activation
+Phase 2  [##########] 100%  Migration & HNSW Hardening
+Phase 3  [..........] 0%    Auto-Tiering & Embedding Infrastructure
+Phase 4  [..........] 0%    Event-Driven Learning
+Phase 5  [..........] 0%    Metrics Instrumentation
+Phase 6  [..........] 0%    Bayesian Confidence System
+Phase 7  [..........] 0%    Recursive Goal Decomposition
+Phase 8  [..........] 0%    Goal Progress & Execution
+Phase 9  [..........] 0%    Tool Chain Synthesis
 
-**Overall:** 1/9 phases complete (11%)
+**Overall:** 2/9 phases complete (22%)
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 1/9 |
-| Plans completed | 3 (2 Phase 1 + 1 Phase 2) |
-| Requirements delivered | 5/32 (MEM-01, MEM-03, MEM-05, MEM-06, MEM-07) |
-| Tests added | 63/50+ target |
+| Phases completed | 2/9 |
+| Plans completed | 4 (2 Phase 1 + 2 Phase 2) |
+| Requirements delivered | 6/32 (MEM-01, MEM-02, MEM-03, MEM-05, MEM-06, MEM-07) |
+| Tests added | 74/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
 | Phase 02 P01 | 5min | 2 tasks | 6 files |
+| Phase 02 P02 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -71,6 +70,11 @@ Phase 9  [ . . . . . . . . . . ] 0%  Tool Chain Synthesis
 - [P2-01] shutdown() not wrapped in mutex (lifecycle method, not concurrent write)
 - [P2-01] Chat/type modes retain TF-IDF path (structural filters, not similarity)
 - [P2-01] Empty query falls back to TF-IDF (no embedding to search against)
+- [P2-02] Marker file (migration-complete.json) chosen over DB flag for idempotency
+- [P2-02] Capacity check preserves most recent entries first (createdAt desc)
+- [P2-02] triggerLegacyMigration() extracted as helper to keep initializeMemory clean
+- [P2-02] Migration runs in both primary and repair AgentDB init paths
+- [P2-02] File backend excluded from migration (already on legacy system)
 - Fine granularity (9 phases) chosen for complex brownfield changes
 - Memory phases split into 3 (activation, migration, auto-tiering) due to interface drift risk
 - Embedding infrastructure placed in Phase 3 (after HNSW hardening) as bridge between memory and learning
@@ -96,19 +100,22 @@ Phase 9  [ . . . . . . . . . . ] 0%  Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-06T12:01:36Z
-**Stopped at:** Completed 02-01-PLAN.md
+**Last session:** 2026-03-06T12:10:30Z
+**Stopped at:** Completed 02-02-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
-- Dormant code: MemoryMigrator (14KB), CachedEmbeddingProvider, ConfidenceScorer
+- Dormant code: CachedEmbeddingProvider, ConfidenceScorer
 - Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts
-- All 1790 tests pass (was 1779, +11 from Phase 2 Plan 01)
+- All 1801 tests pass (was 1790, +11 from Phase 2 Plan 02)
 - Quality gates: /simplify + /security-review after each implementation phase
 - HnswWriteMutex now serializes all HNSW writes in agentdb-memory.ts
 - AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
+- Migration idempotency marker prevents duplicate runs
+- Bootstrap triggers runAutomaticMigration() after AgentDB init (both paths)
+- Phase 2 complete, ready for Phase 3 (Auto-Tiering & Embedding Infrastructure)
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-06T12:01:36Z*
+*Last updated: 2026-03-06T12:10:30Z*

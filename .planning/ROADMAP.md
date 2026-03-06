@@ -42,7 +42,7 @@ Plans:
 **Plans:** 2 plans
 Plans:
 - [x] 02-01-PLAN.md — HNSW write mutex + semantic-first retrieval routing in AgentDBAdapter
-- [ ] 02-02-PLAN.md — FileMemoryManager-to-AgentDB migration with idempotency, validation, and bootstrap wiring
+- [x] 02-02-PLAN.md — FileMemoryManager-to-AgentDB migration with idempotency, validation, and bootstrap wiring
 
 ### Phase 3: Auto-Tiering & Embedding Infrastructure
 **Goal**: Memory entries auto-promote/demote across tiers and the learning pipeline can generate embeddings for instincts
@@ -124,7 +124,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. AgentDB Activation | 2/2 | Complete | 2026-03-06 |
-| 2. Memory Migration & HNSW Hardening | 1/2 | In Progress | - |
+| 2. Memory Migration & HNSW Hardening | 2/2 | Complete | 2026-03-06 |
 | 3. Auto-Tiering & Embedding Infrastructure | 0/? | Not started | - |
 | 4. Event-Driven Learning | 0/? | Not started | - |
 | 5. Metrics Instrumentation | 0/? | Not started | - |
