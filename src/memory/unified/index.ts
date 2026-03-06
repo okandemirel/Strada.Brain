@@ -25,6 +25,9 @@ export {
   createAgentDBMemory,
 } from "./agentdb-memory.js";
 
+// AgentDB adapter (IUnifiedMemory -> IMemoryManager bridge)
+export { AgentDBAdapter } from "./agentdb-adapter.js";
+
 // Migration utilities
 export {
   MemoryMigrator,

@@ -1,0 +1,318 @@
+/**
+ * AgentDBAdapter — Bridges IUnifiedMemory (AgentDB) to IMemoryManager (orchestrator)
+ *
+ * Translates method signatures between the two interfaces so the orchestrator
+ * works unchanged while using AgentDB as the memory backend.
+ *
+ * This adapter is intentionally temporary. When the orchestrator migrates to
+ * speak IUnifiedMemory directly, this adapter can be removed.
+ */
+
+import type {
+  IMemoryManager,
+  RetrievalOptions,
+  RetrievalResult,
+  MemoryEntry,
+  ConversationMemoryEntry,
+  MemoryStats,
+  MemoryHealth,
+  MemoryImportance,
+  MemoryMetadata,
+  MemoryEntryType,
+  PaginatedRetrievalResult,
+  SemanticRetrievalOptions,
+  ChatRetrievalOptions,
+} from "../memory.interface.js";
+import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
+import type {
+  Result,
+  Option,
+  MemoryId,
+  ChatId,
+  TimestampMs,
+  DurationMs,
+  JsonObject,
+} from "../../types/index.js";
+import { ok, err, some, none } from "../../types/index.js";
+import type { AgentDBMemory } from "./agentdb-memory.js";
+import { getLogger } from "../../utils/logger.js";
+
+function getLoggerSafe() {
+  try {
+    return getLogger();
+  } catch {
+    return console;
+  }
+}
+
+export class AgentDBAdapter implements IMemoryManager {
+  constructor(private readonly agentdb: AgentDBMemory) {}
+
+  // =========================================================================
+  // Lifecycle — pass-through
+  // =========================================================================
+
+  async initialize(): Promise<Result<void, Error>> {
+    return this.agentdb.initialize();
+  }
+
+  async shutdown(): Promise<Result<void, Error>> {
+    return this.agentdb.shutdown();
+  }
+
+  // =========================================================================
+  // Retrieval — signature translation
+  // IMemoryManager: retrieve(options: RetrievalOptions) -> Result<RetrievalResult[], Error>
+  // IUnifiedMemory: retrieve(query: string, options?: RetrievalOptions) -> RetrievalResult[]
+  // =========================================================================
+
+  async retrieve(options: RetrievalOptions): Promise<Result<RetrievalResult[], Error>> {
+    try {
+      let query = "";
+      if ("query" in options && options.query) {
+        query = options.query;
+      }
+      const results = await this.agentdb.retrieve(query, options);
+      return ok(results);
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+
+  // =========================================================================
+  // Analysis Cache — return type translation
+  // IMemoryManager: getCachedAnalysis(...) -> Result<Option<Analysis>, Error>
+  // IUnifiedMemory: getCachedAnalysis(...) -> Analysis | null
+  // =========================================================================
+
+  async getCachedAnalysis(
+    projectPath: string,
+    maxAgeMs?: DurationMs,
+  ): Promise<Result<Option<StrataProjectAnalysis>, Error>> {
+    try {
+      const analysis = await this.agentdb.getCachedAnalysis(projectPath, maxAgeMs);
+      return ok(analysis ? some(analysis) : none());
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+
+  async cacheAnalysis(
+    analysis: StrataProjectAnalysis,
+    projectPath: string,
+    _options?: { ttl?: DurationMs },
+  ): Promise<Result<void, Error>> {
+    try {
+      // AgentDB's cacheAnalysis already returns Result<void, Error>
+      const result = await this.agentdb.cacheAnalysis(analysis, projectPath);
+      return result;
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+
+  async invalidateAnalysis(_projectPath: string): Promise<Result<void, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] invalidateAnalysis stub called");
+    return ok(undefined);
+  }
+
+  // =========================================================================
+  // Conversation — parameter shape translation
+  // IMemoryManager: storeConversation(chatId, summary, options?) -> Result<MemoryId, Error>
+  // IUnifiedMemory: storeConversation(chatId, summary, tags?, tier?) -> MemoryEntry
+  // =========================================================================
+
+  async storeConversation(
+    chatId: ChatId,
+    summary: string,
+    options?: {
+      tags?: string[];
+      importance?: MemoryImportance;
+      turnNumber?: number;
+      userMessage?: string;
+      assistantMessage?: string;
+    },
+  ): Promise<Result<MemoryId, Error>> {
+    try {
+      const entry = await this.agentdb.storeConversation(chatId, summary, options?.tags);
+      return ok(entry.id);
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+
+  async getChatHistory(
+    _chatId: ChatId,
+    _options?: { limit?: number; before?: TimestampMs },
+  ): Promise<Result<ConversationMemoryEntry[], Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] getChatHistory stub called");
+    return ok([]);
+  }
+
+  // =========================================================================
+  // General Memory Storage — stubs (not called in Phase 1)
+  // =========================================================================
+
+  async storeNote(
+    _content: string,
+    _options?: {
+      title?: string;
+      tags?: string[];
+      importance?: MemoryImportance;
+      source?: string;
+      metadata?: MemoryMetadata;
+    },
+  ): Promise<Result<MemoryId, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] storeNote stub called");
+    return ok("stub_note_id" as MemoryId);
+  }
+
+  async storeError(
+    _error: Error,
+    _context: {
+      category: string;
+      location?: string;
+      chatId?: ChatId;
+    },
+    _options?: {
+      tags?: string[];
+      metadata?: MemoryMetadata;
+    },
+  ): Promise<Result<MemoryId, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] storeError stub called");
+    return ok("stub_error_id" as MemoryId);
+  }
+
+  async resolveError(_id: MemoryId, _resolution: string): Promise<Result<void, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] resolveError stub called");
+    return ok(undefined);
+  }
+
+  async storeEntry<T extends MemoryEntry>(
+    _entry: Omit<T, "id" | "createdAt" | "accessCount">,
+  ): Promise<Result<T, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] storeEntry stub called");
+    return err(new Error("storeEntry not yet implemented in AgentDBAdapter"));
+  }
+
+  async getEntry<T extends MemoryEntry>(_id: MemoryId): Promise<Result<Option<T>, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] getEntry stub called");
+    return ok(none());
+  }
+
+  async updateEntry<T extends MemoryEntry>(
+    _id: MemoryId,
+    _updates: Partial<Omit<T, "id" | "createdAt">>,
+  ): Promise<Result<T, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] updateEntry stub called");
+    return err(new Error("updateEntry not yet implemented in AgentDBAdapter"));
+  }
+
+  async deleteEntry(_id: MemoryId): Promise<Result<boolean, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] deleteEntry stub called");
+    return ok(false);
+  }
+
+  // =========================================================================
+  // Retrieval variants — stubs
+  // =========================================================================
+
+  async retrievePaginated(
+    _options: RetrievalOptions,
+    _pagination: { page: number; pageSize: number; cursor?: string },
+  ): Promise<Result<PaginatedRetrievalResult, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] retrievePaginated stub called");
+    return ok({
+      results: [],
+      totalCount: 0,
+      page: _pagination.page,
+      pageSize: _pagination.pageSize,
+      hasMore: false,
+    });
+  }
+
+  async retrieveSemantic(
+    _query: string,
+    _options?: Omit<SemanticRetrievalOptions, "mode" | "query">,
+  ): Promise<Result<RetrievalResult[], Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] retrieveSemantic stub called");
+    return ok([]);
+  }
+
+  async retrieveFromChat(
+    _chatId: ChatId,
+    _options?: Omit<ChatRetrievalOptions, "mode" | "chatId">,
+  ): Promise<Result<RetrievalResult<ConversationMemoryEntry>[], Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] retrieveFromChat stub called");
+    return ok([]);
+  }
+
+  // =========================================================================
+  // Management — stubs
+  // =========================================================================
+
+  async archiveOldEntries(_before: TimestampMs): Promise<Result<number, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] archiveOldEntries stub called");
+    return ok(0);
+  }
+
+  async compact(): Promise<Result<{ freedBytes: number }, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] compact stub called");
+    return ok({ freedBytes: 0 });
+  }
+
+  // =========================================================================
+  // Stats & Health — the 2 core production methods
+  // =========================================================================
+
+  getStats(): MemoryStats {
+    // UnifiedMemoryStats extends MemoryStats, so this is structurally compatible
+    return this.agentdb.getStats();
+  }
+
+  /**
+   * Synthesize MemoryHealth from AgentDB's getStats() + getIndexHealth().
+   * IUnifiedMemory doesn't have getHealth(), but we can construct it.
+   */
+  getHealth(): MemoryHealth {
+    const stats = this.agentdb.getStats();
+    const indexHealth = this.agentdb.getIndexHealth();
+
+    const issues: string[] = [...indexHealth.issues];
+    const totalEntries = stats.totalEntries;
+
+    // Check if totalEntries exceeds 90% of the HNSW index max capacity
+    const effectiveMax = stats.hnswStats?.maxElements ?? 11100;
+
+    if (totalEntries > effectiveMax * 0.9) {
+      issues.push("Memory near capacity");
+    }
+
+    return {
+      healthy: issues.length === 0,
+      issues,
+      storageUsagePercent: effectiveMax > 0 ? (totalEntries / effectiveMax) * 100 : 0,
+      indexHealth: indexHealth.isHealthy ? "healthy" : issues.length > 2 ? "critical" : "degraded",
+    };
+  }
+
+  // =========================================================================
+  // Export/Import — stubs
+  // =========================================================================
+
+  async export(
+    _options?: {
+      types?: MemoryEntryType[];
+      after?: TimestampMs;
+      before?: TimestampMs;
+    },
+  ): Promise<Result<JsonObject, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] export stub called");
+    return ok({} as JsonObject);
+  }
+
+  async import(_data: JsonObject): Promise<Result<number, Error>> {
+    getLoggerSafe().debug("[AgentDBAdapter] import stub called");
+    return ok(0);
+  }
+}
