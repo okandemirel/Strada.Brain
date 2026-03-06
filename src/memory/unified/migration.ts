@@ -65,6 +65,17 @@ interface LegacyAnalysisFile {
 }
 
 /**
+ * Migration-complete marker filename.
+ * Written to sourcePath after successful migration to prevent duplicate runs.
+ */
+export const MIGRATION_MARKER = "migration-complete.json";
+
+/**
+ * Default maximum entries to migrate (sum of tier limits: 100+1000+10000)
+ */
+const DEFAULT_MAX_ENTRIES = 11100;
+
+/**
  * Migration configuration
  */
 export interface MigrationConfig {
@@ -82,6 +93,8 @@ export interface MigrationConfig {
   dryRun: boolean;
   /** Skip entries that already exist */
   skipExisting: boolean;
+  /** Maximum entries to migrate (prevents HNSW overflow). Defaults to 11100. */
+  maxEntries?: number;
 }
 
 /**
@@ -93,6 +106,7 @@ export const DEFAULT_MIGRATION_CONFIG: Partial<MigrationConfig> = {
   persistentCutoffDays: 7,
   dryRun: false,
   skipExisting: true,
+  maxEntries: DEFAULT_MAX_ENTRIES,
 };
 
 /**
@@ -127,6 +141,10 @@ export class MemoryMigrator {
       dryRun: this.config.dryRun,
     });
 
+    // Get source entry count for count validation
+    const preview = MemoryMigrator.getMigrationPreview(this.config.sourcePath);
+    const expectedCount = preview.entryCount;
+
     try {
       // Migrate memory entries
       await this.migrateMemoryEntries();
@@ -134,9 +152,25 @@ export class MemoryMigrator {
       // Migrate analysis cache
       await this.migrateAnalysisCache();
 
+      // Count validation: migrated + failed should equal source count
+      const actualCount = this.status.entriesMigrated + this.status.entriesFailed;
+      if (expectedCount > 0 && actualCount !== expectedCount) {
+        // Capacity-limited migration is not a mismatch
+        const maxEntries = this.config.maxEntries ?? DEFAULT_MAX_ENTRIES;
+        const effectiveExpected = Math.min(expectedCount, maxEntries);
+        if (actualCount !== effectiveExpected) {
+          const countError = `Count validation failed: expected ${effectiveExpected} entries (migrated+failed), got ${actualCount}`;
+          getLoggerSafe().error("[MemoryMigrator] " + countError);
+          this.status.errors.push(countError);
+        }
+      }
+
       // Mark complete
       this.status.isComplete = true;
       this.status.completedAt = Date.now();
+
+      // Write idempotency marker file
+      this.writeMarkerFile();
 
       getLoggerSafe().info("[MemoryMigrator] Migration complete", {
         entriesMigrated: this.status.entriesMigrated,
@@ -149,6 +183,28 @@ export class MemoryMigrator {
     }
 
     return this.status;
+  }
+
+  /**
+   * Write migration-complete marker file to prevent duplicate runs
+   */
+  private writeMarkerFile(): void {
+    try {
+      const markerPath = join(this.config.sourcePath, MIGRATION_MARKER);
+      const markerData = {
+        completedAt: new Date().toISOString(),
+        entriesMigrated: this.status.entriesMigrated,
+        entriesFailed: this.status.entriesFailed,
+        sourceSystem: this.status.sourceSystem,
+        version: this.status.version,
+      };
+      writeFileSync(markerPath, JSON.stringify(markerData, null, 2));
+      getLoggerSafe().info("[MemoryMigrator] Migration marker written", { markerPath });
+    } catch (error) {
+      getLoggerSafe().warn("[MemoryMigrator] Failed to write migration marker", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -181,11 +237,26 @@ export class MemoryMigrator {
       count: legacyData.entries.length,
     });
 
+    // Capacity check: truncate if entries exceed maxEntries
+    const maxEntries = this.config.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    let entriesToMigrate = legacyData.entries;
+
+    if (entriesToMigrate.length > maxEntries) {
+      getLoggerSafe().warn("[MemoryMigrator] Entry count exceeds capacity, truncating", {
+        sourceCount: entriesToMigrate.length,
+        maxEntries,
+      });
+      // Sort by createdAt descending (most recent first), take first maxEntries
+      entriesToMigrate = [...entriesToMigrate]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, maxEntries);
+    }
+
     // Rebuild TF-IDF index for similarity computation
     const textIndex = TextIndex.deserialize(legacyData.index);
 
     // Migrate each entry
-    for (const legacyEntry of legacyData.entries) {
+    for (const legacyEntry of entriesToMigrate) {
       try {
         await this.migrateSingleEntry(legacyEntry, textIndex);
         this.status.entriesMigrated++;
@@ -374,9 +445,15 @@ export class MemoryMigrator {
   }
 
   /**
-   * Check if migration is needed
+   * Check if migration is needed.
+   * Returns false if migration-complete marker exists (even if memory.json still exists).
    */
   static isMigrationNeeded(sourcePath: string): boolean {
+    // If marker exists, migration was already completed
+    const markerPath = join(sourcePath, MIGRATION_MARKER);
+    if (existsSync(markerPath)) {
+      return false;
+    }
     const memoryPath = join(sourcePath, "memory.json");
     return existsSync(memoryPath);
   }

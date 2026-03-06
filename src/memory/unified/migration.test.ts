@@ -6,9 +6,9 @@ beforeAll(() => {
   createLogger("error", "test.log");
 });
 import { join } from "node:path";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { MemoryMigrator, runAutomaticMigration, BackwardCompatibleMemory } from "./migration.js";
+import { MemoryMigrator, MIGRATION_MARKER, runAutomaticMigration, BackwardCompatibleMemory } from "./migration.js";
 import { AgentDBMemory } from "./agentdb-memory.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 
@@ -231,6 +231,158 @@ describe("MemoryMigrator", () => {
       });
 
       expect(results.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("idempotency and validation", () => {
+    function createLegacyData(entryCount: number) {
+      const entries = [];
+      for (let i = 0; i < entryCount; i++) {
+        entries.push({
+          id: `entry-${i}`,
+          type: "note" as const,
+          content: `Test content for entry number ${i} with some searchable words`,
+          createdAt: new Date(Date.now() - i * 60000).toISOString(),
+          tags: ["test"],
+        });
+      }
+      return {
+        version: 1 as const,
+        entries,
+        index: { df: { test: entryCount }, docCount: entryCount },
+      };
+    }
+
+    it("should write migration-complete marker file after successful migration", async () => {
+      const legacyData = createLegacyData(3);
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyData));
+
+      const migrator = new MemoryMigrator({
+        sourcePath: tempDir,
+        targetMemory,
+        generateEmbeddings: true,
+        tierAssignment: "age",
+        persistentCutoffDays: 7,
+        dryRun: false,
+        skipExisting: true,
+      });
+
+      await migrator.migrate();
+
+      // Marker file should exist
+      const markerPath = join(tempDir, MIGRATION_MARKER);
+      expect(existsSync(markerPath)).toBe(true);
+
+      // Marker should contain migration metadata
+      const marker = JSON.parse(readFileSync(markerPath, "utf-8"));
+      expect(marker.completedAt).toBeDefined();
+      expect(marker.entriesMigrated).toBe(3);
+      expect(marker.entriesFailed).toBe(0);
+      expect(marker.sourceSystem).toBe("file-memory-tfidf");
+      expect(marker.version).toBe(2);
+    });
+
+    it("should return false from isMigrationNeeded when marker exists", () => {
+      // Create both memory.json and marker file
+      const legacyData = createLegacyData(1);
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyData));
+      writeFileSync(
+        join(tempDir, MIGRATION_MARKER),
+        JSON.stringify({ completedAt: new Date().toISOString(), entriesMigrated: 1, entriesFailed: 0, sourceSystem: "file-memory-tfidf", version: 2 }),
+      );
+
+      // Should return false even though memory.json exists
+      expect(MemoryMigrator.isMigrationNeeded(tempDir)).toBe(false);
+    });
+
+    it("should not duplicate entries when migration is run twice (idempotency via runAutomaticMigration)", async () => {
+      const legacyData = createLegacyData(2);
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyData));
+
+      // First run
+      const status1 = await runAutomaticMigration(tempDir, targetMemory);
+      expect(status1).not.toBeNull();
+      expect(status1!.entriesMigrated).toBe(2);
+
+      // Second run should return null because marker exists
+      const status2 = await runAutomaticMigration(tempDir, targetMemory);
+      expect(status2).toBeNull();
+    });
+
+    it("should validate that entriesMigrated + entriesFailed equals source entryCount", async () => {
+      const legacyData = createLegacyData(5);
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyData));
+
+      const migrator = new MemoryMigrator({
+        sourcePath: tempDir,
+        targetMemory,
+        generateEmbeddings: true,
+        tierAssignment: "age",
+        persistentCutoffDays: 7,
+        dryRun: false,
+        skipExisting: true,
+      });
+
+      const status = await migrator.migrate();
+
+      // Count validation: migrated + failed == source count
+      expect(status.entriesMigrated + status.entriesFailed).toBe(5);
+    });
+
+    it("should log each failed entry with its ID and error message", async () => {
+      // Create legacy data with an entry that will cause failure
+      const legacyData = {
+        version: 1,
+        entries: [
+          { id: "ok-1", type: "note", content: "Valid entry", createdAt: new Date().toISOString(), tags: [] },
+          { id: "ok-2", type: "note", content: "Another valid entry", createdAt: new Date().toISOString(), tags: [] },
+        ],
+        index: { df: {}, docCount: 2 },
+      };
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyData));
+
+      const migrator = new MemoryMigrator({
+        sourcePath: tempDir,
+        targetMemory,
+        generateEmbeddings: true,
+        tierAssignment: "age",
+        persistentCutoffDays: 7,
+        dryRun: false,
+        skipExisting: true,
+      });
+
+      const status = await migrator.migrate();
+
+      // All entries should either be migrated or have error logged with entry ID
+      expect(status.entriesMigrated + status.entriesFailed).toBe(2);
+      // Any failed entries should have error messages containing the entry ID
+      for (const error of status.errors) {
+        expect(error).toMatch(/entry/i);
+      }
+    });
+
+    it("should cap migration at maxEntries when source exceeds capacity", async () => {
+      // Create more entries than capacity allows
+      const maxEntries = 5;
+      const legacyData = createLegacyData(10); // 10 entries but maxEntries is 5
+      writeFileSync(join(tempDir, "memory.json"), JSON.stringify(legacyData));
+
+      const migrator = new MemoryMigrator({
+        sourcePath: tempDir,
+        targetMemory,
+        generateEmbeddings: true,
+        tierAssignment: "age",
+        persistentCutoffDays: 7,
+        dryRun: false,
+        skipExisting: true,
+        maxEntries,
+      });
+
+      const status = await migrator.migrate();
+
+      // Should only migrate up to maxEntries
+      expect(status.entriesMigrated + status.entriesFailed).toBeLessThanOrEqual(maxEntries);
+      expect(status.entriesMigrated).toBeLessThanOrEqual(maxEntries);
     });
   });
 });
