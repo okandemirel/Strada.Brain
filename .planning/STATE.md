@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-03-06T22:13:30.808Z"
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-03-06T22:21:55Z"
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 10
-  completed_plans: 9
-  percent: 90
+  completed_plans: 10
+  percent: 100
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,36 +19,36 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 4 in progress. Plan 01 complete. Plan 02 (event wiring) next.
+**Current Focus:** Phase 4 complete. Phase 5 (Metrics Instrumentation) next.
 
 ## Current Position
 
-**Milestone:** Phase 4 -- Agent Evolution (Level 3 -> 4)
-**Phase:** 3 of 9 complete, Phase 4 in progress (Event-Driven Learning)
-**Plan:** 1 of 2 complete (04-01 done, 04-02 remaining)
+**Milestone:** Phase 5 -- Agent Evolution (Level 3 -> 4)
+**Phase:** 4 of 9 complete, Phase 5 next (Metrics Instrumentation)
+**Plan:** Phase 4 complete (2/2 plans done)
 **Status:** Executing
 
 **Progress:**
-[█████████░] 90%
+[██████████] 100%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
-Phase 4  [#####.....] 50%   Event-Driven Learning (Plan 01 done)
+Phase 4  [##########] 100%  Event-Driven Learning (complete)
 Phase 5  [..........] 0%    Metrics Instrumentation
 Phase 6  [..........] 0%    Bayesian Confidence System
 Phase 7  [..........] 0%    Recursive Goal Decomposition
 Phase 8  [..........] 0%    Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
 
-**Overall:** 3/9 phases complete, Phase 4 at 50%
+**Overall:** 4/9 phases complete
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 3/9 |
-| Plans completed | 9 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 1 Phase 4) |
-| Requirements delivered | 12/32 (MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, LRN-02, LRN-03, LRN-04, LRN-06, LRN-07) |
-| Tests added | 106/50+ target |
+| Phases completed | 4/9 |
+| Plans completed | 10 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4) |
+| Requirements delivered | 15/32 (MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, LRN-01, LRN-02, LRN-03, LRN-04, LRN-05, LRN-06, LRN-07) |
+| Tests added | 121/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
@@ -59,6 +59,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 03 P02 | 4min | 2 tasks | 4 files |
 | Phase 03 P03 | 5min | 1 task | 5 files |
 | Phase 04 P01 | 5min | 2 tasks | 4 files |
+| Phase 04 P02 | 7min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -106,6 +107,11 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P4-01] TypedEventBus wraps EventEmitter with listener-to-wrapper map for correct off() behavior
 - [P4-01] LearningQueue shutdown discards remaining items (only in-flight item completes)
 - [P4-01] Async listener in-flight tracking uses counter + drain resolvers pattern
+- [P4-02] Detection batch timer removed from start() -- event-driven processing via handleToolResult() replaces it
+- [P4-02] Confidence updates filtered by tool_name contextCondition match to prevent false attribution
+- [P4-02] appliedInstinctIds left undefined in orchestrator emit -- Phase 6 will wire IDs through AgentState
+- [P4-02] Shutdown order: drain event bus -> drain queue -> stop pipeline
+- [P4-02] Event emission uses chatId as sessionId (orchestrator doesn't track separate session IDs)
 
 ### Research Flags
 - Phase 1: AgentDB interface drift is #1 risk (15+ casts in agentdb-memory.ts). Integration tests first.
@@ -123,15 +129,14 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-06T22:13:30.173Z
-**Stopped at:** Completed 04-01-PLAN.md
+**Last session:** 2026-03-06T22:21:55Z
+**Stopped at:** Completed 04-02-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
-- Dormant code: ConfidenceScorer (CachedEmbeddingProvider now wired in Phase 3)
-- Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts
-- All 1847 tests pass (was 1829, +18 from Phase 4 Plan 01: 10 event-bus + 8 learning-queue)
+- Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts, event-bus.ts
+- All 1862 tests pass (was 1847, +15 from Phase 4 Plan 02: 3 getVerdictScore + 6 handleToolResult + 4 orchestrator + 2 task-planner)
 - Quality gates: /simplify + /security-review after each implementation phase
 - HnswWriteMutex serializes all HNSW writes in agentdb-memory.ts
 - AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
@@ -141,10 +146,16 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - Phase 3 fully complete: SQLite pragma standardization, embedding queue, auto-tiering sweep
 - Auto-tiering sweep activated via startAutoTiering in bootstrap (when config enabled)
 - CachedEmbeddingProvider shared between RAG and learning pipeline
-- Phase 4 Plan 01 complete: TypedEventBus + LearningQueue infrastructure ready
-- New files: src/core/event-bus.ts, src/learning/pipeline/learning-queue.ts
-- Plan 02 will wire event bus into orchestrator and learning pipeline
+- Phase 4 fully complete: event-driven learning wired end-to-end
+  - TypedEventBus + LearningQueue created in bootstrap
+  - Orchestrator emits tool:result events via IEventEmitter
+  - LearningPipeline.handleToolResult() processes per-event via serial queue
+  - Detection batch timer removed, only evolution timer remains
+  - TaskPlanner decoupled from direct observeToolUse calls
+  - Weighted confidence scoring: 0.9/0.6/0.2 tiers
+  - appliedInstinctIds deferred to Phase 6 (Bayesian Confidence)
+- Phase 5 (Metrics Instrumentation) is next
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-06T22:12:00Z*
+*Last updated: 2026-03-06T22:21:55Z*
