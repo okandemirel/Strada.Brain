@@ -20,11 +20,11 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 ### Real-Time Learning
 
 - [ ] **LRN-01**: Learning pipeline uses event-driven triggers instead of 5-minute batch timer
-- [ ] **LRN-02**: Tool success/failure emits events that trigger immediate pattern storage
+- [x] **LRN-02**: Tool success/failure emits events that trigger immediate pattern storage
 - [x] **LRN-03**: CachedEmbeddingProvider wired to learning pipeline for instinct HNSW embedding generation
 - [x] **LRN-04**: Instinct embedding column populated on every pattern store operation
 - [ ] **LRN-05**: Confidence updates happen online from real tool outcomes (no batch delay)
-- [ ] **LRN-06**: Event bus decouples orchestrator, learning pipeline, and memory subsystems
+- [x] **LRN-06**: Event bus decouples orchestrator, learning pipeline, and memory subsystems
 - [x] **LRN-07**: SQLite pragma standardization (WAL mode, cache_size, busy_timeout) across all databases
 
 ### Recursive Goal Decomposition
@@ -105,9 +105,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | LRN-04 | Phase 3: Auto-Tiering & Embedding Infrastructure | Complete |
 | LRN-07 | Phase 3: Auto-Tiering & Embedding Infrastructure | Complete |
 | LRN-01 | Phase 4: Event-Driven Learning | Pending |
-| LRN-02 | Phase 4: Event-Driven Learning | Pending |
+| LRN-02 | Phase 4: Event-Driven Learning | Complete |
 | LRN-05 | Phase 4: Event-Driven Learning | Pending |
-| LRN-06 | Phase 4: Event-Driven Learning | Pending |
+| LRN-06 | Phase 4: Event-Driven Learning | Complete |
 | EVAL-01 | Phase 5: Metrics Instrumentation | Pending |
 | EVAL-02 | Phase 5: Metrics Instrumentation | Pending |
 | EVAL-03 | Phase 5: Metrics Instrumentation | Pending |

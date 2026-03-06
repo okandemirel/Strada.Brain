@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Completed 03-03-PLAN.md (Phase 3 complete)
-last_updated: "2026-03-06T15:20:00.145Z"
+status: executing
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-03-06T22:13:30.808Z"
 progress:
   total_phases: 9
   completed_phases: 3
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_plans: 10
+  completed_plans: 9
+  percent: 90
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,36 +19,36 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 3 complete. All 3 plans done. Ready for Phase 4.
+**Current Focus:** Phase 4 in progress. Plan 01 complete. Plan 02 (event wiring) next.
 
 ## Current Position
 
-**Milestone:** Phase 4 — Agent Evolution (Level 3 -> 4)
-**Phase:** 3 of 9 complete (Auto-Tiering & Embedding Infrastructure)
-**Plan:** 3 of 3 complete (03-01, 03-02, 03-03 done)
-**Status:** Ready to plan
+**Milestone:** Phase 4 -- Agent Evolution (Level 3 -> 4)
+**Phase:** 3 of 9 complete, Phase 4 in progress (Event-Driven Learning)
+**Plan:** 1 of 2 complete (04-01 done, 04-02 remaining)
+**Status:** Executing
 
 **Progress:**
-[██████████] 100%
+[█████████░] 90%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
-Phase 4  [..........] 0%    Event-Driven Learning
+Phase 4  [#####.....] 50%   Event-Driven Learning (Plan 01 done)
 Phase 5  [..........] 0%    Metrics Instrumentation
 Phase 6  [..........] 0%    Bayesian Confidence System
 Phase 7  [..........] 0%    Recursive Goal Decomposition
 Phase 8  [..........] 0%    Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
 
-**Overall:** 3/9 phases complete (33%)
+**Overall:** 3/9 phases complete, Phase 4 at 50%
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
 | Phases completed | 3/9 |
-| Plans completed | 8 (2 Phase 1 + 3 Phase 2 + 3 Phase 3) |
-| Requirements delivered | 10/32 (MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, LRN-03, LRN-04, LRN-07) |
-| Tests added | 88/50+ target |
+| Plans completed | 9 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 1 Phase 4) |
+| Requirements delivered | 12/32 (MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, LRN-02, LRN-03, LRN-04, LRN-06, LRN-07) |
+| Tests added | 106/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
@@ -58,6 +58,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 03 P01 | 3min | 2 tasks | 6 files |
 | Phase 03 P02 | 4min | 2 tasks | 4 files |
 | Phase 03 P03 | 5min | 1 task | 5 files |
+| Phase 04 P01 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,10 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - Tool synthesis is single phase (Phase 9) since all 5 requirements are tightly coupled
 - Phase 7 depends on Phase 4 (not Phase 6) -- recursive goals need event bus but not Bayesian scoring
 - Phase 9 depends on Phase 6 (not Phase 8) -- tool chains need instinct storage with confidence, not goal execution
+- [P4-01] ToolResultEvent errorDetails defined inline to keep src/core/ self-contained (no import from learning/types.ts)
+- [P4-01] TypedEventBus wraps EventEmitter with listener-to-wrapper map for correct off() behavior
+- [P4-01] LearningQueue shutdown discards remaining items (only in-flight item completes)
+- [P4-01] Async listener in-flight tracking uses counter + drain resolvers pattern
 
 ### Research Flags
 - Phase 1: AgentDB interface drift is #1 risk (15+ casts in agentdb-memory.ts). Integration tests first.
@@ -118,15 +123,15 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-06T15:04:00.000Z
-**Stopped at:** Completed 03-03-PLAN.md (Phase 3 complete)
+**Last session:** 2026-03-06T22:13:30.173Z
+**Stopped at:** Completed 04-01-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
 - Dormant code: ConfidenceScorer (CachedEmbeddingProvider now wired in Phase 3)
 - Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts
-- All 1829 tests pass (was 1801, +13 from Phase 3 Plan 03 auto-tiering, +15 from earlier Phase 3 plans)
+- All 1847 tests pass (was 1829, +18 from Phase 4 Plan 01: 10 event-bus + 8 learning-queue)
 - Quality gates: /simplify + /security-review after each implementation phase
 - HnswWriteMutex serializes all HNSW writes in agentdb-memory.ts
 - AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
@@ -136,8 +141,10 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - Phase 3 fully complete: SQLite pragma standardization, embedding queue, auto-tiering sweep
 - Auto-tiering sweep activated via startAutoTiering in bootstrap (when config enabled)
 - CachedEmbeddingProvider shared between RAG and learning pipeline
-- Ready for Phase 4 (Event-Driven Learning)
+- Phase 4 Plan 01 complete: TypedEventBus + LearningQueue infrastructure ready
+- New files: src/core/event-bus.ts, src/learning/pipeline/learning-queue.ts
+- Plan 02 will wire event bus into orchestrator and learning pipeline
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-06T13:03:04Z*
+*Last updated: 2026-03-06T22:12:00Z*
