@@ -39,10 +39,11 @@ Plans:
   1. All existing FileMemoryManager JSON data is imported into AgentDB with zero data loss (record counts match, content verified)
   2. Conversation retrieval returns semantically similar results via HNSW vector search (not TF-IDF)
   3. Concurrent HNSW writes from memory and learning systems do not corrupt the index (mutex serializes writes)
-**Plans:** 2 plans
+**Plans:** 3 plans
 Plans:
 - [x] 02-01-PLAN.md — HNSW write mutex + semantic-first retrieval routing in AgentDBAdapter
 - [x] 02-02-PLAN.md — FileMemoryManager-to-AgentDB migration with idempotency, validation, and bootstrap wiring
+- [ ] 02-03-PLAN.md — Gap closure: wrap 3 unprotected HNSW remove() calls with writeMutex (MEM-06)
 
 ### Phase 3: Auto-Tiering & Embedding Infrastructure
 **Goal**: Memory entries auto-promote/demote across tiers and the learning pipeline can generate embeddings for instincts
@@ -124,7 +125,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. AgentDB Activation | 2/2 | Complete | 2026-03-06 |
-| 2. Memory Migration & HNSW Hardening | 2/2 | Complete | 2026-03-06 |
+| 2. Memory Migration & HNSW Hardening | 2/3 | Gap closure | - |
 | 3. Auto-Tiering & Embedding Infrastructure | 0/? | Not started | - |
 | 4. Event-Driven Learning | 0/? | Not started | - |
 | 5. Metrics Instrumentation | 0/? | Not started | - |

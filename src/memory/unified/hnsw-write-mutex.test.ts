@@ -94,6 +94,35 @@ describe("HnswWriteMutex", () => {
     expect(result).toBe(42);
   });
 
+  it("serializes remove() queued during an active upsert() (no interleaving)", async () => {
+    const mutex = new HnswWriteMutex();
+    const order: string[] = [];
+
+    // Simulate a long-running upsert holding the lock
+    const upsertOp = mutex.withLock(async () => {
+      order.push("upsert-start");
+      await delay(60);
+      order.push("upsert-end");
+    });
+
+    // Simulate a remove() queued while upsert is active
+    const removeOp = mutex.withLock(async () => {
+      order.push("remove-start");
+      await delay(10);
+      order.push("remove-end");
+    });
+
+    await Promise.all([upsertOp, removeOp]);
+
+    // remove must wait for upsert to fully complete — no interleaving
+    expect(order).toEqual([
+      "upsert-start",
+      "upsert-end",
+      "remove-start",
+      "remove-end",
+    ]);
+  });
+
   it("does not block operations outside withLock while a write lock is held", async () => {
     const mutex = new HnswWriteMutex();
     const order: string[] = [];
