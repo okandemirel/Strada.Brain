@@ -45,11 +45,18 @@ vi.mock("better-sqlite3", () => {
   return { default: MockDatabase };
 });
 
+vi.mock("../memory/unified/migration.js", () => {
+  return {
+    runAutomaticMigration: vi.fn().mockResolvedValue(null),
+  };
+});
+
 // Import the function under test
 import { initializeMemory } from "./bootstrap.js";
 import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
 import { AgentDBAdapter } from "../memory/unified/agentdb-adapter.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
+import { runAutomaticMigration } from "../memory/unified/migration.js";
 import type { Config } from "../config/config.js";
 import type * as winston from "winston";
 
@@ -234,5 +241,76 @@ describe("initializeMemory", () => {
 
     expect(result).toBeUndefined();
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  describe("legacy memory migration", () => {
+    it("should call runAutomaticMigration after successful AgentDB init", async () => {
+      const config = createTestConfig({ backend: "agentdb" });
+      await initializeMemory(config, logger);
+
+      expect(runAutomaticMigration).toHaveBeenCalledTimes(1);
+      // First arg should be config.memory.dbPath (where memory.json lives)
+      expect(runAutomaticMigration).toHaveBeenCalledWith(
+        "/tmp/test-memory",
+        expect.anything(), // agentdb instance
+      );
+    });
+
+    it("should skip migration when it returns null (marker exists or no memory.json)", async () => {
+      vi.mocked(runAutomaticMigration).mockResolvedValue(null);
+      const config = createTestConfig({ backend: "agentdb" });
+      const result = await initializeMemory(config, logger);
+
+      // Should still return a valid adapter
+      expect(result).toBeDefined();
+      expect((result as Record<string, unknown>)._isAdapter).toBe(true);
+      // Should not log migration completion
+      expect(logger.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("Legacy memory migration completed"),
+        expect.anything(),
+      );
+    });
+
+    it("should not block agent startup when migration fails", async () => {
+      vi.mocked(runAutomaticMigration).mockRejectedValue(new Error("migration exploded"));
+      const config = createTestConfig({ backend: "agentdb" });
+      const result = await initializeMemory(config, logger);
+
+      // Agent should still boot with AgentDB
+      expect(result).toBeDefined();
+      expect((result as Record<string, unknown>)._isAdapter).toBe(true);
+      // Should log warning about migration failure
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("migration failed"),
+        expect.objectContaining({ error: "migration exploded" }),
+      );
+    });
+
+    it("should not call migration on file backend", async () => {
+      const config = createTestConfig({ backend: "file" });
+      await initializeMemory(config, logger);
+
+      expect(runAutomaticMigration).not.toHaveBeenCalled();
+    });
+
+    it("should call migration after AgentDB init in repair path", async () => {
+      let callCount = 0;
+      vi.mocked(AgentDBMemory).mockImplementation(() => ({
+        initialize: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            return { kind: "err", error: new Error("init failed") };
+          }
+          return { kind: "ok", value: undefined };
+        }),
+        shutdown: vi.fn(),
+      }) as unknown as InstanceType<typeof AgentDBMemory>);
+
+      const config = createTestConfig({ backend: "agentdb" });
+      await initializeMemory(config, logger);
+
+      // Migration should still be called after recovery
+      expect(runAutomaticMigration).toHaveBeenCalledTimes(1);
+    });
   });
 });

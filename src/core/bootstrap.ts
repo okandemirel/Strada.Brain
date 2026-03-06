@@ -21,6 +21,7 @@ import { DashboardServer } from "../dashboard/server.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
 import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
 import { AgentDBAdapter } from "../memory/unified/agentdb-adapter.js";
+import { runAutomaticMigration } from "../memory/unified/migration.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
@@ -363,6 +364,11 @@ export async function initializeMemory(
         );
       }
 
+      // Trigger migration from legacy FileMemoryManager if needed
+      // Runs AFTER AgentDB init so agent is usable immediately
+      // Uses the agentdb instance directly (IUnifiedMemory) not the adapter
+      await triggerLegacyMigration(config, agentdb, logger);
+
       return new AgentDBAdapter(agentdb);
     }
     // Init returned err — throw to enter recovery
@@ -387,6 +393,9 @@ export async function initializeMemory(
             "AgentDB running with hash-based fallback embeddings - semantic search quality is degraded. Configure an embedding provider for better results.",
           );
         }
+
+        // Trigger migration in repair path too
+        await triggerLegacyMigration(config, agentdb2, logger);
 
         return new AgentDBAdapter(agentdb2);
       }
@@ -419,6 +428,35 @@ async function attemptSchemaRepair(dbPath: string, logger: winston.Logger): Prom
       error: e instanceof Error ? e.message : String(e),
     });
     return false;
+  }
+}
+
+/**
+ * Trigger legacy FileMemoryManager → AgentDB migration if needed.
+ * Non-blocking: migration failure must never prevent agent startup.
+ */
+async function triggerLegacyMigration(
+  config: Config,
+  agentdb: AgentDBMemory,
+  logger: winston.Logger,
+): Promise<void> {
+  try {
+    const migrationStatus = await runAutomaticMigration(
+      config.memory.dbPath, // sourcePath where memory.json lives
+      agentdb,              // IUnifiedMemory target
+    );
+    if (migrationStatus) {
+      logger.info("Legacy memory migration completed", {
+        migrated: migrationStatus.entriesMigrated,
+        failed: migrationStatus.entriesFailed,
+        errors: migrationStatus.errors.length,
+      });
+    }
+  } catch (migrationError) {
+    // Migration failure must not block agent startup
+    logger.warn("Legacy memory migration failed, continuing with empty AgentDB", {
+      error: migrationError instanceof Error ? migrationError.message : String(migrationError),
+    });
   }
 }
 
