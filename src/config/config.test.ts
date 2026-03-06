@@ -44,6 +44,9 @@ describe("loadConfig", () => {
     delete process.env["MEMORY_BACKEND"];
     delete process.env["MEMORY_DIMENSIONS"];
     delete process.env["MEMORY_AUTO_TIERING"];
+    delete process.env["MEMORY_AUTO_TIERING_INTERVAL_MS"];
+    delete process.env["MEMORY_PROMOTION_THRESHOLD"];
+    delete process.env["MEMORY_DEMOTION_TIMEOUT_DAYS"];
     delete process.env["MEMORY_TIER_WORKING_MAX"];
     delete process.env["MEMORY_TIER_EPHEMERAL_MAX"];
     delete process.env["MEMORY_TIER_PERSISTENT_MAX"];
@@ -159,6 +162,9 @@ describe("loadConfig", () => {
       expect(config.memory.unified).toEqual({
         dimensions: 1536,
         autoTiering: false,
+        autoTieringIntervalMs: 300000,
+        promotionThreshold: 5,
+        demotionTimeoutDays: 7,
         tierLimits: {
           working: 100,
           ephemeral: 1000,
@@ -252,6 +258,9 @@ describe("loadConfig", () => {
         unified: {
           dimensions: 1536,
           autoTiering: false,
+          autoTieringIntervalMs: 300000,
+          promotionThreshold: 5,
+          demotionTimeoutDays: 7,
           tierLimits: {
             working: 100,
             ephemeral: 1000,

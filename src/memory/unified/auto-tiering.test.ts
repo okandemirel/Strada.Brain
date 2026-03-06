@@ -104,7 +104,7 @@ describe("AgentDBMemory Auto-Tiering", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   describe("Promotion logic", () => {

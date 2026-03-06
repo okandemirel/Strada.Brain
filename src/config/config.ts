@@ -58,6 +58,9 @@ export type EnvVarName =
   | "MEMORY_BACKEND"
   | "MEMORY_DIMENSIONS"
   | "MEMORY_AUTO_TIERING"
+  | "MEMORY_AUTO_TIERING_INTERVAL_MS"
+  | "MEMORY_PROMOTION_THRESHOLD"
+  | "MEMORY_DEMOTION_TIMEOUT_DAYS"
   | "MEMORY_TIER_WORKING_MAX"
   | "MEMORY_TIER_EPHEMERAL_MAX"
   | "MEMORY_TIER_PERSISTENT_MAX"
@@ -140,6 +143,9 @@ export interface MemoryConfig {
   readonly unified: {
     readonly dimensions: number;
     readonly autoTiering: boolean;
+    readonly autoTieringIntervalMs: number;
+    readonly promotionThreshold: number;
+    readonly demotionTimeoutDays: number;
     readonly tierLimits: {
       readonly working: number;
       readonly ephemeral: number;
@@ -376,6 +382,21 @@ export const configSchema = z
       .pipe(z.number().int().min(64).max(4096))
       .default("1536"),
     memoryAutoTiering: boolFromString(false),
+    memoryAutoTieringIntervalMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10000).max(3600000))
+      .default("300000"),
+    memoryPromotionThreshold: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(1000))
+      .default("5"),
+    memoryDemotionTimeoutDays: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(365))
+      .default("7"),
     memoryTierWorkingMax: z
       .string()
       .transform((s) => parseInt(s, 10))
@@ -573,6 +594,9 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       unified: {
         dimensions: rawConfig.memoryDimensions,
         autoTiering: rawConfig.memoryAutoTiering,
+        autoTieringIntervalMs: rawConfig.memoryAutoTieringIntervalMs,
+        promotionThreshold: rawConfig.memoryPromotionThreshold,
+        demotionTimeoutDays: rawConfig.memoryDemotionTimeoutDays,
         tierLimits: {
           working: rawConfig.memoryTierWorkingMax,
           ephemeral: rawConfig.memoryTierEphemeralMax,
@@ -803,6 +827,9 @@ interface EnvVars {
   memoryBackend: string | undefined;
   memoryDimensions: string | undefined;
   memoryAutoTiering: string | undefined;
+  memoryAutoTieringIntervalMs: string | undefined;
+  memoryPromotionThreshold: string | undefined;
+  memoryDemotionTimeoutDays: string | undefined;
   memoryTierWorkingMax: string | undefined;
   memoryTierEphemeralMax: string | undefined;
   memoryTierPersistentMax: string | undefined;
@@ -867,6 +894,9 @@ function loadFromEnv(): EnvVars {
     memoryBackend: process.env["MEMORY_BACKEND"],
     memoryDimensions: process.env["MEMORY_DIMENSIONS"],
     memoryAutoTiering: process.env["MEMORY_AUTO_TIERING"],
+    memoryAutoTieringIntervalMs: process.env["MEMORY_AUTO_TIERING_INTERVAL_MS"],
+    memoryPromotionThreshold: process.env["MEMORY_PROMOTION_THRESHOLD"],
+    memoryDemotionTimeoutDays: process.env["MEMORY_DEMOTION_TIMEOUT_DAYS"],
     memoryTierWorkingMax: process.env["MEMORY_TIER_WORKING_MAX"],
     memoryTierEphemeralMax: process.env["MEMORY_TIER_EPHEMERAL_MAX"],
     memoryTierPersistentMax: process.env["MEMORY_TIER_PERSISTENT_MAX"],

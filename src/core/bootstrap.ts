@@ -371,6 +371,20 @@ export async function initializeMemory(
       // Uses the agentdb instance directly (IUnifiedMemory) not the adapter
       await triggerLegacyMigration(config, agentdb, logger);
 
+      // Start auto-tiering sweep if enabled
+      if (config.memory.unified.autoTiering) {
+        agentdb.startAutoTiering(
+          config.memory.unified.autoTieringIntervalMs,
+          config.memory.unified.promotionThreshold,
+          config.memory.unified.demotionTimeoutDays,
+        );
+        logger.info("Auto-tiering enabled", {
+          intervalMs: config.memory.unified.autoTieringIntervalMs,
+          promotionThreshold: config.memory.unified.promotionThreshold,
+          demotionTimeoutDays: config.memory.unified.demotionTimeoutDays,
+        });
+      }
+
       return new AgentDBAdapter(agentdb);
     }
     // Init returned err — throw to enter recovery
@@ -398,6 +412,20 @@ export async function initializeMemory(
 
         // Trigger migration in repair path too
         await triggerLegacyMigration(config, agentdb2, logger);
+
+        // Start auto-tiering sweep if enabled (repair path)
+        if (config.memory.unified.autoTiering) {
+          agentdb2.startAutoTiering(
+            config.memory.unified.autoTieringIntervalMs,
+            config.memory.unified.promotionThreshold,
+            config.memory.unified.demotionTimeoutDays,
+          );
+          logger.info("Auto-tiering enabled (after repair)", {
+            intervalMs: config.memory.unified.autoTieringIntervalMs,
+            promotionThreshold: config.memory.unified.promotionThreshold,
+            demotionTimeoutDays: config.memory.unified.demotionTimeoutDays,
+          });
+        }
 
         return new AgentDBAdapter(agentdb2);
       }

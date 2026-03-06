@@ -122,6 +122,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   private searchTimes: number[] = [];
   // Cleanup tracking for metrics/logging (updated in cleanupExpired)
   private _lastCleanupTime = Date.now(); // eslint-disable-line @typescript-eslint/no-unused-vars
+  private tieringTimer: ReturnType<typeof setInterval> | null = null;
   private sqliteDb: Database.Database | null = null;
   private sqliteStatements: Map<string, Database.Statement> = new Map();
 
@@ -194,6 +195,9 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       getLoggerSafe().info("[AgentDBMemory] Shutting down");
 
+      // Stop auto-tiering timer before saving to prevent sweep during shutdown
+      this.stopAutoTiering();
+
       // Save entries
       await this.saveEntries();
 
@@ -209,6 +213,71 @@ export class AgentDBMemory implements IUnifiedMemory {
       return ok(undefined);
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Auto-Tiering
+  // ---------------------------------------------------------------------------
+
+  startAutoTiering(intervalMs: number, promotionThreshold: number, demotionTimeoutDays: number): void {
+    if (this.tieringTimer) return;
+    this.tieringTimer = setInterval(
+      () => this.autoTieringSweep(promotionThreshold, demotionTimeoutDays),
+      intervalMs,
+    );
+  }
+
+  stopAutoTiering(): void {
+    if (this.tieringTimer) {
+      clearInterval(this.tieringTimer);
+      this.tieringTimer = null;
+    }
+  }
+
+  private async autoTieringSweep(promotionThreshold: number, demotionTimeoutDays: number): Promise<void> {
+    const now = Date.now();
+    let promoted = 0;
+    let demoted = 0;
+
+    for (const entry of this.entries.values()) {
+      const daysSinceAccess = (now - (entry.lastAccessedAt as number)) / (1000 * 60 * 60 * 24);
+      const currentTier = entry.tier;
+      let targetTier = currentTier;
+
+      // Promotion: high access frequency + recent access -> hotter tier
+      if (entry.accessCount >= promotionThreshold && daysSinceAccess < 1) {
+        if (currentTier === MemoryTier.Persistent) targetTier = MemoryTier.Ephemeral;
+        else if (currentTier === MemoryTier.Ephemeral) targetTier = MemoryTier.Working;
+      }
+      // Demotion: stale -> colder tier
+      else if (daysSinceAccess > demotionTimeoutDays) {
+        if (currentTier === MemoryTier.Working) targetTier = MemoryTier.Ephemeral;
+        else if (currentTier === MemoryTier.Ephemeral) targetTier = MemoryTier.Persistent;
+      }
+
+      if (targetTier !== currentTier) {
+        const tierOrder = { [MemoryTier.Working]: 0, [MemoryTier.Ephemeral]: 1, [MemoryTier.Persistent]: 2 };
+        const isPromotion = tierOrder[targetTier] < tierOrder[currentTier];
+
+        if (isPromotion) {
+          await this.promoteEntry(entry.id, targetTier);
+          promoted++;
+        } else {
+          await this.demoteEntry(entry.id, targetTier);
+          demoted++;
+        }
+        getLoggerSafe().debug(`[AgentDBMemory] Entry ${entry.id} ${isPromotion ? "promoted" : "demoted"} ${currentTier}->${targetTier}`);
+      }
+    }
+
+    // After promotions/demotions, enforce limits on all tiers (cascade eviction)
+    for (const tier of [MemoryTier.Working, MemoryTier.Ephemeral, MemoryTier.Persistent]) {
+      await this.enforceTierLimits(tier);
+    }
+
+    if (promoted > 0 || demoted > 0) {
+      getLoggerSafe().debug("[AgentDBMemory] Auto-tiering sweep complete", { promoted, demoted });
     }
   }
 
