@@ -273,7 +273,9 @@ describe("TaskPlanner", () => {
 
       planner.trackToolCall("file_read", false, {}, "output");
 
-      expect(pipeline.getStats().observationCount).toBe(1);
+      // After decoupling: trackToolCall no longer calls pipeline.observeToolUse
+      // Events replace direct coupling, so observation count stays 0
+      expect(pipeline.getStats().observationCount).toBe(0);
 
       storage.close();
       rmSync(tempDir, { recursive: true, force: true });
@@ -300,6 +302,45 @@ describe("TaskPlanner", () => {
 
       storage.close();
       rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it("should no longer call pipeline.observeToolUse from trackToolCall", () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
+      const dbPath = join(tempDir, "test.db");
+      const storage = new LearningStorage(dbPath);
+      storage.initialize();
+      const pipeline = new LearningPipeline(storage);
+      const observeSpy = vi.spyOn(pipeline, "observeToolUse");
+
+      planner.enableLearning(pipeline);
+      planner.startTask({
+        sessionId: "test-decouple",
+        taskDescription: "Decoupling test",
+        learningPipeline: pipeline,
+      });
+
+      planner.trackToolCall("file_read", false, { path: "test.cs" }, "content");
+
+      // observeToolUse should NOT be called -- events replace it
+      expect(observeSpy).not.toHaveBeenCalled();
+
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it("should still record trajectory steps (step tracking not removed)", () => {
+      planner.startTask({
+        sessionId: "test-steps",
+        taskDescription: "Step tracking test",
+      });
+
+      planner.trackToolCall("file_read", false, { path: "test.cs" }, "content");
+      planner.trackToolCall("file_write", true, { path: "test.cs" }, "error");
+
+      const steps = planner.getTrajectorySteps();
+      expect(steps).toHaveLength(2);
+      expect(steps[0]?.toolName).toBe("file_read");
+      expect(steps[1]?.toolName).toBe("file_write");
     });
   });
 });

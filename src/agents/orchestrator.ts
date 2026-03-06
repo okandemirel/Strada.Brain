@@ -32,6 +32,7 @@ import { shouldForceReplan } from "./failure-classifier.js";
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
 import { WRITE_OPERATIONS } from "./autonomy/constants.js";
 import type { BackgroundTaskOptions } from "../tasks/types.js";
+import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -79,6 +80,7 @@ export class Orchestrator {
   private pendingDepsPrompt: boolean = false;
   private pendingModulesPrompt: boolean = false;
   private readonly instinctRetriever: InstinctRetriever | null;
+  private readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -94,6 +96,7 @@ export class Orchestrator {
     streamingEnabled?: boolean;
     stradaDeps?: StradaDepsStatus;
     instinctRetriever?: InstinctRetriever;
+    eventEmitter?: IEventEmitter<LearningEventMap>;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -106,6 +109,7 @@ export class Orchestrator {
     this.rateLimiter = opts.rateLimiter;
     this.streamingEnabled = opts.streamingEnabled ?? false;
     this.instinctRetriever = opts.instinctRetriever ?? null;
+    this.eventEmitter = opts.eventEmitter ?? null;
 
     // Build tool registry
     this.tools = new Map();
@@ -299,6 +303,19 @@ export class Orchestrator {
             content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
             isError: tr.isError,
           };
+        }
+
+        // Emit learning event (fire-and-forget, non-blocking)
+        if (this.eventEmitter) {
+          this.eventEmitter.emit("tool:result", {
+            sessionId: chatId,
+            toolName: tc.name,
+            input: tc.input as Record<string, unknown>,
+            output: toolResults[i]!.content.slice(0, 500),
+            success: !(toolResults[i]!.isError ?? false),
+            retryCount: 0,
+            timestamp: Date.now(),
+          });
         }
       }
 
@@ -769,6 +786,19 @@ export class Orchestrator {
             content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
             isError: tr.isError,
           };
+        }
+
+        // Emit learning event (fire-and-forget, non-blocking)
+        if (this.eventEmitter) {
+          this.eventEmitter.emit("tool:result", {
+            sessionId: chatId,
+            toolName: tc.name,
+            input: tc.input as Record<string, unknown>,
+            output: toolResults[i]!.content.slice(0, 500),
+            success: !(toolResults[i]!.isError ?? false),
+            retryCount: 0,
+            timestamp: Date.now(),
+          });
         }
       }
 

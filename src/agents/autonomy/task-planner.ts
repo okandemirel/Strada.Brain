@@ -234,16 +234,8 @@ export class TaskPlanner {
       };
       this.trajectorySteps.push(step);
 
-      // Observe for learning
-      if (this.learningPipeline) {
-        this.learningPipeline.observeToolUse({
-          sessionId: this.sessionId,
-          toolName,
-          input: input ?? {},
-          output: output ?? "",
-          success: !isError,
-        });
-      }
+      // NOTE: Direct pipeline.observeToolUse() removed -- event bus handles this now.
+      // The orchestrator emits 'tool:result' events which the learning pipeline subscribes to.
     }
   }
 

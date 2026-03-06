@@ -1,5 +1,6 @@
 import { Orchestrator } from "./orchestrator.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
+import type { IEventEmitter, LearningEventMap, ToolResultEvent } from "../core/event-bus.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
@@ -437,6 +438,163 @@ describe("Orchestrator", () => {
       await promise;
 
       expect(mockChannel.requestConfirmation).toHaveBeenCalled();
+    });
+  });
+
+  describe("Event Emission", () => {
+    it("should accept optional eventEmitter parameter", () => {
+      const mockEmitter: IEventEmitter<LearningEventMap> = {
+        emit: vi.fn(),
+      };
+
+      expect(() => new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        eventEmitter: mockEmitter,
+      })).not.toThrow();
+    });
+
+    it("should emit tool:result event for each tool call result", async () => {
+      const emittedEvents: ToolResultEvent[] = [];
+      const mockEmitter: IEventEmitter<LearningEventMap> = {
+        emit: vi.fn((_event: string, payload: ToolResultEvent) => {
+          emittedEvents.push(payload);
+        }),
+      };
+
+      const orchWithEmitter = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        eventEmitter: mockEmitter,
+      });
+
+      const toolResponse: ProviderResponse = {
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "test.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+      const finalResponse: ProviderResponse = {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+
+      mockProvider.chat
+        .mockResolvedValueOnce(toolResponse)
+        .mockResolvedValueOnce(finalResponse);
+
+      const promise = orchWithEmitter.handleMessage({
+        channelType: "cli",
+        chatId: "event1",
+        userId: "user1",
+        text: "Read file",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(mockEmitter.emit).toHaveBeenCalledWith("tool:result", expect.objectContaining({
+        toolName: "file_read",
+        success: true,
+      }));
+      expect(emittedEvents).toHaveLength(1);
+      expect(emittedEvents[0]!.toolName).toBe("file_read");
+      expect(emittedEvents[0]!.success).toBe(true);
+      expect(emittedEvents[0]!.timestamp).toBeGreaterThan(0);
+    });
+
+    it("should include correct fields in event payload", async () => {
+      const emittedEvents: ToolResultEvent[] = [];
+      const mockEmitter: IEventEmitter<LearningEventMap> = {
+        emit: vi.fn((_event: string, payload: ToolResultEvent) => {
+          emittedEvents.push(payload);
+        }),
+      };
+
+      const orchWithEmitter = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        eventEmitter: mockEmitter,
+      });
+
+      const toolResponse: ProviderResponse = {
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "test.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+      const finalResponse: ProviderResponse = {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+
+      mockProvider.chat
+        .mockResolvedValueOnce(toolResponse)
+        .mockResolvedValueOnce(finalResponse);
+
+      const promise = orchWithEmitter.handleMessage({
+        channelType: "cli",
+        chatId: "event2",
+        userId: "user1",
+        text: "Read file",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      const event = emittedEvents[0]!;
+      expect(event).toHaveProperty("sessionId");
+      expect(event).toHaveProperty("toolName");
+      expect(event).toHaveProperty("input");
+      expect(event).toHaveProperty("output");
+      expect(event).toHaveProperty("success");
+      expect(event).toHaveProperty("timestamp");
+    });
+
+    it("should not throw when eventEmitter is not provided", async () => {
+      // orch created without eventEmitter in beforeEach
+      const toolResponse: ProviderResponse = {
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "test.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+      const finalResponse: ProviderResponse = {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+
+      mockProvider.chat
+        .mockResolvedValueOnce(toolResponse)
+        .mockResolvedValueOnce(finalResponse);
+
+      const promise = orch.handleMessage({
+        channelType: "cli",
+        chatId: "noevent",
+        userId: "user1",
+        text: "Read file",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(promise).resolves.toBeUndefined();
     });
   });
 
