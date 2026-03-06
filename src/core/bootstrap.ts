@@ -352,40 +352,39 @@ export async function initializeMemory(
     ephemeralTtlMs: (config.memory.unified.ephemeralTtlHours * 3600000) as DurationMs,
   };
 
+  // Post-init steps shared between first attempt and repair path
+  async function finalizeAgentDB(agentdb: AgentDBMemory): Promise<AgentDBAdapter> {
+    if (!config.rag.enabled) {
+      logger.warn(
+        "AgentDB running with hash-based fallback embeddings - semantic search quality is degraded. Configure an embedding provider for better results.",
+      );
+    }
+
+    await triggerLegacyMigration(config, agentdb, logger);
+
+    if (config.memory.unified.autoTiering) {
+      agentdb.startAutoTiering(
+        config.memory.unified.autoTieringIntervalMs,
+        config.memory.unified.promotionThreshold,
+        config.memory.unified.demotionTimeoutDays,
+      );
+      logger.info("Auto-tiering enabled", {
+        intervalMs: config.memory.unified.autoTieringIntervalMs,
+        promotionThreshold: config.memory.unified.promotionThreshold,
+        demotionTimeoutDays: config.memory.unified.demotionTimeoutDays,
+      });
+    }
+
+    return new AgentDBAdapter(agentdb);
+  }
+
   // First attempt
   try {
     const agentdb = new AgentDBMemory(agentdbConfig);
     const initResult = await agentdb.initialize();
     if (initResult.kind === "ok") {
       logger.info("AgentDB memory initialized", { dbPath: agentdbPath });
-
-      // Warn about hash-based fallback embeddings when no embedding provider is configured
-      if (!config.rag.enabled) {
-        logger.warn(
-          "AgentDB running with hash-based fallback embeddings - semantic search quality is degraded. Configure an embedding provider for better results.",
-        );
-      }
-
-      // Trigger migration from legacy FileMemoryManager if needed
-      // Runs AFTER AgentDB init so agent is usable immediately
-      // Uses the agentdb instance directly (IUnifiedMemory) not the adapter
-      await triggerLegacyMigration(config, agentdb, logger);
-
-      // Start auto-tiering sweep if enabled
-      if (config.memory.unified.autoTiering) {
-        agentdb.startAutoTiering(
-          config.memory.unified.autoTieringIntervalMs,
-          config.memory.unified.promotionThreshold,
-          config.memory.unified.demotionTimeoutDays,
-        );
-        logger.info("Auto-tiering enabled", {
-          intervalMs: config.memory.unified.autoTieringIntervalMs,
-          promotionThreshold: config.memory.unified.promotionThreshold,
-          demotionTimeoutDays: config.memory.unified.demotionTimeoutDays,
-        });
-      }
-
-      return new AgentDBAdapter(agentdb);
+      return await finalizeAgentDB(agentdb);
     }
     // Init returned err — throw to enter recovery
     throw initResult.error;
@@ -403,31 +402,7 @@ export async function initializeMemory(
       const retryResult = await agentdb2.initialize();
       if (retryResult.kind === "ok") {
         logger.info("AgentDB recovered after schema repair", { dbPath: agentdbPath });
-
-        if (!config.rag.enabled) {
-          logger.warn(
-            "AgentDB running with hash-based fallback embeddings - semantic search quality is degraded. Configure an embedding provider for better results.",
-          );
-        }
-
-        // Trigger migration in repair path too
-        await triggerLegacyMigration(config, agentdb2, logger);
-
-        // Start auto-tiering sweep if enabled (repair path)
-        if (config.memory.unified.autoTiering) {
-          agentdb2.startAutoTiering(
-            config.memory.unified.autoTieringIntervalMs,
-            config.memory.unified.promotionThreshold,
-            config.memory.unified.demotionTimeoutDays,
-          );
-          logger.info("Auto-tiering enabled (after repair)", {
-            intervalMs: config.memory.unified.autoTieringIntervalMs,
-            promotionThreshold: config.memory.unified.promotionThreshold,
-            demotionTimeoutDays: config.memory.unified.demotionTimeoutDays,
-          });
-        }
-
-        return new AgentDBAdapter(agentdb2);
+        return await finalizeAgentDB(agentdb2);
       }
       throw retryResult.error;
     } catch (retryError) {

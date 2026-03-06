@@ -68,23 +68,17 @@ export class AgentDBAdapter implements IMemoryManager {
 
   async retrieve(options: RetrievalOptions): Promise<Result<RetrievalResult[], Error>> {
     try {
-      let query = "";
-      if ("query" in options && options.query) {
-        query = options.query;
-      }
+      const query = ("query" in options && options.query) ? options.query : "";
+      const mode = "mode" in options ? options.mode : undefined;
 
       // Chat and type modes are structural filters — keep TF-IDF path.
       // All other modes (text, semantic, hybrid) with a non-empty query
       // route through HNSW vector similarity search.
-      const mode = "mode" in options ? options.mode : undefined;
       if (mode === "chat" || mode === "type" || query.length === 0) {
-        const results = await this.agentdb.retrieve(query, options);
-        return ok(results);
+        return ok(await this.agentdb.retrieve(query, options));
       }
 
-      // Semantic-first retrieval via HNSW
-      const results = await this.agentdb.retrieveSemantic(query, { limit: options.limit });
-      return ok(results);
+      return ok(await this.agentdb.retrieveSemantic(query, { limit: options.limit }));
     } catch (e) {
       return err(e instanceof Error ? e : new Error(String(e)));
     }
@@ -113,13 +107,7 @@ export class AgentDBAdapter implements IMemoryManager {
     projectPath: string,
     _options?: { ttl?: DurationMs },
   ): Promise<Result<void, Error>> {
-    try {
-      // AgentDB's cacheAnalysis already returns Result<void, Error>
-      const result = await this.agentdb.cacheAnalysis(analysis, projectPath);
-      return result;
-    } catch (e) {
-      return err(e instanceof Error ? e : new Error(String(e)));
-    }
+    return this.agentdb.cacheAnalysis(analysis, projectPath);
   }
 
   async invalidateAnalysis(_projectPath: string): Promise<Result<void, Error>> {
@@ -294,20 +282,26 @@ export class AgentDBAdapter implements IMemoryManager {
     const indexHealth = this.agentdb.getIndexHealth();
 
     const issues: string[] = [...indexHealth.issues];
-    const totalEntries = stats.totalEntries;
-
-    // Check if totalEntries exceeds 90% of the HNSW index max capacity
     const effectiveMax = stats.hnswStats?.maxElements ?? 11100;
 
-    if (totalEntries > effectiveMax * 0.9) {
+    if (stats.totalEntries > effectiveMax * 0.9) {
       issues.push("Memory near capacity");
+    }
+
+    let indexStatus: "healthy" | "degraded" | "critical";
+    if (indexHealth.isHealthy) {
+      indexStatus = "healthy";
+    } else if (issues.length > 2) {
+      indexStatus = "critical";
+    } else {
+      indexStatus = "degraded";
     }
 
     return {
       healthy: issues.length === 0,
       issues,
-      storageUsagePercent: effectiveMax > 0 ? (totalEntries / effectiveMax) * 100 : 0,
-      indexHealth: indexHealth.isHealthy ? "healthy" : issues.length > 2 ? "critical" : "degraded",
+      storageUsagePercent: effectiveMax > 0 ? (stats.totalEntries / effectiveMax) * 100 : 0,
+      indexHealth: indexStatus,
     };
   }
 

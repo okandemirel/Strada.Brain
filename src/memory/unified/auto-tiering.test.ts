@@ -89,6 +89,20 @@ function createTestEntry(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Helpers to reduce repetitive casts in tests
+function getEntries(memory: AgentDBMemory): Map<string, unknown> {
+  return (memory as unknown as { entries: Map<string, unknown> }).entries;
+}
+
+function runSweep(memory: AgentDBMemory, threshold: number, demotionDays: number): Promise<void> {
+  return (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
+    .autoTieringSweep.call(memory, threshold, demotionDays);
+}
+
+function getTieringTimer(memory: AgentDBMemory): unknown {
+  return (memory as unknown as { tieringTimer: unknown }).tieringTimer;
+}
+
 describe("AgentDBMemory Auto-Tiering", () => {
   let memory: AgentDBMemory;
 
@@ -98,7 +112,6 @@ describe("AgentDBMemory Auto-Tiering", () => {
       dbPath: "/tmp/test-auto-tiering",
       dimensions: 128,
     });
-    // Initialize to set up internal state
     await memory.initialize();
   });
 
@@ -118,14 +131,13 @@ describe("AgentDBMemory Auto-Tiering", () => {
       });
 
       // Inject entry into memory's internal map
-      (memory as unknown as { entries: Map<string, unknown> }).entries.set("promo-1", entry);
+      getEntries(memory).set("promo-1", entry);
 
       // Spy on promoteEntry
       const promoteSpy = vi.spyOn(memory, "promoteEntry");
 
       // Run sweep with default thresholds
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       expect(promoteSpy).toHaveBeenCalledWith("promo-1", MemoryTier.Ephemeral);
     });
@@ -138,12 +150,11 @@ describe("AgentDBMemory Auto-Tiering", () => {
         lastAccessedAt: Date.now(),
       });
 
-      (memory as unknown as { entries: Map<string, unknown> }).entries.set("promo-2", entry);
+      getEntries(memory).set("promo-2", entry);
 
       const promoteSpy = vi.spyOn(memory, "promoteEntry");
 
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       expect(promoteSpy).toHaveBeenCalledWith("promo-2", MemoryTier.Working);
     });
@@ -156,12 +167,11 @@ describe("AgentDBMemory Auto-Tiering", () => {
         lastAccessedAt: Date.now(),
       });
 
-      (memory as unknown as { entries: Map<string, unknown> }).entries.set("no-promo-1", entry);
+      getEntries(memory).set("no-promo-1", entry);
 
       const promoteSpy = vi.spyOn(memory, "promoteEntry");
 
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       expect(promoteSpy).not.toHaveBeenCalled();
     });
@@ -174,13 +184,12 @@ describe("AgentDBMemory Auto-Tiering", () => {
         lastAccessedAt: Date.now(),
       });
 
-      (memory as unknown as { entries: Map<string, unknown> }).entries.set("ceiling-1", entry);
+      getEntries(memory).set("ceiling-1", entry);
 
       const promoteSpy = vi.spyOn(memory, "promoteEntry");
       const demoteSpy = vi.spyOn(memory, "demoteEntry");
 
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       expect(promoteSpy).not.toHaveBeenCalled();
       expect(demoteSpy).not.toHaveBeenCalled();
@@ -197,12 +206,11 @@ describe("AgentDBMemory Auto-Tiering", () => {
         lastAccessedAt: eightDaysAgo,
       });
 
-      (memory as unknown as { entries: Map<string, unknown> }).entries.set("demo-1", entry);
+      getEntries(memory).set("demo-1", entry);
 
       const demoteSpy = vi.spyOn(memory, "demoteEntry");
 
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       expect(demoteSpy).toHaveBeenCalledWith("demo-1", MemoryTier.Ephemeral);
     });
@@ -216,12 +224,11 @@ describe("AgentDBMemory Auto-Tiering", () => {
         lastAccessedAt: tenDaysAgo,
       });
 
-      (memory as unknown as { entries: Map<string, unknown> }).entries.set("demo-2", entry);
+      getEntries(memory).set("demo-2", entry);
 
       const demoteSpy = vi.spyOn(memory, "demoteEntry");
 
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       expect(demoteSpy).toHaveBeenCalledWith("demo-2", MemoryTier.Persistent);
     });
@@ -235,13 +242,12 @@ describe("AgentDBMemory Auto-Tiering", () => {
         lastAccessedAt: thirtyDaysAgo,
       });
 
-      (memory as unknown as { entries: Map<string, unknown> }).entries.set("floor-1", entry);
+      getEntries(memory).set("floor-1", entry);
 
       const promoteSpy = vi.spyOn(memory, "promoteEntry");
       const demoteSpy = vi.spyOn(memory, "demoteEntry");
 
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       expect(promoteSpy).not.toHaveBeenCalled();
       expect(demoteSpy).not.toHaveBeenCalled();
@@ -257,15 +263,12 @@ describe("AgentDBMemory Auto-Tiering", () => {
         lastAccessedAt: Date.now(),
       });
 
-      (memory as unknown as { entries: Map<string, unknown> }).entries.set("enforce-1", entry);
+      getEntries(memory).set("enforce-1", entry);
 
-      const enforceSpy = vi.spyOn(
-        memory as unknown as { enforceTierLimits(tier: MemoryTier): Promise<void> },
-        "enforceTierLimits",
-      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const enforceSpy = vi.spyOn(memory as any, "enforceTierLimits");
 
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       expect(enforceSpy).toHaveBeenCalledWith(MemoryTier.Working);
       expect(enforceSpy).toHaveBeenCalledWith(MemoryTier.Ephemeral);
@@ -279,23 +282,19 @@ describe("AgentDBMemory Auto-Tiering", () => {
       memory.startAutoTiering(60000, 5, 7);
 
       // Timer should be set
-      expect(
-        (memory as unknown as { tieringTimer: ReturnType<typeof setInterval> | null }).tieringTimer,
-      ).not.toBeNull();
+      expect(getTieringTimer(memory)).not.toBeNull();
 
       memory.stopAutoTiering();
 
-      expect(
-        (memory as unknown as { tieringTimer: ReturnType<typeof setInterval> | null }).tieringTimer,
-      ).toBeNull();
+      expect(getTieringTimer(memory)).toBeNull();
     });
 
     it("should not create duplicate timers on repeated startAutoTiering calls", () => {
       memory.startAutoTiering(60000, 5, 7);
-      const firstTimer = (memory as unknown as { tieringTimer: unknown }).tieringTimer;
+      const firstTimer = getTieringTimer(memory);
 
       memory.startAutoTiering(60000, 5, 7);
-      const secondTimer = (memory as unknown as { tieringTimer: unknown }).tieringTimer;
+      const secondTimer = getTieringTimer(memory);
 
       expect(firstTimer).toBe(secondTimer);
       memory.stopAutoTiering();
@@ -311,9 +310,7 @@ describe("AgentDBMemory Auto-Tiering", () => {
       await memory.shutdown();
 
       expect(stopSpy).toHaveBeenCalled();
-      expect(
-        (memory as unknown as { tieringTimer: ReturnType<typeof setInterval> | null }).tieringTimer,
-      ).toBeNull();
+      expect(getTieringTimer(memory)).toBeNull();
     });
   });
 
@@ -330,10 +327,9 @@ describe("AgentDBMemory Auto-Tiering", () => {
         lastAccessedAt: Date.now(),
       });
 
-      (memory as unknown as { entries: Map<string, unknown> }).entries.set("log-1", entry);
+      getEntries(memory).set("log-1", entry);
 
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       // Check that debug was called with tier transition message
       const transitionCalls = debugSpy.mock.calls.filter(
@@ -372,7 +368,7 @@ describe("AgentDBMemory Auto-Tiering", () => {
         lastAccessedAt: now - 3 * 24 * 60 * 60 * 1000, // 3 days ago
       });
 
-      const entries = (memory as unknown as { entries: Map<string, unknown> }).entries;
+      const entries = getEntries(memory);
       entries.set("mixed-hot", hotEntry);
       entries.set("mixed-cold", coldEntry);
       entries.set("mixed-stable", stableEntry);
@@ -380,8 +376,7 @@ describe("AgentDBMemory Auto-Tiering", () => {
       const promoteSpy = vi.spyOn(memory, "promoteEntry");
       const demoteSpy = vi.spyOn(memory, "demoteEntry");
 
-      await (memory as unknown as { autoTieringSweep(t: number, d: number): Promise<void> })
-        .autoTieringSweep.call(memory, 5, 7);
+      await runSweep(memory, 5, 7);
 
       expect(promoteSpy).toHaveBeenCalledWith("mixed-hot", MemoryTier.Ephemeral);
       expect(demoteSpy).toHaveBeenCalledWith("mixed-cold", MemoryTier.Ephemeral);

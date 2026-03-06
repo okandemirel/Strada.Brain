@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AgentDBMemory } from "./agentdb-memory.js";
-import type { MemoryEntry, MemoryStats, RetrievalResult } from "../memory.interface.js";
+import type { MemoryEntry, RetrievalResult } from "../memory.interface.js";
 import type { UnifiedMemoryStats, HnswHealth } from "./unified-memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
-import type { MemoryId, ChatId, TimestampMs, NormalizedScore, DurationMs } from "../../types/index.js";
+import type { MemoryId, ChatId, NormalizedScore, DurationMs } from "../../types/index.js";
 import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
 
 // Mock the logger to suppress output during tests

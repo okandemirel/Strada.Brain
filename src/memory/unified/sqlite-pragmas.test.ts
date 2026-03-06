@@ -63,6 +63,7 @@ describe("configureSqlitePragmas", () => {
     const profiles: SqliteProfile[] = ["memory", "learning", "tasks", "preferences"];
 
     for (const profile of profiles) {
+      if (db) db.close();
       db = new Database(":memory:");
       configureSqlitePragmas(db, profile);
 
@@ -70,11 +71,7 @@ describe("configureSqlitePragmas", () => {
       expect(getPragma("temp_store")).toBe(2);
       expect(getPragma("foreign_keys")).toBe(1);
       expect(getPragma("busy_timeout")).toBe(5000);
-
-      db.close();
     }
-    // Prevent afterEach from double-closing
-    db = new Database(":memory:");
   });
 
   it("SqliteProfile type prevents invalid profiles at compile time", () => {

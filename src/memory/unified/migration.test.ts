@@ -189,7 +189,7 @@ describe("MemoryMigrator", () => {
       const backupPath = join(tempDir, "backup");
       migrator.createBackup(backupPath);
 
-      expect(require("node:fs").existsSync(join(backupPath, "memory-backup.json"))).toBe(true);
+      expect(existsSync(join(backupPath, "memory-backup.json"))).toBe(true);
     });
   });
 
