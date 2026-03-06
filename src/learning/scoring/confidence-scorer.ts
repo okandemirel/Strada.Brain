@@ -5,7 +5,7 @@
  * Tracks success/failure history and updates confidence using Bayesian inference.
  */
 
-import type { Instinct, InstinctStatus, InstinctStats } from "../types.js";
+import { CONFIDENCE_THRESHOLDS, type Instinct, type InstinctStatus, type InstinctStats } from "../types.js";
 
 // ─── Confidence Factors ─────────────────────────────────────────────────────────
 
@@ -127,16 +127,11 @@ export class ConfidenceScorer {
    * Get the status based on current confidence
    */
   getStatus(confidence: number): InstinctStatus {
-    // CONFIDENCE_THRESHOLDS values
-    const EVOLUTION = 0.9;
-    const ACTIVE = 0.7;
-    const DEPRECATED = 0.3;
-    
-    if (confidence >= EVOLUTION) {
+    if (confidence >= CONFIDENCE_THRESHOLDS.EVOLUTION) {
       return "evolved";
-    } else if (confidence >= ACTIVE) {
+    } else if (confidence >= CONFIDENCE_THRESHOLDS.ACTIVE) {
       return "active";
-    } else if (confidence < DEPRECATED) {
+    } else if (confidence < CONFIDENCE_THRESHOLDS.DEPRECATED) {
       return "deprecated";
     }
     return "proposed";

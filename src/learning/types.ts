@@ -69,6 +69,9 @@ export const CONFIDENCE_THRESHOLDS = {
   ACTIVE: 0.7,      // Threshold to become active
   DEPRECATED: 0.3,  // Threshold below which instinct is deprecated
   EVOLUTION: 0.9,   // Threshold for evolution consideration
+  SIMILAR: 0.85,    // Similarity threshold for duplicate detection
+  AUTO_EVOLVE: 0.95, // Auto-evolution threshold
+  MAX_INITIAL: 0.8, // Maximum initial confidence for new instincts
 } as const;
 
 /** Context condition type */

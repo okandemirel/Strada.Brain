@@ -33,20 +33,10 @@ import {
   type InstinctType,
   type ContextCondition,
   type ContextConditionId,
+  CONFIDENCE_THRESHOLDS,
   createInstinctId,
 } from "../types.js";
 import { createBrand, type ToolName, type TimestampMs, type JsonObject } from "../../types/index.js";
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const CONFIDENCE_THRESHOLDS = {
-  EVOLUTION: 0.9,
-  ACTIVE: 0.7,
-  DEPRECATED: 0.3,
-  SIMILAR: 0.85,
-  AUTO_EVOLVE: 0.95,
-  MAX_INITIAL: 0.8,
-};
 
 const VERDICT_SCORE = {
   HIGH: 0.7,

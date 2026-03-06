@@ -17,7 +17,24 @@
 
 import { MUTATION_TOOLS, VERIFY_TOOLS } from "./constants.js";
 import type { LearningPipeline, TrajectoryStep, TrajectoryOutcome, TrajectoryStepResult, ErrorDetails } from "../../learning/index.js";
-import { createBrand, now, durationMs } from "../../types/index.js";
+import { createBrand, now, durationMs, type JsonObject, type JsonValue } from "../../types/index.js";
+
+/** Convert Record<string, unknown> to JsonObject, filtering non-JSON values */
+function toJsonObject(input: Record<string, unknown>): JsonObject {
+  return Object.fromEntries(
+    Object.entries(input)
+      .filter(([, v]) =>
+        typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null ||
+        Array.isArray(v) || (typeof v === "object" && v !== null)
+      )
+      .map(([k, v]) => {
+        if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+          return [k, v as JsonObject];
+        }
+        return [k, v as JsonValue];
+      })
+  ) as JsonObject;
+}
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
@@ -199,18 +216,7 @@ export class TaskPlanner {
 
     // Record step for trajectory
     if (this.isTaskActive) {
-      // Convert Record<string, unknown> to JsonObject
-      const jsonInput: import("../../types/index.js").JsonObject = input 
-        ? Object.fromEntries(Object.entries(input).filter(([, v]) => 
-            typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null || 
-            Array.isArray(v) || (typeof v === "object" && v !== null)
-          ).map(([k, v]) => {
-            if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-              return [k, v as import("../../types/index.js").JsonObject];
-            }
-            return [k, v as import("../../types/index.js").JsonValue];
-          })) as import("../../types/index.js").JsonObject
-        : {};
+      const jsonInput = input ? toJsonObject(input) : {} as JsonObject;
       
       // Build TrajectoryStepResult based on isError
       let result: TrajectoryStepResult;
@@ -261,17 +267,7 @@ export class TaskPlanner {
     });
 
     // Also record as a step
-    // Convert Record<string, unknown> to JsonObject
-    const jsonInput: import("../../types/index.js").JsonObject = 
-      Object.fromEntries(Object.entries(params.originalInput).filter(([, v]) => 
-        typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null || 
-        Array.isArray(v) || (typeof v === "object" && v !== null)
-      ).map(([k, v]) => {
-        if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-          return [k, v as import("../../types/index.js").JsonObject];
-        }
-        return [k, v as import("../../types/index.js").JsonValue];
-      })) as import("../../types/index.js").JsonObject;
+    const jsonInput = toJsonObject(params.originalInput);
     
     const step: TrajectoryStep = {
       stepNumber: this.iterationsUsed + 1,
