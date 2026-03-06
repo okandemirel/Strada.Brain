@@ -608,7 +608,7 @@ export class LearningStorage {
          JOIN error_patterns_fts f ON p.rowid = f.rowid
          WHERE error_patterns_fts MATCH ?
          ORDER BY rank`
-      ).all(query) as ErrorPatternRow[];
+      ).all(`"${query.replace(/"/g, '""')}"`) as ErrorPatternRow[];
       return rows.map(r => this.rowToErrorPattern(r));
     } catch {
       // Fallback to LIKE search if FTS fails

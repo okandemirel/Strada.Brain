@@ -6,16 +6,9 @@
  */
 
 import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import type { 
-  IUnifiedMemory 
-} from "./unified-memory.interface.js";
-import type { 
-  MigrationStatus
-} from "./unified-memory.interface.js";
-import {
-  MemoryTier,
-} from "./unified-memory.interface.js";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import type { IUnifiedMemory, MigrationStatus } from "./unified-memory.interface.js";
+import { MemoryTier } from "./unified-memory.interface.js";
 import type { 
   RetrievalOptions,
   RetrievalResult,
@@ -198,7 +191,9 @@ export class MemoryMigrator {
         sourceSystem: this.status.sourceSystem,
         version: this.status.version,
       };
-      writeFileSync(markerPath, JSON.stringify(markerData, null, 2));
+      const tmpPath = markerPath + ".tmp";
+      writeFileSync(tmpPath, JSON.stringify(markerData, null, 2));
+      renameSync(tmpPath, markerPath);
       getLoggerSafe().info("[MemoryMigrator] Migration marker written", { markerPath });
     } catch (error) {
       getLoggerSafe().warn("[MemoryMigrator] Failed to write migration marker", {
@@ -452,7 +447,12 @@ export class MemoryMigrator {
     // If marker exists, migration was already completed
     const markerPath = join(sourcePath, MIGRATION_MARKER);
     if (existsSync(markerPath)) {
-      return false;
+      try {
+        JSON.parse(readFileSync(markerPath, "utf-8"));
+        return false;
+      } catch {
+        // Corrupted marker — treat as if migration is needed
+      }
     }
     const memoryPath = join(sourcePath, "memory.json");
     return existsSync(memoryPath);

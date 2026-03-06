@@ -374,7 +374,7 @@ export const configSchema = z
 
     // Memory
     memoryEnabled: boolFromString(true),
-    memoryDbPath: z.string().default(".strata-memory"),
+    memoryDbPath: z.string().refine((p) => !p.includes(".."), { message: "Path must not contain '..' (path traversal)" }).default(".strata-memory"),
     memoryBackend: z.enum(["agentdb", "file"]).default("agentdb"),
     memoryDimensions: z
       .string()
