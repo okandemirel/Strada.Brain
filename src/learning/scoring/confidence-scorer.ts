@@ -292,6 +292,25 @@ export class ConfidenceScorer {
   }
 }
 
+// ─── Verdict Scoring ────────────────────────────────────────────────────────────
+
+/**
+ * Calculate weighted verdict score from a tool result event.
+ * Used by handleToolResult for confidence attribution:
+ *   - Clean success (no retries): strong positive (0.9)
+ *   - Retry success (retryCount > 0): weak positive (0.6)
+ *   - Hard failure: strong negative (0.2)
+ */
+export function getVerdictScore(event: { success: boolean; retryCount?: number }): { success: boolean; verdictScore: number } {
+  if (event.success && (!event.retryCount || event.retryCount === 0)) {
+    return { success: true, verdictScore: 0.9 };  // Clean success: strong positive
+  }
+  if (event.success && event.retryCount && event.retryCount > 0) {
+    return { success: true, verdictScore: 0.6 };  // Retry success: weak positive
+  }
+  return { success: false, verdictScore: 0.2 };   // Hard failure: strong negative
+}
+
 // ─── Utility Functions ──────────────────────────────────────────────────────────
 
 /**

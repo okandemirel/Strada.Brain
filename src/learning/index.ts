@@ -36,7 +36,7 @@
 // Core exports
 export { LearningStorage, type LearningStats } from "./storage/learning-storage.js";
 export { LearningPipeline } from "./pipeline/learning-pipeline.js";
-export { ConfidenceScorer, calculateEloRating, wilsonScoreInterval } from "./scoring/confidence-scorer.js";
+export { ConfidenceScorer, calculateEloRating, wilsonScoreInterval, getVerdictScore } from "./scoring/confidence-scorer.js";
 export { PatternMatcher, extractKeywords, jaccardSimilarity } from "./matching/pattern-matcher.js";
 export { ErrorLearningHooks, type ErrorContext, type ResolutionContext } from "./hooks/error-learning-hooks.js";
 

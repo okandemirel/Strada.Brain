@@ -6,8 +6,9 @@
 
 import { randomUUID } from "node:crypto";
 import { LearningStorage } from "../storage/learning-storage.js";
-import { ConfidenceScorer } from "../scoring/confidence-scorer.js";
+import { ConfidenceScorer, getVerdictScore } from "../scoring/confidence-scorer.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
+import type { ToolResultEvent } from "../../core/event-bus.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import {
@@ -79,9 +80,9 @@ export class LearningPipeline {
 
   start(): void {
     if (this.isRunning || !this.config.enabled) return;
-    
+
     this.isRunning = true;
-    this.detectionTimer = setInterval(() => this.runDetectionBatch(), this.config.detectionIntervalMs);
+    // Detection timer removed -- event-driven processing via handleToolResult() replaces it
     this.evolutionTimer = setInterval(() => this.runEvolution(), this.config.evolutionIntervalMs);
   }
 
@@ -160,6 +161,52 @@ export class LearningPipeline {
       action: params.correction,
       toolName: params.toolName,
     });
+  }
+
+  // ─── Event-Driven Processing ─────────────────────────────────────────────────
+
+  /**
+   * Handle a tool result event from the event bus.
+   * Runs the full pipeline per event: observe -> process -> confidence update.
+   * Replaces the batch detection timer for per-event learning.
+   */
+  handleToolResult(event: ToolResultEvent): void {
+    // 1. Store observation (reuse existing observeToolUse logic)
+    this.observeToolUse({
+      sessionId: event.sessionId,
+      toolName: event.toolName,
+      input: event.input,
+      output: event.output,
+      success: event.success,
+      errorDetails: event.errorDetails as ErrorDetails | undefined,
+    });
+
+    // 2. Process the observation immediately (replaces batch detection)
+    const observations = this.storage.getUnprocessedObservations(1);
+    for (const obs of observations) {
+      this.processObservation(obs);
+    }
+    this.storage.markObservationsProcessed(observations.map(o => o.id));
+
+    // 3. Update confidence for relevant instincts
+    if (event.appliedInstinctIds && event.appliedInstinctIds.length > 0) {
+      const verdict = getVerdictScore(event);
+
+      for (const instinctId of event.appliedInstinctIds) {
+        const instinct = this.storage.getInstinct(instinctId);
+        if (!instinct) continue;
+
+        // Only update confidence if instinct has a tool_name contextCondition matching event.toolName
+        const isRelevant = instinct.contextConditions.length === 0 ||
+          instinct.contextConditions.some(cc =>
+            cc.type === "tool_name" && cc.value === event.toolName
+          );
+        if (!isRelevant) continue;
+
+        const updated = this.confidenceScorer.updateConfidence(instinct, verdict.success, verdict.verdictScore);
+        this.updateInstinctStatus(updated);
+      }
+    }
   }
 
   // ─── Trajectory Methods ──────────────────────────────────────────────────────

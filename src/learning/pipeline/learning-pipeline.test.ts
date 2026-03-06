@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { LearningPipeline } from "./learning-pipeline.ts";
 import { LearningStorage } from "../storage/learning-storage.ts";
 import type { Instinct, Trajectory, TrajectoryStep, TrajectoryOutcome } from "../types.ts";
+import type { ToolResultEvent } from "../../core/event-bus.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -337,13 +338,175 @@ describe("LearningPipeline", () => {
   describe("getStats", () => {
     it("should return current statistics", () => {
       const stats = pipeline.getStats();
-      
+
       expect(stats).toHaveProperty("instinctCount");
       expect(stats).toHaveProperty("activeInstinctCount");
       expect(stats).toHaveProperty("trajectoryCount");
       expect(stats).toHaveProperty("observationCount");
       expect(stats).toHaveProperty("errorPatternCount");
       expect(stats).toHaveProperty("unprocessedObservationCount");
+    });
+  });
+
+  describe("handleToolResult", () => {
+    it("should call observeToolUse with event data", () => {
+      const event: ToolResultEvent = {
+        sessionId: "session-1",
+        toolName: "dotnet_build",
+        input: { args: ["--release"] },
+        output: "Build succeeded",
+        success: true,
+        timestamp: Date.now(),
+      };
+
+      pipeline.handleToolResult(event);
+
+      storage.flush();
+      const stats = pipeline.getStats();
+      expect(stats.observationCount).toBe(1);
+    });
+
+    it("should call processObservation for the new observation", () => {
+      const event: ToolResultEvent = {
+        sessionId: "session-1",
+        toolName: "dotnet_build",
+        input: {},
+        output: "error CS0246: Type not found",
+        success: false,
+        errorDetails: {
+          category: "missing_type",
+          message: "CS0246: Type not found",
+          code: "CS0246",
+        },
+        timestamp: Date.now(),
+      };
+
+      pipeline.handleToolResult(event);
+
+      storage.flush();
+      // Observations are processed inline (marked processed)
+      const stats = pipeline.getStats();
+      expect(stats.observationCount).toBe(1);
+      expect(stats.unprocessedObservationCount).toBe(0);
+    });
+
+    it("should update confidence for matching instincts only (tool_name contextCondition match)", () => {
+      // Create an instinct with tool_name contextCondition matching "dotnet_build"
+      const instinct: Instinct = {
+        id: `instinct_match_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        name: "Test Instinct",
+        type: "error_fix",
+        status: "active",
+        confidence: 0.5,
+        triggerPattern: "CS0246 error",
+        action: "Add using directive",
+        contextConditions: [
+          { id: "ctx_1" as any, type: "tool_name", value: "dotnet_build", match: "include" },
+        ],
+        stats: { timesSuggested: 5, timesApplied: 3, timesFailed: 2, successRate: 0.6, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+      };
+      storage.createInstinct(instinct);
+
+      const event: ToolResultEvent = {
+        sessionId: "session-1",
+        toolName: "dotnet_build",
+        input: {},
+        output: "Build succeeded",
+        success: true,
+        appliedInstinctIds: [instinct.id],
+        timestamp: Date.now(),
+      };
+
+      pipeline.handleToolResult(event);
+
+      // Instinct should have been updated
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      // Confidence should have increased (success with verdictScore 0.9)
+      expect(updated!.confidence).not.toBe(instinct.confidence);
+    });
+
+    it("should NOT update confidence for instincts with non-matching tool_name", () => {
+      // Create an instinct with tool_name contextCondition matching "file_edit" (not dotnet_build)
+      const instinct: Instinct = {
+        id: `instinct_nomatch_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        name: "Non-matching Instinct",
+        type: "error_fix",
+        status: "active",
+        confidence: 0.5,
+        triggerPattern: "Wrong file content",
+        action: "Fix file content",
+        contextConditions: [
+          { id: "ctx_2" as any, type: "tool_name", value: "file_edit", match: "include" },
+        ],
+        stats: { timesSuggested: 5, timesApplied: 3, timesFailed: 2, successRate: 0.6, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+      };
+      storage.createInstinct(instinct);
+
+      const event: ToolResultEvent = {
+        sessionId: "session-1",
+        toolName: "dotnet_build",
+        input: {},
+        output: "Build succeeded",
+        success: true,
+        appliedInstinctIds: [instinct.id],
+        timestamp: Date.now(),
+      };
+
+      pipeline.handleToolResult(event);
+
+      // Instinct should NOT have been updated
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.confidence).toBe(instinct.confidence);
+    });
+  });
+
+  describe("Lifecycle (event-driven)", () => {
+    it("should no longer set detectionTimer in start() (only evolutionTimer)", () => {
+      // We verify by checking that start() doesn't create a detection timer
+      // The pipeline is already started in beforeEach -- stop it and restart
+      pipeline.stop();
+
+      // Use fake timers to inspect
+      vi.useFakeTimers();
+      try {
+        pipeline.start();
+
+        // After start, advancing by detectionIntervalMs should NOT run runDetectionBatch
+        // (since we removed the timer). We verify indirectly: no observations get processed by timer.
+        pipeline.observeToolUse({
+          sessionId: "session-timer",
+          toolName: "file_read",
+          input: {},
+          output: "content",
+          success: true,
+        });
+
+        // Advance past the detection interval
+        vi.advanceTimersByTime(2000);
+
+        // Observations should still be unprocessed (no batch timer)
+        const stats = pipeline.getStats();
+        expect(stats.unprocessedObservationCount).toBe(1);
+      } finally {
+        pipeline.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it("should still clear evolutionTimer and shut down embeddingQueue on stop()", () => {
+      // Just verify stop() doesn't throw
+      pipeline.start();
+      expect(() => pipeline.stop()).not.toThrow();
     });
   });
 });

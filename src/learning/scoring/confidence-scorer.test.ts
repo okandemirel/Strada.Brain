@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { ConfidenceScorer, calculateEloRating, wilsonScoreInterval } from "./confidence-scorer.ts";
+import { ConfidenceScorer, calculateEloRating, wilsonScoreInterval, getVerdictScore } from "./confidence-scorer.ts";
 import type { Instinct } from "../types.ts";
 
 describe("ConfidenceScorer", () => {
@@ -193,6 +193,29 @@ describe("calculateEloRating", () => {
     const changeIfUnderdogWins = calculateEloRating(lowRated, highRated, 1) - lowRated;
 
     expect(Math.abs(changeIfFavoredWins)).toBeLessThan(Math.abs(changeIfUnderdogWins));
+  });
+});
+
+describe("getVerdictScore", () => {
+  it("should return 0.9 for clean success (retryCount 0 or undefined)", () => {
+    const result1 = getVerdictScore({ success: true });
+    expect(result1).toEqual({ success: true, verdictScore: 0.9 });
+
+    const result2 = getVerdictScore({ success: true, retryCount: 0 });
+    expect(result2).toEqual({ success: true, verdictScore: 0.9 });
+  });
+
+  it("should return 0.6 for retry success (retryCount > 0)", () => {
+    const result = getVerdictScore({ success: true, retryCount: 2 });
+    expect(result).toEqual({ success: true, verdictScore: 0.6 });
+  });
+
+  it("should return 0.2 for hard failure", () => {
+    const result = getVerdictScore({ success: false });
+    expect(result).toEqual({ success: false, verdictScore: 0.2 });
+
+    const result2 = getVerdictScore({ success: false, retryCount: 3 });
+    expect(result2).toEqual({ success: false, verdictScore: 0.2 });
   });
 });
 
