@@ -120,8 +120,6 @@ export class AgentDBMemory implements IUnifiedMemory {
   private migrationStatus: MigrationStatus;
   private isInitialized = false;
   private searchTimes: number[] = [];
-  // Cleanup tracking for metrics/logging (updated in cleanupExpired)
-  private _lastCleanupTime = Date.now(); // eslint-disable-line @typescript-eslint/no-unused-vars
   private tieringTimer: ReturnType<typeof setInterval> | null = null;
   private sqliteDb: Database.Database | null = null;
   private sqliteStatements: Map<string, Database.Statement> = new Map();
@@ -223,9 +221,11 @@ export class AgentDBMemory implements IUnifiedMemory {
   startAutoTiering(intervalMs: number, promotionThreshold: number, demotionTimeoutDays: number): void {
     if (this.tieringTimer) return;
     this.tieringTimer = setInterval(
-      () => this.autoTieringSweep(promotionThreshold, demotionTimeoutDays),
+      () => this.autoTieringSweep(promotionThreshold, demotionTimeoutDays)
+        .catch(e => getLoggerSafe().error("[AgentDBMemory] Auto-tiering sweep failed", { error: String(e) })),
       intervalMs,
     );
+    this.tieringTimer.unref();
   }
 
   stopAutoTiering(): void {
@@ -237,6 +237,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   private async autoTieringSweep(promotionThreshold: number, demotionTimeoutDays: number): Promise<void> {
     const now = Date.now();
+    const tierOrder = { [MemoryTier.Working]: 0, [MemoryTier.Ephemeral]: 1, [MemoryTier.Persistent]: 2 };
     let promoted = 0;
     let demoted = 0;
 
@@ -257,7 +258,6 @@ export class AgentDBMemory implements IUnifiedMemory {
       }
 
       if (targetTier !== currentTier) {
-        const tierOrder = { [MemoryTier.Working]: 0, [MemoryTier.Ephemeral]: 1, [MemoryTier.Persistent]: 2 };
         const isPromotion = tierOrder[targetTier] < tierOrder[currentTier];
 
         if (isPromotion) {
@@ -866,10 +866,6 @@ export class AgentDBMemory implements IUnifiedMemory {
         removed++;
       }
     }
-
-    this._lastCleanupTime = Date.now();
-    // Use the cleanup time for potential metrics/logging
-    void this._lastCleanupTime;
 
     if (removed > 0) {
       getLoggerSafe().info("[AgentDBMemory] Cleaned up expired entries", { removed });

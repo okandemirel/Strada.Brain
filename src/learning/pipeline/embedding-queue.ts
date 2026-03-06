@@ -20,14 +20,17 @@ interface PendingItem {
 
 interface EmbeddingQueueOptions {
   batchWindowMs?: number;
+  maxPendingItems?: number;
 }
 
 const DEFAULT_BATCH_WINDOW_MS = 500;
+const DEFAULT_MAX_PENDING_ITEMS = 1000;
 
 export class EmbeddingQueue {
   private readonly provider: IEmbeddingProvider;
   private readonly storage: LearningStorage;
   private readonly batchWindowMs: number;
+  private readonly maxPendingItems: number;
 
   private pending: PendingItem[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -41,6 +44,7 @@ export class EmbeddingQueue {
     this.provider = provider;
     this.storage = storage;
     this.batchWindowMs = options?.batchWindowMs ?? DEFAULT_BATCH_WINDOW_MS;
+    this.maxPendingItems = options?.maxPendingItems ?? DEFAULT_MAX_PENDING_ITEMS;
   }
 
   /**
@@ -50,6 +54,10 @@ export class EmbeddingQueue {
   enqueue(instinctId: string, text: string): void {
     if (this.stopped) return;
 
+    if (this.pending.length >= this.maxPendingItems) {
+      this.pending.shift(); // Drop oldest to prevent unbounded growth
+    }
+
     this.pending.push({ instinctId, text });
 
     if (!this.timer) {
@@ -57,6 +65,7 @@ export class EmbeddingQueue {
         this.timer = null;
         void this.flush();
       }, this.batchWindowMs);
+      this.timer.unref();
     }
   }
 
