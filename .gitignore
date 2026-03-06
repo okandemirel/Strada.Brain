@@ -5,7 +5,9 @@ dist/
 .DS_Store
 *.sqlite
 *.sqlite-journal
+*.bak
 .vscode/
 .idea/
 coverage/
 .worktrees/
+.planning/

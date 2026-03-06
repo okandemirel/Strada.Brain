@@ -271,4 +271,36 @@ describe("LearningStorage", () => {
       expect(updatedStats.instinctCount).toBe(initialStats.instinctCount + 1);
     });
   });
+
+  describe("Schema Migration", () => {
+    it("should not error when initialize is called twice (idempotent migration)", () => {
+      // Storage is already initialized in beforeEach
+      // Calling initialize again should not throw (ALTER TABLE silently fails if column exists)
+      expect(() => storage.initialize()).not.toThrow();
+    });
+
+    it("should have embedding column in instincts table after initialize", () => {
+      const instinct: Instinct = {
+        id: randomUUID(),
+        name: "Embedding Test",
+        type: "error_fix",
+        status: "proposed",
+        confidence: 0.7,
+        triggerPattern: "test pattern",
+        action: "test action",
+        contextConditions: [],
+        stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0 },
+        embedding: [0.1, 0.2, 0.3],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      // Should not throw — embedding column must exist
+      storage.createInstinct(instinct);
+
+      const retrieved = storage.getInstinct(instinct.id);
+      expect(retrieved).not.toBeNull();
+      expect(retrieved?.embedding).toEqual([0.1, 0.2, 0.3]);
+    });
+  });
 });

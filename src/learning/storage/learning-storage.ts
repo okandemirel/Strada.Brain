@@ -218,12 +218,28 @@ export class LearningStorage {
     
     // Execute schema
     this.db.exec(SCHEMA_SQL);
-    
+
+    // Run schema migrations for existing databases
+    this.migrateSchema();
+
     // Prepare commonly used statements
     this.prepareStatements();
-    
+
     // Start batch flush timer
     this.startBatchFlushTimer();
+  }
+
+  /**
+   * Apply schema migrations for existing databases.
+   * Idempotent — safe to call on every startup.
+   */
+  private migrateSchema(): void {
+    if (!this.db) return;
+    try {
+      this.db.exec("ALTER TABLE instincts ADD COLUMN embedding TEXT");
+    } catch {
+      // Column already exists — expected after first migration
+    }
   }
 
   /** Close the database connection */
