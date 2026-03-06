@@ -11,7 +11,7 @@ describe("configureSqlitePragmas", () => {
   });
 
   function getPragma(name: string): unknown {
-    return db.pragma(name, true);
+    return db.pragma(name, { simple: true });
   }
 
   it('sets correct pragmas for "memory" profile (16MB cache)', () => {
