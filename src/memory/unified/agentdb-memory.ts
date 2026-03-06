@@ -36,6 +36,7 @@ import type {
   Vector,
 } from "../../types/index.js";
 import { ok, err, some, none, createBrand } from "../../types/index.js";
+import { HnswWriteMutex } from "./hnsw-write-mutex.js";
 
 // ---------------------------------------------------------------------------
 // SQLite Schema & Row Types
@@ -112,6 +113,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   private dbPath: string;
   private entries: Map<string, UnifiedMemoryEntry> = new Map();
   private hnswStore?: HNSWVectorStore;
+  private readonly writeMutex = new HnswWriteMutex();
   private textIndex = new TextIndex();
   private cachedAnalysis: { projectPath: string; analysis: StrataProjectAnalysis } | null = null;
   private migrationStatus: MigrationStatus;
@@ -415,27 +417,30 @@ export class AgentDBMemory implements IUnifiedMemory {
       // Store in memory
       this.entries.set(id as string, unifiedEntry);
 
-      // Add to HNSW index
+      // Add to HNSW index (mutex-serialized to prevent interleaved writes)
       if (this.hnswStore) {
-        await this.hnswStore.upsert([
-          {
-            id: id as string,
-            vector: embedding,
-            chunk: {
+        const store = this.hnswStore;
+        await this.writeMutex.withLock(() =>
+          store.upsert([
+            {
               id: id as string,
-              content: entry.content,
-              contentHash: "",
-              filePath: (entry.chatId as string) ?? "memory",
-              indexedAt: Date.now() as TimestampMs,
-              kind: "class" as const,
-              startLine: 0,
-              endLine: 0,
-              language: "typescript",
+              vector: embedding,
+              chunk: {
+                id: id as string,
+                content: entry.content,
+                contentHash: "",
+                filePath: (entry.chatId as string) ?? "memory",
+                indexedAt: Date.now() as TimestampMs,
+                kind: "class" as const,
+                startLine: 0,
+                endLine: 0,
+                language: "typescript",
+              },
+              addedAt: Date.now() as TimestampMs,
+              accessCount: 0,
             },
-            addedAt: Date.now() as TimestampMs,
-            accessCount: 0,
-          },
-        ]);
+          ]),
+        );
       }
 
       // Add to text index for backward compatibility
@@ -986,12 +991,14 @@ export class AgentDBMemory implements IUnifiedMemory {
         accessCount: e.accessCount,
       }));
 
-      // Clear and re-add
-      for (const entry of entries) {
-        await this.hnswStore.remove([entry.id as string]);
-      }
-
-      await this.hnswStore.upsertBatch(vectorEntries);
+      // Clear and re-add (mutex-serialized to prevent interleaved writes)
+      const store = this.hnswStore;
+      await this.writeMutex.withLock(async () => {
+        for (const entry of entries) {
+          await store.remove([entry.id as string]);
+        }
+        await store.upsertBatch(vectorEntries);
+      });
 
       getLoggerSafe().info("[AgentDBMemory] Index rebuild complete", { count: entries.length });
       return ok(undefined);
@@ -1448,7 +1455,8 @@ export class AgentDBMemory implements IUnifiedMemory {
           }
         }
         if (vectors.length > 0) {
-          await this.hnswStore.upsert(vectors);
+          const store = this.hnswStore;
+          await this.writeMutex.withLock(() => store.upsert(vectors));
           getLoggerSafe().info("[AgentDBMemory] Rebuilt HNSW index from SQLite", {
             count: vectors.length,
           });

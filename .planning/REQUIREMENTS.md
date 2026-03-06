@@ -9,7 +9,7 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 
 ### Real Memory
 
-- [ ] **MEM-01**: AgentDB replaces FileMemoryManager as the memory backend in bootstrap
+- [x] **MEM-01**: AgentDB replaces FileMemoryManager as the memory backend in bootstrap
 - [ ] **MEM-02**: MemoryMigrator imports all existing FileMemoryManager JSON data into AgentDB SQLite without data loss
 - [ ] **MEM-03**: Conversation retrieval uses HNSW semantic search via AgentDB (vector similarity, not TF-IDF)
 - [ ] **MEM-04**: Memory entries auto-tier between Working (hot), Ephemeral (warm), and Persistent (cold) based on access patterns
@@ -94,7 +94,7 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MEM-01 | Phase 1: AgentDB Activation | Pending |
+| MEM-01 | Phase 1: AgentDB Activation | Complete |
 | MEM-05 | Phase 1: AgentDB Activation | Complete |
 | MEM-07 | Phase 1: AgentDB Activation | Complete |
 | MEM-02 | Phase 2: Memory Migration & HNSW Hardening | Pending |

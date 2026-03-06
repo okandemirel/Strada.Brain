@@ -28,6 +28,9 @@ export {
 // AgentDB adapter (IUnifiedMemory -> IMemoryManager bridge)
 export { AgentDBAdapter } from "./agentdb-adapter.js";
 
+// HNSW write serialization mutex
+export { HnswWriteMutex } from "./hnsw-write-mutex.js";
+
 // Migration utilities
 export {
   MemoryMigrator,

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-03-06T11:06:33.047Z"
+stopped_at: Completed 01-02-PLAN.md (Phase 1 complete)
+last_updated: "2026-03-06T11:13:16Z"
 progress:
   total_phases: 9
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,18 +19,18 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 1 Plan 02 (bootstrap wiring) is next.
+**Current Focus:** Phase 1 complete. Phase 2 (Migration & HNSW Hardening) is next.
 
 ## Current Position
 
 **Milestone:** Phase 2 — Agent Evolution (Level 3 → 4)
 **Phase:** 1 of 9 (AgentDB Activation)
-**Plan:** 1 of 2 complete (01-01-PLAN.md done)
-**Status:** Executing Phase 1.
+**Plan:** 2 of 2 complete (Phase 1 done)
+**Status:** Phase 1 complete. Ready for Phase 2.
 
 **Progress:**
-[█████░░░░░] 50%
-Phase 1  [█████ . . . . . ] 50%  AgentDB Activation
+[██████████] 100%
+Phase 1  [██████████] 100%  AgentDB Activation
 Phase 2  [ . . . . . . . . . . ] 0%  Migration & HNSW Hardening
 Phase 3  [ . . . . . . . . . . ] 0%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [ . . . . . . . . . . ] 0%  Event-Driven Learning
@@ -41,18 +41,19 @@ Phase 8  [ . . . . . . . . . . ] 0%  Goal Progress & Execution
 Phase 9  [ . . . . . . . . . . ] 0%  Tool Chain Synthesis
 ```
 
-**Overall:** 0/9 phases complete (0%)
+**Overall:** 1/9 phases complete (11%)
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 0/9 |
-| Plans completed | 1/2 (Phase 1) |
-| Requirements delivered | 2/32 (MEM-05, MEM-07) |
-| Tests added | 39/50+ target |
+| Phases completed | 1/9 |
+| Plans completed | 2/2 (Phase 1) |
+| Requirements delivered | 3/32 (MEM-01, MEM-05, MEM-07) |
+| Tests added | 49/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
+| Phase 01 P02 | 7min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,10 @@ Phase 9  [ . . . . . . . . . . ] 0%  Tool Chain Synthesis
 - [P1-01] Tier limits match AgentDB defaults: 100/1000/10000
 - [P1-01] getHealth() synthesized from getStats() + getIndexHealth()
 - [P1-01] Adapter stubs return ok()/defaults for 15+ non-production methods
+- [P1-02] AgentDB path is subdirectory of dbPath (join(dbPath, 'agentdb')) to avoid file conflicts
+- [P1-02] initializeMemory exported for unit testing (was private function)
+- [P1-02] Schema repair opens SQLite directly to validate memories table before retry
+- [P1-02] Hash-based embedding warning logged at startup when RAG is disabled
 - Fine granularity (9 phases) chosen for complex brownfield changes
 - Memory phases split into 3 (activation, migration, auto-tiering) due to interface drift risk
 - Embedding infrastructure placed in Phase 3 (after HNSW hardening) as bridge between memory and learning
@@ -86,17 +91,17 @@ Phase 9  [ . . . . . . . . . . ] 0%  Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-06T11:06:33.045Z
-**Stopped at:** Completed 01-01-PLAN.md
+**Last session:** 2026-03-06T11:13:16Z
+**Stopped at:** Completed 01-02-PLAN.md (Phase 1 complete)
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
 - Dormant code: AgentDB (51KB), MemoryMigrator (14KB), CachedEmbeddingProvider, ConfidenceScorer
 - Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts
-- All 1730 existing tests must continue to pass
+- All 1779 tests pass (was 1730, +49 from Phase 1)
 - Quality gates: /simplify + /security-review after each implementation phase
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-06*
+*Last updated: 2026-03-06T11:13:16Z*
