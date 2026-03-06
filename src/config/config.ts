@@ -55,6 +55,13 @@ export type EnvVarName =
   | "PROMETHEUS_PORT"
   | "MEMORY_ENABLED"
   | "MEMORY_DB_PATH"
+  | "MEMORY_BACKEND"
+  | "MEMORY_DIMENSIONS"
+  | "MEMORY_AUTO_TIERING"
+  | "MEMORY_TIER_WORKING_MAX"
+  | "MEMORY_TIER_EPHEMERAL_MAX"
+  | "MEMORY_TIER_PERSISTENT_MAX"
+  | "MEMORY_EPHEMERAL_TTL_HOURS"
   | "RAG_ENABLED"
   | "EMBEDDING_PROVIDER"
   | "EMBEDDING_MODEL"
@@ -122,10 +129,24 @@ export interface RateLimitConfig {
   readonly monthlyBudgetUsd: number;
 }
 
+/** Memory backend type */
+export type MemoryBackend = "agentdb" | "file";
+
 /** Memory configuration */
 export interface MemoryConfig {
   readonly enabled: boolean;
   readonly dbPath: string;
+  readonly backend: MemoryBackend;
+  readonly unified: {
+    readonly dimensions: number;
+    readonly autoTiering: boolean;
+    readonly tierLimits: {
+      readonly working: number;
+      readonly ephemeral: number;
+      readonly persistent: number;
+    };
+    readonly ephemeralTtlHours: number;
+  };
 }
 
 /** RAG configuration */
@@ -348,6 +369,33 @@ export const configSchema = z
     // Memory
     memoryEnabled: boolFromString(true),
     memoryDbPath: z.string().default(".strata-memory"),
+    memoryBackend: z.enum(["agentdb", "file"]).default("agentdb"),
+    memoryDimensions: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(64).max(4096))
+      .default("1536"),
+    memoryAutoTiering: boolFromString(false),
+    memoryTierWorkingMax: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10).max(10000))
+      .default("100"),
+    memoryTierEphemeralMax: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10).max(100000))
+      .default("1000"),
+    memoryTierPersistentMax: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10).max(1000000))
+      .default("10000"),
+    memoryEphemeralTtlHours: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(8760))
+      .default("24"),
 
     // RAG
     ragEnabled: boolFromString(true),
@@ -521,6 +569,17 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     memory: {
       enabled: rawConfig.memoryEnabled,
       dbPath: rawConfig.memoryDbPath,
+      backend: rawConfig.memoryBackend,
+      unified: {
+        dimensions: rawConfig.memoryDimensions,
+        autoTiering: rawConfig.memoryAutoTiering,
+        tierLimits: {
+          working: rawConfig.memoryTierWorkingMax,
+          ephemeral: rawConfig.memoryTierEphemeralMax,
+          persistent: rawConfig.memoryTierPersistentMax,
+        },
+        ephemeralTtlHours: rawConfig.memoryEphemeralTtlHours,
+      },
     },
 
     rag: {
@@ -741,6 +800,13 @@ interface EnvVars {
   prometheusPort: string | undefined;
   memoryEnabled: string | undefined;
   memoryDbPath: string | undefined;
+  memoryBackend: string | undefined;
+  memoryDimensions: string | undefined;
+  memoryAutoTiering: string | undefined;
+  memoryTierWorkingMax: string | undefined;
+  memoryTierEphemeralMax: string | undefined;
+  memoryTierPersistentMax: string | undefined;
+  memoryEphemeralTtlHours: string | undefined;
   ragEnabled: string | undefined;
   embeddingProvider: string | undefined;
   embeddingModel: string | undefined;
@@ -798,6 +864,13 @@ function loadFromEnv(): EnvVars {
     prometheusPort: process.env["PROMETHEUS_PORT"],
     memoryEnabled: process.env["MEMORY_ENABLED"],
     memoryDbPath: process.env["MEMORY_DB_PATH"],
+    memoryBackend: process.env["MEMORY_BACKEND"],
+    memoryDimensions: process.env["MEMORY_DIMENSIONS"],
+    memoryAutoTiering: process.env["MEMORY_AUTO_TIERING"],
+    memoryTierWorkingMax: process.env["MEMORY_TIER_WORKING_MAX"],
+    memoryTierEphemeralMax: process.env["MEMORY_TIER_EPHEMERAL_MAX"],
+    memoryTierPersistentMax: process.env["MEMORY_TIER_PERSISTENT_MAX"],
+    memoryEphemeralTtlHours: process.env["MEMORY_EPHEMERAL_TTL_HOURS"],
     ragEnabled: process.env["RAG_ENABLED"],
     embeddingProvider: process.env["EMBEDDING_PROVIDER"],
     embeddingModel: process.env["EMBEDDING_MODEL"],
@@ -1015,7 +1088,18 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     dashboard: { ...base.dashboard, ...partial.dashboard },
     websocketDashboard: { ...base.websocketDashboard, ...partial.websocketDashboard },
     prometheus: { ...base.prometheus, ...partial.prometheus },
-    memory: { ...base.memory, ...partial.memory },
+    memory: {
+      ...base.memory,
+      ...partial.memory,
+      unified: {
+        ...base.memory.unified,
+        ...(partial.memory?.unified ?? {}),
+        tierLimits: {
+          ...base.memory.unified.tierLimits,
+          ...(partial.memory?.unified?.tierLimits ?? {}),
+        },
+      },
+    },
     rag: { ...base.rag, ...partial.rag },
     rateLimit: { ...base.rateLimit, ...partial.rateLimit },
   } as Config;
