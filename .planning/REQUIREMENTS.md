@@ -12,7 +12,7 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 - [x] **MEM-01**: AgentDB replaces FileMemoryManager as the memory backend in bootstrap
 - [x] **MEM-02**: MemoryMigrator imports all existing FileMemoryManager JSON data into AgentDB SQLite without data loss
 - [x] **MEM-03**: Conversation retrieval uses HNSW semantic search via AgentDB (vector similarity, not TF-IDF)
-- [ ] **MEM-04**: Memory entries auto-tier between Working (hot), Ephemeral (warm), and Persistent (cold) based on access patterns
+- [x] **MEM-04**: Memory entries auto-tier between Working (hot), Ephemeral (warm), and Persistent (cold) based on access patterns
 - [x] **MEM-05**: AgentDB interface aligns with IMemoryManager contract (adapter if needed to bridge IUnifiedMemory)
 - [x] **MEM-06**: HNSW write mutex prevents index corruption from concurrent writes across memory and learning systems
 - [x] **MEM-07**: Unified memory config options added to Zod config schema (tier thresholds, auto-tiering toggle)
@@ -100,7 +100,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | MEM-02 | Phase 2: Memory Migration & HNSW Hardening | Pending |
 | MEM-03 | Phase 2: Memory Migration & HNSW Hardening | Complete |
 | MEM-06 | Phase 2: Memory Migration & HNSW Hardening | Complete |
-| MEM-04 | Phase 3: Auto-Tiering & Embedding Infrastructure | Pending |
+| MEM-04 | Phase 3: Auto-Tiering & Embedding Infrastructure | Complete |
 | LRN-03 | Phase 3: Auto-Tiering & Embedding Infrastructure | Complete |
 | LRN-04 | Phase 3: Auto-Tiering & Embedding Infrastructure | Complete |
 | LRN-07 | Phase 3: Auto-Tiering & Embedding Infrastructure | Complete |
@@ -134,4 +134,4 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-03-06*
-*Last updated: 2026-03-06 after 02-01 execution (MEM-03, MEM-06 complete)*
+*Last updated: 2026-03-06 after 03-03 execution (MEM-04 complete, Phase 3 done)*

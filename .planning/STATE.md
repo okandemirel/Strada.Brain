@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-03-06T14:56:34.342Z"
+stopped_at: Completed 03-03-PLAN.md (Phase 3 complete)
+last_updated: "2026-03-06T15:04:00.000Z"
 progress:
   total_phases: 9
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 7
-  percent: 88
+  completed_plans: 8
+  percent: 100
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,19 +19,19 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 3 in progress. Plans 01-02 complete. Plan 03 next.
+**Current Focus:** Phase 3 complete. All 3 plans done. Ready for Phase 4.
 
 ## Current Position
 
-**Milestone:** Phase 3 — Agent Evolution (Level 3 -> 4)
-**Phase:** 3 of 9 (Auto-Tiering & Embedding Infrastructure)
-**Plan:** 2 of 3 complete (03-01, 03-02 done)
-**Status:** Executing
+**Milestone:** Phase 4 — Agent Evolution (Level 3 -> 4)
+**Phase:** 3 of 9 complete (Auto-Tiering & Embedding Infrastructure)
+**Plan:** 3 of 3 complete (03-01, 03-02, 03-03 done)
+**Status:** Phase 3 Complete
 
 **Progress:**
-[█████████░] 88%
+[██████████] 100%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
-Phase 3  [######....] 67%   Auto-Tiering & Embedding Infrastructure
+Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [..........] 0%    Event-Driven Learning
 Phase 5  [..........] 0%    Metrics Instrumentation
 Phase 6  [..........] 0%    Bayesian Confidence System
@@ -39,16 +39,16 @@ Phase 7  [..........] 0%    Recursive Goal Decomposition
 Phase 8  [..........] 0%    Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
 
-**Overall:** 2/9 phases complete (22%)
+**Overall:** 3/9 phases complete (33%)
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 2/9 |
-| Plans completed | 7 (2 Phase 1 + 3 Phase 2 + 2 Phase 3) |
-| Requirements delivered | 9/32 (MEM-01, MEM-02, MEM-03, MEM-05, MEM-06, MEM-07, LRN-03, LRN-04, LRN-07) |
-| Tests added | 75/50+ target |
+| Phases completed | 3/9 |
+| Plans completed | 8 (2 Phase 1 + 3 Phase 2 + 3 Phase 3) |
+| Requirements delivered | 10/32 (MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, LRN-03, LRN-04, LRN-07) |
+| Tests added | 88/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
@@ -57,6 +57,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 02 P03 | 2min | 1 task | 2 files |
 | Phase 03 P01 | 3min | 2 tasks | 6 files |
 | Phase 03 P02 | 4min | 2 tasks | 4 files |
+| Phase 03 P03 | 5min | 1 task | 5 files |
 
 ## Accumulated Context
 
@@ -87,6 +88,11 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P3-02] Shared CachedEmbeddingProvider: single instance for RAG and learning
 - [P3-02] Optional provider pattern: when RAG disabled, embeddingQueue stays null
 - [P3-02] Embedding text = triggerPattern + " " + action concatenation
+- [P3-03] Promotion requires accessCount >= threshold AND lastAccessedAt < 1 day (dual condition)
+- [P3-03] Demotion uses only staleness (daysSinceAccess > timeout), access count irrelevant
+- [P3-03] enforceTierLimits for all 3 tiers after every sweep (cascade eviction correctness)
+- [P3-03] stopAutoTiering before saveEntries in shutdown (prevents sweep during teardown)
+- [P3-03] Auto-tiering defaults OFF, requires MEMORY_AUTO_TIERING=true to enable
 - Fine granularity (9 phases) chosen for complex brownfield changes
 - Memory phases split into 3 (activation, migration, auto-tiering) due to interface drift risk
 - Embedding infrastructure placed in Phase 3 (after HNSW hardening) as bridge between memory and learning
@@ -112,22 +118,25 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-06T14:56:34.338Z
-**Stopped at:** Completed 03-02-PLAN.md
+**Last session:** 2026-03-06T15:04:00.000Z
+**Stopped at:** Completed 03-03-PLAN.md (Phase 3 complete)
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
-- Dormant code: CachedEmbeddingProvider, ConfidenceScorer
+- Dormant code: ConfidenceScorer (CachedEmbeddingProvider now wired in Phase 3)
 - Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts
-- All 1801 tests pass (was 1790, +11 from Phase 2 Plan 02)
+- All 1829 tests pass (was 1801, +13 from Phase 3 Plan 03 auto-tiering, +15 from earlier Phase 3 plans)
 - Quality gates: /simplify + /security-review after each implementation phase
-- HnswWriteMutex now serializes all HNSW writes in agentdb-memory.ts
+- HnswWriteMutex serializes all HNSW writes in agentdb-memory.ts
 - AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
 - Migration idempotency marker prevents duplicate runs
 - Bootstrap triggers runAutomaticMigration() after AgentDB init (both paths)
 - Phase 2 fully complete (all 3 plans), all 6 HNSW write sites mutex-protected
-- Ready for Phase 3 (Auto-Tiering & Embedding Infrastructure)
+- Phase 3 fully complete: SQLite pragma standardization, embedding queue, auto-tiering sweep
+- Auto-tiering sweep activated via startAutoTiering in bootstrap (when config enabled)
+- CachedEmbeddingProvider shared between RAG and learning pipeline
+- Ready for Phase 4 (Event-Driven Learning)
 
 ---
 *State initialized: 2026-03-06*

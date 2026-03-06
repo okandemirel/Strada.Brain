@@ -54,11 +54,11 @@ Plans:
   2. Every new instinct stored in the learning pipeline has an embedding vector populated in the instincts table
   3. All SQLite databases use consistent pragmas (WAL mode, appropriate cache_size, busy_timeout) preventing lock contention
   4. CachedEmbeddingProvider is wired to the learning pipeline and generates embeddings for instinct HNSW indexing
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans executed
 Plans:
-- [ ] 03-01-PLAN.md — SQLite pragma standardization with centralized helper (16/16/8/2 MB cache, 5s busy_timeout)
-- [ ] 03-02-PLAN.md — Async embedding queue + CachedEmbeddingProvider wiring from RAG to learning pipeline
-- [ ] 03-03-PLAN.md — Auto-tiering sweep with promotion/demotion logic, config knobs, and bootstrap wiring
+- [x] 03-01-PLAN.md — SQLite pragma standardization with centralized helper (16/16/8/2 MB cache, 5s busy_timeout)
+- [x] 03-02-PLAN.md — Async embedding queue + CachedEmbeddingProvider wiring from RAG to learning pipeline
+- [x] 03-03-PLAN.md — Auto-tiering sweep with promotion/demotion logic, config knobs, and bootstrap wiring
 
 ### Phase 4: Event-Driven Learning
 **Goal**: The agent learns immediately from tool outcomes instead of waiting for a 5-minute batch timer
@@ -130,7 +130,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. AgentDB Activation | 2/2 | Complete | 2026-03-06 |
 | 2. Memory Migration & HNSW Hardening | 3/3 | Complete | 2026-03-06 |
-| 3. Auto-Tiering & Embedding Infrastructure | 2/3 | In Progress|  |
+| 3. Auto-Tiering & Embedding Infrastructure | 3/3 | Complete | 2026-03-06 |
 | 4. Event-Driven Learning | 0/? | Not started | - |
 | 5. Metrics Instrumentation | 0/? | Not started | - |
 | 6. Bayesian Confidence System | 0/? | Not started | - |
@@ -193,4 +193,4 @@ Phase 1 (AgentDB Activation)
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-06 (Phase 3 planned: 3 plans in 2 waves)*
+*Last updated: 2026-03-06 (Phase 3 complete: 3/3 plans done)*
