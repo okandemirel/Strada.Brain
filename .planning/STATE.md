@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 08-01-PLAN.md
+stopped_at: Completed 08-02-PLAN.md
 last_updated: "2026-03-07T18:41:14.343Z"
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 21
-  completed_plans: 19
-  percent: 90
+  completed_plans: 20
+  percent: 95
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,24 +19,24 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 8 in progress (Goal Progress & Execution). Plan 1/3 done.
+**Current Focus:** Phase 8 in progress (Goal Progress & Execution). Plan 2/3 done.
 
 ## Current Position
 
 **Milestone:** Phase 8 -- Agent Evolution (Level 3 -> 4)
 **Phase:** 7 of 9 complete, Phase 8 in progress (Goal Progress & Execution)
-**Plan:** 1/3 plans done in Phase 8
+**Plan:** 2/3 plans done in Phase 8
 **Status:** Executing
 
 **Progress:**
-[█████████░] 90%
+[█████████░] 95%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [##########] 100%  Event-Driven Learning (complete)
 Phase 5  [##########] 100%  Metrics Instrumentation (complete)
 Phase 6  [##########] 100%  Bayesian Confidence System (complete)
 Phase 7  [##########] 100%  Recursive Goal Decomposition (complete)
-Phase 8  [###.......] 33%   Goal Progress & Execution
+Phase 8  [######....] 67%   Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
 
 **Overall:** 7/9 phases complete
@@ -46,8 +46,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Metric | Value |
 |--------|-------|
 | Phases completed | 7/9 (Phase 7 complete) |
-| Plans completed | 18 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6 + 3 Phase 7) |
-| Requirements delivered | 29/32 (MEM-01..07, LRN-01..07, EVAL-01..07, GOAL-01,02,04,05) |
+| Plans completed | 20 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6 + 3 Phase 7 + 2 Phase 8) |
+| Requirements delivered | 30/32 (MEM-01..07, LRN-01..07, EVAL-01..07, GOAL-01,02,03,04,05,06) |
 | Tests added | 236/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
@@ -69,6 +69,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 07 P02 | 6min | 2 tasks | 6 files |
 | Phase 07 P03 | 10min | 2 tasks | 5 files |
 | Phase 08 P01 | 5min | 2 tasks | 7 files |
+| Phase 08 P02 | 6min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -164,6 +165,13 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P7-03] activeGoalTrees persist across session messages, cleaned on eviction/cleanup
 - [P7-03] /api/goals returns empty trees array gracefully when goalStorage unavailable
 
+- [P8-02] Failure budget threshold uses >= comparison (failureCount >= maxFailures) for immediate trigger
+- [P8-02] CriticalityEvaluator is a callback injected by caller, GoalExecutor does not call LLM directly
+- [P8-02] Non-critical failed nodes tracked in separate Set (nonCriticalFailedIds) to allow dependents to proceed
+- [P8-02] Dependency-blocked nodes get "skipped" status (distinct from "failed") via separate code path
+- [P8-02] Root node excluded from execution by pre-populating completedIds
+- [P8-02] Resume resets executing->pending, preserves completed/failed nodes
+- [P8-02] Staleness threshold is 24 hours based on latest node updatedAt
 - [P8-01] upsertTree uses INSERT OR REPLACE for tree + DELETE+INSERT for nodes in transaction
 - [P8-01] Schema migration uses pragma table_info to detect missing columns (safe for fresh and existing DBs)
 - [P8-01] Progress calculation excludes root node (only child completion matters for percentage)
@@ -185,8 +193,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-07T18:41:14.339Z
-**Stopped at:** Completed 08-01-PLAN.md
+**Last session:** 2026-03-07T18:48:50Z
+**Stopped at:** Completed 08-02-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
@@ -284,6 +292,17 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
   - Config: GOAL_PARALLEL_EXECUTION (bool, default true), GOAL_MAX_PARALLEL (1-10, default 3)
   - 15 new tests (7 storage + 8 progress), all 68 goal tests passing
   - GOAL-03 requirement complete
+- Phase 8 Plan 02 complete: GoalExecutor + goal-resume
+  - GoalExecutor: wave-based parallel DAG execution with semaphore concurrency limiting
+  - Semaphore: queue-based async limiter (GOAL_MAX_PARALLEL)
+  - CriticalityEvaluator callback for LLM-based failure propagation decisions
+  - Failure budget with FailureReport, force-continue, and alwaysContinue options
+  - Per-node retry logic (up to maxRetries) with timing (startedAt, completedAt)
+  - Independent siblings continue when one fails (Promise.allSettled pattern)
+  - goal-resume: detectInterruptedTrees, prepareTreeForResume (executing->pending), isTreeStale
+  - formatResumePrompt: ASCII tree with progress bar and Resume/Discard options
+  - 33 new tests (21 executor + 12 resume), 101 total goal tests passing
+  - GOAL-06 requirement complete
 
 ---
 *State initialized: 2026-03-06*

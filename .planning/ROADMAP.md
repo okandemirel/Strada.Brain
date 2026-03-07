@@ -126,8 +126,8 @@ Plans:
   2. Sub-goals execute in topological order respecting dependency edges (a sub-goal never starts before its dependencies complete)
 **Plans:** 3 plans
 Plans:
-- [ ] 08-01-PLAN.md — GoalNode type extensions + Config options + GoalStorage upsert/resume methods + progress calculation module
-- [ ] 08-02-PLAN.md — GoalExecutor wave-based parallel DAG execution engine + goal resume module
+- [x] 08-01-PLAN.md — GoalNode type extensions + Config options + GoalStorage upsert/resume methods + progress calculation module
+- [x] 08-02-PLAN.md — GoalExecutor wave-based parallel DAG execution engine + goal resume module
 - [ ] 08-03-PLAN.md — BackgroundExecutor delegation + GoalRenderer progress/timing + bootstrap resume + dashboard progress
 
 ### Phase 9: Tool Chain Synthesis
@@ -153,7 +153,7 @@ Plans:
 | 5. Metrics Instrumentation | 2/2 | Complete | 2026-03-07 |
 | 6. Bayesian Confidence System | 3/3 | Complete    | 2026-03-07 |
 | 7. Recursive Goal Decomposition | 3/3 | Complete | 2026-03-07 |
-| 8. Goal Progress & Execution | 0/3 | Planned | - |
+| 8. Goal Progress & Execution | 2/3 | In Progress | - |
 | 9. Tool Chain Synthesis | 0/? | Not started | - |
 
 ## Coverage Map
@@ -211,4 +211,4 @@ Phase 1 (AgentDB Activation)
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-07 (Phase 8 planned)*
+*Last updated: 2026-03-07 (Phase 8 Plan 02 complete)*
