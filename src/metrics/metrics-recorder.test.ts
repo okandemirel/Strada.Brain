@@ -204,18 +204,8 @@ describe("MetricsRecorder", () => {
     });
   });
 
-  describe("isRecorded", () => {
-    it("should return false before endTask", () => {
-      const id = recorder.startTask({
-        sessionId: "chat_001",
-        taskDescription: "Build project",
-        taskType: "interactive",
-      });
-
-      expect(recorder.isRecorded(id)).toBe(false);
-    });
-
-    it("should return true after endTask", () => {
+  describe("idempotent endTask", () => {
+    it("should be safe to call endTask twice (no-op on second call)", () => {
       const id = recorder.startTask({
         sessionId: "chat_001",
         taskDescription: "Build project",
@@ -229,11 +219,28 @@ describe("MetricsRecorder", () => {
         hitMaxIterations: false,
       });
 
-      expect(recorder.isRecorded(id)).toBe(true);
+      // Second call should be a no-op (not throw, not double-record)
+      recorder.endTask(id, {
+        agentPhase: AgentPhase.FAILED,
+        iterations: 2,
+        toolCallCount: 5,
+        hitMaxIterations: false,
+      });
+
+      // Only one record call
+      expect(mockStorage.recordTaskMetric).toHaveBeenCalledTimes(1);
     });
 
-    it("should return false for unknown metric ID", () => {
-      expect(recorder.isRecorded("metric_unknown")).toBe(false);
+    it("should be safe to call endTask with unknown ID", () => {
+      // Should not throw
+      recorder.endTask("metric_unknown", {
+        agentPhase: AgentPhase.COMPLETE,
+        iterations: 1,
+        toolCallCount: 1,
+        hitMaxIterations: false,
+      });
+
+      expect(mockStorage.recordTaskMetric).not.toHaveBeenCalled();
     });
   });
 });

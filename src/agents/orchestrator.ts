@@ -295,14 +295,12 @@ export class Orchestrator {
           }
 
           // ─── Metrics: record success ────────────────────────────────
-          if (metricId) {
-            this.metricsRecorder?.endTask(metricId, {
-              agentPhase: AgentPhase.COMPLETE,
-              iterations: bgIteration + 1,
-              toolCallCount: bgToolCallCount,
-              hitMaxIterations: false,
-            });
-          }
+          this.recordMetricEnd(metricId, {
+            agentPhase: AgentPhase.COMPLETE,
+            iterations: bgIteration + 1,
+            toolCallCount: bgToolCallCount,
+            hitMaxIterations: false,
+          });
           // ────────────────────────────────────────────────────────────
 
           return response.text || "Task completed without output.";
@@ -367,27 +365,23 @@ export class Orchestrator {
       }
 
       // ─── Metrics: record max iterations ──────────────────────────────
-      if (metricId) {
-        this.metricsRecorder?.endTask(metricId, {
-          agentPhase: AgentPhase.EXECUTING,
-          iterations: bgIteration,
-          toolCallCount: bgToolCallCount,
-          hitMaxIterations: true,
-        });
-      }
+      this.recordMetricEnd(metricId, {
+        agentPhase: AgentPhase.EXECUTING,
+        iterations: bgIteration,
+        toolCallCount: bgToolCallCount,
+        hitMaxIterations: true,
+      });
       // ────────────────────────────────────────────────────────────────
 
       return "Task reached maximum iterations. The work done so far has been saved.";
     } finally {
-      // ─── Metrics: safety net for unexpected exits ────────────────────
-      if (metricId && !this.metricsRecorder?.isRecorded(metricId)) {
-        this.metricsRecorder?.endTask(metricId, {
-          agentPhase: AgentPhase.FAILED,
-          iterations: bgIteration,
-          toolCallCount: bgToolCallCount,
-          hitMaxIterations: false,
-        });
-      }
+      // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
+      this.recordMetricEnd(metricId, {
+        agentPhase: AgentPhase.FAILED,
+        iterations: bgIteration,
+        toolCallCount: bgToolCallCount,
+        hitMaxIterations: false,
+      });
       // ────────────────────────────────────────────────────────────────
     }
   }
@@ -723,14 +717,12 @@ export class Orchestrator {
             if (!canStream) await this.channel.sendMarkdown(chatId, response.text);
           }
           // ─── Metrics: record DONE ───────────────────────────────────
-          if (metricId) {
-            this.metricsRecorder?.endTask(metricId, {
-              agentPhase: AgentPhase.COMPLETE,
-              iterations: agentState.iteration,
-              toolCallCount: agentState.stepResults.length,
-              hitMaxIterations: false,
-            });
-          }
+          this.recordMetricEnd(metricId, {
+            agentPhase: AgentPhase.COMPLETE,
+            iterations: agentState.iteration,
+            toolCallCount: agentState.stepResults.length,
+            hitMaxIterations: false,
+          });
           // ──────────────────────────────────────────────────────────
           return;
         }
@@ -797,14 +789,12 @@ export class Orchestrator {
           }
         }
         // ─── Metrics: record end_turn ───────────────────────────────
-        if (metricId) {
-          this.metricsRecorder?.endTask(metricId, {
-            agentPhase: agentState.phase,
-            iterations: agentState.iteration,
-            toolCallCount: agentState.stepResults.length,
-            hitMaxIterations: false,
-          });
-        }
+        this.recordMetricEnd(metricId, {
+          agentPhase: agentState.phase,
+          iterations: agentState.iteration,
+          toolCallCount: agentState.stepResults.length,
+          hitMaxIterations: false,
+        });
         // ──────────────────────────────────────────────────────────
         return;
       }
@@ -928,14 +918,12 @@ export class Orchestrator {
 
     // Hit max iterations
     // ─── Metrics: record max iterations ──────────────────────────────
-    if (metricId) {
-      this.metricsRecorder?.endTask(metricId, {
-        agentPhase: agentState.phase,
-        iterations: agentState.iteration,
-        toolCallCount: agentState.stepResults.length,
-        hitMaxIterations: true,
-      });
-    }
+    this.recordMetricEnd(metricId, {
+      agentPhase: agentState.phase,
+      iterations: agentState.iteration,
+      toolCallCount: agentState.stepResults.length,
+      hitMaxIterations: true,
+    });
     // ────────────────────────────────────────────────────────────────
 
     await this.channel.sendText(
@@ -944,16 +932,24 @@ export class Orchestrator {
         "Please send a follow-up message to continue.",
     );
     } finally {
-      // ─── Metrics: safety net for unexpected exits ────────────────────
-      if (metricId && !this.metricsRecorder?.isRecorded(metricId)) {
-        this.metricsRecorder?.endTask(metricId, {
-          agentPhase: agentState.phase,
-          iterations: agentState.iteration,
-          toolCallCount: agentState.stepResults.length,
-          hitMaxIterations: false,
-        });
-      }
+      // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
+      this.recordMetricEnd(metricId, {
+        agentPhase: agentState.phase,
+        iterations: agentState.iteration,
+        toolCallCount: agentState.stepResults.length,
+        hitMaxIterations: false,
+      });
       // ────────────────────────────────────────────────────────────────
+    }
+  }
+
+  /** Record a metric end event (idempotent — endTask is a no-op for already-completed or unknown IDs) */
+  private recordMetricEnd(
+    metricId: string | undefined,
+    result: { agentPhase: AgentPhase; iterations: number; toolCallCount: number; hitMaxIterations: boolean },
+  ): void {
+    if (metricId) {
+      this.metricsRecorder?.endTask(metricId, result);
     }
   }
 

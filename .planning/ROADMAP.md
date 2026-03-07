@@ -85,7 +85,7 @@ Plans:
 **Plans:** 2 plans
 Plans:
 - [x] 05-01-PLAN.md — MetricsStorage + MetricsRecorder + InstinctRetriever modification + orchestrator instrumentation + bootstrap wiring
-- [ ] 05-02-PLAN.md — Dashboard /api/agent-metrics endpoint + CLI 'strata-brain metrics' command
+- [x] 05-02-PLAN.md — Dashboard /api/agent-metrics endpoint + CLI 'strata-brain metrics' command
 
 ### Phase 6: Bayesian Confidence System
 **Goal**: Pattern confidence reflects real-world outcomes and the system self-curates its instinct library
@@ -138,7 +138,7 @@ Plans:
 | 2. Memory Migration & HNSW Hardening | 3/3 | Complete | 2026-03-06 |
 | 3. Auto-Tiering & Embedding Infrastructure | 3/3 | Complete | 2026-03-06 |
 | 4. Event-Driven Learning | 2/2 | Complete | 2026-03-06 |
-| 5. Metrics Instrumentation | 1/2 | In Progress | - |
+| 5. Metrics Instrumentation | 2/2 | Complete | 2026-03-07 |
 | 6. Bayesian Confidence System | 0/? | Not started | - |
 | 7. Recursive Goal Decomposition | 0/? | Not started | - |
 | 8. Goal Progress & Execution | 0/? | Not started | - |
@@ -199,4 +199,4 @@ Phase 1 (AgentDB Activation)
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-07 (Phase 5 Plan 01 complete)*
+*Last updated: 2026-03-07 (Phase 5 complete)*

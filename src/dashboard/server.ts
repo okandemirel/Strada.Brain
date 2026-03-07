@@ -5,7 +5,10 @@ import type { MetricsCollector } from "./metrics.js";
 import type { IMemoryManager, MemoryHealth } from "../memory/memory.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { MetricsStorage } from "../metrics/metrics-storage.js";
-import type { MetricsFilter, TaskType, CompletionStatus } from "../metrics/metrics-types.js";
+import type { MetricsFilter } from "../metrics/metrics-types.js";
+import { VALID_TASK_TYPES, VALID_COMPLETION_STATUSES } from "../metrics/metrics-types.js";
+import type { TaskType, CompletionStatus } from "../metrics/metrics-types.js";
+import { parseDurationToTimestamp } from "../metrics/parse-duration.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -100,20 +103,24 @@ export class DashboardServer {
           return;
         }
         const params = new URL(url, "http://localhost").searchParams;
-        const filter: MetricsFilter = {};
-        if (params.get("session")) {
-          (filter as { sessionId: string }).sessionId = params.get("session")!;
+        const type = params.get("type");
+        const status = params.get("status");
+        if (type && !VALID_TASK_TYPES.has(type)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `Invalid type: ${type}` }));
+          return;
         }
-        if (params.get("type")) {
-          (filter as { taskType: TaskType }).taskType = params.get("type") as TaskType;
+        if (status && !VALID_COMPLETION_STATUSES.has(status)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `Invalid status: ${status}` }));
+          return;
         }
-        if (params.get("status")) {
-          (filter as { completionStatus: CompletionStatus }).completionStatus =
-            params.get("status") as CompletionStatus;
-        }
-        if (params.get("since")) {
-          (filter as { since: number }).since = parseDurationToTimestamp(params.get("since")!);
-        }
+        const filter: MetricsFilter = {
+          ...(params.get("session") && { sessionId: params.get("session")! }),
+          ...(type && { taskType: type as TaskType }),
+          ...(status && { completionStatus: status as CompletionStatus }),
+          ...(params.get("since") && { since: parseDurationToTimestamp(params.get("since")!) || undefined }),
+        };
         const aggregation = this.metricsStorage.getAggregation(filter);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(aggregation));
@@ -246,37 +253,6 @@ export class DashboardServer {
       this.server!.close(() => resolve());
     });
   }
-}
-
-// --- Duration Parsing Helper ---
-
-/**
- * Parse duration shorthand (e.g., "1d", "7d", "1h", "30m") into a Unix timestamp.
- * Returns Date.now() minus the parsed duration. Returns 0 if unparseable.
- */
-function parseDurationToTimestamp(duration: string): number {
-  const match = duration.match(/^(\d+)([dhm])$/);
-  if (!match) return 0;
-
-  const value = parseInt(match[1]!, 10);
-  const unit = match[2];
-
-  let ms: number;
-  switch (unit) {
-    case "d":
-      ms = value * 86400000;
-      break;
-    case "h":
-      ms = value * 3600000;
-      break;
-    case "m":
-      ms = value * 60000;
-      break;
-    default:
-      return 0;
-  }
-
-  return Date.now() - ms;
 }
 
 // --- Inline script content (used for both HTML embedding and CSP hash) ---

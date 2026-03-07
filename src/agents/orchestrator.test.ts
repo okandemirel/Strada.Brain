@@ -699,7 +699,6 @@ describe("Orchestrator", () => {
       return {
         startTask: vi.fn().mockReturnValue("metric_test_001"),
         endTask: vi.fn(),
-        isRecorded: vi.fn().mockReturnValue(false),
       };
     }
 
@@ -802,9 +801,8 @@ describe("Orchestrator", () => {
       // The error should be caught by the session lock error handler
       await promise;
 
-      // The finally block should ensure endTask is called
+      // The finally block should ensure endTask is called (idempotent)
       expect(mockRecorder.startTask).toHaveBeenCalled();
-      // isRecorded returns false, so finally block should call endTask
       expect(mockRecorder.endTask).toHaveBeenCalled();
     });
   });

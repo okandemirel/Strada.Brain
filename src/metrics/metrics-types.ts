@@ -48,21 +48,27 @@ export interface TaskMetric {
 
 // ─── Query Types ─────────────────────────────────────────────────────────────
 
-/** Flexible filter for querying metrics */
+/** Flexible filter for querying metrics (mutable DTO built incrementally) */
 export interface MetricsFilter {
   /** Filter by session (chatId) */
-  readonly sessionId?: string;
+  sessionId?: string;
   /** Filter by task type */
-  readonly taskType?: TaskType;
+  taskType?: TaskType;
   /** Filter by completion status */
-  readonly completionStatus?: CompletionStatus;
+  completionStatus?: CompletionStatus;
   /** Only include metrics after this timestamp (ms) */
-  readonly since?: number;
+  since?: number;
   /** Only include metrics before this timestamp (ms) */
-  readonly until?: number;
+  until?: number;
   /** Maximum rows to return (default 100) */
-  readonly limit?: number;
+  limit?: number;
 }
+
+/** Valid TaskType values for input validation */
+export const VALID_TASK_TYPES = new Set<string>(["interactive", "background", "subtask"]);
+
+/** Valid CompletionStatus values for input validation */
+export const VALID_COMPLETION_STATUSES = new Set<string>(["success", "failure", "partial"]);
 
 /** Aggregated metrics computed from filtered rows */
 export interface MetricsAggregation {

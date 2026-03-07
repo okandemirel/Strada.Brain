@@ -29,7 +29,6 @@ interface PendingTask {
 export class MetricsRecorder {
   private readonly storage: MetricsStorage;
   private readonly pending = new Map<string, PendingTask>();
-  private readonly recorded = new Set<string>();
 
   constructor(storage: MetricsStorage) {
     this.storage = storage;
@@ -95,14 +94,6 @@ export class MetricsRecorder {
     });
 
     this.pending.delete(metricId);
-    this.recorded.add(metricId);
-  }
-
-  /**
-   * Check if a metric has been recorded (endTask called).
-   */
-  isRecorded(metricId: string): boolean {
-    return this.recorded.has(metricId);
   }
 
   // ─── Private Helpers ───────────────────────────────────────────────────────

@@ -11,7 +11,7 @@
 
 import Database from "better-sqlite3";
 import { configureSqlitePragmas } from "../memory/unified/sqlite-pragmas.js";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type {
   TaskMetric,
@@ -71,6 +71,7 @@ export class MetricsStorage {
   // Prepared statement cache
   private stmts: {
     insert?: Database.Statement;
+    instinctLeaderboard?: Database.Statement;
   } = {};
 
   constructor(dbPath: string) {
@@ -81,9 +82,7 @@ export class MetricsStorage {
   initialize(): void {
     const dir = dirname(this.dbPath);
     if (dir && dir !== ".") {
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
+      mkdirSync(dir, { recursive: true });
     }
 
     this.db = new Database(this.dbPath);
@@ -97,6 +96,16 @@ export class MetricsStorage {
        paor_iterations, tool_call_count, instinct_ids, instinct_count,
        started_at, completed_at, duration_ms)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    this.stmts.instinctLeaderboard = this.db.prepare(`
+      SELECT
+        j.value as instinct_id,
+        COUNT(*) as usage_count,
+        AVG(CASE WHEN tm.completion_status = 'success' THEN 1.0 ELSE 0.0 END) as task_success_rate
+      FROM task_metrics tm, json_each(tm.instinct_ids) j
+      GROUP BY j.value
+      ORDER BY usage_count DESC
+      LIMIT ?
     `);
   }
 
@@ -180,18 +189,7 @@ export class MetricsStorage {
   getInstinctLeaderboard(limit: number = 50): InstinctLeaderboardEntry[] {
     this.ensureConnection();
 
-    const query = `
-      SELECT
-        j.value as instinct_id,
-        COUNT(*) as usage_count,
-        AVG(CASE WHEN tm.completion_status = 'success' THEN 1.0 ELSE 0.0 END) as task_success_rate
-      FROM task_metrics tm, json_each(tm.instinct_ids) j
-      GROUP BY j.value
-      ORDER BY usage_count DESC
-      LIMIT ?
-    `;
-
-    const rows = this.db!.prepare(query).all(limit) as Array<{
+    const rows = this.stmts.instinctLeaderboard!.all(limit) as Array<{
       instinct_id: string;
       usage_count: number;
       task_success_rate: number;
@@ -214,7 +212,7 @@ export class MetricsStorage {
   // ─── Private Helpers ───────────────────────────────────────────────────────
 
   private ensureConnection(): void {
-    if (!this.db) {
+    if (!this.db || !this.stmts.insert) {
       throw new Error("MetricsStorage not initialized. Call initialize() first.");
     }
   }

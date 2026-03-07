@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { loadConfigSafe } from "../config/config.js";
 import { MetricsStorage } from "./metrics-storage.js";
 import type { MetricsAggregation, MetricsFilter } from "./metrics-types.js";
+import { parseDurationToTimestamp } from "./parse-duration.js";
 
 // ─── Formatting ─────────────────────────────────────────────────────────────
 
@@ -45,37 +46,6 @@ export function formatMetricsJson(agg: MetricsAggregation): string {
   return JSON.stringify(agg, null, 2);
 }
 
-// ─── Duration Parsing ───────────────────────────────────────────────────────
-
-/**
- * Parse duration shorthand (e.g., "1d", "7d", "1h", "30m") into a Unix timestamp.
- * Returns Date.now() minus the parsed duration. Returns 0 if unparseable.
- */
-function parseDurationToTimestamp(duration: string): number {
-  const match = duration.match(/^(\d+)([dhm])$/);
-  if (!match) return 0;
-
-  const value = parseInt(match[1]!, 10);
-  const unit = match[2];
-
-  let ms: number;
-  switch (unit) {
-    case "d":
-      ms = value * 86400000;
-      break;
-    case "h":
-      ms = value * 3600000;
-      break;
-    case "m":
-      ms = value * 60000;
-      break;
-    default:
-      return 0;
-  }
-
-  return Date.now() - ms;
-}
-
 // ─── Command Runner ─────────────────────────────────────────────────────────
 
 /**
@@ -100,16 +70,10 @@ export function runMetricsCommand(opts: {
     storage = new MetricsStorage(dbPath);
     storage.initialize();
 
-    const filter: MetricsFilter = {};
-    if (opts.session) {
-      (filter as { sessionId: string }).sessionId = opts.session;
-    }
-    if (opts.since) {
-      const ts = parseDurationToTimestamp(opts.since);
-      if (ts > 0) {
-        (filter as { since: number }).since = ts;
-      }
-    }
+    const filter: MetricsFilter = {
+      ...(opts.session && { sessionId: opts.session }),
+      ...(opts.since && { since: parseDurationToTimestamp(opts.since) || undefined }),
+    };
 
     const agg = storage.getAggregation(filter);
 
