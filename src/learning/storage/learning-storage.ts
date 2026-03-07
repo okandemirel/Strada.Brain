@@ -42,7 +42,7 @@ const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS instincts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization')),
+  type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization', 'tool_chain')),
   status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent')),
   confidence REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
   trigger_pattern TEXT NOT NULL,
@@ -263,6 +263,9 @@ export class LearningStorage {
     // Phase 6: Migrate CHECK constraint to include 'permanent' and 'optimization'
     this.migrateStatusConstraint();
 
+    // Phase 9: Migrate CHECK constraint on type to include 'tool_chain'
+    this.migrateTypeConstraint();
+
     // Phase 6: Derive alpha/beta from existing stats for migrated instincts
     try {
       this.db.exec(`
@@ -336,7 +339,7 @@ export class LearningStorage {
         CREATE TABLE instincts (
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
-          type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization')),
+          type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization', 'tool_chain')),
           status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent')),
           confidence REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
           trigger_pattern TEXT NOT NULL,
@@ -390,6 +393,88 @@ export class LearningStorage {
       this.db.pragma("legacy_alter_table = OFF");
       this.db.pragma("foreign_keys = ON");
       throw err;
+    }
+  }
+
+  /**
+   * Migrate the CHECK constraint on instincts.type to include 'tool_chain'.
+   * Uses table recreation since SQLite cannot ALTER CHECK constraints.
+   * Idempotent -- only runs if 'tool_chain' is not already valid.
+   */
+  private migrateTypeConstraint(): void {
+    if (!this.db) return;
+
+    // Check if 'tool_chain' is already accepted
+    try {
+      this.db.prepare("INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        "__check_tool_chain__", "__test__", "tool_chain", "proposed", 0.5, "__test__", "__test__", "[]", "{}", 0, 0
+      );
+      // If we get here, 'tool_chain' is already in CHECK -- delete test row and return
+      this.db.prepare("DELETE FROM instincts WHERE id = ?").run("__check_tool_chain__");
+      return;
+    } catch {
+      // 'tool_chain' not valid -- proceed with migration
+    }
+
+    this.db.pragma("foreign_keys = OFF");
+    this.db.pragma("legacy_alter_table = ON");
+
+    const migrate = this.db.transaction(() => {
+      this.db!.prepare("ALTER TABLE instincts RENAME TO instincts_old").run();
+
+      this.db!.prepare(`
+        CREATE TABLE instincts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization', 'tool_chain')),
+          status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent')),
+          confidence REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
+          trigger_pattern TEXT NOT NULL,
+          action TEXT NOT NULL,
+          context_conditions TEXT NOT NULL,
+          stats TEXT NOT NULL,
+          embedding TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          evolved_to TEXT,
+          bayesian_alpha REAL DEFAULT 1.0,
+          bayesian_beta REAL DEFAULT 1.0,
+          cooling_started_at INTEGER,
+          cooling_failures INTEGER DEFAULT 0
+        )
+      `).run();
+
+      this.db!.prepare(`
+        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures)
+        SELECT id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to,
+               COALESCE(bayesian_alpha, 1.0), COALESCE(bayesian_beta, 1.0), cooling_started_at, COALESCE(cooling_failures, 0)
+        FROM instincts_old
+      `).run();
+
+      // Recreate indexes
+      this.db!.prepare("CREATE INDEX IF NOT EXISTS idx_instincts_status_confidence ON instincts(status, confidence DESC)").run();
+      this.db!.prepare("CREATE INDEX IF NOT EXISTS idx_instincts_type_status ON instincts(type, status)").run();
+
+      // Recreate junction table with foreign key reference
+      this.db!.prepare("DROP TABLE IF EXISTS trajectory_instincts").run();
+      this.db!.prepare(`
+        CREATE TABLE IF NOT EXISTS trajectory_instincts (
+          trajectory_id TEXT NOT NULL,
+          instinct_id TEXT NOT NULL,
+          PRIMARY KEY (trajectory_id, instinct_id),
+          FOREIGN KEY (trajectory_id) REFERENCES trajectories(id) ON DELETE CASCADE,
+          FOREIGN KEY (instinct_id) REFERENCES instincts(id) ON DELETE CASCADE
+        ) WITHOUT ROWID
+      `).run();
+
+      this.db!.prepare("DROP TABLE instincts_old").run();
+    });
+
+    try {
+      migrate();
+    } finally {
+      this.db.pragma("legacy_alter_table = OFF");
+      this.db.pragma("foreign_keys = ON");
     }
   }
 
@@ -708,6 +793,32 @@ export class LearningStorage {
     this.ensureConnection();
     const stmt = this.getStatement('getUnprocessedTrajectories');
     const rows = stmt.all(limit) as TrajectoryRow[];
+    return rows.map(r => this.rowToTrajectory(r));
+  }
+
+  /**
+   * Get trajectories with optional filtering for bulk scanning.
+   * Used by chain detection to find recurring tool patterns.
+   */
+  getTrajectories(options: { since?: number; limit?: number } = {}): Trajectory[] {
+    this.ensureConnection();
+
+    let sql = "SELECT * FROM trajectories WHERE 1=1";
+    const params: number[] = [];
+
+    if (options.since !== undefined) {
+      sql += " AND created_at >= ?";
+      params.push(options.since);
+    }
+
+    sql += " ORDER BY created_at DESC";
+
+    if (options.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(options.limit);
+    }
+
+    const rows = this.db!.prepare(sql).all(...params) as TrajectoryRow[];
     return rows.map(r => this.rowToTrajectory(r));
   }
 
