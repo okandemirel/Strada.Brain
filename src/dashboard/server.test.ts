@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { DashboardServer } from "./server.js";
 import { MetricsCollector } from "./metrics.js";
+import type { MetricsAggregation } from "../metrics/metrics-types.js";
+import type { MetricsStorage } from "../metrics/metrics-storage.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
@@ -84,5 +86,117 @@ describe("DashboardServer", () => {
 
     const res = await fetch(`http://localhost:${addr.port}/unknown`);
     expect(res.status).toBe(404);
+  });
+
+  describe("/api/agent-metrics", () => {
+    function getPort(srv: DashboardServer): number {
+      const addr = (srv as unknown as { server: { address: () => { port: number } } }).server.address();
+      if (!addr || typeof addr === "string") throw new Error("No address");
+      return addr.port;
+    }
+
+    const MOCK_AGGREGATION: MetricsAggregation = {
+      totalTasks: 42,
+      successCount: 36,
+      failureCount: 3,
+      partialCount: 3,
+      completionRate: 0.857,
+      avgIterations: 4.2,
+      avgToolCalls: 8.7,
+      tasksWithInstincts: 26,
+      instinctReusePct: 61.9,
+      avgInstinctsPerInformedTask: 2.3,
+    };
+
+    function createMockMetricsStorage(agg?: MetricsAggregation): MetricsStorage {
+      return {
+        getAggregation: vi.fn().mockReturnValue(agg ?? MOCK_AGGREGATION),
+        getTaskMetrics: vi.fn().mockReturnValue([]),
+        getInstinctLeaderboard: vi.fn().mockReturnValue([]),
+        initialize: vi.fn(),
+        close: vi.fn(),
+        recordTaskMetric: vi.fn(),
+      } as unknown as MetricsStorage;
+    }
+
+    it("returns 200 with MetricsAggregation JSON when metricsStorage is registered", async () => {
+      const metrics = new MetricsCollector();
+      const mockStorage = createMockMetricsStorage();
+      server = new DashboardServer(0, metrics, () => undefined);
+      server.registerServices({ metricsStorage: mockStorage });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/agent-metrics`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("application/json");
+
+      const data = await res.json();
+      expect(data.totalTasks).toBe(42);
+      expect(data.completionRate).toBe(0.857);
+      expect(data.avgIterations).toBe(4.2);
+    });
+
+    it("returns 503 when metricsStorage is not registered", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/agent-metrics`);
+      expect(res.status).toBe(503);
+
+      const data = await res.json();
+      expect(data.error).toBe("Metrics not available");
+    });
+
+    it("passes session query param as sessionId filter", async () => {
+      const metrics = new MetricsCollector();
+      const mockStorage = createMockMetricsStorage();
+      server = new DashboardServer(0, metrics, () => undefined);
+      server.registerServices({ metricsStorage: mockStorage });
+      await server.start();
+
+      const port = getPort(server);
+      await fetch(`http://localhost:${port}/api/agent-metrics?session=abc`);
+
+      expect(mockStorage.getAggregation).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "abc" }),
+      );
+    });
+
+    it("passes type query param as taskType filter", async () => {
+      const metrics = new MetricsCollector();
+      const mockStorage = createMockMetricsStorage();
+      server = new DashboardServer(0, metrics, () => undefined);
+      server.registerServices({ metricsStorage: mockStorage });
+      await server.start();
+
+      const port = getPort(server);
+      await fetch(`http://localhost:${port}/api/agent-metrics?type=interactive`);
+
+      expect(mockStorage.getAggregation).toHaveBeenCalledWith(
+        expect.objectContaining({ taskType: "interactive" }),
+      );
+    });
+
+    it("parses since duration shorthand into timestamp filter", async () => {
+      const metrics = new MetricsCollector();
+      const mockStorage = createMockMetricsStorage();
+      server = new DashboardServer(0, metrics, () => undefined);
+      server.registerServices({ metricsStorage: mockStorage });
+      await server.start();
+
+      const port = getPort(server);
+      const before = Date.now();
+      await fetch(`http://localhost:${port}/api/agent-metrics?since=1d`);
+
+      expect(mockStorage.getAggregation).toHaveBeenCalledTimes(1);
+      const filter = (mockStorage.getAggregation as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      // 1d = 86400000ms ago from ~now
+      const expected = before - 86400000;
+      expect(filter.since).toBeGreaterThanOrEqual(expected - 100);
+      expect(filter.since).toBeLessThanOrEqual(before);
+    });
   });
 });

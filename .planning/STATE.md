@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-03-06T22:29:41.216Z"
+status: executing
+stopped_at: "Completed 05-01-PLAN.md"
+last_updated: "2026-03-07T10:07:00Z"
 progress:
   total_phases: 9
   completed_phases: 4
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 11
+  completed_plans: 11
   percent: 100
 ---
 
@@ -19,36 +19,36 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 4 complete. Phase 5 (Metrics Instrumentation) next.
+**Current Focus:** Phase 5 Plan 01 complete (metrics storage + orchestrator instrumentation). Plan 02 next (dashboard/CLI).
 
 ## Current Position
 
 **Milestone:** Phase 5 -- Agent Evolution (Level 3 -> 4)
-**Phase:** 4 of 9 complete, Phase 5 next (Metrics Instrumentation)
-**Plan:** Phase 4 complete (2/2 plans done)
-**Status:** Ready to plan
+**Phase:** 4 of 9 complete, Phase 5 in progress (Metrics Instrumentation)
+**Plan:** 1/2 plans done in Phase 5
+**Status:** Executing
 
 **Progress:**
 [██████████] 100%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [##########] 100%  Event-Driven Learning (complete)
-Phase 5  [..........] 0%    Metrics Instrumentation
+Phase 5  [#####.....] 50%   Metrics Instrumentation (1/2 plans)
 Phase 6  [..........] 0%    Bayesian Confidence System
 Phase 7  [..........] 0%    Recursive Goal Decomposition
 Phase 8  [..........] 0%    Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
 
-**Overall:** 4/9 phases complete
+**Overall:** 4/9 phases complete, Phase 5 in progress
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 4/9 |
-| Plans completed | 10 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4) |
-| Requirements delivered | 15/32 (MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, LRN-01, LRN-02, LRN-03, LRN-04, LRN-05, LRN-06, LRN-07) |
-| Tests added | 121/50+ target |
+| Phases completed | 4/9 (Phase 5 in progress) |
+| Plans completed | 11 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 1 Phase 5) |
+| Requirements delivered | 18/32 (MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, LRN-01, LRN-02, LRN-03, LRN-04, LRN-05, LRN-06, LRN-07, EVAL-01, EVAL-02, EVAL-03) |
+| Tests added | 161/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
@@ -60,6 +60,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 03 P03 | 5min | 1 task | 5 files |
 | Phase 04 P01 | 5min | 2 tasks | 4 files |
 | Phase 04 P02 | 7min | 3 tasks | 10 files |
+| Phase 05 P01 | 8min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -112,6 +113,11 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P4-02] appliedInstinctIds left undefined in orchestrator emit -- Phase 6 will wire IDs through AgentState
 - [P4-02] Shutdown order: drain event bus -> drain queue -> stop pipeline
 - [P4-02] Event emission uses chatId as sessionId (orchestrator doesn't track separate session IDs)
+- [P5-01] Separate MetricsStorage connection to learning.db (WAL handles concurrency, avoids LearningStorage coupling)
+- [P5-01] INSERT OR REPLACE for idempotent metric recording
+- [P5-01] No retention/purge policy (metrics rows ~200 bytes, keep indefinitely)
+- [P5-01] InsightResult returns both formatted strings and raw instinct IDs (no separate method)
+- [P5-01] parentMetricId on BackgroundTaskOptions for subtask correlation
 
 ### Research Flags
 - Phase 1: AgentDB interface drift is #1 risk (15+ casts in agentdb-memory.ts). Integration tests first.
@@ -129,14 +135,14 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-06T22:21:55Z
-**Stopped at:** Completed 04-02-PLAN.md
+**Last session:** 2026-03-07T10:07:00Z
+**Stopped at:** Completed 05-01-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
 - Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts, event-bus.ts
-- All 1862 tests pass (was 1847, +15 from Phase 4 Plan 02: 3 getVerdictScore + 6 handleToolResult + 4 orchestrator + 2 task-planner)
+- All 1902 tests pass (was 1862, +40 from Phase 5 Plan 01: 36 metrics + 4 orchestrator)
 - Quality gates: /simplify + /security-review after each implementation phase
 - HnswWriteMutex serializes all HNSW writes in agentdb-memory.ts
 - AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
@@ -154,8 +160,15 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
   - TaskPlanner decoupled from direct observeToolUse calls
   - Weighted confidence scoring: 0.9/0.6/0.2 tiers
   - appliedInstinctIds deferred to Phase 6 (Bayesian Confidence)
-- Phase 5 (Metrics Instrumentation) is next
+- Phase 5 Plan 01 complete: metrics storage + orchestrator instrumentation
+  - MetricsStorage: task_metrics table in learning.db (separate connection, WAL concurrent)
+  - MetricsRecorder: startTask/endTask facade with three-state completion mapping
+  - InsightResult: enriched InstinctRetriever return with matchedInstinctIds
+  - Orchestrator processMessage and runBackgroundTask fully instrumented
+  - Bootstrap creates MetricsStorage/MetricsRecorder, injects into orchestrator
+  - EVAL-01 (completion rate), EVAL-02 (iterations), EVAL-03 (instinct reuse) all tracked
+- Phase 5 Plan 02 (dashboard/CLI metrics exposure) is next
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-06T22:21:55Z*
+*Last updated: 2026-03-07T10:07:00Z*

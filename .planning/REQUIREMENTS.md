@@ -38,9 +38,9 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 
 ### Self-Evaluation Metrics
 
-- [ ] **EVAL-01**: Task completion rate instrumented and tracked per session
-- [ ] **EVAL-02**: Iterations per task (tool calls to completion) instrumented
-- [ ] **EVAL-03**: Pattern reuse rate tracked (how often instincts influence planning)
+- [x] **EVAL-01**: Task completion rate instrumented and tracked per session
+- [x] **EVAL-02**: Iterations per task (tool calls to completion) instrumented
+- [x] **EVAL-03**: Pattern reuse rate tracked (how often instincts influence planning)
 - [ ] **EVAL-04**: Bayesian confidence updates from real outcomes replace LLM-only judgment
 - [ ] **EVAL-05**: Patterns with confidence < 0.3 auto-deprecated after cooling period
 - [ ] **EVAL-06**: Patterns with confidence > 0.95 auto-promoted to permanent status
@@ -108,9 +108,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | LRN-02 | Phase 4: Event-Driven Learning | Complete |
 | LRN-05 | Phase 4: Event-Driven Learning | Complete |
 | LRN-06 | Phase 4: Event-Driven Learning | Complete |
-| EVAL-01 | Phase 5: Metrics Instrumentation | Pending |
-| EVAL-02 | Phase 5: Metrics Instrumentation | Pending |
-| EVAL-03 | Phase 5: Metrics Instrumentation | Pending |
+| EVAL-01 | Phase 5: Metrics Instrumentation | Complete |
+| EVAL-02 | Phase 5: Metrics Instrumentation | Complete |
+| EVAL-03 | Phase 5: Metrics Instrumentation | Complete |
 | EVAL-04 | Phase 6: Bayesian Confidence System | Pending |
 | EVAL-05 | Phase 6: Bayesian Confidence System | Pending |
 | EVAL-06 | Phase 6: Bayesian Confidence System | Pending |
@@ -134,4 +134,4 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-03-06*
-*Last updated: 2026-03-06 after 04-02 execution (LRN-01, LRN-05 complete, Phase 4 done)*
+*Last updated: 2026-03-07 after 05-01 execution (EVAL-01, EVAL-02, EVAL-03 complete)*
