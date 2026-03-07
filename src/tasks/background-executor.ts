@@ -5,8 +5,8 @@
  * Uses a FIFO queue with configurable concurrency limit.
  * All work is I/O-bound (LLM API calls), so same event loop is fine.
  *
- * Optionally accepts a TaskDecomposer to break complex prompts
- * into ordered subtasks before execution.
+ * Optionally accepts a GoalDecomposer to decompose complex prompts
+ * into goal trees, executing sub-goals in topological order.
  */
 
 import type { Task } from "./types.js";
