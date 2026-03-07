@@ -10,6 +10,7 @@ import { VALID_TASK_TYPES, VALID_COMPLETION_STATUSES } from "../metrics/metrics-
 import type { TaskType, CompletionStatus } from "../metrics/metrics-types.js";
 import { parseDurationToTimestamp } from "../metrics/parse-duration.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
+import type { GoalStorage } from "../goals/index.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -53,6 +54,7 @@ export class DashboardServer {
   private channel?: IChannelAdapter;
   private metricsStorage?: MetricsStorage;
   private learningStorage?: LearningStorage;
+  private goalStorage?: GoalStorage;
 
   constructor(
     port: number,
@@ -75,6 +77,7 @@ export class DashboardServer {
     channel?: IChannelAdapter;
     metricsStorage?: MetricsStorage;
     learningStorage?: LearningStorage;
+    goalStorage?: GoalStorage;
   }): void {
     this.memoryManager = services.memoryManager;
     this.channel = services.channel;
@@ -83,6 +86,9 @@ export class DashboardServer {
     }
     if (services.learningStorage) {
       this.learningStorage = services.learningStorage;
+    }
+    if (services.goalStorage) {
+      this.goalStorage = services.goalStorage;
     }
   }
 
@@ -101,6 +107,40 @@ export class DashboardServer {
       res.setHeader("X-Frame-Options", "DENY");
       res.setHeader("X-XSS-Protection", "1; mode=block");
       res.setHeader("Referrer-Policy", "no-referrer");
+
+      if (url.startsWith("/api/goals")) {
+        // Goal tree data endpoint -- graceful degradation when goalStorage is not available
+        if (!this.goalStorage) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ trees: [] }));
+          return;
+        }
+        try {
+          const params = new URL(url, "http://localhost").searchParams;
+          const sessionFilter = params.get("session");
+          const rootIdFilter = params.get("rootId");
+
+          let trees;
+          if (rootIdFilter) {
+            // Get specific tree by rootId
+            const tree = this.goalStorage.getTree(rootIdFilter as import("../goals/types.js").GoalNodeId);
+            trees = tree ? [this.serializeGoalTree(tree)] : [];
+          } else if (sessionFilter) {
+            // Get trees for a specific session
+            const rawTrees = this.goalStorage.getTreesBySession(sessionFilter);
+            trees = rawTrees.map((t) => this.serializeGoalTree(t));
+          } else {
+            // No filter -- return empty (no "get all" to avoid scanning entire DB)
+            trees = [];
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ trees }));
+        } catch {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ trees: [] }));
+        }
+        return;
+      }
 
       if (url.startsWith("/api/agent-metrics")) {
         if (!this.metricsStorage) {
@@ -317,6 +357,41 @@ export class DashboardServer {
     return Array.from(byWeek.entries())
       .map(([weekStart, data]) => ({ weekStart, ...data }))
       .sort((a, b) => b.weekStart - a.weekStart);
+  }
+
+  /**
+   * Serialize a GoalTree into JSON-safe format for the /api/goals endpoint.
+   */
+  private serializeGoalTree(tree: import("../goals/types.js").GoalTree): Record<string, unknown> {
+    const nodes: Array<Record<string, unknown>> = [];
+    let completedCount = 0;
+    let rootStatus: string = "pending";
+
+    for (const [, node] of tree.nodes) {
+      nodes.push({
+        id: node.id,
+        task: node.task,
+        status: node.status,
+        depth: node.depth,
+        dependsOn: [...node.dependsOn],
+        parentId: node.parentId,
+        result: node.result,
+        error: node.error,
+      });
+      if (node.status === "completed") completedCount++;
+      if (node.id === tree.rootId) rootStatus = node.status;
+    }
+
+    return {
+      rootId: tree.rootId,
+      sessionId: tree.sessionId,
+      taskDescription: tree.taskDescription,
+      status: rootStatus,
+      nodeCount: nodes.length,
+      completedCount,
+      createdAt: tree.createdAt,
+      nodes,
+    };
   }
 
   async stop(): Promise<void> {

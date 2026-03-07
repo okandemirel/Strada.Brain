@@ -14,6 +14,7 @@
 
 import { EventEmitter } from "node:events";
 import type { InstinctLifecycleEvent } from "../learning/types.js";
+import type { GoalLifecycleEvent } from "../goals/types.js";
 
 // =============================================================================
 // EVENT PAYLOAD TYPES
@@ -50,6 +51,7 @@ export interface LearningEventMap {
   "instinct:cooling-started": InstinctLifecycleEvent;
   "instinct:deprecated": InstinctLifecycleEvent;
   "instinct:promoted": InstinctLifecycleEvent;
+  "goal:status-changed": GoalLifecycleEvent;
 }
 
 // =============================================================================

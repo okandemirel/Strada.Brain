@@ -34,6 +34,9 @@ import { WRITE_OPERATIONS } from "./autonomy/constants.js";
 import type { BackgroundTaskOptions } from "../tasks/types.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
+import type { GoalDecomposer } from "../goals/goal-decomposer.js";
+import { renderGoalTree, summarizeTree } from "../goals/goal-renderer.js";
+import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -85,6 +88,9 @@ export class Orchestrator {
   private readonly metricsRecorder: MetricsRecorder | null;
   /** Per-session matched instinct IDs for appliedInstinctIds attribution in tool:result events */
   private readonly currentSessionInstinctIds = new Map<string, string[]>();
+  private readonly goalDecomposer: GoalDecomposer | null;
+  /** Active goal trees per session for proactive/reactive decomposition */
+  private readonly activeGoalTrees = new Map<string, GoalTree>();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -102,6 +108,7 @@ export class Orchestrator {
     instinctRetriever?: InstinctRetriever;
     eventEmitter?: IEventEmitter<LearningEventMap>;
     metricsRecorder?: MetricsRecorder;
+    goalDecomposer?: GoalDecomposer;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -116,6 +123,7 @@ export class Orchestrator {
     this.instinctRetriever = opts.instinctRetriever ?? null;
     this.eventEmitter = opts.eventEmitter ?? null;
     this.metricsRecorder = opts.metricsRecorder ?? null;
+    this.goalDecomposer = opts.goalDecomposer ?? null;
 
     // Build tool registry
     this.tools = new Map();
@@ -738,6 +746,45 @@ export class Orchestrator {
             lastReflection: response.text ?? null,
             reflectionCount: agentState.reflectionCount + 1,
           };
+
+          // ─── Goal Decomposition: reactive decomposition when stuck ──────
+          if (this.goalDecomposer && this.activeGoalTrees.has(chatId)) {
+            try {
+              const goalTree = this.activeGoalTrees.get(chatId)!;
+              // Find the currently-executing node
+              let executingNodeId: GoalNodeId | null = null;
+              for (const [, node] of goalTree.nodes) {
+                if (node.status === "executing") {
+                  executingNodeId = node.id;
+                  break;
+                }
+              }
+              if (executingNodeId) {
+                const executingNode = goalTree.nodes.get(executingNodeId)!;
+                this.emitGoalEvent(goalTree.rootId, executingNodeId, "failed", executingNode.depth);
+                const updatedTree = await this.goalDecomposer.decomposeReactive(
+                  goalTree,
+                  executingNodeId,
+                  response.text ?? "",
+                );
+                if (updatedTree) {
+                  this.activeGoalTrees.set(chatId, updatedTree);
+                  const treeViz = renderGoalTree(updatedTree);
+                  await this.channel.sendMarkdown(chatId, "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```");
+                } else {
+                  getLogger().info("Reactive decomposition skipped (depth limit reached)", { chatId, nodeId: executingNodeId });
+                }
+              }
+            } catch (reactiveError) {
+              // Reactive decomposition failure is non-fatal
+              getLogger().warn("Reactive goal decomposition failed", {
+                chatId,
+                error: reactiveError instanceof Error ? reactiveError.message : String(reactiveError),
+              });
+            }
+          }
+          // ────────────────────────────────────────────────────────────────
+
           agentState = transitionPhase(agentState, AgentPhase.REPLANNING);
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
@@ -806,6 +853,28 @@ export class Orchestrator {
       // ─── PAOR: Phase transitions ────────────────────────────────────
       if (agentState.phase === AgentPhase.PLANNING) {
         agentState = { ...agentState, plan: response.text ?? null };
+
+        // ─── Goal Decomposition: proactive decomposition for complex tasks ───
+        if (this.goalDecomposer && this.goalDecomposer.shouldDecompose(lastUserMessage)) {
+          try {
+            const goalTree = await this.goalDecomposer.decomposeProactive(chatId, lastUserMessage);
+            this.activeGoalTrees.set(chatId, goalTree);
+            this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
+            const treeViz = renderGoalTree(goalTree);
+            await this.channel.sendMarkdown(chatId, "Goal decomposition:\n```\n" + treeViz + "\n```");
+            // Augment plan with decomposition summary
+            const treeSummary = summarizeTree(goalTree);
+            agentState = { ...agentState, plan: (agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]" };
+          } catch (decompError) {
+            // Decomposition failure is non-fatal -- continue without decomposition
+            getLogger().warn("Proactive goal decomposition failed", {
+              chatId,
+              error: decompError instanceof Error ? decompError.message : String(decompError),
+            });
+          }
+        }
+        // ────────────────────────────────────────────────────────────────────
+
         agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
       }
       if (agentState.phase === AgentPhase.REPLANNING) {
@@ -944,8 +1013,10 @@ export class Orchestrator {
         hitMaxIterations: false,
       });
       // ────────────────────────────────────────────────────────────────
-      // Clean up per-session instinct IDs to prevent memory leak
+      // Clean up per-session instinct IDs and goal trees to prevent memory leak
       this.currentSessionInstinctIds.delete(chatId);
+      // Note: activeGoalTrees intentionally NOT cleaned up here -- trees persist across messages
+      // in a session for reactive decomposition. Cleaned up in cleanupSessions and eviction.
     }
   }
 
@@ -1186,6 +1257,7 @@ export class Orchestrator {
       const oldestKey = this.sessions.keys().next().value as string;
       this.sessions.delete(oldestKey);
       this.sessionLocks.delete(oldestKey);
+      this.activeGoalTrees.delete(oldestKey);
     }
 
     session = { messages: [], lastActivity: new Date() };
@@ -1233,6 +1305,7 @@ export class Orchestrator {
       if (now - session.lastActivity.getTime() > maxAgeMs) {
         this.sessions.delete(chatId);
         this.sessionLocks.delete(chatId);
+        this.activeGoalTrees.delete(chatId);
       }
     }
   }
@@ -1247,6 +1320,18 @@ export class Orchestrator {
       success: !(tr.isError ?? false),
       retryCount: 0,
       appliedInstinctIds: this.currentSessionInstinctIds.get(chatId) ?? [],
+      timestamp: Date.now(),
+    });
+  }
+
+  /** Emit a goal lifecycle event on the event bus */
+  private emitGoalEvent(rootId: GoalNodeId | string, nodeId: GoalNodeId | string, status: GoalStatus, depth: number): void {
+    if (!this.eventEmitter) return;
+    this.eventEmitter.emit("goal:status-changed", {
+      rootId: rootId as GoalNodeId,
+      nodeId: nodeId as GoalNodeId,
+      status,
+      depth,
       timestamp: Date.now(),
     });
   }

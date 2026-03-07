@@ -61,6 +61,7 @@ import { TaskPlanner } from "../agents/autonomy/task-planner.js";
 import { InstinctRetriever } from "../agents/instinct-retriever.js";
 import { MetricsStorage } from "../metrics/metrics-storage.js";
 import { MetricsRecorder } from "../metrics/metrics-recorder.js";
+import { GoalStorage, GoalDecomposer } from "../goals/index.js";
 
 // Task system imports
 import {
@@ -169,9 +170,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
   }
 
+  // Initialize goal decomposition system (GOAL-01, GOAL-02)
+  let goalStorage: GoalStorage | undefined;
+  let goalDecomposer: GoalDecomposer | undefined;
+  try {
+    const goalsDbPath = join(config.memory.dbPath, "goals.db");
+    goalStorage = new GoalStorage(goalsDbPath);
+    goalStorage.initialize();
+    goalDecomposer = new GoalDecomposer(
+      providerManager.getProvider(""),
+      config.goalMaxDepth,
+    );
+    logger.info("GoalDecomposer initialized", { dbPath: goalsDbPath, maxDepth: config.goalMaxDepth });
+  } catch (error) {
+    logger.warn("GoalDecomposer initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   // Register services for deep readiness checks and agent metrics endpoint
   if (dashboard) {
-    dashboard.registerServices({ memoryManager, channel, metricsStorage, learningStorage: learningResult.storage });
+    dashboard.registerServices({ memoryManager, channel, metricsStorage, learningStorage: learningResult.storage, goalStorage });
   }
 
   // Initialize orchestrator
@@ -191,13 +210,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     instinctRetriever,
     eventEmitter: learningResult.eventBus,
     metricsRecorder,
+    goalDecomposer,
   });
 
   // Initialize task system
   const taskStorage = initializeTaskStorage(config, logger);
-  const { TaskDecomposer } = await import("../tasks/task-decomposer.js");
-  const decomposer = new TaskDecomposer(providerManager.getProvider(""));
-  const backgroundExecutor = new BackgroundExecutor(orchestrator, 3, decomposer);
+  const backgroundExecutor = new BackgroundExecutor(orchestrator, 3, goalDecomposer);
   const taskManager = new TaskManager(taskStorage, backgroundExecutor);
   backgroundExecutor.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
@@ -241,6 +259,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       eventBus: learningResult.eventBus,
       learningQueue: learningResult.learningQueue,
       metricsStorage,
+      goalStorage,
     }),
   };
 }
@@ -835,6 +854,7 @@ interface ShutdownOptions {
   eventBus?: IEventBus<LearningEventMap>;
   learningQueue?: LearningQueue;
   metricsStorage?: MetricsStorage;
+  goalStorage?: GoalStorage;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -862,6 +882,10 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
 
     if (options.metricsStorage) {
       options.metricsStorage.close();
+    }
+
+    if (options.goalStorage) {
+      options.goalStorage.close();
     }
 
     if (options.taskStorage) {

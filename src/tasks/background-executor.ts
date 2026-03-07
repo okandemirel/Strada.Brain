@@ -13,7 +13,8 @@ import type { Task } from "./types.js";
 import { TaskStatus } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
-import type { TaskDecomposer } from "./task-decomposer.js";
+import type { GoalDecomposer } from "../goals/goal-decomposer.js";
+import type { GoalNode, GoalNodeId } from "../goals/types.js";
 import { getLogger } from "../utils/logger.js";
 
 interface QueueEntry {
@@ -30,7 +31,7 @@ export class BackgroundExecutor {
   constructor(
     private readonly orchestrator: Orchestrator,
     private readonly concurrencyLimit: number = 3,
-    private readonly decomposer?: TaskDecomposer,
+    private readonly decomposer?: GoalDecomposer,
   ) {}
 
   /**
@@ -115,7 +116,8 @@ export class BackgroundExecutor {
   }
 
   /**
-   * Decompose a task into subtasks, execute each sequentially, and combine results.
+   * Decompose a task into a goal tree, execute nodes in topological order, and combine results.
+   * Phase 7: sequential execution; Phase 8 will add parallel execution with GOAL-06.
    */
   private async executeDecomposed(
     task: Task,
@@ -123,29 +125,110 @@ export class BackgroundExecutor {
     onProgress: (message: string) => void,
   ): Promise<string> {
     const logger = getLogger();
-    const subtasks = await this.decomposer!.decompose(task.prompt);
+    const { renderGoalTree } = await import("../goals/goal-renderer.js");
+    const goalTree = await this.decomposer!.decomposeProactive(task.chatId, task.prompt);
+    const nodes: GoalNode[] = Array.from(goalTree.nodes.values());
 
-    logger.info("Task decomposed", { taskId: task.id, subtaskCount: subtasks.length });
-    onProgress(`Decomposed into ${subtasks.length} subtasks`);
+    // Extract topological order: nodes with all deps completed, excluding root
+    const nonRootNodes = nodes.filter((n) => n.id !== goalTree.rootId);
+    const sortedNodes = this.topologicalSort(nonRootNodes);
+
+    logger.info("Task decomposed into goal tree", { taskId: task.id, nodeCount: sortedNodes.length });
+    onProgress(`Decomposed into ${sortedNodes.length} sub-goals`);
+    onProgress(renderGoalTree(goalTree));
 
     const results: string[] = [];
+    const completedNodeIds = new Set<GoalNodeId>();
+    // Mutable copy for status tracking
+    const mutableNodes = new Map(goalTree.nodes);
 
-    for (let i = 0; i < subtasks.length; i++) {
+    for (let i = 0; i < sortedNodes.length; i++) {
       if (signal.aborted) return "";
 
-      const subtask = subtasks[i]!;
-      onProgress(`Subtask ${i + 1}/${subtasks.length}: ${subtask}`);
+      const node = sortedNodes[i]!;
 
-      const result = await this.orchestrator.runBackgroundTask(subtask, {
-        signal,
-        onProgress: (msg: string) => onProgress(`[${i + 1}/${subtasks.length}] ${msg}`),
-        chatId: task.chatId,
-        channelType: task.channelType,
-      });
+      // Check all dependencies are completed
+      const depsReady = node.dependsOn.every((depId) => completedNodeIds.has(depId));
+      if (!depsReady) {
+        // Skip this node -- deps not met (node failed or skipped)
+        mutableNodes.set(node.id, { ...node, status: "skipped" as const, updatedAt: Date.now() });
+        continue;
+      }
 
-      results.push(`## Subtask ${i + 1}: ${subtask}\n\n${result}`);
+      // Mark as executing
+      mutableNodes.set(node.id, { ...node, status: "executing" as const, updatedAt: Date.now() });
+      onProgress(`Sub-goal ${i + 1}/${sortedNodes.length}: ${node.task}`);
+
+      try {
+        const result = await this.orchestrator.runBackgroundTask(node.task, {
+          signal,
+          onProgress: (msg: string) => onProgress(`[${i + 1}/${sortedNodes.length}] ${msg}`),
+          chatId: task.chatId,
+          channelType: task.channelType,
+        });
+
+        mutableNodes.set(node.id, { ...node, status: "completed" as const, result, updatedAt: Date.now() });
+        completedNodeIds.add(node.id);
+        results.push(`## Sub-goal ${i + 1}: ${node.task}\n\n${result}`);
+      } catch (nodeError) {
+        const errMsg = nodeError instanceof Error ? nodeError.message : String(nodeError);
+        mutableNodes.set(node.id, { ...node, status: "failed" as const, error: errMsg, updatedAt: Date.now() });
+        logger.warn("Sub-goal execution failed, stopping remaining", { taskId: task.id, nodeId: node.id, error: errMsg });
+        // Stop remaining sub-goals on failure (Phase 8 may refine this)
+        break;
+      }
+
+      // Show updated tree on progress
+      const updatedTree = { ...goalTree, nodes: mutableNodes };
+      onProgress(renderGoalTree(updatedTree));
     }
 
     return results.join("\n\n---\n\n");
+  }
+
+  /**
+   * Topological sort of goal nodes using Kahn's algorithm.
+   * Returns nodes in dependency order (independent nodes first).
+   */
+  private topologicalSort(nodes: GoalNode[]): GoalNode[] {
+    const inDegree = new Map<GoalNodeId, number>();
+    const adjacency = new Map<GoalNodeId, GoalNodeId[]>();
+    const nodeMap = new Map<GoalNodeId, GoalNode>();
+
+    for (const node of nodes) {
+      nodeMap.set(node.id, node);
+      inDegree.set(node.id, 0);
+      adjacency.set(node.id, []);
+    }
+
+    for (const node of nodes) {
+      for (const dep of node.dependsOn) {
+        if (nodeMap.has(dep)) {
+          inDegree.set(node.id, (inDegree.get(node.id) ?? 0) + 1);
+          adjacency.get(dep)?.push(node.id);
+        }
+      }
+    }
+
+    // Start with zero in-degree nodes (sorted by creation time for stability)
+    const queue: GoalNode[] = nodes
+      .filter((n) => (inDegree.get(n.id) ?? 0) === 0)
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    const sorted: GoalNode[] = [];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      sorted.push(current);
+      for (const nextId of adjacency.get(current.id) ?? []) {
+        const newDeg = (inDegree.get(nextId) ?? 1) - 1;
+        inDegree.set(nextId, newDeg);
+        if (newDeg === 0) {
+          const nextNode = nodeMap.get(nextId);
+          if (nextNode) queue.push(nextNode);
+        }
+      }
+    }
+
+    return sorted;
   }
 }
