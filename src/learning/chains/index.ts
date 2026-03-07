@@ -1,8 +1,7 @@
 /**
  * Chain module barrel exports
  *
- * Re-exports chain types and schemas.
- * Will be extended in Plan 02 with ChainDetector, ChainSynthesizer, CompositeTool.
+ * Re-exports chain types, schemas, and core classes.
  */
 
 export {
@@ -15,3 +14,5 @@ export {
   type CandidateChain,
   type ToolChainConfig,
 } from "./chain-types.js";
+
+export { ChainDetector } from "./chain-detector.js";
