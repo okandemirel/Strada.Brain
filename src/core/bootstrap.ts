@@ -622,6 +622,10 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
     const learningStorage = new LearningStorage(learningDbPath);
     learningStorage.initialize();
 
+    // Create event bus for decoupled learning (created before pipeline so it can be injected)
+    const eventBus = new TypedEventBus<LearningEventMap>();
+    const learningQueue = new LearningQueue();
+
     const pipeline = new LearningPipeline(learningStorage, {
       dbPath: learningDbPath,
       enabled: LEARNING_DEFAULTS.enabled,
@@ -630,7 +634,7 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
       evolutionIntervalMs: LEARNING_DEFAULTS.evolutionIntervalMs as DurationMs,
       minConfidenceForCreation: LEARNING_DEFAULTS.minConfidenceForCreation,
       maxInstincts: LEARNING_DEFAULTS.maxInstincts,
-    }, embeddingProvider);
+    }, embeddingProvider, config.bayesian, eventBus);
 
     pipeline.start();
 
@@ -651,10 +655,6 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
 
     const taskPlanner = new TaskPlanner();
     taskPlanner.enableLearning(pipeline);
-
-    // Create event bus for decoupled learning
-    const eventBus = new TypedEventBus<LearningEventMap>();
-    const learningQueue = new LearningQueue();
 
     // Subscribe learning pipeline to tool result events via serial queue
     eventBus.on("tool:result", (event) => {

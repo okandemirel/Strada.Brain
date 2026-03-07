@@ -83,6 +83,8 @@ export class Orchestrator {
   private readonly instinctRetriever: InstinctRetriever | null;
   private readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
   private readonly metricsRecorder: MetricsRecorder | null;
+  /** Per-session matched instinct IDs for appliedInstinctIds attribution in tool:result events */
+  private readonly currentSessionInstinctIds = new Map<string, string[]>();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -643,6 +645,8 @@ export class Orchestrator {
         // Non-fatal
       }
     }
+    // Store per-session instinct IDs for appliedInstinctIds attribution
+    this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
 
     // ─── Metrics: start recording ────────────────────────────────────
     const metricId = this.metricsRecorder?.startTask({
@@ -940,6 +944,8 @@ export class Orchestrator {
         hitMaxIterations: false,
       });
       // ────────────────────────────────────────────────────────────────
+      // Clean up per-session instinct IDs to prevent memory leak
+      this.currentSessionInstinctIds.delete(chatId);
     }
   }
 
@@ -1240,6 +1246,7 @@ export class Orchestrator {
       output: tr.content.slice(0, 500),
       success: !(tr.isError ?? false),
       retryCount: 0,
+      appliedInstinctIds: this.currentSessionInstinctIds.get(chatId) ?? [],
       timestamp: Date.now(),
     });
   }

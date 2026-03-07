@@ -598,6 +598,195 @@ describe("Orchestrator", () => {
     });
   });
 
+  describe("appliedInstinctIds Wiring", () => {
+    it("should include appliedInstinctIds in tool:result events when instincts are matched", async () => {
+      const emittedEvents: ToolResultEvent[] = [];
+      const mockEmitter: IEventEmitter<LearningEventMap> = {
+        emit: vi.fn((_event: string, payload: ToolResultEvent) => {
+          emittedEvents.push(payload);
+        }),
+      };
+
+      // Mock InstinctRetriever that returns matched instinct IDs
+      const mockRetriever = {
+        getInsightsForTask: vi.fn().mockResolvedValue({
+          insights: "Some insights",
+          matchedInstinctIds: ["instinct_abc_123", "instinct_def_456"],
+        }),
+      };
+
+      const orchWithIds = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        eventEmitter: mockEmitter,
+        instinctRetriever: mockRetriever as any,
+      });
+
+      const toolResponse: ProviderResponse = {
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "test.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+      const finalResponse: ProviderResponse = {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+
+      mockProvider.chat
+        .mockResolvedValueOnce(toolResponse)
+        .mockResolvedValueOnce(finalResponse);
+
+      const promise = orchWithIds.handleMessage({
+        channelType: "cli",
+        chatId: "ids1",
+        userId: "user1",
+        text: "Read file",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(emittedEvents).toHaveLength(1);
+      expect(emittedEvents[0]!.appliedInstinctIds).toEqual(["instinct_abc_123", "instinct_def_456"]);
+    });
+
+    it("should send empty array when no instincts are matched", async () => {
+      const emittedEvents: ToolResultEvent[] = [];
+      const mockEmitter: IEventEmitter<LearningEventMap> = {
+        emit: vi.fn((_event: string, payload: ToolResultEvent) => {
+          emittedEvents.push(payload);
+        }),
+      };
+
+      // No instinctRetriever provided
+      const orchNoRetriever = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        eventEmitter: mockEmitter,
+      });
+
+      const toolResponse: ProviderResponse = {
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "test.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+      const finalResponse: ProviderResponse = {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+
+      mockProvider.chat
+        .mockResolvedValueOnce(toolResponse)
+        .mockResolvedValueOnce(finalResponse);
+
+      const promise = orchNoRetriever.handleMessage({
+        channelType: "cli",
+        chatId: "ids2",
+        userId: "user1",
+        text: "Read file",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(emittedEvents).toHaveLength(1);
+      expect(emittedEvents[0]!.appliedInstinctIds).toEqual([]);
+    });
+
+    it("should capture appliedInstinctIds per-message (not shared across sessions)", async () => {
+      const emittedEvents: ToolResultEvent[] = [];
+      const mockEmitter: IEventEmitter<LearningEventMap> = {
+        emit: vi.fn((_event: string, payload: ToolResultEvent) => {
+          emittedEvents.push(payload);
+        }),
+      };
+
+      let callCount = 0;
+      const mockRetriever = {
+        getInsightsForTask: vi.fn().mockImplementation(() => {
+          callCount++;
+          return Promise.resolve({
+            insights: "insights",
+            matchedInstinctIds: callCount === 1 ? ["instinct_first"] : ["instinct_second"],
+          });
+        }),
+      };
+
+      const orchPerMessage = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        eventEmitter: mockEmitter,
+        instinctRetriever: mockRetriever as any,
+      });
+
+      const toolResponse: ProviderResponse = {
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "test.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+      const finalResponse: ProviderResponse = {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+
+      // First message
+      mockProvider.chat
+        .mockResolvedValueOnce(toolResponse)
+        .mockResolvedValueOnce(finalResponse);
+
+      const promise1 = orchPerMessage.handleMessage({
+        channelType: "cli",
+        chatId: "ids3a",
+        userId: "user1",
+        text: "First message",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise1;
+
+      // Second message
+      mockProvider.chat
+        .mockResolvedValueOnce({ ...toolResponse, toolCalls: [{ id: "tc2", name: "file_read", input: { path: "other.cs" } }] })
+        .mockResolvedValueOnce(finalResponse);
+
+      const promise2 = orchPerMessage.handleMessage({
+        channelType: "cli",
+        chatId: "ids3b",
+        userId: "user1",
+        text: "Second message",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise2;
+
+      // Each message should have its own instinct IDs
+      expect(emittedEvents).toHaveLength(2);
+      expect(emittedEvents[0]!.appliedInstinctIds).toEqual(["instinct_first"]);
+      expect(emittedEvents[1]!.appliedInstinctIds).toEqual(["instinct_second"]);
+    });
+  });
+
   describe("PAOR State Machine", () => {
     it("injects planning prompt on first call", async () => {
       const chatSpy = vi.fn()
