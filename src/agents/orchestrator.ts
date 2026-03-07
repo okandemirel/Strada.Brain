@@ -151,6 +151,38 @@ export class Orchestrator {
   }
 
   /**
+   * Dynamically add a tool to the orchestrator's available tools.
+   * Used by chain synthesis to make composite tools available to the LLM.
+   */
+  addTool(tool: ITool): void {
+    this.tools.set(tool.name, tool);
+    // Update or append toolDefinitions
+    const existingIdx = this.toolDefinitions.findIndex(td => td.name === tool.name);
+    const def = {
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.inputSchema as import("../types/index.js").JsonObject,
+    };
+    if (existingIdx >= 0) {
+      this.toolDefinitions[existingIdx] = def;
+    } else {
+      this.toolDefinitions.push(def);
+    }
+  }
+
+  /**
+   * Dynamically remove a tool from the orchestrator's available tools.
+   * Used by chain synthesis to remove invalidated composite tools.
+   */
+  removeTool(name: string): void {
+    this.tools.delete(name);
+    const idx = this.toolDefinitions.findIndex(td => td.name === name);
+    if (idx >= 0) {
+      this.toolDefinitions.splice(idx, 1);
+    }
+  }
+
+  /**
    * Handle an incoming message from any channel.
    * Uses a per-session lock to prevent concurrent processing.
    */

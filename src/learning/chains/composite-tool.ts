@@ -49,6 +49,16 @@ export class CompositeTool implements ITool {
     this.chainMetadata = metadata.chainMetadata;
   }
 
+  /** Get the ordered tool sequence for this chain */
+  get toolSequence(): string[] {
+    return this.chainMetadata.toolSequence;
+  }
+
+  /** Check if this composite tool contains the given tool in its chain */
+  containsTool(name: string): boolean {
+    return this.chainMetadata.toolSequence.includes(name);
+  }
+
   async execute(
     input: Record<string, unknown>,
     context: ToolContext,

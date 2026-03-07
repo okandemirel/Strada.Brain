@@ -3,6 +3,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.mock("../../utils/logger.js", () => ({
+  getLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
 import { ChainManager } from "./chain-manager.js";
 import { CompositeTool } from "./composite-tool.js";
 import type { CandidateChain, ToolChainConfig } from "./chain-types.js";
@@ -398,10 +408,8 @@ describe("ChainManager", () => {
       const manager = createManager({ detectionIntervalMs: 5000 });
       await manager.start();
 
-      // Advance timer past one interval
-      vi.advanceTimersByTime(5000);
-      // Need to flush promises for async runDetectionCycle
-      await vi.runAllTimersAsync();
+      // Advance timer past one interval and flush pending promises
+      await vi.advanceTimersByTimeAsync(5001);
 
       expect(detector.detect).toHaveBeenCalled();
 
