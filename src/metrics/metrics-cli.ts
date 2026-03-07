@@ -107,10 +107,11 @@ export function runMetricsCommand(opts: {
       const ls = new LearningStorage(dbPath);
       ls.initialize();
       try {
-        const active = ls.getInstincts({ status: "active" }).length;
-        const cooling = ls.getInstincts({ status: "cooling" }).length;
-        const deprecated = ls.getInstincts({ status: "deprecated" }).length;
-        const permanent = ls.getInstincts({ status: "permanent" }).length;
+        const allInstincts = ls.getInstincts();
+        const active = allInstincts.filter(i => i.status === "active" && i.coolingStartedAt == null).length;
+        const cooling = allInstincts.filter(i => i.coolingStartedAt != null).length;
+        const deprecated = allInstincts.filter(i => i.status === "deprecated").length;
+        const permanent = allInstincts.filter(i => i.status === "permanent").length;
         const weeklyTrends = ls.getWeeklyCounters(4);
         agg.lifecycle = {
           statusCounts: { active, cooling, deprecated, permanent },

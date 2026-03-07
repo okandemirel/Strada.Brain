@@ -143,7 +143,7 @@ Plans:
 | 3. Auto-Tiering & Embedding Infrastructure | 3/3 | Complete | 2026-03-06 |
 | 4. Event-Driven Learning | 2/2 | Complete | 2026-03-06 |
 | 5. Metrics Instrumentation | 2/2 | Complete | 2026-03-07 |
-| 6. Bayesian Confidence System | 3/3 | Complete   | 2026-03-07 |
+| 6. Bayesian Confidence System | 3/3 | Complete    | 2026-03-07 |
 | 7. Recursive Goal Decomposition | 0/? | Not started | - |
 | 8. Goal Progress & Execution | 0/? | Not started | - |
 | 9. Tool Chain Synthesis | 0/? | Not started | - |

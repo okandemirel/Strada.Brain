@@ -274,13 +274,11 @@ export class DashboardServer {
     if (!this.learningStorage) return null;
 
     try {
-      const permanent = this.learningStorage.getInstincts({ status: "permanent" }).length;
-      const active = this.learningStorage.getInstincts({ status: "active" }).length;
-      const proposed = this.learningStorage.getInstincts({ status: "proposed" }).length;
-      const deprecated = this.learningStorage.getInstincts({ status: "deprecated" }).length;
-
-      // Cooling: instincts with coolingStartedAt set (still status="active")
       const allInstincts = this.learningStorage.getInstincts();
+      const permanent = allInstincts.filter(i => i.status === "permanent").length;
+      const active = allInstincts.filter(i => i.status === "active" && i.coolingStartedAt == null).length;
+      const proposed = allInstincts.filter(i => i.status === "proposed").length;
+      const deprecated = allInstincts.filter(i => i.status === "deprecated").length;
       const cooling = allInstincts.filter(i => i.coolingStartedAt != null).length;
 
       const weeklyCounters = this.learningStorage.getWeeklyCounters(1);
