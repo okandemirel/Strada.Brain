@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Completed 07-03-PLAN.md (Wiring Integration)
-last_updated: "2026-03-07T16:05:25Z"
+status: executing
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-03-07T18:41:14.343Z"
 progress:
   total_phases: 9
   completed_phases: 7
-  total_plans: 18
-  completed_plans: 18
-  percent: 100
+  total_plans: 21
+  completed_plans: 19
+  percent: 90
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,24 +19,24 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 7 complete (Recursive Goal Decomposition). All 3 plans done. Phase 8 next.
+**Current Focus:** Phase 8 in progress (Goal Progress & Execution). Plan 1/3 done.
 
 ## Current Position
 
 **Milestone:** Phase 8 -- Agent Evolution (Level 3 -> 4)
-**Phase:** 7 of 9 complete, Phase 8 next (Goal Progress & Execution)
-**Plan:** 3/3 plans done in Phase 7
-**Status:** Planning
+**Phase:** 7 of 9 complete, Phase 8 in progress (Goal Progress & Execution)
+**Plan:** 1/3 plans done in Phase 8
+**Status:** Executing
 
 **Progress:**
-[██████████] 100%
+[█████████░] 90%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [##########] 100%  Event-Driven Learning (complete)
 Phase 5  [##########] 100%  Metrics Instrumentation (complete)
 Phase 6  [##########] 100%  Bayesian Confidence System (complete)
 Phase 7  [##########] 100%  Recursive Goal Decomposition (complete)
-Phase 8  [..........] 0%    Goal Progress & Execution
+Phase 8  [###.......] 33%   Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
 
 **Overall:** 7/9 phases complete
@@ -68,6 +68,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 07 P01 | 3min | 2 tasks | 5 files |
 | Phase 07 P02 | 6min | 2 tasks | 6 files |
 | Phase 07 P03 | 10min | 2 tasks | 5 files |
+| Phase 08 P01 | 5min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -163,6 +164,11 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P7-03] activeGoalTrees persist across session messages, cleaned on eviction/cleanup
 - [P7-03] /api/goals returns empty trees array gracefully when goalStorage unavailable
 
+- [P8-01] upsertTree uses INSERT OR REPLACE for tree + DELETE+INSERT for nodes in transaction
+- [P8-01] Schema migration uses pragma table_info to detect missing columns (safe for fresh and existing DBs)
+- [P8-01] Progress calculation excludes root node (only child completion matters for percentage)
+- [P8-01] renderProgressBar uses fixed-width [######....] format with fraction and percentage
+
 ### Research Flags
 - Phase 1: AgentDB interface drift is #1 risk (15+ casts in agentdb-memory.ts). Integration tests first.
 - Phase 2: Migration can lose data from null embeddings. Backup first, validate counts.
@@ -179,8 +185,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-07T16:05:25Z
-**Stopped at:** Completed 07-03-PLAN.md (Wiring Integration -- Phase 7 complete)
+**Last session:** 2026-03-07T18:41:14.339Z
+**Stopped at:** Completed 08-01-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
@@ -267,6 +273,17 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
   - GoalStorage included in shutdown handler for clean teardown
   - All 2016 tests pass (125 test files)
 - Phase 7 fully complete (all 3 plans, GOAL-01, GOAL-02, GOAL-04, GOAL-05 requirements met)
+- Phase 8 Plan 01 complete: Goal progress & storage extensions
+  - GoalNode extended with startedAt, completedAt, retryCount timing fields
+  - GoalStorage: upsertTree (INSERT OR REPLACE + DELETE+INSERT nodes in transaction)
+  - GoalStorage: getInterruptedTrees (status='executing'), updateTreeStatus
+  - Schema migration: pragma table_info detects missing columns, ALTER TABLE adds them
+  - calculateProgress: completed/total/percentage for non-root nodes
+  - renderProgressBar: [######....] 3/5 (60%) format
+  - Config: GOAL_MAX_RETRIES (0-5, default 1), GOAL_MAX_FAILURES (1-20, default 3)
+  - Config: GOAL_PARALLEL_EXECUTION (bool, default true), GOAL_MAX_PARALLEL (1-10, default 3)
+  - 15 new tests (7 storage + 8 progress), all 68 goal tests passing
+  - GOAL-03 requirement complete
 
 ---
 *State initialized: 2026-03-06*

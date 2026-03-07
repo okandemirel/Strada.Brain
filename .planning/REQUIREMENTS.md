@@ -31,7 +31,7 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 
 - [x] **GOAL-01**: Orchestrator can create sub-goals mid-execution (not only at task start)
 - [x] **GOAL-02**: Sub-goals form a DAG with explicit dependency edges (not flat list)
-- [ ] **GOAL-03**: Progress tracked at each decomposition level with completion percentage
+- [x] **GOAL-03**: Progress tracked at each decomposition level with completion percentage
 - [x] **GOAL-04**: Maximum decomposition depth of 3 enforced to prevent runaway recursion
 - [x] **GOAL-05**: Cycle detection prevents circular sub-goal dependencies
 - [ ] **GOAL-06**: Sub-goals execute respecting dependency ordering (topological sort)
@@ -119,7 +119,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | GOAL-02 | Phase 7: Recursive Goal Decomposition | Complete |
 | GOAL-04 | Phase 7: Recursive Goal Decomposition | Complete |
 | GOAL-05 | Phase 7: Recursive Goal Decomposition | Complete |
-| GOAL-03 | Phase 8: Goal Progress & Execution | Pending |
+| GOAL-03 | Phase 8: Goal Progress & Execution | Complete |
 | GOAL-06 | Phase 8: Goal Progress & Execution | Pending |
 | TOOL-01 | Phase 9: Tool Chain Synthesis | Pending |
 | TOOL-02 | Phase 9: Tool Chain Synthesis | Pending |
