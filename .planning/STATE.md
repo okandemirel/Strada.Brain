@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 7 context gathered
-last_updated: "2026-03-07T15:41:48.604Z"
+stopped_at: Completed 07-02-PLAN.md (GoalDecomposer + GoalRenderer)
+last_updated: "2026-03-07T15:50:47Z"
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 18
-  completed_plans: 16
-  percent: 89
+  completed_plans: 17
+  percent: 94
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,23 +19,23 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 7 in progress (Recursive Goal Decomposition). Plan 01 complete, Plan 02 next.
+**Current Focus:** Phase 7 in progress (Recursive Goal Decomposition). Plans 01-02 complete, Plan 03 next.
 
 ## Current Position
 
 **Milestone:** Phase 7 -- Agent Evolution (Level 3 -> 4)
 **Phase:** 6 of 9 complete, Phase 7 in progress (Recursive Goal Decomposition)
-**Plan:** 1/3 plans done in Phase 7
+**Plan:** 2/3 plans done in Phase 7
 **Status:** Executing
 
 **Progress:**
-[█████████░] 89%
+[█████████░] 94%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [##########] 100%  Event-Driven Learning (complete)
 Phase 5  [##########] 100%  Metrics Instrumentation (complete)
 Phase 6  [##########] 100%  Bayesian Confidence System (complete)
-Phase 7  [###.......] 33%   Recursive Goal Decomposition (Plan 01 done)
+Phase 7  [######....] 67%   Recursive Goal Decomposition (Plans 01-02 done)
 Phase 8  [..........] 0%    Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
 
@@ -46,9 +46,9 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Metric | Value |
 |--------|-------|
 | Phases completed | 6/9 (Phase 7 in progress) |
-| Plans completed | 17 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6 + 1 Phase 7) |
-| Requirements delivered | 28/32 (MEM-01..07, LRN-01..07, EVAL-01..07, GOAL-02,04,05) |
-| Tests added | 215/50+ target |
+| Plans completed | 17 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6 + 2 Phase 7) |
+| Requirements delivered | 29/32 (MEM-01..07, LRN-01..07, EVAL-01..07, GOAL-01,02,04,05) |
+| Tests added | 236/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
@@ -66,6 +66,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 06 P02 | 6min | 2 tasks | 5 files |
 | Phase 06 P03 | 4min | 2 tasks | 7 files |
 | Phase 07 P01 | 3min | 2 tasks | 5 files |
+| Phase 07 P02 | 6min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -146,6 +147,13 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P7-01] FK cascade delete on goal_nodes for atomic tree cleanup
 - [P7-01] parseLLMOutput strips markdown fences before JSON parsing
 - [P7-01] Zod schema limits to max 20 nodes per decomposition
+- [P7-02] GoalDecomposer accepts IAIProvider | undefined (fallback to single-node tree)
+- [P7-02] LLM string IDs remapped to branded GoalNodeId via idMap for type safety
+- [P7-02] Proactive decomposition uses hybrid depth strategy (needsFurtherDecomposition flag)
+- [P7-02] Reactive decomposition includes completed-so-far context for LLM
+- [P7-02] GOAL_MAX_DEPTH is top-level config field (not nested) for simplicity
+- [P7-02] ASCII renderer uses +-- and \-- box-drawing for monospace compatibility
+- [P7-02] Large trees truncated at 3000 chars with summary and /api/goals pointer
 
 ### Research Flags
 - Phase 1: AgentDB interface drift is #1 risk (15+ casts in agentdb-memory.ts). Integration tests first.
@@ -163,8 +171,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-07T15:41:00Z
-**Stopped at:** Completed 07-01-PLAN.md (Goal Foundation)
+**Last session:** 2026-03-07T15:50:47Z
+**Stopped at:** Completed 07-02-PLAN.md (GoalDecomposer + GoalRenderer)
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
@@ -231,6 +239,16 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
   - GoalStorage: goals.db with goal_trees and goal_nodes tables, FK cascade
   - 32 tests (23 validator + 9 storage) all passing
   - GOAL-02, GOAL-04, GOAL-05 requirements complete
+- Phase 7 Plan 02 complete: GoalDecomposer + GoalRenderer + config + barrel exports
+  - GoalDecomposer: proactive (hybrid LLM depth) + reactive (failing node re-decomposition)
+  - shouldDecompose heuristic reuses COMPLEXITY_INDICATORS/SIMPLE_PATTERNS from TaskDecomposer
+  - Cycle detection rejects invalid LLM output, retries once, falls back to single-node tree
+  - GoalRenderer: ASCII tree with status icons ([ ] [~] [x] [!] [-]), box-drawing hierarchy
+  - Large trees truncated at 3000 chars with summary and /api/goals pointer
+  - GOAL_MAX_DEPTH config (1-5, default 3) in configSchema + Config + loadFromEnv + mergeConfigs
+  - Module barrel exports from src/goals/index.ts
+  - 21 new tests (13 decomposer + 8 renderer), 53 total goals tests passing
+  - GOAL-01 requirement complete (proactive + reactive decomposition)
 
 ---
 *State initialized: 2026-03-06*

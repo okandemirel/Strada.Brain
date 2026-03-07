@@ -113,8 +113,8 @@ Plans:
   4. Circular dependencies between sub-goals are detected and rejected before execution begins
 **Plans:** 3 plans
 Plans:
-- [ ] 07-01-PLAN.md — GoalNode types + Zod LLM output schema + Kahn's DAG validator + GoalStorage SQLite persistence
-- [ ] 07-02-PLAN.md — GoalDecomposer (replaces TaskDecomposer) + GoalRenderer ASCII tree + GOAL_MAX_DEPTH config + module exports
+- [x] 07-01-PLAN.md — GoalNode types + Zod LLM output schema + Kahn's DAG validator + GoalStorage SQLite persistence
+- [x] 07-02-PLAN.md — GoalDecomposer (replaces TaskDecomposer) + GoalRenderer ASCII tree + GOAL_MAX_DEPTH config + module exports
 - [ ] 07-03-PLAN.md — Bootstrap wiring + orchestrator PAOR integration + BackgroundExecutor migration + event bus + /api/goals dashboard
 
 ### Phase 8: Goal Progress & Execution
@@ -148,7 +148,7 @@ Plans:
 | 4. Event-Driven Learning | 2/2 | Complete | 2026-03-06 |
 | 5. Metrics Instrumentation | 2/2 | Complete | 2026-03-07 |
 | 6. Bayesian Confidence System | 3/3 | Complete    | 2026-03-07 |
-| 7. Recursive Goal Decomposition | 0/3 | Planned | - |
+| 7. Recursive Goal Decomposition | 2/3 | In Progress | - |
 | 8. Goal Progress & Execution | 0/? | Not started | - |
 | 9. Tool Chain Synthesis | 0/? | Not started | - |
 
@@ -207,4 +207,4 @@ Phase 1 (AgentDB Activation)
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-07 (Phase 7 planned)*
+*Last updated: 2026-03-07 (Phase 7 Plan 02 complete)*

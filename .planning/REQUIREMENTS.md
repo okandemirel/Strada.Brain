@@ -29,7 +29,7 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 
 ### Recursive Goal Decomposition
 
-- [ ] **GOAL-01**: Orchestrator can create sub-goals mid-execution (not only at task start)
+- [x] **GOAL-01**: Orchestrator can create sub-goals mid-execution (not only at task start)
 - [x] **GOAL-02**: Sub-goals form a DAG with explicit dependency edges (not flat list)
 - [ ] **GOAL-03**: Progress tracked at each decomposition level with completion percentage
 - [x] **GOAL-04**: Maximum decomposition depth of 3 enforced to prevent runaway recursion
@@ -115,7 +115,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | EVAL-05 | Phase 6: Bayesian Confidence System | Complete |
 | EVAL-06 | Phase 6: Bayesian Confidence System | Complete |
 | EVAL-07 | Phase 6: Bayesian Confidence System | Complete |
-| GOAL-01 | Phase 7: Recursive Goal Decomposition | Pending |
+| GOAL-01 | Phase 7: Recursive Goal Decomposition | Complete |
 | GOAL-02 | Phase 7: Recursive Goal Decomposition | Complete |
 | GOAL-04 | Phase 7: Recursive Goal Decomposition | Complete |
 | GOAL-05 | Phase 7: Recursive Goal Decomposition | Complete |
@@ -134,4 +134,4 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-03-06*
-*Last updated: 2026-03-07 after 05-02 execution (Phase 5 complete, all 3 EVAL query surfaces delivered)*
+*Last updated: 2026-03-07 after 07-02 execution (GOAL-01 complete: GoalDecomposer proactive+reactive decomposition)*
