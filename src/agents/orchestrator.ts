@@ -36,6 +36,7 @@ import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import { renderGoalTree, summarizeTree } from "../goals/goal-renderer.js";
+import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.js";
 import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
 
 const MAX_TOOL_ITERATIONS = 50;
@@ -91,6 +92,8 @@ export class Orchestrator {
   private readonly goalDecomposer: GoalDecomposer | null;
   /** Active goal trees per session for proactive/reactive decomposition */
   private readonly activeGoalTrees = new Map<string, GoalTree>();
+  /** Interrupted goal trees detected on startup, pending user resume/discard decision */
+  private pendingResumeTrees: GoalTree[];
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -109,6 +112,7 @@ export class Orchestrator {
     eventEmitter?: IEventEmitter<LearningEventMap>;
     metricsRecorder?: MetricsRecorder;
     goalDecomposer?: GoalDecomposer;
+    interruptedGoalTrees?: GoalTree[];
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -124,6 +128,7 @@ export class Orchestrator {
     this.eventEmitter = opts.eventEmitter ?? null;
     this.metricsRecorder = opts.metricsRecorder ?? null;
     this.goalDecomposer = opts.goalDecomposer ?? null;
+    this.pendingResumeTrees = opts.interruptedGoalTrees ?? [];
 
     // Build tool registry
     this.tools = new Map();
@@ -487,6 +492,29 @@ export class Orchestrator {
       textLength: text.length,
       channel: msg.channelType,
     });
+
+    // Goal tree resume detection (trigger on first message when interrupted trees exist)
+    if (this.pendingResumeTrees.length > 0) {
+      const resumePrompt = formatResumePrompt(this.pendingResumeTrees);
+      await this.channel.sendMarkdown(chatId, resumePrompt);
+
+      const normalized = text.toLowerCase().trim();
+      if (normalized === "resume" || normalized === "resume all") {
+        for (const tree of this.pendingResumeTrees) {
+          const prepared = prepareTreeForResume(tree);
+          this.activeGoalTrees.set(tree.sessionId, prepared);
+        }
+        this.pendingResumeTrees = [];
+        await this.channel.sendMarkdown(chatId, "Resuming interrupted goal trees...");
+        return;
+      } else if (normalized === "discard" || normalized === "discard all") {
+        this.pendingResumeTrees = [];
+        await this.channel.sendMarkdown(chatId, "Interrupted goal trees discarded.");
+        return;
+      }
+      // User chose to ignore the prompt — clear pending and continue with normal flow
+      this.pendingResumeTrees = [];
+    }
 
     // Check rate limits before processing
     if (this.rateLimiter) {

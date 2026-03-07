@@ -61,7 +61,9 @@ import { TaskPlanner } from "../agents/autonomy/task-planner.js";
 import { InstinctRetriever } from "../agents/instinct-retriever.js";
 import { MetricsStorage } from "../metrics/metrics-storage.js";
 import { MetricsRecorder } from "../metrics/metrics-recorder.js";
-import { GoalStorage, GoalDecomposer } from "../goals/index.js";
+import { GoalStorage, GoalDecomposer, detectInterruptedTrees } from "../goals/index.js";
+import type { GoalExecutorConfig } from "../goals/index.js";
+import type { GoalTree } from "../goals/types.js";
 
 // Task system imports
 import {
@@ -188,6 +190,29 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
   }
 
+  // Detect interrupted goal trees for resume prompt
+  let interruptedGoalTrees: GoalTree[] = [];
+  if (goalStorage) {
+    try {
+      interruptedGoalTrees = detectInterruptedTrees(goalStorage);
+      if (interruptedGoalTrees.length > 0) {
+        logger.info("Detected interrupted goal trees", { count: interruptedGoalTrees.length });
+      }
+    } catch (error) {
+      logger.debug("Interrupted tree detection failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // Create GoalExecutorConfig from config values
+  const goalExecutorConfig: GoalExecutorConfig = {
+    maxRetries: config.goalMaxRetries,
+    maxFailures: config.goalMaxFailures,
+    parallelExecution: config.goalParallelExecution,
+    maxParallel: config.goalMaxParallel,
+  };
+
   // Register services for deep readiness checks and agent metrics endpoint
   if (dashboard) {
     dashboard.registerServices({ memoryManager, channel, metricsStorage, learningStorage: learningResult.storage, goalStorage });
@@ -211,11 +236,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     eventEmitter: learningResult.eventBus,
     metricsRecorder,
     goalDecomposer,
+    interruptedGoalTrees,
   });
 
   // Initialize task system
   const taskStorage = initializeTaskStorage(config, logger);
-  const backgroundExecutor = new BackgroundExecutor(orchestrator, 3, goalDecomposer);
+  const backgroundExecutor = new BackgroundExecutor(
+    orchestrator, 3, goalDecomposer, goalStorage, goalExecutorConfig,
+    providerManager.getProvider(""), channel,
+  );
   const taskManager = new TaskManager(taskStorage, backgroundExecutor);
   backgroundExecutor.setTaskManager(taskManager);
   taskManager.recoverOnStartup();

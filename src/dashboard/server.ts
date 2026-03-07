@@ -11,6 +11,7 @@ import type { TaskType, CompletionStatus } from "../metrics/metrics-types.js";
 import { parseDurationToTimestamp } from "../metrics/parse-duration.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { GoalStorage } from "../goals/index.js";
+import { calculateProgress } from "../goals/goal-progress.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -120,7 +121,7 @@ export class DashboardServer {
           const sessionFilter = params.get("session");
           const rootIdFilter = params.get("rootId");
 
-          let trees;
+          let trees: Record<string, unknown>[];
           if (rootIdFilter) {
             // Get specific tree by rootId
             const tree = this.goalStorage.getTree(rootIdFilter as import("../goals/types.js").GoalNodeId);
@@ -377,10 +378,15 @@ export class DashboardServer {
         parentId: node.parentId,
         result: node.result,
         error: node.error,
+        startedAt: node.startedAt ?? null,
+        completedAt: node.completedAt ?? null,
+        retryCount: node.retryCount ?? 0,
       });
       if (node.status === "completed") completedCount++;
       if (node.id === tree.rootId) rootStatus = node.status;
     }
+
+    const progress = calculateProgress(tree);
 
     return {
       rootId: tree.rootId,
@@ -391,6 +397,11 @@ export class DashboardServer {
       completedCount,
       createdAt: tree.createdAt,
       nodes,
+      progress: {
+        completed: progress.completed,
+        total: progress.total,
+        percentage: progress.percentage,
+      },
     };
   }
 
