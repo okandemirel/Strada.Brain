@@ -38,12 +38,16 @@ CREATE TABLE IF NOT EXISTS goal_nodes (
   error TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  started_at INTEGER,
+  completed_at INTEGER,
+  retry_count INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (root_id) REFERENCES goal_trees(root_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_goal_nodes_root ON goal_nodes(root_id);
 CREATE INDEX IF NOT EXISTS idx_goal_nodes_status ON goal_nodes(root_id, status);
 CREATE INDEX IF NOT EXISTS idx_goal_trees_session ON goal_trees(session_id);
+CREATE INDEX IF NOT EXISTS idx_goal_trees_status ON goal_trees(status);
 `;
 
 // =============================================================================
@@ -71,6 +75,9 @@ interface GoalNodeRow {
   error: string | null;
   created_at: number;
   updated_at: number;
+  started_at: number | null;
+  completed_at: number | null;
+  retry_count: number;
 }
 
 // =============================================================================
@@ -95,6 +102,20 @@ export class GoalStorage {
     this.db = new Database(this.dbPath);
     configureSqlitePragmas(this.db, "tasks");
     this.db.exec(SCHEMA_SQL);
+
+    // Phase 8: Add timing columns if missing (safe migration for existing DBs)
+    const cols = this.db.pragma("table_info(goal_nodes)") as Array<{ name: string }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    if (!colNames.has("started_at")) {
+      this.db.exec("ALTER TABLE goal_nodes ADD COLUMN started_at INTEGER");
+    }
+    if (!colNames.has("completed_at")) {
+      this.db.exec("ALTER TABLE goal_nodes ADD COLUMN completed_at INTEGER");
+    }
+    if (!colNames.has("retry_count")) {
+      this.db.exec("ALTER TABLE goal_nodes ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
+    }
+
     this.prepareStatements();
   }
 
@@ -116,8 +137,8 @@ export class GoalStorage {
         VALUES (?, ?, ?, ?, ?, ?)
       `,
       insertNode: `
-        INSERT INTO goal_nodes (id, root_id, parent_id, task, depends_on, depth, status, result, error, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO goal_nodes (id, root_id, parent_id, task, depends_on, depth, status, result, error, created_at, updated_at, started_at, completed_at, retry_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       getTree: `SELECT * FROM goal_trees WHERE root_id = ?`,
       getNodesByRoot: `SELECT * FROM goal_nodes WHERE root_id = ?`,
@@ -126,6 +147,13 @@ export class GoalStorage {
       `,
       getTreesBySession: `SELECT * FROM goal_trees WHERE session_id = ? ORDER BY created_at DESC`,
       deleteTree: `DELETE FROM goal_trees WHERE root_id = ?`,
+      upsertTree: `
+        INSERT OR REPLACE INTO goal_trees (root_id, session_id, task_description, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      deleteNodesByRoot: `DELETE FROM goal_nodes WHERE root_id = ?`,
+      getInterruptedTrees: `SELECT * FROM goal_trees WHERE status = 'executing' ORDER BY updated_at DESC`,
+      updateTreeStatus: `UPDATE goal_trees SET status = ?, updated_at = ? WHERE root_id = ?`,
     };
 
     for (const [name, sql] of Object.entries(stmts)) {
@@ -178,6 +206,9 @@ export class GoalStorage {
           node.error ?? null,
           node.createdAt,
           node.updatedAt,
+          node.startedAt ?? null,
+          node.completedAt ?? null,
+          node.retryCount ?? 0,
         );
       }
     });
@@ -275,6 +306,75 @@ export class GoalStorage {
       error: row.error ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      startedAt: row.started_at ?? undefined,
+      completedAt: row.completed_at ?? undefined,
+      retryCount: row.retry_count ?? 0,
     };
+  }
+
+  // --- Phase 8: New Methods ---
+
+  /** Upsert a complete GoalTree (INSERT OR REPLACE for tree, DELETE+INSERT for nodes) */
+  upsertTree(tree: GoalTree, treeStatus: string = "pending"): void {
+    this.ensureConnection();
+    const transaction = this.db!.transaction(() => {
+      const now = Date.now();
+      this.getStatement("upsertTree").run(
+        tree.rootId,
+        tree.sessionId,
+        tree.taskDescription,
+        treeStatus,
+        tree.createdAt,
+        now,
+      );
+      // Delete existing nodes and re-insert (atomic replacement)
+      this.getStatement("deleteNodesByRoot").run(tree.rootId);
+      const insertNode = this.getStatement("insertNode");
+      for (const [, node] of tree.nodes) {
+        insertNode.run(
+          node.id,
+          tree.rootId,
+          node.parentId ?? null,
+          node.task,
+          JSON.stringify(node.dependsOn),
+          node.depth,
+          node.status,
+          node.result ?? null,
+          node.error ?? null,
+          node.createdAt,
+          node.updatedAt,
+          node.startedAt ?? null,
+          node.completedAt ?? null,
+          node.retryCount ?? 0,
+        );
+      }
+    });
+    transaction();
+  }
+
+  /** Get all trees with status 'executing' (interrupted/in-progress) */
+  getInterruptedTrees(): GoalTree[] {
+    this.ensureConnection();
+    const rows = this.getStatement("getInterruptedTrees").all() as GoalTreeRow[];
+    return rows.map((row) => {
+      const nodeRows = this.getStatement("getNodesByRoot").all(row.root_id) as GoalNodeRow[];
+      const nodes = new Map<GoalNodeId, GoalNode>();
+      for (const nr of nodeRows) {
+        nodes.set(nr.id as GoalNodeId, this.rowToNode(nr));
+      }
+      return {
+        rootId: row.root_id as GoalNodeId,
+        sessionId: row.session_id,
+        taskDescription: row.task_description,
+        nodes,
+        createdAt: row.created_at,
+      };
+    });
+  }
+
+  /** Update a tree's top-level status */
+  updateTreeStatus(rootId: GoalNodeId, status: string): void {
+    this.ensureConnection();
+    this.getStatement("updateTreeStatus").run(status, Date.now(), rootId);
   }
 }

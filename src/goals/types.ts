@@ -44,6 +44,9 @@ export interface GoalNode {
   readonly error?: string;
   readonly createdAt: number;
   readonly updatedAt: number;
+  readonly startedAt?: number;
+  readonly completedAt?: number;
+  readonly retryCount?: number;
 }
 
 /** A goal tree rooted at a single node */

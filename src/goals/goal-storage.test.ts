@@ -218,4 +218,130 @@ describe("GoalStorage", () => {
       /not initialized/,
     );
   });
+
+  // ===========================================================================
+  // Phase 8: upsertTree, getInterruptedTrees, updateTreeStatus, timing fields
+  // ===========================================================================
+
+  describe("upsertTree()", () => {
+    it("calling twice with same rootId does not throw", () => {
+      const tree = buildTestTree();
+      storage.upsertTree(tree);
+      // Second call should NOT throw (INSERT OR REPLACE)
+      expect(() => storage.upsertTree(tree)).not.toThrow();
+    });
+
+    it("second upsert updates tree data", () => {
+      const tree = buildTestTree({ taskDescription: "Original description" });
+      storage.upsertTree(tree);
+
+      // Build updated tree with same rootId but different description
+      const updatedTree: GoalTree = {
+        ...tree,
+        taskDescription: "Updated description",
+      };
+      storage.upsertTree(updatedTree);
+
+      const retrieved = storage.getTree(tree.rootId);
+      expect(retrieved).not.toBeNull();
+      expect(retrieved!.taskDescription).toBe("Updated description");
+      expect(retrieved!.nodes.size).toBe(tree.nodes.size);
+    });
+  });
+
+  describe("getInterruptedTrees()", () => {
+    it("returns trees with status 'executing'", () => {
+      const tree1 = buildTestTree({ sessionId: "s1" });
+      const tree2 = buildTestTree({ sessionId: "s2" });
+      const tree3 = buildTestTree({ sessionId: "s3" });
+
+      // Save with default status, then update some to executing
+      storage.upsertTree(tree1, "executing");
+      storage.upsertTree(tree2, "completed");
+      storage.upsertTree(tree3, "executing");
+
+      const interrupted = storage.getInterruptedTrees();
+      expect(interrupted).toHaveLength(2);
+      const rootIds = interrupted.map((t) => t.rootId);
+      expect(rootIds).toContain(tree1.rootId);
+      expect(rootIds).toContain(tree3.rootId);
+    });
+
+    it("does not return completed or pending trees", () => {
+      const tree1 = buildTestTree({ sessionId: "s1" });
+      const tree2 = buildTestTree({ sessionId: "s2" });
+
+      storage.upsertTree(tree1, "completed");
+      storage.upsertTree(tree2, "pending");
+
+      const interrupted = storage.getInterruptedTrees();
+      expect(interrupted).toHaveLength(0);
+    });
+  });
+
+  describe("updateTreeStatus()", () => {
+    it("changes tree status", () => {
+      const tree = buildTestTree();
+      storage.upsertTree(tree, "pending");
+
+      storage.updateTreeStatus(tree.rootId, "executing");
+
+      // Verify via getInterruptedTrees (executing should appear)
+      const interrupted = storage.getInterruptedTrees();
+      expect(interrupted).toHaveLength(1);
+      expect(interrupted[0].rootId).toBe(tree.rootId);
+    });
+  });
+
+  describe("timing fields roundtrip", () => {
+    it("saves and retrieves startedAt, completedAt, retryCount", () => {
+      const rootId = generateGoalNodeId();
+      const now = Date.now();
+
+      const rootNode: GoalNode = {
+        id: rootId,
+        parentId: null,
+        task: "Root with timing",
+        dependsOn: [],
+        depth: 0,
+        status: "executing",
+        createdAt: now,
+        updatedAt: now,
+        startedAt: now - 1000,
+        completedAt: now,
+        retryCount: 2,
+      };
+
+      const nodes = new Map<GoalNodeId, GoalNode>();
+      nodes.set(rootId, rootNode);
+
+      const tree: GoalTree = {
+        rootId,
+        sessionId: "timing-test",
+        taskDescription: "Timing fields test",
+        nodes,
+        createdAt: now,
+      };
+
+      storage.upsertTree(tree);
+
+      const retrieved = storage.getTree(rootId);
+      expect(retrieved).not.toBeNull();
+      const retrievedNode = retrieved!.nodes.get(rootId)!;
+      expect(retrievedNode.startedAt).toBe(now - 1000);
+      expect(retrievedNode.completedAt).toBe(now);
+      expect(retrievedNode.retryCount).toBe(2);
+    });
+
+    it("defaults retryCount to 0 when not provided", () => {
+      const tree = buildTestTree();
+      storage.upsertTree(tree);
+
+      const retrieved = storage.getTree(tree.rootId);
+      const rootNode = retrieved!.nodes.get(tree.rootId)!;
+      expect(rootNode.retryCount).toBe(0);
+      expect(rootNode.startedAt).toBeUndefined();
+      expect(rootNode.completedAt).toBeUndefined();
+    });
+  });
 });

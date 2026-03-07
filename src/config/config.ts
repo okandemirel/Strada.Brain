@@ -90,7 +90,11 @@ export type EnvVarName =
   | "BAYESIAN_COOLING_PERIOD_DAYS" | "BAYESIAN_COOLING_MIN_OBSERVATIONS"
   | "BAYESIAN_COOLING_MAX_FAILURES" | "BAYESIAN_PROMOTION_MIN_OBSERVATIONS"
   | "BAYESIAN_VERDICT_CLEAN_SUCCESS" | "BAYESIAN_VERDICT_RETRY_SUCCESS" | "BAYESIAN_VERDICT_FAILURE"
-  | "GOAL_MAX_DEPTH";
+  | "GOAL_MAX_DEPTH"
+  | "GOAL_MAX_RETRIES"
+  | "GOAL_MAX_FAILURES"
+  | "GOAL_PARALLEL_EXECUTION"
+  | "GOAL_MAX_PARALLEL";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -284,6 +288,12 @@ export interface Config {
 
   // Goal Decomposition
   readonly goalMaxDepth: number;
+
+  // Goal Execution Policy
+  readonly goalMaxRetries: number;
+  readonly goalMaxFailures: number;
+  readonly goalParallelExecution: boolean;
+  readonly goalMaxParallel: number;
 }
 
 /** Partial config for updates */
@@ -501,6 +511,12 @@ export const configSchema = z
 
     // Goal Decomposition
     goalMaxDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(5)).default("3"),
+
+    // Goal Execution Policy
+    goalMaxRetries: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(5)).default("1"),
+    goalMaxFailures: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
+    goalParallelExecution: boolFromString(true),
+    goalMaxParallel: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -711,6 +727,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     goalMaxDepth: rawConfig.goalMaxDepth,
+    goalMaxRetries: rawConfig.goalMaxRetries,
+    goalMaxFailures: rawConfig.goalMaxFailures,
+    goalParallelExecution: rawConfig.goalParallelExecution,
+    goalMaxParallel: rawConfig.goalMaxParallel,
   };
 
   return { kind: "valid", value: config };
@@ -943,6 +963,10 @@ interface EnvVars {
   bayesianVerdictRetrySuccess: string | undefined;
   bayesianVerdictFailure: string | undefined;
   goalMaxDepth: string | undefined;
+  goalMaxRetries: string | undefined;
+  goalMaxFailures: string | undefined;
+  goalParallelExecution: string | undefined;
+  goalMaxParallel: string | undefined;
 }
 
 /**
@@ -1024,6 +1048,10 @@ function loadFromEnv(): EnvVars {
     bayesianVerdictRetrySuccess: process.env["BAYESIAN_VERDICT_RETRY_SUCCESS"],
     bayesianVerdictFailure: process.env["BAYESIAN_VERDICT_FAILURE"],
     goalMaxDepth: process.env["GOAL_MAX_DEPTH"],
+    goalMaxRetries: process.env["GOAL_MAX_RETRIES"],
+    goalMaxFailures: process.env["GOAL_MAX_FAILURES"],
+    goalParallelExecution: process.env["GOAL_PARALLEL_EXECUTION"],
+    goalMaxParallel: process.env["GOAL_MAX_PARALLEL"],
   };
 }
 
@@ -1240,5 +1268,9 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     rateLimit: { ...base.rateLimit, ...partial.rateLimit },
     bayesian: { ...base.bayesian, ...partial.bayesian },
     goalMaxDepth: (partial as Partial<Config>).goalMaxDepth ?? base.goalMaxDepth,
+    goalMaxRetries: (partial as Partial<Config>).goalMaxRetries ?? base.goalMaxRetries,
+    goalMaxFailures: (partial as Partial<Config>).goalMaxFailures ?? base.goalMaxFailures,
+    goalParallelExecution: (partial as Partial<Config>).goalParallelExecution ?? base.goalParallelExecution,
+    goalMaxParallel: (partial as Partial<Config>).goalMaxParallel ?? base.goalMaxParallel,
   } as Config;
 }
