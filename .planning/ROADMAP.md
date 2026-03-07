@@ -13,7 +13,7 @@
 - [ ] **Phase 5: Metrics Instrumentation** - Instrument task completion rate, iterations per task, and pattern reuse rate
 - [x] **Phase 6: Bayesian Confidence System** - Wire Bayesian updates from real outcomes, auto-deprecate/promote patterns, enforce confidence threshold gap (completed 2026-03-07)
 - [ ] **Phase 7: Recursive Goal Decomposition** - Enable mid-execution sub-goals with DAG dependencies, cycle detection, and depth limits
-- [ ] **Phase 8: Goal Progress & Execution** - Track progress at each decomposition level, execute sub-goals in topological order
+- [x] **Phase 8: Goal Progress & Execution** - Track progress at each decomposition level, execute sub-goals in topological order (completed 2026-03-07)
 - [ ] **Phase 9: Tool Chain Synthesis** - Detect recurring tool sequences, store as instincts, register and execute as composite tools
 
 ## Phase Details
@@ -128,7 +128,7 @@ Plans:
 Plans:
 - [x] 08-01-PLAN.md — GoalNode type extensions + Config options + GoalStorage upsert/resume methods + progress calculation module
 - [x] 08-02-PLAN.md — GoalExecutor wave-based parallel DAG execution engine + goal resume module
-- [ ] 08-03-PLAN.md — BackgroundExecutor delegation + GoalRenderer progress/timing + bootstrap resume + dashboard progress
+- [x] 08-03-PLAN.md — BackgroundExecutor delegation + GoalRenderer progress/timing + bootstrap resume + dashboard progress
 
 ### Phase 9: Tool Chain Synthesis
 **Goal**: The agent detects, stores, and can execute recurring tool sequences as composite operations
@@ -153,7 +153,7 @@ Plans:
 | 5. Metrics Instrumentation | 2/2 | Complete | 2026-03-07 |
 | 6. Bayesian Confidence System | 3/3 | Complete    | 2026-03-07 |
 | 7. Recursive Goal Decomposition | 3/3 | Complete | 2026-03-07 |
-| 8. Goal Progress & Execution | 2/3 | In Progress | - |
+| 8. Goal Progress & Execution | 3/3 | Complete | 2026-03-07 |
 | 9. Tool Chain Synthesis | 0/? | Not started | - |
 
 ## Coverage Map
