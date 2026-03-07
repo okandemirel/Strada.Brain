@@ -33,6 +33,7 @@ import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/i
 import { WRITE_OPERATIONS } from "./autonomy/constants.js";
 import type { BackgroundTaskOptions } from "../tasks/types.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
+import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -81,6 +82,7 @@ export class Orchestrator {
   private pendingModulesPrompt: boolean = false;
   private readonly instinctRetriever: InstinctRetriever | null;
   private readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
+  private readonly metricsRecorder: MetricsRecorder | null;
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -97,6 +99,7 @@ export class Orchestrator {
     stradaDeps?: StradaDepsStatus;
     instinctRetriever?: InstinctRetriever;
     eventEmitter?: IEventEmitter<LearningEventMap>;
+    metricsRecorder?: MetricsRecorder;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -110,6 +113,7 @@ export class Orchestrator {
     this.streamingEnabled = opts.streamingEnabled ?? false;
     this.instinctRetriever = opts.instinctRetriever ?? null;
     this.eventEmitter = opts.eventEmitter ?? null;
+    this.metricsRecorder = opts.metricsRecorder ?? null;
 
     // Build tool registry
     this.tools = new Map();
@@ -174,6 +178,16 @@ export class Orchestrator {
     const { signal, onProgress, chatId } = options;
     const provider = this.providerManager.getProvider(chatId);
 
+    // ─── Metrics: start recording ────────────────────────────────────
+    const taskType = options.parentMetricId ? "subtask" as const : "background" as const;
+    const metricId = this.metricsRecorder?.startTask({
+      sessionId: chatId,
+      taskDescription: prompt.slice(0, 200),
+      taskType,
+      parentTaskId: options.parentMetricId,
+    });
+    // ────────────────────────────────────────────────────────────────
+
     // Isolated session for this task
     const session: Session = {
       messages: [{ role: "user", content: prompt }],
@@ -232,110 +246,150 @@ export class Orchestrator {
     systemPrompt += taskPlanner.getPlanningPrompt();
     let verificationRequested = false;
 
-    for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-      // Check cancellation
-      if (signal.aborted) {
-        throw new Error("Task cancelled");
-      }
+    let bgIteration = 0;
+    let bgToolCallCount = 0;
 
-      const response = await provider.chat(
-        systemPrompt,
-        session.messages,
-        this.toolDefinitions,
-      );
+    try {
+      for (bgIteration = 0; bgIteration < MAX_TOOL_ITERATIONS; bgIteration++) {
+        // Check cancellation
+        if (signal.aborted) {
+          throw new Error("Task cancelled");
+        }
 
-      logger.debug("Background task LLM response", {
-        chatId,
-        iteration,
-        stopReason: response.stopReason,
-        toolCallCount: response.toolCalls.length,
-      });
-      this.metrics?.recordTokenUsage(
-        response.usage.inputTokens,
-        response.usage.outputTokens,
-        provider.name,
-      );
-      this.rateLimiter?.recordTokenUsage(
-        response.usage.inputTokens,
-        response.usage.outputTokens,
-        provider.name,
-      );
+        const response = await provider.chat(
+          systemPrompt,
+          session.messages,
+          this.toolDefinitions,
+        );
 
-      // Final response — return text
-      if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-        if (!verificationRequested && selfVerification.needsVerification()) {
-          verificationRequested = true;
+        logger.debug("Background task LLM response", {
+          chatId,
+          iteration: bgIteration,
+          stopReason: response.stopReason,
+          toolCallCount: response.toolCalls.length,
+        });
+        this.metrics?.recordTokenUsage(
+          response.usage.inputTokens,
+          response.usage.outputTokens,
+          provider.name,
+        );
+        this.rateLimiter?.recordTokenUsage(
+          response.usage.inputTokens,
+          response.usage.outputTokens,
+          provider.name,
+        );
+
+        // Final response — return text
+        if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
+          if (!verificationRequested && selfVerification.needsVerification()) {
+            verificationRequested = true;
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: selfVerification.getPrompt() });
+            continue;
+          }
+
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
           }
-          session.messages.push({ role: "user", content: selfVerification.getPrompt() });
-          continue;
+
+          // ─── Metrics: record success ────────────────────────────────
+          if (metricId) {
+            this.metricsRecorder?.endTask(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: bgIteration + 1,
+              toolCallCount: bgToolCallCount,
+              hitMaxIterations: false,
+            });
+          }
+          // ────────────────────────────────────────────────────────────
+
+          return response.text || "Task completed without output.";
         }
 
-        if (response.text) {
-          session.messages.push({ role: "assistant", content: response.text });
-        }
-        return response.text || "Task completed without output.";
-      }
+        // Handle tool calls
+        session.messages.push({
+          role: "assistant",
+          content: response.text,
+          tool_calls: response.toolCalls,
+        });
 
-      // Handle tool calls
-      session.messages.push({
-        role: "assistant",
-        content: response.text,
-        tool_calls: response.toolCalls,
-      });
+        const toolResults = await this.executeToolCalls(chatId, response.toolCalls);
+        bgToolCallCount += response.toolCalls.length;
 
-      const toolResults = await this.executeToolCalls(chatId, response.toolCalls);
+        // Autonomy tracking
+        for (let i = 0; i < response.toolCalls.length; i++) {
+          const tc = response.toolCalls[i]!;
+          const tr = toolResults[i]!;
+          taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
+          selfVerification.track(tc.name, tc.input, tr);
+          if (tc.name === "dotnet_build") verificationRequested = false;
 
-      // Autonomy tracking
-      for (let i = 0; i < response.toolCalls.length; i++) {
-        const tc = response.toolCalls[i]!;
-        const tr = toolResults[i]!;
-        taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
-        selfVerification.track(tc.name, tc.input, tr);
-        if (tc.name === "dotnet_build") verificationRequested = false;
+          const analysis = errorRecovery.analyze(tc.name, tr);
+          if (analysis) {
+            taskPlanner.recordError(analysis.summary);
+            toolResults[i] = {
+              toolCallId: tr.toolCallId,
+              content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
+              isError: tr.isError,
+            };
+          }
 
-        const analysis = errorRecovery.analyze(tc.name, tr);
-        if (analysis) {
-          taskPlanner.recordError(analysis.summary);
-          toolResults[i] = {
-            toolCallId: tr.toolCallId,
-            content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
-            isError: tr.isError,
-          };
+          this.emitToolResult(chatId, tc, toolResults[i]!);
         }
 
-        this.emitToolResult(chatId, tc, toolResults[i]!);
-      }
+        // Progress report: summarize tool calls
+        const toolNames = response.toolCalls.map((tc) => tc.name).join(", ");
+        onProgress(`Running tools: ${toolNames}`);
 
-      // Progress report: summarize tool calls
-      const toolNames = response.toolCalls.map((tc) => tc.name).join(", ");
-      onProgress(`Running tools: ${toolNames}`);
-
-      // Add tool results
-      const stateCtx = taskPlanner.getStateInjection();
-      const contentBlocks: Array<
-        | { type: "text"; text: string }
-        | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
-      > = [];
-      if (stateCtx) {
-        contentBlocks.push({ type: "text" as const, text: stateCtx });
-      }
-      for (const tr of toolResults) {
-        contentBlocks.push({
-          type: "tool_result" as const,
-          tool_use_id: tr.toolCallId,
-          content: tr.content,
-          is_error: tr.isError,
+        // Add tool results
+        const stateCtx = taskPlanner.getStateInjection();
+        const contentBlocks: Array<
+          | { type: "text"; text: string }
+          | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
+        > = [];
+        if (stateCtx) {
+          contentBlocks.push({ type: "text" as const, text: stateCtx });
+        }
+        for (const tr of toolResults) {
+          contentBlocks.push({
+            type: "tool_result" as const,
+            tool_use_id: tr.toolCallId,
+            content: tr.content,
+            is_error: tr.isError,
+          });
+        }
+        session.messages.push({
+          role: "user",
+          content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
         });
       }
-      session.messages.push({
-        role: "user",
-        content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
-      });
-    }
 
-    return "Task reached maximum iterations. The work done so far has been saved.";
+      // ─── Metrics: record max iterations ──────────────────────────────
+      if (metricId) {
+        this.metricsRecorder?.endTask(metricId, {
+          agentPhase: AgentPhase.EXECUTING,
+          iterations: bgIteration,
+          toolCallCount: bgToolCallCount,
+          hitMaxIterations: true,
+        });
+      }
+      // ────────────────────────────────────────────────────────────────
+
+      return "Task reached maximum iterations. The work done so far has been saved.";
+    } finally {
+      // ─── Metrics: safety net for unexpected exits ────────────────────
+      if (metricId && !this.metricsRecorder?.isRecorded(metricId)) {
+        this.metricsRecorder?.endTask(metricId, {
+          agentPhase: AgentPhase.FAILED,
+          iterations: bgIteration,
+          toolCallCount: bgToolCallCount,
+          hitMaxIterations: false,
+        });
+      }
+      // ────────────────────────────────────────────────────────────────
+    }
   }
 
   /**
@@ -585,14 +639,25 @@ export class Orchestrator {
     const lastUserMessage = this.extractLastUserMessage(session);
     let agentState = createInitialState(lastUserMessage);
 
+    let matchedInstinctIds: string[] = [];
     if (this.instinctRetriever) {
       try {
-        const insights = await this.instinctRetriever.getInsightsForTask(lastUserMessage);
-        agentState = { ...agentState, learnedInsights: insights };
+        const insightResult = await this.instinctRetriever.getInsightsForTask(lastUserMessage);
+        agentState = { ...agentState, learnedInsights: insightResult.insights };
+        matchedInstinctIds = insightResult.matchedInstinctIds;
       } catch {
         // Non-fatal
       }
     }
+
+    // ─── Metrics: start recording ────────────────────────────────────
+    const metricId = this.metricsRecorder?.startTask({
+      sessionId: chatId,
+      taskDescription: lastUserMessage.slice(0, 200),
+      taskType: "interactive",
+      instinctIds: matchedInstinctIds,
+    });
+    // ────────────────────────────────────────────────────────────────
 
     const REFLECT_INTERVAL = 3;
     // ────────────────────────────────────────────────────────────────────
@@ -604,6 +669,7 @@ export class Orchestrator {
       "startStreamingMessage" in this.channel &&
       typeof this.channel.startStreamingMessage === "function";
 
+    try {
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       // ─── PAOR: Build phase-aware system prompt ──────────────────────
       let activePrompt = systemPrompt;
@@ -656,6 +722,16 @@ export class Orchestrator {
             session.messages.push({ role: "assistant", content: response.text });
             if (!canStream) await this.channel.sendMarkdown(chatId, response.text);
           }
+          // ─── Metrics: record DONE ───────────────────────────────────
+          if (metricId) {
+            this.metricsRecorder?.endTask(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
+            });
+          }
+          // ──────────────────────────────────────────────────────────
           return;
         }
 
@@ -720,6 +796,16 @@ export class Orchestrator {
             await this.channel.sendMarkdown(chatId, response.text);
           }
         }
+        // ─── Metrics: record end_turn ───────────────────────────────
+        if (metricId) {
+          this.metricsRecorder?.endTask(metricId, {
+            agentPhase: agentState.phase,
+            iterations: agentState.iteration,
+            toolCallCount: agentState.stepResults.length,
+            hitMaxIterations: false,
+          });
+        }
+        // ──────────────────────────────────────────────────────────
         return;
       }
 
@@ -841,11 +927,34 @@ export class Orchestrator {
     }
 
     // Hit max iterations
+    // ─── Metrics: record max iterations ──────────────────────────────
+    if (metricId) {
+      this.metricsRecorder?.endTask(metricId, {
+        agentPhase: agentState.phase,
+        iterations: agentState.iteration,
+        toolCallCount: agentState.stepResults.length,
+        hitMaxIterations: true,
+      });
+    }
+    // ────────────────────────────────────────────────────────────────
+
     await this.channel.sendText(
       chatId,
       "I've reached the maximum number of steps for this request. " +
         "Please send a follow-up message to continue.",
     );
+    } finally {
+      // ─── Metrics: safety net for unexpected exits ────────────────────
+      if (metricId && !this.metricsRecorder?.isRecorded(metricId)) {
+        this.metricsRecorder?.endTask(metricId, {
+          agentPhase: agentState.phase,
+          iterations: agentState.iteration,
+          toolCallCount: agentState.stepResults.length,
+          hitMaxIterations: false,
+        });
+      }
+      // ────────────────────────────────────────────────────────────────
+    }
   }
 
   /**

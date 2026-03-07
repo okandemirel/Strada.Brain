@@ -59,16 +59,17 @@ describe("InstinctRetriever", () => {
     return { retriever, mockStorage, mockMatcher };
   }
 
-  it("returns empty array when no active instincts exist", async () => {
+  it("returns empty InsightResult when no active instincts exist", async () => {
     const { retriever, mockMatcher } = setup([], []);
 
     const result = await retriever.getInsightsForTask("fix null pointer");
 
-    expect(result).toEqual([]);
+    expect(result.insights).toEqual([]);
+    expect(result.matchedInstinctIds).toEqual([]);
     expect(mockMatcher.findSimilarInstincts).toHaveBeenCalled();
   });
 
-  it("returns formatted insights when matches found", async () => {
+  it("returns formatted insights and matched IDs when matches found", async () => {
     const instinct = createMockInstinct({
       action: JSON.stringify({ description: "Add null check before accessing property" }),
       confidence: 0.85,
@@ -86,8 +87,9 @@ describe("InstinctRetriever", () => {
 
     const result = await retriever.getInsightsForTask("handle null values");
 
-    expect(result).toHaveLength(1);
-    expect(result[0]).toBe("Add null check before accessing property (85% confidence, 80% success, applied 8x)");
+    expect(result.insights).toHaveLength(1);
+    expect(result.insights[0]).toBe("Add null check before accessing property (85% confidence, 80% success, applied 8x)");
+    expect(result.matchedInstinctIds).toEqual(["instinct_test_001"]);
   });
 
   it("limits results to maxInsights parameter", async () => {
@@ -112,14 +114,15 @@ describe("InstinctRetriever", () => {
 
     const result = await retriever.getInsightsForTask("some task", 3);
 
-    expect(result).toHaveLength(3);
+    expect(result.insights).toHaveLength(3);
+    expect(result.matchedInstinctIds).toHaveLength(3);
     expect(mockMatcher.findSimilarInstincts).toHaveBeenCalledWith(
       "some task",
       { minSimilarity: 0.4, maxResults: 3 },
     );
   });
 
-  it("handles JSON parse errors gracefully", async () => {
+  it("handles JSON parse errors gracefully (still collects IDs)", async () => {
     const goodInstinct = createMockInstinct({
       id: "instinct_good" as Instinct["id"],
       action: JSON.stringify({ description: "Valid insight" }),
@@ -148,7 +151,9 @@ describe("InstinctRetriever", () => {
 
     const result = await retriever.getInsightsForTask("some task");
 
-    expect(result).toHaveLength(1);
-    expect(result[0]).toBe("Valid insight (90% confidence, 80% success, applied 4x)");
+    expect(result.insights).toHaveLength(1);
+    expect(result.insights[0]).toBe("Valid insight (90% confidence, 80% success, applied 4x)");
+    // Both instinct IDs are collected even if formatting fails
+    expect(result.matchedInstinctIds).toEqual(["instinct_good", "instinct_bad"]);
   });
 });

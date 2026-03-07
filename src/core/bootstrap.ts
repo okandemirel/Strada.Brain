@@ -59,6 +59,8 @@ import { LearningQueue } from "../learning/pipeline/learning-queue.js";
 import { ErrorRecoveryEngine } from "../agents/autonomy/error-recovery.js";
 import { TaskPlanner } from "../agents/autonomy/task-planner.js";
 import { InstinctRetriever } from "../agents/instinct-retriever.js";
+import { MetricsStorage } from "../metrics/metrics-storage.js";
+import { MetricsRecorder } from "../metrics/metrics-recorder.js";
 
 // Task system imports
 import {
@@ -157,6 +159,21 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     ? new InstinctRetriever(learningResult.patternMatcher)
     : undefined;
 
+  // Initialize metrics storage for agent performance tracking (EVAL-01, EVAL-02, EVAL-03)
+  let metricsStorage: MetricsStorage | undefined;
+  let metricsRecorder: MetricsRecorder | undefined;
+  try {
+    const metricsDbPath = join(config.memory.dbPath, "learning.db");
+    metricsStorage = new MetricsStorage(metricsDbPath);
+    metricsStorage.initialize();
+    metricsRecorder = new MetricsRecorder(metricsStorage);
+    logger.info("Metrics storage initialized", { dbPath: metricsDbPath });
+  } catch (error) {
+    logger.warn("Metrics storage initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -173,6 +190,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     stradaDeps,
     instinctRetriever,
     eventEmitter: learningResult.eventBus,
+    metricsRecorder,
   });
 
   // Initialize task system
@@ -222,6 +240,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       providerManager,
       eventBus: learningResult.eventBus,
       learningQueue: learningResult.learningQueue,
+      metricsStorage,
     }),
   };
 }
@@ -815,6 +834,7 @@ interface ShutdownOptions {
   providerManager?: ProviderManager;
   eventBus?: IEventBus<LearningEventMap>;
   learningQueue?: LearningQueue;
+  metricsStorage?: MetricsStorage;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -838,6 +858,10 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
     // Then stop the pipeline (clears evolution timer, shuts down embedding queue)
     if (learningPipeline) {
       learningPipeline.stop();
+    }
+
+    if (options.metricsStorage) {
+      options.metricsStorage.close();
     }
 
     if (options.taskStorage) {

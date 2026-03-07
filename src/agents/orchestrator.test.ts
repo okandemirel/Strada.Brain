@@ -693,4 +693,119 @@ describe("Orchestrator", () => {
       expect(chatSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
   });
+
+  describe("MetricsRecorder Integration", () => {
+    function createMockRecorder() {
+      return {
+        startTask: vi.fn().mockReturnValue("metric_test_001"),
+        endTask: vi.fn(),
+        isRecorded: vi.fn().mockReturnValue(false),
+      };
+    }
+
+    it("should call startTask when processMessage begins", async () => {
+      const mockRecorder = createMockRecorder();
+      const orchWithMetrics = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        metricsRecorder: mockRecorder as any,
+      });
+
+      const promise = orchWithMetrics.handleMessage({
+        channelType: "cli",
+        chatId: "metrics1",
+        userId: "user1",
+        text: "Hello",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(mockRecorder.startTask).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: "metrics1",
+        taskType: "interactive",
+      }));
+    });
+
+    it("should call endTask with correct agentPhase on completion", async () => {
+      const mockRecorder = createMockRecorder();
+      const orchWithMetrics = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        metricsRecorder: mockRecorder as any,
+      });
+
+      const promise = orchWithMetrics.handleMessage({
+        channelType: "cli",
+        chatId: "metrics2",
+        userId: "user1",
+        text: "Hello",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(mockRecorder.endTask).toHaveBeenCalledWith(
+        "metric_test_001",
+        expect.objectContaining({
+          hitMaxIterations: false,
+        }),
+      );
+    });
+
+    it("should not throw when metricsRecorder is not provided", async () => {
+      // orch created without metricsRecorder in beforeEach
+      const promise = orch.handleMessage({
+        channelType: "cli",
+        chatId: "no-metrics",
+        userId: "user1",
+        text: "Hello",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(promise).resolves.toBeUndefined();
+    });
+
+    it("should call endTask in finally block on unexpected error", async () => {
+      const mockRecorder = createMockRecorder();
+      const badProvider = {
+        name: "bad",
+        chat: vi.fn().mockRejectedValue(new Error("API down")),
+      };
+
+      const orchWithMetrics = new Orchestrator({
+        providerManager: { getProvider: () => badProvider, getActiveInfo: () => ({ providerName: "bad", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        metricsRecorder: mockRecorder as any,
+      });
+
+      const promise = orchWithMetrics.handleMessage({
+        channelType: "cli",
+        chatId: "metrics-error",
+        userId: "user1",
+        text: "Hello",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      // The error should be caught by the session lock error handler
+      await promise;
+
+      // The finally block should ensure endTask is called
+      expect(mockRecorder.startTask).toHaveBeenCalled();
+      // isRecorded returns false, so finally block should call endTask
+      expect(mockRecorder.endTask).toHaveBeenCalled();
+    });
+  });
 });

@@ -93,4 +93,6 @@ export interface BackgroundTaskOptions {
   onProgress: (message: string) => void;
   chatId: string;
   channelType: string;
+  /** Parent metric ID for subtask tracking (passed from BackgroundExecutor for decomposed tasks) */
+  parentMetricId?: string;
 }
