@@ -140,7 +140,11 @@ Plans:
   3. Stored tool chains are registered as composite ITool implementations in the tool registry at runtime
   4. Composite tools execute their chain sequentially, passing each step's output as input to the next
   5. Tool chain validation confirms all referenced tools exist before registration (invalid chains are rejected)
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 09-01-PLAN.md — Chain types, Zod schemas, config extension, event bus extension, ToolRegistry registerOrUpdate/unregister, LearningStorage CHECK migration + bulk trajectory retrieval
+- [ ] 09-02-PLAN.md — ChainDetector contiguous sequence mining + ChainSynthesizer LLM metadata + CompositeTool sequential execution
+- [ ] 09-03-PLAN.md — ChainManager lifecycle + Orchestrator addTool/removeTool + bootstrap wiring + startup loading + auto-invalidation
 
 ## Progress
 
@@ -154,7 +158,7 @@ Plans:
 | 6. Bayesian Confidence System | 3/3 | Complete    | 2026-03-07 |
 | 7. Recursive Goal Decomposition | 3/3 | Complete | 2026-03-07 |
 | 8. Goal Progress & Execution | 3/3 | Complete | 2026-03-07 |
-| 9. Tool Chain Synthesis | 0/? | Not started | - |
+| 9. Tool Chain Synthesis | 0/3 | Planning complete | - |
 
 ## Coverage Map
 
@@ -211,4 +215,4 @@ Phase 1 (AgentDB Activation)
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-07 (Phase 8 Plan 02 complete)*
+*Last updated: 2026-03-07 (Phase 9 plans created)*

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 08-03-PLAN.md -- Phase 8 finished
-last_updated: "2026-03-07T19:45:27.764Z"
+stopped_at: Phase 9 context gathered
+last_updated: "2026-03-07T21:11:34.805Z"
 progress:
   total_phases: 9
   completed_phases: 8
-  total_plans: 21
-  completed_plans: 21
-  percent: 100
+  total_plans: 24
+  completed_plans: 22
+  percent: 92
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,17 +19,17 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 8 complete (Goal Progress & Execution). All 3/3 plans done. Phase 9 next.
+**Current Focus:** Phase 9 in progress (Tool Chain Synthesis). Plan 01 complete, Plans 02-03 remaining.
 
 ## Current Position
 
-**Milestone:** Phase 8 -- Agent Evolution (Level 3 -> 4)
-**Phase:** 8 of 9 complete, Phase 9 next (Tool Chain Synthesis)
-**Plan:** 3/3 plans done in Phase 8
-**Status:** Ready to plan
+**Milestone:** Phase 9 -- Agent Evolution (Level 3 -> 4)
+**Phase:** 8 of 9 complete, Phase 9 in progress (Tool Chain Synthesis)
+**Plan:** 1/3 plans done in Phase 9
+**Status:** Executing
 
 **Progress:**
-[██████████] 100%
+[█████████░] 92%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [##########] 100%  Event-Driven Learning (complete)
@@ -37,16 +37,16 @@ Phase 5  [##########] 100%  Metrics Instrumentation (complete)
 Phase 6  [##########] 100%  Bayesian Confidence System (complete)
 Phase 7  [##########] 100%  Recursive Goal Decomposition (complete)
 Phase 8  [##########] 100%  Goal Progress & Execution
-Phase 9  [..........] 0%    Tool Chain Synthesis
+Phase 9  [###.......] 33%   Tool Chain Synthesis (1/3 plans)
 
-**Overall:** 8/9 phases complete
+**Overall:** 8/9 phases complete, Phase 9 Plan 01 done
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 8/9 (Phase 8 complete) |
-| Plans completed | 21 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6 + 3 Phase 7 + 3 Phase 8) |
+| Phases completed | 8/9 (Phase 9 in progress) |
+| Plans completed | 22 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6 + 3 Phase 7 + 3 Phase 8 + 1 Phase 9) |
 | Requirements delivered | 30/32 (MEM-01..07, LRN-01..07, EVAL-01..07, GOAL-01,02,03,04,05,06) |
 | Tests added | 236/50+ target |
 | Quality gates passed | 0 |
@@ -71,6 +71,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 08 P01 | 5min | 2 tasks | 7 files |
 | Phase 08 P02 | 6min | 2 tasks | 5 files |
 | Phase 08 P03 | 10min | 2 tasks | 8 files |
+| Phase 09 P01 | 6min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -179,6 +180,10 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P8-03] interactiveChannel cast uses `unknown` intermediate for strict TypeScript safety
 - [P8-03] GoalRendererOptions exported from barrel for external use
 - [P8-03] Braille spinner uses Date.now() / 100 modulo for deterministic-per-frame rotation
+- [P9-01] ToolChainConfig imported from chain-types into config.ts (same pattern as BayesianConfig)
+- [P9-01] Chain event types defined inline in event-bus.ts to keep core self-contained
+- [P9-01] migrateTypeConstraint uses test-insert probe + table recreation (same pattern as migrateStatusConstraint)
+- [P9-01] getTrajectories uses dynamic SQL query building (same pattern as getInstincts)
 - [P8-01] upsertTree uses INSERT OR REPLACE for tree + DELETE+INSERT for nodes in transaction
 - [P8-01] Schema migration uses pragma table_info to detect missing columns (safe for fresh and existing DBs)
 - [P8-01] Progress calculation excludes root node (only child completion matters for percentage)
@@ -200,8 +205,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-07T19:40:38Z
-**Stopped at:** Completed 08-03-PLAN.md -- Phase 8 finished
+**Last session:** 2026-03-07T21:10:25Z
+**Stopped at:** Completed 09-01-PLAN.md (Tool Chain Foundation)
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
@@ -324,6 +329,16 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
   - 2070 tests passing (128 test files), TypeScript compiles clean
   - GOAL-03 and GOAL-06 requirements fully integrated end-to-end
 - Phase 8 fully complete (all 3 plans, GOAL-03 and GOAL-06 requirements met)
+- Phase 9 Plan 01 complete: Tool chain foundation (types, config, storage, registry, events)
+  - Chain Zod schemas: ChainStepMappingSchema, ChainMetadataSchema, LLMChainOutputSchema
+  - CandidateChain and ToolChainConfig interfaces in src/learning/chains/chain-types.ts
+  - InstinctType extended with 'tool_chain' in src/learning/types.ts
+  - LearningEventMap: chain:detected, chain:executed, chain:invalidated events
+  - ToolCategories: COMPOSITE category; ToolRegistry: registerOrUpdate(), unregister()
+  - Config: toolChain section with 9 env-configurable fields (TOOL_CHAIN_*)
+  - LearningStorage: 'tool_chain' CHECK constraint migration + getTrajectories(since/limit)
+  - 99 tests passing (26 chain-types + 31 storage + 42 config)
+  - TOOL-02, TOOL-05 requirements complete
 
 ---
 *State initialized: 2026-03-06*
