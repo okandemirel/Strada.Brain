@@ -48,10 +48,10 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 
 ### Tool Synthesis
 
-- [ ] **TOOL-01**: Recurring tool sequences (3+ occurrences, >80% success) detected from trajectory data
+- [x] **TOOL-01**: Recurring tool sequences (3+ occurrences, >80% success) detected from trajectory data
 - [x] **TOOL-02**: Detected tool chains stored as instincts with chain metadata
-- [ ] **TOOL-03**: Stored tool chains registered as composite ITool implementations in tool registry at runtime
-- [ ] **TOOL-04**: Composite tools execute their chain sequentially, passing output of each step as input to next
+- [x] **TOOL-03**: Stored tool chains registered as composite ITool implementations in tool registry at runtime
+- [x] **TOOL-04**: Composite tools execute their chain sequentially, passing output of each step as input to next
 - [x] **TOOL-05**: Tool chain validation ensures all referenced tools exist before registration
 
 ## v2 Requirements
@@ -121,10 +121,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | GOAL-05 | Phase 7: Recursive Goal Decomposition | Complete |
 | GOAL-03 | Phase 8: Goal Progress & Execution | Complete |
 | GOAL-06 | Phase 8: Goal Progress & Execution | Complete |
-| TOOL-01 | Phase 9: Tool Chain Synthesis | Pending |
+| TOOL-01 | Phase 9: Tool Chain Synthesis | Complete |
 | TOOL-02 | Phase 9: Tool Chain Synthesis | Complete |
-| TOOL-03 | Phase 9: Tool Chain Synthesis | Pending |
-| TOOL-04 | Phase 9: Tool Chain Synthesis | Pending |
+| TOOL-03 | Phase 9: Tool Chain Synthesis | Complete |
+| TOOL-04 | Phase 9: Tool Chain Synthesis | Complete |
 | TOOL-05 | Phase 9: Tool Chain Synthesis | Complete |
 
 **Coverage:**

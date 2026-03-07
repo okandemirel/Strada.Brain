@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 9 context gathered
-last_updated: "2026-03-07T21:11:34.805Z"
+status: executing
+stopped_at: Completed 09-02-PLAN.md (Core Chain Synthesis Modules)
+last_updated: "2026-03-07T21:22:50Z"
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 24
-  completed_plans: 22
-  percent: 92
+  completed_plans: 23
+  percent: 96
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,17 +19,17 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 9 in progress (Tool Chain Synthesis). Plan 01 complete, Plans 02-03 remaining.
+**Current Focus:** Phase 9 in progress (Tool Chain Synthesis). Plans 01-02 complete, Plan 03 remaining.
 
 ## Current Position
 
 **Milestone:** Phase 9 -- Agent Evolution (Level 3 -> 4)
 **Phase:** 8 of 9 complete, Phase 9 in progress (Tool Chain Synthesis)
-**Plan:** 1/3 plans done in Phase 9
+**Plan:** 2/3 plans done in Phase 9
 **Status:** Executing
 
 **Progress:**
-[█████████░] 92%
+[█████████░] 96%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [##########] 100%  Event-Driven Learning (complete)
@@ -37,18 +37,18 @@ Phase 5  [##########] 100%  Metrics Instrumentation (complete)
 Phase 6  [##########] 100%  Bayesian Confidence System (complete)
 Phase 7  [##########] 100%  Recursive Goal Decomposition (complete)
 Phase 8  [##########] 100%  Goal Progress & Execution
-Phase 9  [###.......] 33%   Tool Chain Synthesis (1/3 plans)
+Phase 9  [######....] 67%   Tool Chain Synthesis (2/3 plans)
 
-**Overall:** 8/9 phases complete, Phase 9 Plan 01 done
+**Overall:** 8/9 phases complete, Phase 9 Plans 01-02 done
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
 | Phases completed | 8/9 (Phase 9 in progress) |
-| Plans completed | 22 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6 + 3 Phase 7 + 3 Phase 8 + 1 Phase 9) |
-| Requirements delivered | 30/32 (MEM-01..07, LRN-01..07, EVAL-01..07, GOAL-01,02,03,04,05,06) |
-| Tests added | 236/50+ target |
+| Plans completed | 23 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6 + 3 Phase 7 + 3 Phase 8 + 2 Phase 9) |
+| Requirements delivered | 32/32 (MEM-01..07, LRN-01..07, EVAL-01..07, GOAL-01..06, TOOL-01..05) |
+| Tests added | 264/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
@@ -72,6 +72,7 @@ Phase 9  [###.......] 33%   Tool Chain Synthesis (1/3 plans)
 | Phase 08 P02 | 6min | 2 tasks | 5 files |
 | Phase 08 P03 | 10min | 2 tasks | 8 files |
 | Phase 09 P01 | 6min | 2 tasks | 9 files |
+| Phase 09 P02 | 8min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -184,6 +185,11 @@ Phase 9  [###.......] 33%   Tool Chain Synthesis (1/3 plans)
 - [P9-01] Chain event types defined inline in event-bus.ts to keep core self-contained
 - [P9-01] migrateTypeConstraint uses test-insert probe + table recreation (same pattern as migrateStatusConstraint)
 - [P9-01] getTrajectories uses dynamic SQL query building (same pattern as getInstincts)
+- [P9-02] Mutable internal MutableCandidate during detection, exposed as readonly CandidateChain externally
+- [P9-02] ChainSynthesizer owns parseLLMOutput (Zod LLMChainOutputSchema) rather than importing goals/types.ts
+- [P9-02] CompositeTool parses step output via JSON.parse with { result: content } fallback
+- [P9-02] Instinct confidence capped at CONFIDENCE_THRESHOLDS.MAX_INITIAL (0.5) regardless of success rate
+- [P9-02] Longest-match-wins subsumption uses key containment for flexible overlapping subsequence matching
 - [P8-01] upsertTree uses INSERT OR REPLACE for tree + DELETE+INSERT for nodes in transaction
 - [P8-01] Schema migration uses pragma table_info to detect missing columns (safe for fresh and existing DBs)
 - [P8-01] Progress calculation excludes root node (only child completion matters for percentage)
@@ -205,14 +211,14 @@ Phase 9  [###.......] 33%   Tool Chain Synthesis (1/3 plans)
 
 ## Session Continuity
 
-**Last session:** 2026-03-07T21:10:25Z
-**Stopped at:** Completed 09-01-PLAN.md (Tool Chain Foundation)
+**Last session:** 2026-03-07T21:22:50Z
+**Stopped at:** Completed 09-02-PLAN.md (Core Chain Synthesis Modules)
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
 - Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts, event-bus.ts
-- All 2070 tests pass (128 test files, +6 from Phase 8 Plan 03 renderer tests)
+- All 2130 tests pass (132 test files, +28 from Phase 9 Plan 02 chain modules)
 - Quality gates: /simplify + /security-review after each implementation phase
 - HnswWriteMutex serializes all HNSW writes in agentdb-memory.ts
 - AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
@@ -339,7 +345,16 @@ Phase 9  [###.......] 33%   Tool Chain Synthesis (1/3 plans)
   - LearningStorage: 'tool_chain' CHECK constraint migration + getTrajectories(since/limit)
   - 99 tests passing (26 chain-types + 31 storage + 42 config)
   - TOOL-02, TOOL-05 requirements complete
+- Phase 9 Plan 02 complete: Core chain synthesis modules (ChainDetector + ChainSynthesizer + CompositeTool)
+  - ChainDetector: contiguous sequence mining with per-trajectory deduplication and longest-match-wins subsumption
+  - ChainSynthesizer: LLM-based chain metadata generation with budget caps (llmBudgetPerCycle + maxActive)
+  - CompositeTool: ITool implementation with sequential execution and parameter flow mapping
+  - Tool existence validated at both synthesis time and execution time (TOOL-05)
+  - Instinct confidence capped at MAX_INITIAL (0.5) regardless of observed success rate
+  - 54 chain module tests passing (11 detector + 8 synthesizer + 9 composite-tool + 26 chain-types)
+  - 2130 total tests passing (132 test files)
+  - TOOL-01, TOOL-03, TOOL-04, TOOL-05 requirements complete
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-07T14:37:58Z*
+*Last updated: 2026-03-07T21:22:50Z*
