@@ -477,4 +477,164 @@ describe("LearningStorage", () => {
       }
     });
   });
+
+  describe("Phase 9 -- tool_chain type and getTrajectories", () => {
+    it("should accept type='tool_chain' in createInstinct (CHECK constraint)", () => {
+      const instinct: Instinct = {
+        id: `instinct_chain_${randomUUID()}` as import("../types.ts").InstinctId,
+        name: "Chain Instinct",
+        type: "tool_chain",
+        status: "proposed",
+        confidence: 0.7,
+        triggerPattern: "file_read->file_write",
+        action: JSON.stringify({ toolSequence: ["file_read", "file_write"], parameterMappings: [], successRate: 0.9, occurrences: 5 }),
+        contextConditions: [],
+        stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      expect(() => storage.createInstinct(instinct)).not.toThrow();
+      const retrieved = storage.getInstinct(instinct.id);
+      expect(retrieved).not.toBeNull();
+      expect(retrieved?.type).toBe("tool_chain");
+    });
+
+    it("should filter instincts by type='tool_chain'", () => {
+      // Create a tool_chain instinct and an error_fix instinct
+      const chainInstinct: Instinct = {
+        id: `instinct_chain_${randomUUID()}` as import("../types.ts").InstinctId,
+        name: "Chain Test",
+        type: "tool_chain",
+        status: "active",
+        confidence: 0.85,
+        triggerPattern: "grep->file_edit",
+        action: "{}",
+        contextConditions: [],
+        stats: { timesSuggested: 0, timesApplied: 3, timesFailed: 0, successRate: 1.0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      const errorInstinct: Instinct = {
+        id: `instinct_err_${randomUUID()}` as import("../types.ts").InstinctId,
+        name: "Error Test",
+        type: "error_fix",
+        status: "active",
+        confidence: 0.8,
+        triggerPattern: "CS0246",
+        action: "fix",
+        contextConditions: [],
+        stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      storage.createInstinct(chainInstinct);
+      storage.createInstinct(errorInstinct);
+
+      const chains = storage.getInstincts({ type: "tool_chain" });
+      expect(chains).toHaveLength(1);
+      expect(chains[0]?.type).toBe("tool_chain");
+      expect(chains[0]?.id).toBe(chainInstinct.id);
+    });
+
+    it("should return trajectories filtered by since timestamp", () => {
+      const now = Date.now();
+      const older: Trajectory = {
+        id: `traj_old_${randomUUID()}` as import("../types.ts").TrajectoryId,
+        sessionId: "session-1" as import("../../types/index.ts").SessionId,
+        taskDescription: "Old task",
+        steps: [],
+        outcome: { success: true, totalSteps: 0, hadErrors: false, errorCount: 0, durationMs: 100, completionRate: 1.0 },
+        appliedInstinctIds: [],
+        createdAt: (now - 10000) as import("../../types/index.ts").TimestampMs,
+        processed: false,
+      };
+      const newer: Trajectory = {
+        id: `traj_new_${randomUUID()}` as import("../types.ts").TrajectoryId,
+        sessionId: "session-2" as import("../../types/index.ts").SessionId,
+        taskDescription: "New task",
+        steps: [],
+        outcome: { success: true, totalSteps: 0, hadErrors: false, errorCount: 0, durationMs: 200, completionRate: 1.0 },
+        appliedInstinctIds: [],
+        createdAt: now as import("../../types/index.ts").TimestampMs,
+        processed: false,
+      };
+      storage.createTrajectoryImmediate(older);
+      storage.createTrajectoryImmediate(newer);
+
+      const results = storage.getTrajectories({ since: now - 5000 });
+      expect(results).toHaveLength(1);
+      expect(results[0]?.id).toBe(newer.id);
+    });
+
+    it("should return trajectories limited by count", () => {
+      const now = Date.now();
+      for (let i = 0; i < 5; i++) {
+        const t: Trajectory = {
+          id: `traj_limit_${i}_${randomUUID()}` as import("../types.ts").TrajectoryId,
+          sessionId: "session-1" as import("../../types/index.ts").SessionId,
+          taskDescription: `Task ${i}`,
+          steps: [],
+          outcome: { success: true, totalSteps: 0, hadErrors: false, errorCount: 0, durationMs: 100, completionRate: 1.0 },
+          appliedInstinctIds: [],
+          createdAt: (now + i) as import("../../types/index.ts").TimestampMs,
+          processed: false,
+        };
+        storage.createTrajectoryImmediate(t);
+      }
+
+      const results = storage.getTrajectories({ limit: 3 });
+      expect(results).toHaveLength(3);
+    });
+
+    it("should return trajectories combining since and limit", () => {
+      const now = Date.now();
+      for (let i = 0; i < 5; i++) {
+        const t: Trajectory = {
+          id: `traj_combo_${i}_${randomUUID()}` as import("../types.ts").TrajectoryId,
+          sessionId: "session-1" as import("../../types/index.ts").SessionId,
+          taskDescription: `Combo ${i}`,
+          steps: [],
+          outcome: { success: true, totalSteps: 0, hadErrors: false, errorCount: 0, durationMs: 100, completionRate: 1.0 },
+          appliedInstinctIds: [],
+          createdAt: (now + i * 1000) as import("../../types/index.ts").TimestampMs,
+          processed: false,
+        };
+        storage.createTrajectoryImmediate(t);
+      }
+
+      // Get only the last 2 trajectories created after now + 2000
+      const results = storage.getTrajectories({ since: now + 2000, limit: 2 });
+      expect(results.length).toBeLessThanOrEqual(2);
+      for (const r of results) {
+        expect(r.createdAt).toBeGreaterThanOrEqual(now + 2000);
+      }
+    });
+
+    it("should return all trajectories ordered by created_at DESC when no options", () => {
+      const now = Date.now();
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const id = `traj_all_${i}_${randomUUID()}`;
+        ids.push(id);
+        const t: Trajectory = {
+          id: id as import("../types.ts").TrajectoryId,
+          sessionId: "session-1" as import("../../types/index.ts").SessionId,
+          taskDescription: `All ${i}`,
+          steps: [],
+          outcome: { success: true, totalSteps: 0, hadErrors: false, errorCount: 0, durationMs: 100, completionRate: 1.0 },
+          appliedInstinctIds: [],
+          createdAt: (now + i * 1000) as import("../../types/index.ts").TimestampMs,
+          processed: false,
+        };
+        storage.createTrajectoryImmediate(t);
+      }
+
+      const results = storage.getTrajectories({});
+      expect(results).toHaveLength(3);
+      // Should be DESC order -- newest first
+      expect(results[0]?.createdAt).toBeGreaterThanOrEqual(results[1]?.createdAt ?? 0);
+      expect(results[1]?.createdAt).toBeGreaterThanOrEqual(results[2]?.createdAt ?? 0);
+    });
+  });
 });
