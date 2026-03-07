@@ -303,4 +303,178 @@ describe("LearningStorage", () => {
       expect(retrieved?.embedding).toEqual([0.1, 0.2, 0.3]);
     });
   });
+
+  describe("Bayesian schema migration", () => {
+    it("should add bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures columns", () => {
+      // Insert an instinct with bayesian fields
+      const instinct: Instinct = {
+        id: randomUUID(),
+        name: "Bayesian Test",
+        type: "error_fix",
+        status: "proposed",
+        confidence: 0.5,
+        triggerPattern: "test",
+        action: "fix",
+        contextConditions: [],
+        stats: { timesSuggested: 0, timesApplied: 5, timesFailed: 2, successRate: 0.71 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        bayesianAlpha: 6.0,
+        bayesianBeta: 3.0,
+      };
+      storage.createInstinct(instinct);
+
+      const retrieved = storage.getInstinct(instinct.id);
+      expect(retrieved).not.toBeNull();
+      expect(retrieved?.bayesianAlpha).toBe(6.0);
+      expect(retrieved?.bayesianBeta).toBe(3.0);
+    });
+
+    it("should accept 'permanent' in CHECK constraint", () => {
+      const instinct: Instinct = {
+        id: randomUUID(),
+        name: "Permanent Test",
+        type: "error_fix",
+        status: "permanent",
+        confidence: 0.96,
+        triggerPattern: "test",
+        action: "fix",
+        contextConditions: [],
+        stats: { timesSuggested: 0, timesApplied: 50, timesFailed: 2, successRate: 0.96 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      // Should not throw — 'permanent' must be in CHECK constraint
+      expect(() => storage.createInstinct(instinct)).not.toThrow();
+
+      const retrieved = storage.getInstinct(instinct.id);
+      expect(retrieved).not.toBeNull();
+      expect(retrieved?.status).toBe("permanent");
+    });
+
+    it("should create instinct_lifecycle_log table with correct schema", () => {
+      const entry = {
+        instinctId: "instinct_test_123" as import("../types.ts").InstinctId,
+        fromStatus: "active" as import("../types.ts").InstinctStatus,
+        toStatus: "permanent" as import("../types.ts").InstinctStatus,
+        reason: "High confidence after 30 observations",
+        confidenceAtTransition: 0.96,
+        bayesianAlpha: 28.5,
+        bayesianBeta: 2.5,
+        observationCount: 30,
+        timestamp: Date.now(),
+      };
+
+      // Should not throw — lifecycle_log table must exist
+      storage.writeLifecycleLog(entry);
+
+      const logs = storage.getLifecycleLogs({ instinctId: entry.instinctId });
+      expect(logs).toHaveLength(1);
+      expect(logs[0]?.fromStatus).toBe("active");
+      expect(logs[0]?.toStatus).toBe("permanent");
+      expect(logs[0]?.reason).toBe("High confidence after 30 observations");
+      expect(logs[0]?.confidenceAtTransition).toBe(0.96);
+      expect(logs[0]?.bayesianAlpha).toBe(28.5);
+      expect(logs[0]?.bayesianBeta).toBe(2.5);
+      expect(logs[0]?.observationCount).toBe(30);
+    });
+
+    it("should create instinct_weekly_counters table with correct schema", () => {
+      // Increment a counter
+      storage.incrementWeeklyCounter("promoted");
+      storage.incrementWeeklyCounter("promoted");
+      storage.incrementWeeklyCounter("deprecated");
+
+      const counters = storage.getWeeklyCounters(1);
+      expect(counters.length).toBeGreaterThan(0);
+
+      // Find this week's promoted count
+      const promoted = counters.find(c => c.eventType === "promoted");
+      expect(promoted).toBeDefined();
+      expect(promoted?.count).toBe(2);
+
+      const deprecated = counters.find(c => c.eventType === "deprecated");
+      expect(deprecated).toBeDefined();
+      expect(deprecated?.count).toBe(1);
+    });
+
+    it("should write and read lifecycle log entries", () => {
+      const entries = [
+        {
+          instinctId: "instinct_a" as import("../types.ts").InstinctId,
+          fromStatus: "proposed" as import("../types.ts").InstinctStatus,
+          toStatus: "active" as import("../types.ts").InstinctStatus,
+          reason: "Reached active threshold",
+          confidenceAtTransition: 0.72,
+          bayesianAlpha: 8.0,
+          bayesianBeta: 3.0,
+          observationCount: 10,
+          timestamp: Date.now() - 1000,
+        },
+        {
+          instinctId: "instinct_a" as import("../types.ts").InstinctId,
+          fromStatus: "active" as import("../types.ts").InstinctStatus,
+          toStatus: "permanent" as import("../types.ts").InstinctStatus,
+          reason: "Promoted after 25 observations",
+          confidenceAtTransition: 0.95,
+          bayesianAlpha: 24.0,
+          bayesianBeta: 2.0,
+          observationCount: 25,
+          timestamp: Date.now(),
+        },
+      ];
+
+      for (const entry of entries) {
+        storage.writeLifecycleLog(entry);
+      }
+
+      const logs = storage.getLifecycleLogs({ instinctId: "instinct_a" as import("../types.ts").InstinctId });
+      expect(logs).toHaveLength(2);
+    });
+
+    it("should increment and query weekly counters", () => {
+      storage.incrementWeeklyCounter("cooling_started");
+      storage.incrementWeeklyCounter("cooling_started");
+      storage.incrementWeeklyCounter("cooling_recovered");
+
+      const counters = storage.getWeeklyCounters(4);
+      const coolingStarted = counters.find(c => c.eventType === "cooling_started");
+      expect(coolingStarted?.count).toBe(2);
+    });
+
+    it("should preserve existing instincts during CHECK constraint migration", () => {
+      // Create instincts with all existing statuses
+      const statuses = ["proposed", "active", "deprecated", "evolved"] as const;
+      const instincts: Instinct[] = statuses.map(status => ({
+        id: `instinct_${status}_${randomUUID()}` as import("../types.ts").InstinctId,
+        name: `${status} instinct`,
+        type: "error_fix" as const,
+        status,
+        confidence: 0.5,
+        triggerPattern: "test",
+        action: "fix",
+        contextConditions: [],
+        stats: { timesSuggested: 0, timesApplied: 3, timesFailed: 1, successRate: 0.75 },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }));
+
+      for (const instinct of instincts) {
+        storage.createInstinct(instinct);
+      }
+
+      // Verify all instincts survive after re-initialization
+      storage.close();
+      storage = new LearningStorage(dbPath);
+      storage.initialize();
+
+      for (const instinct of instincts) {
+        const retrieved = storage.getInstinct(instinct.id);
+        expect(retrieved).not.toBeNull();
+        expect(retrieved?.status).toBe(instinct.status);
+        expect(retrieved?.name).toBe(instinct.name);
+      }
+    });
+  });
 });

@@ -13,14 +13,15 @@ import Database from "better-sqlite3";
 import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import type { 
-  Instinct, 
+import type {
+  Instinct,
   InstinctId,
-  Trajectory, 
+  InstinctStatus,
+  Trajectory,
   TrajectoryId,
-  TrajectoryStep, 
+  TrajectoryStep,
   TrajectoryOutcome,
-  ErrorPattern, 
+  ErrorPattern,
   ErrorPatternId,
   Solution,
   Observation,
@@ -41,8 +42,8 @@ const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS instincts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification')),
-  status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved')),
+  type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization')),
+  status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent')),
   confidence REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
   trigger_pattern TEXT NOT NULL,
   action TEXT NOT NULL,
@@ -51,7 +52,11 @@ CREATE TABLE IF NOT EXISTS instincts (
   embedding TEXT, -- JSON-serialized float array for semantic search
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  evolved_to TEXT
+  evolved_to TEXT,
+  bayesian_alpha REAL DEFAULT 1.0,
+  bayesian_beta REAL DEFAULT 1.0,
+  cooling_started_at INTEGER,
+  cooling_failures INTEGER DEFAULT 0
 );
 
 -- Trajectories table (experience replay)
@@ -232,10 +237,159 @@ export class LearningStorage {
    */
   private migrateSchema(): void {
     if (!this.db) return;
+
+    // Phase 3 migration: embedding column
     try {
       this.db.exec("ALTER TABLE instincts ADD COLUMN embedding TEXT");
     } catch {
       // Column already exists — expected after first migration
+    }
+
+    // Phase 6 migration: Bayesian columns
+    const bayesianColumns = [
+      "ALTER TABLE instincts ADD COLUMN bayesian_alpha REAL DEFAULT 1.0",
+      "ALTER TABLE instincts ADD COLUMN bayesian_beta REAL DEFAULT 1.0",
+      "ALTER TABLE instincts ADD COLUMN cooling_started_at INTEGER",
+      "ALTER TABLE instincts ADD COLUMN cooling_failures INTEGER DEFAULT 0",
+    ];
+    for (const sql of bayesianColumns) {
+      try {
+        this.db.exec(sql);
+      } catch {
+        // Column already exists — expected after first migration
+      }
+    }
+
+    // Phase 6: Migrate CHECK constraint to include 'permanent' and 'optimization'
+    this.migrateStatusConstraint();
+
+    // Phase 6: Derive alpha/beta from existing stats for migrated instincts
+    try {
+      this.db.exec(`
+        UPDATE instincts
+        SET bayesian_alpha = (COALESCE(json_extract(stats, '$.timesApplied'), 0) + 1),
+            bayesian_beta = (COALESCE(json_extract(stats, '$.timesFailed'), 0) + 1)
+        WHERE bayesian_alpha = 1.0 AND bayesian_beta = 1.0
+          AND (COALESCE(json_extract(stats, '$.timesApplied'), 0) > 0
+               OR COALESCE(json_extract(stats, '$.timesFailed'), 0) > 0)
+      `);
+    } catch {
+      // Stats extraction failed — leave defaults
+    }
+
+    // Phase 6: Create lifecycle log table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS instinct_lifecycle_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instinct_id TEXT NOT NULL,
+        from_status TEXT NOT NULL,
+        to_status TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        confidence_at_transition REAL NOT NULL,
+        bayesian_alpha REAL NOT NULL,
+        bayesian_beta REAL NOT NULL,
+        observation_count INTEGER NOT NULL,
+        timestamp INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_lifecycle_log_instinct ON instinct_lifecycle_log(instinct_id, timestamp DESC);
+    `);
+
+    // Phase 6: Create weekly counters table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS instinct_weekly_counters (
+        week_start INTEGER NOT NULL,
+        event_type TEXT NOT NULL CHECK(event_type IN ('promoted', 'deprecated', 'cooling_started', 'cooling_recovered')),
+        count INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (week_start, event_type)
+      ) WITHOUT ROWID;
+    `);
+  }
+
+  /**
+   * Migrate the CHECK constraint on instincts.status to include 'permanent'.
+   * Uses table recreation since SQLite cannot ALTER CHECK constraints.
+   * Idempotent — only runs if 'permanent' is not already valid.
+   */
+  private migrateStatusConstraint(): void {
+    if (!this.db) return;
+
+    // Check if 'permanent' is already accepted
+    try {
+      this.db.exec("INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, created_at, updated_at) VALUES ('__check_permanent__', '__test__', 'error_fix', 'permanent', 0.5, '__test__', '__test__', '[]', '{}', 0, 0)");
+      // If we get here, 'permanent' is already in CHECK — delete test row and return
+      this.db.exec("DELETE FROM instincts WHERE id = '__check_permanent__'");
+      return;
+    } catch {
+      // 'permanent' not valid — proceed with migration
+    }
+
+    // Temporarily disable FK checks for table recreation (standard SQLite practice)
+    // legacy_alter_table prevents SQLite from updating FK references in other tables
+    // when we rename instincts -> instincts_old (prevents stale FK references)
+    this.db.pragma("foreign_keys = OFF");
+    this.db.pragma("legacy_alter_table = ON");
+    this.db.exec("BEGIN TRANSACTION");
+    try {
+      this.db.exec("ALTER TABLE instincts RENAME TO instincts_old");
+
+      this.db.exec(`
+        CREATE TABLE instincts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization')),
+          status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent')),
+          confidence REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
+          trigger_pattern TEXT NOT NULL,
+          action TEXT NOT NULL,
+          context_conditions TEXT NOT NULL,
+          stats TEXT NOT NULL,
+          embedding TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          evolved_to TEXT,
+          bayesian_alpha REAL DEFAULT 1.0,
+          bayesian_beta REAL DEFAULT 1.0,
+          cooling_started_at INTEGER,
+          cooling_failures INTEGER DEFAULT 0
+        )
+      `);
+
+      // Copy data from old table
+      this.db.exec(`
+        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures)
+        SELECT id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to,
+               COALESCE(bayesian_alpha, 1.0), COALESCE(bayesian_beta, 1.0), cooling_started_at, COALESCE(cooling_failures, 0)
+        FROM instincts_old
+      `);
+
+      // Recreate indexes
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_instincts_status_confidence ON instincts(status, confidence DESC)");
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_instincts_type_status ON instincts(type, status)");
+
+      // Recreate junction table with foreign key reference
+      this.db.exec("DROP TABLE IF EXISTS trajectory_instincts");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS trajectory_instincts (
+          trajectory_id TEXT NOT NULL,
+          instinct_id TEXT NOT NULL,
+          PRIMARY KEY (trajectory_id, instinct_id),
+          FOREIGN KEY (trajectory_id) REFERENCES trajectories(id) ON DELETE CASCADE,
+          FOREIGN KEY (instinct_id) REFERENCES instincts(id) ON DELETE CASCADE
+        ) WITHOUT ROWID
+      `);
+
+      // Drop old table
+      this.db.exec("DROP TABLE instincts_old");
+
+      this.db.exec("COMMIT");
+      // Re-enable FK checks and legacy alter table
+      this.db.pragma("legacy_alter_table = OFF");
+      this.db.pragma("foreign_keys = ON");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      this.db.pragma("legacy_alter_table = OFF");
+      this.db.pragma("foreign_keys = ON");
+      throw err;
     }
   }
 
@@ -260,13 +414,14 @@ export class LearningStorage {
     const stmts = {
       insertInstinct: `
         INSERT INTO instincts
-        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       updateInstinct: `
         UPDATE instincts SET
           name = ?, type = ?, status = ?, confidence = ?, trigger_pattern = ?,
-          action = ?, context_conditions = ?, stats = ?, updated_at = ?, evolved_to = ?
+          action = ?, context_conditions = ?, stats = ?, updated_at = ?, evolved_to = ?,
+          bayesian_alpha = ?, bayesian_beta = ?, cooling_started_at = ?, cooling_failures = ?
         WHERE id = ?
       `,
       getInstinct: `SELECT * FROM instincts WHERE id = ?`,
@@ -425,7 +580,11 @@ export class LearningStorage {
       instinct.embedding ? JSON.stringify(instinct.embedding) : null,
       instinct.createdAt,
       instinct.updatedAt,
-      instinct.evolvedTo ?? null
+      instinct.evolvedTo ?? null,
+      instinct.bayesianAlpha ?? null,
+      instinct.bayesianBeta ?? null,
+      instinct.coolingStartedAt ?? null,
+      instinct.coolingFailures ?? 0
     );
   }
 
@@ -441,7 +600,7 @@ export class LearningStorage {
   updateInstinct(instinct: Instinct): void {
     this.ensureConnection();
     const stmt = this.getStatement('updateInstinct');
-    
+
     stmt.run(
       instinct.name,
       instinct.type,
@@ -453,6 +612,10 @@ export class LearningStorage {
       JSON.stringify(instinct.stats),
       Date.now() as TimestampMs,
       instinct.evolvedTo ?? null,
+      instinct.bayesianAlpha ?? null,
+      instinct.bayesianBeta ?? null,
+      instinct.coolingStartedAt ?? null,
+      instinct.coolingFailures ?? 0,
       instinct.id
     );
   }
@@ -713,6 +876,143 @@ export class LearningStorage {
     );
   }
 
+  // ─── Lifecycle Log Operations ────────────────────────────────────────────────
+
+  /** Write a lifecycle log entry */
+  writeLifecycleLog(entry: {
+    instinctId: InstinctId;
+    fromStatus: InstinctStatus;
+    toStatus: InstinctStatus;
+    reason: string;
+    confidenceAtTransition: number;
+    bayesianAlpha: number;
+    bayesianBeta: number;
+    observationCount: number;
+    timestamp: number;
+  }): void {
+    this.ensureConnection();
+    this.db!.prepare(`
+      INSERT INTO instinct_lifecycle_log
+      (instinct_id, from_status, to_status, reason, confidence_at_transition, bayesian_alpha, bayesian_beta, observation_count, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      entry.instinctId,
+      entry.fromStatus,
+      entry.toStatus,
+      entry.reason,
+      entry.confidenceAtTransition,
+      entry.bayesianAlpha,
+      entry.bayesianBeta,
+      entry.observationCount,
+      entry.timestamp
+    );
+  }
+
+  /** Get lifecycle log entries with optional filters */
+  getLifecycleLogs(options?: {
+    instinctId?: InstinctId;
+    since?: number;
+    limit?: number;
+  }): Array<{
+    instinctId: string;
+    fromStatus: string;
+    toStatus: string;
+    reason: string;
+    confidenceAtTransition: number;
+    bayesianAlpha: number;
+    bayesianBeta: number;
+    observationCount: number;
+    timestamp: number;
+  }> {
+    this.ensureConnection();
+
+    let sql = "SELECT * FROM instinct_lifecycle_log WHERE 1=1";
+    const params: (string | number)[] = [];
+
+    if (options?.instinctId) {
+      sql += " AND instinct_id = ?";
+      params.push(options.instinctId);
+    }
+    if (options?.since) {
+      sql += " AND timestamp >= ?";
+      params.push(options.since);
+    }
+    sql += " ORDER BY timestamp DESC";
+    if (options?.limit) {
+      sql += " LIMIT ?";
+      params.push(options.limit);
+    }
+
+    const rows = this.db!.prepare(sql).all(...params) as Array<{
+      instinct_id: string;
+      from_status: string;
+      to_status: string;
+      reason: string;
+      confidence_at_transition: number;
+      bayesian_alpha: number;
+      bayesian_beta: number;
+      observation_count: number;
+      timestamp: number;
+    }>;
+
+    return rows.map(row => ({
+      instinctId: row.instinct_id,
+      fromStatus: row.from_status,
+      toStatus: row.to_status,
+      reason: row.reason,
+      confidenceAtTransition: row.confidence_at_transition,
+      bayesianAlpha: row.bayesian_alpha,
+      bayesianBeta: row.bayesian_beta,
+      observationCount: row.observation_count,
+      timestamp: row.timestamp,
+    }));
+  }
+
+  // ─── Weekly Counter Operations ─────────────────────────────────────────────
+
+  /** Increment a weekly counter for the current week */
+  incrementWeeklyCounter(eventType: "promoted" | "deprecated" | "cooling_started" | "cooling_recovered"): void {
+    this.ensureConnection();
+    // Calculate week start (Monday 00:00 UTC)
+    const now = new Date();
+    const dayOfWeek = now.getUTCDay();
+    const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const weekStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysSinceMonday));
+    const weekStartMs = weekStart.getTime();
+
+    this.db!.prepare(`
+      INSERT INTO instinct_weekly_counters (week_start, event_type, count)
+      VALUES (?, ?, 1)
+      ON CONFLICT(week_start, event_type) DO UPDATE SET count = count + 1
+    `).run(weekStartMs, eventType);
+  }
+
+  /** Get weekly counters for the last N weeks */
+  getWeeklyCounters(weeksSince: number = 4): Array<{
+    weekStart: number;
+    eventType: string;
+    count: number;
+  }> {
+    this.ensureConnection();
+    const since = Date.now() - (weeksSince * 7 * 24 * 60 * 60 * 1000);
+
+    const rows = this.db!.prepare(`
+      SELECT * FROM instinct_weekly_counters
+      WHERE week_start >= ?
+      ORDER BY week_start DESC, event_type ASC
+    `).all(since) as Array<{
+      week_start: number;
+      event_type: string;
+      count: number;
+    }>;
+
+    return rows.map(row => ({
+      weekStart: row.week_start,
+      eventType: row.event_type,
+      count: row.count,
+    }));
+  }
+
   // ─── Statistics ──────────────────────────────────────────────────────────────
 
   /** Get learning statistics (single query for efficiency) */
@@ -771,6 +1071,10 @@ export class LearningStorage {
       sourceTrajectoryIds: [], // Default empty array for missing field
       tags: [], // Default empty array for missing field
       embedding: row.embedding ? JSON.parse(row.embedding) as number[] : undefined,
+      bayesianAlpha: row.bayesian_alpha ?? undefined,
+      bayesianBeta: row.bayesian_beta ?? undefined,
+      coolingStartedAt: row.cooling_started_at ? row.cooling_started_at as TimestampMs : undefined,
+      coolingFailures: row.cooling_failures ?? undefined,
     };
   }
 
@@ -836,6 +1140,10 @@ interface InstinctRow {
   created_at: number;
   updated_at: number;
   evolved_to: string | null;
+  bayesian_alpha: number | null;
+  bayesian_beta: number | null;
+  cooling_started_at: number | null;
+  cooling_failures: number | null;
 }
 
 interface TrajectoryRow {

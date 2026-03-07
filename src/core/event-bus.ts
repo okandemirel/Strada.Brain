@@ -13,6 +13,7 @@
  */
 
 import { EventEmitter } from "node:events";
+import type { InstinctLifecycleEvent } from "../learning/types.js";
 
 // =============================================================================
 // EVENT PAYLOAD TYPES
@@ -46,10 +47,9 @@ export interface ToolResultEvent {
 /** Map of event names to their payload types */
 export interface LearningEventMap {
   "tool:result": ToolResultEvent;
-  // Future event types:
-  // 'tool:correction': ToolCorrectionEvent;
-  // 'paor:transition': PaorTransitionEvent;
-  // 'task:complete': TaskCompleteEvent;
+  "instinct:cooling-started": InstinctLifecycleEvent;
+  "instinct:deprecated": InstinctLifecycleEvent;
+  "instinct:promoted": InstinctLifecycleEvent;
 }
 
 // =============================================================================

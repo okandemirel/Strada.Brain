@@ -57,9 +57,10 @@ export type InstinctType =
   | "optimization";  // Performance optimization patterns
 
 /** Lifecycle status of an instinct */
-export type InstinctStatus = 
+export type InstinctStatus =
   | "proposed"   // New instinct, needs more validation
   | "active"     // Validated and active
+  | "permanent"  // Proven instinct, confidence frozen
   | "deprecated" // No longer effective
   | "evolved";   // Evolved to a higher form (skill/command/agent)
 
@@ -71,7 +72,7 @@ export const CONFIDENCE_THRESHOLDS = {
   EVOLUTION: 0.9,   // Threshold for evolution consideration
   SIMILAR: 0.85,    // Similarity threshold for duplicate detection
   AUTO_EVOLVE: 0.95, // Auto-evolution threshold
-  MAX_INITIAL: 0.8, // Maximum initial confidence for new instincts
+  MAX_INITIAL: 0.5, // Maximum initial confidence for new instincts (Beta(1,1) prior)
 } as const;
 
 /** Context condition type */
@@ -152,6 +153,62 @@ export interface Instinct {
   readonly tags: string[];
   /** Optional pre-computed embedding vector for semantic search */
   readonly embedding?: number[];
+  /** Bayesian alpha parameter (successes + prior) */
+  readonly bayesianAlpha?: number;
+  /** Bayesian beta parameter (failures + prior) */
+  readonly bayesianBeta?: number;
+  /** When cooling period started (timestamp ms) */
+  readonly coolingStartedAt?: TimestampMs;
+  /** Number of consecutive failures during cooling */
+  readonly coolingFailures?: number;
+}
+
+// =============================================================================
+// BAYESIAN & LIFECYCLE TYPES
+// =============================================================================
+
+/** Lifecycle transition event for instincts */
+export interface InstinctLifecycleEvent {
+  /** The instinct that transitioned */
+  readonly instinct: Instinct;
+  /** Previous status */
+  readonly fromStatus: InstinctStatus;
+  /** New status */
+  readonly toStatus: InstinctStatus;
+  /** Reason for the transition */
+  readonly reason: string;
+  /** When the transition occurred */
+  readonly timestamp: number;
+}
+
+/** Bayesian confidence system configuration */
+export interface BayesianConfig {
+  /** Master toggle for Bayesian confidence system */
+  readonly enabled: boolean;
+  /** Threshold below which instinct is deprecated */
+  readonly deprecatedThreshold: number;
+  /** Threshold to become active */
+  readonly activeThreshold: number;
+  /** Threshold for evolution consideration */
+  readonly evolutionThreshold: number;
+  /** Auto-evolution threshold */
+  readonly autoEvolveThreshold: number;
+  /** Maximum initial confidence for new instincts */
+  readonly maxInitial: number;
+  /** Cooling period in days before deprecation */
+  readonly coolingPeriodDays: number;
+  /** Minimum total observations before cooling can start */
+  readonly coolingMinObservations: number;
+  /** Maximum consecutive failures during cooling before deprecation */
+  readonly coolingMaxFailures: number;
+  /** Minimum observations for permanent promotion */
+  readonly promotionMinObservations: number;
+  /** Verdict score for clean success (no retries) */
+  readonly verdictCleanSuccess: number;
+  /** Verdict score for retry success */
+  readonly verdictRetrySuccess: number;
+  /** Verdict score for hard failure */
+  readonly verdictFailure: number;
 }
 
 // =============================================================================

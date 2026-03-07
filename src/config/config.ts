@@ -13,6 +13,7 @@ import { z } from "zod";
 import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
+import type { BayesianConfig } from "../learning/types.js";
 
 dotenv.config();
 
@@ -83,7 +84,12 @@ export type EnvVarName =
   | "PLUGIN_DIRS"
   | "OPENAI_MODEL" | "DEEPSEEK_MODEL" | "QWEN_MODEL" | "KIMI_MODEL"
   | "MINIMAX_MODEL" | "GROQ_MODEL" | "MISTRAL_MODEL" | "TOGETHER_MODEL"
-  | "FIREWORKS_MODEL" | "GEMINI_MODEL" | "CLAUDE_MODEL" | "OLLAMA_MODEL";
+  | "FIREWORKS_MODEL" | "GEMINI_MODEL" | "CLAUDE_MODEL" | "OLLAMA_MODEL"
+  | "BAYESIAN_ENABLED" | "BAYESIAN_DEPRECATED_THRESHOLD" | "BAYESIAN_ACTIVE_THRESHOLD"
+  | "BAYESIAN_EVOLUTION_THRESHOLD" | "BAYESIAN_AUTO_EVOLVE_THRESHOLD" | "BAYESIAN_MAX_INITIAL"
+  | "BAYESIAN_COOLING_PERIOD_DAYS" | "BAYESIAN_COOLING_MIN_OBSERVATIONS"
+  | "BAYESIAN_COOLING_MAX_FAILURES" | "BAYESIAN_PROMOTION_MIN_OBSERVATIONS"
+  | "BAYESIAN_VERDICT_CLEAN_SUCCESS" | "BAYESIAN_VERDICT_RETRY_SUCCESS" | "BAYESIAN_VERDICT_FAILURE";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -271,6 +277,9 @@ export interface Config {
 
   // Plugins
   readonly pluginDirs: string[];
+
+  // Bayesian Confidence System
+  readonly bayesian: BayesianConfig;
 }
 
 /** Partial config for updates */
@@ -470,8 +479,52 @@ export const configSchema = z
 
     // Plugins
     pluginDirs: commaSeparatedList.transform((arr) => arr ?? []),
+
+    // Bayesian Confidence System
+    bayesianEnabled: boolFromString(true),
+    bayesianDeprecatedThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.1).max(0.5)).default("0.3"),
+    bayesianActiveThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(0.9)).default("0.7"),
+    bayesianEvolutionThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.8).max(0.99)).default("0.9"),
+    bayesianAutoEvolveThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.9).max(1.0)).default("0.95"),
+    bayesianMaxInitial: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.3).max(0.8)).default("0.5"),
+    bayesianCoolingPeriodDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(30)).default("7"),
+    bayesianCoolingMinObservations: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(3).max(50)).default("10"),
+    bayesianCoolingMaxFailures: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(10)).default("3"),
+    bayesianPromotionMinObservations: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10).max(100)).default("25"),
+    bayesianVerdictCleanSuccess: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(1.0)).default("0.9"),
+    bayesianVerdictRetrySuccess: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.3).max(0.8)).default("0.6"),
+    bayesianVerdictFailure: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.0).max(0.5)).default("0.2"),
   })
   .superRefine((data, ctx) => {
+    // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
+    if (data.bayesianDeprecatedThreshold >= data.bayesianActiveThreshold) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "BAYESIAN_DEPRECATED_THRESHOLD must be less than BAYESIAN_ACTIVE_THRESHOLD",
+        path: ["bayesianDeprecatedThreshold"],
+      });
+    }
+    if (data.bayesianActiveThreshold >= data.bayesianEvolutionThreshold) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "BAYESIAN_ACTIVE_THRESHOLD must be less than BAYESIAN_EVOLUTION_THRESHOLD",
+        path: ["bayesianActiveThreshold"],
+      });
+    }
+    if (data.bayesianEvolutionThreshold >= data.bayesianAutoEvolveThreshold) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "BAYESIAN_EVOLUTION_THRESHOLD must be less than BAYESIAN_AUTO_EVOLVE_THRESHOLD",
+        path: ["bayesianEvolutionThreshold"],
+      });
+    }
+    if (data.bayesianMaxInitial > data.bayesianActiveThreshold) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "BAYESIAN_MAX_INITIAL must not exceed BAYESIAN_ACTIVE_THRESHOLD",
+        path: ["bayesianMaxInitial"],
+      });
+    }
     // At least one AI provider key must be present, or ollama must be in the chain
     const hasAnyKey = [
       data.anthropicApiKey,
@@ -633,6 +686,22 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     logLevel: rawConfig.logLevel,
     logFile: rawConfig.logFile,
     pluginDirs: rawConfig.pluginDirs,
+
+    bayesian: {
+      enabled: rawConfig.bayesianEnabled,
+      deprecatedThreshold: rawConfig.bayesianDeprecatedThreshold,
+      activeThreshold: rawConfig.bayesianActiveThreshold,
+      evolutionThreshold: rawConfig.bayesianEvolutionThreshold,
+      autoEvolveThreshold: rawConfig.bayesianAutoEvolveThreshold,
+      maxInitial: rawConfig.bayesianMaxInitial,
+      coolingPeriodDays: rawConfig.bayesianCoolingPeriodDays,
+      coolingMinObservations: rawConfig.bayesianCoolingMinObservations,
+      coolingMaxFailures: rawConfig.bayesianCoolingMaxFailures,
+      promotionMinObservations: rawConfig.bayesianPromotionMinObservations,
+      verdictCleanSuccess: rawConfig.bayesianVerdictCleanSuccess,
+      verdictRetrySuccess: rawConfig.bayesianVerdictRetrySuccess,
+      verdictFailure: rawConfig.bayesianVerdictFailure,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -851,6 +920,19 @@ interface EnvVars {
   logFile: string | undefined;
   webChannelPort: string | undefined;
   pluginDirs: string | undefined;
+  bayesianEnabled: string | undefined;
+  bayesianDeprecatedThreshold: string | undefined;
+  bayesianActiveThreshold: string | undefined;
+  bayesianEvolutionThreshold: string | undefined;
+  bayesianAutoEvolveThreshold: string | undefined;
+  bayesianMaxInitial: string | undefined;
+  bayesianCoolingPeriodDays: string | undefined;
+  bayesianCoolingMinObservations: string | undefined;
+  bayesianCoolingMaxFailures: string | undefined;
+  bayesianPromotionMinObservations: string | undefined;
+  bayesianVerdictCleanSuccess: string | undefined;
+  bayesianVerdictRetrySuccess: string | undefined;
+  bayesianVerdictFailure: string | undefined;
 }
 
 /**
@@ -918,6 +1000,19 @@ function loadFromEnv(): EnvVars {
     logFile: process.env["LOG_FILE"],
     webChannelPort: process.env["WEB_CHANNEL_PORT"],
     pluginDirs: process.env["PLUGIN_DIRS"],
+    bayesianEnabled: process.env["BAYESIAN_ENABLED"],
+    bayesianDeprecatedThreshold: process.env["BAYESIAN_DEPRECATED_THRESHOLD"],
+    bayesianActiveThreshold: process.env["BAYESIAN_ACTIVE_THRESHOLD"],
+    bayesianEvolutionThreshold: process.env["BAYESIAN_EVOLUTION_THRESHOLD"],
+    bayesianAutoEvolveThreshold: process.env["BAYESIAN_AUTO_EVOLVE_THRESHOLD"],
+    bayesianMaxInitial: process.env["BAYESIAN_MAX_INITIAL"],
+    bayesianCoolingPeriodDays: process.env["BAYESIAN_COOLING_PERIOD_DAYS"],
+    bayesianCoolingMinObservations: process.env["BAYESIAN_COOLING_MIN_OBSERVATIONS"],
+    bayesianCoolingMaxFailures: process.env["BAYESIAN_COOLING_MAX_FAILURES"],
+    bayesianPromotionMinObservations: process.env["BAYESIAN_PROMOTION_MIN_OBSERVATIONS"],
+    bayesianVerdictCleanSuccess: process.env["BAYESIAN_VERDICT_CLEAN_SUCCESS"],
+    bayesianVerdictRetrySuccess: process.env["BAYESIAN_VERDICT_RETRY_SUCCESS"],
+    bayesianVerdictFailure: process.env["BAYESIAN_VERDICT_FAILURE"],
   };
 }
 
@@ -1132,5 +1227,6 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     },
     rag: { ...base.rag, ...partial.rag },
     rateLimit: { ...base.rateLimit, ...partial.rateLimit },
+    bayesian: { ...base.bayesian, ...partial.bayesian },
   } as Config;
 }

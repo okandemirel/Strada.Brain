@@ -51,6 +51,20 @@ describe("loadConfig", () => {
     delete process.env["MEMORY_TIER_EPHEMERAL_MAX"];
     delete process.env["MEMORY_TIER_PERSISTENT_MAX"];
     delete process.env["MEMORY_EPHEMERAL_TTL_HOURS"];
+    // Clear Bayesian env vars
+    delete process.env["BAYESIAN_ENABLED"];
+    delete process.env["BAYESIAN_DEPRECATED_THRESHOLD"];
+    delete process.env["BAYESIAN_ACTIVE_THRESHOLD"];
+    delete process.env["BAYESIAN_EVOLUTION_THRESHOLD"];
+    delete process.env["BAYESIAN_AUTO_EVOLVE_THRESHOLD"];
+    delete process.env["BAYESIAN_MAX_INITIAL"];
+    delete process.env["BAYESIAN_COOLING_PERIOD_DAYS"];
+    delete process.env["BAYESIAN_COOLING_MIN_OBSERVATIONS"];
+    delete process.env["BAYESIAN_COOLING_MAX_FAILURES"];
+    delete process.env["BAYESIAN_PROMOTION_MIN_OBSERVATIONS"];
+    delete process.env["BAYESIAN_VERDICT_CLEAN_SUCCESS"];
+    delete process.env["BAYESIAN_VERDICT_RETRY_SUCCESS"];
+    delete process.env["BAYESIAN_VERDICT_FAILURE"];
   });
 
   it("loads valid configuration", () => {
@@ -269,6 +283,61 @@ describe("loadConfig", () => {
           ephemeralTtlHours: 24,
         },
       });
+    });
+  });
+
+  // =========================================================================
+  // Bayesian Config Tests (EVAL-04, EVAL-07)
+  // =========================================================================
+
+  describe("bayesian config", () => {
+    it("validates with sensible defaults", () => {
+      setEnv();
+      const result = validateConfig({
+        anthropicApiKey: "sk-test-key-123",
+        unityProjectPath: "/test/project",
+      });
+      expect(result.kind).toBe("valid");
+      if (result.kind !== "valid") return;
+      const raw = result.value as Record<string, unknown>;
+      expect(raw.bayesian).toBeDefined();
+      const bayesian = raw.bayesian as Record<string, unknown>;
+      expect(bayesian.enabled).toBe(true);
+      expect(bayesian.deprecatedThreshold).toBe(0.3);
+      expect(bayesian.activeThreshold).toBe(0.7);
+      expect(bayesian.evolutionThreshold).toBe(0.9);
+      expect(bayesian.autoEvolveThreshold).toBe(0.95);
+      expect(bayesian.maxInitial).toBe(0.5);
+      expect(bayesian.coolingPeriodDays).toBe(7);
+      expect(bayesian.coolingMinObservations).toBe(10);
+      expect(bayesian.coolingMaxFailures).toBe(3);
+      expect(bayesian.promotionMinObservations).toBe(25);
+      expect(bayesian.verdictCleanSuccess).toBe(0.9);
+      expect(bayesian.verdictRetrySuccess).toBe(0.6);
+      expect(bayesian.verdictFailure).toBe(0.2);
+    });
+
+    it("rejects invalid threshold ordering (deprecated >= active)", () => {
+      setEnv({
+        BAYESIAN_DEPRECATED_THRESHOLD: "0.8",
+        BAYESIAN_ACTIVE_THRESHOLD: "0.5",
+      });
+      expect(() => loadConfig()).toThrow();
+    });
+
+    it("accepts custom threshold values within range", () => {
+      setEnv({
+        BAYESIAN_DEPRECATED_THRESHOLD: "0.2",
+        BAYESIAN_ACTIVE_THRESHOLD: "0.6",
+        BAYESIAN_EVOLUTION_THRESHOLD: "0.85",
+        BAYESIAN_AUTO_EVOLVE_THRESHOLD: "0.92",
+        BAYESIAN_MAX_INITIAL: "0.4",
+      });
+      const config = loadConfig();
+      const bayesian = config.bayesian as Record<string, unknown>;
+      expect(bayesian.deprecatedThreshold).toBe(0.2);
+      expect(bayesian.activeThreshold).toBe(0.6);
+      expect(bayesian.maxInitial).toBe(0.4);
     });
   });
 });
