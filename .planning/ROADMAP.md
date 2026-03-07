@@ -14,7 +14,7 @@
 - [x] **Phase 6: Bayesian Confidence System** - Wire Bayesian updates from real outcomes, auto-deprecate/promote patterns, enforce confidence threshold gap (completed 2026-03-07)
 - [ ] **Phase 7: Recursive Goal Decomposition** - Enable mid-execution sub-goals with DAG dependencies, cycle detection, and depth limits
 - [x] **Phase 8: Goal Progress & Execution** - Track progress at each decomposition level, execute sub-goals in topological order (completed 2026-03-07)
-- [ ] **Phase 9: Tool Chain Synthesis** - Detect recurring tool sequences, store as instincts, register and execute as composite tools
+- [x] **Phase 9: Tool Chain Synthesis** - Detect recurring tool sequences, store as instincts, register and execute as composite tools (completed 2026-03-07)
 
 ## Phase Details
 
@@ -140,7 +140,7 @@ Plans:
   3. Stored tool chains are registered as composite ITool implementations in the tool registry at runtime
   4. Composite tools execute their chain sequentially, passing each step's output as input to the next
   5. Tool chain validation confirms all referenced tools exist before registration (invalid chains are rejected)
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 09-01-PLAN.md — Chain types, Zod schemas, config extension, event bus extension, ToolRegistry registerOrUpdate/unregister, LearningStorage CHECK migration + bulk trajectory retrieval
 - [x] 09-02-PLAN.md — ChainDetector contiguous sequence mining + ChainSynthesizer LLM metadata + CompositeTool sequential execution
@@ -158,7 +158,7 @@ Plans:
 | 6. Bayesian Confidence System | 3/3 | Complete    | 2026-03-07 |
 | 7. Recursive Goal Decomposition | 3/3 | Complete | 2026-03-07 |
 | 8. Goal Progress & Execution | 3/3 | Complete | 2026-03-07 |
-| 9. Tool Chain Synthesis | 2/3 | In progress | - |
+| 9. Tool Chain Synthesis | 3/3 | Complete   | 2026-03-07 |
 
 ## Coverage Map
 
