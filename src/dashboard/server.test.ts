@@ -180,6 +180,58 @@ describe("DashboardServer", () => {
       );
     });
 
+    it("includes lifecycle field in response when learningStorage is registered", async () => {
+      const metrics = new MetricsCollector();
+      const mockMetricsStorage = createMockMetricsStorage();
+
+      // Mock LearningStorage with lifecycle data
+      const mockLearningStorage = {
+        getInstincts: vi.fn()
+          .mockReturnValueOnce([{ status: "permanent" }, { status: "permanent" }]) // permanent
+          .mockReturnValueOnce([{ status: "active" }, { status: "active" }, { status: "active" }]) // active
+          .mockReturnValueOnce([{ status: "proposed" }]) // proposed
+          .mockReturnValueOnce([{ status: "deprecated" }]) // deprecated
+          .mockReturnValueOnce([{ coolingStartedAt: Date.now() }]), // cooling (all instincts, filter for coolingStartedAt)
+        getWeeklyCounters: vi.fn().mockReturnValue([
+          { weekStart: Date.now(), eventType: "promoted", count: 2 },
+          { weekStart: Date.now(), eventType: "deprecated", count: 1 },
+          { weekStart: Date.now(), eventType: "cooling_started", count: 0 },
+          { weekStart: Date.now(), eventType: "cooling_recovered", count: 0 },
+        ]),
+      };
+
+      server = new DashboardServer(0, metrics, () => undefined);
+      server.registerServices({
+        metricsStorage: mockMetricsStorage,
+        learningStorage: mockLearningStorage as unknown as import("../learning/storage/learning-storage.js").LearningStorage,
+      });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/agent-metrics`);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.lifecycle).toBeDefined();
+      expect(data.lifecycle.statusCounts).toBeDefined();
+      expect(data.lifecycle.weeklyTrends).toBeDefined();
+    });
+
+    it("omits lifecycle field when learningStorage is not registered", async () => {
+      const metrics = new MetricsCollector();
+      const mockStorage = createMockMetricsStorage();
+      server = new DashboardServer(0, metrics, () => undefined);
+      server.registerServices({ metricsStorage: mockStorage });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/agent-metrics`);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.lifecycle).toBeUndefined();
+    });
+
     it("parses since duration shorthand into timestamp filter", async () => {
       const metrics = new MetricsCollector();
       const mockStorage = createMockMetricsStorage();

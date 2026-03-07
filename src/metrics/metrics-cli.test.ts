@@ -101,6 +101,80 @@ describe("metrics-cli", () => {
     });
   });
 
+  describe("formatMetricsTable with lifecycle", () => {
+    it("should include Instinct Library Health section with status counts", async () => {
+      const { formatMetricsTable } = await import("./metrics-cli.js");
+      const aggWithLifecycle: MetricsAggregation = {
+        ...MOCK_AGGREGATION,
+        lifecycle: {
+          statusCounts: { permanent: 5, active: 23, cooling: 3, proposed: 8, deprecated: 2 },
+          weeklyTrends: [{ weekStart: Date.now(), promoted: 2, deprecated: 1, coolingStarted: 0, coolingRecovered: 0 }],
+        },
+      };
+
+      const output = formatMetricsTable(aggWithLifecycle);
+
+      expect(output).toContain("Instinct Library Health");
+      expect(output).toContain("Permanent:");
+      expect(output).toContain("5");
+      expect(output).toContain("Active:");
+      expect(output).toContain("23");
+      expect(output).toContain("Cooling:");
+      expect(output).toContain("3");
+      expect(output).toContain("Proposed:");
+      expect(output).toContain("8");
+      expect(output).toContain("Deprecated:");
+      expect(output).toContain("2");
+    });
+
+    it("should include weekly trends line", async () => {
+      const { formatMetricsTable } = await import("./metrics-cli.js");
+      const aggWithLifecycle: MetricsAggregation = {
+        ...MOCK_AGGREGATION,
+        lifecycle: {
+          statusCounts: { permanent: 5, active: 23, cooling: 3, proposed: 8, deprecated: 2 },
+          weeklyTrends: [{ weekStart: Date.now(), promoted: 2, deprecated: 1, coolingStarted: 0, coolingRecovered: 0 }],
+        },
+      };
+
+      const output = formatMetricsTable(aggWithLifecycle);
+
+      expect(output).toContain("This week:");
+      expect(output).toContain("2 promoted");
+      expect(output).toContain("1 deprecated");
+    });
+
+    it("should not show lifecycle section when lifecycle data absent (backward compat)", async () => {
+      const { formatMetricsTable } = await import("./metrics-cli.js");
+      const output = formatMetricsTable(MOCK_AGGREGATION);
+
+      expect(output).not.toContain("Instinct Library Health");
+      expect(output).not.toContain("Permanent:");
+    });
+  });
+
+  describe("formatMetricsJson with lifecycle", () => {
+    it("should include lifecycle object with status counts and weekly trends", async () => {
+      const { formatMetricsJson } = await import("./metrics-cli.js");
+      const aggWithLifecycle: MetricsAggregation = {
+        ...MOCK_AGGREGATION,
+        lifecycle: {
+          statusCounts: { permanent: 5, active: 23, cooling: 3, proposed: 8, deprecated: 2 },
+          weeklyTrends: [{ weekStart: 1000, promoted: 2, deprecated: 1, coolingStarted: 0, coolingRecovered: 0 }],
+        },
+      };
+
+      const output = formatMetricsJson(aggWithLifecycle);
+      const parsed = JSON.parse(output);
+
+      expect(parsed.lifecycle).toBeDefined();
+      expect(parsed.lifecycle.statusCounts.permanent).toBe(5);
+      expect(parsed.lifecycle.statusCounts.active).toBe(23);
+      expect(parsed.lifecycle.weeklyTrends).toHaveLength(1);
+      expect(parsed.lifecycle.weeklyTrends[0].promoted).toBe(2);
+    });
+  });
+
   describe("formatMetricsJson", () => {
     it("should return valid pretty-printed JSON", async () => {
       const { formatMetricsJson } = await import("./metrics-cli.js");
