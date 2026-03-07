@@ -64,6 +64,8 @@ import { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import { GoalStorage, GoalDecomposer, detectInterruptedTrees } from "../goals/index.js";
 import type { GoalExecutorConfig } from "../goals/index.js";
 import type { GoalTree } from "../goals/types.js";
+import { ChainDetector, ChainSynthesizer, ChainManager } from "../learning/chains/index.js";
+import type { ToolChainConfig } from "../learning/chains/index.js";
 
 // Task system imports
 import {
@@ -179,6 +181,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     const goalsDbPath = join(config.memory.dbPath, "goals.db");
     goalStorage = new GoalStorage(goalsDbPath);
     goalStorage.initialize();
+    goalStorage.pruneOldTrees(); // Clean up completed/failed trees older than 7 days
     goalDecomposer = new GoalDecomposer(
       providerManager.getProvider(""),
       config.goalMaxDepth,
@@ -239,6 +242,41 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     interruptedGoalTrees,
   });
 
+  // Initialize tool chain synthesis (TOOL-01 through TOOL-05)
+  let chainManager: ChainManager | undefined;
+  if (config.toolChain.enabled && learningResult.storage) {
+    try {
+      const chainConfig: ToolChainConfig = config.toolChain;
+      const chainDetector = new ChainDetector(learningResult.storage, chainConfig);
+      const chainSynthesizer = new ChainSynthesizer(
+        learningResult.storage,
+        toolRegistry,
+        learningResult.eventBus as IEventBus<LearningEventMap>,
+        chainConfig,
+      );
+      // Use the same provider as orchestrator for LLM chain synthesis
+      chainSynthesizer.setProvider(providerManager.getProvider(""));
+
+      chainManager = new ChainManager(
+        chainDetector,
+        chainSynthesizer,
+        toolRegistry,
+        learningResult.storage,
+        orchestrator,
+        learningResult.eventBus as IEventBus<LearningEventMap>,
+        chainConfig,
+      );
+
+      // Start chain manager (loads existing chains, starts detection timer)
+      await chainManager.start();
+      logger.info("Tool chain synthesis initialized");
+    } catch (error) {
+      logger.warn("Tool chain synthesis initialization failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // Initialize task system
   const taskStorage = initializeTaskStorage(config, logger);
   const backgroundExecutor = new BackgroundExecutor({
@@ -293,6 +331,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       learningQueue: learningResult.learningQueue,
       metricsStorage,
       goalStorage,
+      chainManager,
     }),
   };
 }
@@ -888,6 +927,7 @@ interface ShutdownOptions {
   learningQueue?: LearningQueue;
   metricsStorage?: MetricsStorage;
   goalStorage?: GoalStorage;
+  chainManager?: ChainManager;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -899,6 +939,11 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
     logger.info("Shutting down Strata Brain...");
 
     clearInterval(cleanupInterval);
+
+    // Stop chain detection timer before draining events
+    if (options.chainManager) {
+      options.chainManager.stop();
+    }
 
     // Drain event bus and learning queue before stopping pipeline
     if (options.eventBus) {
