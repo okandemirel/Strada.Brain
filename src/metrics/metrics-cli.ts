@@ -11,6 +11,7 @@ import { loadConfigSafe } from "../config/config.js";
 import { MetricsStorage } from "./metrics-storage.js";
 import type { MetricsAggregation, MetricsFilter } from "./metrics-types.js";
 import { parseDurationToTimestamp } from "./parse-duration.js";
+import { LearningStorage } from "../learning/storage/learning-storage.js";
 
 // ─── Formatting ─────────────────────────────────────────────────────────────
 
@@ -100,6 +101,27 @@ export function runMetricsCommand(opts: {
     };
 
     const agg = storage.getAggregation(filter);
+
+    // Enrich with lifecycle data from LearningStorage
+    try {
+      const ls = new LearningStorage(dbPath);
+      ls.initialize();
+      try {
+        const active = ls.getInstincts({ status: "active" }).length;
+        const cooling = ls.getInstincts({ status: "cooling" }).length;
+        const deprecated = ls.getInstincts({ status: "deprecated" }).length;
+        const permanent = ls.getInstincts({ status: "permanent" }).length;
+        const weeklyTrends = ls.getWeeklyCounters(4);
+        agg.lifecycle = {
+          statusCounts: { active, cooling, deprecated, permanent },
+          weeklyTrends,
+        };
+      } finally {
+        ls.close();
+      }
+    } catch {
+      // LearningStorage not available — lifecycle section omitted
+    }
 
     if (opts.json) {
       console.log(formatMetricsJson(agg));

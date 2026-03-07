@@ -171,7 +171,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Register services for deep readiness checks and agent metrics endpoint
   if (dashboard) {
-    dashboard.registerServices({ memoryManager, channel, metricsStorage });
+    dashboard.registerServices({ memoryManager, channel, metricsStorage, learningStorage: learningResult.storage });
   }
 
   // Initialize orchestrator
