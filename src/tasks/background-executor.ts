@@ -16,7 +16,7 @@ import { TaskStatus } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
-import type { GoalNode } from "../goals/types.js";
+import type { GoalNode, GoalTree } from "../goals/types.js";
 import { GoalExecutor } from "../goals/goal-executor.js";
 import type {
   GoalExecutorConfig,
@@ -29,7 +29,7 @@ import { calculateProgress, renderProgressBar } from "../goals/goal-progress.js"
 import { renderGoalTree } from "../goals/goal-renderer.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
-import { supportsMessageEditing } from "../channels/channel-core.interface.js";
+import type { IChannelInteractive } from "../channels/channel-core.interface.js";
 import { supportsInteractivity } from "../channels/channel.interface.js";
 import { getLogger } from "../utils/logger.js";
 
@@ -39,20 +39,37 @@ interface QueueEntry {
   onProgress: (message: string) => void;
 }
 
+export interface BackgroundExecutorOptions {
+  orchestrator: Orchestrator;
+  concurrencyLimit?: number;
+  decomposer?: GoalDecomposer;
+  goalStorage?: GoalStorage;
+  goalExecutorConfig?: GoalExecutorConfig;
+  aiProvider?: IAIProvider;
+  channel?: IChannelAdapter;
+}
+
 export class BackgroundExecutor {
   private readonly queue: QueueEntry[] = [];
   private running = 0;
   private taskManager: TaskManager | null = null;
+  private readonly orchestrator: Orchestrator;
+  private readonly concurrencyLimit: number;
+  private readonly decomposer?: GoalDecomposer;
+  private readonly goalStorage?: GoalStorage;
+  private readonly goalExecutorConfig?: GoalExecutorConfig;
+  private readonly aiProvider?: IAIProvider;
+  private readonly channel?: IChannelAdapter;
 
-  constructor(
-    private readonly orchestrator: Orchestrator,
-    private readonly concurrencyLimit: number = 3,
-    private readonly decomposer?: GoalDecomposer,
-    private readonly goalStorage?: GoalStorage,
-    private readonly goalExecutorConfig?: GoalExecutorConfig,
-    private readonly aiProvider?: IAIProvider,
-    private readonly channel?: IChannelAdapter,
-  ) {}
+  constructor(opts: BackgroundExecutorOptions) {
+    this.orchestrator = opts.orchestrator;
+    this.concurrencyLimit = opts.concurrencyLimit ?? 3;
+    this.decomposer = opts.decomposer;
+    this.goalStorage = opts.goalStorage;
+    this.goalExecutorConfig = opts.goalExecutorConfig;
+    this.aiProvider = opts.aiProvider;
+    this.channel = opts.channel;
+  }
 
   /**
    * Set the task manager reference (avoids circular dependency).
@@ -179,33 +196,27 @@ export class BackgroundExecutor {
       });
     };
 
-    // Channel-adaptive progress tracking (per user decision: edit in-place where supported)
-    let progressMessageId: string | null = null;
+    // Status change callback: persist node status + send throttled progress update
+    let lastProgressUpdate = 0;
+    const PROGRESS_THROTTLE_MS = 500;
 
-    // Status change callback: persist + send channel-adaptive progress update
-    const onStatusChange = (updatedTree: import("../goals/types.js").GoalTree, _node: GoalNode): void => {
-      // Persist tree state (fire-and-forget)
+    const onStatusChange = (updatedTree: GoalTree, updatedNode: GoalNode): void => {
+      // Persist individual node status change (not full tree rewrite)
       if (this.goalStorage) {
         try {
-          this.goalStorage.upsertTree(updatedTree, "executing");
+          this.goalStorage.updateNodeStatus(updatedNode.id, updatedNode.status, updatedNode.error);
         } catch (e) {
-          logger.debug("Goal tree persistence failed", { error: e instanceof Error ? e.message : String(e) });
+          logger.debug("Goal node persistence failed", { error: e instanceof Error ? e.message : String(e) });
         }
       }
 
-      // Build progress content
-      const progress = calculateProgress(updatedTree);
-      const progressContent = renderProgressBar(progress.completed, progress.total) + "\n" + renderGoalTree(updatedTree);
-
-      // Channel-adaptive update: edit in-place where supported, append where not
-      if (this.channel && progressMessageId && supportsMessageEditing(this.channel)) {
-        // Edit existing progress message in-place (Telegram, Discord, Web)
-        this.channel.editMessage(task.chatId, progressMessageId, progressContent).catch((e: unknown) => {
-          logger.debug("Progress message edit failed, falling back to append", { error: e instanceof Error ? e.message : String(e) });
-          onProgress(progressContent);
-        });
-      } else {
-        // Append new message (CLI, or when no messageId yet)
+      // Throttled progress rendering to avoid message flood
+      const now = Date.now();
+      const isTerminal = updatedNode.status === "completed" || updatedNode.status === "failed" || updatedNode.status === "skipped";
+      if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS || isTerminal) {
+        lastProgressUpdate = now;
+        const progress = calculateProgress(updatedTree);
+        const progressContent = renderProgressBar(progress.completed, progress.total) + "\n" + renderGoalTree(updatedTree);
         onProgress(progressContent);
       }
     };
@@ -287,7 +298,7 @@ Provide a brief diagnosis (what likely went wrong) and actionable next steps.`,
             const details = failureLines.join("\n");
 
             // Present force-continue / abort options to user (per user decision)
-            const interactiveChannel = this.channel as unknown as import("../channels/channel-core.interface.js").IChannelInteractive;
+            const interactiveChannel = this.channel as unknown as IChannelInteractive;
             const choice = await interactiveChannel.requestConfirmation({
               chatId: task.chatId,
               question: `Failure budget exceeded (${report.failureCount}/${report.maxFailures}). How would you like to proceed?`,
@@ -305,23 +316,6 @@ Provide a brief diagnosis (what likely went wrong) and actionable next steps.`,
             }
           }
         : undefined;
-
-    // Send initial progress message and capture messageId for in-place editing
-    if (this.channel && supportsMessageEditing(this.channel)) {
-      try {
-        // Send an initial progress message to get a messageId for future edits
-        // Use startStreamingMessage pattern if available, otherwise sendMarkdown
-        const initialProgress = renderProgressBar(0, nodeCount) + "\n" + renderGoalTree(goalTree);
-        await this.channel.sendMarkdown(task.chatId, initialProgress);
-        // Note: sendMarkdown doesn't return messageId in current interface.
-        // For channels that support editing, the onProgress callback will
-        // be used initially, and progressMessageId can be captured from
-        // a wrapper that the channel provides. For now, fall back to append mode.
-        // TODO: Once sendMarkdown returns messageId, wire it here.
-      } catch {
-        // Non-critical: fall back to onProgress callback
-      }
-    }
 
     // Execute the tree with all callbacks
     const result = await executor.executeTree(goalTree, nodeExecutor, signal, {

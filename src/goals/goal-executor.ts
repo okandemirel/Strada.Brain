@@ -185,6 +185,17 @@ export class GoalExecutor {
       return false;
     };
 
+    // Helper: mark all pending nodes as skipped
+    const skipAllPending = (): void => {
+      for (const [id, node] of mutableNodes) {
+        if (id === tree.rootId) continue;
+        if (node.status === "pending") {
+          updateNode(id, { status: "skipped" as const });
+          skippedIds.add(id);
+        }
+      }
+    };
+
     // Helper: get the parent task string for criticality evaluation
     const getParentTask = (nodeId: GoalNodeId): string => {
       const node = mutableNodes.get(nodeId);
@@ -262,14 +273,7 @@ export class GoalExecutor {
     // Main execution loop: find ready nodes and execute in waves
     while (!aborted) {
       if (signal.aborted) {
-        // Mark all pending as skipped
-        for (const [id, node] of mutableNodes) {
-          if (id === tree.rootId) continue;
-          if (node.status === "pending") {
-            updateNode(id, { status: "skipped" as const });
-            skippedIds.add(id);
-          }
-        }
+        skipAllPending();
         aborted = true;
         break;
       }
@@ -306,15 +310,7 @@ export class GoalExecutor {
 
       // If no ready nodes but pending exist, they are dependency-blocked: mark as skipped
       if (readyNodes.length === 0) {
-        if (hasPending) {
-          for (const [id, node] of mutableNodes) {
-            if (id === tree.rootId) continue;
-            if (node.status === "pending") {
-              updateNode(id, { status: "skipped" as const });
-              skippedIds.add(id);
-            }
-          }
-        }
+        if (hasPending) skipAllPending();
         break;
       }
 
@@ -353,26 +349,12 @@ export class GoalExecutor {
             alwaysContinue = true;
           }
           if (!decision.continue) {
-            // Abort: mark all remaining pending as skipped
-            for (const [id, node] of mutableNodes) {
-              if (id === tree.rootId) continue;
-              if (node.status === "pending") {
-                updateNode(id, { status: "skipped" as const });
-                skippedIds.add(id);
-              }
-            }
+            skipAllPending();
             aborted = true;
             break;
           }
         } else {
-          // No callback: abort
-          for (const [id, node] of mutableNodes) {
-            if (id === tree.rootId) continue;
-            if (node.status === "pending") {
-              updateNode(id, { status: "skipped" as const });
-              skippedIds.add(id);
-            }
-          }
+          skipAllPending();
           aborted = true;
           break;
         }

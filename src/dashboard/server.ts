@@ -365,7 +365,6 @@ export class DashboardServer {
    */
   private serializeGoalTree(tree: import("../goals/types.js").GoalTree): Record<string, unknown> {
     const nodes: Array<Record<string, unknown>> = [];
-    let completedCount = 0;
     let rootStatus: string = "pending";
 
     for (const [, node] of tree.nodes) {
@@ -382,7 +381,6 @@ export class DashboardServer {
         completedAt: node.completedAt ?? null,
         retryCount: node.retryCount ?? 0,
       });
-      if (node.status === "completed") completedCount++;
       if (node.id === tree.rootId) rootStatus = node.status;
     }
 
@@ -394,7 +392,7 @@ export class DashboardServer {
       taskDescription: tree.taskDescription,
       status: rootStatus,
       nodeCount: nodes.length,
-      completedCount,
+      completedCount: progress.completed,
       createdAt: tree.createdAt,
       nodes,
       progress: {

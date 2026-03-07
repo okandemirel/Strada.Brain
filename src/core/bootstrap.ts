@@ -241,10 +241,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Initialize task system
   const taskStorage = initializeTaskStorage(config, logger);
-  const backgroundExecutor = new BackgroundExecutor(
-    orchestrator, 3, goalDecomposer, goalStorage, goalExecutorConfig,
-    providerManager.getProvider(""), channel,
-  );
+  const backgroundExecutor = new BackgroundExecutor({
+    orchestrator,
+    decomposer: goalDecomposer,
+    goalStorage,
+    goalExecutorConfig,
+    aiProvider: providerManager.getProvider(""),
+    channel,
+  });
   const taskManager = new TaskManager(taskStorage, backgroundExecutor);
   backgroundExecutor.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
