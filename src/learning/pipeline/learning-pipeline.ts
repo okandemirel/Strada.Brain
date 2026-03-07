@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer, getVerdictScore } from "../scoring/confidence-scorer.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
-import type { ToolResultEvent } from "../../core/event-bus.js";
+import type { ToolResultEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import {
@@ -33,6 +33,8 @@ import {
   type InstinctType,
   type ContextCondition,
   type ContextConditionId,
+  type BayesianConfig,
+  type InstinctLifecycleEvent,
   CONFIDENCE_THRESHOLDS,
   createInstinctId,
 } from "../types.js";
@@ -43,6 +45,23 @@ const VERDICT_SCORE = {
   PERFECT: 1.0,
 };
 
+/** Default Bayesian config used when none is provided */
+const DEFAULT_BAYESIAN_CONFIG: BayesianConfig = {
+  enabled: true,
+  deprecatedThreshold: 0.3,
+  activeThreshold: 0.7,
+  evolutionThreshold: 0.9,
+  autoEvolveThreshold: 0.95,
+  maxInitial: 0.5,
+  coolingPeriodDays: 7,
+  coolingMinObservations: 10,
+  coolingMaxFailures: 3,
+  promotionMinObservations: 25,
+  verdictCleanSuccess: 0.9,
+  verdictRetrySuccess: 0.6,
+  verdictFailure: 0.2,
+};
+
 // ─── LearningPipeline Class ──────────────────────────────────────────────────
 
 export class LearningPipeline {
@@ -50,15 +69,25 @@ export class LearningPipeline {
   private confidenceScorer: ConfidenceScorer;
   private patternMatcher: PatternMatcher;
   private config: LearningConfig;
+  private bayesianConfig: BayesianConfig;
+  private eventBus: IEventBus<LearningEventMap> | null = null;
   private embeddingQueue: EmbeddingQueue | null = null;
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
 
-  constructor(storage: LearningStorage, config: Partial<LearningConfig> = {}, embeddingProvider?: IEmbeddingProvider) {
+  constructor(
+    storage: LearningStorage,
+    config: Partial<LearningConfig> = {},
+    embeddingProvider?: IEmbeddingProvider,
+    bayesianConfig?: BayesianConfig,
+    eventBus?: IEventBus<LearningEventMap>,
+  ) {
     this.storage = storage;
     this.config = { ...DEFAULT_LEARNING_CONFIG, ...config };
+    this.bayesianConfig = bayesianConfig ?? DEFAULT_BAYESIAN_CONFIG;
     this.confidenceScorer = new ConfidenceScorer();
     this.patternMatcher = new PatternMatcher(storage);
+    this.eventBus = eventBus ?? null;
 
     if (embeddingProvider) {
       this.embeddingQueue = new EmbeddingQueue(embeddingProvider, storage);
@@ -189,6 +218,9 @@ export class LearningPipeline {
         const instinct = this.storage.getInstinct(instinctId);
         if (!instinct) continue;
 
+        // Skip permanent instincts -- confidence is frozen
+        if (instinct.status === "permanent") continue;
+
         // Only update confidence if instinct has a tool_name contextCondition matching event.toolName
         const isRelevant = instinct.contextConditions.length === 0 ||
           instinct.contextConditions.some(cc =>
@@ -196,7 +228,16 @@ export class LearningPipeline {
           );
         if (!isRelevant) continue;
 
-        const updated = this.confidenceScorer.updateConfidence(instinct, verdict.success, verdict.verdictScore);
+        // Increment coolingFailures for failures on cooling instincts
+        let instinctForUpdate = instinct;
+        if (!verdict.success && instinct.coolingStartedAt) {
+          instinctForUpdate = {
+            ...instinct,
+            coolingFailures: (instinct.coolingFailures ?? 0) + 1,
+          };
+        }
+
+        const updated = this.confidenceScorer.updateConfidence(instinctForUpdate, verdict.success, verdict.verdictScore);
         this.updateInstinctStatus(updated);
       }
     }
@@ -350,20 +391,109 @@ export class LearningPipeline {
   }
 
   updateInstinctStatus(instinct: Instinct): void {
-    let newStatus = instinct.status;
-    
-    if (instinct.confidence >= CONFIDENCE_THRESHOLDS.EVOLUTION) {
-      // Ready for evolution
-    } else if (instinct.confidence >= CONFIDENCE_THRESHOLDS.ACTIVE && instinct.status === "proposed") {
-      newStatus = "active";
-    } else if (instinct.confidence < CONFIDENCE_THRESHOLDS.DEPRECATED && instinct.status === "active") {
-      newStatus = "deprecated";
+    const config = this.bayesianConfig;
+
+    // Skip permanent instincts entirely -- they are frozen
+    if (instinct.status === "permanent") {
+      const updatedInstinct: Instinct = {
+        ...instinct,
+        updatedAt: Date.now() as TimestampMs,
+      };
+      this.storage.updateInstinct(updatedInstinct);
+      return;
     }
 
-    const updatedInstinct: Instinct = { 
-      ...instinct, 
+    const totalObs = instinct.stats.timesApplied + instinct.stats.timesFailed;
+    let updatedInstinct: Instinct = { ...instinct };
+
+    // ─── PROMOTION CHECK (before cooling -- high confidence trumps everything) ───
+    if (
+      instinct.confidence >= config.autoEvolveThreshold &&
+      totalObs >= config.promotionMinObservations &&
+      instinct.status === "active"
+    ) {
+      updatedInstinct = {
+        ...updatedInstinct,
+        status: "permanent",
+        updatedAt: Date.now() as TimestampMs,
+      };
+      this.storage.updateInstinct(updatedInstinct);
+
+      // Emit lifecycle event
+      this.emitLifecycleEvent("instinct:promoted", updatedInstinct, instinct.status, "permanent", `Promoted to permanent: confidence=${instinct.confidence.toFixed(3)}, observations=${totalObs}`);
+
+      // Persist lifecycle log
+      this.writeLifecycleLogSafe(instinct, "permanent", `Auto-promoted: confidence ${instinct.confidence.toFixed(3)} >= ${config.autoEvolveThreshold} with ${totalObs} observations`);
+
+      // Increment weekly counter
+      this.incrementWeeklyCounterSafe("promoted");
+      return;
+    }
+
+    // ─── COOLING CHECK ──────────────────────────────────────────────────────
+    if (instinct.confidence < config.deprecatedThreshold && totalObs >= config.coolingMinObservations) {
+      if (!instinct.coolingStartedAt) {
+        // START COOLING
+        updatedInstinct = {
+          ...updatedInstinct,
+          coolingStartedAt: Date.now() as TimestampMs,
+          coolingFailures: 0,
+          updatedAt: Date.now() as TimestampMs,
+        };
+        this.storage.updateInstinct(updatedInstinct);
+
+        this.emitLifecycleEvent("instinct:cooling-started", updatedInstinct, instinct.status, instinct.status, `Cooling started: confidence=${instinct.confidence.toFixed(3)}, observations=${totalObs}`);
+        this.writeLifecycleLogSafe(instinct, "cooling", `Cooling started: confidence ${instinct.confidence.toFixed(3)} < ${config.deprecatedThreshold} with ${totalObs} observations`);
+        this.incrementWeeklyCounterSafe("cooling_started");
+        return;
+      } else {
+        // ALREADY COOLING -- check deprecation triggers
+        const daysCooling = (Date.now() - instinct.coolingStartedAt) / (1000 * 60 * 60 * 24);
+        if (daysCooling >= config.coolingPeriodDays || (instinct.coolingFailures ?? 0) >= config.coolingMaxFailures) {
+          const reason = daysCooling >= config.coolingPeriodDays
+            ? `Cooling period expired: ${daysCooling.toFixed(1)} days >= ${config.coolingPeriodDays}`
+            : `Consecutive failures: ${instinct.coolingFailures} >= ${config.coolingMaxFailures}`;
+
+          updatedInstinct = {
+            ...updatedInstinct,
+            status: "deprecated",
+            coolingStartedAt: undefined,
+            coolingFailures: 0,
+            updatedAt: Date.now() as TimestampMs,
+          };
+          this.storage.updateInstinct(updatedInstinct);
+
+          this.emitLifecycleEvent("instinct:deprecated", updatedInstinct, instinct.status, "deprecated", reason);
+          this.writeLifecycleLogSafe(instinct, "deprecated", reason);
+          this.incrementWeeklyCounterSafe("deprecated");
+          return;
+        }
+      }
+    }
+
+    // ─── COOLING RECOVERY CHECK ─────────────────────────────────────────────
+    if (instinct.coolingStartedAt && instinct.confidence >= config.deprecatedThreshold) {
+      updatedInstinct = {
+        ...updatedInstinct,
+        coolingStartedAt: undefined,
+        coolingFailures: 0,
+        updatedAt: Date.now() as TimestampMs,
+      };
+      this.storage.updateInstinct(updatedInstinct);
+      this.incrementWeeklyCounterSafe("cooling_recovered");
+      return;
+    }
+
+    // ─── EXISTING: proposed -> active promotion ─────────────────────────────
+    let newStatus = instinct.status;
+    if (instinct.confidence >= config.activeThreshold && instinct.status === "proposed") {
+      newStatus = "active";
+    }
+
+    updatedInstinct = {
+      ...updatedInstinct,
       status: newStatus,
-      updatedAt: Date.now() as TimestampMs 
+      updatedAt: Date.now() as TimestampMs,
     };
     this.storage.updateInstinct(updatedInstinct);
   }
@@ -424,6 +554,60 @@ export class LearningPipeline {
     this.storage.updateInstinct(updatedInstinct);
 
     return proposal;
+  }
+
+  // ─── Lifecycle Helpers ───────────────────────────────────────────────────────
+
+  /** Emit a lifecycle event on the event bus (fire-and-forget) */
+  private emitLifecycleEvent(
+    eventName: "instinct:cooling-started" | "instinct:deprecated" | "instinct:promoted",
+    instinct: Instinct,
+    fromStatus: string,
+    toStatus: string,
+    reason: string,
+  ): void {
+    if (!this.eventBus) return;
+    try {
+      const event: InstinctLifecycleEvent = {
+        instinct,
+        fromStatus: fromStatus as Instinct["status"],
+        toStatus: toStatus as Instinct["status"],
+        reason,
+        timestamp: Date.now(),
+      };
+      this.eventBus.emit(eventName, event);
+    } catch {
+      // Fire-and-forget: log and continue
+    }
+  }
+
+  /** Write lifecycle log entry (fire-and-forget) */
+  private writeLifecycleLogSafe(instinct: Instinct, toStatus: string, reason: string): void {
+    try {
+      const totalObs = instinct.stats.timesApplied + instinct.stats.timesFailed;
+      this.storage.writeLifecycleLog({
+        instinctId: instinct.id,
+        fromStatus: instinct.status,
+        toStatus: toStatus as Instinct["status"],
+        reason,
+        confidenceAtTransition: instinct.confidence,
+        bayesianAlpha: instinct.bayesianAlpha ?? 1,
+        bayesianBeta: instinct.bayesianBeta ?? 1,
+        observationCount: totalObs,
+        timestamp: Date.now(),
+      });
+    } catch {
+      // Fire-and-forget: log and continue
+    }
+  }
+
+  /** Increment weekly counter (fire-and-forget) */
+  private incrementWeeklyCounterSafe(eventType: "promoted" | "deprecated" | "cooling_started" | "cooling_recovered"): void {
+    try {
+      this.storage.incrementWeeklyCounter(eventType);
+    } catch {
+      // Fire-and-forget: log and continue
+    }
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────────

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 05-02-PLAN.md"
-last_updated: "2026-03-07T10:17:30Z"
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-03-07T12:01:36Z"
 progress:
   total_phases: 9
   completed_phases: 5
-  total_plans: 13
+  total_plans: 15
   completed_plans: 13
-  percent: 100
+  percent: 87
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -24,8 +24,8 @@ progress:
 ## Current Position
 
 **Milestone:** Phase 6 -- Agent Evolution (Level 3 -> 4)
-**Phase:** 5 of 9 complete, Phase 6 next (Bayesian Confidence System)
-**Plan:** 2/2 plans done in Phase 5 (complete)
+**Phase:** 5 of 9 complete, Phase 6 in progress (Bayesian Confidence System)
+**Plan:** 1/3 plans done in Phase 6
 **Status:** Executing
 
 **Progress:**
@@ -34,7 +34,7 @@ Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [##########] 100%  Event-Driven Learning (complete)
 Phase 5  [##########] 100%  Metrics Instrumentation (complete)
-Phase 6  [..........] 0%    Bayesian Confidence System
+Phase 6  [###.......] 33%   Bayesian Confidence System (1/3 plans)
 Phase 7  [..........] 0%    Recursive Goal Decomposition
 Phase 8  [..........] 0%    Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
@@ -46,8 +46,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Metric | Value |
 |--------|-------|
 | Phases completed | 5/9 (Phase 5 complete) |
-| Plans completed | 13 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5) |
-| Requirements delivered | 18/32 (MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, LRN-01, LRN-02, LRN-03, LRN-04, LRN-05, LRN-06, LRN-07, EVAL-01, EVAL-02, EVAL-03) |
+| Plans completed | 14 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 1 Phase 6) |
+| Requirements delivered | 20/32 (MEM-01, MEM-02, MEM-03, MEM-04, MEM-05, MEM-06, MEM-07, LRN-01, LRN-02, LRN-03, LRN-04, LRN-05, LRN-06, LRN-07, EVAL-01, EVAL-02, EVAL-03, EVAL-04, EVAL-07) |
 | Tests added | 171/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
@@ -62,6 +62,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 04 P02 | 7min | 3 tasks | 10 files |
 | Phase 05 P01 | 8min | 2 tasks | 11 files |
 | Phase 05 P02 | 5min | 2 tasks | 6 files |
+| Phase 06 P01 | 11min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,11 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P5-02] metricsStorage passed via registerServices (same pattern as memoryManager/channel)
 - [P5-02] CLI creates standalone MetricsStorage for read-only queries (no bootstrap needed)
 - [P5-02] Duration shorthand duplicated in server.ts and metrics-cli.ts (2 callsites, not worth shared util)
+- [P6-01] Pure Beta posterior chosen over blended heuristic (EVAL-04: Bayesian Beta from real outcomes)
+- [P6-01] Beta(1,1) uninformative prior matching MAX_INITIAL=0.5 (EVAL-07)
+- [P6-01] Verdict weight formula is uniform: alpha += verdictScore, beta += (1-verdictScore) for all cases
+- [P6-01] PRAGMA legacy_alter_table=ON prevents FK corruption during CHECK constraint migration
+- [P6-01] SCHEMA_SQL includes 'permanent'/'optimization' upfront; migration only for existing DBs
 
 ### Research Flags
 - Phase 1: AgentDB interface drift is #1 risk (15+ casts in agentdb-memory.ts). Integration tests first.
@@ -140,14 +146,14 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-07T10:17:30Z
-**Stopped at:** Completed 05-02-PLAN.md
+**Last session:** 2026-03-07T12:01:36Z
+**Stopped at:** Completed 06-01-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
 - Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts, event-bus.ts
-- All 1912 tests pass (was 1902, +10 from Phase 5 Plan 02: 5 dashboard + 5 CLI)
+- All 1931 tests pass (was 1912, +19 from Phase 6 Plan 01: 7 storage + 3 config + 9 scorer)
 - Quality gates: /simplify + /security-review after each implementation phase
 - HnswWriteMutex serializes all HNSW writes in agentdb-memory.ts
 - AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
@@ -176,7 +182,15 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
   - /api/agent-metrics returns MetricsAggregation JSON with session/type/since filters
   - CLI 'strata-brain metrics' prints ASCII table or JSON (--json)
   - All 3 EVAL surfaces complete: internal methods, dashboard HTTP, CLI command
-- Phase 5 fully complete -- Phase 6 (Bayesian Confidence) is next
+- Phase 5 fully complete
+- Phase 6 Plan 01 complete: Bayesian foundation (types, config, schema, scorer)
+  - InstinctStatus: 'permanent' added (5th status)
+  - CONFIDENCE_THRESHOLDS.MAX_INITIAL: 0.8 -> 0.5, Beta(1,1) prior
+  - BayesianConfig: 13 env vars with threshold ordering validation
+  - LearningEventMap: 3 lifecycle events (instinct:cooling-started/deprecated/promoted)
+  - SQLite: bayesian_alpha/beta columns, CHECK constraint migration, lifecycle_log/weekly_counters tables
+  - ConfidenceScorer: pure Beta posterior (no blend, no temporal discount), permanent freeze
+  - EVAL-04 (pure Bayesian) and EVAL-07 (max initial 0.5) requirements complete
 
 ---
 *State initialized: 2026-03-06*

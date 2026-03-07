@@ -96,7 +96,11 @@ Plans:
   2. Patterns with confidence below 0.3 are automatically deprecated after a cooling period (not immediately)
   3. Patterns with confidence above 0.95 are automatically promoted to permanent status
   4. New patterns start at a maximum confidence of 0.5 (not 0.8), preventing premature promotion before sufficient observations
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 06-01-PLAN.md — Types, config, schema migration, event bus extensions, ConfidenceScorer pure Beta posterior refactor
+- [ ] 06-02-PLAN.md — Cooling/promotion state machine in pipeline, lifecycle events, appliedInstinctIds orchestrator wiring
+- [ ] 06-03-PLAN.md — InstinctRetriever filtering/boost, CLI lifecycle section, dashboard lifecycle stats
 
 ### Phase 7: Recursive Goal Decomposition
 **Goal**: The agent can break complex tasks into sub-goals mid-execution with explicit dependency ordering
@@ -139,7 +143,7 @@ Plans:
 | 3. Auto-Tiering & Embedding Infrastructure | 3/3 | Complete | 2026-03-06 |
 | 4. Event-Driven Learning | 2/2 | Complete | 2026-03-06 |
 | 5. Metrics Instrumentation | 2/2 | Complete | 2026-03-07 |
-| 6. Bayesian Confidence System | 0/? | Not started | - |
+| 6. Bayesian Confidence System | 0/3 | Planned | - |
 | 7. Recursive Goal Decomposition | 0/? | Not started | - |
 | 8. Goal Progress & Execution | 0/? | Not started | - |
 | 9. Tool Chain Synthesis | 0/? | Not started | - |
@@ -199,4 +203,4 @@ Phase 1 (AgentDB Activation)
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-07 (Phase 5 complete)*
+*Last updated: 2026-03-07 (Phase 6 planned)*

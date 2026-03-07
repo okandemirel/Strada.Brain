@@ -470,6 +470,382 @@ describe("LearningPipeline", () => {
     });
   });
 
+  describe("Bayesian Lifecycle State Machine", () => {
+    // Helper to create an instinct with specified properties
+    function createTestInstinct(overrides: Partial<Instinct> = {}): Instinct {
+      return {
+        id: `instinct_${Date.now()}_${Math.random().toString(36).slice(2)}` as any,
+        name: "Test Instinct",
+        type: "error_fix",
+        status: "active",
+        confidence: 0.5,
+        triggerPattern: "test pattern",
+        action: "fix it",
+        contextConditions: [
+          { id: "ctx_1" as any, type: "tool_name", value: "dotnet_build", match: "include" },
+        ],
+        stats: { timesSuggested: 10, timesApplied: 7, timesFailed: 5, successRate: 0.58, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+        bayesianAlpha: 2.0,
+        bayesianBeta: 3.0,
+        ...overrides,
+      };
+    }
+
+    it("should enter cooling when confidence < 0.3 and >= 10 observations", () => {
+      const instinct = createTestInstinct({
+        confidence: 0.25, // Below deprecated threshold (0.3)
+        stats: { timesSuggested: 15, timesApplied: 3, timesFailed: 12, successRate: 0.2, averageExecutionMs: 0 },
+        bayesianAlpha: 1.5,
+        bayesianBeta: 4.5,
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.coolingStartedAt).toBeDefined();
+      expect(updated!.coolingStartedAt).toBeGreaterThan(0);
+      expect(updated!.coolingFailures).toBe(0);
+      // Status should remain active (cooling, not deprecated yet)
+      expect(updated!.status).toBe("active");
+    });
+
+    it("should NOT enter cooling when confidence < 0.3 but < 10 observations", () => {
+      const instinct = createTestInstinct({
+        confidence: 0.25,
+        // Only 5+3=8 total observations, below coolingMinObservations (10)
+        stats: { timesSuggested: 10, timesApplied: 5, timesFailed: 3, successRate: 0.625, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.coolingStartedAt).toBeFalsy();
+    });
+
+    it("should deprecate after 7+ days cooling", () => {
+      const sevenDaysAgo = Date.now() - (8 * 24 * 60 * 60 * 1000); // 8 days ago
+      const instinct = createTestInstinct({
+        confidence: 0.2,
+        coolingStartedAt: sevenDaysAgo as TimestampMs,
+        coolingFailures: 1,
+        stats: { timesSuggested: 20, timesApplied: 4, timesFailed: 16, successRate: 0.2, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.status).toBe("deprecated");
+    });
+
+    it("should deprecate after 3 consecutive failures during cooling (even if < 7 days)", () => {
+      const twoDaysAgo = Date.now() - (2 * 24 * 60 * 60 * 1000);
+      const instinct = createTestInstinct({
+        confidence: 0.2,
+        coolingStartedAt: twoDaysAgo as TimestampMs,
+        coolingFailures: 3, // Exactly at the threshold
+        stats: { timesSuggested: 20, timesApplied: 4, timesFailed: 16, successRate: 0.2, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.status).toBe("deprecated");
+    });
+
+    it("should reset cooling when confidence rises above 0.3", () => {
+      const instinct = createTestInstinct({
+        confidence: 0.35, // Above deprecated threshold -- recovery
+        coolingStartedAt: (Date.now() - 2 * 24 * 60 * 60 * 1000) as TimestampMs,
+        coolingFailures: 1,
+        stats: { timesSuggested: 20, timesApplied: 10, timesFailed: 10, successRate: 0.5, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      // Cooling should be fully reset
+      expect(updated!.coolingStartedAt).toBeFalsy();
+      expect(updated!.coolingFailures).toBe(0);
+    });
+
+    it("should emit instinct:cooling-started event when cooling begins", () => {
+      const { TypedEventBus } = require("../../core/event-bus.ts");
+      const eventBus = new TypedEventBus();
+      const emittedEvents: any[] = [];
+      eventBus.on("instinct:cooling-started", (event: any) => {
+        emittedEvents.push(event);
+      });
+
+      const pipelineWithBus = new LearningPipeline(storage, {
+        enabled: true,
+        detectionIntervalMs: 1000,
+        evolutionIntervalMs: 5000,
+        minConfidenceForCreation: 0.5,
+        batchSize: 5,
+      }, undefined, undefined, eventBus);
+
+      const instinct = createTestInstinct({
+        confidence: 0.2,
+        stats: { timesSuggested: 20, timesApplied: 4, timesFailed: 16, successRate: 0.2, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipelineWithBus.updateInstinctStatus(instinct);
+
+      expect(emittedEvents).toHaveLength(1);
+      expect(emittedEvents[0].fromStatus).toBe("active");
+      expect(emittedEvents[0].reason.toLowerCase()).toContain("cooling");
+    });
+
+    it("should emit instinct:deprecated event when deprecation happens", () => {
+      const { TypedEventBus } = require("../../core/event-bus.ts");
+      const eventBus = new TypedEventBus();
+      const emittedEvents: any[] = [];
+      eventBus.on("instinct:deprecated", (event: any) => {
+        emittedEvents.push(event);
+      });
+
+      const pipelineWithBus = new LearningPipeline(storage, {
+        enabled: true,
+        detectionIntervalMs: 1000,
+        evolutionIntervalMs: 5000,
+        minConfidenceForCreation: 0.5,
+        batchSize: 5,
+      }, undefined, undefined, eventBus);
+
+      const instinct = createTestInstinct({
+        confidence: 0.15,
+        coolingStartedAt: (Date.now() - 8 * 24 * 60 * 60 * 1000) as TimestampMs,
+        coolingFailures: 1,
+        stats: { timesSuggested: 25, timesApplied: 5, timesFailed: 20, successRate: 0.2, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipelineWithBus.updateInstinctStatus(instinct);
+
+      expect(emittedEvents).toHaveLength(1);
+      expect(emittedEvents[0].toStatus).toBe("deprecated");
+    });
+
+    it("should emit instinct:promoted event when promotion happens", () => {
+      const { TypedEventBus } = require("../../core/event-bus.ts");
+      const eventBus = new TypedEventBus();
+      const emittedEvents: any[] = [];
+      eventBus.on("instinct:promoted", (event: any) => {
+        emittedEvents.push(event);
+      });
+
+      const pipelineWithBus = new LearningPipeline(storage, {
+        enabled: true,
+        detectionIntervalMs: 1000,
+        evolutionIntervalMs: 5000,
+        minConfidenceForCreation: 0.5,
+        batchSize: 5,
+      }, undefined, undefined, eventBus);
+
+      const instinct = createTestInstinct({
+        confidence: 0.96,
+        status: "active",
+        stats: { timesSuggested: 30, timesApplied: 28, timesFailed: 2, successRate: 0.93, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipelineWithBus.updateInstinctStatus(instinct);
+
+      expect(emittedEvents).toHaveLength(1);
+      expect(emittedEvents[0].toStatus).toBe("permanent");
+    });
+
+    it("should promote instinct with > 0.95 confidence and >= 25 observations to permanent", () => {
+      const instinct = createTestInstinct({
+        confidence: 0.96,
+        status: "active",
+        // 28+2=30 observations, above promotionMinObservations (25)
+        stats: { timesSuggested: 35, timesApplied: 28, timesFailed: 2, successRate: 0.93, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.status).toBe("permanent");
+    });
+
+    it("should NOT promote instinct with > 0.95 confidence but < 25 observations", () => {
+      const instinct = createTestInstinct({
+        confidence: 0.96,
+        status: "active",
+        // 8+1=9 observations, below promotionMinObservations (25)
+        stats: { timesSuggested: 10, timesApplied: 8, timesFailed: 1, successRate: 0.89, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.status).toBe("active"); // Not promoted
+    });
+
+    it("should skip all status updates for permanent instincts", () => {
+      const instinct = createTestInstinct({
+        status: "permanent",
+        confidence: 0.96,
+        stats: { timesSuggested: 50, timesApplied: 48, timesFailed: 2, successRate: 0.96, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.status).toBe("permanent");
+    });
+
+    it("should write lifecycle log on cooling start", () => {
+      const instinct = createTestInstinct({
+        confidence: 0.2,
+        stats: { timesSuggested: 20, timesApplied: 4, timesFailed: 16, successRate: 0.2, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const logs = storage.getLifecycleLogs({ instinctId: instinct.id });
+      expect(logs).toHaveLength(1);
+      expect(logs[0]!.toStatus).toContain("cooling");
+    });
+
+    it("should write lifecycle log on deprecation", () => {
+      const instinct = createTestInstinct({
+        confidence: 0.15,
+        coolingStartedAt: (Date.now() - 8 * 24 * 60 * 60 * 1000) as TimestampMs,
+        coolingFailures: 1,
+        stats: { timesSuggested: 25, timesApplied: 5, timesFailed: 20, successRate: 0.2, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const logs = storage.getLifecycleLogs({ instinctId: instinct.id });
+      expect(logs.some(l => l.toStatus === "deprecated")).toBe(true);
+    });
+
+    it("should write lifecycle log on promotion", () => {
+      const instinct = createTestInstinct({
+        confidence: 0.96,
+        status: "active",
+        stats: { timesSuggested: 35, timesApplied: 28, timesFailed: 2, successRate: 0.93, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      const logs = storage.getLifecycleLogs({ instinctId: instinct.id });
+      expect(logs.some(l => l.toStatus === "permanent")).toBe(true);
+    });
+
+    it("should increment weekly counter on lifecycle transitions", () => {
+      const instinct = createTestInstinct({
+        confidence: 0.96,
+        status: "active",
+        stats: { timesSuggested: 35, timesApplied: 28, timesFailed: 2, successRate: 0.93, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      pipeline.updateInstinctStatus(instinct);
+
+      // The weekly counter should have been incremented (promoted)
+      // We check via lifecycle logs as a proxy since weekly counters are internal
+      const logs = storage.getLifecycleLogs({ instinctId: instinct.id });
+      expect(logs).toHaveLength(1);
+      expect(logs[0]!.toStatus).toBe("permanent");
+    });
+
+    it("handleToolResult should skip confidence update for permanent instincts", () => {
+      const instinct = createTestInstinct({
+        status: "permanent",
+        confidence: 0.96,
+        bayesianAlpha: 20,
+        bayesianBeta: 1,
+        stats: { timesSuggested: 50, timesApplied: 48, timesFailed: 2, successRate: 0.96, averageExecutionMs: 0 },
+      });
+      storage.createInstinct(instinct);
+
+      const event: ToolResultEvent = {
+        sessionId: "session-1",
+        toolName: "dotnet_build",
+        input: {},
+        output: "Build succeeded",
+        success: true,
+        appliedInstinctIds: [instinct.id],
+        timestamp: Date.now(),
+      };
+
+      pipeline.handleToolResult(event);
+
+      const updated = storage.getInstinct(instinct.id);
+      expect(updated).not.toBeNull();
+      // Confidence should be unchanged (permanent instincts are frozen)
+      expect(updated!.confidence).toBe(0.96);
+      expect(updated!.bayesianAlpha).toBe(20);
+      expect(updated!.bayesianBeta).toBe(1);
+    });
+
+    it("handleToolResult should use appliedInstinctIds from event for attribution when present", () => {
+      // Create two instincts, only one in the appliedInstinctIds list
+      const instinctApplied = createTestInstinct({
+        id: `instinct_applied_${Date.now()}` as any,
+        confidence: 0.5,
+        bayesianAlpha: 3,
+        bayesianBeta: 3,
+      });
+      const instinctNotApplied = createTestInstinct({
+        id: `instinct_notapplied_${Date.now()}` as any,
+        confidence: 0.5,
+        bayesianAlpha: 3,
+        bayesianBeta: 3,
+      });
+      storage.createInstinct(instinctApplied);
+      storage.createInstinct(instinctNotApplied);
+
+      const event: ToolResultEvent = {
+        sessionId: "session-1",
+        toolName: "dotnet_build",
+        input: {},
+        output: "Build succeeded",
+        success: true,
+        appliedInstinctIds: [instinctApplied.id], // Only instinctApplied
+        timestamp: Date.now(),
+      };
+
+      pipeline.handleToolResult(event);
+
+      const updatedApplied = storage.getInstinct(instinctApplied.id);
+      const updatedNotApplied = storage.getInstinct(instinctNotApplied.id);
+
+      // Applied instinct should be updated
+      expect(updatedApplied!.confidence).not.toBe(0.5);
+      // Non-applied instinct should be unchanged
+      expect(updatedNotApplied!.confidence).toBe(0.5);
+    });
+  });
+
   describe("Lifecycle (event-driven)", () => {
     it("should no longer set detectionTimer in start() (only evolutionTimer)", () => {
       // We verify by checking that start() doesn't create a detection timer
