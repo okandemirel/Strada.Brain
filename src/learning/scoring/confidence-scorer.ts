@@ -42,10 +42,10 @@ const DEFAULT_WEIGHTS: ConfidenceWeights = {
 
 export class ConfidenceScorer {
   private weights: ConfidenceWeights;
-  
-  /** Prior belief for Bayesian updates (Beta distribution) */
-  private priorAlpha = 2; // Prior successes
-  private priorBeta = 2;  // Prior failures
+
+  /** Prior belief for Bayesian updates (uninformative Beta(1,1) prior matching MAX_INITIAL=0.5) */
+  private readonly priorAlpha = 1;
+  private readonly priorBeta = 1;
 
   constructor(weights: Partial<ConfidenceWeights> = {}) {
     this.weights = { ...DEFAULT_WEIGHTS, ...weights };
@@ -83,8 +83,12 @@ export class ConfidenceScorer {
   }
 
   /**
-   * Update confidence using Bayesian inference
-   * 
+   * Update confidence using pure Beta posterior inference.
+   *
+   * Pure Bayesian: confidence = alpha / (alpha + beta) (no blending, no temporal discount).
+   * Verdict weights (0.9/0.6/0.2) are applied as fractional evidence updates.
+   * Permanent instincts are frozen (returned unchanged).
+   *
    * @param instinct - The instinct to update
    * @param success - Whether the application was successful
    * @param verdictScore - Optional verdict score (0.0 - 1.0) for weighted updates
@@ -94,6 +98,11 @@ export class ConfidenceScorer {
     success: boolean,
     verdictScore?: number
   ): Instinct {
+    // Permanent instincts are frozen — no updates
+    if (instinct.status === "permanent") {
+      return instinct;
+    }
+
     // Calculate new statistics
     const newTimesSuggested = instinct.stats.timesSuggested + 1;
     const newTimesApplied = instinct.stats.timesApplied + (success ? 1 : 0);
@@ -101,14 +110,38 @@ export class ConfidenceScorer {
     const total = newTimesApplied + newTimesFailed;
     const newSuccessRate = total > 0 ? newTimesApplied / total : 0;
 
-    // Calculate Bayesian posterior
-    const posterior = this.bayesianUpdate(instinct, success, verdictScore);
-    
-    // Blend with current confidence for smooth transitions
-    const blendFactor = 0.3; // How much to weight new evidence
-    const newConfidence = (instinct.confidence * (1 - blendFactor)) + (posterior * blendFactor);
+    // Get current alpha/beta (use stored values, or derive from stats)
+    let currentAlpha = instinct.bayesianAlpha;
+    let currentBeta = instinct.bayesianBeta;
+    if (currentAlpha === undefined || currentBeta === undefined) {
+      // Migration case: derive from stats
+      currentAlpha = instinct.stats.timesApplied + this.priorAlpha;
+      currentBeta = instinct.stats.timesFailed + this.priorBeta;
+    }
 
-    // Return new instinct with updated stats (readonly properties require new object)
+    // Apply verdict-weighted evidence
+    // When verdictScore is provided, it acts as a fractional observation weight:
+    //   Success with verdictScore=0.9: alpha += 0.9, beta += 0.1 (strong positive)
+    //   Failure with verdictScore=0.2: alpha += 0.2, beta += 0.8 (strong negative)
+    // When verdictScore is not provided, use full unit evidence based on success/failure.
+    let newAlpha: number;
+    let newBeta: number;
+    if (verdictScore !== undefined) {
+      // Verdict score already encodes direction: high for success, low for failure
+      newAlpha = currentAlpha + verdictScore;
+      newBeta = currentBeta + (1 - verdictScore);
+    } else if (success) {
+      newAlpha = currentAlpha + 1;
+      newBeta = currentBeta;
+    } else {
+      newAlpha = currentAlpha;
+      newBeta = currentBeta + 1;
+    }
+
+    // Pure posterior mean — no blending, no temporal discount
+    const newConfidence = newAlpha / (newAlpha + newBeta);
+
+    // Return new instinct with updated stats and Bayesian parameters
     return {
       ...instinct,
       stats: {
@@ -119,6 +152,8 @@ export class ConfidenceScorer {
         successRate: newSuccessRate,
       },
       confidence: newConfidence,
+      bayesianAlpha: newAlpha,
+      bayesianBeta: newBeta,
       updatedAt: Date.now() as import("../../types/index.js").TimestampMs,
     };
   }
@@ -148,9 +183,9 @@ export class ConfidenceScorer {
     instinct: Instinct,
     confidenceLevel: number = 0.95
   ): [number, number] {
-    // Use Beta distribution parameters
-    const successes = instinct.stats.timesApplied + this.priorAlpha;
-    const failures = instinct.stats.timesFailed + this.priorBeta;
+    // Use stored alpha/beta if available, otherwise derive from stats
+    const successes = instinct.bayesianAlpha ?? (instinct.stats.timesApplied + this.priorAlpha);
+    const failures = instinct.bayesianBeta ?? (instinct.stats.timesFailed + this.priorBeta);
     const total = successes + failures;
 
     // Mean of Beta distribution
@@ -261,30 +296,6 @@ export class ConfidenceScorer {
     return Math.min(1, decay * 0.7 + recencyBoost);
   }
 
-  private bayesianUpdate(
-    instinct: Instinct,
-    success: boolean,
-    verdictScore?: number
-  ): number {
-    // Use Beta-Binomial model
-    const successes = instinct.stats.timesApplied + this.priorAlpha;
-    const failures = instinct.stats.timesFailed + this.priorBeta;
-
-    // Weight the update by verdict score if provided
-    let effectiveSuccess = success ? 1 : 0;
-    if (verdictScore !== undefined) {
-      effectiveSuccess = success ? verdictScore : (1 - verdictScore);
-    }
-
-    // Posterior mean of Beta distribution
-    const posteriorMean = (successes + effectiveSuccess) / (successes + failures + 1);
-
-    // Apply temporal discounting for older data
-    const totalObservations = successes + failures;
-    const discountFactor = Math.min(1, totalObservations / 50); // Full weight after 50 observations
-
-    return posteriorMean * discountFactor + 0.5 * (1 - discountFactor);
-  }
 }
 
 // ─── Verdict Scoring ────────────────────────────────────────────────────────────

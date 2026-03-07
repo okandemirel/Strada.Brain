@@ -114,6 +114,114 @@ describe("ConfidenceScorer", () => {
     });
   });
 
+  describe("pure Beta posterior", () => {
+    it("Beta(1,1) prior with clean success (verdictScore=0.9) produces correct alpha/beta/confidence", () => {
+      // Start: alpha=1, beta=1
+      // Success with verdictScore=0.9: alpha += 0.9 = 1.9, beta += 0.1 = 1.1
+      // confidence = 1.9 / (1.9 + 1.1) = 1.9 / 3.0 = 0.633...
+      const updated = scorer.updateConfidence(baseInstinct, true, 0.9);
+      expect(updated.bayesianAlpha).toBeCloseTo(1.9, 5);
+      expect(updated.bayesianBeta).toBeCloseTo(1.1, 5);
+      expect(updated.confidence).toBeCloseTo(1.9 / 3.0, 5);
+    });
+
+    it("Beta(1,1) prior with hard failure (verdictScore=0.2) produces correct alpha/beta/confidence", () => {
+      // Start: alpha=1, beta=1
+      // Failure with verdictScore=0.2: alpha += 0.2 = 1.2, beta += 0.8 = 1.8
+      // confidence = 1.2 / (1.2 + 1.8) = 1.2 / 3.0 = 0.4
+      const updated = scorer.updateConfidence(baseInstinct, false, 0.2);
+      expect(updated.bayesianAlpha).toBeCloseTo(1.2, 5);
+      expect(updated.bayesianBeta).toBeCloseTo(1.8, 5);
+      expect(updated.confidence).toBeCloseTo(1.2 / 3.0, 5);
+    });
+
+    it("Beta(10,2) with clean success produces correct alpha/beta/confidence", () => {
+      // Start: alpha=10, beta=2
+      // Success with verdictScore=0.9: alpha += 0.9 = 10.9, beta += 0.1 = 2.1
+      // confidence = 10.9 / (10.9 + 2.1) = 10.9 / 13.0 = 0.838...
+      const instinct: Instinct = {
+        ...baseInstinct,
+        bayesianAlpha: 10,
+        bayesianBeta: 2,
+        confidence: 10 / 12, // current Beta(10,2) mean
+      };
+      const updated = scorer.updateConfidence(instinct, true, 0.9);
+      expect(updated.bayesianAlpha).toBeCloseTo(10.9, 5);
+      expect(updated.bayesianBeta).toBeCloseTo(2.1, 5);
+      expect(updated.confidence).toBeCloseTo(10.9 / 13.0, 5);
+    });
+
+    it("returns instinct with updated bayesianAlpha and bayesianBeta fields", () => {
+      const updated = scorer.updateConfidence(baseInstinct, true);
+      expect(updated.bayesianAlpha).toBeDefined();
+      expect(updated.bayesianBeta).toBeDefined();
+      expect(typeof updated.bayesianAlpha).toBe("number");
+      expect(typeof updated.bayesianBeta).toBe("number");
+    });
+
+    it("permanent instinct returns unchanged (frozen confidence)", () => {
+      const permanent: Instinct = {
+        ...baseInstinct,
+        status: "permanent",
+        confidence: 0.96,
+        bayesianAlpha: 25,
+        bayesianBeta: 2,
+      };
+      const updated = scorer.updateConfidence(permanent, true, 0.9);
+      expect(updated).toBe(permanent); // same reference — no changes
+      expect(updated.confidence).toBe(0.96);
+      expect(updated.bayesianAlpha).toBe(25);
+      expect(updated.bayesianBeta).toBe(2);
+    });
+
+    it("derives alpha/beta from stats when not stored on instinct", () => {
+      // Instinct without bayesianAlpha/bayesianBeta — should derive from stats
+      // timesApplied=5, timesFailed=2 → alpha=5+1=6, beta=2+1=3
+      const instinct: Instinct = {
+        ...baseInstinct,
+        stats: { timesSuggested: 10, timesApplied: 5, timesFailed: 2, successRate: 0.71 },
+        // No bayesianAlpha/bayesianBeta set
+      };
+      const updated = scorer.updateConfidence(instinct, true, 0.9);
+      // Derived: alpha=6, beta=3, then success: alpha+=0.9=6.9, beta+=0.1=3.1
+      expect(updated.bayesianAlpha).toBeCloseTo(6.9, 5);
+      expect(updated.bayesianBeta).toBeCloseTo(3.1, 5);
+    });
+
+    it("no temporal discount applied (pure posterior only)", () => {
+      // With 2 observations: alpha=2, beta=1
+      const instinct: Instinct = {
+        ...baseInstinct,
+        bayesianAlpha: 2,
+        bayesianBeta: 1,
+        confidence: 2 / 3,
+        stats: { timesSuggested: 3, timesApplied: 1, timesFailed: 0, successRate: 1 },
+      };
+      const updated = scorer.updateConfidence(instinct, true, 0.9);
+      // alpha=2.9, beta=1.1, confidence = 2.9/(2.9+1.1) = 2.9/4.0 = 0.725
+      // If temporal discount were applied, result would differ
+      expect(updated.confidence).toBeCloseTo(2.9 / 4.0, 5);
+    });
+
+    it("no blend factor applied (posterior mean IS the confidence)", () => {
+      // With Beta(1,1) prior, success with default verdictScore=1.0:
+      // alpha=2, beta=1, confidence = 2/3 = 0.667
+      // If blending were applied (0.3 * posterior + 0.7 * old), result would differ
+      const updated = scorer.updateConfidence(baseInstinct, true, 1.0);
+      expect(updated.confidence).toBeCloseTo(2 / 3, 5);
+    });
+
+    it("initial Beta(1,1) produces mean 0.5 matching MAX_INITIAL", () => {
+      // New instinct with default priors should start at 0.5
+      // alpha=1, beta=1, mean = 1/(1+1) = 0.5
+      expect(baseInstinct.confidence).toBe(0.5);
+      // After first observation the confidence should be the posterior mean, not blended
+      const updated = scorer.updateConfidence(baseInstinct, true, 0.5);
+      // alpha=1.5, beta=1.5, confidence = 1.5/3.0 = 0.5
+      expect(updated.confidence).toBeCloseTo(0.5, 5);
+    });
+  });
+
   describe("getStatus", () => {
     it("should return 'deprecated' for low confidence", () => {
       expect(scorer.getStatus(0.2)).toBe("deprecated");
@@ -129,6 +237,12 @@ describe("ConfidenceScorer", () => {
 
     it("should return 'proposed' for mid confidence", () => {
       expect(scorer.getStatus(0.5)).toBe("proposed");
+    });
+
+    it("should handle 'permanent' status value in getStatus", () => {
+      // getStatus should not return "permanent" (promotion is managed by pipeline),
+      // but it should handle the value. When confidence >= EVOLUTION, return "evolved".
+      expect(scorer.getStatus(0.95)).toBe("evolved");
     });
   });
 
