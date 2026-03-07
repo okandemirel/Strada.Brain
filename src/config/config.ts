@@ -89,7 +89,8 @@ export type EnvVarName =
   | "BAYESIAN_EVOLUTION_THRESHOLD" | "BAYESIAN_AUTO_EVOLVE_THRESHOLD" | "BAYESIAN_MAX_INITIAL"
   | "BAYESIAN_COOLING_PERIOD_DAYS" | "BAYESIAN_COOLING_MIN_OBSERVATIONS"
   | "BAYESIAN_COOLING_MAX_FAILURES" | "BAYESIAN_PROMOTION_MIN_OBSERVATIONS"
-  | "BAYESIAN_VERDICT_CLEAN_SUCCESS" | "BAYESIAN_VERDICT_RETRY_SUCCESS" | "BAYESIAN_VERDICT_FAILURE";
+  | "BAYESIAN_VERDICT_CLEAN_SUCCESS" | "BAYESIAN_VERDICT_RETRY_SUCCESS" | "BAYESIAN_VERDICT_FAILURE"
+  | "GOAL_MAX_DEPTH";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -280,6 +281,9 @@ export interface Config {
 
   // Bayesian Confidence System
   readonly bayesian: BayesianConfig;
+
+  // Goal Decomposition
+  readonly goalMaxDepth: number;
 }
 
 /** Partial config for updates */
@@ -494,6 +498,9 @@ export const configSchema = z
     bayesianVerdictCleanSuccess: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(1.0)).default("0.9"),
     bayesianVerdictRetrySuccess: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.3).max(0.8)).default("0.6"),
     bayesianVerdictFailure: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.0).max(0.5)).default("0.2"),
+
+    // Goal Decomposition
+    goalMaxDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(5)).default("3"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -702,6 +709,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       verdictRetrySuccess: rawConfig.bayesianVerdictRetrySuccess,
       verdictFailure: rawConfig.bayesianVerdictFailure,
     },
+
+    goalMaxDepth: rawConfig.goalMaxDepth,
   };
 
   return { kind: "valid", value: config };
@@ -933,6 +942,7 @@ interface EnvVars {
   bayesianVerdictCleanSuccess: string | undefined;
   bayesianVerdictRetrySuccess: string | undefined;
   bayesianVerdictFailure: string | undefined;
+  goalMaxDepth: string | undefined;
 }
 
 /**
@@ -1013,6 +1023,7 @@ function loadFromEnv(): EnvVars {
     bayesianVerdictCleanSuccess: process.env["BAYESIAN_VERDICT_CLEAN_SUCCESS"],
     bayesianVerdictRetrySuccess: process.env["BAYESIAN_VERDICT_RETRY_SUCCESS"],
     bayesianVerdictFailure: process.env["BAYESIAN_VERDICT_FAILURE"],
+    goalMaxDepth: process.env["GOAL_MAX_DEPTH"],
   };
 }
 
@@ -1228,5 +1239,6 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     rag: { ...base.rag, ...partial.rag },
     rateLimit: { ...base.rateLimit, ...partial.rateLimit },
     bayesian: { ...base.bayesian, ...partial.bayesian },
+    goalMaxDepth: (partial as Partial<Config>).goalMaxDepth ?? base.goalMaxDepth,
   } as Config;
 }
