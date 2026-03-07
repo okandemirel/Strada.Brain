@@ -116,9 +116,10 @@ describe("InstinctRetriever", () => {
 
     expect(result.insights).toHaveLength(3);
     expect(result.matchedInstinctIds).toHaveLength(3);
+    // maxResults is maxInsights + 10 to account for post-filtering of deprecated instincts
     expect(mockMatcher.findSimilarInstincts).toHaveBeenCalledWith(
       "some task",
-      { minSimilarity: 0.4, maxResults: 3 },
+      { minSimilarity: 0.4, maxResults: 13 },
     );
   });
 

@@ -31,15 +31,32 @@ export class InstinctRetriever {
    */
   async getInsightsForTask(taskDescription: string, maxInsights: number = 5): Promise<InsightResult> {
     // Find similar instincts using the pattern matcher (single scan)
+    // Request extra results to account for post-filtering of deprecated instincts
     const matches = this.matcher.findSimilarInstincts(taskDescription, {
       minSimilarity: 0.4,
-      maxResults: maxInsights,
+      maxResults: maxInsights + 10,
     });
+
+    // Filter out deprecated instincts (EVAL-05: deprecated excluded from retrieval)
+    const filtered = matches.filter(m => !m.instinct || m.instinct.status !== "deprecated");
+
+    // Apply 1.2x ranking boost for permanent instincts (EVAL-06: permanent highlighted)
+    const boosted = filtered.map(m =>
+      m.instinct?.status === "permanent"
+        ? { ...m, confidence: m.confidence * 1.2 }
+        : m
+    );
+
+    // Re-sort by boosted confidence descending
+    boosted.sort((a, b) => b.confidence - a.confidence);
+
+    // Limit to maxInsights after filtering and boosting
+    const finalMatches = boosted.slice(0, maxInsights);
 
     const insights: string[] = [];
     const matchedInstinctIds: string[] = [];
 
-    for (const match of matches) {
+    for (const match of finalMatches) {
       if (match.instinct) {
         matchedInstinctIds.push(match.instinct.id);
       }
