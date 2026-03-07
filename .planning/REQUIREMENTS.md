@@ -42,8 +42,8 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 - [x] **EVAL-02**: Iterations per task (tool calls to completion) instrumented
 - [x] **EVAL-03**: Pattern reuse rate tracked (how often instincts influence planning)
 - [x] **EVAL-04**: Bayesian confidence updates from real outcomes replace LLM-only judgment
-- [ ] **EVAL-05**: Patterns with confidence < 0.3 auto-deprecated after cooling period
-- [ ] **EVAL-06**: Patterns with confidence > 0.95 auto-promoted to permanent status
+- [x] **EVAL-05**: Patterns with confidence < 0.3 auto-deprecated after cooling period
+- [x] **EVAL-06**: Patterns with confidence > 0.95 auto-promoted to permanent status
 - [x] **EVAL-07**: Confidence threshold gap enforced (new patterns start at max 0.5, not 0.8) to prevent premature promotion
 
 ### Tool Synthesis
@@ -112,8 +112,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | EVAL-02 | Phase 5: Metrics Instrumentation | Complete |
 | EVAL-03 | Phase 5: Metrics Instrumentation | Complete |
 | EVAL-04 | Phase 6: Bayesian Confidence System | Complete |
-| EVAL-05 | Phase 6: Bayesian Confidence System | Pending |
-| EVAL-06 | Phase 6: Bayesian Confidence System | Pending |
+| EVAL-05 | Phase 6: Bayesian Confidence System | Complete |
+| EVAL-06 | Phase 6: Bayesian Confidence System | Complete |
 | EVAL-07 | Phase 6: Bayesian Confidence System | Complete |
 | GOAL-01 | Phase 7: Recursive Goal Decomposition | Pending |
 | GOAL-02 | Phase 7: Recursive Goal Decomposition | Pending |
