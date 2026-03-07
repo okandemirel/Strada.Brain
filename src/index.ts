@@ -16,6 +16,7 @@ import { createContainer } from "./core/di-container.js";
 import { SetupWizard } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
 import { CHANNEL_DEFAULTS, type SupportedChannelType } from "./common/constants.js";
+import { runMetricsCommand } from "./metrics/metrics-cli.js";
 
 // Setup global error handlers
 setupGlobalErrorHandlers(
@@ -72,6 +73,16 @@ program
       args: ["start", "--channel", opts.channel],
     });
     await daemon.start();
+  });
+
+program
+  .command("metrics")
+  .description("Show agent performance metrics")
+  .option("--json", "Output as JSON")
+  .option("--session <id>", "Filter by session/chat ID")
+  .option("--since <duration>", "Time window (e.g., 1d, 7d, 1h)")
+  .action((opts: { json?: boolean; session?: string; since?: string }) => {
+    runMetricsCommand(opts);
   });
 
 // Run CLI
