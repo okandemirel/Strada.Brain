@@ -42,6 +42,40 @@ export interface ToolResultEvent {
 }
 
 // =============================================================================
+// CHAIN EVENT PAYLOAD TYPES
+// =============================================================================
+
+/** Emitted when a new tool chain pattern is detected and synthesized */
+export interface ChainDetectedEvent {
+  readonly chainName: string;
+  readonly toolSequence: string[];
+  readonly occurrences: number;
+  readonly successRate: number;
+  readonly instinctId: string;
+  readonly timestamp: number;
+}
+
+/** Emitted when a composite tool chain is executed */
+export interface ChainExecutionEvent {
+  readonly chainName: string;
+  readonly success: boolean;
+  readonly stepResults: Array<{
+    readonly tool: string;
+    readonly success: boolean;
+    readonly durationMs: number;
+  }>;
+  readonly totalDurationMs: number;
+  readonly timestamp: number;
+}
+
+/** Emitted when a chain is invalidated (low success rate, aged out, etc.) */
+export interface ChainInvalidatedEvent {
+  readonly chainName: string;
+  readonly reason: string;
+  readonly timestamp: number;
+}
+
+// =============================================================================
 // EVENT MAP
 // =============================================================================
 
@@ -52,6 +86,9 @@ export interface LearningEventMap {
   "instinct:deprecated": InstinctLifecycleEvent;
   "instinct:promoted": InstinctLifecycleEvent;
   "goal:status-changed": GoalLifecycleEvent;
+  "chain:detected": ChainDetectedEvent;
+  "chain:executed": ChainExecutionEvent;
+  "chain:invalidated": ChainInvalidatedEvent;
 }
 
 // =============================================================================

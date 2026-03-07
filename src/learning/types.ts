@@ -54,7 +54,8 @@ export type InstinctType =
   | "tool_usage"     // Optimized tool usage patterns
   | "correction"     // User correction patterns
   | "verification"   // Verification sequence patterns
-  | "optimization";  // Performance optimization patterns
+  | "optimization"   // Performance optimization patterns
+  | "tool_chain";    // Composite tool chain pattern
 
 /** Lifecycle status of an instinct */
 export type InstinctStatus =

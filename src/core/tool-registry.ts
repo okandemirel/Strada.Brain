@@ -27,6 +27,7 @@ export const ToolCategories = {
   DOTNET: "dotnet",
   MEMORY: "memory",
   BROWSER: "browser",
+  COMPOSITE: "composite",
 } as const;
 
 export type ToolCategory = (typeof ToolCategories)[keyof typeof ToolCategories];
@@ -178,6 +179,40 @@ export class ToolRegistry {
         this.categories.set(fullMetadata.category, new Set([tool.name]));
       }
     }
+  }
+
+  /**
+   * Register or update a tool. If the tool already exists, removes the old
+   * entry first (including category index) then re-registers.
+   * Used by chain synthesis to update composite tools without throwing.
+   */
+  registerOrUpdate(tool: ITool, metadata?: Partial<ToolMetadata>): void {
+    if (this.tools.has(tool.name)) {
+      this.unregister(tool.name);
+    }
+    this.register(tool, metadata);
+  }
+
+  /**
+   * Unregister a tool by name. Returns true if the tool was found and removed,
+   * false if it was not registered.
+   */
+  unregister(name: string): boolean {
+    if (!this.tools.has(name)) return false;
+
+    // Remove from category index
+    const meta = this.metadata.get(name);
+    if (meta) {
+      const categorySet = this.categories.get(meta.category);
+      if (categorySet) {
+        categorySet.delete(name);
+      }
+    }
+
+    // Remove from maps
+    this.tools.delete(name);
+    this.metadata.delete(name);
+    return true;
   }
 
   /**

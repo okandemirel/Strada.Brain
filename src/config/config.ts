@@ -14,6 +14,7 @@ import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
 import type { BayesianConfig } from "../learning/types.js";
+import type { ToolChainConfig } from "../learning/chains/index.js";
 
 dotenv.config();
 
@@ -294,6 +295,9 @@ export interface Config {
   readonly goalMaxFailures: number;
   readonly goalParallelExecution: boolean;
   readonly goalMaxParallel: number;
+
+  // Tool Chain Synthesis
+  readonly toolChain: ToolChainConfig;
 }
 
 /** Partial config for updates */
@@ -517,6 +521,17 @@ export const configSchema = z
     goalMaxFailures: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
     goalParallelExecution: boolFromString(true),
     goalMaxParallel: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
+
+    // Tool Chain Synthesis
+    toolChainEnabled: boolFromString(true),
+    toolChainMinOccurrences: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(20)).default("3"),
+    toolChainSuccessRateThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(1.0)).default("0.8"),
+    toolChainMaxActive: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("10"),
+    toolChainMaxAgeDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(365)).default("30"),
+    toolChainLlmBudgetPerCycle: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
+    toolChainMinChainLength: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(5)).default("2"),
+    toolChainMaxChainLength: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(3).max(10)).default("5"),
+    toolChainDetectionIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000).max(3600000)).default("300000"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -731,6 +746,18 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     goalMaxFailures: rawConfig.goalMaxFailures,
     goalParallelExecution: rawConfig.goalParallelExecution,
     goalMaxParallel: rawConfig.goalMaxParallel,
+
+    toolChain: {
+      enabled: rawConfig.toolChainEnabled,
+      minOccurrences: rawConfig.toolChainMinOccurrences,
+      successRateThreshold: rawConfig.toolChainSuccessRateThreshold,
+      maxActive: rawConfig.toolChainMaxActive,
+      maxAgeDays: rawConfig.toolChainMaxAgeDays,
+      llmBudgetPerCycle: rawConfig.toolChainLlmBudgetPerCycle,
+      minChainLength: rawConfig.toolChainMinChainLength,
+      maxChainLength: rawConfig.toolChainMaxChainLength,
+      detectionIntervalMs: rawConfig.toolChainDetectionIntervalMs,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -967,6 +994,15 @@ interface EnvVars {
   goalMaxFailures: string | undefined;
   goalParallelExecution: string | undefined;
   goalMaxParallel: string | undefined;
+  toolChainEnabled: string | undefined;
+  toolChainMinOccurrences: string | undefined;
+  toolChainSuccessRateThreshold: string | undefined;
+  toolChainMaxActive: string | undefined;
+  toolChainMaxAgeDays: string | undefined;
+  toolChainLlmBudgetPerCycle: string | undefined;
+  toolChainMinChainLength: string | undefined;
+  toolChainMaxChainLength: string | undefined;
+  toolChainDetectionIntervalMs: string | undefined;
 }
 
 /**
@@ -1052,6 +1088,15 @@ function loadFromEnv(): EnvVars {
     goalMaxFailures: process.env["GOAL_MAX_FAILURES"],
     goalParallelExecution: process.env["GOAL_PARALLEL_EXECUTION"],
     goalMaxParallel: process.env["GOAL_MAX_PARALLEL"],
+    toolChainEnabled: process.env["TOOL_CHAIN_ENABLED"],
+    toolChainMinOccurrences: process.env["TOOL_CHAIN_MIN_OCCURRENCES"],
+    toolChainSuccessRateThreshold: process.env["TOOL_CHAIN_SUCCESS_RATE_THRESHOLD"],
+    toolChainMaxActive: process.env["TOOL_CHAIN_MAX_ACTIVE"],
+    toolChainMaxAgeDays: process.env["TOOL_CHAIN_MAX_AGE_DAYS"],
+    toolChainLlmBudgetPerCycle: process.env["TOOL_CHAIN_LLM_BUDGET_PER_CYCLE"],
+    toolChainMinChainLength: process.env["TOOL_CHAIN_MIN_CHAIN_LENGTH"],
+    toolChainMaxChainLength: process.env["TOOL_CHAIN_MAX_CHAIN_LENGTH"],
+    toolChainDetectionIntervalMs: process.env["TOOL_CHAIN_DETECTION_INTERVAL_MS"],
   };
 }
 
@@ -1272,5 +1317,6 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     goalMaxFailures: (partial as Partial<Config>).goalMaxFailures ?? base.goalMaxFailures,
     goalParallelExecution: (partial as Partial<Config>).goalParallelExecution ?? base.goalParallelExecution,
     goalMaxParallel: (partial as Partial<Config>).goalMaxParallel ?? base.goalMaxParallel,
+    toolChain: { ...base.toolChain, ...(partial as Partial<Config>).toolChain },
   } as Config;
 }
