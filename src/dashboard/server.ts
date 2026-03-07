@@ -4,6 +4,8 @@ import { getLogger } from "../utils/logger.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { IMemoryManager, MemoryHealth } from "../memory/memory.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
+import type { MetricsStorage } from "../metrics/metrics-storage.js";
+import type { MetricsFilter, TaskType, CompletionStatus } from "../metrics/metrics-types.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -45,6 +47,7 @@ export class DashboardServer {
 
   private memoryManager?: IMemoryManager;
   private channel?: IChannelAdapter;
+  private metricsStorage?: MetricsStorage;
 
   constructor(
     port: number,
@@ -62,9 +65,16 @@ export class DashboardServer {
    * Register optional services for deep readiness checks.
    * Call this after constructing but before or after start().
    */
-  registerServices(services: { memoryManager?: IMemoryManager; channel?: IChannelAdapter }): void {
+  registerServices(services: {
+    memoryManager?: IMemoryManager;
+    channel?: IChannelAdapter;
+    metricsStorage?: MetricsStorage;
+  }): void {
     this.memoryManager = services.memoryManager;
     this.channel = services.channel;
+    if (services.metricsStorage) {
+      this.metricsStorage = services.metricsStorage;
+    }
   }
 
   async start(): Promise<void> {
@@ -82,6 +92,33 @@ export class DashboardServer {
       res.setHeader("X-Frame-Options", "DENY");
       res.setHeader("X-XSS-Protection", "1; mode=block");
       res.setHeader("Referrer-Policy", "no-referrer");
+
+      if (url.startsWith("/api/agent-metrics")) {
+        if (!this.metricsStorage) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Metrics not available" }));
+          return;
+        }
+        const params = new URL(url, "http://localhost").searchParams;
+        const filter: MetricsFilter = {};
+        if (params.get("session")) {
+          (filter as { sessionId: string }).sessionId = params.get("session")!;
+        }
+        if (params.get("type")) {
+          (filter as { taskType: TaskType }).taskType = params.get("type") as TaskType;
+        }
+        if (params.get("status")) {
+          (filter as { completionStatus: CompletionStatus }).completionStatus =
+            params.get("status") as CompletionStatus;
+        }
+        if (params.get("since")) {
+          (filter as { since: number }).since = parseDurationToTimestamp(params.get("since")!);
+        }
+        const aggregation = this.metricsStorage.getAggregation(filter);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(aggregation));
+        return;
+      }
 
       if (url === "/api/metrics") {
         const snapshot = this.metrics.getSnapshot(this.getMemoryStats());
@@ -209,6 +246,37 @@ export class DashboardServer {
       this.server!.close(() => resolve());
     });
   }
+}
+
+// --- Duration Parsing Helper ---
+
+/**
+ * Parse duration shorthand (e.g., "1d", "7d", "1h", "30m") into a Unix timestamp.
+ * Returns Date.now() minus the parsed duration. Returns 0 if unparseable.
+ */
+function parseDurationToTimestamp(duration: string): number {
+  const match = duration.match(/^(\d+)([dhm])$/);
+  if (!match) return 0;
+
+  const value = parseInt(match[1]!, 10);
+  const unit = match[2];
+
+  let ms: number;
+  switch (unit) {
+    case "d":
+      ms = value * 86400000;
+      break;
+    case "h":
+      ms = value * 3600000;
+      break;
+    case "m":
+      ms = value * 60000;
+      break;
+    default:
+      return 0;
+  }
+
+  return Date.now() - ms;
 }
 
 // --- Inline script content (used for both HTML embedding and CSP hash) ---

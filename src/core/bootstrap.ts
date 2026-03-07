@@ -146,11 +146,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   const dashboard = await initializeDashboard(config, metrics, memoryManager, logger);
 
-  // Register services for deep readiness checks
-  if (dashboard) {
-    dashboard.registerServices({ memoryManager, channel });
-  }
-
   // Initialize rate limiter
   const rateLimiter = initializeRateLimiter(config, logger);
 
@@ -172,6 +167,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     logger.warn("Metrics storage initialization failed", {
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+
+  // Register services for deep readiness checks and agent metrics endpoint
+  if (dashboard) {
+    dashboard.registerServices({ memoryManager, channel, metricsStorage });
   }
 
   // Initialize orchestrator
