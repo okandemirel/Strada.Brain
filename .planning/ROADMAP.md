@@ -11,7 +11,7 @@
 - [ ] **Phase 3: Auto-Tiering & Embedding Infrastructure** - Activate 3-tier memory promotion, standardize SQLite pragmas, wire embedding provider to learning pipeline
 - [ ] **Phase 4: Event-Driven Learning** - Replace 5-minute batch timer with event-driven triggers, add event bus, enable online confidence updates
 - [ ] **Phase 5: Metrics Instrumentation** - Instrument task completion rate, iterations per task, and pattern reuse rate
-- [ ] **Phase 6: Bayesian Confidence System** - Wire Bayesian updates from real outcomes, auto-deprecate/promote patterns, enforce confidence threshold gap
+- [x] **Phase 6: Bayesian Confidence System** - Wire Bayesian updates from real outcomes, auto-deprecate/promote patterns, enforce confidence threshold gap (completed 2026-03-07)
 - [ ] **Phase 7: Recursive Goal Decomposition** - Enable mid-execution sub-goals with DAG dependencies, cycle detection, and depth limits
 - [ ] **Phase 8: Goal Progress & Execution** - Track progress at each decomposition level, execute sub-goals in topological order
 - [ ] **Phase 9: Tool Chain Synthesis** - Detect recurring tool sequences, store as instincts, register and execute as composite tools
@@ -96,7 +96,7 @@ Plans:
   2. Patterns with confidence below 0.3 are automatically deprecated after a cooling period (not immediately)
   3. Patterns with confidence above 0.95 are automatically promoted to permanent status
   4. New patterns start at a maximum confidence of 0.5 (not 0.8), preventing premature promotion before sufficient observations
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [ ] 06-01-PLAN.md — Types, config, schema migration, event bus extensions, ConfidenceScorer pure Beta posterior refactor
 - [ ] 06-02-PLAN.md — Cooling/promotion state machine in pipeline, lifecycle events, appliedInstinctIds orchestrator wiring
@@ -143,7 +143,7 @@ Plans:
 | 3. Auto-Tiering & Embedding Infrastructure | 3/3 | Complete | 2026-03-06 |
 | 4. Event-Driven Learning | 2/2 | Complete | 2026-03-06 |
 | 5. Metrics Instrumentation | 2/2 | Complete | 2026-03-07 |
-| 6. Bayesian Confidence System | 2/3 | In Progress|  |
+| 6. Bayesian Confidence System | 3/3 | Complete   | 2026-03-07 |
 | 7. Recursive Goal Decomposition | 0/? | Not started | - |
 | 8. Goal Progress & Execution | 0/? | Not started | - |
 | 9. Tool Chain Synthesis | 0/? | Not started | - |

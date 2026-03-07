@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-03-07T12:14:55.279Z"
+stopped_at: Completed 06-03-PLAN.md
+last_updated: "2026-03-07T14:37:58Z"
 progress:
   total_phases: 9
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 15
-  completed_plans: 14
-  percent: 93
+  completed_plans: 15
+  percent: 100
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,36 +19,36 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 5 complete (metrics storage, orchestrator instrumentation, dashboard endpoint, CLI command). Phase 6 next (Bayesian Confidence).
+**Current Focus:** Phase 6 complete (Bayesian Confidence System). Phase 7 next (Recursive Goal Decomposition).
 
 ## Current Position
 
-**Milestone:** Phase 6 -- Agent Evolution (Level 3 -> 4)
-**Phase:** 5 of 9 complete, Phase 6 in progress (Bayesian Confidence System)
-**Plan:** 2/3 plans done in Phase 6
+**Milestone:** Phase 7 -- Agent Evolution (Level 3 -> 4)
+**Phase:** 6 of 9 complete, Phase 7 next (Recursive Goal Decomposition)
+**Plan:** 3/3 plans done in Phase 6
 **Status:** Executing
 
 **Progress:**
-[█████████░] 93%
+[██████████] 100%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [##########] 100%  Event-Driven Learning (complete)
 Phase 5  [##########] 100%  Metrics Instrumentation (complete)
-Phase 6  [######....] 67%   Bayesian Confidence System (2/3 plans)
+Phase 6  [##########] 100%  Bayesian Confidence System (complete)
 Phase 7  [..........] 0%    Recursive Goal Decomposition
 Phase 8  [..........] 0%    Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
 
-**Overall:** 5/9 phases complete
+**Overall:** 6/9 phases complete
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 5/9 (Phase 5 complete) |
-| Plans completed | 15 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 2 Phase 6) |
-| Requirements delivered | 22/32 (MEM-01..07, LRN-01..07, EVAL-01..07) |
-| Tests added | 171/50+ target |
+| Phases completed | 6/9 (Phase 6 complete) |
+| Plans completed | 16 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6) |
+| Requirements delivered | 25/32 (MEM-01..07, LRN-01..07, EVAL-01..07) |
+| Tests added | 183/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
@@ -64,6 +64,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 05 P02 | 5min | 2 tasks | 6 files |
 | Phase 06 P01 | 11min | 2 tasks | 8 files |
 | Phase 06 P02 | 6min | 2 tasks | 5 files |
+| Phase 06 P03 | 4min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -133,6 +134,10 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P6-02] Cooling state machine uses coolingStartedAt/coolingFailures sub-state on Instinct, status remains 'active' during cooling
 - [P6-02] appliedInstinctIds stored per-session in Map<chatId, string[]>, cleaned up in finally block
 - [P6-02] EventBus created before LearningPipeline in bootstrap for constructor injection
+- [P6-03] Post-filter deprecated instincts in InstinctRetriever (not storage-level) since PatternMatcher loads all instincts
+- [P6-03] Request maxInsights+10 from PatternMatcher to account for deprecated post-filter losses
+- [P6-03] Lifecycle data optional on MetricsAggregation (backward compatible)
+- [P6-03] LearningStorage added to DashboardServer.registerServices for lifecycle queries
 
 ### Research Flags
 - Phase 1: AgentDB interface drift is #1 risk (15+ casts in agentdb-memory.ts). Integration tests first.
@@ -150,14 +155,14 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-07T12:14:55.275Z
-**Stopped at:** Completed 06-02-PLAN.md
+**Last session:** 2026-03-07T14:37:58Z
+**Stopped at:** Completed 06-03-PLAN.md
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
 - Research summary in `.planning/research/SUMMARY.md`
 - Key files: bootstrap.ts, agentdb-memory.ts, migration.ts, learning-pipeline.ts, orchestrator.ts, event-bus.ts
-- All 1951 tests pass (was 1931, +20 from Phase 6 Plan 02: 15 pipeline + 3 orchestrator + 2 TDD adjustments)
+- All 1963 tests pass (was 1951, +12 from Phase 6 Plan 03: 6 retriever + 4 CLI + 2 dashboard)
 - Quality gates: /simplify + /security-review after each implementation phase
 - HnswWriteMutex serializes all HNSW writes in agentdb-memory.ts
 - AgentDBAdapter.retrieve() routes text queries through HNSW semantic search
@@ -203,7 +208,15 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
   - appliedInstinctIds wired end-to-end: orchestrator -> tool:result events -> pipeline
   - Bootstrap injects BayesianConfig + IEventBus into LearningPipeline constructor
   - EVAL-04 (attribution), EVAL-05 (auto-deprecation), EVAL-06 (auto-promotion) complete
+- Phase 6 Plan 03 complete: Lifecycle surface integration
+  - InstinctRetriever: deprecated instincts excluded, permanent get 1.2x boost
+  - CLI: Instinct Library Health section with status counts and weekly trends
+  - Dashboard: /api/agent-metrics includes lifecycle field with statusCounts and weeklyTrends
+  - MetricsAggregation extended with optional LifecycleData type
+  - LearningStorage injected into DashboardServer via registerServices
+  - EVAL-05, EVAL-06, EVAL-07 fully surfaced in all user-facing outputs
+- Phase 6 fully complete (all 3 plans, all EVAL requirements met)
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-07T12:14:55Z*
+*Last updated: 2026-03-07T14:37:58Z*
