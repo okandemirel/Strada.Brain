@@ -36,3 +36,25 @@ export { renderGoalTree, summarizeTree } from "./goal-renderer.js";
 // Progress
 export { calculateProgress, renderProgressBar } from "./goal-progress.js";
 export type { ProgressInfo } from "./goal-progress.js";
+
+// Executor
+export { GoalExecutor, Semaphore } from "./goal-executor.js";
+export type {
+  ExecutionResult,
+  GoalExecutorConfig,
+  NodeExecutor,
+  OnNodeStatusChange,
+  CriticalityEvaluator,
+  OnFailureBudgetExceeded,
+  FailureReport,
+  FailedNodeInfo,
+  FailureBudgetDecision,
+} from "./goal-executor.js";
+
+// Resume
+export {
+  detectInterruptedTrees,
+  prepareTreeForResume,
+  isTreeStale,
+  formatResumePrompt,
+} from "./goal-resume.js";
