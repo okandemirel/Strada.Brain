@@ -113,12 +113,12 @@ export class DashboardServer {
         const status = params.get("status");
         if (type && !VALID_TASK_TYPES.has(type)) {
           res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: `Invalid type: ${type}` }));
+          res.end(JSON.stringify({ error: "Invalid type parameter" }));
           return;
         }
         if (status && !VALID_COMPLETION_STATUSES.has(status)) {
           res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: `Invalid status: ${status}` }));
+          res.end(JSON.stringify({ error: "Invalid status parameter" }));
           return;
         }
         const filter: MetricsFilter = {

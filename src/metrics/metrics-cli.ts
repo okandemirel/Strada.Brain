@@ -100,7 +100,7 @@ export function runMetricsCommand(opts: {
       ...(opts.since && { since: parseDurationToTimestamp(opts.since) || undefined }),
     };
 
-    const agg = storage.getAggregation(filter);
+    let enriched: MetricsAggregation = storage.getAggregation(filter);
 
     // Enrich with lifecycle data from LearningStorage
     try {
@@ -112,10 +112,33 @@ export function runMetricsCommand(opts: {
         const cooling = allInstincts.filter(i => i.coolingStartedAt != null).length;
         const deprecated = allInstincts.filter(i => i.status === "deprecated").length;
         const permanent = allInstincts.filter(i => i.status === "permanent").length;
-        const weeklyTrends = ls.getWeeklyCounters(4);
-        agg.lifecycle = {
-          statusCounts: { active, cooling, deprecated, permanent },
-          weeklyTrends,
+        const proposed = allInstincts.filter(i => i.status === "proposed").length;
+        const rawCounters = ls.getWeeklyCounters(4);
+
+        // Aggregate raw counter rows into LifecycleWeeklyTrend entries
+        const byWeek = new Map<number, { promoted: number; deprecated: number; coolingStarted: number; coolingRecovered: number }>();
+        for (const c of rawCounters) {
+          if (!byWeek.has(c.weekStart)) {
+            byWeek.set(c.weekStart, { promoted: 0, deprecated: 0, coolingStarted: 0, coolingRecovered: 0 });
+          }
+          const entry = byWeek.get(c.weekStart)!;
+          switch (c.eventType) {
+            case "promoted": entry.promoted = c.count; break;
+            case "deprecated": entry.deprecated = c.count; break;
+            case "cooling_started": entry.coolingStarted = c.count; break;
+            case "cooling_recovered": entry.coolingRecovered = c.count; break;
+          }
+        }
+        const weeklyTrends = Array.from(byWeek.entries())
+          .map(([weekStart, data]) => ({ weekStart, ...data }))
+          .sort((a, b) => b.weekStart - a.weekStart);
+
+        enriched = {
+          ...enriched,
+          lifecycle: {
+            statusCounts: { permanent, active, cooling, proposed, deprecated },
+            weeklyTrends,
+          },
         };
       } finally {
         ls.close();
@@ -125,9 +148,9 @@ export function runMetricsCommand(opts: {
     }
 
     if (opts.json) {
-      console.log(formatMetricsJson(agg));
+      console.log(formatMetricsJson(enriched));
     } else {
-      console.log(formatMetricsTable(agg));
+      console.log(formatMetricsTable(enriched));
     }
   } catch (error) {
     console.error(
