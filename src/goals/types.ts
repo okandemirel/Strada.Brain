@@ -111,7 +111,7 @@ export function parseLLMOutput(text: string): LLMDecompositionOutput | null {
     // Strip markdown code fences (```json ... ``` or ``` ... ```)
     let cleaned = text.trim();
     const fenceMatch = cleaned.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
-    if (fenceMatch) {
+    if (fenceMatch?.[1]) {
       cleaned = fenceMatch[1].trim();
     }
 

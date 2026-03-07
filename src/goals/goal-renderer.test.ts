@@ -6,6 +6,10 @@
  * - summarizeTree: status count summary string
  * - Truncation for large trees
  * - Single-node and deep tree rendering
+ * - Progress bar header for trees with sub-goals
+ * - Duration display for completed nodes with timing
+ * - Braille spinner for executing nodes
+ * - Parallelizable node annotations
  */
 
 import { describe, it, expect } from "vitest";
@@ -24,6 +28,9 @@ function makeNode(
     depth?: number;
     status?: GoalStatus;
     dependsOn?: string[];
+    startedAt?: number;
+    completedAt?: number;
+    retryCount?: number;
   } = {},
 ): GoalNode {
   return {
@@ -35,6 +42,9 @@ function makeNode(
     dependsOn: (opts.dependsOn ?? []) as GoalNodeId[],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    startedAt: opts.startedAt,
+    completedAt: opts.completedAt,
+    retryCount: opts.retryCount,
   };
 }
 
@@ -127,7 +137,7 @@ describe("renderGoalTree", () => {
     expect(result).toContain("/api/goals");
   });
 
-  it("single-node tree (root only) renders without children", () => {
+  it("single-node tree (root only) renders without children or progress bar", () => {
     const tree = makeTree("root", [
       makeNode("root", "Simple task", { depth: 0, status: "pending" }),
     ]);
@@ -137,6 +147,9 @@ describe("renderGoalTree", () => {
     // Should not contain child indicators
     expect(result).not.toContain("+--");
     expect(result).not.toContain("\\--");
+    // Should not contain progress bar (no sub-goals)
+    expect(result).not.toContain("[#");
+    expect(result).not.toContain("[.");
   });
 
   it("deep tree (3 levels) renders with proper nesting", () => {
@@ -167,6 +180,117 @@ describe("renderGoalTree", () => {
     const grandchildPrefix = grandchildLine!.indexOf("[");
     const childPrefix = childLine!.indexOf("[");
     expect(grandchildPrefix).toBeGreaterThan(childPrefix);
+  });
+
+  // ==========================================================================
+  // NEW: Progress bar header tests
+  // ==========================================================================
+
+  it("includes progress bar for trees with sub-goals", () => {
+    const tree = makeTree("root", [
+      makeNode("root", "Build system", { depth: 0, status: "executing" }),
+      makeNode("s1", "Step one", { parentId: "root", depth: 1, status: "completed" }),
+      makeNode("s2", "Step two", { parentId: "root", depth: 1, status: "pending" }),
+      makeNode("s3", "Step three", { parentId: "root", depth: 1, status: "pending" }),
+    ]);
+
+    const result = renderGoalTree(tree);
+    // Should contain progress bar: 1/3 completed
+    expect(result).toContain("1/3");
+    expect(result).toContain("33%");
+  });
+
+  it("excludes progress bar for root-only trees", () => {
+    const tree = makeTree("root", [
+      makeNode("root", "Solo task", { depth: 0, status: "pending" }),
+    ]);
+
+    const result = renderGoalTree(tree);
+    // No progress bar for root-only
+    expect(result).not.toMatch(/\d+\/\d+ \(\d+%\)/);
+  });
+
+  // ==========================================================================
+  // NEW: Duration display tests
+  // ==========================================================================
+
+  it("shows duration for completed nodes with timing", () => {
+    const now = Date.now();
+    const tree = makeTree("root", [
+      makeNode("root", "Main task", { depth: 0, status: "executing" }),
+      makeNode("s1", "Fast step", {
+        parentId: "root",
+        depth: 1,
+        status: "completed",
+        startedAt: now - 500,
+        completedAt: now,
+      }),
+      makeNode("s2", "Slow step", {
+        parentId: "root",
+        depth: 1,
+        status: "completed",
+        startedAt: now - 2300,
+        completedAt: now,
+      }),
+    ]);
+
+    const result = renderGoalTree(tree);
+    // 500ms should display as "500ms"
+    expect(result).toContain("(500ms)");
+    // 2300ms should display as "2.3s"
+    expect(result).toContain("(2.3s)");
+  });
+
+  // ==========================================================================
+  // NEW: Braille spinner tests
+  // ==========================================================================
+
+  it("shows braille spinner for executing nodes", () => {
+    const tree = makeTree("root", [
+      makeNode("root", "Main task", { depth: 0, status: "executing" }),
+      makeNode("s1", "Running step", { parentId: "root", depth: 1, status: "executing" }),
+    ]);
+
+    const result = renderGoalTree(tree);
+    // Should contain one of the braille spinner characters after the executing node
+    const braillePattern = /\[~\] Running step [\u2800-\u28FF]/;
+    expect(result).toMatch(braillePattern);
+  });
+
+  // ==========================================================================
+  // NEW: Parallelizable annotation tests
+  // ==========================================================================
+
+  it("with annotateParallelizable=true marks parallelizable pending nodes", () => {
+    const tree = makeTree("root", [
+      makeNode("root", "Main task", { depth: 0, status: "executing" }),
+      makeNode("s1", "Independent A", { parentId: "root", depth: 1, status: "pending", dependsOn: ["root"] }),
+      makeNode("s2", "Independent B", { parentId: "root", depth: 1, status: "pending", dependsOn: ["root"] }),
+      makeNode("s3", "Depends on A", { parentId: "root", depth: 1, status: "pending", dependsOn: ["s1"] }),
+    ]);
+
+    const result = renderGoalTree(tree, { annotateParallelizable: true });
+    // s1 and s2 are both ready (depend only on root which is always in completedIds)
+    expect(result).toContain("Independent A (parallelizable)");
+    expect(result).toContain("Independent B (parallelizable)");
+    // s3 depends on s1 (not completed), so not parallelizable
+    expect(result).not.toContain("Depends on A (parallelizable)");
+  });
+
+  it("with annotateParallelizable=false (or omitted) does not annotate", () => {
+    const tree = makeTree("root", [
+      makeNode("root", "Main task", { depth: 0, status: "executing" }),
+      makeNode("s1", "Independent A", { parentId: "root", depth: 1, status: "pending", dependsOn: ["root"] }),
+      makeNode("s2", "Independent B", { parentId: "root", depth: 1, status: "pending", dependsOn: ["root"] }),
+    ]);
+
+    // Without options
+    const result1 = renderGoalTree(tree);
+    expect(result1).not.toContain("(parallelizable)");
+
+    // With annotateParallelizable=false
+    const result2 = renderGoalTree(tree, { annotateParallelizable: false });
+    expect(result2).not.toContain("(parallelizable)");
   });
 });
 
