@@ -70,6 +70,30 @@ export const VALID_TASK_TYPES = new Set<string>(["interactive", "background", "s
 /** Valid CompletionStatus values for input validation */
 export const VALID_COMPLETION_STATUSES = new Set<string>(["success", "failure", "partial"]);
 
+/** Instinct lifecycle status counts */
+export interface LifecycleStatusCounts {
+  readonly permanent: number;
+  readonly active: number;
+  readonly cooling: number;
+  readonly proposed: number;
+  readonly deprecated: number;
+}
+
+/** Weekly lifecycle trend entry */
+export interface LifecycleWeeklyTrend {
+  readonly weekStart: number;
+  readonly promoted: number;
+  readonly deprecated: number;
+  readonly coolingStarted: number;
+  readonly coolingRecovered: number;
+}
+
+/** Lifecycle data for instinct library health */
+export interface LifecycleData {
+  readonly statusCounts: LifecycleStatusCounts;
+  readonly weeklyTrends: LifecycleWeeklyTrend[];
+}
+
 /** Aggregated metrics computed from filtered rows */
 export interface MetricsAggregation {
   readonly totalTasks: number;
@@ -88,6 +112,8 @@ export interface MetricsAggregation {
   readonly instinctReusePct: number;
   /** Average instincts per informed task (tasks with instinct_count > 0) */
   readonly avgInstinctsPerInformedTask: number;
+  /** Optional lifecycle data for instinct library health (Phase 6) */
+  readonly lifecycle?: LifecycleData;
 }
 
 // ─── Instinct Leaderboard ────────────────────────────────────────────────────

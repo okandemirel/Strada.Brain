@@ -36,6 +36,30 @@ export function formatMetricsTable(agg: MetricsAggregation): string {
   lines.push(
     `${"Avg Instincts/Task:".padEnd(24)}${agg.avgInstinctsPerInformedTask.toFixed(1)}`,
   );
+
+  // Lifecycle section (Phase 6: Bayesian Confidence System)
+  if (agg.lifecycle) {
+    const { statusCounts, weeklyTrends } = agg.lifecycle;
+    lines.push("");
+    lines.push("Instinct Library Health");
+    lines.push("========================");
+    lines.push(
+      `${"Permanent:".padEnd(14)}${String(statusCounts.permanent).padEnd(6)}` +
+      `${"Active:".padEnd(10)}${String(statusCounts.active).padEnd(6)}` +
+      `${"Cooling:".padEnd(10)}${String(statusCounts.cooling).padEnd(6)}` +
+      `${"Proposed:".padEnd(11)}${String(statusCounts.proposed).padEnd(6)}` +
+      `${"Deprecated:".padEnd(13)}${statusCounts.deprecated}`
+    );
+
+    // Weekly trends (most recent week)
+    if (weeklyTrends.length > 0) {
+      const latest = weeklyTrends[0]!;
+      lines.push(
+        `This week: ${latest.promoted} promoted, ${latest.deprecated} deprecated, ${latest.coolingStarted} cooling started`
+      );
+    }
+  }
+
   return lines.join("\n");
 }
 

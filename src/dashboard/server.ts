@@ -5,10 +5,11 @@ import type { MetricsCollector } from "./metrics.js";
 import type { IMemoryManager, MemoryHealth } from "../memory/memory.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { MetricsStorage } from "../metrics/metrics-storage.js";
-import type { MetricsFilter } from "../metrics/metrics-types.js";
+import type { MetricsFilter, LifecycleData } from "../metrics/metrics-types.js";
 import { VALID_TASK_TYPES, VALID_COMPLETION_STATUSES } from "../metrics/metrics-types.js";
 import type { TaskType, CompletionStatus } from "../metrics/metrics-types.js";
 import { parseDurationToTimestamp } from "../metrics/parse-duration.js";
+import type { LearningStorage } from "../learning/storage/learning-storage.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -51,6 +52,7 @@ export class DashboardServer {
   private memoryManager?: IMemoryManager;
   private channel?: IChannelAdapter;
   private metricsStorage?: MetricsStorage;
+  private learningStorage?: LearningStorage;
 
   constructor(
     port: number,
@@ -72,11 +74,15 @@ export class DashboardServer {
     memoryManager?: IMemoryManager;
     channel?: IChannelAdapter;
     metricsStorage?: MetricsStorage;
+    learningStorage?: LearningStorage;
   }): void {
     this.memoryManager = services.memoryManager;
     this.channel = services.channel;
     if (services.metricsStorage) {
       this.metricsStorage = services.metricsStorage;
+    }
+    if (services.learningStorage) {
+      this.learningStorage = services.learningStorage;
     }
   }
 
@@ -122,8 +128,22 @@ export class DashboardServer {
           ...(params.get("since") && { since: parseDurationToTimestamp(params.get("since")!) || undefined }),
         };
         const aggregation = this.metricsStorage.getAggregation(filter);
+
+        // Enrich with lifecycle data if LearningStorage is available
+        let responseData: Record<string, unknown> = { ...aggregation };
+        if (this.learningStorage) {
+          try {
+            const lifecycle = this.getLifecycleData();
+            if (lifecycle) {
+              responseData = { ...aggregation, lifecycle };
+            }
+          } catch {
+            // Lifecycle data is non-critical; omit on error
+          }
+        }
+
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(aggregation));
+        res.end(JSON.stringify(responseData));
         return;
       }
 
@@ -245,6 +265,60 @@ export class DashboardServer {
     } catch {
       return { status: "error", detail: "Failed to query channel health" };
     }
+  }
+
+  /**
+   * Query lifecycle data from LearningStorage for instinct library health.
+   */
+  private getLifecycleData(): LifecycleData | null {
+    if (!this.learningStorage) return null;
+
+    try {
+      const permanent = this.learningStorage.getInstincts({ status: "permanent" }).length;
+      const active = this.learningStorage.getInstincts({ status: "active" }).length;
+      const proposed = this.learningStorage.getInstincts({ status: "proposed" }).length;
+      const deprecated = this.learningStorage.getInstincts({ status: "deprecated" }).length;
+
+      // Cooling: instincts with coolingStartedAt set (still status="active")
+      const allInstincts = this.learningStorage.getInstincts();
+      const cooling = allInstincts.filter(i => i.coolingStartedAt != null).length;
+
+      const weeklyCounters = this.learningStorage.getWeeklyCounters(1);
+      const weeklyTrends = this.aggregateWeeklyCounters(weeklyCounters);
+
+      return {
+        statusCounts: { permanent, active, cooling, proposed, deprecated },
+        weeklyTrends,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Aggregate weekly counter rows into trend entries.
+   */
+  private aggregateWeeklyCounters(
+    counters: Array<{ weekStart: number; eventType: string; count: number }>
+  ): Array<{ weekStart: number; promoted: number; deprecated: number; coolingStarted: number; coolingRecovered: number }> {
+    const byWeek = new Map<number, { promoted: number; deprecated: number; coolingStarted: number; coolingRecovered: number }>();
+
+    for (const c of counters) {
+      if (!byWeek.has(c.weekStart)) {
+        byWeek.set(c.weekStart, { promoted: 0, deprecated: 0, coolingStarted: 0, coolingRecovered: 0 });
+      }
+      const entry = byWeek.get(c.weekStart)!;
+      switch (c.eventType) {
+        case "promoted": entry.promoted = c.count; break;
+        case "deprecated": entry.deprecated = c.count; break;
+        case "cooling_started": entry.coolingStarted = c.count; break;
+        case "cooling_recovered": entry.coolingRecovered = c.count; break;
+      }
+    }
+
+    return Array.from(byWeek.entries())
+      .map(([weekStart, data]) => ({ weekStart, ...data }))
+      .sort((a, b) => b.weekStart - a.weekStart);
   }
 
   async stop(): Promise<void> {
