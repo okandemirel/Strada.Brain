@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: planning
 stopped_at: Phase 7 context gathered
-last_updated: "2026-03-07T15:11:42.433Z"
+last_updated: "2026-03-07T15:41:48.604Z"
 progress:
   total_phases: 9
   completed_phases: 6
-  total_plans: 15
-  completed_plans: 15
-  percent: 100
+  total_plans: 18
+  completed_plans: 16
+  percent: 89
 ---
 
 # State: Strada.Brain Phase 2 — Agent Evolution (Level 3 → 4)
@@ -19,23 +19,23 @@ progress:
 
 **Core Value:** The agent must reason, learn, and adapt autonomously -- real memory, real-time learning, recursive goals, self-evaluation, and tool synthesis transform a chatbot wrapper into a genuine autonomous agent.
 
-**Current Focus:** Phase 6 complete (Bayesian Confidence System). Phase 7 next (Recursive Goal Decomposition).
+**Current Focus:** Phase 7 in progress (Recursive Goal Decomposition). Plan 01 complete, Plan 02 next.
 
 ## Current Position
 
 **Milestone:** Phase 7 -- Agent Evolution (Level 3 -> 4)
-**Phase:** 6 of 9 complete, Phase 7 next (Recursive Goal Decomposition)
-**Plan:** 3/3 plans done in Phase 6
-**Status:** Ready to plan
+**Phase:** 6 of 9 complete, Phase 7 in progress (Recursive Goal Decomposition)
+**Plan:** 1/3 plans done in Phase 7
+**Status:** Executing
 
 **Progress:**
-[██████████] 100%
+[█████████░] 89%
 Phase 2  [##########] 100%  Migration & HNSW Hardening
 Phase 3  [##########] 100%  Auto-Tiering & Embedding Infrastructure
 Phase 4  [##########] 100%  Event-Driven Learning (complete)
 Phase 5  [##########] 100%  Metrics Instrumentation (complete)
 Phase 6  [##########] 100%  Bayesian Confidence System (complete)
-Phase 7  [..........] 0%    Recursive Goal Decomposition
+Phase 7  [###.......] 33%   Recursive Goal Decomposition (Plan 01 done)
 Phase 8  [..........] 0%    Goal Progress & Execution
 Phase 9  [..........] 0%    Tool Chain Synthesis
 
@@ -45,10 +45,10 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 6/9 (Phase 6 complete) |
-| Plans completed | 16 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6) |
-| Requirements delivered | 25/32 (MEM-01..07, LRN-01..07, EVAL-01..07) |
-| Tests added | 183/50+ target |
+| Phases completed | 6/9 (Phase 7 in progress) |
+| Plans completed | 17 (2 Phase 1 + 3 Phase 2 + 3 Phase 3 + 2 Phase 4 + 2 Phase 5 + 3 Phase 6 + 1 Phase 7) |
+| Requirements delivered | 28/32 (MEM-01..07, LRN-01..07, EVAL-01..07, GOAL-02,04,05) |
+| Tests added | 215/50+ target |
 | Quality gates passed | 0 |
 | Phase 01 P01 | 5min | 2 tasks | 5 files |
 | Phase 01 P02 | 7min | 2 tasks | 5 files |
@@ -65,6 +65,7 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 | Phase 06 P01 | 11min | 2 tasks | 8 files |
 | Phase 06 P02 | 6min | 2 tasks | 5 files |
 | Phase 06 P03 | 4min | 2 tasks | 7 files |
+| Phase 07 P01 | 3min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -139,6 +140,13 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 - [P6-03] Lifecycle data optional on MetricsAggregation (backward compatible)
 - [P6-03] LearningStorage added to DashboardServer.registerServices for lifecycle queries
 
+- [P7-01] GoalNodeId branded type (string & __brand) matching TaskId convention
+- [P7-01] Kahn's algorithm for cycle detection (O(V+E), produces topological order)
+- [P7-01] GoalStorage uses 'tasks' SQLite profile (8MB cache, WAL, FK ON)
+- [P7-01] FK cascade delete on goal_nodes for atomic tree cleanup
+- [P7-01] parseLLMOutput strips markdown fences before JSON parsing
+- [P7-01] Zod schema limits to max 20 nodes per decomposition
+
 ### Research Flags
 - Phase 1: AgentDB interface drift is #1 risk (15+ casts in agentdb-memory.ts). Integration tests first.
 - Phase 2: Migration can lose data from null embeddings. Backup first, validate counts.
@@ -155,8 +163,8 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
 
 ## Session Continuity
 
-**Last session:** 2026-03-07T15:11:42.426Z
-**Stopped at:** Phase 7 context gathered
+**Last session:** 2026-03-07T15:41:00Z
+**Stopped at:** Completed 07-01-PLAN.md (Goal Foundation)
 **Context to preserve:**
 - 32 v1 requirements across 5 categories (MEM, LRN, GOAL, EVAL, TOOL)
 - 9 phases derived from dependency analysis
@@ -216,6 +224,13 @@ Phase 9  [..........] 0%    Tool Chain Synthesis
   - LearningStorage injected into DashboardServer via registerServices
   - EVAL-05, EVAL-06, EVAL-07 fully surfaced in all user-facing outputs
 - Phase 6 fully complete (all 3 plans, all EVAL requirements met)
+- Phase 7 Plan 01 complete: Goal foundation (types, DAG validation, SQLite storage)
+  - GoalNodeId branded type, GoalNode/GoalTree interfaces in src/goals/types.ts
+  - Zod-validated LLMDecompositionOutput with parseLLMOutput helper
+  - validateDAG: Kahn's algorithm for cycle detection + topological sort
+  - GoalStorage: goals.db with goal_trees and goal_nodes tables, FK cascade
+  - 32 tests (23 validator + 9 storage) all passing
+  - GOAL-02, GOAL-04, GOAL-05 requirements complete
 
 ---
 *State initialized: 2026-03-06*

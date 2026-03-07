@@ -30,10 +30,10 @@ Requirements for Level 4 release. Each maps to roadmap phases.
 ### Recursive Goal Decomposition
 
 - [ ] **GOAL-01**: Orchestrator can create sub-goals mid-execution (not only at task start)
-- [ ] **GOAL-02**: Sub-goals form a DAG with explicit dependency edges (not flat list)
+- [x] **GOAL-02**: Sub-goals form a DAG with explicit dependency edges (not flat list)
 - [ ] **GOAL-03**: Progress tracked at each decomposition level with completion percentage
-- [ ] **GOAL-04**: Maximum decomposition depth of 3 enforced to prevent runaway recursion
-- [ ] **GOAL-05**: Cycle detection prevents circular sub-goal dependencies
+- [x] **GOAL-04**: Maximum decomposition depth of 3 enforced to prevent runaway recursion
+- [x] **GOAL-05**: Cycle detection prevents circular sub-goal dependencies
 - [ ] **GOAL-06**: Sub-goals execute respecting dependency ordering (topological sort)
 
 ### Self-Evaluation Metrics
@@ -116,9 +116,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | EVAL-06 | Phase 6: Bayesian Confidence System | Complete |
 | EVAL-07 | Phase 6: Bayesian Confidence System | Complete |
 | GOAL-01 | Phase 7: Recursive Goal Decomposition | Pending |
-| GOAL-02 | Phase 7: Recursive Goal Decomposition | Pending |
-| GOAL-04 | Phase 7: Recursive Goal Decomposition | Pending |
-| GOAL-05 | Phase 7: Recursive Goal Decomposition | Pending |
+| GOAL-02 | Phase 7: Recursive Goal Decomposition | Complete |
+| GOAL-04 | Phase 7: Recursive Goal Decomposition | Complete |
+| GOAL-05 | Phase 7: Recursive Goal Decomposition | Complete |
 | GOAL-03 | Phase 8: Goal Progress & Execution | Pending |
 | GOAL-06 | Phase 8: Goal Progress & Execution | Pending |
 | TOOL-01 | Phase 9: Tool Chain Synthesis | Pending |
