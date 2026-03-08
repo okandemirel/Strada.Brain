@@ -1,14 +1,16 @@
 /**
  * Cross-Session Learning Transfer Tests
  *
- * Tests for Phase 13 Plan 01: types, config, migration runner, and schema migration.
+ * Tests for Phase 13: types, config, migration runner, schema migration,
+ * scope-filtered retrieval, age filtering, deduplication, provenance formatting.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { validateConfig, resetConfigCache } from "../../config/config.js";
-import type { Instinct, InstinctId } from "../types.js";
+import type { Instinct, InstinctId, InstinctStatus } from "../types.js";
 import type { TimestampMs } from "../../types/index.js";
+import type { IEventBus } from "../../core/event-bus.js";
 
 // =============================================================================
 // Task 1: Types, Config, and Event Bus contracts
@@ -491,5 +493,309 @@ describe("LearningStorage provenance", () => {
     const db = storage.getDatabase();
     const scope = db.prepare("SELECT * FROM instinct_scopes WHERE instinct_id = ?").get("instinct_no_scope") as any;
     expect(scope).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Plan 02 Task 1: Scope-filtered retrieval, age filtering, deduplication
+// =============================================================================
+
+/** Helper: create a test instinct with overrides */
+function makeInstinct(overrides: Partial<Instinct> & { id: InstinctId }): Instinct {
+  return {
+    name: "Test instinct",
+    type: "error_fix",
+    status: "active" as InstinctStatus,
+    confidence: 0.8 as any,
+    triggerPattern: "test pattern",
+    action: JSON.stringify({ description: "test action" }),
+    contextConditions: [],
+    stats: {
+      timesSuggested: 0,
+      timesApplied: 0,
+      timesFailed: 0,
+      successRate: 0 as any,
+      averageExecutionMs: 0,
+    },
+    createdAt: Date.now() as TimestampMs,
+    updatedAt: Date.now() as TimestampMs,
+    sourceTrajectoryIds: [],
+    tags: [],
+    ...overrides,
+  } as Instinct;
+}
+
+describe("LearningStorage.getInstinctsForScope", () => {
+  let storage: any; // LearningStorage
+
+  beforeEach(async () => {
+    const { LearningStorage } = await import("./learning-storage.js");
+    storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    // Create instincts with various scopes
+    const projectA = makeInstinct({ id: "instinct_projA" as InstinctId, name: "Project A instinct" });
+    const projectB = makeInstinct({ id: "instinct_projB" as InstinctId, name: "Project B instinct" });
+    const universal = makeInstinct({ id: "instinct_universal" as InstinctId, name: "Universal instinct" });
+
+    storage.createInstinct(projectA, "/projects/alpha");
+    storage.createInstinct(projectB, "/projects/beta");
+    storage.createInstinct(universal);
+
+    // Add universal scope
+    storage.addInstinctScope("instinct_universal", "*");
+  });
+
+  afterEach(() => {
+    storage.close();
+  });
+
+  it("returns project-specific + universal instincts with 'project+universal'", () => {
+    const results = storage.getInstinctsForScope({
+      projectPath: "/projects/alpha",
+      scopeFilter: "project+universal",
+    });
+
+    const ids = results.map((r: Instinct) => r.id);
+    expect(ids).toContain("instinct_projA");
+    expect(ids).toContain("instinct_universal");
+    expect(ids).not.toContain("instinct_projB");
+  });
+
+  it("returns only project-specific instincts with 'project-only'", () => {
+    const results = storage.getInstinctsForScope({
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+    });
+
+    const ids = results.map((r: Instinct) => r.id);
+    expect(ids).toContain("instinct_projA");
+    expect(ids).not.toContain("instinct_universal");
+    expect(ids).not.toContain("instinct_projB");
+  });
+
+  it("returns all instincts regardless of scope with 'all'", () => {
+    const results = storage.getInstinctsForScope({
+      projectPath: "/projects/alpha",
+      scopeFilter: "all",
+    });
+
+    const ids = results.map((r: Instinct) => r.id);
+    expect(ids).toContain("instinct_projA");
+    expect(ids).toContain("instinct_projB");
+    expect(ids).toContain("instinct_universal");
+  });
+
+  it("excludes instincts older than maxAgeDays", () => {
+    // Create an old instinct (60 days ago)
+    const oldTime = Date.now() - (60 * 24 * 60 * 60 * 1000);
+    const oldInstinct = makeInstinct({
+      id: "instinct_old" as InstinctId,
+      name: "Old instinct",
+      createdAt: oldTime as TimestampMs,
+      updatedAt: oldTime as TimestampMs,
+    });
+    storage.createInstinct(oldInstinct, "/projects/alpha");
+
+    const results = storage.getInstinctsForScope({
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      maxAgeDays: 30,
+    });
+
+    const ids = results.map((r: Instinct) => r.id);
+    expect(ids).toContain("instinct_projA");
+    expect(ids).not.toContain("instinct_old");
+  });
+
+  it("does NOT exclude permanent instincts from age filtering", () => {
+    // Create an old permanent instinct
+    const oldTime = Date.now() - (120 * 24 * 60 * 60 * 1000);
+    const permanentOld = makeInstinct({
+      id: "instinct_perm_old" as InstinctId,
+      name: "Permanent old",
+      status: "permanent" as InstinctStatus,
+      createdAt: oldTime as TimestampMs,
+      updatedAt: oldTime as TimestampMs,
+    });
+    storage.createInstinct(permanentOld, "/projects/alpha");
+
+    const results = storage.getInstinctsForScope({
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      maxAgeDays: 30,
+    });
+
+    const ids = results.map((r: Instinct) => r.id);
+    expect(ids).toContain("instinct_perm_old");
+  });
+
+  it("emits instinct:age_expired event for each age-filtered instinct when eventBus provided", () => {
+    // Create an old instinct
+    const oldTime = Date.now() - (60 * 24 * 60 * 60 * 1000);
+    const oldInstinct = makeInstinct({
+      id: "instinct_age_event" as InstinctId,
+      name: "Age event test",
+      createdAt: oldTime as TimestampMs,
+      updatedAt: oldTime as TimestampMs,
+    });
+    storage.createInstinct(oldInstinct, "/projects/alpha");
+
+    const emittedEvents: any[] = [];
+    const mockEventBus = {
+      emit: vi.fn((event: string, payload: any) => { emittedEvents.push({ event, payload }); }),
+      on: vi.fn(),
+      off: vi.fn(),
+      shutdown: vi.fn(),
+    } as unknown as IEventBus;
+
+    storage.getInstinctsForScope({
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      maxAgeDays: 30,
+      eventBus: mockEventBus,
+    });
+
+    expect(mockEventBus.emit).toHaveBeenCalledWith(
+      "instinct:age_expired",
+      expect.objectContaining({
+        instinctId: "instinct_age_event",
+        maxAgeDays: 30,
+      }),
+    );
+    const payload = emittedEvents.find(e => e.event === "instinct:age_expired")?.payload;
+    expect(payload.ageDays).toBeGreaterThanOrEqual(59);
+    expect(payload.timestamp).toBeGreaterThan(0);
+  });
+});
+
+describe("LearningStorage.addInstinctScope", () => {
+  let storage: any;
+
+  beforeEach(async () => {
+    const { LearningStorage } = await import("./learning-storage.js");
+    storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({ id: "instinct_scope_add" as InstinctId });
+    storage.createInstinct(instinct);
+  });
+
+  afterEach(() => {
+    storage.close();
+  });
+
+  it("inserts a row into instinct_scopes", () => {
+    storage.addInstinctScope("instinct_scope_add", "/projects/delta");
+
+    const db = storage.getDatabase();
+    const row = db.prepare("SELECT * FROM instinct_scopes WHERE instinct_id = ? AND project_path = ?").get("instinct_scope_add", "/projects/delta") as any;
+    expect(row).toBeDefined();
+    expect(row.project_path).toBe("/projects/delta");
+    expect(row.created_at).toBeGreaterThan(0);
+  });
+});
+
+describe("LearningStorage.getInstinctScopeCount", () => {
+  let storage: any;
+
+  beforeEach(async () => {
+    const { LearningStorage } = await import("./learning-storage.js");
+    storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({ id: "instinct_count" as InstinctId });
+    storage.createInstinct(instinct);
+    storage.addInstinctScope("instinct_count", "/projects/a");
+    storage.addInstinctScope("instinct_count", "/projects/b");
+    storage.addInstinctScope("instinct_count", "*"); // Universal should not count
+  });
+
+  afterEach(() => {
+    storage.close();
+  });
+
+  it("returns distinct non-universal project count", () => {
+    const count = storage.getInstinctScopeCount("instinct_count");
+    expect(count).toBe(2); // Only /projects/a and /projects/b
+  });
+});
+
+describe("LearningStorage.incrementCrossSessionHitCount", () => {
+  let storage: any;
+
+  beforeEach(async () => {
+    const { LearningStorage } = await import("./learning-storage.js");
+    storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({
+      id: "instinct_hit" as InstinctId,
+      crossSessionHitCount: 0,
+    });
+    storage.createInstinct(instinct);
+  });
+
+  afterEach(() => {
+    storage.close();
+  });
+
+  it("increments by 1 and returns new count", () => {
+    const count = storage.incrementCrossSessionHitCount("instinct_hit", "session_1");
+    expect(count).toBe(1);
+  });
+
+  it("is idempotent per session", () => {
+    const count1 = storage.incrementCrossSessionHitCount("instinct_hit", "session_1");
+    const count2 = storage.incrementCrossSessionHitCount("instinct_hit", "session_1");
+    expect(count1).toBe(1);
+    expect(count2).toBe(1); // Not incremented again
+
+    // Different session should increment
+    const count3 = storage.incrementCrossSessionHitCount("instinct_hit", "session_2");
+    expect(count3).toBe(2);
+  });
+});
+
+describe("LearningStorage.mergeInstincts", () => {
+  let storage: any;
+
+  beforeEach(async () => {
+    const { LearningStorage } = await import("./learning-storage.js");
+    storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const winner = makeInstinct({ id: "instinct_winner" as InstinctId, name: "Winner", confidence: 0.9 as any });
+    const loser = makeInstinct({ id: "instinct_loser" as InstinctId, name: "Loser", confidence: 0.7 as any });
+
+    storage.createInstinct(winner, "/projects/a");
+    storage.createInstinct(loser, "/projects/b");
+    // Add extra scope to loser to test transfer
+    storage.addInstinctScope("instinct_loser", "/projects/c");
+  });
+
+  afterEach(() => {
+    storage.close();
+  });
+
+  it("keeps winner, hard-deletes loser, transfers loser scopes to winner", () => {
+    storage.mergeInstincts("instinct_winner", "instinct_loser");
+
+    // Winner exists
+    const winner = storage.getInstinct("instinct_winner");
+    expect(winner).not.toBeNull();
+    expect(winner!.name).toBe("Winner");
+
+    // Loser is gone
+    const loser = storage.getInstinct("instinct_loser");
+    expect(loser).toBeNull();
+
+    // Winner now has loser's scopes
+    const db = storage.getDatabase();
+    const scopes = db.prepare("SELECT project_path FROM instinct_scopes WHERE instinct_id = ? ORDER BY project_path").all("instinct_winner") as any[];
+    const paths = scopes.map((s: any) => s.project_path);
+    expect(paths).toContain("/projects/a"); // Original winner scope
+    expect(paths).toContain("/projects/b"); // Transferred from loser
+    expect(paths).toContain("/projects/c"); // Transferred from loser
   });
 });

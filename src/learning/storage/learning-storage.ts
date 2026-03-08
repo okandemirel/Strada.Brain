@@ -34,6 +34,7 @@ import type {
 } from "../types.js";
 import type { SessionId, TimestampMs, JsonObject } from "../../types/index.js";
 import { createBrand } from "../../types/index.js";
+import type { IEventBus } from "../../core/event-bus.js";
 
 // ─── Database Schema ────────────────────────────────────────────────────────────
 
@@ -198,6 +199,9 @@ export class LearningStorage {
   private observationBuffer: Observation[] = [];
   private trajectoryBuffer: Trajectory[] = [];
   private readonly BATCH_SIZE = 100;
+
+  // Cross-session hit count dedup: tracks last counted session per instinct
+  private readonly lastCountedSession = new Map<string, string>();
   private flushTimer: NodeJS.Timeout | null = null;
 
   constructor(dbPath: string = "./data/learning.db") {
@@ -790,6 +794,176 @@ export class LearningStorage {
     this.ensureConnection();
     this.db!.prepare("UPDATE instincts SET embedding = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(embedding), Date.now(), id);
+  }
+
+  // ─── Cross-Session Scope Operations ──────────────────────────────────────────
+
+  /**
+   * Get instincts filtered by project scope, age, and status.
+   * Does NOT modify getInstincts -- this is an independent retrieval path.
+   */
+  getInstinctsForScope(options: {
+    projectPath: string;
+    scopeFilter: 'project-only' | 'project+universal' | 'all';
+    maxAgeDays?: number;
+    status?: InstinctStatus[];
+    minConfidence?: number;
+    eventBus?: IEventBus;
+  }): Instinct[] {
+    this.ensureConnection();
+
+    const {
+      projectPath,
+      scopeFilter,
+      maxAgeDays,
+      status = ['active', 'proposed', 'permanent'],
+      minConfidence,
+      eventBus,
+    } = options;
+
+    // If maxAgeDays and eventBus provided, emit age_expired events for filtered instincts
+    if (maxAgeDays !== undefined && eventBus) {
+      try {
+        const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
+        // Find instincts that WOULD be excluded by age (non-permanent, older than cutoff)
+        let expiredSql = `SELECT DISTINCT i.* FROM instincts i
+          INNER JOIN instinct_scopes s ON i.id = s.instinct_id
+          WHERE i.status != 'permanent' AND i.created_at < ?`;
+        const expiredParams: (string | number)[] = [cutoff];
+
+        // Apply scope filter to expired query too
+        if (scopeFilter === 'project-only') {
+          expiredSql += " AND s.project_path = ?";
+          expiredParams.push(projectPath);
+        } else if (scopeFilter === 'project+universal') {
+          expiredSql += " AND (s.project_path = ? OR s.project_path = '*')";
+          expiredParams.push(projectPath);
+        }
+        // 'all' -- no scope filter on expired query
+
+        // Status filter
+        const statusPlaceholders = status.map(() => "?").join(",");
+        expiredSql += ` AND i.status IN (${statusPlaceholders})`;
+        expiredParams.push(...status);
+
+        const expiredRows = this.db!.prepare(expiredSql).all(...expiredParams) as InstinctRow[];
+        for (const row of expiredRows) {
+          const ageDays = Math.floor((Date.now() - row.created_at) / 86400000);
+          eventBus.emit("instinct:age_expired", {
+            instinctId: row.id as InstinctId,
+            ageDays,
+            maxAgeDays,
+            timestamp: Date.now(),
+          });
+        }
+      } catch {
+        // Never block retrieval due to event emission failure
+      }
+    }
+
+    // Build the main retrieval query
+    let sql = "SELECT DISTINCT i.* FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE 1=1";
+    const params: (string | number)[] = [];
+
+    // Scope filter
+    if (scopeFilter === 'project-only') {
+      sql += " AND s.project_path = ?";
+      params.push(projectPath);
+    } else if (scopeFilter === 'project+universal') {
+      sql += " AND (s.project_path = ? OR s.project_path = '*')";
+      params.push(projectPath);
+    }
+    // 'all' -- no scope filter (still requires JOIN to ensure at least one scope row)
+
+    // Age filter with permanent exemption
+    if (maxAgeDays !== undefined) {
+      const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
+      sql += " AND (i.created_at >= ? OR i.status = 'permanent')";
+      params.push(cutoff);
+    }
+
+    // Status filter
+    const statusPlaceholders = status.map(() => "?").join(",");
+    sql += ` AND i.status IN (${statusPlaceholders})`;
+    params.push(...status);
+
+    // Confidence filter
+    if (minConfidence !== undefined) {
+      sql += " AND i.confidence >= ?";
+      params.push(minConfidence);
+    }
+
+    sql += " ORDER BY i.confidence DESC";
+
+    const rows = this.db!.prepare(sql).all(...params) as InstinctRow[];
+    return rows.map(r => this.rowToInstinct(r));
+  }
+
+  /**
+   * Add a scope association for an instinct.
+   * Uses INSERT OR IGNORE for idempotency.
+   */
+  addInstinctScope(instinctId: string, projectPath: string): void {
+    this.ensureConnection();
+    this.db!.prepare(
+      "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at) VALUES (?, ?, ?)"
+    ).run(instinctId, projectPath, Date.now());
+  }
+
+  /**
+   * Get count of distinct non-universal projects for an instinct.
+   */
+  getInstinctScopeCount(instinctId: string): number {
+    this.ensureConnection();
+    const row = this.db!.prepare(
+      "SELECT COUNT(DISTINCT project_path) as cnt FROM instinct_scopes WHERE instinct_id = ? AND project_path != '*'"
+    ).get(instinctId) as { cnt: number };
+    return row.cnt;
+  }
+
+  /**
+   * Increment cross-session hit count for an instinct.
+   * Idempotent per session: tracks last counted session in-memory.
+   * Returns the new count.
+   */
+  incrementCrossSessionHitCount(instinctId: string, sessionId: string): number {
+    this.ensureConnection();
+
+    // Check if already counted for this session
+    if (this.lastCountedSession.get(instinctId) === sessionId) {
+      const row = this.db!.prepare("SELECT cross_session_hit_count FROM instincts WHERE id = ?").get(instinctId) as { cross_session_hit_count: number } | undefined;
+      return row?.cross_session_hit_count ?? 0;
+    }
+
+    // Increment
+    this.db!.prepare(
+      "UPDATE instincts SET cross_session_hit_count = COALESCE(cross_session_hit_count, 0) + 1 WHERE id = ?"
+    ).run(instinctId);
+
+    this.lastCountedSession.set(instinctId, sessionId);
+
+    const row = this.db!.prepare("SELECT cross_session_hit_count FROM instincts WHERE id = ?").get(instinctId) as { cross_session_hit_count: number } | undefined;
+    return row?.cross_session_hit_count ?? 0;
+  }
+
+  /**
+   * Merge two instincts: winner keeps its data, loser's scopes transfer, loser is hard-deleted.
+   * Winner keeps its own name/pattern/alpha/beta per locked decision.
+   */
+  mergeInstincts(winnerId: string, loserId: string): void {
+    this.ensureConnection();
+
+    const merge = this.db!.transaction(() => {
+      // Transfer loser's scopes to winner (INSERT OR IGNORE avoids duplicates)
+      this.db!.prepare(
+        "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at) SELECT ?, project_path, created_at FROM instinct_scopes WHERE instinct_id = ?"
+      ).run(winnerId, loserId);
+
+      // Hard-delete loser (CASCADE will clean up loser's scope rows)
+      this.db!.prepare("DELETE FROM instincts WHERE id = ?").run(loserId);
+    });
+
+    merge();
   }
 
   // ─── Trajectory Operations ───────────────────────────────────────────────────
