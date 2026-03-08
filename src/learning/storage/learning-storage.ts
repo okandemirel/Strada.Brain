@@ -260,6 +260,31 @@ export class LearningStorage {
       }
     }
 
+    // Phase 13 migration: cross-session provenance columns
+    const provenanceColumns = [
+      "ALTER TABLE instincts ADD COLUMN origin_session_id TEXT",
+      "ALTER TABLE instincts ADD COLUMN origin_boot_count INTEGER",
+      "ALTER TABLE instincts ADD COLUMN cross_session_hit_count INTEGER DEFAULT 0",
+      "ALTER TABLE instincts ADD COLUMN migrated_at INTEGER",
+    ];
+    for (const sql of provenanceColumns) {
+      try {
+        this.db.prepare(sql).run();
+      } catch {
+        // Column already exists -- expected after first migration
+      }
+    }
+
+    // Phase 13: instinct_scopes table for project-scope filtering
+    this.db.prepare(`CREATE TABLE IF NOT EXISTS instinct_scopes (
+      instinct_id TEXT NOT NULL,
+      project_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (instinct_id, project_path),
+      FOREIGN KEY (instinct_id) REFERENCES instincts(id) ON DELETE CASCADE
+    ) WITHOUT ROWID`).run();
+    this.db.prepare("CREATE INDEX IF NOT EXISTS idx_instinct_scopes_path ON instinct_scopes(project_path, instinct_id)").run();
+
     // Phase 6: Migrate CHECK constraint to include 'permanent' and 'optimization'
     this.migrateStatusConstraint();
 
@@ -478,6 +503,11 @@ export class LearningStorage {
     }
   }
 
+  /** Get the underlying database instance (for migration runner access) */
+  getDatabase(): Database.Database | null {
+    return this.db;
+  }
+
   /** Close the database connection */
   close(): void {
     this.stopBatchFlushTimer();
@@ -499,14 +529,15 @@ export class LearningStorage {
     const stmts = {
       insertInstinct: `
         INSERT INTO instincts
-        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       updateInstinct: `
         UPDATE instincts SET
           name = ?, type = ?, status = ?, confidence = ?, trigger_pattern = ?,
           action = ?, context_conditions = ?, stats = ?, updated_at = ?, evolved_to = ?,
-          bayesian_alpha = ?, bayesian_beta = ?, cooling_started_at = ?, cooling_failures = ?
+          bayesian_alpha = ?, bayesian_beta = ?, cooling_started_at = ?, cooling_failures = ?,
+          origin_session_id = ?, origin_boot_count = ?, cross_session_hit_count = ?, migrated_at = ?
         WHERE id = ?
       `,
       getInstinct: `SELECT * FROM instincts WHERE id = ?`,
@@ -647,11 +678,11 @@ export class LearningStorage {
 
   // ─── Instinct Operations ─────────────────────────────────────────────────────
 
-  /** Create a new instinct */
-  createInstinct(instinct: Instinct): void {
+  /** Create a new instinct, optionally scoped to a project path */
+  createInstinct(instinct: Instinct, projectPath?: string): void {
     this.ensureConnection();
     const stmt = this.getStatement('insertInstinct');
-    
+
     stmt.run(
       instinct.id,
       instinct.name,
@@ -669,8 +700,19 @@ export class LearningStorage {
       instinct.bayesianAlpha ?? null,
       instinct.bayesianBeta ?? null,
       instinct.coolingStartedAt ?? null,
-      instinct.coolingFailures ?? 0
+      instinct.coolingFailures ?? 0,
+      instinct.originSessionId ?? null,
+      instinct.originBootCount ?? null,
+      instinct.crossSessionHitCount ?? 0,
+      instinct.migratedAt ?? null
     );
+
+    // Insert scope row when projectPath is provided
+    if (projectPath) {
+      this.db!.prepare(
+        "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at) VALUES (?, ?, ?)"
+      ).run(instinct.id, projectPath, Date.now());
+    }
   }
 
   /** Get an instinct by ID */
@@ -701,6 +743,10 @@ export class LearningStorage {
       instinct.bayesianBeta ?? null,
       instinct.coolingStartedAt ?? null,
       instinct.coolingFailures ?? 0,
+      instinct.originSessionId ?? null,
+      instinct.originBootCount ?? null,
+      instinct.crossSessionHitCount ?? 0,
+      instinct.migratedAt ?? null,
       instinct.id
     );
   }
@@ -1186,6 +1232,10 @@ export class LearningStorage {
       bayesianBeta: row.bayesian_beta ?? undefined,
       coolingStartedAt: row.cooling_started_at ? row.cooling_started_at as TimestampMs : undefined,
       coolingFailures: row.cooling_failures ?? undefined,
+      originSessionId: row.origin_session_id ?? undefined,
+      originBootCount: row.origin_boot_count ?? undefined,
+      crossSessionHitCount: row.cross_session_hit_count ?? 0,
+      migratedAt: row.migrated_at ? (row.migrated_at as TimestampMs) : undefined,
     };
   }
 
@@ -1255,6 +1305,10 @@ interface InstinctRow {
   bayesian_beta: number | null;
   cooling_started_at: number | null;
   cooling_failures: number | null;
+  origin_session_id: string | null;
+  origin_boot_count: number | null;
+  cross_session_hit_count: number | null;
+  migrated_at: number | null;
 }
 
 interface TrajectoryRow {
