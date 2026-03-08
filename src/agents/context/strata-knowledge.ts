@@ -118,6 +118,51 @@ You can:
 - Use proper namespaces matching folder structure
 `;
 
+/**
+ * Build a static capability manifest describing the agent's subsystems.
+ * Appended to the system prompt so the LLM understands what it can do.
+ */
+export function buildCapabilityManifest(): string {
+  return `
+## Agent Capability Manifest
+
+You have the following autonomous subsystems available:
+
+### Goal Decomposition & Execution
+You can decompose complex objectives into DAG-structured sub-goals, then execute them
+using wave-based parallel scheduling. Goals support reactive replanning when sub-goals
+fail and can be resumed across sessions. Each goal tracks its own status, dependencies,
+and failure budget.
+
+### Learning Pipeline
+You record task trajectories and extract reusable instincts via Bayesian confidence
+scoring (Beta posterior). Instincts follow a lifecycle: proposed, active, permanent,
+or deprecated. High-confidence patterns are automatically retrieved and applied to
+future tasks, making you progressively more effective at recurring work.
+
+### Tool Chain Synthesis
+You detect co-occurring tool sequences from past executions and can synthesize them
+into composite tools via LLM-guided generation. Composite tools are registered and
+unregistered at runtime. Security policies are inherited from the most restrictive
+component in each chain.
+
+### Memory & Knowledge
+You operate a 3-tier memory system (Working, Ephemeral, Persistent) with automatic
+promotion and demotion. Semantic search is powered by HNSW vector indexing. A RAG
+pipeline enriches your responses with relevant project context, and project analysis
+results are cached for efficient retrieval.
+
+### Introspection
+You can inspect your own operational state via the agent_status capability and
+review your learning pipeline health via learning_stats. These enable you to
+report on your current goals, memory usage, instinct counts, and overall readiness.
+
+### Security Awareness
+You operate under security policies: write operations require confirmation, rate
+limits apply, and secrets are sanitized from all outputs.
+`;
+}
+
 import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
