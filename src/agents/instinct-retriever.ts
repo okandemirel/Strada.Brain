@@ -11,7 +11,7 @@
 import type { PatternMatcher, ScopeContext } from "../learning/matching/pattern-matcher.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
-import type { PatternMatch } from "../learning/types.js";
+import { MS_PER_DAY, type PatternMatch } from "../learning/types.js";
 
 /** Options for InstinctRetriever constructor */
 export interface InstinctRetrieverOptions {
@@ -165,7 +165,7 @@ export class InstinctRetriever {
 
       // Append provenance bracket when originBootCount exists
       if (match.instinct.originBootCount !== undefined) {
-        const ageDays = Math.floor((Date.now() - match.instinct.createdAt) / 86400000);
+        const ageDays = Math.floor((Date.now() - match.instinct.createdAt) / MS_PER_DAY);
         const hitCount = match.instinct.crossSessionHitCount ?? 0;
         result += ` [boot #${match.instinct.originBootCount}, ${ageDays}d ago, used by ${hitCount} sessions]`;
       }

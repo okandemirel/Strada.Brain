@@ -108,7 +108,7 @@ export class MetricsRecorder {
   }): void {
     try {
       this.storage.recordTaskMetric({
-        id: `retrieval_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        id: `retrieval_${randomUUID()}`,
         sessionId: "retrieval",
         taskType: "simple" as TaskType,
         taskDescription: "instinct-retrieval",

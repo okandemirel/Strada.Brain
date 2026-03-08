@@ -13,7 +13,8 @@ import type {
   PatternMatchInput,
   InstinctStatus,
 } from "../types.js";
-import { CONFIDENCE_THRESHOLDS } from "../types.js";
+import { CONFIDENCE_THRESHOLDS, MS_PER_DAY } from "../types.js";
+import type { ScopeFilterMode } from "../types.js";
 import type { IEventBus } from "../../core/event-bus.js";
 
 // ─── Similarity Algorithms ──────────────────────────────────────────────────────
@@ -91,7 +92,7 @@ export interface EmbedderLike {
 /** Scope context for cross-session filtered retrieval */
 export interface ScopeContext {
   projectPath: string;
-  scopeFilter: 'project-only' | 'project+universal' | 'all';
+  scopeFilter: ScopeFilterMode;
   maxAgeDays?: number;
   recencyBoost: number;   // default 1.0
   scopeBoost: number;     // default 1.1
@@ -228,7 +229,7 @@ export class PatternMatcher {
         confidence *= scope.scopeBoost;
 
         // Recency boost: newer instincts get higher boost, floors at 0.5x for 1+ year old
-        const ageDays = Math.max(0, Math.floor((Date.now() - instinct.createdAt) / 86400000));
+        const ageDays = Math.max(0, Math.floor((Date.now() - instinct.createdAt) / MS_PER_DAY));
         const recencyFactor = Math.max(0.5, 1.0 - (ageDays / 365));
         confidence *= scope.recencyBoost * recencyFactor;
       }

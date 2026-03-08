@@ -741,20 +741,22 @@ describe("LearningStorage.incrementCrossSessionHitCount", () => {
     storage.close();
   });
 
-  it("increments by 1 and returns new count", () => {
-    const count = storage.incrementCrossSessionHitCount("instinct_hit", "session_1");
-    expect(count).toBe(1);
+  it("increments by 1", () => {
+    storage.incrementCrossSessionHitCount("instinct_hit", "session_1");
+    const inst = storage.getInstinct("instinct_hit");
+    expect(inst.crossSessionHitCount).toBe(1);
   });
 
   it("is idempotent per session", () => {
-    const count1 = storage.incrementCrossSessionHitCount("instinct_hit", "session_1");
-    const count2 = storage.incrementCrossSessionHitCount("instinct_hit", "session_1");
-    expect(count1).toBe(1);
-    expect(count2).toBe(1); // Not incremented again
+    storage.incrementCrossSessionHitCount("instinct_hit", "session_1");
+    storage.incrementCrossSessionHitCount("instinct_hit", "session_1");
+    const inst1 = storage.getInstinct("instinct_hit");
+    expect(inst1.crossSessionHitCount).toBe(1); // Not incremented again
 
     // Different session should increment
-    const count3 = storage.incrementCrossSessionHitCount("instinct_hit", "session_2");
-    expect(count3).toBe(2);
+    storage.incrementCrossSessionHitCount("instinct_hit", "session_2");
+    const inst2 = storage.getInstinct("instinct_hit");
+    expect(inst2.crossSessionHitCount).toBe(2);
   });
 });
 

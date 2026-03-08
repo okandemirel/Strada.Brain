@@ -65,6 +65,12 @@ export type InstinctStatus =
   | "deprecated" // No longer effective
   | "evolved";   // Evolved to a higher form (skill/command/agent)
 
+/** Milliseconds per calendar day */
+export const MS_PER_DAY = 86_400_000;
+
+/** Scope filter mode for cross-session retrieval */
+export type ScopeFilterMode = 'project-only' | 'project+universal' | 'all';
+
 /** Confidence level thresholds */
 export const CONFIDENCE_THRESHOLDS = {
   PROPOSED: 0.0,    // Starting confidence
@@ -223,7 +229,7 @@ export interface InstinctAgeExpiredEvent {
 export interface CrossSessionConfig {
   readonly enabled: boolean;
   readonly maxAgeDays: number;
-  readonly scopeFilter: 'project-only' | 'project+universal' | 'all';
+  readonly scopeFilter: ScopeFilterMode;
   readonly recencyBoost: number;
   readonly scopeBoost: number;
   readonly promotionThreshold: number;

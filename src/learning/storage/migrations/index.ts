@@ -9,6 +9,7 @@
  */
 
 import { copyFileSync, existsSync, readdirSync, unlinkSync } from "node:fs";
+import { dirname, basename, join } from "node:path";
 import type Database from "better-sqlite3";
 
 // =============================================================================
@@ -116,9 +117,9 @@ export class MigrationRunner {
     }
 
     try {
-      const dir = this.dbPath.substring(0, this.dbPath.lastIndexOf("/")) || ".";
-      const baseName = this.dbPath.substring(this.dbPath.lastIndexOf("/") + 1);
-      const pattern = baseName + ".bak-";
+      const dir = dirname(this.dbPath) || ".";
+      const base = basename(this.dbPath);
+      const pattern = base + ".bak-";
 
       const files = readdirSync(dir)
         .filter(f => f.startsWith(pattern))
@@ -132,7 +133,7 @@ export class MigrationRunner {
       // Delete all but the latest 3
       for (const file of files.slice(3)) {
         try {
-          unlinkSync(dir + "/" + file);
+          unlinkSync(join(dir, file));
         } catch {
           // Best-effort cleanup
         }

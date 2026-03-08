@@ -32,6 +32,7 @@ import type {
   InstinctStats,
   ErrorCategory,
 } from "../types.js";
+import { MS_PER_DAY } from "../types.js";
 import type { SessionId, TimestampMs, JsonObject } from "../../types/index.js";
 import { createBrand } from "../../types/index.js";
 import type { IEventBus } from "../../core/event-bus.js";
@@ -265,6 +266,9 @@ export class LearningStorage {
     }
 
     // Phase 13 migration: cross-session provenance columns
+    // Note: duplicated in 001-cross-session-provenance.ts (MigrationRunner path).
+    // Both paths are needed: migrateSchema runs in initialize() for standalone usage
+    // (tests, CLI), while MigrationRunner runs in bootstrap for backfill logic.
     const provenanceColumns = [
       "ALTER TABLE instincts ADD COLUMN origin_session_id TEXT",
       "ALTER TABLE instincts ADD COLUMN origin_boot_count INTEGER",
@@ -275,7 +279,7 @@ export class LearningStorage {
       try {
         this.db.prepare(sql).run();
       } catch {
-        // Column already exists -- expected after first migration
+        // Column already exists — expected after first migration
       }
     }
 
@@ -848,7 +852,7 @@ export class LearningStorage {
 
         const expiredRows = this.db!.prepare(expiredSql).all(...expiredParams) as InstinctRow[];
         for (const row of expiredRows) {
-          const ageDays = Math.floor((Date.now() - row.created_at) / 86400000);
+          const ageDays = Math.floor((Date.now() - row.created_at) / MS_PER_DAY);
           eventBus.emit("instinct:age_expired", {
             instinctId: row.id as InstinctId,
             ageDays,
@@ -926,24 +930,19 @@ export class LearningStorage {
    * Idempotent per session: tracks last counted session in-memory.
    * Returns the new count.
    */
-  incrementCrossSessionHitCount(instinctId: string, sessionId: string): number {
+  incrementCrossSessionHitCount(instinctId: string, sessionId: string): void {
     this.ensureConnection();
 
-    // Check if already counted for this session
+    // Idempotent per session: skip if already counted
     if (this.lastCountedSession.get(instinctId) === sessionId) {
-      const row = this.db!.prepare("SELECT cross_session_hit_count FROM instincts WHERE id = ?").get(instinctId) as { cross_session_hit_count: number } | undefined;
-      return row?.cross_session_hit_count ?? 0;
+      return;
     }
 
-    // Increment
     this.db!.prepare(
       "UPDATE instincts SET cross_session_hit_count = COALESCE(cross_session_hit_count, 0) + 1 WHERE id = ?"
     ).run(instinctId);
 
     this.lastCountedSession.set(instinctId, sessionId);
-
-    const row = this.db!.prepare("SELECT cross_session_hit_count FROM instincts WHERE id = ?").get(instinctId) as { cross_session_hit_count: number } | undefined;
-    return row?.cross_session_hit_count ?? 0;
   }
 
   /**

@@ -12,6 +12,7 @@ import { MetricsStorage } from "./metrics-storage.js";
 import type { MetricsAggregation, MetricsFilter } from "./metrics-types.js";
 import { parseDurationToTimestamp } from "./parse-duration.js";
 import { LearningStorage } from "../learning/storage/learning-storage.js";
+import { MS_PER_DAY } from "../learning/types.js";
 import { MigrationRunner } from "../learning/storage/migrations/index.js";
 import { migration001CrossSessionProvenance } from "../learning/storage/migrations/001-cross-session-provenance.js";
 
@@ -277,7 +278,7 @@ export function gatherCrossSessionStats(ls: LearningStorage): CrossSessionStats 
   const allInstincts = ls.getInstincts();
   const buckets = { "0-7d": 0, "7-30d": 0, "30-90d": 0, "90d+": 0 };
   for (const inst of allInstincts) {
-    const ageDays = Math.floor((now - inst.createdAt) / 86400000);
+    const ageDays = Math.floor((now - inst.createdAt) / MS_PER_DAY);
     if (ageDays <= 7) buckets["0-7d"]++;
     else if (ageDays <= 30) buckets["7-30d"]++;
     else if (ageDays <= 90) buckets["30-90d"]++;
