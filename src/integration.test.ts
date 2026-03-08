@@ -19,6 +19,7 @@ vi.mock("./agents/context/strata-knowledge.js", () => ({
   buildProjectContext: vi.fn().mockReturnValue("\nProject context"),
   buildAnalysisSummary: vi.fn().mockReturnValue(""),
   buildDepsContext: vi.fn().mockReturnValue(""),
+  buildCapabilityManifest: vi.fn().mockReturnValue(""),
 }));
 
 const defaultCapabilities = {

@@ -19,6 +19,7 @@ import {
   buildProjectContext,
   buildAnalysisSummary,
   buildDepsContext,
+  buildCapabilityManifest,
 } from "./context/strata-knowledge.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
 import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
@@ -147,7 +148,8 @@ export class Orchestrator {
     this.systemPrompt =
       STRATA_SYSTEM_PROMPT +
       buildProjectContext(this.projectPath) +
-      buildDepsContext(opts.stradaDeps);
+      buildDepsContext(opts.stradaDeps) +
+      buildCapabilityManifest();
   }
 
   /**

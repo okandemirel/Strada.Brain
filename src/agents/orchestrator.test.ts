@@ -16,6 +16,7 @@ vi.mock("./context/strata-knowledge.js", () => ({
   buildProjectContext: () => "",
   buildAnalysisSummary: () => "",
   buildDepsContext: () => "",
+  buildCapabilityManifest: () => "\n## Agent Capability Manifest\nGoal Decomposition\nLearning Pipeline\nIntrospection\n",
 }));
 
 function createMockProvider() {
@@ -331,6 +332,34 @@ describe("Orchestrator", () => {
     await promise2;
 
     expect(mockProvider.chat).toHaveBeenCalledTimes(2);
+  });
+
+  describe("Capability Manifest", () => {
+    it("includes capability manifest in system prompt sent to provider", async () => {
+      const chatSpy = vi.fn().mockResolvedValueOnce({
+        text: "Hello!",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+      mockProvider.chat = chatSpy;
+
+      const promise = orch.handleMessage({
+        channelType: "cli",
+        chatId: "manifest-check",
+        userId: "user1",
+        text: "What can you do?",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      const systemPromptArg = chatSpy.mock.calls[0]![0] as string;
+      expect(systemPromptArg).toContain("Agent Capability Manifest");
+      expect(systemPromptArg).toContain("Goal Decomposition");
+      expect(systemPromptArg).toContain("Learning Pipeline");
+      expect(systemPromptArg).toContain("Introspection");
+    });
   });
 
   describe("isWriteOperation", () => {
