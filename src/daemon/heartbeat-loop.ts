@@ -321,6 +321,13 @@ export class HeartbeatLoop {
     return this.circuitBreakers.get(triggerName);
   }
 
+  /**
+   * Get the security policy (for Plan 05 AgentStatusTool and approval flow).
+   */
+  getSecurityPolicy(): DaemonSecurityPolicy {
+    return this.securityPolicy;
+  }
+
   // ===========================================================================
   // Private
   // ===========================================================================

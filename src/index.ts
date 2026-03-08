@@ -45,8 +45,9 @@ program
     `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
     CHANNEL_DEFAULTS.DEFAULT_TYPE,
   )
-  .action(async (opts: { channel: string }) => {
-    await startApp(opts.channel);
+  .option("--daemon", "Enable daemon heartbeat mode", false)
+  .action(async (opts: { channel: string; daemon: boolean }) => {
+    await startApp(opts.channel, opts.daemon);
   });
 
 program
@@ -101,7 +102,7 @@ program.parse();
 // Application Startup
 // ============================================================================
 
-async function startApp(channelType: string): Promise<void> {
+async function startApp(channelType: string, daemonMode = false): Promise<void> {
   const MAX_WIZARD_ATTEMPTS = 3;
 
   // Try loading config — if invalid and using web channel, launch setup wizard
@@ -158,6 +159,7 @@ async function startApp(channelType: string): Promise<void> {
       channelType,
       config,
       container,
+      daemonMode,
     });
 
     // Register container services after bootstrap creates them

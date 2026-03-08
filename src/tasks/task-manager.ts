@@ -12,6 +12,7 @@ import { TaskStatus, ACTIVE_STATUSES, generateTaskId } from "./types.js";
 import type { TaskStorage } from "./task-storage.js";
 import type { BackgroundExecutor } from "./background-executor.js";
 import { getLogger } from "../utils/logger.js";
+import type { TaskOrigin } from "../daemon/daemon-types.js";
 
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
@@ -25,8 +26,16 @@ export class TaskManager extends EventEmitter {
 
   /**
    * Submit a new task for background execution.
+   *
+   * @param options Optional settings. `origin` defaults to 'user'; daemon-initiated
+   *   tasks pass `{ origin: 'daemon' }` for security policy enforcement.
    */
-  submit(chatId: string, channelType: string, prompt: string): Task {
+  submit(
+    chatId: string,
+    channelType: string,
+    prompt: string,
+    options?: { origin?: TaskOrigin },
+  ): Task {
     const logger = getLogger();
     const now = Date.now();
 
@@ -40,6 +49,7 @@ export class TaskManager extends EventEmitter {
       progress: [],
       createdAt: now,
       updatedAt: now,
+      origin: options?.origin ?? "user",
     };
 
     this.storage.save(task);

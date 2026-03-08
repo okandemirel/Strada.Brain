@@ -73,6 +73,17 @@ import { MigrationRunner } from "../learning/storage/migrations/index.js";
 import { migration001CrossSessionProvenance } from "../learning/storage/migrations/001-cross-session-provenance.js";
 import type { ScopeContext } from "../learning/matching/pattern-matcher.js";
 
+// Daemon imports
+import { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
+import { TriggerRegistry } from "../daemon/trigger-registry.js";
+import { DaemonStorage } from "../daemon/daemon-storage.js";
+import { BudgetTracker } from "../daemon/budget/budget-tracker.js";
+import { DaemonSecurityPolicy } from "../daemon/security/daemon-security-policy.js";
+import { ApprovalQueue } from "../daemon/security/approval-queue.js";
+import { CronTrigger } from "../daemon/triggers/cron-trigger.js";
+import { parseHeartbeatFile } from "../daemon/heartbeat-parser.js";
+import type { DaemonEventMap } from "../daemon/daemon-events.js";
+
 // Task system imports
 import {
   TaskStorage,
@@ -92,6 +103,7 @@ export interface BootstrapOptions {
   channelType: string;
   config: Config;
   container?: DIContainer;
+  daemonMode?: boolean;
 }
 
 export interface BootstrapResult {
@@ -100,6 +112,7 @@ export interface BootstrapResult {
   channel: IChannelAdapter;
   container: DIContainer;
   shutdown: () => Promise<void>;
+  heartbeatLoop?: HeartbeatLoop;
 }
 
 /**
@@ -386,6 +399,95 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // ProgressReporter subscribes to taskManager events in constructor
   new ProgressReporter(channel, taskManager);
 
+  // Initialize daemon heartbeat loop (if daemon mode enabled)
+  let heartbeatLoop: HeartbeatLoop | undefined;
+  if (options.daemonMode) {
+    const daemonConfig = config.daemon;
+
+    // Validate budget is configured (required for daemon mode)
+    if (!daemonConfig.budget.dailyBudgetUsd) {
+      throw new AppError(
+        "STRATA_DAEMON_DAILY_BUDGET is required for daemon mode",
+        "DAEMON_CONFIG_ERROR",
+        400,
+      );
+    }
+
+    // Initialize daemon storage
+    const daemonDbPath = join(config.memory.dbPath, "daemon.db");
+    const daemonStorage = new DaemonStorage(daemonDbPath);
+    daemonStorage.initialize();
+
+    // Create event bus for daemon events (separate from learning event bus)
+    const daemonEventBus = new TypedEventBus<DaemonEventMap>();
+
+    // Create subsystems
+    const triggerRegistry = new TriggerRegistry();
+    const budgetTrackerInstance = new BudgetTracker(daemonStorage, daemonConfig.budget);
+    const approvalQueueInstance = new ApprovalQueue(
+      daemonStorage,
+      daemonConfig.security.approvalTimeoutMin,
+      daemonEventBus,
+    );
+    const securityPolicyInstance = new DaemonSecurityPolicy(
+      (name) => toolRegistry.getMetadata(name),
+      approvalQueueInstance,
+      new Set(daemonConfig.security.autoApproveTools),
+    );
+
+    // Parse HEARTBEAT.md and register triggers
+    const heartbeatPath = daemonConfig.heartbeat.heartbeatFile;
+    if (existsSync(heartbeatPath)) {
+      const content = readFileSync(heartbeatPath, "utf-8");
+      const triggerDefs = parseHeartbeatFile(content);
+      for (const def of triggerDefs) {
+        if (def.enabled === false) continue;
+        const trigger = new CronTrigger(
+          { name: def.name, description: def.action, type: "cron" },
+          def.cron,
+          daemonConfig.timezone || undefined,
+        );
+        triggerRegistry.register(trigger);
+      }
+      logger.info("Daemon triggers loaded", {
+        count: triggerRegistry.count(),
+        file: heartbeatPath,
+      });
+    } else {
+      logger.warn("HEARTBEAT.md not found", { path: heartbeatPath });
+    }
+
+    // Create HeartbeatLoop
+    heartbeatLoop = new HeartbeatLoop(
+      triggerRegistry,
+      taskManager,
+      budgetTrackerInstance,
+      securityPolicyInstance,
+      approvalQueueInstance,
+      daemonStorage,
+      identityManager,
+      daemonEventBus,
+      daemonConfig,
+      logger,
+    );
+
+    // Auto-restart after crash recovery
+    if (crashContext?.wasCrash) {
+      const wasDaemonRunning = daemonStorage.getDaemonState("daemon_was_running");
+      if (wasDaemonRunning === "true") {
+        logger.info("Daemon auto-restarting after crash recovery");
+      }
+    }
+
+    // Start heartbeat
+    heartbeatLoop.start();
+    logger.info("Daemon heartbeat started", {
+      intervalMs: daemonConfig.heartbeat.intervalMs,
+      triggers: triggerRegistry.count(),
+      budget: `$${daemonConfig.budget.dailyBudgetUsd}`,
+    });
+  }
+
   // Wire up message handler
   wireMessageHandler(
     channel,
@@ -409,6 +511,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     messageRouter,
     channel,
     container,
+    heartbeatLoop,
     shutdown: createShutdownHandler({
       dashboard,
       ragPipeline,
@@ -425,6 +528,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       chainManager,
       identityManager,
       uptimeInterval,
+      heartbeatLoop,
     }),
   };
 }
@@ -1047,6 +1151,7 @@ interface ShutdownOptions {
   chainManager?: ChainManager;
   identityManager?: IdentityStateManager;
   uptimeInterval?: ReturnType<typeof setInterval>;
+  heartbeatLoop?: HeartbeatLoop;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -1058,6 +1163,11 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
     logger.info("Shutting down Strata Brain...");
 
     clearInterval(cleanupInterval);
+
+    // Stop heartbeat loop before draining events
+    if (options.heartbeatLoop) {
+      options.heartbeatLoop.stop();
+    }
 
     // Stop chain detection timer before draining events
     if (options.chainManager) {
