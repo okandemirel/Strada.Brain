@@ -45,7 +45,9 @@ export class LearningStatsTool implements ITool {
     input: Record<string, unknown>,
     _context: ToolContext,
   ): Promise<ToolExecutionResult> {
-    const section = (input["section"] as string) ?? "all";
+    const validSections = ["instincts", "metrics", "all"];
+    const raw = (input["section"] as string) ?? "all";
+    const section = validSections.includes(raw) ? raw : "all";
     const sections: string[] = [];
 
     if (section === "instincts" || section === "all") {

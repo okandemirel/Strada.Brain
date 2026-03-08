@@ -53,7 +53,9 @@ export class AgentStatusTool implements ITool {
     input: Record<string, unknown>,
     _context: ToolContext,
   ): Promise<ToolExecutionResult> {
-    const section = (input["section"] as string) ?? "overview";
+    const validSections = ["overview", "tools", "memory", "all"];
+    const raw = (input["section"] as string) ?? "overview";
+    const section = validSections.includes(raw) ? raw : "overview";
     const memStats = this.getMemoryStats?.();
     const snapshot = this.metrics.getSnapshot(memStats ?? undefined);
 

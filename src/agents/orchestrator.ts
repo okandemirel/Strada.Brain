@@ -452,6 +452,7 @@ export class Orchestrator {
           this.stradaDeps = checkStradaDeps(this.projectPath);
           this.systemPrompt =
             STRATA_SYSTEM_PROMPT +
+            buildCapabilityManifest() +
             buildProjectContext(this.projectPath) +
             buildDepsContext(this.stradaDeps);
           this.depsSetupComplete = true;
@@ -505,6 +506,7 @@ export class Orchestrator {
         this.stradaDeps = checkStradaDeps(this.projectPath);
         this.systemPrompt =
           STRATA_SYSTEM_PROMPT +
+          buildCapabilityManifest() +
           buildProjectContext(this.projectPath) +
           buildDepsContext(this.stradaDeps);
         await this.channel.sendText(chatId, "Strada.Modules kuruldu!");

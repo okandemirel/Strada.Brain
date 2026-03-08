@@ -32,6 +32,7 @@ export const ToolCategories = {
   BROWSER: "browser",
   COMPOSITE: "composite",
   INTROSPECTION: "introspection",
+  CUSTOM: "custom",
 } as const;
 
 export type ToolCategory = (typeof ToolCategories)[keyof typeof ToolCategories];
@@ -553,7 +554,7 @@ export class ToolRegistry {
           memoryManager
             ? () => {
                 const stats = memoryManager.getStats();
-                return { totalEntries: stats.totalEntries, hasAnalysisCache: false };
+                return { totalEntries: stats.totalEntries, hasAnalysisCache: stats.hasAnalysisCache };
               }
             : undefined,
         ),
@@ -565,6 +566,7 @@ export class ToolRegistry {
       );
     }
 
+    // Registered unconditionally — gracefully reports "not available" when deps are missing
     this.register(
       new LearningStatsTool(learningStorage, metricsStorage),
       {
