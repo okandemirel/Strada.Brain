@@ -11,6 +11,7 @@ import type { TaskType, CompletionStatus } from "../metrics/metrics-types.js";
 import { parseDurationToTimestamp } from "../metrics/parse-duration.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { GoalStorage } from "../goals/index.js";
+import type { GoalTree } from "../goals/types.js";
 import { calculateProgress } from "../goals/goal-progress.js";
 
 /**
@@ -363,7 +364,7 @@ export class DashboardServer {
   /**
    * Serialize a GoalTree into JSON-safe format for the /api/goals endpoint.
    */
-  private serializeGoalTree(tree: import("../goals/types.js").GoalTree): Record<string, unknown> {
+  private serializeGoalTree(tree: GoalTree): Record<string, unknown> {
     const nodes: Array<Record<string, unknown>> = [];
     let rootStatus: string = "pending";
 

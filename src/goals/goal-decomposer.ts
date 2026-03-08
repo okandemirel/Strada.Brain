@@ -117,14 +117,14 @@ export class GoalDecomposer {
     // Attempt LLM decomposition with one retry
     let llmOutput = await this.callLLMForDecomposition(
       PROACTIVE_PROMPT,
-      `Decompose this task into sub-goals:\n\n${taskDescription}`,
+      `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
     );
 
     // If first attempt fails, retry with error feedback
     if (!llmOutput) {
       llmOutput = await this.callLLMForDecomposition(
         PROACTIVE_PROMPT,
-        `Previous attempt failed to produce valid JSON. Please try again.\n\nDecompose this task into sub-goals:\n\n${taskDescription}`,
+        `Previous attempt failed to produce valid JSON. Please try again.\n\nDecompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
       );
     }
 
@@ -168,7 +168,7 @@ export class GoalDecomposer {
 
         const subOutput = await this.callLLMForDecomposition(
           PROACTIVE_PROMPT,
-          `Further decompose this sub-goal:\n\n${flagged.task}`,
+          `Further decompose this sub-goal:\n\n<task>${flagged.task}</task>`,
         );
 
         if (subOutput) {
@@ -218,7 +218,7 @@ export class GoalDecomposer {
       .map((n) => `  - [completed] ${n.task}`)
       .join("\n");
 
-    const userMessage = `The following sub-goal FAILED:\nTask: ${failingNode.task}\nFailure context: ${reflectionContext}\n\nCompleted so far:\n${completedNodes || "  (none)"}\n\nDecompose the failing sub-goal into smaller recovery steps.`;
+    const userMessage = `The following sub-goal FAILED:\n<failed_task>${failingNode.task}</failed_task>\n<failure_context>${reflectionContext}</failure_context>\n\nCompleted so far:\n${completedNodes || "  (none)"}\n\nDecompose the failing sub-goal into smaller recovery steps.`;
 
     const llmOutput = await this.callLLMForDecomposition(
       REACTIVE_PROMPT,

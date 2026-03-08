@@ -29,9 +29,26 @@ import { calculateProgress, renderProgressBar } from "../goals/goal-progress.js"
 import { renderGoalTree } from "../goals/goal-renderer.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
-import type { IChannelInteractive } from "../channels/channel-core.interface.js";
 import { supportsInteractivity } from "../channels/channel.interface.js";
 import { getLogger } from "../utils/logger.js";
+
+const LLM_TIMEOUT_MS = 10_000;
+
+/** Race a promise against a timeout; resolves to fallback on timeout. */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** Truncate error messages to avoid leaking internal details. */
+function sanitizeError(error: string, maxLen = 200): string {
+  // Strip absolute file paths
+  const cleaned = error.replace(/\/[^\s:]+/g, "<path>");
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "…" : cleaned;
+}
 
 interface QueueEntry {
   task: Task;
@@ -78,10 +95,15 @@ export class BackgroundExecutor {
     this.taskManager = manager;
   }
 
+  private static readonly MAX_QUEUE_SIZE = 100;
+
   /**
    * Add a task to the execution queue.
    */
   enqueue(task: Task, signal: AbortSignal, onProgress: (message: string) => void): void {
+    if (this.queue.length >= BackgroundExecutor.MAX_QUEUE_SIZE) {
+      throw new Error(`Task queue full (max ${BackgroundExecutor.MAX_QUEUE_SIZE}). Try again later.`);
+    }
     this.queue.push({ task, signal, onProgress });
     this.processQueue();
   }
@@ -226,19 +248,23 @@ export class BackgroundExecutor {
     const criticalityEvaluator: CriticalityEvaluator | undefined = this.aiProvider
       ? async (failedNode: GoalNode, parentTask: string): Promise<boolean> => {
           try {
-            const response = await this.aiProvider!.chat(
-              "You are a task criticality evaluator. Respond with exactly YES or NO followed by one sentence of reasoning.",
-              [{
-                role: "user" as const,
-                content: `A sub-goal failed during task execution. Evaluate if this failure is critical enough to block dependent sub-goals.
+            const response = await withTimeout(
+              this.aiProvider!.chat(
+                "You are a task criticality evaluator. Respond with exactly YES or NO followed by one sentence of reasoning.",
+                [{
+                  role: "user" as const,
+                  content: `A sub-goal failed during task execution. Evaluate if this failure is critical enough to block dependent sub-goals.
 
-Failed sub-goal: "${failedNode.task}"
-Error: "${failedNode.error ?? "unknown error"}"
-Parent goal: "${parentTask}"
+<failed_subgoal>${failedNode.task}</failed_subgoal>
+<error>${sanitizeError(failedNode.error ?? "unknown error")}</error>
+<parent_goal>${parentTask}</parent_goal>
 
-Is this failure critical? A critical failure means dependent sub-goals cannot proceed without this result. A non-critical failure means other sub-goals can work around it.`,
-              }],
-              [],
+Is this failure critical? A critical failure means dependent sub-goals cannot proceed without this result. A non-critical failure means other sub-goals can work around it. Respond with exactly YES or NO followed by one sentence of reasoning.`,
+                }],
+                [],
+              ),
+              LLM_TIMEOUT_MS,
+              { text: "YES" } as Awaited<ReturnType<IAIProvider["chat"]>>,
             );
             const text = response.text?.trim().toUpperCase() ?? "YES";
             return text.startsWith("YES");
@@ -249,13 +275,12 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
         }
       : undefined;
 
-    // Failure budget exceeded handler (per user decisions:
-    // - "detailed failure report listing all failed nodes with errors"
-    // - "LLM-generated fix suggestions: both diagnosis and actionable next steps"
-    // - "Force-continue option when budget exceeded"
-    // - "'Always continue' option remembered for the current tree")
-    const onFailureBudgetExceeded: OnFailureBudgetExceeded | undefined =
-      (this.channel && supportsInteractivity(this.channel))
+    // Failure budget exceeded handler: detailed report, LLM diagnosis, force-continue UX
+    const interactiveChannel = this.channel && supportsInteractivity(this.channel)
+      ? this.channel
+      : undefined;
+
+    const onFailureBudgetExceeded: OnFailureBudgetExceeded | undefined = interactiveChannel
         ? async (report: FailureReport) => {
             // Build detailed failure report
             const failureLines: string[] = [
@@ -264,26 +289,33 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
             ];
             for (const fn of report.failedNodes) {
               failureLines.push(`[!] ${fn.task}`);
-              failureLines.push(`    Error: ${fn.error}`);
+              failureLines.push(`    Error: ${sanitizeError(fn.error)}`);
               if (fn.retryCount > 0) failureLines.push(`    Retries: ${fn.retryCount}`);
               failureLines.push("");
             }
 
-            // LLM-generated fix suggestions (per user decision)
+            // LLM-generated fix suggestions (best-effort)
             let diagnosis = "";
             if (this.aiProvider) {
               try {
-                const diagResponse = await this.aiProvider.chat(
-                  "You are a task failure diagnostician. Provide a brief diagnosis and actionable next steps. Be concise (2-3 sentences).",
-                  [{
-                    role: "user" as const,
-                    content: `The following sub-goals failed during execution of "${goalTree.taskDescription}":
+                const diagResponse = await withTimeout(
+                  this.aiProvider.chat(
+                    "You are a task failure diagnostician. Provide a brief diagnosis and actionable next steps. Be concise (2-3 sentences).",
+                    [{
+                      role: "user" as const,
+                      content: `The following sub-goals failed during execution of a task.
 
-${report.failedNodes.map(fn => `- "${fn.task}": ${fn.error}`).join("\n")}
+<task_description>${goalTree.taskDescription}</task_description>
+<failures>
+${report.failedNodes.map(fn => `<failure task="${fn.task}">${sanitizeError(fn.error)}</failure>`).join("\n")}
+</failures>
 
 Provide a brief diagnosis (what likely went wrong) and actionable next steps.`,
-                  }],
-                  [],
+                    }],
+                    [],
+                  ),
+                  LLM_TIMEOUT_MS,
+                  { text: "" } as Awaited<ReturnType<IAIProvider["chat"]>>,
                 );
                 diagnosis = diagResponse.text?.trim() ?? "";
               } catch {
@@ -297,8 +329,7 @@ Provide a brief diagnosis (what likely went wrong) and actionable next steps.`,
 
             const details = failureLines.join("\n");
 
-            // Present force-continue / abort options to user (per user decision)
-            const interactiveChannel = this.channel as unknown as IChannelInteractive;
+            // Present force-continue / abort options to user
             const choice = await interactiveChannel.requestConfirmation({
               chatId: task.chatId,
               question: `Failure budget exceeded (${report.failureCount}/${report.maxFailures}). How would you like to proceed?`,

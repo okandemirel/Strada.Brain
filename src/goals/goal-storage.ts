@@ -9,7 +9,7 @@
 import Database from "better-sqlite3";
 import { configureSqlitePragmas } from "../memory/unified/sqlite-pragmas.js";
 import { mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { GoalNode, GoalTree, GoalNodeId, GoalStatus } from "./types.js";
 
 // =============================================================================
@@ -92,14 +92,20 @@ export class GoalStorage {
 
   /** Initialize the database connection and schema */
   initialize(): void {
-    const dir = dirname(this.dbPath);
+    // Defense-in-depth: validate resolved path doesn't escape expected directory
+    const resolved = resolve(this.dbPath);
+    if (resolved.includes("..")) {
+      throw new Error("GoalStorage: resolved dbPath must not contain path traversal");
+    }
+
+    const dir = dirname(resolved);
     if (dir && dir !== ".") {
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
     }
 
-    this.db = new Database(this.dbPath);
+    this.db = new Database(resolved);
     configureSqlitePragmas(this.db, "tasks");
     this.db.exec(SCHEMA_SQL);
 
@@ -145,15 +151,16 @@ export class GoalStorage {
       updateNodeStatus: `
         UPDATE goal_nodes SET status = ?, result = ?, error = ?, updated_at = ? WHERE id = ?
       `,
-      getTreesBySession: `SELECT * FROM goal_trees WHERE session_id = ? ORDER BY created_at DESC`,
+      getTreesBySession: `SELECT * FROM goal_trees WHERE session_id = ? ORDER BY created_at DESC LIMIT 50`,
       deleteTree: `DELETE FROM goal_trees WHERE root_id = ?`,
       upsertTree: `
         INSERT OR REPLACE INTO goal_trees (root_id, session_id, task_description, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `,
       deleteNodesByRoot: `DELETE FROM goal_nodes WHERE root_id = ?`,
-      getInterruptedTrees: `SELECT * FROM goal_trees WHERE status = 'executing' ORDER BY updated_at DESC`,
+      getInterruptedTrees: `SELECT * FROM goal_trees WHERE status = 'executing' ORDER BY updated_at DESC LIMIT 20`,
       updateTreeStatus: `UPDATE goal_trees SET status = ?, updated_at = ? WHERE root_id = ?`,
+      pruneOldTrees: `DELETE FROM goal_trees WHERE status IN ('completed', 'failed') AND updated_at < ?`,
     };
 
     for (const [name, sql] of Object.entries(stmts)) {
@@ -225,20 +232,7 @@ export class GoalStorage {
       | undefined;
     if (!treeRow) return null;
 
-    const nodeRows = this.getStatement("getNodesByRoot").all(rootId) as GoalNodeRow[];
-    const nodes = new Map<GoalNodeId, GoalNode>();
-
-    for (const row of nodeRows) {
-      nodes.set(row.id as GoalNodeId, this.rowToNode(row));
-    }
-
-    return {
-      rootId: treeRow.root_id as GoalNodeId,
-      sessionId: treeRow.session_id,
-      taskDescription: treeRow.task_description,
-      nodes,
-      createdAt: treeRow.created_at,
-    };
+    return this.buildTreeFromRow(treeRow);
   }
 
   /** Update a node's status, result, and error */
@@ -266,24 +260,7 @@ export class GoalStorage {
       sessionId,
     ) as GoalTreeRow[];
 
-    return treeRows.map((treeRow) => {
-      const nodeRows = this.getStatement("getNodesByRoot").all(
-        treeRow.root_id,
-      ) as GoalNodeRow[];
-      const nodes = new Map<GoalNodeId, GoalNode>();
-
-      for (const row of nodeRows) {
-        nodes.set(row.id as GoalNodeId, this.rowToNode(row));
-      }
-
-      return {
-        rootId: treeRow.root_id as GoalNodeId,
-        sessionId: treeRow.session_id,
-        taskDescription: treeRow.task_description,
-        nodes,
-        createdAt: treeRow.created_at,
-      };
-    });
+    return treeRows.map((treeRow) => this.buildTreeFromRow(treeRow));
   }
 
   /** Delete a tree and all its nodes (cascade via FK) */
@@ -309,6 +286,22 @@ export class GoalStorage {
       startedAt: row.started_at ?? undefined,
       completedAt: row.completed_at ?? undefined,
       retryCount: row.retry_count ?? 0,
+    };
+  }
+
+  /** Reconstruct a GoalTree from a tree row by loading its nodes */
+  private buildTreeFromRow(treeRow: GoalTreeRow): GoalTree {
+    const nodeRows = this.getStatement("getNodesByRoot").all(treeRow.root_id) as GoalNodeRow[];
+    const nodes = new Map<GoalNodeId, GoalNode>();
+    for (const row of nodeRows) {
+      nodes.set(row.id as GoalNodeId, this.rowToNode(row));
+    }
+    return {
+      rootId: treeRow.root_id as GoalNodeId,
+      sessionId: treeRow.session_id,
+      taskDescription: treeRow.task_description,
+      nodes,
+      createdAt: treeRow.created_at,
     };
   }
 
@@ -356,25 +349,20 @@ export class GoalStorage {
   getInterruptedTrees(): GoalTree[] {
     this.ensureConnection();
     const rows = this.getStatement("getInterruptedTrees").all() as GoalTreeRow[];
-    return rows.map((row) => {
-      const nodeRows = this.getStatement("getNodesByRoot").all(row.root_id) as GoalNodeRow[];
-      const nodes = new Map<GoalNodeId, GoalNode>();
-      for (const nr of nodeRows) {
-        nodes.set(nr.id as GoalNodeId, this.rowToNode(nr));
-      }
-      return {
-        rootId: row.root_id as GoalNodeId,
-        sessionId: row.session_id,
-        taskDescription: row.task_description,
-        nodes,
-        createdAt: row.created_at,
-      };
-    });
+    return rows.map((row) => this.buildTreeFromRow(row));
   }
 
   /** Update a tree's top-level status */
   updateTreeStatus(rootId: GoalNodeId, status: string): void {
     this.ensureConnection();
     this.getStatement("updateTreeStatus").run(status, Date.now(), rootId);
+  }
+
+  /** Prune completed/failed trees older than maxAgeMs (default 7 days). Returns count deleted. */
+  pruneOldTrees(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): number {
+    this.ensureConnection();
+    const cutoff = Date.now() - maxAgeMs;
+    const result = this.getStatement("pruneOldTrees").run(cutoff);
+    return result.changes;
   }
 }

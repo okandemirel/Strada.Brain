@@ -218,6 +218,7 @@ export class GoalExecutor {
       });
 
       for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
+        if (signal.aborted) return;
         try {
           const result = await executor(mutableNodes.get(nodeId)!, signal);
 
@@ -233,6 +234,7 @@ export class GoalExecutor {
           return;
         } catch (err) {
           retryCount = attempt + 1;
+          if (signal.aborted) return;
           if (attempt < this.config.maxRetries) {
             // Update retryCount for the next attempt
             updateNode(nodeId, { retryCount });

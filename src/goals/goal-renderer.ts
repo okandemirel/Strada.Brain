@@ -26,6 +26,11 @@ const STATUS_ICONS: Record<GoalStatus, string> = {
 /** Maximum character length before truncation */
 const MAX_RENDER_LENGTH = 3000;
 
+/** Escape HTML-sensitive characters in task text (defense-in-depth for web channels) */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /** Braille spinner characters for executing nodes */
 const SPINNER_CHARS = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
 
@@ -56,7 +61,7 @@ export function renderGoalTree(tree: GoalTree, options?: GoalRendererOptions): s
   const lines: string[] = [];
 
   // Render root line
-  lines.push(`${STATUS_ICONS[root.status]} ${root.task}`);
+  lines.push(`${STATUS_ICONS[root.status]} ${escapeHtml(root.task)}`);
 
   // Find and sort root's children
   const children = getChildren(tree, tree.rootId);
@@ -178,7 +183,7 @@ function renderNode(
   if (!node) return;
 
   const connector = isLast ? "\\-- " : "+-- ";
-  let line = `${prefix}${connector}${STATUS_ICONS[node.status]} ${node.task}`;
+  let line = `${prefix}${connector}${STATUS_ICONS[node.status]} ${escapeHtml(node.task)}`;
 
   // Duration for completed nodes with timing
   if (node.status === "completed" && node.startedAt && node.completedAt) {
