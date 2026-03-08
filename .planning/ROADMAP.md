@@ -32,7 +32,7 @@
 - [x] **Phase 10: WebSocket Security Hardening** - Fix known vulnerability patterns before adding daemon control surfaces (completed 2026-03-08)
 - [x] **Phase 11: LLM Self-Awareness + Identity Foundation** - Agent knows its own capabilities and can introspect its state (completed 2026-03-08)
 - [x] **Phase 12: Persistent Identity + Startup Recovery** - Agent persists identity across restarts and recovers from crashes (completed 2026-03-08)
-- [ ] **Phase 13: Cross-Session Learning Transfer** - Instincts flow across sessions with provenance and project-scope filtering
+- [x] **Phase 13: Cross-Session Learning Transfer** - Instincts flow across sessions with provenance and project-scope filtering (completed 2026-03-08)
 - [ ] **Phase 14: Heartbeat Daemon Loop** - Core daemon loop with trigger evaluation, security policy, and cost guards
 - [ ] **Phase 15: Proactive Triggers** - File watcher, webhook, checklist, and deduplication extend the daemon's senses
 - [ ] **Phase 16: Interactive Goal Execution + Replanning** - Goals execute inline during chat with mid-execution replanning
@@ -96,7 +96,7 @@ Plans:
 Plans:
 - [x] 13-01-PLAN.md -- Types, config, migration runner, and schema migration for cross-session foundation
 - [x] 13-02-PLAN.md -- Scope-filtered retrieval, provenance formatting, eager deduplication, weighted scoring
-- [ ] 13-03-PLAN.md -- Bootstrap wiring, metrics integration, CLI cross-session subcommand
+- [x] 13-03-PLAN.md -- Bootstrap wiring, metrics integration, CLI cross-session subcommand
 
 ### Phase 14: Heartbeat Daemon Loop
 **Goal**: Agent runs as a persistent daemon with periodic self-activation, pluggable trigger evaluation, security constraints, and cost controls
@@ -108,12 +108,14 @@ Plans:
   3. When daily LLM budget is exceeded, daemon halts proactive actions and notifies the user
   4. CronTrigger fires at scheduled times with timezone support
   5. After repeated trigger failures, exponential backoff and circuit breaker prevent runaway re-evaluation
-**Plans**: TBD
+**Plans**: 5 plans
 
 Plans:
-- [ ] 14-01: TBD
-- [ ] 14-02: TBD
-- [ ] 14-03: TBD
+- [ ] 14-01-PLAN.md -- Types, config schema, DaemonStorage, DaemonEvents foundation
+- [ ] 14-02-PLAN.md -- CircuitBreaker, HEARTBEAT.md parser, CronTrigger, TriggerRegistry
+- [ ] 14-03-PLAN.md -- BudgetTracker, DaemonSecurityPolicy, ApprovalQueue
+- [ ] 14-04-PLAN.md -- HeartbeatLoop core + bootstrap wiring + --daemon CLI flag
+- [ ] 14-05-PLAN.md -- Daemon CLI commands + dashboard /api/daemon + AgentStatusTool extension
 
 ### Phase 15: Proactive Triggers
 **Goal**: Daemon responds to real-world events through file changes, webhooks, checklists, and deduplication
@@ -209,8 +211,8 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 10. WebSocket Security Hardening | v2.0 | 1/1 | Complete | 2026-03-08 |
 | 11. LLM Self-Awareness + Identity Foundation | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 12. Persistent Identity + Startup Recovery | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
-| 13. Cross-Session Learning Transfer | v2.0 | 2/3 | In progress | - |
-| 14. Heartbeat Daemon Loop | v2.0 | 0/TBD | Not started | - |
+| 13. Cross-Session Learning Transfer | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
+| 14. Heartbeat Daemon Loop | 1/5 | In Progress|  | - |
 | 15. Proactive Triggers | v2.0 | 0/TBD | Not started | - |
 | 16. Interactive Goal Execution + Replanning | v2.0 | 0/TBD | Not started | - |
 | 17. Dynamic Memory Re-retrieval | v2.0 | 0/TBD | Not started | - |
