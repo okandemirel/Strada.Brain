@@ -328,4 +328,337 @@ describe("WebSocketDashboardServer", () => {
     ws.close();
     await authServer.stop();
   });
+
+  // ─── Origin Validation (SEC-01) ──────────────────────────────────────────────
+
+  describe("Origin validation (SEC-01)", () => {
+    it("rejects connections with non-localhost Origin", async () => {
+      const originServer = new WebSocketDashboardServer(
+        currentPort++,
+        undefined,
+        metrics,
+        () => undefined
+      );
+
+      await originServer.start();
+      const port = currentPort - 1;
+
+      const ws = new WebSocket(`ws://localhost:${port}/ws`, {
+        headers: { Origin: "http://evil.com" },
+      });
+
+      const error = await new Promise<Error>((resolve) => {
+        ws.on("error", resolve);
+        ws.on("unexpected-response", () => resolve(new Error("rejected")));
+      });
+
+      expect(error).toBeDefined();
+      ws.close();
+      await originServer.stop();
+    }, 15000);
+
+    it("allows connections from localhost Origin", async () => {
+      const originServer = new WebSocketDashboardServer(
+        currentPort++,
+        undefined,
+        metrics,
+        () => undefined
+      );
+
+      await originServer.start();
+      const port = currentPort - 1;
+
+      const ws = new WebSocket(`ws://localhost:${port}/ws`, {
+        headers: { Origin: "http://localhost" },
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", resolve);
+        ws.on("error", reject);
+      });
+
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
+      await originServer.stop();
+    }, 15000);
+
+    it("allows connections from localhost Origin with port", async () => {
+      const originServer = new WebSocketDashboardServer(
+        currentPort++,
+        undefined,
+        metrics,
+        () => undefined
+      );
+
+      await originServer.start();
+      const port = currentPort - 1;
+
+      const ws = new WebSocket(`ws://localhost:${port}/ws`, {
+        headers: { Origin: "http://localhost:3100" },
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", resolve);
+        ws.on("error", reject);
+      });
+
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
+      await originServer.stop();
+    }, 15000);
+
+    it("allows connections from 127.0.0.1 Origin", async () => {
+      const originServer = new WebSocketDashboardServer(
+        currentPort++,
+        undefined,
+        metrics,
+        () => undefined
+      );
+
+      await originServer.start();
+      const port = currentPort - 1;
+
+      const ws = new WebSocket(`ws://localhost:${port}/ws`, {
+        headers: { Origin: "http://127.0.0.1" },
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", resolve);
+        ws.on("error", reject);
+      });
+
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
+      await originServer.stop();
+    }, 15000);
+
+    it("allows connections without Origin header (non-browser)", async () => {
+      const originServer = new WebSocketDashboardServer(
+        currentPort++,
+        undefined,
+        metrics,
+        () => undefined
+      );
+
+      await originServer.start();
+      const port = currentPort - 1;
+
+      const ws = new WebSocket(`ws://localhost:${port}/ws`);
+
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", resolve);
+        ws.on("error", reject);
+      });
+
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
+      await originServer.stop();
+    }, 15000);
+
+    it("rejects malformed Origin header", async () => {
+      const originServer = new WebSocketDashboardServer(
+        currentPort++,
+        undefined,
+        metrics,
+        () => undefined
+      );
+
+      await originServer.start();
+      const port = currentPort - 1;
+
+      const ws = new WebSocket(`ws://localhost:${port}/ws`, {
+        headers: { Origin: "not-a-url" },
+      });
+
+      const error = await new Promise<Error>((resolve) => {
+        ws.on("error", resolve);
+        ws.on("unexpected-response", () => resolve(new Error("rejected")));
+      });
+
+      expect(error).toBeDefined();
+      ws.close();
+      await originServer.stop();
+    }, 15000);
+
+    it("allows custom allowed origins when configured", async () => {
+      const originServer = new WebSocketDashboardServer(
+        currentPort++,
+        undefined,
+        metrics,
+        () => undefined,
+        undefined,
+        undefined,
+        ["myapp.local"]
+      );
+
+      await originServer.start();
+      const port = currentPort - 1;
+
+      const ws = new WebSocket(`ws://localhost:${port}/ws`, {
+        headers: { Origin: "http://myapp.local" },
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", resolve);
+        ws.on("error", reject);
+      });
+
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
+      await originServer.stop();
+    }, 15000);
+  });
+
+  // ─── Auth Rate Limiting (SEC-02) ──────────────────────────────────────────────
+
+  describe("Auth rate limiting (SEC-02)", () => {
+    it("blocks auth after 5 failed attempts", async () => {
+      const rlServer = new WebSocketDashboardServer(
+        currentPort++,
+        "secret-token",
+        metrics,
+        () => undefined
+      );
+
+      await rlServer.start();
+      const port = currentPort - 1;
+
+      const ws = new WebSocket(`ws://localhost:${port}/ws`);
+
+      // Wait for initial auth message
+      await new Promise<void>((resolve) => {
+        ws.on("message", (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "auth") resolve();
+        });
+      });
+
+      // Send 5 failed auth attempts
+      const responses: Array<{ type: string; payload?: { retryAfter?: number; message?: string } }> = [];
+
+      for (let i = 0; i < 5; i++) {
+        ws.send(JSON.stringify({ type: "auth", payload: { token: "wrong" } }));
+        await new Promise<void>((resolve) => {
+          const handler = (data: Buffer) => {
+            const msg = JSON.parse(data.toString());
+            if (msg.type === "auth_error") {
+              responses.push(msg);
+              ws.removeListener("message", handler);
+              resolve();
+            }
+          };
+          ws.on("message", handler);
+        });
+      }
+
+      expect(responses).toHaveLength(5);
+
+      // 6th attempt should be rate-limited
+      ws.send(JSON.stringify({ type: "auth", payload: { token: "wrong" } }));
+      const rateLimited = await new Promise<{ type: string; payload: { retryAfter?: number; message?: string } }>((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "auth_error") {
+            ws.removeListener("message", handler);
+            resolve(msg);
+          }
+        };
+        ws.on("message", handler);
+      });
+
+      expect(rateLimited.type).toBe("auth_error");
+      expect(rateLimited.payload.retryAfter).toBeDefined();
+      expect(rateLimited.payload.retryAfter).toBeGreaterThan(0);
+
+      ws.close();
+      await rlServer.stop();
+    }, 15000);
+
+    it("successful auth resets lockout counter", async () => {
+      const rlServer = new WebSocketDashboardServer(
+        currentPort++,
+        "secret-token",
+        metrics,
+        () => undefined
+      );
+
+      await rlServer.start();
+      const port = currentPort - 1;
+
+      const ws = new WebSocket(`ws://localhost:${port}/ws`);
+
+      // Wait for initial auth message
+      await new Promise<void>((resolve) => {
+        ws.on("message", (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "auth") resolve();
+        });
+      });
+
+      // Send 3 failed auth attempts
+      for (let i = 0; i < 3; i++) {
+        ws.send(JSON.stringify({ type: "auth", payload: { token: "wrong" } }));
+        await new Promise<void>((resolve) => {
+          const handler = (data: Buffer) => {
+            const msg = JSON.parse(data.toString());
+            if (msg.type === "auth_error") {
+              ws.removeListener("message", handler);
+              resolve();
+            }
+          };
+          ws.on("message", handler);
+        });
+      }
+
+      // Succeed once -- should reset counter
+      ws.send(JSON.stringify({ type: "auth", payload: { token: "secret-token" } }));
+      await new Promise<void>((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "auth_success") {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+      });
+
+      // Now fail 5 more times -- should only lock after the 5th (not the 3rd)
+      const failResponses: Array<{ type: string; payload?: { retryAfter?: number } }> = [];
+      for (let i = 0; i < 5; i++) {
+        ws.send(JSON.stringify({ type: "auth", payload: { token: "wrong" } }));
+        await new Promise<void>((resolve) => {
+          const handler = (data: Buffer) => {
+            const msg = JSON.parse(data.toString());
+            if (msg.type === "auth_error") {
+              failResponses.push(msg);
+              ws.removeListener("message", handler);
+              resolve();
+            }
+          };
+          ws.on("message", handler);
+        });
+      }
+
+      // First 4 should not have retryAfter, 5th should trigger lockout
+      // Check the 6th attempt to see the lockout
+      ws.send(JSON.stringify({ type: "auth", payload: { token: "wrong" } }));
+      const lockedOut = await new Promise<{ type: string; payload: { retryAfter?: number } }>((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "auth_error") {
+            ws.removeListener("message", handler);
+            resolve(msg);
+          }
+        };
+        ws.on("message", handler);
+      });
+
+      expect(lockedOut.payload.retryAfter).toBeDefined();
+      expect(lockedOut.payload.retryAfter).toBeGreaterThan(0);
+
+      ws.close();
+      await rlServer.stop();
+    }, 15000);
+  });
 });
