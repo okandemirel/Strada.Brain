@@ -169,19 +169,6 @@ import { formatDowntime } from "../../identity/crash-recovery.js";
 import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
-/**
- * Format milliseconds as human-readable uptime string.
- * Returns "X hours Y minutes" or "X minutes" for < 1h.
- */
-function formatUptime(ms: number): string {
-  const totalMinutes = Math.floor(ms / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours > 0) {
-    return `${hours} hour${hours !== 1 ? "s" : ""} ${minutes} minute${minutes !== 1 ? "s" : ""}`;
-  }
-  return `${minutes} minute${minutes !== 1 ? "s" : ""}`;
-}
 
 /**
  * Build an identity section for the system prompt.
@@ -193,7 +180,7 @@ export function buildIdentitySection(state: IdentityState): string {
   const lastActive = state.lastActivityTs > 0
     ? new Date(state.lastActivityTs).toISOString()
     : "never";
-  const uptimeStr = formatUptime(state.cumulativeUptimeMs);
+  const uptimeStr = formatDowntime(state.cumulativeUptimeMs);
 
   const lines: string[] = [
     "\n## Agent Identity",

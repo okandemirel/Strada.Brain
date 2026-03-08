@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: in-progress
-stopped_at: Completed 12-01-PLAN.md
-last_updated: "2026-03-08T14:54:00.000Z"
-last_activity: 2026-03-08 -- Completed 12-01 Persistent Identity State
+stopped_at: Completed 12-02-PLAN.md
+last_updated: "2026-03-08T15:01:03.000Z"
+last_activity: 2026-03-08 -- Completed 12-02 Startup Recovery
 progress:
   total_phases: 10
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 5
-  completed_plans: 4
-  percent: 80
+  completed_plans: 5
+  percent: 100
 ---
 
 # State: Strada.Brain
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 12 of 19 (Persistent Identity + Startup Recovery)
-Plan: 1 of 2
-Status: Plan 12-01 complete
-Last activity: 2026-03-08 -- Completed 12-01 Persistent Identity State
+Plan: 2 of 2
+Status: Phase 12 complete
+Last activity: 2026-03-08 -- Completed 12-02 Startup Recovery
 
-Progress: [████████░░] 80%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4 (v2.0) / 28 (lifetime)
-- Average duration: 5min (v2.0)
-- Total execution time: 18min (v2.0)
+- Total plans completed: 5 (v2.0) / 29 (lifetime)
+- Average duration: 4min (v2.0)
+- Total execution time: 22min (v2.0)
 
 **By Phase:**
 
@@ -45,7 +45,7 @@ Progress: [████████░░] 80%
 |-------|-------|-------|----------|
 | 10 | 1 | 5min | 5min |
 | 11 | 2 | 7min | 3.5min |
-| 12 | 1/2 | 6min | 6min |
+| 12 | 2/2 | 10min | 5min |
 
 *Updated after each plan completion*
 
@@ -71,6 +71,9 @@ Recent decisions affecting current work:
 - [12-01]: Separate identity.db file over co-locating in learning.db -- avoids dual-connection complexity
 - [12-01]: Identity profile in SqliteProfile with 2MB cache -- small footprint for single-row data
 - [12-01]: 60s uptime flush interval -- bounds SIGKILL loss to 60 seconds
+- [12-02]: Combined crash notification and recovery prompt into single system prompt injection
+- [12-02]: No crash type distinction -- all unclean shutdowns treated identically
+- [12-02]: Crash notification persists for entire first post-crash session, cleared on next clean restart
 
 ### Pending Todos
 
@@ -83,9 +86,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T14:54:00.000Z
-Stopped at: Completed 12-01-PLAN.md
-Resume file: .planning/phases/12-persistent-identity-startup-recovery/12-01-SUMMARY.md
+Last session: 2026-03-08T15:01:03.000Z
+Stopped at: Completed 12-02-PLAN.md (Phase 12 complete)
+Resume file: .planning/phases/12-persistent-identity-startup-recovery/12-02-SUMMARY.md
 
 ---
 *State initialized: 2026-03-06*

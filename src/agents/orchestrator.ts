@@ -118,7 +118,7 @@ export class Orchestrator {
     metricsRecorder?: MetricsRecorder;
     goalDecomposer?: GoalDecomposer;
     interruptedGoalTrees?: GoalTree[];
-    identityState?: IdentityState;
+    getIdentityState?: () => IdentityState;
     crashRecoveryContext?: CrashRecoveryContext;
   }) {
     this.providerManager = opts.providerManager;
@@ -156,7 +156,7 @@ export class Orchestrator {
       buildProjectContext(this.projectPath) +
       buildDepsContext(opts.stradaDeps) +
       buildCapabilityManifest() +
-      (opts.identityState ? buildIdentitySection(opts.identityState) : "") +
+      (opts.getIdentityState ? buildIdentitySection(opts.getIdentityState()) : "") +
       (opts.crashRecoveryContext ? buildCrashNotificationSection(opts.crashRecoveryContext) : "");
   }
 

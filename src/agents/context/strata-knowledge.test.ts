@@ -1,9 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildCapabilityManifest, buildIdentitySection, buildCrashNotificationSection } from "./strata-knowledge.js";
-import type { IdentityState } from "../../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
-import type { GoalTree } from "../../goals/types.js";
-import type { GoalNodeId } from "../../goals/types.js";
+import { makeIdentityState, makeGoalTree } from "../../test-helpers.js";
 
 describe("buildCapabilityManifest", () => {
   it("returns a non-empty string", () => {
@@ -53,25 +51,9 @@ describe("buildCapabilityManifest", () => {
   });
 });
 
-function makeSampleState(overrides?: Partial<IdentityState>): IdentityState {
-  return {
-    agentUuid: "550e8400-e29b-41d4-a716-446655440000",
-    agentName: "Strata Brain",
-    firstBootTs: 1709856000000, // 2024-03-08
-    bootCount: 5,
-    cumulativeUptimeMs: 5580000, // 1h33m
-    lastActivityTs: 1709942400000,
-    totalMessages: 42,
-    totalTasks: 10,
-    projectContext: "/projects/MyGame",
-    cleanShutdown: true,
-    ...overrides,
-  };
-}
-
 describe("buildIdentitySection", () => {
   it("returns expected format with all fields", () => {
-    const state = makeSampleState();
+    const state = makeIdentityState();
     const result = buildIdentitySection(state);
 
     expect(result).toContain("## Agent Identity");
@@ -84,58 +66,33 @@ describe("buildIdentitySection", () => {
   });
 
   it("omits Project line when projectContext is empty string", () => {
-    const state = makeSampleState({ projectContext: "" });
+    const state = makeIdentityState({ projectContext: "" });
     const result = buildIdentitySection(state);
 
     expect(result).not.toContain("**Project:**");
   });
 
-  it("formats 0ms uptime as '0 minutes'", () => {
-    const state = makeSampleState({ cumulativeUptimeMs: 0 });
+  it("formats 0ms uptime as 'less than a minute'", () => {
+    const state = makeIdentityState({ cumulativeUptimeMs: 0 });
     const result = buildIdentitySection(state);
 
-    expect(result).toContain("0 minutes");
+    expect(result).toContain("less than a minute");
   });
 
   it("formats 3600000ms uptime as '1 hour 0 minutes'", () => {
-    const state = makeSampleState({ cumulativeUptimeMs: 3600000 });
+    const state = makeIdentityState({ cumulativeUptimeMs: 3600000 });
     const result = buildIdentitySection(state);
 
     expect(result).toContain("1 hour 0 minutes");
   });
 
   it("formats 5580000ms uptime as '1 hour 33 minutes'", () => {
-    const state = makeSampleState({ cumulativeUptimeMs: 5580000 });
+    const state = makeIdentityState({ cumulativeUptimeMs: 5580000 });
     const result = buildIdentitySection(state);
 
     expect(result).toContain("1 hour 33 minutes");
   });
 });
-
-function makeSampleTree(desc: string): GoalTree {
-  const rootId = "goal_test_root" as GoalNodeId;
-  return {
-    rootId,
-    sessionId: "session-1",
-    taskDescription: desc,
-    nodes: new Map([
-      [
-        rootId,
-        {
-          id: rootId,
-          parentId: null,
-          task: desc,
-          dependsOn: [] as readonly GoalNodeId[],
-          depth: 0,
-          status: "executing" as const,
-          createdAt: Date.now() - 600000,
-          updatedAt: Date.now() - 300000,
-        },
-      ],
-    ]),
-    createdAt: Date.now() - 600000,
-  };
-}
 
 function makeCrashContext(overrides?: Partial<CrashRecoveryContext>): CrashRecoveryContext {
   return {
@@ -151,7 +108,7 @@ function makeCrashContext(overrides?: Partial<CrashRecoveryContext>): CrashRecov
 describe("buildCrashNotificationSection", () => {
   it("produces section with Crash Recovery Notice heading, downtime, last activity, interrupted task count", () => {
     const ctx = makeCrashContext({
-      interruptedTrees: [makeSampleTree("Build player"), makeSampleTree("Setup inventory")],
+      interruptedTrees: [makeGoalTree("Build player"), makeGoalTree("Setup inventory")],
     });
     const result = buildCrashNotificationSection(ctx);
 
@@ -171,7 +128,7 @@ describe("buildCrashNotificationSection", () => {
 
   it("with 1 tree includes single-tree guidance", () => {
     const ctx = makeCrashContext({
-      interruptedTrees: [makeSampleTree("Build player")],
+      interruptedTrees: [makeGoalTree("Build player")],
     });
     const result = buildCrashNotificationSection(ctx);
 
@@ -182,9 +139,9 @@ describe("buildCrashNotificationSection", () => {
   it("with 3 trees includes multi-tree guidance", () => {
     const ctx = makeCrashContext({
       interruptedTrees: [
-        makeSampleTree("Build player"),
-        makeSampleTree("Setup inventory"),
-        makeSampleTree("Create UI"),
+        makeGoalTree("Build player"),
+        makeGoalTree("Setup inventory"),
+        makeGoalTree("Create UI"),
       ],
     });
     const result = buildCrashNotificationSection(ctx);

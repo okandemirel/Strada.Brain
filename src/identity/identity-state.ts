@@ -6,6 +6,8 @@
  * via a clean_shutdown flag.
  *
  * Uses key-value schema for flexibility and forward-compatibility.
+ * Counters are cached in memory and flushed periodically to minimize
+ * per-message SQLite writes.
  */
 
 import Database from "better-sqlite3";
@@ -36,17 +38,31 @@ CREATE TABLE IF NOT EXISTS identity_state (
 );
 `;
 
+/** Single source of truth for SQLite key names. */
+const K = {
+  uuid: "agent_uuid",
+  name: "agent_name",
+  firstBoot: "first_boot_ts",
+  bootCount: "boot_count",
+  uptime: "cumulative_uptime_ms",
+  lastActivity: "last_activity_ts",
+  messages: "total_messages",
+  tasks: "total_tasks",
+  project: "project_context",
+  cleanShutdown: "clean_shutdown",
+} as const;
+
 const DEFAULT_KEYS: Record<string, string> = {
-  agent_uuid: "",
-  agent_name: "Strata Brain",
-  first_boot_ts: "0",
-  boot_count: "0",
-  cumulative_uptime_ms: "0",
-  last_activity_ts: "0",
-  total_messages: "0",
-  total_tasks: "0",
-  project_context: "",
-  clean_shutdown: "true",
+  [K.uuid]: "",
+  [K.name]: "Strata Brain",
+  [K.firstBoot]: "0",
+  [K.bootCount]: "0",
+  [K.uptime]: "0",
+  [K.lastActivity]: "0",
+  [K.messages]: "0",
+  [K.tasks]: "0",
+  [K.project]: "",
+  [K.cleanShutdown]: "true",
 };
 
 /**
@@ -57,6 +73,10 @@ export class IdentityStateManager {
   private bootStartTime: number = 0;
   private crashDetected: boolean = false;
   private readonly agentName: string;
+
+  // In-memory counter cache — flushed on shutdown and periodic intervals
+  private cache: Map<string, string> = new Map();
+  private dirty: Set<string> = new Set();
 
   // Prepared statements
   private stmtGet: Database.Statement | null = null;
@@ -74,9 +94,6 @@ export class IdentityStateManager {
    */
   initialize(): void {
     const resolved = resolve(this.dbPath);
-    if (resolved.includes("..")) {
-      throw new Error("IdentityStateManager: path traversal not allowed");
-    }
     const dir = dirname(resolved);
     if (dir && dir !== "." && !existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
@@ -102,14 +119,17 @@ export class IdentityStateManager {
     }
 
     // On first boot, generate UUID and set first_boot_ts
-    const uuid = this.getValue("agent_uuid");
+    const uuid = this.readDb(K.uuid);
     if (!uuid) {
       const newUuid = randomUUID();
       const bootTs = Date.now().toString();
-      this.setValue("agent_uuid", newUuid);
-      this.setValue("first_boot_ts", bootTs);
-      this.setValue("agent_name", this.agentName);
+      this.writeDb(K.uuid, newUuid);
+      this.writeDb(K.firstBoot, bootTs);
+      this.writeDb(K.name, this.agentName);
     }
+
+    // Load all values into in-memory cache
+    this.loadCache();
   }
 
   /**
@@ -120,18 +140,20 @@ export class IdentityStateManager {
     this.bootStartTime = Date.now();
 
     // Check if previous session crashed (clean_shutdown was false)
-    const prevClean = this.getValue("clean_shutdown");
+    const prevClean = this.getCached(K.cleanShutdown);
     this.crashDetected = prevClean === "false";
 
     // Increment boot count
-    const currentCount = parseInt(this.getValue("boot_count") ?? "0", 10);
-    this.setValue("boot_count", (currentCount + 1).toString());
+    this.incrementValue(K.bootCount);
 
     // Mark this boot as started (not yet cleanly shut down)
-    this.setValue("clean_shutdown", "false");
+    this.setCached(K.cleanShutdown, "false");
 
     // Update last activity
-    this.setValue("last_activity_ts", Date.now().toString());
+    this.setCached(K.lastActivity, Date.now().toString());
+
+    // Flush boot-critical state immediately
+    this.flush();
   }
 
   /**
@@ -145,38 +167,35 @@ export class IdentityStateManager {
    * Atomically increment cumulative uptime by deltaMs milliseconds.
    */
   updateUptime(deltaMs: number): void {
-    const current = parseInt(this.getValue("cumulative_uptime_ms") ?? "0", 10);
-    this.setValue("cumulative_uptime_ms", (current + deltaMs).toString());
+    this.incrementValue(K.uptime, deltaMs);
   }
 
   /**
    * Update last_activity_ts to current time.
    */
   recordActivity(): void {
-    this.setValue("last_activity_ts", Date.now().toString());
+    this.setCached(K.lastActivity, Date.now().toString());
   }
 
   /**
    * Increment total_messages counter.
    */
   incrementMessages(): void {
-    const current = parseInt(this.getValue("total_messages") ?? "0", 10);
-    this.setValue("total_messages", (current + 1).toString());
+    this.incrementValue(K.messages);
   }
 
   /**
    * Increment total_tasks counter.
    */
   incrementTasks(): void {
-    const current = parseInt(this.getValue("total_tasks") ?? "0", 10);
-    this.setValue("total_tasks", (current + 1).toString());
+    this.incrementValue(K.tasks);
   }
 
   /**
    * Set the project context path.
    */
   setProjectContext(path: string): void {
-    this.setValue("project_context", path);
+    this.setCached(K.project, path);
   }
 
   /**
@@ -186,34 +205,52 @@ export class IdentityStateManager {
   recordShutdown(): void {
     if (this.bootStartTime > 0) {
       const delta = Date.now() - this.bootStartTime;
-      this.updateUptime(delta);
+      this.incrementValue(K.uptime, delta);
       this.bootStartTime = 0;
     }
-    this.setValue("clean_shutdown", "true");
+    this.setCached(K.cleanShutdown, "true");
+    this.flush();
   }
 
   /**
    * Read all identity keys and return a typed IdentityState object.
+   * Uses in-memory cache — no SQLite reads.
    */
   getState(): IdentityState {
     return {
-      agentUuid: this.getValue("agent_uuid") ?? "",
-      agentName: this.getValue("agent_name") ?? "Strata Brain",
-      firstBootTs: parseInt(this.getValue("first_boot_ts") ?? "0", 10),
-      bootCount: parseInt(this.getValue("boot_count") ?? "0", 10),
-      cumulativeUptimeMs: parseInt(this.getValue("cumulative_uptime_ms") ?? "0", 10),
-      lastActivityTs: parseInt(this.getValue("last_activity_ts") ?? "0", 10),
-      totalMessages: parseInt(this.getValue("total_messages") ?? "0", 10),
-      totalTasks: parseInt(this.getValue("total_tasks") ?? "0", 10),
-      projectContext: this.getValue("project_context") ?? "",
-      cleanShutdown: this.getValue("clean_shutdown") === "true",
+      agentUuid: this.getCached(K.uuid) ?? "",
+      agentName: this.getCached(K.name) ?? "Strata Brain",
+      firstBootTs: parseInt(this.getCached(K.firstBoot) ?? "0", 10),
+      bootCount: parseInt(this.getCached(K.bootCount) ?? "0", 10),
+      cumulativeUptimeMs: parseInt(this.getCached(K.uptime) ?? "0", 10),
+      lastActivityTs: parseInt(this.getCached(K.lastActivity) ?? "0", 10),
+      totalMessages: parseInt(this.getCached(K.messages) ?? "0", 10),
+      totalTasks: parseInt(this.getCached(K.tasks) ?? "0", 10),
+      projectContext: this.getCached(K.project) ?? "",
+      cleanShutdown: this.getCached(K.cleanShutdown) === "true",
     };
   }
 
   /**
-   * Close the database connection.
+   * Flush all dirty in-memory values to SQLite.
+   */
+  flush(): void {
+    if (this.dirty.size === 0) return;
+    const now = new Date().toISOString();
+    for (const key of this.dirty) {
+      const value = this.cache.get(key);
+      if (value !== undefined) {
+        this.stmtSet?.run(key, value, now);
+      }
+    }
+    this.dirty.clear();
+  }
+
+  /**
+   * Close the database connection. Flushes pending writes first.
    */
   close(): void {
+    this.flush();
     this.stmtGet = null;
     this.stmtSet = null;
     this.db?.close();
@@ -224,12 +261,41 @@ export class IdentityStateManager {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  private getValue(key: string): string | undefined {
+  /** Load all rows from SQLite into the in-memory cache. */
+  private loadCache(): void {
+    if (!this.db) return;
+    const rows = this.db.prepare("SELECT key, value FROM identity_state").all() as Array<{ key: string; value: string }>;
+    this.cache.clear();
+    for (const row of rows) {
+      this.cache.set(row.key, row.value);
+    }
+  }
+
+  /** Read a value from in-memory cache. */
+  private getCached(key: string): string | undefined {
+    return this.cache.get(key);
+  }
+
+  /** Set a value in cache and mark as dirty for next flush. */
+  private setCached(key: string, value: string): void {
+    this.cache.set(key, value);
+    this.dirty.add(key);
+  }
+
+  /** Increment a numeric counter in cache by the given amount. */
+  private incrementValue(key: string, by: number = 1): void {
+    const current = parseInt(this.getCached(key) ?? "0", 10);
+    this.setCached(key, (current + by).toString());
+  }
+
+  /** Read directly from SQLite (used during initialization only). */
+  private readDb(key: string): string | undefined {
     const row = this.stmtGet?.get(key) as { value: string } | undefined;
     return row?.value;
   }
 
-  private setValue(key: string, value: string): void {
+  /** Write directly to SQLite (used during initialization only). */
+  private writeDb(key: string, value: string): void {
     this.stmtSet?.run(key, value, new Date().toISOString());
   }
 }

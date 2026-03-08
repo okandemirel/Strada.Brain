@@ -1,6 +1,7 @@
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import type { MetricsCollector } from "../../dashboard/metrics.js";
 import type { IdentityState } from "../../identity/identity-state.js";
+import { formatDowntime } from "../../identity/crash-recovery.js";
 import { buildSection, unavailableSection, checkToolRateLimit } from "./introspection-helpers.js";
 
 /**
@@ -112,12 +113,7 @@ export class AgentStatusTool implements ITool {
     if (section === "identity" || section === "all") {
       const identityState = this.getIdentityState?.();
       if (identityState) {
-        const totalMinutes = Math.floor(identityState.cumulativeUptimeMs / 60000);
-        const hours = Math.floor(totalMinutes / 60);
-        const minutes = totalMinutes % 60;
-        const uptimeStr = hours > 0
-          ? `${hours}h ${minutes}m`
-          : `${minutes}m`;
+        const uptimeStr = formatDowntime(identityState.cumulativeUptimeMs);
         const created = new Date(identityState.firstBootTs).toISOString().split("T")[0];
         sections.push(
           buildSection("Identity", [

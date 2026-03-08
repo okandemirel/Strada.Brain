@@ -5,6 +5,9 @@ import { join } from "node:path";
 import type { IChannelAdapter } from "./channels/channel.interface.js";
 import type { IAIProvider, ConversationMessage, ToolDefinition, ProviderResponse } from "./agents/providers/provider.interface.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./agents/tools/tool.interface.js";
+import type { IdentityState } from "./identity/identity-state.js";
+import type { GoalTree } from "./goals/types.js";
+import type { GoalNodeId } from "./goals/types.js";
 
 /**
  * Create a mock logger matching winston's interface.
@@ -98,4 +101,51 @@ export async function withTempDir(fn: (dir: string) => Promise<void>): Promise<v
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Create a sample IdentityState for testing.
+ */
+export function makeIdentityState(overrides?: Partial<IdentityState>): IdentityState {
+  return {
+    agentUuid: "550e8400-e29b-41d4-a716-446655440000",
+    agentName: "Strata Brain",
+    firstBootTs: 1709856000000,
+    bootCount: 5,
+    cumulativeUptimeMs: 5580000,
+    lastActivityTs: 1709942400000,
+    totalMessages: 42,
+    totalTasks: 10,
+    projectContext: "/projects/MyGame",
+    cleanShutdown: true,
+    ...overrides,
+  };
+}
+
+/**
+ * Create a sample GoalTree for testing.
+ */
+export function makeGoalTree(taskDescription: string): GoalTree {
+  const rootId = "goal_test_root" as GoalNodeId;
+  return {
+    rootId,
+    sessionId: "session-1",
+    taskDescription,
+    nodes: new Map([
+      [
+        rootId,
+        {
+          id: rootId,
+          parentId: null,
+          task: taskDescription,
+          dependsOn: [] as readonly GoalNodeId[],
+          depth: 0,
+          status: "executing" as const,
+          createdAt: Date.now() - 600000,
+          updatedAt: Date.now() - 300000,
+        },
+      ],
+    ]),
+    createdAt: Date.now() - 600000,
+  };
 }

@@ -186,8 +186,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     identityManager.recordBoot();
     identityManager.setProjectContext(config.unityProjectPath);
 
-    // Periodic uptime flush (bounds SIGKILL loss to 60 seconds)
-    uptimeInterval = setInterval(() => identityManager!.updateUptime(60000), 60000);
+    // Periodic uptime flush using actual elapsed time (bounds SIGKILL loss to ~60s)
+    let lastFlushTime = Date.now();
+    uptimeInterval = setInterval(() => {
+      const now = Date.now();
+      identityManager!.updateUptime(now - lastFlushTime);
+      identityManager!.flush();
+      lastFlushTime = now;
+    }, 60000);
 
     logger.info("Identity initialized", {
       bootNumber: identityManager.getState().bootCount,
@@ -294,7 +300,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     metricsRecorder,
     goalDecomposer,
     interruptedGoalTrees,
-    identityState: identityManager?.getState(),
+    getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
     crashRecoveryContext: crashContext ?? undefined,
   });
 
