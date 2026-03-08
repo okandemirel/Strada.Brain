@@ -1175,6 +1175,7 @@ export class Orchestrator {
       projectPath: this.projectPath,
       workingDirectory: this.projectPath,
       readOnly: this.readOnly,
+      chatId,
     };
 
     for (const tc of toolCalls) {

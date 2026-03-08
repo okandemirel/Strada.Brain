@@ -32,7 +32,7 @@ const dummyContext: ToolContext = {
 };
 
 describe("AgentStatusTool", () => {
-  it("execute({}) returns overview with uptime, messages, sessions, tokens, provider", async () => {
+  it("execute({}) returns overview with uptime, messages, sessions (no provider/tokens)", async () => {
     const metrics = createMockMetrics();
     const tool = new AgentStatusTool(
       metrics as never,
@@ -45,10 +45,9 @@ describe("AgentStatusTool", () => {
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain("2"); // uptime minutes (120000ms = 2 min)
     expect(result.content).toContain("42"); // totalMessages
-    expect(result.content).toContain("2"); // activeSessions
-    expect(result.content).toContain("1000"); // input tokens
-    expect(result.content).toContain("500"); // output tokens
-    expect(result.content).toContain("anthropic"); // provider
+    // Provider name and token details should be redacted
+    expect(result.content).not.toContain("anthropic");
+    expect(result.content).not.toContain("1000 input");
   });
 
   it('execute({section: "tools"}) returns tool count and tool names', async () => {
@@ -113,7 +112,7 @@ describe("AgentStatusTool", () => {
 
     expect(result.isError).toBeFalsy();
     // Should contain overview, tools, and memory sections
-    expect(result.content).toContain("anthropic"); // overview
+    expect(result.content).toContain("Overview"); // overview header
     expect(result.content).toContain("25"); // tool count
     expect(result.content).toContain("150"); // memory entries
   });

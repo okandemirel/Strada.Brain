@@ -1,6 +1,7 @@
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import type { LearningStorage } from "../../learning/storage/learning-storage.js";
 import type { MetricsStorage } from "../../metrics/metrics-storage.js";
+import { buildSection, unavailableSection, checkToolRateLimit } from "./introspection-helpers.js";
 
 /**
  * Introspection tool that lets the LLM query learning pipeline health.
@@ -8,7 +9,7 @@ import type { MetricsStorage } from "../../metrics/metrics-storage.js";
  * Returns instinct counts, trajectory history, task completion rates, and
  * confidence distribution.  Read-only -- never modifies state.  Gracefully
  * degrades when optional dependencies (LearningStorage, MetricsStorage) are
- * unavailable.
+ * unavailable.  Per-tool rate limited.
  */
 export class LearningStatsTool implements ITool {
   readonly name = "learning_stats";
@@ -45,6 +46,10 @@ export class LearningStatsTool implements ITool {
     input: Record<string, unknown>,
     _context: ToolContext,
   ): Promise<ToolExecutionResult> {
+    // Per-tool rate limit
+    const rateLimited = checkToolRateLimit(this.name);
+    if (rateLimited) return rateLimited;
+
     const validSections = ["instincts", "metrics", "all"];
     const raw = (input["section"] as string) ?? "all";
     const section = validSections.includes(raw) ? raw : "all";
@@ -63,43 +68,41 @@ export class LearningStatsTool implements ITool {
 
   private formatInstincts(): string {
     if (!this.learningStorage) {
-      return "## Instincts\n\nNot available (LearningStorage not initialized).";
+      return unavailableSection("Instincts", "LearningStorage not initialized");
     }
 
     try {
       const stats = this.learningStorage.getStats();
-      return [
-        "## Instincts",
-        `- **Total instincts:** ${stats.instinctCount}`,
-        `- **Active instincts:** ${stats.activeInstinctCount}`,
-        `- **Trajectories:** ${stats.trajectoryCount}`,
-        `- **Error patterns:** ${stats.errorPatternCount}`,
-        `- **Observations:** ${stats.observationCount} (${stats.unprocessedObservationCount} unprocessed)`,
-      ].join("\n");
+      return buildSection("Instincts", [
+        `**Total instincts:** ${stats.instinctCount}`,
+        `**Active instincts:** ${stats.activeInstinctCount}`,
+        `**Trajectories:** ${stats.trajectoryCount}`,
+        `**Error patterns:** ${stats.errorPatternCount}`,
+        `**Observations:** ${stats.observationCount} (${stats.unprocessedObservationCount} unprocessed)`,
+      ]);
     } catch {
-      return "## Instincts\n\nNot available (error reading learning storage).";
+      return unavailableSection("Instincts", "error reading learning storage");
     }
   }
 
   private formatMetrics(): string {
     if (!this.metricsStorage) {
-      return "## Task Metrics\n\nNot available (MetricsStorage not initialized).";
+      return unavailableSection("Task Metrics", "MetricsStorage not initialized");
     }
 
     try {
       const agg = this.metricsStorage.getAggregation({});
       const completionPct = (agg.completionRate * 100).toFixed(1);
-      return [
-        "## Task Metrics",
-        `- **Total tasks:** ${agg.totalTasks}`,
-        `- **Success rate:** ${completionPct}% (${agg.successCount}/${agg.totalTasks})`,
-        `- **Failures:** ${agg.failureCount} | **Partial:** ${agg.partialCount}`,
-        `- **Avg iterations:** ${agg.avgIterations}`,
-        `- **Avg tool calls:** ${agg.avgToolCalls}`,
-        `- **Instinct reuse:** ${agg.instinctReusePct}% of tasks guided by instincts`,
-      ].join("\n");
+      return buildSection("Task Metrics", [
+        `**Total tasks:** ${agg.totalTasks}`,
+        `**Success rate:** ${completionPct}% (${agg.successCount}/${agg.totalTasks})`,
+        `**Failures:** ${agg.failureCount} | **Partial:** ${agg.partialCount}`,
+        `**Avg iterations:** ${agg.avgIterations}`,
+        `**Avg tool calls:** ${agg.avgToolCalls}`,
+        `**Instinct reuse:** ${agg.instinctReusePct}% of tasks guided by instincts`,
+      ]);
     } catch {
-      return "## Task Metrics\n\nNot available (error reading metrics storage).";
+      return unavailableSection("Task Metrics", "error reading metrics storage");
     }
   }
 }

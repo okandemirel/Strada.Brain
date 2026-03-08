@@ -1,18 +1,22 @@
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import type { MetricsCollector } from "../../dashboard/metrics.js";
+import { buildSection, unavailableSection, checkToolRateLimit } from "./introspection-helpers.js";
 
 /**
  * Introspection tool that lets the LLM query its own operational status.
  *
- * Returns uptime, session count, token usage, tool availability, and memory
- * stats.  Read-only -- never modifies state.  Gracefully degrades when
- * optional dependencies (memory) are unavailable.
+ * Returns uptime, session count, tool availability, and memory stats.
+ * Read-only -- never modifies state.  Gracefully degrades when optional
+ * dependencies (memory) are unavailable.
+ *
+ * Security: redacts provider name, omits token usage details, limits tool
+ * enumeration to count only.  Per-tool rate limited.
  */
 export class AgentStatusTool implements ITool {
   readonly name = "agent_status";
   readonly description =
     "Get your current operational status including uptime, active sessions, tool availability, " +
-    "token usage, and memory stats. Use this when a user asks 'what can you do?' or " +
+    "and memory stats. Use this when a user asks 'what can you do?' or " +
     "'how are you doing?' or wants to know your state.";
 
   readonly inputSchema = {
@@ -53,6 +57,10 @@ export class AgentStatusTool implements ITool {
     input: Record<string, unknown>,
     _context: ToolContext,
   ): Promise<ToolExecutionResult> {
+    // Per-tool rate limit
+    const rateLimited = checkToolRateLimit(this.name);
+    if (rateLimited) return rateLimited;
+
     const validSections = ["overview", "tools", "memory", "all"];
     const raw = (input["section"] as string) ?? "overview";
     const section = validSections.includes(raw) ? raw : "overview";
@@ -64,15 +72,12 @@ export class AgentStatusTool implements ITool {
     if (section === "overview" || section === "all") {
       const uptimeMin = Math.floor(snapshot.uptime / 60000);
       sections.push(
-        [
-          "## Overview",
-          `- **Uptime:** ${uptimeMin} minutes`,
-          `- **Messages processed:** ${snapshot.totalMessages}`,
-          `- **Active sessions:** ${snapshot.activeSessions}`,
-          `- **Tokens used:** ${snapshot.totalTokens.input} input / ${snapshot.totalTokens.output} output`,
-          `- **Provider:** ${snapshot.providerName}`,
-          `- **Read-only mode:** ${snapshot.readOnlyMode ? "yes" : "no"}`,
-        ].join("\n"),
+        buildSection("Overview", [
+          `**Uptime:** ${uptimeMin} minutes`,
+          `**Messages processed:** ${snapshot.totalMessages}`,
+          `**Active sessions:** ${snapshot.activeSessions}`,
+          `**Read-only mode:** ${snapshot.readOnlyMode ? "yes" : "no"}`,
+        ]),
       );
     }
 
@@ -80,25 +85,23 @@ export class AgentStatusTool implements ITool {
       const count = this.getToolCount();
       const names = this.getToolNames();
       sections.push(
-        [
-          "## Tools",
-          `- **Registered tools:** ${count}`,
-          `- **Available:** ${names.join(", ")}`,
-        ].join("\n"),
+        buildSection("Tools", [
+          `**Registered tools:** ${count}`,
+          `**Available:** ${names.join(", ")}`,
+        ]),
       );
     }
 
     if (section === "memory" || section === "all") {
       if (memStats) {
         sections.push(
-          [
-            "## Memory",
-            `- **Total entries:** ${memStats.totalEntries}`,
-            `- **Analysis cache:** ${memStats.hasAnalysisCache ? "yes" : "no"}`,
-          ].join("\n"),
+          buildSection("Memory", [
+            `**Total entries:** ${memStats.totalEntries}`,
+            `**Analysis cache:** ${memStats.hasAnalysisCache ? "yes" : "no"}`,
+          ]),
         );
       } else {
-        sections.push("## Memory\n\nMemory stats not available.");
+        sections.push(unavailableSection("Memory", "memory stats not available"));
       }
     }
 
