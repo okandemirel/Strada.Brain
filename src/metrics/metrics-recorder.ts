@@ -96,6 +96,36 @@ export class MetricsRecorder {
     this.pending.delete(metricId);
   }
 
+  /**
+   * Record retrieval metrics for cross-session instinct retrieval.
+   * Fire-and-forget: errors are silently caught to avoid disrupting retrieval flow.
+   */
+  recordRetrievalMetrics(data: {
+    retrievalTimeMs: number;
+    instinctsScanned: number;
+    scopeFiltered: number;
+    insightsReturned: number;
+  }): void {
+    try {
+      this.storage.recordTaskMetric({
+        id: `retrieval_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        sessionId: "retrieval",
+        taskType: "simple" as TaskType,
+        taskDescription: "instinct-retrieval",
+        completionStatus: "success" as CompletionStatus,
+        paorIterations: 0,
+        toolCallCount: 0,
+        instinctIds: [],
+        instinctCount: data.insightsReturned,
+        startedAt: Date.now() - data.retrievalTimeMs,
+        completedAt: Date.now(),
+        durationMs: data.retrievalTimeMs,
+      });
+    } catch {
+      // Fire-and-forget: retrieval metrics failure must not affect retrieval
+    }
+  }
+
   // ─── Private Helpers ───────────────────────────────────────────────────────
 
   /**

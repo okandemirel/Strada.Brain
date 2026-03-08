@@ -69,6 +69,9 @@ import type { ToolChainConfig } from "../learning/chains/index.js";
 import { IdentityStateManager } from "../identity/identity-state.js";
 import { buildCrashRecoveryContext } from "../identity/crash-recovery.js";
 import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
+import { MigrationRunner } from "../learning/storage/migrations/index.js";
+import { migration001CrossSessionProvenance } from "../learning/storage/migrations/001-cross-session-provenance.js";
+import type { ScopeContext } from "../learning/matching/pattern-matcher.js";
 
 // Task system imports
 import {
@@ -140,6 +143,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const cachedEmbeddingProvider = ragResult?.cachedProvider;
 
   // Initialize learning system (pass shared embedding provider if available)
+  // Note: identityManager may not be initialized yet at this point,
+  // but it's created later. We pass undefined now and wire scope context after identity init.
   const learningResult = await initializeLearning(config, logger, cachedEmbeddingProvider);
 
   // Initialize tools (registry created here, initialized after metricsStorage below)
@@ -156,10 +161,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Initialize rate limiter
   const rateLimiter = initializeRateLimiter(config, logger);
 
-  // Create InstinctRetriever for proactive learning (reuse existing PatternMatcher)
-  const instinctRetriever = learningResult.patternMatcher
-    ? new InstinctRetriever(learningResult.patternMatcher)
-    : undefined;
+  // InstinctRetriever created below after identity and metrics are initialized
 
   // Initialize metrics storage for agent performance tracking (EVAL-01, EVAL-02, EVAL-03)
   let metricsStorage: MetricsStorage | undefined;
@@ -203,6 +205,32 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     logger.warn("Identity initialization failed", {
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+
+  // Wire cross-session scope context and InstinctRetriever (Phase 13)
+  let instinctRetriever: InstinctRetriever | undefined;
+  if (learningResult.patternMatcher) {
+    const scopeContext: ScopeContext = {
+      projectPath: config.unityProjectPath,
+      scopeFilter: config.crossSession.scopeFilter,
+      maxAgeDays: config.crossSession.maxAgeDays,
+      recencyBoost: config.crossSession.recencyBoost,
+      scopeBoost: config.crossSession.scopeBoost,
+      currentBootCount: identityManager?.getState().bootCount,
+      currentSessionId: `boot-${identityManager?.getState().bootCount ?? 0}`,
+    };
+
+    instinctRetriever = new InstinctRetriever(learningResult.patternMatcher, {
+      scopeContext,
+      storage: learningResult.storage,
+      metricsRecorder,
+    });
+  }
+
+  // Wire project path and promotion threshold to learning pipeline (Phase 13)
+  if (learningResult.pipeline) {
+    learningResult.pipeline.setProjectPath(config.unityProjectPath);
+    learningResult.pipeline.setPromotionThreshold(config.crossSession.promotionThreshold);
   }
 
   // Initialize tool registry now that all deps are available
@@ -778,6 +806,23 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
     const learningStorage = new LearningStorage(learningDbPath);
     learningStorage.initialize();
 
+    // Run cross-session migrations (Phase 13) with graceful degradation
+    const db = learningStorage.getDatabase();
+    if (db) {
+      try {
+        const runner = new MigrationRunner(db, learningDbPath);
+        const migrationResult = runner.run([migration001CrossSessionProvenance]);
+        if (migrationResult.applied.length > 0) {
+          logger.info("Learning DB migrations applied", { applied: migrationResult.applied });
+        }
+      } catch (error) {
+        logger.warn("Learning DB migration failed, cross-session features degraded", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // Graceful degradation: continue without cross-session features
+      }
+    }
+
     // Create event bus for decoupled learning (created before pipeline so it can be injected)
     const eventBus = new TypedEventBus<LearningEventMap>();
     const learningQueue = new LearningQueue();
@@ -794,7 +839,7 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
 
     pipeline.start();
 
-    const patternMatcher = new PatternMatcher(learningStorage);
+    const patternMatcher = new PatternMatcher(learningStorage, { eventBus });
     const confidenceScorer = new ConfidenceScorer();
     const errorLearningHooks = new ErrorLearningHooks(
       pipeline,

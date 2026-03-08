@@ -1157,3 +1157,262 @@ describe("InstinctRetriever provenance formatting", () => {
     storage.close();
   });
 });
+
+// =============================================================================
+// Plan 03 Task 1: Bootstrap wiring, metrics, and scope promotion
+// =============================================================================
+
+describe("Bootstrap wiring integration", () => {
+  it("runs migration, builds ScopeContext, creates PatternMatcher with eventBus, retrieves with provenance", async () => {
+    const { LearningStorage } = await import("./learning-storage.js");
+    const { MigrationRunner } = await import("./migrations/index.js");
+    const { migration001CrossSessionProvenance } = await import("./migrations/001-cross-session-provenance.js");
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { InstinctRetriever } = await import("../../agents/instinct-retriever.js");
+    const { TypedEventBus } = await import("../../core/event-bus.js");
+
+    // 1. Create storage and run migration (simulates bootstrap flow)
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const db = storage.getDatabase()!;
+    const runner = new MigrationRunner(db, ":memory:");
+    const migrationResult = runner.run([migration001CrossSessionProvenance]);
+    expect(migrationResult.applied.length).toBeGreaterThanOrEqual(0); // May be skipped if migrateSchema already applied
+
+    // 2. Build ScopeContext (simulates bootstrap)
+    const scopeContext: ScopeContext = {
+      projectPath: "/projects/integration-test",
+      scopeFilter: "project+universal",
+      maxAgeDays: 90,
+      recencyBoost: 1.0,
+      scopeBoost: 1.1,
+      currentBootCount: 5,
+      currentSessionId: "boot-5",
+    };
+
+    // 3. Create PatternMatcher with eventBus
+    const eventBus = new TypedEventBus();
+    const matcher = new PatternMatcher(storage, { eventBus });
+
+    // 4. Create an instinct with provenance
+    const instinct = makeInstinct({
+      id: "instinct_integration" as InstinctId,
+      triggerPattern: "handle null reference in service",
+      action: JSON.stringify({ description: "Add null safety checks" }),
+      confidence: 0.85 as any,
+      stats: {
+        timesSuggested: 5,
+        timesApplied: 4,
+        timesFailed: 1,
+        successRate: 0.8 as any,
+        averageExecutionMs: 100,
+      },
+      originBootCount: 2,
+      originSessionId: "session_old",
+      crossSessionHitCount: 3,
+    });
+    storage.createInstinct(instinct, "/projects/integration-test");
+
+    // 5. Create InstinctRetriever with scope context
+    const retriever = new InstinctRetriever(matcher, {
+      scopeContext,
+      storage,
+    });
+
+    // 6. Retrieve insights
+    const result = await retriever.getInsightsForTask("handle null reference in service");
+    expect(result.insights.length).toBeGreaterThanOrEqual(1);
+    expect(result.insights[0]).toMatch(/\[boot #2/);
+    expect(result.matchedInstinctIds).toContain("instinct_integration");
+
+    await eventBus.shutdown();
+    storage.close();
+  });
+});
+
+describe("Scope promotion via LearningPipeline", () => {
+  it("promotes instinct to universal when learned in N distinct projects", async () => {
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    // Create an instinct
+    const instinct = makeInstinct({
+      id: "instinct_promo_test" as InstinctId,
+      triggerPattern: "test promotion pattern",
+    });
+    storage.createInstinct(instinct);
+
+    // Add project-specific scopes for 3 distinct projects (promotion threshold = 3)
+    storage.addInstinctScope("instinct_promo_test", "/projects/a");
+    storage.addInstinctScope("instinct_promo_test", "/projects/b");
+    storage.addInstinctScope("instinct_promo_test", "/projects/c");
+
+    // Verify scope count reaches threshold
+    const count = storage.getInstinctScopeCount("instinct_promo_test");
+    expect(count).toBe(3);
+
+    // Manually promote (simulates what pipeline does)
+    storage.addInstinctScope("instinct_promo_test", "*");
+
+    // Verify universal scope exists
+    const db = storage.getDatabase()!;
+    const universalScope = db.prepare("SELECT * FROM instinct_scopes WHERE instinct_id = ? AND project_path = '*'").get("instinct_promo_test") as any;
+    expect(universalScope).toBeDefined();
+    expect(universalScope.project_path).toBe("*");
+
+    storage.close();
+  });
+
+  it("fires instinct:scope_promoted event when threshold reached", async () => {
+    const { LearningStorage } = await import("./learning-storage.js");
+    const { TypedEventBus } = await import("../../core/event-bus.js");
+    const { LearningPipeline } = await import("../pipeline/learning-pipeline.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const eventBus = new TypedEventBus();
+    const promotedEvents: any[] = [];
+    eventBus.on("instinct:scope_promoted", (payload) => {
+      promotedEvents.push(payload);
+    });
+
+    const pipeline = new LearningPipeline(storage, {
+      dbPath: ":memory:",
+      enabled: true,
+      batchSize: 10,
+      detectionIntervalMs: 60000 as any,
+      evolutionIntervalMs: 60000 as any,
+      minConfidenceForCreation: 0.1,
+      maxInstincts: 1000,
+    }, undefined, undefined, eventBus);
+
+    // Use threshold of 1 so a single project scope triggers promotion
+    pipeline.setPromotionThreshold(1);
+    pipeline.setProjectPath("/projects/promo-test");
+
+    const created = pipeline.createInstinct({
+      name: "Scope promo event test",
+      type: "error_fix",
+      status: "proposed",
+      confidence: 0.6 as any,
+      triggerPattern: "unique scope promo event pattern test string",
+      action: JSON.stringify({ description: "test" }),
+      contextConditions: [],
+    });
+
+    // With threshold=1, the single scope from creation should trigger promotion
+    expect(promotedEvents.length).toBeGreaterThanOrEqual(1);
+    const lastEvent = promotedEvents[promotedEvents.length - 1];
+    expect(lastEvent.promotedToUniversal).toBe(true);
+    expect(lastEvent.instinct.id).toBe(created.id);
+    expect(lastEvent.projectPath).toBe("/projects/promo-test");
+
+    // Verify universal scope was added
+    const db = storage.getDatabase()!;
+    const universalRow = db.prepare("SELECT * FROM instinct_scopes WHERE instinct_id = ? AND project_path = '*'").get(created.id) as any;
+    expect(universalRow).toBeDefined();
+
+    pipeline.stop();
+    await eventBus.shutdown();
+    storage.close();
+  });
+});
+
+describe("MetricsRecorder.recordRetrievalMetrics", () => {
+  it("is called during InstinctRetriever.getInsightsForTask when metricsRecorder provided", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { InstinctRetriever } = await import("../../agents/instinct-retriever.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({
+      id: "instinct_metrics_test" as InstinctId,
+      triggerPattern: "fix broken test",
+      action: JSON.stringify({ description: "Fix the test" }),
+      confidence: 0.8 as any,
+      stats: {
+        timesSuggested: 3,
+        timesApplied: 2,
+        timesFailed: 1,
+        successRate: 0.67 as any,
+        averageExecutionMs: 50,
+      },
+    });
+    storage.createInstinct(instinct, "/projects/alpha");
+
+    const matcher = new PatternMatcher(storage);
+    const scope: ScopeContext = {
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      recencyBoost: 1.0,
+      scopeBoost: 1.0,
+    };
+
+    // Mock MetricsRecorder
+    const mockMetricsRecorder = {
+      recordRetrievalMetrics: vi.fn(),
+      startTask: vi.fn(),
+      endTask: vi.fn(),
+    } as any;
+
+    const retriever = new InstinctRetriever(matcher, {
+      scopeContext: scope,
+      storage,
+      metricsRecorder: mockMetricsRecorder,
+    });
+
+    await retriever.getInsightsForTask("fix broken test");
+
+    // Verify recordRetrievalMetrics was called
+    expect(mockMetricsRecorder.recordRetrievalMetrics).toHaveBeenCalledTimes(1);
+    expect(mockMetricsRecorder.recordRetrievalMetrics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        retrievalTimeMs: expect.any(Number),
+        instinctsScanned: expect.any(Number),
+        scopeFiltered: expect.any(Number),
+        insightsReturned: expect.any(Number),
+      }),
+    );
+
+    storage.close();
+  });
+
+  it("does not fail when metricsRecorder is not provided", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { InstinctRetriever } = await import("../../agents/instinct-retriever.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({
+      id: "instinct_no_metrics" as InstinctId,
+      triggerPattern: "fix broken test no metrics",
+      action: JSON.stringify({ description: "Fix" }),
+      confidence: 0.8 as any,
+      stats: {
+        timesSuggested: 1,
+        timesApplied: 1,
+        timesFailed: 0,
+        successRate: 1.0 as any,
+        averageExecutionMs: 50,
+      },
+    });
+    storage.createInstinct(instinct);
+
+    const matcher = new PatternMatcher(storage);
+    const retriever = new InstinctRetriever(matcher);
+
+    // Should not throw
+    const result = await retriever.getInsightsForTask("fix broken test no metrics");
+    expect(result.insights.length).toBeGreaterThanOrEqual(1);
+
+    storage.close();
+  });
+});

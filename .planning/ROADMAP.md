@@ -91,11 +91,12 @@ Plans:
   1. Instinct retrieval returns relevant patterns from previous sessions, not just the current one
   2. Each retrieved pattern includes provenance metadata (originating session, age, usage count)
   3. Patterns are filterable by scope (project-specific vs universal) to prevent cross-project contamination
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 13-01: TBD
-- [ ] 13-02: TBD
+- [x] 13-01-PLAN.md -- Types, config, migration runner, and schema migration for cross-session foundation
+- [x] 13-02-PLAN.md -- Scope-filtered retrieval, provenance formatting, eager deduplication, weighted scoring
+- [ ] 13-03-PLAN.md -- Bootstrap wiring, metrics integration, CLI cross-session subcommand
 
 ### Phase 14: Heartbeat Daemon Loop
 **Goal**: Agent runs as a persistent daemon with periodic self-activation, pluggable trigger evaluation, security constraints, and cost controls
@@ -207,8 +208,8 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 9. Tool Chain Synthesis | v1.0 | 3/3 | Complete | 2026-03-07 |
 | 10. WebSocket Security Hardening | v2.0 | 1/1 | Complete | 2026-03-08 |
 | 11. LLM Self-Awareness + Identity Foundation | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
-| 12. Persistent Identity + Startup Recovery | v2.0 | 2/2 | Complete | 2026-03-08 |
-| 13. Cross-Session Learning Transfer | v2.0 | 0/TBD | Not started | - |
+| 12. Persistent Identity + Startup Recovery | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
+| 13. Cross-Session Learning Transfer | v2.0 | 2/3 | In progress | - |
 | 14. Heartbeat Daemon Loop | v2.0 | 0/TBD | Not started | - |
 | 15. Proactive Triggers | v2.0 | 0/TBD | Not started | - |
 | 16. Interactive Goal Execution + Replanning | v2.0 | 0/TBD | Not started | - |

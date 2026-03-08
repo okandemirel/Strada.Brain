@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: in-progress
-stopped_at: Completed 12-02-PLAN.md
-last_updated: "2026-03-08T15:01:03.000Z"
-last_activity: 2026-03-08 -- Completed 12-02 Startup Recovery
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-03-08T18:11:22Z"
+last_activity: 2026-03-08 -- Completed 13-02 Retrieval Pipeline
 progress:
   total_phases: 10
   completed_phases: 3
-  total_plans: 5
-  completed_plans: 5
-  percent: 100
+  total_plans: 8
+  completed_plans: 7
+  percent: 88
 ---
 
 # State: Strada.Brain
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 12 -- Persistent Identity + Startup Recovery
+**Current focus:** Phase 13 -- Cross-Session Learning Transfer
 
 ## Current Position
 
-Phase: 12 of 19 (Persistent Identity + Startup Recovery)
-Plan: 2 of 2
-Status: Phase 12 complete
-Last activity: 2026-03-08 -- Completed 12-02 Startup Recovery
+Phase: 13 of 19 (Cross-Session Learning Transfer)
+Plan: 2 of 3
+Status: Plan 13-02 complete
+Last activity: 2026-03-08 -- Completed 13-02 Retrieval Pipeline
 
-Progress: [██████████] 100%
+Progress: [████████░░] 88%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5 (v2.0) / 29 (lifetime)
-- Average duration: 4min (v2.0)
-- Total execution time: 22min (v2.0)
+- Total plans completed: 7 (v2.0) / 31 (lifetime)
+- Average duration: 5min (v2.0)
+- Total execution time: 37min (v2.0)
 
 **By Phase:**
 
@@ -46,6 +46,7 @@ Progress: [██████████] 100%
 | 10 | 1 | 5min | 5min |
 | 11 | 2 | 7min | 3.5min |
 | 12 | 2/2 | 10min | 5min |
+| 13 | 2/3 | 15min | 7.5min |
 
 *Updated after each plan completion*
 
@@ -74,6 +75,15 @@ Recent decisions affecting current work:
 - [12-02]: Combined crash notification and recovery prompt into single system prompt injection
 - [12-02]: No crash type distinction -- all unclean shutdowns treated identically
 - [12-02]: Crash notification persists for entire first post-crash session, cleared on next clean restart
+- [13-01]: Named migration system with MigrationRunner class reusable across phases (not learning.db only)
+- [13-01]: instinct_scopes uses wildcard project_path='*' for universal instincts
+- [13-01]: Provenance columns added to both migrateSchema() inline and migration 001 for dual-path compat
+- [13-01]: CrossSessionConfig promotionThreshold defaults to 3 distinct projects for universal promotion
+- [13-02]: Scope and recency boosts multiply into confidence score (not additive)
+- [13-02]: Eager dedup only activates in scope mode (no surprise merges in legacy paths)
+- [13-02]: Recency decay: max(0.5, 1.0 - ageDays/365) -- floors at 0.5x for 1+ year old
+- [13-02]: Provenance bracket only appended when originBootCount exists (clean upgrade path)
+- [13-02]: Cross-session hit count uses in-memory Map for per-session dedup
 
 ### Pending Todos
 
@@ -86,9 +96,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T15:01:03.000Z
-Stopped at: Completed 12-02-PLAN.md (Phase 12 complete)
-Resume file: .planning/phases/12-persistent-identity-startup-recovery/12-02-SUMMARY.md
+Last session: 2026-03-08T18:11:22Z
+Stopped at: Completed 13-02-PLAN.md
+Resume file: .planning/phases/13-cross-session-learning-transfer/13-02-SUMMARY.md
 
 ---
 *State initialized: 2026-03-06*

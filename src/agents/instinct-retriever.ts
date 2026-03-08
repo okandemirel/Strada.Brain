@@ -10,6 +10,7 @@
 
 import type { PatternMatcher, ScopeContext } from "../learning/matching/pattern-matcher.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
+import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import type { PatternMatch } from "../learning/types.js";
 
 /** Options for InstinctRetriever constructor */
@@ -18,6 +19,8 @@ export interface InstinctRetrieverOptions {
   readonly scopeContext?: ScopeContext;
   /** Optional storage reference for cross-session hit count tracking */
   readonly storage?: LearningStorage;
+  /** Optional metrics recorder for retrieval performance tracking */
+  readonly metricsRecorder?: MetricsRecorder;
 }
 
 /** Result from getInsightsForTask containing both formatted strings and raw IDs */
@@ -31,6 +34,7 @@ export interface InsightResult {
 export class InstinctRetriever {
   private readonly scopeContext?: ScopeContext;
   private readonly storage?: LearningStorage;
+  private readonly metricsRecorder?: MetricsRecorder;
 
   constructor(
     private readonly matcher: PatternMatcher,
@@ -38,6 +42,7 @@ export class InstinctRetriever {
   ) {
     this.scopeContext = options?.scopeContext;
     this.storage = options?.storage;
+    this.metricsRecorder = options?.metricsRecorder;
   }
 
   /**
@@ -48,6 +53,8 @@ export class InstinctRetriever {
    * @returns InsightResult with formatted strings and raw instinct IDs
    */
   async getInsightsForTask(taskDescription: string, maxInsights: number = 5): Promise<InsightResult> {
+    const retrievalStart = Date.now();
+
     // Find similar instincts using the pattern matcher (single scan)
     // Request extra results to account for post-filtering of deprecated instincts
     const findOptions: {
@@ -65,6 +72,7 @@ export class InstinctRetriever {
     }
 
     const matches = this.matcher.findSimilarInstincts(taskDescription, findOptions);
+    const instinctsScanned = matches.length;
 
     // Filter out deprecated instincts (EVAL-05: deprecated excluded from retrieval)
     const filtered = matches.filter(m => !m.instinct || m.instinct.status !== "deprecated");
@@ -110,6 +118,20 @@ export class InstinctRetriever {
       const formatted = this.formatInsight(match);
       if (formatted !== null) {
         insights.push(formatted);
+      }
+    }
+
+    // Record retrieval metrics if recorder available
+    if (this.metricsRecorder) {
+      try {
+        this.metricsRecorder.recordRetrievalMetrics({
+          retrievalTimeMs: Date.now() - retrievalStart,
+          instinctsScanned,
+          scopeFiltered: instinctsScanned - finalMatches.length,
+          insightsReturned: insights.length,
+        });
+      } catch {
+        // Non-blocking: metrics failure must not affect retrieval
       }
     }
 

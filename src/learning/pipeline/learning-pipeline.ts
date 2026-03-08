@@ -75,6 +75,11 @@ export class LearningPipeline {
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
 
+  /** Project path for scope-aware instinct creation (Phase 13) */
+  private projectPath?: string;
+  /** Scope promotion threshold (Phase 13): distinct projects needed for universal promotion */
+  private promotionThreshold = 3;
+
   constructor(
     storage: LearningStorage,
     config: Partial<LearningConfig> = {},
@@ -92,6 +97,16 @@ export class LearningPipeline {
     if (embeddingProvider) {
       this.embeddingQueue = new EmbeddingQueue(embeddingProvider, storage);
     }
+  }
+
+  /** Set the project path for scope-aware instinct creation (Phase 13) */
+  setProjectPath(path: string): void {
+    this.projectPath = path;
+  }
+
+  /** Set the promotion threshold for scope promotion (Phase 13) */
+  setPromotionThreshold(threshold: number): void {
+    this.promotionThreshold = threshold;
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -320,7 +335,8 @@ export class LearningPipeline {
     for (const trajectory of trajectories) {
       const instinct = this.extractInstinctFromTrajectory(trajectory);
       if (instinct) {
-        this.storage.createInstinct(instinct);
+        this.storage.createInstinct(instinct, this.projectPath);
+        this.checkScopePromotion(instinct);
         if (this.embeddingQueue) {
           this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
         }
@@ -365,7 +381,8 @@ export class LearningPipeline {
       tags: [],
     };
 
-    this.storage.createInstinct(instinct);
+    this.storage.createInstinct(instinct, this.projectPath);
+    this.checkScopePromotion(instinct);
     if (this.embeddingQueue) {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
     }
@@ -383,7 +400,8 @@ export class LearningPipeline {
       tags: [],
     };
 
-    this.storage.createInstinct(instinct);
+    this.storage.createInstinct(instinct, this.projectPath);
+    this.checkScopePromotion(instinct);
     if (this.embeddingQueue) {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
     }
@@ -607,6 +625,37 @@ export class LearningPipeline {
       this.storage.incrementWeeklyCounter(eventType);
     } catch {
       // Fire-and-forget: log and continue
+    }
+  }
+
+  // ─── Scope Promotion (Phase 13) ──────────────────────────────────────────────
+
+  /**
+   * Check if an instinct qualifies for scope promotion to universal.
+   * Fires instinct:scope_promoted event when threshold reached.
+   */
+  private checkScopePromotion(instinct: Instinct): void {
+    if (!this.projectPath) return;
+
+    try {
+      const scopeCount = this.storage.getInstinctScopeCount(instinct.id);
+      if (scopeCount >= this.promotionThreshold) {
+        // Promote to universal scope
+        this.storage.addInstinctScope(instinct.id, "*");
+
+        // Emit scope promotion event
+        if (this.eventBus) {
+          this.eventBus.emit("instinct:scope_promoted", {
+            instinct,
+            projectPath: this.projectPath,
+            promotedToUniversal: true,
+            distinctProjectCount: scopeCount,
+            timestamp: Date.now(),
+          });
+        }
+      }
+    } catch {
+      // Non-blocking: promotion failure should not affect instinct creation
     }
   }
 
