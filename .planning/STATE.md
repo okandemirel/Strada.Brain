@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
-status: completed
-stopped_at: Completed 11-02-PLAN.md
-last_updated: "2026-03-08T13:04:37Z"
-last_activity: 2026-03-08 -- Completed 11-02 Introspection Tools (AgentStatusTool, LearningStatsTool)
+status: in-progress
+stopped_at: Completed 12-01-PLAN.md
+last_updated: "2026-03-08T14:54:00.000Z"
+last_activity: 2026-03-08 -- Completed 12-01 Persistent Identity State
 progress:
   total_phases: 10
   completed_phases: 2
-  total_plans: 3
-  completed_plans: 3
-  percent: 100
+  total_plans: 5
+  completed_plans: 4
+  percent: 80
 ---
 
 # State: Strada.Brain
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 11 -- LLM Self-Awareness & Identity Foundation
+**Current focus:** Phase 12 -- Persistent Identity + Startup Recovery
 
 ## Current Position
 
-Phase: 11 of 19 (LLM Self-Awareness & Identity Foundation)
-Plan: 2 of 2 (complete)
-Status: Phase 11 complete
-Last activity: 2026-03-08 -- Completed 11-02 Introspection Tools (AgentStatusTool, LearningStatsTool)
+Phase: 12 of 19 (Persistent Identity + Startup Recovery)
+Plan: 1 of 2
+Status: Plan 12-01 complete
+Last activity: 2026-03-08 -- Completed 12-01 Persistent Identity State
 
-Progress: [##########] 100%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3 (v2.0) / 27 (lifetime)
-- Average duration: 4min (v2.0)
-- Total execution time: 12min (v2.0)
+- Total plans completed: 4 (v2.0) / 28 (lifetime)
+- Average duration: 5min (v2.0)
+- Total execution time: 18min (v2.0)
 
 **By Phase:**
 
@@ -45,6 +45,7 @@ Progress: [##########] 100%
 |-------|-------|-------|----------|
 | 10 | 1 | 5min | 5min |
 | 11 | 2 | 7min | 3.5min |
+| 12 | 1/2 | 6min | 6min |
 
 *Updated after each plan completion*
 
@@ -66,6 +67,10 @@ Recent decisions affecting current work:
 - [11-02]: Callback-based DI for AgentStatusTool to avoid circular ToolRegistry dependency
 - [11-02]: Moved toolRegistry.initialize() after metricsStorage creation in bootstrap
 - [11-02]: LearningStatsTool always registered even without deps -- graceful degradation over conditional registration
+- [12-01]: Key-value schema for identity state over single-row table -- simpler to extend, forward-compatible
+- [12-01]: Separate identity.db file over co-locating in learning.db -- avoids dual-connection complexity
+- [12-01]: Identity profile in SqliteProfile with 2MB cache -- small footprint for single-row data
+- [12-01]: 60s uptime flush interval -- bounds SIGKILL loss to 60 seconds
 
 ### Pending Todos
 
@@ -78,9 +83,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08
-Stopped at: Completed 11-02-PLAN.md
-Resume file: None
+Last session: 2026-03-08T14:54:00.000Z
+Stopped at: Completed 12-01-PLAN.md
+Resume file: .planning/phases/12-persistent-identity-startup-recovery/12-01-SUMMARY.md
 
 ---
 *State initialized: 2026-03-06*

@@ -164,6 +164,8 @@ limits apply, and secrets are sanitized from all outputs.
 }
 
 import type { IdentityState } from "../../identity/identity-state.js";
+import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
+import { formatDowntime } from "../../identity/crash-recovery.js";
 import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
@@ -210,6 +212,42 @@ export function buildIdentitySection(state: IdentityState): string {
     "",
     `Your experience level reflects ${state.bootCount} session${state.bootCount !== 1 ? "s" : ""} and ${uptimeStr} of operation.`,
   );
+
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Build a crash notification section for the system prompt.
+ * Injected after an unclean shutdown so the LLM naturally acknowledges
+ * the crash and guides the user through recovery options.
+ */
+export function buildCrashNotificationSection(context: CrashRecoveryContext): string {
+  const lastActivityIso = new Date(context.lastActivityTs).toISOString();
+  const treeCount = context.interruptedTrees.length;
+
+  const lines: string[] = [
+    "\n## Crash Recovery Notice",
+    "You experienced an unexpected shutdown. Here is the context:",
+    `- **Downtime:** ${formatDowntime(context.downtimeMs)}`,
+    `- **Last activity:** ${lastActivityIso}`,
+    `- **Boot #:** ${context.bootCount} (recovered from crash)`,
+    `- **Interrupted tasks:** ${treeCount} goal tree(s) were mid-execution`,
+    "",
+  ];
+
+  if (treeCount > 0) {
+    lines.push(
+      "The user will be presented with recovery options for interrupted goals.",
+      "Acknowledge the crash naturally in your first response. Mention what happened",
+      "(unexpected shutdown, downtime duration) and that you've detected interrupted work.",
+      "Let the user know they can resume or discard the interrupted tasks.",
+    );
+  } else {
+    lines.push(
+      "No interrupted tasks were found. Acknowledge the unexpected shutdown briefly",
+      "and reassure the user that no work was lost.",
+    );
+  }
 
   return lines.join("\n") + "\n";
 }

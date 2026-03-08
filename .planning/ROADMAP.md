@@ -77,11 +77,11 @@ Plans:
   1. Agent persists boot count, cumulative uptime, and last activity timestamp in SQLite across restarts
   2. After an unclean shutdown, agent detects the crash on next startup and resumes interrupted goal trees
   3. Agent's identity state (boot number, uptime) is available to the self-awareness system from Phase 11
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 12-01: TBD
-- [ ] 12-02: TBD
+- [ ] 12-01-PLAN.md -- IdentityStateManager + config + system prompt + AgentStatusTool + bootstrap wiring
+- [ ] 12-02-PLAN.md -- Crash detection + recovery context + system prompt injection + bootstrap wiring
 
 ### Phase 13: Cross-Session Learning Transfer
 **Goal**: Learned patterns persist across sessions with provenance tracking and project-scope filtering
@@ -206,8 +206,8 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 8. Goal Progress & Execution | v1.0 | 3/3 | Complete | 2026-03-07 |
 | 9. Tool Chain Synthesis | v1.0 | 3/3 | Complete | 2026-03-07 |
 | 10. WebSocket Security Hardening | v2.0 | 1/1 | Complete | 2026-03-08 |
-| 11. LLM Self-Awareness + Identity Foundation | v2.0 | 2/2 | Complete | 2026-03-08 |
-| 12. Persistent Identity + Startup Recovery | v2.0 | 0/TBD | Not started | - |
+| 11. LLM Self-Awareness + Identity Foundation | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
+| 12. Persistent Identity + Startup Recovery | v2.0 | 1/2 | In progress | - |
 | 13. Cross-Session Learning Transfer | v2.0 | 0/TBD | Not started | - |
 | 14. Heartbeat Daemon Loop | v2.0 | 0/TBD | Not started | - |
 | 15. Proactive Triggers | v2.0 | 0/TBD | Not started | - |

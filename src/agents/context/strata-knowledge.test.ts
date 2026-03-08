@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildCapabilityManifest, buildIdentitySection } from "./strata-knowledge.js";
+import { buildCapabilityManifest, buildIdentitySection, buildCrashNotificationSection } from "./strata-knowledge.js";
 import type { IdentityState } from "../../identity/identity-state.js";
+import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
+import type { GoalTree } from "../../goals/types.js";
+import type { GoalNodeId } from "../../goals/types.js";
 
 describe("buildCapabilityManifest", () => {
   it("returns a non-empty string", () => {
@@ -106,5 +109,87 @@ describe("buildIdentitySection", () => {
     const result = buildIdentitySection(state);
 
     expect(result).toContain("1 hour 33 minutes");
+  });
+});
+
+function makeSampleTree(desc: string): GoalTree {
+  const rootId = "goal_test_root" as GoalNodeId;
+  return {
+    rootId,
+    sessionId: "session-1",
+    taskDescription: desc,
+    nodes: new Map([
+      [
+        rootId,
+        {
+          id: rootId,
+          parentId: null,
+          task: desc,
+          dependsOn: [] as readonly GoalNodeId[],
+          depth: 0,
+          status: "executing" as const,
+          createdAt: Date.now() - 600000,
+          updatedAt: Date.now() - 300000,
+        },
+      ],
+    ]),
+    createdAt: Date.now() - 600000,
+  };
+}
+
+function makeCrashContext(overrides?: Partial<CrashRecoveryContext>): CrashRecoveryContext {
+  return {
+    wasCrash: true,
+    downtimeMs: 300000,
+    lastActivityTs: Date.now() - 300000,
+    bootCount: 5,
+    interruptedTrees: [],
+    ...overrides,
+  };
+}
+
+describe("buildCrashNotificationSection", () => {
+  it("produces section with Crash Recovery Notice heading, downtime, last activity, interrupted task count", () => {
+    const ctx = makeCrashContext({
+      interruptedTrees: [makeSampleTree("Build player"), makeSampleTree("Setup inventory")],
+    });
+    const result = buildCrashNotificationSection(ctx);
+
+    expect(result).toContain("## Crash Recovery Notice");
+    expect(result).toContain("5 minutes");
+    expect(result).toContain("Boot #:** 5");
+    expect(result).toContain("2 goal tree(s)");
+  });
+
+  it("with 0 interrupted trees mentions no work was lost", () => {
+    const ctx = makeCrashContext({ interruptedTrees: [] });
+    const result = buildCrashNotificationSection(ctx);
+
+    expect(result).toContain("no work was lost");
+    expect(result).not.toContain("resume or discard");
+  });
+
+  it("with 1 tree includes single-tree guidance", () => {
+    const ctx = makeCrashContext({
+      interruptedTrees: [makeSampleTree("Build player")],
+    });
+    const result = buildCrashNotificationSection(ctx);
+
+    expect(result).toContain("1 goal tree(s)");
+    expect(result).toContain("resume or discard");
+  });
+
+  it("with 3 trees includes multi-tree guidance", () => {
+    const ctx = makeCrashContext({
+      interruptedTrees: [
+        makeSampleTree("Build player"),
+        makeSampleTree("Setup inventory"),
+        makeSampleTree("Create UI"),
+      ],
+    });
+    const result = buildCrashNotificationSection(ctx);
+
+    expect(result).toContain("3 goal tree(s)");
+    expect(result).toContain("resume or discard");
   });
 });
