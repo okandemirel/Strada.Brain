@@ -99,6 +99,7 @@ export type ToolCategory =
   | "dotnet"
   | "memory"
   | "browser"
+  | "introspection"
   | "custom";
 
 /**

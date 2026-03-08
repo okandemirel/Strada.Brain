@@ -139,9 +139,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Initialize learning system (pass shared embedding provider if available)
   const learningResult = await initializeLearning(config, logger, cachedEmbeddingProvider);
 
-  // Initialize tools
+  // Initialize tools (registry created here, initialized after metricsStorage below)
   const toolRegistry = new ToolRegistry();
-  await toolRegistry.initialize(config, { memoryManager, ragPipeline });
 
   // Initialize channel
   const channel = await initializeChannel(channelType, config, auth, logger);
@@ -173,6 +172,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       error: error instanceof Error ? error.message : String(error),
     });
   }
+
+  // Initialize tool registry now that all deps are available
+  await toolRegistry.initialize(config, {
+    memoryManager,
+    ragPipeline,
+    metricsCollector: metrics,
+    learningStorage: learningResult.storage,
+    metricsStorage,
+  });
 
   // Initialize goal decomposition system (GOAL-01, GOAL-02)
   let goalStorage: GoalStorage | undefined;

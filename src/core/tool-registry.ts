@@ -12,6 +12,9 @@ import type { Config } from "../config/config.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
+import type { MetricsCollector } from "../dashboard/metrics.js";
+import type { LearningStorage } from "../learning/storage/learning-storage.js";
+import type { MetricsStorage } from "../metrics/metrics-storage.js";
 import { PluginLoader } from "../agents/plugins/plugin-loader.js";
 import { getLogger } from "../utils/logger.js";
 import { ValidationError } from "../common/errors.js";
@@ -28,6 +31,7 @@ export const ToolCategories = {
   MEMORY: "memory",
   BROWSER: "browser",
   COMPOSITE: "composite",
+  INTROSPECTION: "introspection",
 } as const;
 
 export type ToolCategory = (typeof ToolCategories)[keyof typeof ToolCategories];
@@ -94,6 +98,10 @@ import { DotnetBuildTool, DotnetTestTool } from "../agents/tools/dotnet-tools.js
 // Memory tools
 import { MemorySearchTool } from "../agents/tools/memory-search.js";
 
+// Introspection tools
+import { AgentStatusTool } from "../agents/tools/agent-status.js";
+import { LearningStatsTool } from "../agents/tools/learning-stats.js";
+
 // ============================================================================
 // Tool Registry
 // ============================================================================
@@ -101,6 +109,9 @@ import { MemorySearchTool } from "../agents/tools/memory-search.js";
 export interface ToolRegistryOptions {
   memoryManager?: IMemoryManager;
   ragPipeline?: IRAGPipeline;
+  metricsCollector?: MetricsCollector;
+  learningStorage?: LearningStorage;
+  metricsStorage?: MetricsStorage;
 }
 
 export class ToolRegistry {
@@ -336,7 +347,7 @@ export class ToolRegistry {
   // ============================================================================
 
   private registerBuiltinTools(options: ToolRegistryOptions): void {
-    const { memoryManager, ragPipeline } = options;
+    const { memoryManager, ragPipeline, metricsCollector, learningStorage, metricsStorage } = options;
 
     // File operations
     this.register(new FileReadTool(), {
@@ -531,6 +542,37 @@ export class ToolRegistry {
         readOnly: false,
       });
     }
+
+    // Introspection tools (gracefully degrade when deps unavailable)
+    if (metricsCollector) {
+      this.register(
+        new AgentStatusTool(
+          metricsCollector,
+          () => this.count,
+          () => this.getToolNames(),
+          memoryManager
+            ? () => {
+                const stats = memoryManager.getStats();
+                return { totalEntries: stats.totalEntries, hasAnalysisCache: false };
+              }
+            : undefined,
+        ),
+        {
+          category: ToolCategories.INTROSPECTION,
+          dangerous: false,
+          readOnly: true,
+        },
+      );
+    }
+
+    this.register(
+      new LearningStatsTool(learningStorage, metricsStorage),
+      {
+        category: ToolCategories.INTROSPECTION,
+        dangerous: false,
+        readOnly: true,
+      },
+    );
   }
 }
 
@@ -580,4 +622,9 @@ export const DotnetTools = {
 
 export const ShellTools = {
   EXEC: "shell_exec",
+} as const;
+
+export const IntrospectionTools = {
+  AGENT_STATUS: "agent_status",
+  LEARNING_STATS: "learning_stats",
 } as const;
