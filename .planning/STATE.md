@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: in-progress
-stopped_at: Completed 14-03-PLAN.md
-last_updated: "2026-03-08T20:02:00Z"
-last_activity: 2026-03-08 -- Completed 14-03 Security & Budget
+stopped_at: Completed 14-04-PLAN.md
+last_updated: "2026-03-08T20:13:04Z"
+last_activity: 2026-03-08 -- Completed 14-04 HeartbeatLoop & Bootstrap Wiring
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 13
-  completed_plans: 11
-  percent: 77
+  completed_plans: 12
+  percent: 85
 ---
 
 # State: Strada.Brain
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 14 of 19 (Heartbeat Daemon Loop)
-Plan: 3 of 5
-Status: Plan 14-03 complete
-Last activity: 2026-03-08 -- Completed 14-03 Security & Budget
+Plan: 4 of 5
+Status: Plan 14-04 complete
+Last activity: 2026-03-08 -- Completed 14-04 HeartbeatLoop & Bootstrap Wiring
 
-Progress: [████████░░] 77%
+Progress: [█████████░] 85%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 11 (v2.0) / 35 (lifetime)
-- Average duration: 5min (v2.0)
-- Total execution time: 56min (v2.0)
+- Total plans completed: 12 (v2.0) / 36 (lifetime)
+- Average duration: 5.3min (v2.0)
+- Total execution time: 63min (v2.0)
 
 **By Phase:**
 
@@ -47,7 +47,7 @@ Progress: [████████░░] 77%
 | 11 | 2 | 7min | 3.5min |
 | 12 | 2/2 | 10min | 5min |
 | 13 | 3/3 | 24min | 8min |
-| 14 | 3/5 | 10min | 3.3min |
+| 14 | 4/5 | 17min | 4.3min |
 
 *Updated after each plan completion*
 
@@ -102,6 +102,10 @@ Recent decisions affecting current work:
 - [14-03]: MetadataLookup function type over direct ToolRegistry dependency for DaemonSecurityPolicy decoupling
 - [14-03]: FILE_WRITE_TOOLS hardcoded set for always-require-approval enforcement (file_write, file_create, file_edit)
 - [14-03]: Params summary truncated to 200 chars in audit log entries
+- [14-04]: Sequential trigger evaluation (not parallel) to prevent budget race conditions
+- [14-04]: Overlap suppression via activeTriggerTasks Map -- skips triggers with active tasks
+- [14-04]: Budget exceeded/warning events emit only once per state change (de-duplicated)
+- [14-04]: securityPolicy injected as dependency for future use, accessed via getSecurityPolicy()
 
 ### Pending Todos
 
@@ -114,9 +118,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T20:02:00Z
-Stopped at: Completed 14-03-PLAN.md
-Resume file: .planning/phases/14-heartbeat-daemon-loop/14-03-SUMMARY.md
+Last session: 2026-03-08T20:13:04Z
+Stopped at: Completed 14-04-PLAN.md
+Resume file: .planning/phases/14-heartbeat-daemon-loop/14-04-SUMMARY.md
 
 ---
 *State initialized: 2026-03-06*
