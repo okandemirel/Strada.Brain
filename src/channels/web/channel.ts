@@ -15,6 +15,7 @@ import { readFile } from "node:fs/promises";
 import { join, extname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
+import { isAllowedOrigin } from "../../security/origin-validation.js";
 import type {
   IChannelAdapter,
   IChannelStreaming,
@@ -86,16 +87,7 @@ export class WebChannel
     this.wss = new WebSocketServer({
       server: this.server,
       maxPayload: 1 * 1024 * 1024,
-      verifyClient: ({ req }: { req: HttpReq }) => {
-        const origin = req.headers.origin;
-        if (!origin) return true; // non-browser clients (CLI tools, tests)
-        try {
-          const { hostname } = new URL(origin);
-          return hostname === "localhost" || hostname === "127.0.0.1";
-        } catch {
-          return false;
-        }
-      },
+      verifyClient: ({ req }: { req: HttpReq }) => isAllowedOrigin(req.headers.origin),
     });
     this.wss.on("connection", (ws) => this.handleWsConnection(ws));
 

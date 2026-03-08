@@ -601,7 +601,10 @@ export class BruteForceProtection {
       };
     }
 
-    // Lock expired -- allow but DO NOT reset count
+    // Evict only if a lock actually existed and expired (not pre-lockout accumulation)
+    if (record.lockUntil > 0) {
+      this.attempts.delete(key);
+    }
     return { allowed: true };
   }
 

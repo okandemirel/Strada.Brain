@@ -9,11 +9,12 @@ import { createServer, type Server } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { getLogger } from "../utils/logger.js";
 import { BruteForceProtection } from "../security/auth-hardened.js";
+import { isAllowedOrigin } from "../security/origin-validation.js";
 import type { MetricsCollector } from "./metrics.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type WSMessageType = 
+export type WSMessageType =
   | "auth" | "auth_success" | "auth_error" | "metrics" | "command" | "command_result"
   | "error" | "ping" | "pong" | "notification";
 
@@ -33,11 +34,24 @@ export interface WSClient extends WebSocket {
 
 export type CommandHandler = (command: string, payload: unknown) => Promise<unknown> | unknown;
 
+export interface WebSocketDashboardServerOptions {
+  port: number;
+  authToken?: string;
+  metrics: MetricsCollector;
+  getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
+  getPluginsStats?: () => { loaded: number; directories: string[] } | undefined;
+  allowedOrigins?: string[];
+  maxAuthAttempts?: number;
+  authLockoutMs?: number;
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const METRICS_INTERVAL_MS = 1000;
+const METRICS_INTERVAL_MS = 1_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
-const HEARTBEAT_TIMEOUT_MS = 60000;
+const HEARTBEAT_TIMEOUT_MS = 60_000;
+const DEFAULT_MAX_AUTH_ATTEMPTS = 5;
+const DEFAULT_AUTH_LOCKOUT_MS = 5 * 60 * 1_000;
 
 // ─── WebSocketDashboardServer Class ──────────────────────────────────────────
 
@@ -48,7 +62,7 @@ export class WebSocketDashboardServer {
   private readonly getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
   private readonly getPluginsStats: (() => { loaded: number; directories: string[] } | undefined) | undefined;
   private readonly allowedOrigins: string[] | undefined;
-  private readonly bruteForce = new BruteForceProtection(5, 5 * 60 * 1000);
+  private readonly bruteForce: BruteForceProtection;
 
   private httpServer: Server | null = null;
   private wsServer: WebSocketServer | null = null;
@@ -58,21 +72,17 @@ export class WebSocketDashboardServer {
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private readonly logger = getLogger();
 
-  constructor(
-    port: number,
-    authToken: string | undefined,
-    metrics: MetricsCollector,
-    getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined,
-    getPluginsStats?: () => { loaded: number; directories: string[] } | undefined,
-    _getLogs?: () => string[] | undefined,
-    allowedOrigins?: string[]
-  ) {
-    this.port = port;
-    this.authToken = authToken;
-    this.metrics = metrics;
-    this.getMemoryStats = getMemoryStats;
-    this.getPluginsStats = getPluginsStats;
-    this.allowedOrigins = allowedOrigins;
+  constructor(opts: WebSocketDashboardServerOptions) {
+    this.port = opts.port;
+    this.authToken = opts.authToken;
+    this.metrics = opts.metrics;
+    this.getMemoryStats = opts.getMemoryStats;
+    this.getPluginsStats = opts.getPluginsStats;
+    this.allowedOrigins = opts.allowedOrigins;
+    this.bruteForce = new BruteForceProtection(
+      opts.maxAuthAttempts ?? DEFAULT_MAX_AUTH_ATTEMPTS,
+      opts.authLockoutMs ?? DEFAULT_AUTH_LOCKOUT_MS,
+    );
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -83,19 +93,7 @@ export class WebSocketDashboardServer {
       server: this.httpServer,
       path: "/ws",
       maxPayload: 1 * 1024 * 1024,
-      verifyClient: ({ req }) => {
-        const origin = req.headers.origin;
-        if (!origin) return true; // Non-browser clients
-        try {
-          const { hostname } = new URL(origin);
-          if (this.allowedOrigins && this.allowedOrigins.length > 0) {
-            return this.allowedOrigins.includes(hostname);
-          }
-          return hostname === "localhost" || hostname === "127.0.0.1";
-        } catch {
-          return false; // Malformed Origin
-        }
-      },
+      verifyClient: ({ req }) => isAllowedOrigin(req.headers.origin, this.allowedOrigins),
     });
     this.wsServer.on("connection", this.handleWsConnection.bind(this));
 
@@ -277,6 +275,12 @@ export class WebSocketDashboardServer {
 
   private async handleCommand(client: WSClient, message: WSMessage): Promise<void> {
     const { id, payload } = message;
+
+    if (!payload || typeof payload !== "object") {
+      this.sendError(client, "Command payload must be an object", id);
+      return;
+    }
+
     const { command, data } = payload as { command: string; data?: unknown };
 
     if (!command) {

@@ -81,6 +81,9 @@ export {
   type FileOperationAudit,
 } from "./filesystem-security.js";
 
+// Origin Validation
+export { isAllowedOrigin } from "./origin-validation.js";
+
 // Original Security Modules
 export { validatePath, isValidCSharpIdentifier, isValidCSharpType } from "./path-guard.js";
 export {
