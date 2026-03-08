@@ -65,6 +65,18 @@ describe("loadConfig", () => {
     delete process.env["BAYESIAN_VERDICT_CLEAN_SUCCESS"];
     delete process.env["BAYESIAN_VERDICT_RETRY_SUCCESS"];
     delete process.env["BAYESIAN_VERDICT_FAILURE"];
+    // Clear daemon env vars
+    delete process.env["STRATA_DAEMON_INTERVAL_MS"];
+    delete process.env["STRATA_DAEMON_TIMEZONE"];
+    delete process.env["STRATA_DAEMON_HEARTBEAT_FILE"];
+    delete process.env["STRATA_DAEMON_DAILY_BUDGET"];
+    delete process.env["STRATA_DAEMON_BUDGET_WARN_PCT"];
+    delete process.env["STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES"];
+    delete process.env["STRATA_DAEMON_AUTO_APPROVE_TOOLS"];
+    delete process.env["STRATA_DAEMON_BACKOFF_BASE"];
+    delete process.env["STRATA_DAEMON_BACKOFF_MAX"];
+    delete process.env["STRATA_DAEMON_FAILURE_THRESHOLD"];
+    delete process.env["STRATA_DAEMON_IDLE_PAUSE"];
   });
 
   it("loads valid configuration", () => {
@@ -338,6 +350,103 @@ describe("loadConfig", () => {
       expect(bayesian.deprecatedThreshold).toBe(0.2);
       expect(bayesian.activeThreshold).toBe(0.6);
       expect(bayesian.maxInitial).toBe(0.4);
+    });
+  });
+
+  // =========================================================================
+  // Daemon Config Tests (DAEMON-01, DAEMON-03, SEC-05)
+  // =========================================================================
+
+  describe("daemon config", () => {
+    it("validates with sensible defaults", () => {
+      setEnv();
+      const config = loadConfig();
+      expect(config.daemon).toBeDefined();
+      expect(config.daemon.heartbeat.intervalMs).toBe(60000);
+      expect(config.daemon.budget.warnPct).toBe(0.8);
+      expect(config.daemon.security.approvalTimeoutMin).toBe(30);
+      expect(config.daemon.backoff.baseCooldownMs).toBe(60000);
+      expect(config.daemon.backoff.maxCooldownMs).toBe(3600000);
+      expect(config.daemon.backoff.failureThreshold).toBe(3);
+    });
+
+    it("rejects intervalMs < 10000", () => {
+      setEnv({ STRATA_DAEMON_INTERVAL_MS: "5000" });
+      expect(() => loadConfig()).toThrow();
+    });
+
+    it("rejects intervalMs > 300000", () => {
+      setEnv({ STRATA_DAEMON_INTERVAL_MS: "500000" });
+      expect(() => loadConfig()).toThrow();
+    });
+
+    it("rejects dailyBudget <= 0 when provided", () => {
+      setEnv({ STRATA_DAEMON_DAILY_BUDGET: "0" });
+      expect(() => loadConfig()).toThrow();
+    });
+
+    it("accepts comma-separated STRATA_DAEMON_AUTO_APPROVE_TOOLS", () => {
+      setEnv({ STRATA_DAEMON_AUTO_APPROVE_TOOLS: "file_read,git_status,search" });
+      const config = loadConfig();
+      expect(config.daemon.security.autoApproveTools).toEqual(["file_read", "git_status", "search"]);
+    });
+
+    it("returns Config with daemon property matching DaemonConfig shape", () => {
+      setEnv();
+      const config = loadConfig();
+      expect(config.daemon).toEqual({
+        heartbeat: {
+          intervalMs: 60000,
+          heartbeatFile: "./HEARTBEAT.md",
+          idlePause: false,
+        },
+        security: {
+          approvalTimeoutMin: 30,
+          autoApproveTools: [],
+        },
+        budget: {
+          dailyBudgetUsd: undefined,
+          warnPct: 0.8,
+        },
+        backoff: {
+          baseCooldownMs: 60000,
+          maxCooldownMs: 3600000,
+          failureThreshold: 3,
+        },
+        timezone: "",
+      });
+    });
+
+    it("defaults STRATA_DAEMON_TIMEZONE to empty string", () => {
+      setEnv();
+      const config = loadConfig();
+      expect(config.daemon.timezone).toBe("");
+    });
+
+    it("accepts custom daemon values", () => {
+      setEnv({
+        STRATA_DAEMON_INTERVAL_MS: "30000",
+        STRATA_DAEMON_TIMEZONE: "America/New_York",
+        STRATA_DAEMON_HEARTBEAT_FILE: "./custom.md",
+        STRATA_DAEMON_DAILY_BUDGET: "10.50",
+        STRATA_DAEMON_BUDGET_WARN_PCT: "0.9",
+        STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES: "60",
+        STRATA_DAEMON_BACKOFF_BASE: "30000",
+        STRATA_DAEMON_BACKOFF_MAX: "7200000",
+        STRATA_DAEMON_FAILURE_THRESHOLD: "5",
+        STRATA_DAEMON_IDLE_PAUSE: "true",
+      });
+      const config = loadConfig();
+      expect(config.daemon.heartbeat.intervalMs).toBe(30000);
+      expect(config.daemon.timezone).toBe("America/New_York");
+      expect(config.daemon.heartbeat.heartbeatFile).toBe("./custom.md");
+      expect(config.daemon.budget.dailyBudgetUsd).toBe(10.50);
+      expect(config.daemon.budget.warnPct).toBe(0.9);
+      expect(config.daemon.security.approvalTimeoutMin).toBe(60);
+      expect(config.daemon.backoff.baseCooldownMs).toBe(30000);
+      expect(config.daemon.backoff.maxCooldownMs).toBe(7200000);
+      expect(config.daemon.backoff.failureThreshold).toBe(5);
+      expect(config.daemon.heartbeat.idlePause).toBe(true);
     });
   });
 });

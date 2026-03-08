@@ -6,6 +6,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import type { TaskOrigin } from "../daemon/daemon-types.js";
 
 // ─── Task Identity ──────────────────────────────────────────────────────────────
 
@@ -67,6 +68,8 @@ export interface Task {
   updatedAt: number;
   completedAt?: number;
   parentId?: TaskId;
+  /** Origin of the task -- 'user' for interactive, 'daemon' for daemon-initiated */
+  origin?: TaskOrigin;
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────────

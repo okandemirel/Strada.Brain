@@ -15,6 +15,7 @@ import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
 import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
+import type { DaemonConfig } from "../daemon/daemon-types.js";
 
 dotenv.config();
 
@@ -104,7 +105,18 @@ export type EnvVarName =
   | "STRATA_INSTINCT_SCOPE_FILTER"
   | "STRATA_INSTINCT_RECENCY_BOOST"
   | "STRATA_INSTINCT_SCOPE_BOOST"
-  | "STRATA_INSTINCT_PROMOTION_THRESHOLD";
+  | "STRATA_INSTINCT_PROMOTION_THRESHOLD"
+  | "STRATA_DAEMON_INTERVAL_MS"
+  | "STRATA_DAEMON_TIMEZONE"
+  | "STRATA_DAEMON_HEARTBEAT_FILE"
+  | "STRATA_DAEMON_DAILY_BUDGET"
+  | "STRATA_DAEMON_BUDGET_WARN_PCT"
+  | "STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES"
+  | "STRATA_DAEMON_AUTO_APPROVE_TOOLS"
+  | "STRATA_DAEMON_BACKOFF_BASE"
+  | "STRATA_DAEMON_BACKOFF_MAX"
+  | "STRATA_DAEMON_FAILURE_THRESHOLD"
+  | "STRATA_DAEMON_IDLE_PAUSE";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -315,6 +327,9 @@ export interface Config {
 
   // Identity
   readonly agentName: string;
+
+  // Daemon
+  readonly daemon: DaemonConfig;
 }
 
 /** Partial config for updates */
@@ -562,6 +577,19 @@ export const configSchema = z
 
     // Identity
     agentName: z.string().default("Strata Brain"),
+
+    // Daemon
+    daemonIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10000).max(300000)).default("60000"),
+    daemonTimezone: z.string().default(""),
+    daemonHeartbeatFile: z.string().default("./HEARTBEAT.md"),
+    daemonDailyBudget: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.01).max(1000)).optional(),
+    daemonBudgetWarnPct: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.1).max(0.99)).default("0.8"),
+    daemonApprovalTimeoutMin: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1440)).default("30"),
+    daemonAutoApproveTools: z.string().transform((s) => s.split(",").map((t) => t.trim()).filter(Boolean)).default(""),
+    daemonBackoffBase: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10000).max(600000)).default("60000"),
+    daemonBackoffMax: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000).max(86400000)).default("3600000"),
+    daemonFailureThreshold: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
+    daemonIdlePause: boolFromString(false),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -801,6 +829,28 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     agentName: rawConfig.agentName,
+
+    daemon: {
+      heartbeat: {
+        intervalMs: rawConfig.daemonIntervalMs,
+        heartbeatFile: rawConfig.daemonHeartbeatFile,
+        idlePause: rawConfig.daemonIdlePause,
+      },
+      security: {
+        approvalTimeoutMin: rawConfig.daemonApprovalTimeoutMin,
+        autoApproveTools: rawConfig.daemonAutoApproveTools,
+      },
+      budget: {
+        dailyBudgetUsd: rawConfig.daemonDailyBudget,
+        warnPct: rawConfig.daemonBudgetWarnPct,
+      },
+      backoff: {
+        baseCooldownMs: rawConfig.daemonBackoffBase,
+        maxCooldownMs: rawConfig.daemonBackoffMax,
+        failureThreshold: rawConfig.daemonFailureThreshold,
+      },
+      timezone: rawConfig.daemonTimezone,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -1055,6 +1105,17 @@ interface EnvVars {
   crossSessionScopeBoost: string | undefined;
   crossSessionPromotionThreshold: string | undefined;
   agentName: string | undefined;
+  daemonIntervalMs: string | undefined;
+  daemonTimezone: string | undefined;
+  daemonHeartbeatFile: string | undefined;
+  daemonDailyBudget: string | undefined;
+  daemonBudgetWarnPct: string | undefined;
+  daemonApprovalTimeoutMin: string | undefined;
+  daemonAutoApproveTools: string | undefined;
+  daemonBackoffBase: string | undefined;
+  daemonBackoffMax: string | undefined;
+  daemonFailureThreshold: string | undefined;
+  daemonIdlePause: string | undefined;
 }
 
 /**
@@ -1158,6 +1219,17 @@ function loadFromEnv(): EnvVars {
     crossSessionScopeBoost: process.env["STRATA_INSTINCT_SCOPE_BOOST"],
     crossSessionPromotionThreshold: process.env["STRATA_INSTINCT_PROMOTION_THRESHOLD"],
     agentName: process.env["STRATA_AGENT_NAME"],
+    daemonIntervalMs: process.env["STRATA_DAEMON_INTERVAL_MS"],
+    daemonTimezone: process.env["STRATA_DAEMON_TIMEZONE"],
+    daemonHeartbeatFile: process.env["STRATA_DAEMON_HEARTBEAT_FILE"],
+    daemonDailyBudget: process.env["STRATA_DAEMON_DAILY_BUDGET"],
+    daemonBudgetWarnPct: process.env["STRATA_DAEMON_BUDGET_WARN_PCT"],
+    daemonApprovalTimeoutMin: process.env["STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
+    daemonAutoApproveTools: process.env["STRATA_DAEMON_AUTO_APPROVE_TOOLS"],
+    daemonBackoffBase: process.env["STRATA_DAEMON_BACKOFF_BASE"],
+    daemonBackoffMax: process.env["STRATA_DAEMON_BACKOFF_MAX"],
+    daemonFailureThreshold: process.env["STRATA_DAEMON_FAILURE_THRESHOLD"],
+    daemonIdlePause: process.env["STRATA_DAEMON_IDLE_PAUSE"],
   };
 }
 
