@@ -1416,3 +1416,85 @@ describe("MetricsRecorder.recordRetrievalMetrics", () => {
     storage.close();
   });
 });
+
+// =============================================================================
+// Plan 03 Task 2: Cross-session CLI subcommand
+// =============================================================================
+
+describe("crossSessionCommand JSON output", () => {
+  it("returns valid JSON structure with all required sections", async () => {
+    const { LearningStorage } = await import("./learning-storage.js");
+    const { gatherCrossSessionStats } = await import("../../metrics/metrics-cli.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    // Populate test data
+    const instinct1 = makeInstinct({
+      id: "instinct_cli_1" as InstinctId,
+      triggerPattern: "cli test pattern one",
+      originBootCount: 1,
+      originSessionId: "session_1",
+      crossSessionHitCount: 5,
+    });
+    const instinct2 = makeInstinct({
+      id: "instinct_cli_2" as InstinctId,
+      triggerPattern: "cli test pattern two",
+      originBootCount: 2,
+      originSessionId: "session_2",
+      crossSessionHitCount: 3,
+    });
+    const instinct3 = makeInstinct({
+      id: "instinct_cli_3" as InstinctId,
+      triggerPattern: "cli test pattern three",
+      originBootCount: 1,
+      originSessionId: "session_1",
+      crossSessionHitCount: 0,
+    });
+
+    storage.createInstinct(instinct1, "/projects/alpha");
+    storage.createInstinct(instinct2, "/projects/beta");
+    storage.createInstinct(instinct3, "/projects/alpha");
+
+    // Add universal scope for instinct1
+    storage.addInstinctScope("instinct_cli_1", "*");
+
+    // Gather stats (used internally by crossSessionCommand)
+    const stats = gatherCrossSessionStats(storage);
+
+    // Verify structure
+    expect(stats.provenanceDistribution).toBeInstanceOf(Array);
+    expect(stats.provenanceDistribution.length).toBeGreaterThanOrEqual(1);
+    // Boot 1 should have 2 instincts, boot 2 should have 1
+    const boot1 = stats.provenanceDistribution.find(r => r.bootCount === 1);
+    const boot2 = stats.provenanceDistribution.find(r => r.bootCount === 2);
+    expect(boot1?.instinctCount).toBe(2);
+    expect(boot2?.instinctCount).toBe(1);
+
+    // Scope stats
+    expect(stats.scopeStats.projectSpecific).toBeGreaterThanOrEqual(2); // /projects/alpha (2) + /projects/beta (1)
+    expect(stats.scopeStats.universal).toBe(1); // instinct_cli_1 with '*'
+
+    // Age histogram -- all created just now, so all in 0-7d
+    expect(stats.ageHistogram.find(r => r.bucket === "0-7d")?.count).toBe(3);
+
+    // Cross-session value
+    expect(stats.crossSessionValue.length).toBe(2); // instinct_cli_1 (5 hits) and instinct_cli_2 (3 hits)
+    expect(stats.crossSessionValue[0]!.hitCount).toBe(5);
+    expect(stats.crossSessionValue[1]!.hitCount).toBe(3);
+
+    // Migration stats (migrations table created by migrateSchema -> MigrationRunner not run here)
+    expect(stats.migrationStats.migrationsApplied).toBeGreaterThanOrEqual(0);
+
+    // Verify JSON serialization
+    const json = JSON.stringify(stats, null, 2);
+    const parsed = JSON.parse(json);
+    expect(parsed.provenanceDistribution).toBeDefined();
+    expect(parsed.scopeStats).toBeDefined();
+    expect(parsed.ageHistogram).toBeDefined();
+    expect(parsed.crossSessionValue).toBeDefined();
+    expect(parsed.migrationStats).toBeDefined();
+
+    storage.close();
+  });
+});

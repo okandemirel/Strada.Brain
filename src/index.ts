@@ -85,6 +85,15 @@ program
     runMetricsCommand(opts);
   });
 
+program
+  .command("cross-session")
+  .description("Show cross-session learning statistics")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    const { crossSessionCommand } = await import("./metrics/metrics-cli.js");
+    crossSessionCommand(opts);
+  });
+
 // Run CLI
 program.parse();
 
