@@ -21,8 +21,10 @@ import {
   buildDepsContext,
   buildCapabilityManifest,
   buildIdentitySection,
+  buildCrashNotificationSection,
 } from "./context/strata-knowledge.js";
 import type { IdentityState } from "../identity/identity-state.js";
+import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
 import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
@@ -117,6 +119,7 @@ export class Orchestrator {
     goalDecomposer?: GoalDecomposer;
     interruptedGoalTrees?: GoalTree[];
     identityState?: IdentityState;
+    crashRecoveryContext?: CrashRecoveryContext;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -153,7 +156,8 @@ export class Orchestrator {
       buildProjectContext(this.projectPath) +
       buildDepsContext(opts.stradaDeps) +
       buildCapabilityManifest() +
-      (opts.identityState ? buildIdentitySection(opts.identityState) : "");
+      (opts.identityState ? buildIdentitySection(opts.identityState) : "") +
+      (opts.crashRecoveryContext ? buildCrashNotificationSection(opts.crashRecoveryContext) : "");
   }
 
   /**

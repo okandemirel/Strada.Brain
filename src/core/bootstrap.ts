@@ -67,6 +67,8 @@ import type { GoalTree } from "../goals/types.js";
 import { ChainDetector, ChainSynthesizer, ChainManager } from "../learning/chains/index.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
 import { IdentityStateManager } from "../identity/identity-state.js";
+import { buildCrashRecoveryContext } from "../identity/crash-recovery.js";
+import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
 
 // Task system imports
 import {
@@ -243,6 +245,23 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     }
   }
 
+  // Build crash recovery context if unclean shutdown detected (IDENT-02)
+  let crashContext: CrashRecoveryContext | null = null;
+  if (identityManager) {
+    crashContext = buildCrashRecoveryContext(
+      identityManager.wasCrash(),
+      identityManager.getState(),
+      interruptedGoalTrees,
+    );
+    if (crashContext) {
+      logger.warn("Unclean shutdown detected", {
+        downtimeMs: crashContext.downtimeMs,
+        interruptedTrees: crashContext.interruptedTrees.length,
+        bootCount: crashContext.bootCount,
+      });
+    }
+  }
+
   // Create GoalExecutorConfig from config values
   const goalExecutorConfig: GoalExecutorConfig = {
     maxRetries: config.goalMaxRetries,
@@ -276,6 +295,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     goalDecomposer,
     interruptedGoalTrees,
     identityState: identityManager?.getState(),
+    crashRecoveryContext: crashContext ?? undefined,
   });
 
   // Initialize tool chain synthesis (TOOL-01 through TOOL-05)
