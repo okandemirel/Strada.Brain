@@ -58,6 +58,7 @@ function createMockToolRegistry(): ToolRegistry {
   return {
     has: vi.fn((name: string) => tools.has(name)),
     get: vi.fn((name: string) => tools.get(name)),
+    getMetadata: vi.fn().mockReturnValue(undefined),
     registerOrUpdate: vi.fn((tool: ITool) => { tools.set(tool.name, tool); }),
     unregister: vi.fn((name: string) => tools.delete(name)),
     // Allow test to pre-populate tools
@@ -405,11 +406,11 @@ describe("ChainManager", () => {
       const newTool = createMockCompositeTool("read_and_grep", ["file_read", "grep_search"]);
       (synthesizer.synthesize as ReturnType<typeof vi.fn>).mockResolvedValue([newTool]);
 
-      const manager = createManager({ detectionIntervalMs: 5000 });
+      const manager = createManager({ detectionIntervalMs: 60000 });
       await manager.start();
 
       // Advance timer past one interval and flush pending promises
-      await vi.advanceTimersByTimeAsync(5001);
+      await vi.advanceTimersByTimeAsync(60001);
 
       expect(detector.detect).toHaveBeenCalled();
 

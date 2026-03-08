@@ -18,6 +18,7 @@ import type {
   ChainExecutionEvent,
 } from "../../core/event-bus.js";
 import type { ChainMetadata } from "./chain-types.js";
+import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 
 export interface CompositeToolMetadata {
   name: string;
@@ -105,7 +106,7 @@ export class CompositeTool implements ITool {
         // Fail immediately on step error
         this.emitChainEvent(false, stepResults, startTime);
         return {
-          content: `Chain '${this.name}' failed at step ${i + 1} (${toolName}): ${result.content}`,
+          content: `Chain '${this.name}' failed at step ${i + 1} (${toolName}): ${sanitizeSecrets(result.content).slice(0, 200)}`,
           isError: true,
         };
       }
@@ -191,12 +192,13 @@ export class CompositeTool implements ITool {
     stepResults: StepRecord[],
     startTime: number,
   ): void {
+    const now = Date.now();
     const event: ChainExecutionEvent = {
       chainName: this.name,
       success,
       stepResults,
-      totalDurationMs: Date.now() - startTime,
-      timestamp: Date.now(),
+      totalDurationMs: now - startTime,
+      timestamp: now,
     };
     this.eventBus.emit("chain:executed", event);
   }

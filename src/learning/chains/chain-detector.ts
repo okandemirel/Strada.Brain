@@ -16,6 +16,7 @@
 import type { LearningStorage } from "../storage/learning-storage.js";
 import type { TrajectoryStep } from "../types.js";
 import type { ToolChainConfig, CandidateChain } from "./chain-types.js";
+import { computeSuccessRate, isContiguousSubsequence } from "./chain-types.js";
 
 /** Mutable internal variant used during detection accumulation */
 interface MutableCandidate {
@@ -39,7 +40,7 @@ export class ChainDetector {
   detect(): CandidateChain[] {
     // 1. Fetch trajectories from storage (within age limit)
     const since = Date.now() - this.config.maxAgeDays * 24 * 60 * 60 * 1000;
-    const trajectories = this.learningStorage.getTrajectories({ since });
+    const trajectories = this.learningStorage.getTrajectories({ since, limit: 500 });
 
     // 2. Build frequency map: Map<key, MutableCandidate>
     const candidates = new Map<string, MutableCandidate>();
@@ -91,14 +92,10 @@ export class ChainDetector {
     }
 
     // 3. Filter by thresholds
-    let results = Array.from(candidates.values()).filter((c) => {
-      const successRate =
-        c.occurrences > 0 ? c.successCount / c.occurrences : 0;
-      return (
-        c.occurrences >= this.config.minOccurrences &&
-        successRate >= this.config.successRateThreshold
-      );
-    });
+    let results = Array.from(candidates.values()).filter((c) =>
+      c.occurrences >= this.config.minOccurrences &&
+      computeSuccessRate(c) >= this.config.successRateThreshold,
+    );
 
     // 4. Longest-match-wins: remove shorter sequences subsumed by longer ones
     results = this.removeSubsumedChains(results);
@@ -111,24 +108,19 @@ export class ChainDetector {
 
   /**
    * Remove shorter chains that are subsumed by longer chains with >= occurrences.
-   * A shorter chain is subsumed if a longer chain's key contains the shorter key
-   * and the longer chain has at least as many occurrences.
+   * Uses proper contiguous array subsequence matching (not string inclusion).
    */
   private removeSubsumedChains(
     chains: MutableCandidate[],
   ): MutableCandidate[] {
     return chains.filter((chain) => {
-      // A chain at maxChainLength cannot be subsumed
       if (chain.toolNames.length === this.config.maxChainLength) return true;
 
-      // Check if any longer chain subsumes this one
-      const chainKey = chain.key;
       return !chains.some(
         (longer) =>
-          longer.key !== chainKey &&
           longer.toolNames.length > chain.toolNames.length &&
-          longer.key.includes(chainKey) &&
-          longer.occurrences >= chain.occurrences,
+          longer.occurrences >= chain.occurrences &&
+          isContiguousSubsequence(chain.toolNames, longer.toolNames),
       );
     });
   }

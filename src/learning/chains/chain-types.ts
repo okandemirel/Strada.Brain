@@ -75,6 +75,79 @@ export type ChainMetadata = z.infer<typeof ChainMetadataSchema>;
 export type LLMChainOutput = z.infer<typeof LLMChainOutputSchema>;
 
 // =============================================================================
+// HELPERS
+// =============================================================================
+
+/** Compute success rate from a candidate chain */
+export function computeSuccessRate(candidate: { occurrences: number; successCount: number }): number {
+  return candidate.occurrences > 0 ? candidate.successCount / candidate.occurrences : 0;
+}
+
+/** Default metadata for composite tools in the registry */
+export const COMPOSITE_TOOL_METADATA = {
+  category: "composite" as const,
+  dangerous: true,
+  requiresConfirmation: false,
+  readOnly: false,
+} as const;
+
+/** Compute composite tool metadata inheriting the most restrictive flags from component tools */
+export function computeCompositeMetadata(
+  componentMeta: Array<{ dangerous?: boolean; requiresConfirmation?: boolean } | undefined>,
+): { category: "composite"; dangerous: boolean; requiresConfirmation: boolean; readOnly: false } {
+  const dangerous = componentMeta.some((m) => m?.dangerous);
+  const requiresConfirmation = componentMeta.some((m) => m?.requiresConfirmation);
+  return { category: "composite" as const, dangerous, requiresConfirmation, readOnly: false };
+}
+
+/**
+ * Parse and validate LLM JSON output against a Zod schema.
+ * Strips markdown code fences before parsing.
+ */
+export function parseLLMJsonOutput<T>(text: string, schema: z.ZodSchema<T>): T | null {
+  try {
+    let cleaned = text.trim();
+    const fenceMatch = cleaned.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
+    if (fenceMatch?.[1]) {
+      cleaned = fenceMatch[1].trim();
+    }
+    const parsed = JSON.parse(cleaned);
+    const result = schema.safeParse(parsed);
+    if (!result.success) return null;
+    return result.data;
+  } catch {
+    return null;
+  }
+}
+
+/** Truncate a string to maxLen, appending "..." if truncated */
+function truncate(s: string, maxLen: number): string {
+  return s.length <= maxLen ? s : s.slice(0, maxLen) + "...";
+}
+
+/** Safely stringify a value for LLM prompts (truncated to limit) */
+export function safeStringify(value: unknown, maxLen = 500): string {
+  try {
+    return truncate(JSON.stringify(value), maxLen);
+  } catch {
+    return truncate(String(value), maxLen);
+  }
+}
+
+/** Check if shorter toolNames appear as a contiguous subsequence within longer toolNames */
+export function isContiguousSubsequence(shorter: string[], longer: string[]): boolean {
+  if (shorter.length >= longer.length) return false;
+  for (let i = 0; i <= longer.length - shorter.length; i++) {
+    let match = true;
+    for (let j = 0; j < shorter.length; j++) {
+      if (longer[i + j] !== shorter[j]) { match = false; break; }
+    }
+    if (match) return true;
+  }
+  return false;
+}
+
+// =============================================================================
 // INTERFACES
 // =============================================================================
 

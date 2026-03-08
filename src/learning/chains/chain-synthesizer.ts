@@ -11,7 +11,7 @@
 
 import type { LearningStorage } from "../storage/learning-storage.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
-import type { IEventBus, LearningEventMap } from "../../core/event-bus.js";
+import type { IEventEmitter, LearningEventMap } from "../../core/event-bus.js";
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
 import type {
   CandidateChain,
@@ -19,7 +19,8 @@ import type {
   ChainMetadata,
   LLMChainOutput,
 } from "./chain-types.js";
-import { LLMChainOutputSchema } from "./chain-types.js";
+import { LLMChainOutputSchema, computeSuccessRate, computeCompositeMetadata, parseLLMJsonOutput, safeStringify } from "./chain-types.js";
+import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 import { CompositeTool } from "./composite-tool.js";
 import { createInstinctId, CONFIDENCE_THRESHOLDS } from "../types.js";
 import type { Instinct, TrajectoryId } from "../types.js";
@@ -47,7 +48,7 @@ export class ChainSynthesizer {
   constructor(
     private readonly learningStorage: LearningStorage,
     private readonly toolRegistry: ToolRegistry,
-    private readonly eventBus: IEventBus<LearningEventMap>,
+    private readonly eventBus: IEventEmitter<LearningEventMap>,
     private readonly config: ToolChainConfig,
   ) {}
 
@@ -98,11 +99,12 @@ export class ChainSynthesizer {
         const llmOutput = await this.callLLM(candidate);
         if (!llmOutput) continue;
 
+        // Prevent LLM-generated names from shadowing existing non-composite tools
+        const existingMeta = this.toolRegistry.getMetadata(llmOutput.name);
+        if (existingMeta && existingMeta.category !== "composite") continue;
+
         // Build chain metadata from LLM output + candidate data
-        const successRate =
-          candidate.occurrences > 0
-            ? candidate.successCount / candidate.occurrences
-            : 0;
+        const successRate = computeSuccessRate(candidate);
 
         const chainMetadata: ChainMetadata = {
           toolSequence: candidate.toolNames,
@@ -155,13 +157,11 @@ export class ChainSynthesizer {
           this.eventBus,
         );
 
-        // Register the tool
-        this.toolRegistry.registerOrUpdate(tool, {
-          category: "composite",
-          dangerous: true,
-          requiresConfirmation: false,
-          readOnly: false,
-        });
+        // Register with metadata inheriting confirmation gates from component tools
+        const toolMeta = computeCompositeMetadata(
+          candidate.toolNames.map((name) => this.toolRegistry.getMetadata(name)),
+        );
+        this.toolRegistry.registerOrUpdate(tool, toolMeta);
 
         // Emit chain:detected event
         this.eventBus.emit("chain:detected", {
@@ -215,7 +215,7 @@ export class ChainSynthesizer {
       `Tool sequence: ${candidate.toolNames.join(" -> ")}`,
       `Occurrences: ${candidate.occurrences}`,
       `Success count: ${candidate.successCount}`,
-      `Success rate: ${(candidate.occurrences > 0 ? candidate.successCount / candidate.occurrences : 0).toFixed(2)}`,
+      `Success rate: ${computeSuccessRate(candidate).toFixed(2)}`,
     ];
 
     if (candidate.sampleSteps.length > 0) {
@@ -225,7 +225,7 @@ export class ChainSynthesizer {
         lines.push(`  Sample ${s + 1}:`);
         for (const step of candidate.sampleSteps[s]!) {
           lines.push(
-            `    ${step.toolName}: input=${JSON.stringify(step.input)}`,
+            `    ${step.toolName}: input=${sanitizeSecrets(safeStringify(step.input))}`,
           );
         }
       }
@@ -234,29 +234,8 @@ export class ChainSynthesizer {
     return lines.join("\n");
   }
 
-  /**
-   * Parse and validate LLM output against LLMChainOutputSchema.
-   * Strips markdown fences before parsing.
-   */
+  /** Parse and validate LLM output against LLMChainOutputSchema */
   private parseLLMOutput(text: string): LLMChainOutput | null {
-    try {
-      let cleaned = text.trim();
-      // Strip markdown code fences
-      const fenceMatch = cleaned.match(
-        /^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/,
-      );
-      if (fenceMatch?.[1]) {
-        cleaned = fenceMatch[1].trim();
-      }
-
-      const parsed = JSON.parse(cleaned);
-      const result = LLMChainOutputSchema.safeParse(parsed);
-      if (!result.success) {
-        return null;
-      }
-      return result.data;
-    } catch {
-      return null;
-    }
+    return parseLLMJsonOutput(text, LLMChainOutputSchema);
   }
 }

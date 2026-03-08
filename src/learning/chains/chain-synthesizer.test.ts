@@ -84,6 +84,7 @@ function makeToolRegistry(existingTools: string[]): ToolRegistry {
   const toolSet = new Set(existingTools);
   return {
     has: vi.fn((name: string) => toolSet.has(name)),
+    getMetadata: vi.fn().mockReturnValue(undefined),
     registerOrUpdate: vi.fn(),
   } as unknown as ToolRegistry;
 }

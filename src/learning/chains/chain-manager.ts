@@ -12,18 +12,19 @@
 import type { ChainDetector } from "./chain-detector.js";
 import type { ChainSynthesizer } from "./chain-synthesizer.js";
 import { CompositeTool } from "./composite-tool.js";
-import { ChainMetadataSchema } from "./chain-types.js";
+import { ChainMetadataSchema, computeCompositeMetadata } from "./chain-types.js";
 import type { ToolChainConfig } from "./chain-types.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
-import type { IEventBus, LearningEventMap } from "../../core/event-bus.js";
+import type { IEventEmitter, LearningEventMap } from "../../core/event-bus.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
-import type { ToolCategory } from "../../core/tool-registry.js";
 import { getLogger } from "../../utils/logger.js";
 
 export class ChainManager {
   private detectionTimer: ReturnType<typeof setInterval> | null = null;
   private readonly activeChainNames = new Set<string>();
+  /** Track candidate keys (comma-joined tool sequences) to avoid re-synthesizing */
+  private readonly activeCandidateKeys = new Set<string>();
 
   constructor(
     private readonly detector: ChainDetector,
@@ -31,7 +32,7 @@ export class ChainManager {
     private readonly toolRegistry: ToolRegistry,
     private readonly learningStorage: LearningStorage,
     private readonly orchestrator: { addTool(tool: ITool): void; removeTool(name: string): void },
-    private readonly eventBus: IEventBus<LearningEventMap>,
+    private readonly eventBus: IEventEmitter<LearningEventMap>,
     private readonly config: ToolChainConfig,
   ) {}
 
@@ -48,10 +49,12 @@ export class ChainManager {
     // Load existing tool_chain instincts from storage
     this.loadExistingChains();
 
-    // Start periodic detection timer
+    // Start periodic detection timer (minimum 60s to prevent resource exhaustion)
+    const MIN_DETECTION_INTERVAL_MS = 60_000;
+    const interval = Math.max(this.config.detectionIntervalMs, MIN_DETECTION_INTERVAL_MS);
     this.detectionTimer = setInterval(
       () => { void this.runDetectionCycle(); },
-      this.config.detectionIntervalMs,
+      interval,
     );
 
     getLogger().info("ChainManager started", {
@@ -105,14 +108,13 @@ export class ChainManager {
           this.eventBus,
         );
 
-        this.toolRegistry.registerOrUpdate(tool, {
-          category: "composite" as ToolCategory,
-          dangerous: true,
-          requiresConfirmation: false,
-          readOnly: false,
-        });
+        const toolMeta = computeCompositeMetadata(
+          chainMetadata.toolSequence.map((name) => this.toolRegistry.getMetadata(name)),
+        );
+        this.toolRegistry.registerOrUpdate(tool, toolMeta);
         this.orchestrator.addTool(tool);
         this.activeChainNames.add(instinct.name);
+        this.activeCandidateKeys.add(instinct.triggerPattern);
       } catch (error) {
         getLogger().debug(
           `Failed to load chain instinct '${instinct.name}'`,
@@ -132,9 +134,9 @@ export class ChainManager {
     try {
       const candidates = this.detector.detect();
 
-      // Filter out candidates whose key matches already-active chain keys
+      // Filter out candidates already synthesized (match by candidate key)
       const newCandidates = candidates.filter(
-        (c) => !this.activeChainNames.has(c.key),
+        (c) => !this.activeCandidateKeys.has(c.key),
       );
 
       if (newCandidates.length === 0) return;
@@ -147,6 +149,7 @@ export class ChainManager {
       for (const tool of newTools) {
         this.orchestrator.addTool(tool);
         this.activeChainNames.add(tool.name);
+        this.activeCandidateKeys.add(tool.toolSequence.join(","));
       }
 
       if (newTools.length > 0) {
@@ -170,11 +173,12 @@ export class ChainManager {
       const tool = this.toolRegistry.get(chainName);
       if (!tool) continue;
 
-      // Check if this composite tool contains the removed tool (duck-type check)
-      if ("containsTool" in tool && typeof (tool as CompositeTool).containsTool === "function" && (tool as CompositeTool).containsTool(toolName)) {
+      if ("containsTool" in tool && typeof tool.containsTool === "function" && (tool as CompositeTool).containsTool(toolName)) {
+        const candidateKey = (tool as CompositeTool).toolSequence.join(",");
         this.toolRegistry.unregister(chainName);
         this.orchestrator.removeTool(chainName);
         this.activeChainNames.delete(chainName);
+        this.activeCandidateKeys.delete(candidateKey);
 
         this.eventBus.emit("chain:invalidated", {
           chainName,
