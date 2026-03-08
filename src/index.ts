@@ -17,6 +17,7 @@ import { SetupWizard } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
 import { CHANNEL_DEFAULTS, type SupportedChannelType } from "./common/constants.js";
 import { runMetricsCommand } from "./metrics/metrics-cli.js";
+import { registerDaemonCommands } from "./daemon/daemon-cli.js";
 
 // Setup global error handlers
 setupGlobalErrorHandlers(
@@ -58,8 +59,8 @@ program
   });
 
 program
-  .command("daemon")
-  .description("Run Strata Brain as an always-on daemon with auto-restart")
+  .command("supervise")
+  .description("Run Strata Brain as an always-on supervisor with auto-restart")
   .option(
     "--channel <type>",
     `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
@@ -68,7 +69,7 @@ program
   .action(async (opts: { channel: string }) => {
     const config = loadConfig();
     const logger = createLogger(config.logLevel, config.logFile);
-    logger.info("Starting Strata Brain in daemon mode");
+    logger.info("Starting Strata Brain in supervisor mode");
 
     const daemon = new Daemon({
       args: ["start", "--channel", opts.channel],
@@ -94,6 +95,11 @@ program
     const { crossSessionCommand } = await import("./metrics/metrics-cli.js");
     crossSessionCommand(opts);
   });
+
+// Register daemon management commands (status, trigger, reset, audit, config, budget)
+// Context is provided via callback since daemon may not be initialized at registration time
+let appResult: import("./core/bootstrap.js").BootstrapResult | undefined;
+registerDaemonCommands(program, () => appResult?.daemonContext);
 
 // Run CLI
 program.parse();
@@ -161,6 +167,9 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
       container,
       daemonMode,
     });
+
+    // Store bootstrap result for daemon CLI context access
+    appResult = app;
 
     // Register container services after bootstrap creates them
     container.registerInstance("Logger", logger);

@@ -113,6 +113,7 @@ export interface BootstrapResult {
   container: DIContainer;
   shutdown: () => Promise<void>;
   heartbeatLoop?: HeartbeatLoop;
+  daemonContext?: import("../daemon/daemon-cli.js").DaemonContext;
 }
 
 /**
@@ -401,6 +402,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Initialize daemon heartbeat loop (if daemon mode enabled)
   let heartbeatLoop: HeartbeatLoop | undefined;
+  let daemonContext: import("../daemon/daemon-cli.js").DaemonContext | undefined;
   if (options.daemonMode) {
     const daemonConfig = config.daemon;
 
@@ -471,6 +473,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       logger,
     );
 
+    // Build daemon context for CLI commands (Plan 05)
+    daemonContext = {
+      heartbeatLoop,
+      registry: triggerRegistry,
+      budgetTracker: budgetTrackerInstance,
+      approvalQueue: approvalQueueInstance,
+      storage: daemonStorage,
+      config: daemonConfig,
+    };
+
     // Auto-restart after crash recovery
     if (crashContext?.wasCrash) {
       const wasDaemonRunning = daemonStorage.getDaemonState("daemon_was_running");
@@ -512,6 +524,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     channel,
     container,
     heartbeatLoop,
+    daemonContext,
     shutdown: createShutdownHandler({
       dashboard,
       ragPipeline,

@@ -94,7 +94,7 @@ async function runDaemonCommand(
   console.error = (...args: unknown[]) => stderrLines.push(args.map(String).join(" "));
 
   try {
-    await program.parseAsync(["node", "strata", "daemon", ...args], { from: "user" });
+    await program.parseAsync(["node", "strata", "daemon", ...args]);
   } catch {
     // Commander may throw on exitOverride
   } finally {
