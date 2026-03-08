@@ -1,0 +1,97 @@
+/**
+ * DaemonSecurityPolicy
+ *
+ * Middleware that enforces the read-only-by-default security contract for
+ * daemon-initiated tool calls. Classifies tools as 'allow' or 'queue' based
+ * on their readOnly metadata, an auto-approve allowlist, and a hardcoded
+ * file-write tool set that always requires approval.
+ *
+ * This class does NOT execute tools directly. The HeartbeatLoop calls
+ * checkPermission() before executing, and if 'queue', calls requestApproval()
+ * and skips execution until approved.
+ *
+ * Requirements: SEC-03 (Read-only default), SEC-04 (Write approval)
+ */
+
+import type { ApprovalQueue } from "./approval-queue.js";
+import type { ApprovalEntry } from "../daemon-types.js";
+
+/** Metadata lookup function -- decoupled from ToolRegistry for testability */
+export type MetadataLookup = (
+  name: string,
+) => { readOnly: boolean } | undefined;
+
+/** Permission result from security policy check */
+export type PermissionResult = "allow" | "queue";
+
+export class DaemonSecurityPolicy {
+  private readonly metadataLookup: MetadataLookup;
+  private readonly approvalQueue: ApprovalQueue;
+  private readonly autoApproveList: Set<string>;
+
+  /** File-write tools that always require approval, even if auto-approved */
+  private static readonly FILE_WRITE_TOOLS = new Set([
+    "file_write",
+    "file_create",
+    "file_edit",
+  ]);
+
+  constructor(
+    metadataLookup: MetadataLookup,
+    approvalQueue: ApprovalQueue,
+    autoApproveList: Set<string>,
+  ) {
+    this.metadataLookup = metadataLookup;
+    this.approvalQueue = approvalQueue;
+    this.autoApproveList = autoApproveList;
+  }
+
+  /**
+   * Check whether a tool should be allowed to execute immediately or
+   * queued for human approval.
+   *
+   * Decision logic:
+   * 1. File-write tools (file_write, file_create, file_edit) -> always 'queue'
+   * 2. Unknown tools (not in registry) -> 'queue' (safe default)
+   * 3. Read-only tools (metadata.readOnly = true) -> 'allow'
+   * 4. Auto-approved tools (in allowlist) -> 'allow'
+   * 5. Everything else -> 'queue'
+   */
+  checkPermission(toolName: string): PermissionResult {
+    // File-write tools always require approval, even if auto-approved
+    if (DaemonSecurityPolicy.FILE_WRITE_TOOLS.has(toolName)) {
+      return "queue";
+    }
+
+    // Get metadata -- unknown tools default to 'queue' (safe default)
+    const metadata = this.metadataLookup(toolName);
+    if (!metadata) {
+      return "queue";
+    }
+
+    // Read-only tools execute immediately
+    if (metadata.readOnly) {
+      return "allow";
+    }
+
+    // Auto-approved tools execute immediately (budget still checked separately)
+    if (this.autoApproveList.has(toolName)) {
+      return "allow";
+    }
+
+    // Write tool not auto-approved -- queue for approval
+    return "queue";
+  }
+
+  /**
+   * Request approval for a tool execution.
+   * Returns the approval entry for tracking.
+   */
+  requestApproval(
+    toolName: string,
+    params: Record<string, unknown>,
+    triggerName?: string,
+  ): ApprovalEntry {
+    return this.approvalQueue.enqueue(toolName, params, triggerName);
+  }
+}
