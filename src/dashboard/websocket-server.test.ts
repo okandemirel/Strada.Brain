@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { WebSocket } from "ws";
 import { WebSocketDashboardServer } from "./websocket-server.js";
 import { MetricsCollector } from "./metrics.js";
+import { BruteForceProtection } from "../security/auth-hardened.js";
 
 // Mock logger
 vi.mock("../utils/logger.js", () => ({
@@ -573,6 +574,31 @@ describe("WebSocketDashboardServer", () => {
       ws.close();
       await rlServer.stop();
     }, 15000);
+
+    it("allows auth after lockout expires (via BruteForceProtection)", () => {
+      // Direct unit test of lockout expiry behavior since fake timers conflict with WebSocket
+      const bp = new BruteForceProtection(5, 5 * 60 * 1000);
+
+      // Record 5 failures to trigger lockout
+      for (let i = 0; i < 5; i++) {
+        bp.recordFailure("test-ip");
+      }
+
+      // Should be locked out
+      const blocked = bp.canAttempt("test-ip");
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.retryAfter).toBeGreaterThan(0);
+
+      // Advance time past lockout by mocking Date.now
+      const realDateNow = Date.now;
+      try {
+        Date.now = () => realDateNow() + 5 * 60 * 1000 + 1;
+        const allowed = bp.canAttempt("test-ip");
+        expect(allowed.allowed).toBe(true);
+      } finally {
+        Date.now = realDateNow;
+      }
+    });
 
     it("successful auth resets lockout counter", async () => {
       const rlServer = new WebSocketDashboardServer(
