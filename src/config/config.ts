@@ -97,7 +97,8 @@ export type EnvVarName =
   | "GOAL_MAX_RETRIES"
   | "GOAL_MAX_FAILURES"
   | "GOAL_PARALLEL_EXECUTION"
-  | "GOAL_MAX_PARALLEL";
+  | "GOAL_MAX_PARALLEL"
+  | "STRATA_AGENT_NAME";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -302,6 +303,9 @@ export interface Config {
 
   // Tool Chain Synthesis
   readonly toolChain: ToolChainConfig;
+
+  // Identity
+  readonly agentName: string;
 }
 
 /** Partial config for updates */
@@ -538,6 +542,9 @@ export const configSchema = z
     toolChainMinChainLength: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(5)).default("2"),
     toolChainMaxChainLength: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(3).max(10)).default("5"),
     toolChainDetectionIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000).max(3600000)).default("300000"),
+
+    // Identity
+    agentName: z.string().default("Strata Brain"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -766,6 +773,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       maxChainLength: rawConfig.toolChainMaxChainLength,
       detectionIntervalMs: rawConfig.toolChainDetectionIntervalMs,
     },
+
+    agentName: rawConfig.agentName,
   };
 
   return { kind: "valid", value: config };
@@ -1013,6 +1022,7 @@ interface EnvVars {
   toolChainMinChainLength: string | undefined;
   toolChainMaxChainLength: string | undefined;
   toolChainDetectionIntervalMs: string | undefined;
+  agentName: string | undefined;
 }
 
 /**
@@ -1109,6 +1119,7 @@ function loadFromEnv(): EnvVars {
     toolChainMinChainLength: process.env["TOOL_CHAIN_MIN_CHAIN_LENGTH"],
     toolChainMaxChainLength: process.env["TOOL_CHAIN_MAX_CHAIN_LENGTH"],
     toolChainDetectionIntervalMs: process.env["TOOL_CHAIN_DETECTION_INTERVAL_MS"],
+    agentName: process.env["STRATA_AGENT_NAME"],
   };
 }
 

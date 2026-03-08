@@ -113,6 +113,7 @@ export interface ToolRegistryOptions {
   metricsCollector?: MetricsCollector;
   learningStorage?: LearningStorage;
   metricsStorage?: MetricsStorage;
+  getIdentityState?: () => import("../identity/identity-state.js").IdentityState;
 }
 
 export class ToolRegistry {
@@ -557,6 +558,7 @@ export class ToolRegistry {
                 return { totalEntries: stats.totalEntries, hasAnalysisCache: stats.hasAnalysisCache };
               }
             : undefined,
+          options.getIdentityState,
         ),
         {
           category: ToolCategories.INTROSPECTION,

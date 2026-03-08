@@ -20,7 +20,9 @@ import {
   buildAnalysisSummary,
   buildDepsContext,
   buildCapabilityManifest,
+  buildIdentitySection,
 } from "./context/strata-knowledge.js";
+import type { IdentityState } from "../identity/identity-state.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
 import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
@@ -114,6 +116,7 @@ export class Orchestrator {
     metricsRecorder?: MetricsRecorder;
     goalDecomposer?: GoalDecomposer;
     interruptedGoalTrees?: GoalTree[];
+    identityState?: IdentityState;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -149,7 +152,8 @@ export class Orchestrator {
       STRATA_SYSTEM_PROMPT +
       buildProjectContext(this.projectPath) +
       buildDepsContext(opts.stradaDeps) +
-      buildCapabilityManifest();
+      buildCapabilityManifest() +
+      (opts.identityState ? buildIdentitySection(opts.identityState) : "");
   }
 
   /**

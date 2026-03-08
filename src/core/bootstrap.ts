@@ -66,6 +66,7 @@ import type { GoalExecutorConfig } from "../goals/index.js";
 import type { GoalTree } from "../goals/types.js";
 import { ChainDetector, ChainSynthesizer, ChainManager } from "../learning/chains/index.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
+import { IdentityStateManager } from "../identity/identity-state.js";
 
 // Task system imports
 import {
@@ -173,6 +174,29 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
   }
 
+  // Initialize identity persistence (IDENT-01)
+  let identityManager: IdentityStateManager | undefined;
+  let uptimeInterval: ReturnType<typeof setInterval> | undefined;
+  try {
+    const identityDbPath = join(config.memory.dbPath, "identity.db");
+    identityManager = new IdentityStateManager(identityDbPath, config.agentName);
+    identityManager.initialize();
+    identityManager.recordBoot();
+    identityManager.setProjectContext(config.unityProjectPath);
+
+    // Periodic uptime flush (bounds SIGKILL loss to 60 seconds)
+    uptimeInterval = setInterval(() => identityManager!.updateUptime(60000), 60000);
+
+    logger.info("Identity initialized", {
+      bootNumber: identityManager.getState().bootCount,
+      wasCrash: identityManager.wasCrash(),
+    });
+  } catch (error) {
+    logger.warn("Identity initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   // Initialize tool registry now that all deps are available
   await toolRegistry.initialize(config, {
     memoryManager,
@@ -180,6 +204,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     metricsCollector: metrics,
     learningStorage: learningResult.storage,
     metricsStorage,
+    getIdentityState: identityManager
+      ? () => identityManager!.getState()
+      : undefined,
   });
 
   // Initialize goal decomposition system (GOAL-01, GOAL-02)
@@ -248,6 +275,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     metricsRecorder,
     goalDecomposer,
     interruptedGoalTrees,
+    identityState: identityManager?.getState(),
   });
 
   // Initialize tool chain synthesis (TOOL-01 through TOOL-05)
@@ -311,6 +339,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     orchestrator,
     learningResult.taskPlanner,
     learningResult.pipeline,
+    identityManager,
   );
 
   // Setup cleanup
@@ -340,6 +369,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       metricsStorage,
       goalStorage,
       chainManager,
+      identityManager,
+      uptimeInterval,
     }),
   };
 }
@@ -891,8 +922,15 @@ function wireMessageHandler(
   _orchestrator: Orchestrator,
   taskPlanner: TaskPlanner,
   learningPipeline: LearningPipeline | undefined,
+  identityManager?: IdentityStateManager,
 ): void {
   channel.onMessage(async (msg) => {
+    // Track activity and messages for identity persistence
+    if (identityManager) {
+      identityManager.recordActivity();
+      identityManager.incrementMessages();
+    }
+
     // Start task tracking for learning system
     if (taskPlanner) {
       taskPlanner.startTask({
@@ -936,6 +974,8 @@ interface ShutdownOptions {
   metricsStorage?: MetricsStorage;
   goalStorage?: GoalStorage;
   chainManager?: ChainManager;
+  identityManager?: IdentityStateManager;
+  uptimeInterval?: ReturnType<typeof setInterval>;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -992,6 +1032,15 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
 
     if (memoryManager) {
       await memoryManager.shutdown();
+    }
+
+    // Identity shutdown: record clean shutdown and flush uptime (before DB closes)
+    if (options.uptimeInterval) {
+      clearInterval(options.uptimeInterval);
+    }
+    if (options.identityManager) {
+      options.identityManager.recordShutdown();
+      options.identityManager.close();
     }
 
     await channel.disconnect();

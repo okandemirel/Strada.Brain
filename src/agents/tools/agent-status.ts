@@ -1,5 +1,6 @@
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import type { MetricsCollector } from "../../dashboard/metrics.js";
+import type { IdentityState } from "../../identity/identity-state.js";
 import { buildSection, unavailableSection, checkToolRateLimit } from "./introspection-helpers.js";
 
 /**
@@ -24,7 +25,7 @@ export class AgentStatusTool implements ITool {
     properties: {
       section: {
         type: "string",
-        enum: ["overview", "tools", "memory", "all"],
+        enum: ["overview", "tools", "memory", "identity", "all"],
         description:
           "Which section to return. Defaults to overview. Use 'all' for every section.",
       },
@@ -38,6 +39,7 @@ export class AgentStatusTool implements ITool {
   private readonly getMemoryStats?: () =>
     | { totalEntries: number; hasAnalysisCache: boolean }
     | undefined;
+  private readonly getIdentityState?: () => IdentityState | undefined;
 
   constructor(
     metrics: MetricsCollector,
@@ -46,11 +48,13 @@ export class AgentStatusTool implements ITool {
     getMemoryStats?: () =>
       | { totalEntries: number; hasAnalysisCache: boolean }
       | undefined,
+    getIdentityState?: () => IdentityState | undefined,
   ) {
     this.metrics = metrics;
     this.getToolCount = getToolCount;
     this.getToolNames = getToolNames;
     this.getMemoryStats = getMemoryStats;
+    this.getIdentityState = getIdentityState;
   }
 
   async execute(
@@ -61,7 +65,7 @@ export class AgentStatusTool implements ITool {
     const rateLimited = checkToolRateLimit(this.name);
     if (rateLimited) return rateLimited;
 
-    const validSections = ["overview", "tools", "memory", "all"];
+    const validSections = ["overview", "tools", "memory", "identity", "all"];
     const raw = (input["section"] as string) ?? "overview";
     const section = validSections.includes(raw) ? raw : "overview";
     const memStats = this.getMemoryStats?.();
@@ -102,6 +106,31 @@ export class AgentStatusTool implements ITool {
         );
       } else {
         sections.push(unavailableSection("Memory", "memory stats not available"));
+      }
+    }
+
+    if (section === "identity" || section === "all") {
+      const identityState = this.getIdentityState?.();
+      if (identityState) {
+        const totalMinutes = Math.floor(identityState.cumulativeUptimeMs / 60000);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        const uptimeStr = hours > 0
+          ? `${hours}h ${minutes}m`
+          : `${minutes}m`;
+        const created = new Date(identityState.firstBootTs).toISOString().split("T")[0];
+        sections.push(
+          buildSection("Identity", [
+            `**Name:** ${identityState.agentName}`,
+            `**Boot #:** ${identityState.bootCount}`,
+            `**Total uptime:** ${uptimeStr}`,
+            `**Created:** ${created}`,
+            `**Messages (lifetime):** ${identityState.totalMessages}`,
+            `**Tasks (lifetime):** ${identityState.totalTasks}`,
+          ]),
+        );
+      } else {
+        sections.push(unavailableSection("Identity", "identity state not available"));
       }
     }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { AgentStatusTool } from "./agent-status.js";
 import type { ToolContext } from "./tool-core.interface.js";
 import type { DashboardSnapshot } from "../../dashboard/metrics.js";
+import type { IdentityState } from "../../identity/identity-state.js";
 
 function createMockMetrics(overrides?: Partial<DashboardSnapshot>) {
   const snapshot: DashboardSnapshot = {
@@ -127,5 +128,87 @@ describe("AgentStatusTool", () => {
 
     expect(tool.name).toBe("agent_status");
     expect(tool.description.toLowerCase()).toContain("operational status");
+  });
+
+  it('execute({section: "identity"}) returns formatted identity data when callback provided', async () => {
+    const metrics = createMockMetrics();
+    const identityState: IdentityState = {
+      agentUuid: "550e8400-e29b-41d4-a716-446655440000",
+      agentName: "Strata Brain",
+      firstBootTs: 1709856000000,
+      bootCount: 5,
+      cumulativeUptimeMs: 5580000,
+      lastActivityTs: 1709942400000,
+      totalMessages: 42,
+      totalTasks: 10,
+      projectContext: "/projects/MyGame",
+      cleanShutdown: true,
+    };
+    const tool = new AgentStatusTool(
+      metrics as never,
+      () => 25,
+      () => [],
+      undefined,
+      () => identityState,
+    );
+
+    const result = await tool.execute({ section: "identity" }, dummyContext);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain("Identity");
+    expect(result.content).toContain("Strata Brain");
+    expect(result.content).toContain("5"); // boot count
+    expect(result.content).toContain("42"); // messages
+    expect(result.content).toContain("10"); // tasks
+  });
+
+  it('execute({section: "identity"}) shows unavailable when callback returns undefined', async () => {
+    const metrics = createMockMetrics();
+    const tool = new AgentStatusTool(
+      metrics as never,
+      () => 25,
+      () => [],
+      undefined,
+      () => undefined,
+    );
+
+    const result = await tool.execute({ section: "identity" }, dummyContext);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content.toLowerCase()).toContain("not available");
+  });
+
+  it('execute({section: "all"}) includes identity section when callback provided', async () => {
+    const metrics = createMockMetrics();
+    const getMemoryStats = () => ({ totalEntries: 150, hasAnalysisCache: true });
+    const identityState: IdentityState = {
+      agentUuid: "550e8400-e29b-41d4-a716-446655440000",
+      agentName: "Strata Brain",
+      firstBootTs: 1709856000000,
+      bootCount: 3,
+      cumulativeUptimeMs: 3600000,
+      lastActivityTs: 1709942400000,
+      totalMessages: 20,
+      totalTasks: 5,
+      projectContext: "",
+      cleanShutdown: true,
+    };
+    const tool = new AgentStatusTool(
+      metrics as never,
+      () => 25,
+      () => ["file_read"],
+      getMemoryStats,
+      () => identityState,
+    );
+
+    const result = await tool.execute({ section: "all" }, dummyContext);
+
+    expect(result.isError).toBeFalsy();
+    // Should contain overview, tools, memory, AND identity sections
+    expect(result.content).toContain("Overview");
+    expect(result.content).toContain("Tools");
+    expect(result.content).toContain("Memory");
+    expect(result.content).toContain("Identity");
+    expect(result.content).toContain("Strata Brain");
   });
 });
