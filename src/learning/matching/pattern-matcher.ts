@@ -13,6 +13,8 @@ import type {
   PatternMatchInput,
   InstinctStatus,
 } from "../types.js";
+import { CONFIDENCE_THRESHOLDS } from "../types.js";
+import type { IEventBus } from "../../core/event-bus.js";
 
 // ─── Similarity Algorithms ──────────────────────────────────────────────────────
 
@@ -86,10 +88,23 @@ export interface EmbedderLike {
   embed(text: string): Promise<{ vector: number[]; dimensions: number }>;
 }
 
+/** Scope context for cross-session filtered retrieval */
+export interface ScopeContext {
+  projectPath: string;
+  scopeFilter: 'project-only' | 'project+universal' | 'all';
+  maxAgeDays?: number;
+  recencyBoost: number;   // default 1.0
+  scopeBoost: number;     // default 1.1
+  currentBootCount?: number;
+  currentSessionId?: string;
+}
+
 /** Options for PatternMatcher constructor */
 export interface PatternMatcherOptions {
   /** Optional embedder for semantic instinct search */
   embedder?: EmbedderLike;
+  /** Optional event bus for merge event emission */
+  eventBus?: import("../../core/event-bus.js").IEventBus;
 }
 
 // ─── Pattern Matcher Class ──────────────────────────────────────────────────────
@@ -97,12 +112,14 @@ export interface PatternMatcherOptions {
 export class PatternMatcher {
   private storage: LearningStorage;
   private readonly embedder?: EmbedderLike;
+  private readonly eventBus?: IEventBus;
   private readonly FUZZY_THRESHOLD = 0.7;
   private readonly CONTEXTUAL_THRESHOLD = 0.5;
 
   constructor(storage: LearningStorage, options?: PatternMatcherOptions) {
     this.storage = storage;
     this.embedder = options?.embedder;
+    this.eventBus = options?.eventBus;
   }
 
   /**
@@ -152,9 +169,9 @@ export class PatternMatcher {
 
   /**
    * Find similar instincts based on trigger pattern
-   * 
+   *
    * @param triggerPattern - The pattern to compare against
-   * @param options - Matching options
+   * @param options - Matching options (with optional scope context for cross-session filtering)
    * @returns Array of similar instincts with similarity scores
    */
   findSimilarInstincts(
@@ -163,21 +180,37 @@ export class PatternMatcher {
       minSimilarity?: number;
       maxResults?: number;
       typeFilter?: string;
+      scope?: ScopeContext;
     } = {}
   ): PatternMatch[] {
     const {
       minSimilarity = 0.6,
       maxResults = 5,
       typeFilter,
+      scope,
     } = options;
 
-    let candidates = this.storage.getInstincts();
-    
+    // Choose retrieval path based on scope context
+    let candidates: Instinct[];
+    if (scope) {
+      candidates = this.storage.getInstinctsForScope({
+        projectPath: scope.projectPath,
+        scopeFilter: scope.scopeFilter,
+        maxAgeDays: scope.maxAgeDays,
+        eventBus: this.eventBus,
+      });
+    } else {
+      candidates = this.storage.getInstincts();
+    }
+
     if (typeFilter) {
       candidates = candidates.filter(i => i.type === typeFilter);
     }
 
     const matches: PatternMatch[] = [];
+
+    // Track instinct pairs for eager dedup (scope mode only)
+    const dedupCandidates: Array<{ higher: Instinct; lower: Instinct; similarity: number }> = [];
 
     for (const instinct of candidates) {
       // Calculate multiple similarity metrics
@@ -186,21 +219,73 @@ export class PatternMatcher {
       const cosineSim = cosineSimilarity(instinct.triggerPattern, triggerPattern);
 
       // Combined similarity score
-      const similarity = exactMatch ? 1.0 : (fuzzySim * 0.6 + cosineSim * 0.4);
+      let similarity = exactMatch ? 1.0 : (fuzzySim * 0.6 + cosineSim * 0.4);
+      let confidence = similarity * instinct.confidence;
+
+      // Apply scope and recency boosts when scope context provided
+      if (scope) {
+        // Scope boost: multiply for same-project matches
+        confidence *= scope.scopeBoost;
+
+        // Recency boost: newer instincts get higher boost, floors at 0.5x for 1+ year old
+        const ageDays = Math.max(0, Math.floor((Date.now() - instinct.createdAt) / 86400000));
+        const recencyFactor = Math.max(0.5, 1.0 - (ageDays / 365));
+        confidence *= scope.recencyBoost * recencyFactor;
+      }
 
       if (similarity >= minSimilarity) {
         matches.push({
           id: instinct.id,
           type: exactMatch ? "exact" : (fuzzySim > 0.8 ? "fuzzy" : "contextual"),
-          confidence: similarity * instinct.confidence, // Weight by instinct confidence
-          relevance: similarity,
+          confidence: confidence as any,
+          relevance: similarity as any,
           instinct,
-          matchReason: exactMatch 
-            ? "Exact pattern match" 
+          matchReason: exactMatch
+            ? "Exact pattern match"
             : `Similarity: ${(similarity * 100).toFixed(1)}%`,
           matchedFields: ["triggerPattern"],
-          priority: Math.round(similarity * 100),
+          priority: Math.round(confidence * 100),
         });
+      }
+
+      // Eager dedup: check pairwise similarity between candidates (scope mode only)
+      if (scope && similarity >= CONFIDENCE_THRESHOLDS.SIMILAR) {
+        // Check for existing matches that are also high-similarity
+        for (const existing of matches) {
+          if (existing.instinct && existing.instinct.id !== instinct.id) {
+            const pairSim = stringSimilarity(existing.instinct.triggerPattern, instinct.triggerPattern);
+            const pairCosine = cosineSimilarity(existing.instinct.triggerPattern, instinct.triggerPattern);
+            const pairScore = existing.instinct.triggerPattern === instinct.triggerPattern ? 1.0 : (pairSim * 0.6 + pairCosine * 0.4);
+            if (pairScore >= CONFIDENCE_THRESHOLDS.SIMILAR) {
+              const higher = existing.instinct.confidence >= instinct.confidence ? existing.instinct : instinct;
+              const lower = existing.instinct.confidence >= instinct.confidence ? instinct : existing.instinct;
+              dedupCandidates.push({ higher, lower, similarity: pairScore });
+            }
+          }
+        }
+      }
+    }
+
+    // Execute eager dedup merges
+    for (const { higher, lower, similarity: dedupSim } of dedupCandidates) {
+      try {
+        this.storage.mergeInstincts(higher.id, lower.id);
+        // Remove merged (loser) instinct from results
+        const loserIdx = matches.findIndex(m => m.instinct?.id === lower.id);
+        if (loserIdx >= 0) {
+          matches.splice(loserIdx, 1);
+        }
+        // Emit merge event
+        if (this.eventBus) {
+          this.eventBus.emit("instinct:merged", {
+            winner: higher,
+            loserId: lower.id,
+            reason: `Eager dedup: ${(dedupSim * 100).toFixed(0)}% similarity`,
+            timestamp: Date.now(),
+          });
+        }
+      } catch {
+        // Non-blocking: if merge fails, keep both instincts
       }
     }
 

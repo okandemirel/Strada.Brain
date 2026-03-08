@@ -11,6 +11,7 @@ import { validateConfig, resetConfigCache } from "../../config/config.js";
 import type { Instinct, InstinctId, InstinctStatus } from "../types.js";
 import type { TimestampMs } from "../../types/index.js";
 import type { IEventBus } from "../../core/event-bus.js";
+import type { ScopeContext } from "../matching/pattern-matcher.js";
 
 // =============================================================================
 // Task 1: Types, Config, and Event Bus contracts
@@ -797,5 +798,362 @@ describe("LearningStorage.mergeInstincts", () => {
     expect(paths).toContain("/projects/a"); // Original winner scope
     expect(paths).toContain("/projects/b"); // Transferred from loser
     expect(paths).toContain("/projects/c"); // Transferred from loser
+  });
+});
+
+// =============================================================================
+// Plan 02 Task 2: PatternMatcher scope-aware retrieval + InstinctRetriever provenance
+// =============================================================================
+
+describe("PatternMatcher scope-aware retrieval", () => {
+  it("uses getInstinctsForScope when scope provided", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    // Create instincts with scopes
+    const instinctA = makeInstinct({
+      id: "instinct_scope_a" as InstinctId,
+      triggerPattern: "fix typescript import error",
+    });
+    storage.createInstinct(instinctA, "/projects/alpha");
+
+    const matcher = new PatternMatcher(storage);
+    const scope: ScopeContext = {
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      recencyBoost: 1.0,
+      scopeBoost: 1.1,
+    };
+
+    const results = matcher.findSimilarInstincts("fix typescript import error", { scope });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0]!.instinct!.id).toBe("instinct_scope_a");
+
+    storage.close();
+  });
+
+  it("uses getInstincts when scope not provided (backward compat)", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({
+      id: "instinct_no_scope_compat" as InstinctId,
+      triggerPattern: "fix typescript import error",
+    });
+    storage.createInstinct(instinct);
+
+    const matcher = new PatternMatcher(storage);
+
+    // No scope: should use getInstincts (old path)
+    const results = matcher.findSimilarInstincts("fix typescript import error");
+    expect(results.length).toBeGreaterThanOrEqual(1);
+
+    storage.close();
+  });
+
+  it("applies scopeBoost multiplier to same-project matches", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({
+      id: "instinct_boost" as InstinctId,
+      triggerPattern: "handle null reference",
+      confidence: 0.8 as any,
+    });
+    storage.createInstinct(instinct, "/projects/alpha");
+
+    const matcher = new PatternMatcher(storage);
+
+    // Without scope boost
+    const noScopeResults = matcher.findSimilarInstincts("handle null reference");
+    const noScopeConfidence = noScopeResults[0]?.confidence ?? 0;
+
+    // With scope boost
+    const scope: ScopeContext = {
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      recencyBoost: 1.0,
+      scopeBoost: 1.5, // High boost to make difference clear
+    };
+
+    const scopeResults = matcher.findSimilarInstincts("handle null reference", { scope });
+    const scopeConfidence = scopeResults[0]?.confidence ?? 0;
+
+    // Scope-boosted confidence should be higher
+    expect(scopeConfidence).toBeGreaterThan(noScopeConfidence);
+
+    storage.close();
+  });
+
+  it("applies recencyBoost multiplier based on instinct age", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    // Create a recent instinct
+    const recentInstinct = makeInstinct({
+      id: "instinct_recent" as InstinctId,
+      triggerPattern: "optimize database query for performance",
+      confidence: 0.8 as any,
+      createdAt: Date.now() as TimestampMs,
+    });
+    storage.createInstinct(recentInstinct, "/projects/alpha");
+
+    // Create an old instinct (300 days ago) -- slightly different pattern to avoid dedup
+    const oldTime = Date.now() - (300 * 24 * 60 * 60 * 1000);
+    const oldInstinct = makeInstinct({
+      id: "instinct_old_recency" as InstinctId,
+      triggerPattern: "optimize database query for speed",
+      confidence: 0.8 as any, // Same confidence to isolate recency effect
+      createdAt: oldTime as TimestampMs,
+      updatedAt: oldTime as TimestampMs,
+    });
+    storage.createInstinct(oldInstinct, "/projects/alpha");
+
+    const matcher = new PatternMatcher(storage);
+    const scope: ScopeContext = {
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      recencyBoost: 1.5,
+      scopeBoost: 1.0, // Isolate recency effect
+    };
+
+    const results = matcher.findSimilarInstincts("optimize database query for speed and performance", { scope, minSimilarity: 0.3 });
+    // Recent instinct should rank higher because of recency boost
+    const recentResult = results.find(r => r.instinct?.id === "instinct_recent");
+    const oldResult = results.find(r => r.instinct?.id === "instinct_old_recency");
+    expect(recentResult).toBeDefined();
+    expect(oldResult).toBeDefined();
+    expect(recentResult!.confidence).toBeGreaterThan(oldResult!.confidence);
+
+    storage.close();
+  });
+
+  it("triggers eager dedup when similarity >= 0.85", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    // Two instincts with identical trigger patterns (will be >= 0.85 similarity)
+    const instinct1 = makeInstinct({
+      id: "instinct_dedup_1" as InstinctId,
+      triggerPattern: "fix typescript import error in module",
+      confidence: 0.9 as any,
+    });
+    const instinct2 = makeInstinct({
+      id: "instinct_dedup_2" as InstinctId,
+      triggerPattern: "fix typescript import error in module",
+      confidence: 0.7 as any,
+    });
+    storage.createInstinct(instinct1, "/projects/alpha");
+    storage.createInstinct(instinct2, "/projects/alpha");
+
+    const matcher = new PatternMatcher(storage);
+    const scope: ScopeContext = {
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      recencyBoost: 1.0,
+      scopeBoost: 1.0,
+    };
+
+    matcher.findSimilarInstincts("fix typescript import error in module", { scope });
+
+    // After dedup, the lower-confidence instinct should be gone
+    const remaining1 = storage.getInstinct("instinct_dedup_1");
+    const remaining2 = storage.getInstinct("instinct_dedup_2");
+    expect(remaining1).not.toBeNull(); // Winner (higher confidence)
+    expect(remaining2).toBeNull(); // Loser (lower confidence) -- hard deleted
+
+    storage.close();
+  });
+});
+
+describe("InstinctRetriever provenance formatting", () => {
+  it("includes provenance bracket when originBootCount exists", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { InstinctRetriever } = await import("../../agents/instinct-retriever.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const createdAt = Date.now() - (2 * 24 * 60 * 60 * 1000); // 2 days ago
+    const instinct = makeInstinct({
+      id: "instinct_prov_format" as InstinctId,
+      triggerPattern: "handle null reference",
+      action: JSON.stringify({ description: "Add null check" }),
+      confidence: 0.85 as any,
+      stats: {
+        timesSuggested: 10,
+        timesApplied: 8,
+        timesFailed: 2,
+        successRate: 0.8 as any,
+        averageExecutionMs: 100,
+      },
+      originBootCount: 3,
+      originSessionId: "session_prev",
+      crossSessionHitCount: 5,
+      createdAt: createdAt as TimestampMs,
+      updatedAt: createdAt as TimestampMs,
+    });
+    storage.createInstinct(instinct, "/projects/alpha");
+
+    const matcher = new PatternMatcher(storage);
+    const scope: ScopeContext = {
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      recencyBoost: 1.0,
+      scopeBoost: 1.0,
+      currentBootCount: 10,
+      currentSessionId: "session_current",
+    };
+
+    const retriever = new InstinctRetriever(matcher, { scopeContext: scope, storage });
+    const result = await retriever.getInsightsForTask("handle null reference");
+
+    expect(result.insights.length).toBeGreaterThanOrEqual(1);
+    // Should contain provenance bracket
+    expect(result.insights[0]).toMatch(/\[boot #3.*ago.*sessions\]/);
+
+    storage.close();
+  });
+
+  it("omits provenance bracket when no provenance data", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { InstinctRetriever } = await import("../../agents/instinct-retriever.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({
+      id: "instinct_no_prov" as InstinctId,
+      triggerPattern: "handle null reference",
+      action: JSON.stringify({ description: "Add null check" }),
+      confidence: 0.85 as any,
+      stats: {
+        timesSuggested: 10,
+        timesApplied: 8,
+        timesFailed: 2,
+        successRate: 0.8 as any,
+        averageExecutionMs: 100,
+      },
+      // No originBootCount or originSessionId
+    });
+    storage.createInstinct(instinct);
+
+    const matcher = new PatternMatcher(storage);
+    const retriever = new InstinctRetriever(matcher);
+    const result = await retriever.getInsightsForTask("handle null reference");
+
+    expect(result.insights.length).toBeGreaterThanOrEqual(1);
+    // Should NOT contain provenance bracket
+    expect(result.insights[0]).not.toMatch(/\[boot #/);
+
+    storage.close();
+  });
+
+  it("passes ScopeContext to findSimilarInstincts", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { InstinctRetriever } = await import("../../agents/instinct-retriever.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({
+      id: "instinct_pass_scope" as InstinctId,
+      triggerPattern: "validate user input",
+      action: JSON.stringify({ description: "Add input validation" }),
+      confidence: 0.8 as any,
+      stats: {
+        timesSuggested: 5,
+        timesApplied: 4,
+        timesFailed: 1,
+        successRate: 0.8 as any,
+        averageExecutionMs: 50,
+      },
+    });
+    storage.createInstinct(instinct, "/projects/alpha");
+
+    const matcher = new PatternMatcher(storage);
+    const findSpy = vi.spyOn(matcher, "findSimilarInstincts");
+
+    const scope: ScopeContext = {
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      recencyBoost: 1.0,
+      scopeBoost: 1.1,
+    };
+
+    const retriever = new InstinctRetriever(matcher, { scopeContext: scope, storage });
+    await retriever.getInsightsForTask("validate user input");
+
+    // Should have passed scope to findSimilarInstincts
+    expect(findSpy).toHaveBeenCalledWith(
+      "validate user input",
+      expect.objectContaining({ scope }),
+    );
+
+    storage.close();
+  });
+
+  it("increments crossSessionHitCount for cross-session instincts", async () => {
+    const { PatternMatcher } = await import("../matching/pattern-matcher.js");
+    const { InstinctRetriever } = await import("../../agents/instinct-retriever.js");
+    const { LearningStorage } = await import("./learning-storage.js");
+
+    const storage = new LearningStorage(":memory:");
+    storage.initialize();
+
+    const instinct = makeInstinct({
+      id: "instinct_hit_count" as InstinctId,
+      triggerPattern: "optimize database query",
+      action: JSON.stringify({ description: "Add index" }),
+      confidence: 0.8 as any,
+      stats: {
+        timesSuggested: 5,
+        timesApplied: 4,
+        timesFailed: 1,
+        successRate: 0.8 as any,
+        averageExecutionMs: 50,
+      },
+      originBootCount: 1,
+      originSessionId: "session_old",
+      crossSessionHitCount: 0,
+    });
+    storage.createInstinct(instinct, "/projects/alpha");
+
+    const matcher = new PatternMatcher(storage);
+    const scope: ScopeContext = {
+      projectPath: "/projects/alpha",
+      scopeFilter: "project-only",
+      recencyBoost: 1.0,
+      scopeBoost: 1.0,
+      currentBootCount: 5,
+      currentSessionId: "session_current",
+    };
+
+    const retriever = new InstinctRetriever(matcher, { scopeContext: scope, storage });
+    await retriever.getInsightsForTask("optimize database query");
+
+    // Hit count should have been incremented
+    const updated = storage.getInstinct("instinct_hit_count");
+    expect(updated!.crossSessionHitCount).toBe(1);
+
+    storage.close();
   });
 });
