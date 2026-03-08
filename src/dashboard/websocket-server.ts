@@ -8,6 +8,7 @@
 import { createServer, type Server } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { getLogger } from "../utils/logger.js";
+import { BruteForceProtection } from "../security/auth-hardened.js";
 import type { MetricsCollector } from "./metrics.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -27,6 +28,7 @@ export interface WSClient extends WebSocket {
   isAuthenticated: boolean;
   clientId: string;
   lastPing: number;
+  remoteIp: string;
 }
 
 export type CommandHandler = (command: string, payload: unknown) => Promise<unknown> | unknown;
@@ -45,7 +47,9 @@ export class WebSocketDashboardServer {
   private readonly metrics: MetricsCollector;
   private readonly getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
   private readonly getPluginsStats: (() => { loaded: number; directories: string[] } | undefined) | undefined;
-  
+  private readonly allowedOrigins: string[] | undefined;
+  private readonly bruteForce = new BruteForceProtection(5, 5 * 60 * 1000);
+
   private httpServer: Server | null = null;
   private wsServer: WebSocketServer | null = null;
   private clients = new Map<string, WSClient>();
@@ -60,20 +64,39 @@ export class WebSocketDashboardServer {
     metrics: MetricsCollector,
     getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined,
     getPluginsStats?: () => { loaded: number; directories: string[] } | undefined,
-    _getLogs?: () => string[] | undefined
+    _getLogs?: () => string[] | undefined,
+    allowedOrigins?: string[]
   ) {
     this.port = port;
     this.authToken = authToken;
     this.metrics = metrics;
     this.getMemoryStats = getMemoryStats;
     this.getPluginsStats = getPluginsStats;
+    this.allowedOrigins = allowedOrigins;
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
     this.httpServer = createServer(this.handleHttpRequest.bind(this));
-    this.wsServer = new WebSocketServer({ server: this.httpServer, path: "/ws" });
+    this.wsServer = new WebSocketServer({
+      server: this.httpServer,
+      path: "/ws",
+      maxPayload: 1 * 1024 * 1024,
+      verifyClient: ({ req }) => {
+        const origin = req.headers.origin;
+        if (!origin) return true; // Non-browser clients
+        try {
+          const { hostname } = new URL(origin);
+          if (this.allowedOrigins && this.allowedOrigins.length > 0) {
+            return this.allowedOrigins.includes(hostname);
+          }
+          return hostname === "localhost" || hostname === "127.0.0.1";
+        } catch {
+          return false; // Malformed Origin
+        }
+      },
+    });
     this.wsServer.on("connection", this.handleWsConnection.bind(this));
 
     return new Promise((resolve) => {
@@ -165,9 +188,10 @@ export class WebSocketDashboardServer {
     client.isAuthenticated = !this.authToken;
     client.clientId = clientId;
     client.lastPing = Date.now();
-    
+    client.remoteIp = req.socket.remoteAddress ?? "unknown";
+
     this.clients.set(clientId, client);
-    this.logger.info("WebSocket client connected", { clientId, ip: req.socket.remoteAddress });
+    this.logger.info("WebSocket client connected", { clientId, ip: client.remoteIp });
 
     this.send(client, {
       type: "auth",
@@ -228,13 +252,26 @@ export class WebSocketDashboardServer {
       return;
     }
 
+    // Check brute-force protection
+    const check = this.bruteForce.canAttempt(client.remoteIp);
+    if (!check.allowed) {
+      this.send(client, {
+        type: "auth_error",
+        payload: { message: "Too many failed attempts. Try again later.", retryAfter: check.retryAfter },
+      });
+      return;
+    }
+
     if (payload?.token === this.authToken) {
       client.isAuthenticated = true;
+      this.bruteForce.recordSuccess(client.remoteIp);
       this.send(client, { type: "auth_success", payload: { message: "Authenticated successfully" } });
       this.logger.info("Client authenticated", { clientId: client.clientId });
     } else {
+      this.bruteForce.recordFailure(client.remoteIp);
+      const attempts = this.bruteForce.getAttemptCount(client.remoteIp);
       this.send(client, { type: "auth_error", payload: { message: "Invalid token" } });
-      this.logger.warn("Authentication failed", { clientId: client.clientId });
+      this.logger.warn("Authentication failed", { clientId: client.clientId, attempts });
     }
   }
 

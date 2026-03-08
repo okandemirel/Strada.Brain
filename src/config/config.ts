@@ -53,6 +53,8 @@ export type EnvVarName =
   | "DASHBOARD_PORT"
   | "ENABLE_WEBSOCKET_DASHBOARD"
   | "WEBSOCKET_DASHBOARD_PORT"
+  | "WEBSOCKET_DASHBOARD_AUTH_TOKEN"
+  | "WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS"
   | "ENABLE_PROMETHEUS"
   | "PROMETHEUS_PORT"
   | "MEMORY_ENABLED"
@@ -192,6 +194,8 @@ export interface PrometheusConfig {
 export interface WebSocketDashboardConfig {
   readonly enabled: boolean;
   readonly port: number;
+  readonly authToken?: string;
+  readonly allowedOrigins?: string[];
 }
 
 /** Slack configuration */
@@ -394,6 +398,8 @@ export const configSchema = z
     // WebSocket Dashboard
     websocketDashboardEnabled: boolFromString(false),
     websocketDashboardPort: portSchema.default("3100"),
+    websocketDashboardAuthToken: z.string().optional(),
+    websocketDashboardAllowedOrigins: commaSeparatedList.optional(),
 
     // Prometheus
     prometheusEnabled: boolFromString(false),
@@ -671,6 +677,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     websocketDashboard: {
       enabled: rawConfig.websocketDashboardEnabled,
       port: rawConfig.websocketDashboardPort,
+      authToken: rawConfig.websocketDashboardAuthToken,
+      allowedOrigins: rawConfig.websocketDashboardAllowedOrigins,
     },
 
     prometheus: {
@@ -945,6 +953,8 @@ interface EnvVars {
   dashboardPort: string | undefined;
   websocketDashboardEnabled: string | undefined;
   websocketDashboardPort: string | undefined;
+  websocketDashboardAuthToken: string | undefined;
+  websocketDashboardAllowedOrigins: string | undefined;
   prometheusEnabled: string | undefined;
   prometheusPort: string | undefined;
   memoryEnabled: string | undefined;
@@ -1039,6 +1049,8 @@ function loadFromEnv(): EnvVars {
     dashboardPort: process.env["DASHBOARD_PORT"],
     websocketDashboardEnabled: process.env["ENABLE_WEBSOCKET_DASHBOARD"],
     websocketDashboardPort: process.env["WEBSOCKET_DASHBOARD_PORT"],
+    websocketDashboardAuthToken: process.env["WEBSOCKET_DASHBOARD_AUTH_TOKEN"],
+    websocketDashboardAllowedOrigins: process.env["WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS"],
     prometheusEnabled: process.env["ENABLE_PROMETHEUS"],
     prometheusPort: process.env["PROMETHEUS_PORT"],
     memoryEnabled: process.env["MEMORY_ENABLED"],
