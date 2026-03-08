@@ -13,7 +13,7 @@ import { z } from "zod";
 import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
-import type { BayesianConfig } from "../learning/types.js";
+import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
 
 dotenv.config();
@@ -98,7 +98,13 @@ export type EnvVarName =
   | "GOAL_MAX_FAILURES"
   | "GOAL_PARALLEL_EXECUTION"
   | "GOAL_MAX_PARALLEL"
-  | "STRATA_AGENT_NAME";
+  | "STRATA_AGENT_NAME"
+  | "STRATA_CROSS_SESSION_ENABLED"
+  | "STRATA_INSTINCT_MAX_AGE_DAYS"
+  | "STRATA_INSTINCT_SCOPE_FILTER"
+  | "STRATA_INSTINCT_RECENCY_BOOST"
+  | "STRATA_INSTINCT_SCOPE_BOOST"
+  | "STRATA_INSTINCT_PROMOTION_THRESHOLD";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -303,6 +309,9 @@ export interface Config {
 
   // Tool Chain Synthesis
   readonly toolChain: ToolChainConfig;
+
+  // Cross-Session Learning
+  readonly crossSession: CrossSessionConfig;
 
   // Identity
   readonly agentName: string;
@@ -543,6 +552,14 @@ export const configSchema = z
     toolChainMaxChainLength: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(3).max(10)).default("5"),
     toolChainDetectionIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000).max(3600000)).default("300000"),
 
+    // Cross-Session Learning
+    crossSessionEnabled: boolFromString(true),
+    crossSessionMaxAgeDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(365)).default("90"),
+    crossSessionScopeFilter: z.enum(["project-only", "project+universal", "all"]).default("project+universal"),
+    crossSessionRecencyBoost: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(3.0)).default("1.0"),
+    crossSessionScopeBoost: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(3.0)).default("1.1"),
+    crossSessionPromotionThreshold: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(10)).default("3"),
+
     // Identity
     agentName: z.string().default("Strata Brain"),
   })
@@ -772,6 +789,15 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       minChainLength: rawConfig.toolChainMinChainLength,
       maxChainLength: rawConfig.toolChainMaxChainLength,
       detectionIntervalMs: rawConfig.toolChainDetectionIntervalMs,
+    },
+
+    crossSession: {
+      enabled: rawConfig.crossSessionEnabled,
+      maxAgeDays: rawConfig.crossSessionMaxAgeDays,
+      scopeFilter: rawConfig.crossSessionScopeFilter,
+      recencyBoost: rawConfig.crossSessionRecencyBoost,
+      scopeBoost: rawConfig.crossSessionScopeBoost,
+      promotionThreshold: rawConfig.crossSessionPromotionThreshold,
     },
 
     agentName: rawConfig.agentName,
@@ -1022,6 +1048,12 @@ interface EnvVars {
   toolChainMinChainLength: string | undefined;
   toolChainMaxChainLength: string | undefined;
   toolChainDetectionIntervalMs: string | undefined;
+  crossSessionEnabled: string | undefined;
+  crossSessionMaxAgeDays: string | undefined;
+  crossSessionScopeFilter: string | undefined;
+  crossSessionRecencyBoost: string | undefined;
+  crossSessionScopeBoost: string | undefined;
+  crossSessionPromotionThreshold: string | undefined;
   agentName: string | undefined;
 }
 
@@ -1119,6 +1151,12 @@ function loadFromEnv(): EnvVars {
     toolChainMinChainLength: process.env["TOOL_CHAIN_MIN_CHAIN_LENGTH"],
     toolChainMaxChainLength: process.env["TOOL_CHAIN_MAX_CHAIN_LENGTH"],
     toolChainDetectionIntervalMs: process.env["TOOL_CHAIN_DETECTION_INTERVAL_MS"],
+    crossSessionEnabled: process.env["STRATA_CROSS_SESSION_ENABLED"],
+    crossSessionMaxAgeDays: process.env["STRATA_INSTINCT_MAX_AGE_DAYS"],
+    crossSessionScopeFilter: process.env["STRATA_INSTINCT_SCOPE_FILTER"],
+    crossSessionRecencyBoost: process.env["STRATA_INSTINCT_RECENCY_BOOST"],
+    crossSessionScopeBoost: process.env["STRATA_INSTINCT_SCOPE_BOOST"],
+    crossSessionPromotionThreshold: process.env["STRATA_INSTINCT_PROMOTION_THRESHOLD"],
     agentName: process.env["STRATA_AGENT_NAME"],
   };
 }
@@ -1341,5 +1379,6 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     goalParallelExecution: (partial as Partial<Config>).goalParallelExecution ?? base.goalParallelExecution,
     goalMaxParallel: (partial as Partial<Config>).goalMaxParallel ?? base.goalMaxParallel,
     toolChain: { ...base.toolChain, ...(partial as Partial<Config>).toolChain },
+    crossSession: { ...base.crossSession, ...(partial as Partial<Config>).crossSession },
   } as Config;
 }

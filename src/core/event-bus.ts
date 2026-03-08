@@ -13,7 +13,12 @@
  */
 
 import { EventEmitter } from "node:events";
-import type { InstinctLifecycleEvent } from "../learning/types.js";
+import type {
+  InstinctLifecycleEvent,
+  InstinctScopeEvent,
+  InstinctMergedEvent,
+  InstinctAgeExpiredEvent,
+} from "../learning/types.js";
 import type { GoalLifecycleEvent } from "../goals/types.js";
 
 // =============================================================================
@@ -89,6 +94,9 @@ export interface LearningEventMap {
   "chain:detected": ChainDetectedEvent;
   "chain:executed": ChainExecutionEvent;
   "chain:invalidated": ChainInvalidatedEvent;
+  "instinct:scope_promoted": InstinctScopeEvent;
+  "instinct:merged": InstinctMergedEvent;
+  "instinct:age_expired": InstinctAgeExpiredEvent;
 }
 
 // =============================================================================

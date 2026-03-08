@@ -162,6 +162,14 @@ export interface Instinct {
   readonly coolingStartedAt?: TimestampMs;
   /** Number of consecutive failures during cooling */
   readonly coolingFailures?: number;
+  /** Session ID where this instinct originated */
+  readonly originSessionId?: string;
+  /** Boot count when this instinct was created */
+  readonly originBootCount?: number;
+  /** Number of distinct sessions that retrieved this instinct */
+  readonly crossSessionHitCount?: number;
+  /** Timestamp when this instinct was migrated to cross-session format */
+  readonly migratedAt?: TimestampMs;
 }
 
 // =============================================================================
@@ -180,6 +188,45 @@ export interface InstinctLifecycleEvent {
   readonly reason: string;
   /** When the transition occurred */
   readonly timestamp: number;
+}
+
+// =============================================================================
+// CROSS-SESSION EVENT TYPES
+// =============================================================================
+
+/** Event emitted when an instinct is promoted in scope (e.g., project -> universal) */
+export interface InstinctScopeEvent {
+  readonly instinct: Instinct;
+  readonly projectPath: string;
+  readonly promotedToUniversal: boolean;
+  readonly distinctProjectCount: number;
+  readonly timestamp: number;
+}
+
+/** Event emitted when duplicate instincts are merged */
+export interface InstinctMergedEvent {
+  readonly winner: Instinct;
+  readonly loserId: InstinctId;
+  readonly reason: string;
+  readonly timestamp: number;
+}
+
+/** Event emitted when an instinct is filtered out due to age */
+export interface InstinctAgeExpiredEvent {
+  readonly instinctId: InstinctId;
+  readonly ageDays: number;
+  readonly maxAgeDays: number;
+  readonly timestamp: number;
+}
+
+/** Cross-session learning configuration */
+export interface CrossSessionConfig {
+  readonly enabled: boolean;
+  readonly maxAgeDays: number;
+  readonly scopeFilter: 'project-only' | 'project+universal' | 'all';
+  readonly recencyBoost: number;
+  readonly scopeBoost: number;
+  readonly promotionThreshold: number;
 }
 
 /** Bayesian confidence system configuration */
