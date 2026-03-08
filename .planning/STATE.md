@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: in-progress
-stopped_at: Completed 14-01-PLAN.md
-last_updated: "2026-03-08T19:54:32Z"
-last_activity: 2026-03-08 -- Completed 14-01 Daemon Foundation
+stopped_at: Completed 14-03-PLAN.md
+last_updated: "2026-03-08T20:02:00Z"
+last_activity: 2026-03-08 -- Completed 14-03 Security & Budget
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 13
-  completed_plans: 9
-  percent: 69
+  completed_plans: 11
+  percent: 77
 ---
 
 # State: Strada.Brain
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 14 of 19 (Heartbeat Daemon Loop)
-Plan: 1 of 5
-Status: Plan 14-01 complete
-Last activity: 2026-03-08 -- Completed 14-01 Daemon Foundation
+Plan: 3 of 5
+Status: Plan 14-03 complete
+Last activity: 2026-03-08 -- Completed 14-03 Security & Budget
 
-Progress: [██████░░░░] 69%
+Progress: [████████░░] 77%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9 (v2.0) / 33 (lifetime)
-- Average duration: 6min (v2.0)
-- Total execution time: 52min (v2.0)
+- Total plans completed: 11 (v2.0) / 35 (lifetime)
+- Average duration: 5min (v2.0)
+- Total execution time: 56min (v2.0)
 
 **By Phase:**
 
@@ -47,7 +47,7 @@ Progress: [██████░░░░] 69%
 | 11 | 2 | 7min | 3.5min |
 | 12 | 2/2 | 10min | 5min |
 | 13 | 3/3 | 24min | 8min |
-| 14 | 1/5 | 6min | 6min |
+| 14 | 3/5 | 10min | 3.3min |
 
 *Updated after each plan completion*
 
@@ -94,6 +94,14 @@ Recent decisions affecting current work:
 - [14-01]: Single daemon.db for all 5 tables (budget, approvals, audit, circuit breaker, state)
 - [14-01]: Auto-approve tools parsed as comma-separated string transform defaulting to empty array
 - [14-01]: DaemonConfig.budget.dailyBudgetUsd optional at config level, validated at daemon startup
+- [14-02]: croner used for both cron matching (CronTrigger) and cron validation (heartbeat-parser)
+- [14-02]: CronTrigger uses paused Cron instance -- only match() and nextRun(), not scheduler
+- [14-02]: Double-fire prevention via minute-floor comparison (60000ms granularity)
+- [14-02]: CircuitBreaker OPEN->HALF_OPEN transition is lazy (happens in isOpen() when cooldown expires)
+- [14-02]: HEARTBEAT.md parser uses lenient logger fallback (try/catch for test contexts)
+- [14-03]: MetadataLookup function type over direct ToolRegistry dependency for DaemonSecurityPolicy decoupling
+- [14-03]: FILE_WRITE_TOOLS hardcoded set for always-require-approval enforcement (file_write, file_create, file_edit)
+- [14-03]: Params summary truncated to 200 chars in audit log entries
 
 ### Pending Todos
 
@@ -106,9 +114,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T19:54:32Z
-Stopped at: Completed 14-01-PLAN.md
-Resume file: .planning/phases/14-heartbeat-daemon-loop/14-01-SUMMARY.md
+Last session: 2026-03-08T20:02:00Z
+Stopped at: Completed 14-03-PLAN.md
+Resume file: .planning/phases/14-heartbeat-daemon-loop/14-03-SUMMARY.md
 
 ---
 *State initialized: 2026-03-06*
