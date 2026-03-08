@@ -248,6 +248,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   }
 
   // Initialize tool registry now that all deps are available
+  // getDaemonStatus uses callback-based DI -- heartbeatLoop is set later in daemon init
+  let heartbeatLoopRef: HeartbeatLoop | undefined;
   await toolRegistry.initialize(config, {
     memoryManager,
     ragPipeline,
@@ -257,6 +259,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     getIdentityState: identityManager
       ? () => identityManager!.getState()
       : undefined,
+    getDaemonStatus: () => heartbeatLoopRef?.getDaemonStatus(),
   });
 
   // Initialize goal decomposition system (GOAL-01, GOAL-02)
@@ -473,6 +476,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       logger,
     );
 
+    // Set heartbeat loop ref for AgentStatusTool callback-based DI (Plan 05)
+    heartbeatLoopRef = heartbeatLoop;
+
     // Build daemon context for CLI commands (Plan 05)
     daemonContext = {
       heartbeatLoop,
@@ -498,6 +504,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       triggers: triggerRegistry.count(),
       budget: `$${daemonConfig.budget.dailyBudgetUsd}`,
     });
+
+    // Wire daemon context into dashboard (Plan 05)
+    if (dashboard) {
+      dashboard.setDaemonContext({
+        heartbeatLoop,
+        registry: triggerRegistry,
+        approvalQueue: approvalQueueInstance,
+      });
+    }
   }
 
   // Wire up message handler

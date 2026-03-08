@@ -26,7 +26,7 @@ export class AgentStatusTool implements ITool {
     properties: {
       section: {
         type: "string",
-        enum: ["overview", "tools", "memory", "identity", "all"],
+        enum: ["overview", "tools", "memory", "identity", "daemon", "all"],
         description:
           "Which section to return. Defaults to overview. Use 'all' for every section.",
       },
@@ -41,6 +41,15 @@ export class AgentStatusTool implements ITool {
     | { totalEntries: number; hasAnalysisCache: boolean }
     | undefined;
   private readonly getIdentityState?: () => IdentityState | undefined;
+  private readonly getDaemonStatus?: () =>
+    | {
+        running: boolean;
+        intervalMs: number;
+        triggerCount: number;
+        lastTick: Date | null;
+        budgetUsage: { usedUsd: number; limitUsd: number | undefined; pct: number };
+      }
+    | undefined;
 
   constructor(
     metrics: MetricsCollector,
@@ -50,12 +59,22 @@ export class AgentStatusTool implements ITool {
       | { totalEntries: number; hasAnalysisCache: boolean }
       | undefined,
     getIdentityState?: () => IdentityState | undefined,
+    getDaemonStatus?: () =>
+      | {
+          running: boolean;
+          intervalMs: number;
+          triggerCount: number;
+          lastTick: Date | null;
+          budgetUsage: { usedUsd: number; limitUsd: number | undefined; pct: number };
+        }
+      | undefined,
   ) {
     this.metrics = metrics;
     this.getToolCount = getToolCount;
     this.getToolNames = getToolNames;
     this.getMemoryStats = getMemoryStats;
     this.getIdentityState = getIdentityState;
+    this.getDaemonStatus = getDaemonStatus;
   }
 
   async execute(
@@ -66,7 +85,7 @@ export class AgentStatusTool implements ITool {
     const rateLimited = checkToolRateLimit(this.name);
     if (rateLimited) return rateLimited;
 
-    const validSections = ["overview", "tools", "memory", "identity", "all"];
+    const validSections = ["overview", "tools", "memory", "identity", "daemon", "all"];
     const raw = (input["section"] as string) ?? "overview";
     const section = validSections.includes(raw) ? raw : "overview";
     const memStats = this.getMemoryStats?.();
@@ -127,6 +146,31 @@ export class AgentStatusTool implements ITool {
         );
       } else {
         sections.push(unavailableSection("Identity", "identity state not available"));
+      }
+    }
+
+    if (section === "daemon" || section === "all") {
+      const daemonStatus = this.getDaemonStatus?.();
+      if (daemonStatus) {
+        const limitStr =
+          daemonStatus.budgetUsage.limitUsd !== undefined
+            ? `$${daemonStatus.budgetUsage.limitUsd}`
+            : "unlimited";
+        const pctStr =
+          daemonStatus.budgetUsage.limitUsd !== undefined
+            ? ` (${(daemonStatus.budgetUsage.pct * 100).toFixed(1)}%)`
+            : "";
+        sections.push(
+          buildSection("Daemon", [
+            `**Running:** ${daemonStatus.running ? "yes" : "no"}`,
+            `**Heartbeat:** every ${daemonStatus.intervalMs / 1000}s`,
+            `**Triggers:** ${daemonStatus.triggerCount} registered`,
+            `**Last tick:** ${daemonStatus.lastTick ? daemonStatus.lastTick.toISOString() : "never"}`,
+            `**Budget:** $${daemonStatus.budgetUsage.usedUsd.toFixed(2)} / ${limitStr}${pctStr}`,
+          ]),
+        );
+      } else {
+        sections.push(unavailableSection("Daemon", "daemon not active"));
       }
     }
 

@@ -114,6 +114,15 @@ export interface ToolRegistryOptions {
   learningStorage?: LearningStorage;
   metricsStorage?: MetricsStorage;
   getIdentityState?: () => import("../identity/identity-state.js").IdentityState;
+  getDaemonStatus?: () =>
+    | {
+        running: boolean;
+        intervalMs: number;
+        triggerCount: number;
+        lastTick: Date | null;
+        budgetUsage: { usedUsd: number; limitUsd: number | undefined; pct: number };
+      }
+    | undefined;
 }
 
 export class ToolRegistry {
@@ -559,6 +568,7 @@ export class ToolRegistry {
               }
             : undefined,
           options.getIdentityState,
+          options.getDaemonStatus,
         ),
         {
           category: ToolCategories.INTROSPECTION,

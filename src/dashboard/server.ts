@@ -13,6 +13,9 @@ import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { GoalStorage } from "../goals/index.js";
 import type { GoalTree } from "../goals/types.js";
 import { calculateProgress } from "../goals/goal-progress.js";
+import type { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
+import type { TriggerRegistry } from "../daemon/trigger-registry.js";
+import type { ApprovalQueue } from "../daemon/security/approval-queue.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -58,6 +61,11 @@ export class DashboardServer {
   private learningStorage?: LearningStorage;
   private goalStorage?: GoalStorage;
 
+  // Daemon context (set when daemon mode is active)
+  private daemonHeartbeatLoop?: HeartbeatLoop;
+  private daemonRegistry?: TriggerRegistry;
+  private daemonApprovalQueue?: ApprovalQueue;
+
   constructor(
     port: number,
     metrics: MetricsCollector,
@@ -92,6 +100,20 @@ export class DashboardServer {
     if (services.goalStorage) {
       this.goalStorage = services.goalStorage;
     }
+  }
+
+  /**
+   * Register daemon context for /api/daemon endpoints.
+   * Call after heartbeat loop is started.
+   */
+  setDaemonContext(ctx: {
+    heartbeatLoop?: HeartbeatLoop;
+    registry?: TriggerRegistry;
+    approvalQueue?: ApprovalQueue;
+  }): void {
+    this.daemonHeartbeatLoop = ctx.heartbeatLoop;
+    this.daemonRegistry = ctx.registry;
+    this.daemonApprovalQueue = ctx.approvalQueue;
   }
 
   async start(): Promise<void> {
@@ -186,6 +208,91 @@ export class DashboardServer {
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(responseData));
+        return;
+      }
+
+      // Daemon approval management endpoints (POST)
+      if (url.startsWith("/api/daemon/approvals/") && req.method === "POST") {
+        const match = url.match(/^\/api\/daemon\/approvals\/([^/]+)\/(approve|deny)$/);
+        if (!match) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Not found" }));
+          return;
+        }
+
+        const approvalId = match[1]!;
+        const action = match[2]!;
+
+        if (!this.daemonApprovalQueue) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Daemon not active" }));
+          return;
+        }
+
+        try {
+          if (action === "approve") {
+            this.daemonApprovalQueue.approve(approvalId, "dashboard");
+          } else {
+            this.daemonApprovalQueue.deny(approvalId, "dashboard");
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: action === "approve" ? "approved" : "denied" }));
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `Failed to ${action} approval` }));
+        }
+        return;
+      }
+
+      // Daemon status endpoint (GET)
+      if (url === "/api/daemon" || url.startsWith("/api/daemon?")) {
+        if (!this.daemonHeartbeatLoop) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            running: false,
+            triggers: [],
+            budget: { usedUsd: 0, limitUsd: 0, pct: 0 },
+            approvalQueue: [],
+          }));
+          return;
+        }
+
+        const status = this.daemonHeartbeatLoop.getDaemonStatus();
+        const triggers = this.daemonRegistry?.getAll() ?? [];
+        const pending = this.daemonApprovalQueue?.getPending() ?? [];
+
+        const triggerList = triggers.map((t) => {
+          const cb = this.daemonHeartbeatLoop!.getCircuitBreaker(t.metadata.name);
+          const nextRun = t.getNextRun();
+          return {
+            name: t.metadata.name,
+            type: t.metadata.type,
+            state: t.getState(),
+            circuitState: cb ? cb.getState() : "CLOSED",
+            lastFired: null,
+            nextRun: nextRun ? nextRun.toISOString() : null,
+          };
+        });
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          running: status.running,
+          intervalMs: status.intervalMs,
+          triggers: triggerList,
+          budget: {
+            usedUsd: status.budgetUsage.usedUsd,
+            limitUsd: status.budgetUsage.limitUsd ?? 0,
+            pct: status.budgetUsage.pct,
+          },
+          approvalQueue: pending.map((e) => ({
+            id: e.id,
+            toolName: e.toolName,
+            triggerName: e.triggerName,
+            status: e.status,
+            createdAt: e.createdAt,
+            expiresAt: e.expiresAt,
+          })),
+        }));
         return;
       }
 

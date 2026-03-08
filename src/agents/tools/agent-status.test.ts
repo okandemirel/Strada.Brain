@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AgentStatusTool } from "./agent-status.js";
 import type { ToolContext } from "./tool-core.interface.js";
 import type { DashboardSnapshot } from "../../dashboard/metrics.js";
 import { makeIdentityState } from "../../test-helpers.js";
+import { resetToolRateLimit } from "./introspection-helpers.js";
 
 function createMockMetrics(overrides?: Partial<DashboardSnapshot>) {
   const snapshot: DashboardSnapshot = {
@@ -33,6 +34,10 @@ const dummyContext: ToolContext = {
 };
 
 describe("AgentStatusTool", () => {
+  beforeEach(() => {
+    resetToolRateLimit("agent_status");
+  });
+
   it("execute({}) returns overview with uptime, messages, sessions (no provider/tokens)", async () => {
     const metrics = createMockMetrics();
     const tool = new AgentStatusTool(
@@ -188,5 +193,82 @@ describe("AgentStatusTool", () => {
     expect(result.content).toContain("Memory");
     expect(result.content).toContain("Identity");
     expect(result.content).toContain("Strata Brain");
+  });
+
+  it('execute({section: "daemon"}) returns daemon status when callback provided', async () => {
+    const metrics = createMockMetrics();
+    const daemonStatus = {
+      running: true,
+      intervalMs: 60000,
+      triggerCount: 3,
+      lastTick: new Date("2026-03-08T12:00:00Z"),
+      budgetUsage: { usedUsd: 2.50, limitUsd: 5.0 as number | undefined, pct: 0.5 },
+    };
+    const tool = new AgentStatusTool(
+      metrics as never,
+      () => 25,
+      () => [],
+      undefined,
+      undefined,
+      () => daemonStatus,
+    );
+
+    const result = await tool.execute({ section: "daemon" }, dummyContext);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain("Daemon");
+    expect(result.content).toContain("yes"); // running
+    expect(result.content).toContain("60s"); // heartbeat interval
+    expect(result.content).toContain("3"); // trigger count
+    expect(result.content).toContain("2.50"); // budget used
+    expect(result.content).toContain("$5"); // budget limit
+  });
+
+  it('execute({section: "daemon"}) shows unavailable when callback returns undefined', async () => {
+    const metrics = createMockMetrics();
+    const tool = new AgentStatusTool(
+      metrics as never,
+      () => 25,
+      () => [],
+      undefined,
+      undefined,
+      () => undefined,
+    );
+
+    const result = await tool.execute({ section: "daemon" }, dummyContext);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content.toLowerCase()).toContain("not active");
+  });
+
+  it('execute({section: "all"}) includes daemon section when callback provided', async () => {
+    const metrics = createMockMetrics();
+    const getMemoryStats = () => ({ totalEntries: 150, hasAnalysisCache: true });
+    const identityState = makeIdentityState();
+    const daemonStatus = {
+      running: true,
+      intervalMs: 30000,
+      triggerCount: 2,
+      lastTick: null,
+      budgetUsage: { usedUsd: 0, limitUsd: undefined, pct: 0 },
+    };
+    const tool = new AgentStatusTool(
+      metrics as never,
+      () => 25,
+      () => ["file_read"],
+      getMemoryStats,
+      () => identityState,
+      () => daemonStatus,
+    );
+
+    const result = await tool.execute({ section: "all" }, dummyContext);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain("Overview");
+    expect(result.content).toContain("Tools");
+    expect(result.content).toContain("Memory");
+    expect(result.content).toContain("Identity");
+    expect(result.content).toContain("Daemon");
+    expect(result.content).toContain("2 registered"); // trigger count
   });
 });

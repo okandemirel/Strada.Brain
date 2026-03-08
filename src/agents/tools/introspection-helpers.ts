@@ -60,3 +60,10 @@ export function checkToolRateLimit(toolName: string): ToolExecutionResult | unde
   pruned.push(now);
   return undefined;
 }
+
+/**
+ * Reset rate limit state for a specific tool (used in tests).
+ */
+export function resetToolRateLimit(toolName: string): void {
+  toolCallTimestamps.delete(toolName);
+}
