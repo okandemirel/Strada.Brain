@@ -694,4 +694,130 @@ describe("MemoryRefresher", () => {
       expect(elapsed).toBeLessThan(100);
     });
   });
+
+  describe("e2e", () => {
+    it("full flow: periodic trigger -> context update -> topic shift trigger -> dedup -> events", async () => {
+      const eventBus = mockEventBus();
+
+      // Embedding provider simulates topic continuity then shift
+      const embedProvider = {
+        name: "mock-e2e",
+        dimensions: 3,
+        embed: vi.fn()
+          // Iterations 0-4: same topic (baseline + similar vectors)
+          .mockResolvedValueOnce({ embeddings: [[1, 0, 0]], usage: { totalTokens: 10 } }) // seed/baseline at shouldRefresh(0)
+          .mockResolvedValueOnce({ embeddings: [[0.95, 0.05, 0]], usage: { totalTokens: 10 } }) // shouldRefresh(1): similar
+          .mockResolvedValueOnce({ embeddings: [[0.9, 0.1, 0]], usage: { totalTokens: 10 } }) // shouldRefresh(2): similar
+          .mockResolvedValueOnce({ embeddings: [[0.92, 0.08, 0]], usage: { totalTokens: 10 } }) // shouldRefresh(3): similar
+          .mockResolvedValueOnce({ embeddings: [[0.88, 0.12, 0]], usage: { totalTokens: 10 } }) // shouldRefresh(4): similar
+          // Iteration 5: periodic triggers (interval=5), embed still called for topic shift eval
+          .mockResolvedValueOnce({ embeddings: [[0.85, 0.15, 0]], usage: { totalTokens: 10 } }) // shouldRefresh(5): periodic fires first
+          // Iteration 6: topic shift - orthogonal vector
+          .mockResolvedValueOnce({ embeddings: [[0, 1, 0]], usage: { totalTokens: 10 } }), // shouldRefresh(6): big shift
+      } as unknown as IEmbeddingProvider;
+
+      // Memory manager returns same content for both refreshes (to test dedup)
+      const stableMemory = makeRetrievalResult("stable memory from DB");
+      const newMemory = makeRetrievalResult("new memory about different topic");
+      const memMgr = {
+        retrieve: vi.fn()
+          .mockResolvedValueOnce({ kind: "ok" as const, value: [stableMemory] }) // refresh at iter 5
+          .mockResolvedValueOnce({ kind: "ok" as const, value: [stableMemory, newMemory] }), // refresh at iter 6: includes same stable + new
+      } as unknown as IMemoryManager;
+
+      const ragPipe = mockRagPipeline([makeSearchResult("rag context A")]);
+
+      const instRetriever = mockInstinctRetriever({
+        insights: ["Use caching for performance"],
+        matchedInstinctIds: ["inst-e2e-1"],
+      });
+
+      const deps: MemoryRefresherDeps = {
+        memoryManager: memMgr,
+        ragPipeline: ragPipe as IRAGPipeline,
+        instinctRetriever: instRetriever as unknown as InstinctRetriever,
+        embeddingProvider: embedProvider,
+        eventBus,
+      };
+
+      const refresher = new MemoryRefresher(
+        defaultConfig({ interval: 5, topicShiftEnabled: true, topicShiftThreshold: 0.4 }),
+        deps,
+      );
+
+      // Seed initial content (simulating what orchestrator would do)
+      refresher.seedContentHashes(["initial memory already injected"]);
+
+      // Iterations 0-4: no re-retrieval expected
+      for (let i = 0; i < 5; i++) {
+        const check = await refresher.shouldRefresh(i, `conversation about Unity physics iteration ${i}`, "e2e-session");
+        expect(check.should).toBe(false);
+      }
+
+      // Iteration 5: periodic interval triggers
+      const check5 = await refresher.shouldRefresh(5, "still talking about Unity physics", "e2e-session");
+      expect(check5.should).toBe(true);
+      expect(check5.reason).toBe("periodic");
+
+      const refresh5 = await refresher.refresh("Unity physics query", "e2e-session", check5.reason, 5);
+      expect(refresh5.triggered).toBe(true);
+      expect(refresh5.reason).toBe("periodic");
+      expect(refresh5.newMemoryContext).toContain("stable memory from DB");
+      expect(refresh5.retrievalNumber).toBe(1);
+
+      // Iteration 6: topic shift triggers (orthogonal vector)
+      const check6 = await refresher.shouldRefresh(6, "now lets talk about UI layout design", "e2e-session");
+      expect(check6.should).toBe(true);
+      expect(check6.reason).toBe("topic_shift");
+
+      const refresh6 = await refresher.refresh("UI layout design query", "e2e-session", check6.reason, 6);
+      expect(refresh6.triggered).toBe(true);
+      expect(refresh6.reason).toBe("topic_shift");
+      // "stable memory from DB" was already injected at iteration 5 -> should be deduped
+      // Only "new memory about different topic" should be new
+      expect(refresh6.newMemoryContext).toContain("new memory about different topic");
+      expect(refresh6.newMemoryContext).not.toContain("stable memory from DB");
+      expect(refresh6.retrievalNumber).toBe(2);
+
+      // Verify events
+      const reRetrievedEvents = eventBus.calls.filter((c) => c.event === "memory:re_retrieved");
+      expect(reRetrievedEvents).toHaveLength(2); // periodic + topic_shift
+
+      const topicShiftedEvents = eventBus.calls.filter((c) => c.event === "memory:topic_shifted");
+      expect(topicShiftedEvents).toHaveLength(1); // only the topic_shift refresh
+
+      // Verify retrieval count
+      expect(refresh6.retrievalNumber).toBe(2);
+    });
+
+    it("seedContentHashes prevents re-injection of initial content", async () => {
+      const initialContent = "this was already in the prompt";
+      const deps: MemoryRefresherDeps = {
+        memoryManager: mockMemoryManager([
+          makeRetrievalResult(initialContent),
+          makeRetrievalResult("brand new content"),
+        ]) as IMemoryManager,
+      };
+
+      const refresher = new MemoryRefresher(defaultConfig(), deps);
+      refresher.seedContentHashes([initialContent]);
+
+      const result = await refresher.refresh("query", "s1", "periodic", 5);
+      expect(result.triggered).toBe(true);
+      // Initial content should be deduped, only new content returned
+      expect(result.newMemoryContext).toContain("brand new content");
+      expect(result.newMemoryContext).not.toContain("this was already in the prompt");
+    });
+
+    it("graceful degradation with no deps at all", async () => {
+      const refresher = new MemoryRefresher(defaultConfig(), {});
+      const result = await refresher.refresh("query", "s1", "periodic", 5);
+
+      // Should succeed with no results (all deps missing -> skipped)
+      expect(result.triggered).toBe(true);
+      expect(result.newMemoryContext).toBeUndefined();
+      expect(result.newRagContext).toBeUndefined();
+      expect(result.newInsights).toBeUndefined();
+    });
+  });
 });
