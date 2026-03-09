@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: completed
-stopped_at: Completed 15-02 FileWatchTrigger and ChecklistTrigger
-last_updated: "2026-03-09T11:56:00.000Z"
-last_activity: 2026-03-09 -- Completed 15-02 FileWatchTrigger and ChecklistTrigger
+stopped_at: Completed 15-03 WebhookTrigger, dedup integration, end-to-end wiring
+last_updated: "2026-03-09T12:07:00.000Z"
+last_activity: 2026-03-09 -- Completed Phase 15 (Proactive Triggers)
 progress:
   total_phases: 10
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 16
-  completed_plans: 15
-  percent: 94
+  completed_plans: 16
+  percent: 100
 ---
 
 # State: Strada.Brain
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 15 -- Proactive Triggers (IN PROGRESS)
+**Current focus:** Phase 15 -- Proactive Triggers (COMPLETE)
 
 ## Current Position
 
 Phase: 15 of 19 (Proactive Triggers)
-Plan: 2 of 3
-Status: 15-02 complete, continuing to 15-03
-Last activity: 2026-03-09 -- Completed 15-02 FileWatchTrigger and ChecklistTrigger
+Plan: 3 of 3
+Status: Phase 15 complete
+Last activity: 2026-03-09 -- Completed Phase 15 (Proactive Triggers)
 
-Progress: [█████████░] 94%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15 (v2.0) / 39 (lifetime)
-- Average duration: 5.7min (v2.0)
-- Total execution time: 85min (v2.0)
+- Total plans completed: 16 (v2.0) / 40 (lifetime)
+- Average duration: 5.75min (v2.0)
+- Total execution time: 92min (v2.0)
 
 **By Phase:**
 
@@ -48,11 +48,12 @@ Progress: [█████████░] 94%
 | 12 | 2/2 | 10min | 5min |
 | 13 | 3/3 | 24min | 8min |
 | 14 | 5/5 | 27min | 5.4min |
-| 15 | 2/3 | 12min | 6min |
+| 15 | 3/3 | 19min | 6.3min |
 
 *Updated after each plan completion*
 | Phase 15 P01 | 7min | 3 tasks | 8 files |
 | Phase 15 P02 | 5min | 2 tasks | 4 files |
+| Phase 15 P03 | 7min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -126,6 +127,11 @@ Recent decisions affecting current work:
 - [15-02]: Minute-floor dedup in ChecklistTrigger matches CronTrigger pattern
 - [15-02]: Unscheduled checklist items fire every evaluation with minute dedup
 - [15-02]: Dynamic metadata description updates on onFired() for LLM context
+- [15-03]: Sliding window rate limiter over token bucket for webhook endpoint
+- [15-03]: timingSafeCompare pads shorter buffer to prevent length-based timing leaks
+- [15-03]: Promise.allSettled for trigger dispose on stop() -- fire-and-forget keeps stop() sync
+- [15-03]: TriggerMetadata.cooldownSeconds optional field for per-trigger dedup cooldown
+- [15-03]: Typed event emission in HeartbeatLoop for WebSocket broadcasting
 
 ### Pending Todos
 
@@ -138,8 +144,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T11:56:00.000Z
-Stopped at: Completed 15-02 FileWatchTrigger and ChecklistTrigger
+Last session: 2026-03-09T12:07:00.000Z
+Stopped at: Completed Phase 15 (Proactive Triggers) -- all 3 plans done
 Resume file: None
 
 ---

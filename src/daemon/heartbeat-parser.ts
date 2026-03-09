@@ -46,7 +46,8 @@ function slugify(text: string): string {
  * Matches `- fieldName: value` pattern.
  */
 function extractField(lines: string[], fieldName: string): string | undefined {
-  const regex = new RegExp(`^\\s*-\\s*${fieldName}:\\s*(.+)$`, "i");
+  const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`^\\s*-\\s*${escaped}:\\s*(.+)$`, "i");
   for (const line of lines) {
     const match = line.match(regex);
     if (match) {

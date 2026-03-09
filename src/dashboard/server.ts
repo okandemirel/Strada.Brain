@@ -241,8 +241,22 @@ export class DashboardServer {
         return;
       }
 
-      // Daemon approval management endpoints (POST)
+      // Daemon approval management endpoints (POST) — requires dashboard auth
       if (url.startsWith("/api/daemon/approvals/") && req.method === "POST") {
+        // Auth check: require dashboard token
+        if (!this.dashboardToken) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Dashboard authentication not configured" }));
+          return;
+        }
+        const authHeader = req.headers["authorization"] as string | undefined;
+        const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
+        if (!token || token !== this.dashboardToken) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Authentication required" }));
+          return;
+        }
+
         const match = url.match(/^\/api\/daemon\/approvals\/([^/]+)\/(approve|deny)$/);
         if (!match) {
           res.writeHead(404, { "Content-Type": "application/json" });
@@ -335,9 +349,23 @@ export class DashboardServer {
 
       // POST /api/webhook -- Accept webhook events with dual auth and rate limiting
       if (req.method === "POST" && (url === "/api/webhook" || url.startsWith("/api/webhook?"))) {
+        const MAX_BODY_BYTES = 65_536;
         let body = "";
-        req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+        let bodyBytes = 0;
+        let aborted = false;
+        req.on("data", (chunk: Buffer) => {
+          bodyBytes += chunk.length;
+          if (bodyBytes > MAX_BODY_BYTES) {
+            aborted = true;
+            req.destroy();
+            res.writeHead(413, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Request body too large" }));
+            return;
+          }
+          body += chunk.toString();
+        });
         req.on("end", () => {
+          if (aborted) return;
           try {
             // Auth check
             const headers: Record<string, string | undefined> = {

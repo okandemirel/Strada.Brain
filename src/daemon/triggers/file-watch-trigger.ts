@@ -12,6 +12,7 @@
  * Used by: TriggerRegistry, HeartbeatLoop
  */
 
+import { basename } from "node:path";
 import { watch, type FSWatcher } from "chokidar";
 import type {
   ITrigger,
@@ -31,14 +32,6 @@ const DEFAULT_DEBOUNCE_MS = 500;
 
 /** Default ignore patterns applied to all file watchers */
 const DEFAULT_IGNORE_PATTERNS = ["**/node_modules/**", "**/.git/**"];
-
-/**
- * Extract the basename from a file path for display purposes.
- */
-function basename(filePath: string): string {
-  const parts = filePath.split("/");
-  return parts[parts.length - 1] ?? filePath;
-}
 
 /**
  * Convert a simple glob pattern (e.g., '*.cs', '*.{ts,tsx}') to a RegExp

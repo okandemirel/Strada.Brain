@@ -24,7 +24,7 @@ import type { BudgetTracker } from "./budget/budget-tracker.js";
 import type { DaemonSecurityPolicy } from "./security/daemon-security-policy.js";
 import type { ApprovalQueue } from "./security/approval-queue.js";
 import type { DaemonStorage } from "./daemon-storage.js";
-import type { DaemonConfig, DaemonStatusSnapshot } from "./daemon-types.js";
+import type { DaemonConfig, DaemonStatusSnapshot, TriggerType } from "./daemon-types.js";
 import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
 import type { TaskId } from "../tasks/types.js";
@@ -234,6 +234,9 @@ export class HeartbeatLoop {
             }
           }
 
+          // Emit type-specific events BEFORE onFired drains event buffers
+          this.emitTypedTriggerEvent(trigger, name, now);
+
           trigger.onFired(now);
 
           // Submit task via TaskManager with daemon origin
@@ -265,9 +268,6 @@ export class HeartbeatLoop {
             taskId: task.id,
             timestamp: now.getTime(),
           });
-
-          // Emit type-specific events for WebSocket broadcasting
-          this.emitTypedTriggerEvent(trigger, name, now);
 
           this.logger.info("Trigger fired", {
             trigger: name,
@@ -348,7 +348,7 @@ export class HeartbeatLoop {
    * Emit a type-specific event based on the trigger type.
    * These events are broadcast over WebSocket for real-time dashboard updates.
    */
-  private emitTypedTriggerEvent(trigger: { metadata: { type: string; name: string; description: string }; getPendingEvents?: () => ReadonlyArray<unknown>; getDueItems?: () => ReadonlyArray<unknown> }, name: string, now: Date): void {
+  private emitTypedTriggerEvent(trigger: { metadata: { type: TriggerType; name: string; description: string }; getPendingEvents?: () => ReadonlyArray<unknown>; getDueItems?: () => ReadonlyArray<unknown> }, name: string, now: Date): void {
     switch (trigger.metadata.type) {
       case "file-watch": {
         const fwTrigger = trigger as { getPendingEvents?: () => ReadonlyArray<{ path: string; event: string }> };

@@ -449,7 +449,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     const webhookTriggers = new Map<string, WebhookTrigger>();
     try {
       const content = readFileSync(heartbeatPath, "utf-8");
-      const triggerDefs = parseHeartbeatFile(content);
+      const triggerDefs = parseHeartbeatFile(content, {
+        morningHour: daemonConfig.triggers.checklistMorningHour,
+        afternoonHour: daemonConfig.triggers.checklistAfternoonHour,
+        eveningHour: daemonConfig.triggers.checklistEveningHour,
+      });
       for (const def of triggerDefs) {
         if (def.enabled === false) continue;
         let trigger: ITrigger;
@@ -461,9 +465,21 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
               daemonConfig.timezone || undefined,
             );
             break;
-          case "file-watch":
-            trigger = new FileWatchTrigger(def);
+          case "file-watch": {
+            const resolvedWatchPath = resolve(process.cwd(), def.path);
+            if (!resolvedWatchPath.startsWith(process.cwd() + "/") && resolvedWatchPath !== process.cwd()) {
+              logger.warn("File-watch path outside project root, skipping", {
+                trigger: def.name, path: def.path,
+              });
+              continue;
+            }
+            trigger = new FileWatchTrigger({
+              ...def,
+              path: resolvedWatchPath,
+              debounce: def.debounce ?? daemonConfig.triggers.defaultDebounceMs,
+            });
             break;
+          }
           case "checklist":
             trigger = new ChecklistTrigger(def, daemonConfig.timezone || undefined);
             break;
@@ -546,6 +562,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         webhookTriggers,
         webhookSecret: daemonConfig.triggers.webhookSecret,
         webhookRateLimit: daemonConfig.triggers.webhookRateLimit,
+        dashboardToken: config.websocketDashboard.authToken,
       });
     }
   }

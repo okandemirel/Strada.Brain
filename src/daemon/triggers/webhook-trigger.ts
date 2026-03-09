@@ -51,14 +51,19 @@ export class WebhookTrigger implements ITrigger {
     };
   }
 
+  /** Maximum pending events to prevent unbounded memory growth */
+  private static readonly MAX_PENDING = 1_000;
+
   /**
    * Push an event into the buffer. Called from POST /api/webhook handler.
+   * Drops events when buffer is full to prevent memory exhaustion.
    */
   pushEvent(
     action: string,
     source?: string,
     context?: Record<string, unknown>,
   ): void {
+    if (this.pendingEvents.length >= WebhookTrigger.MAX_PENDING) return;
     this.pendingEvents.push({
       action,
       source,
@@ -237,7 +242,7 @@ export function validateWebhookAuth(
     const token = authHeader.startsWith("Bearer ")
       ? authHeader.slice(7)
       : authHeader;
-    if (token === dashboardToken) {
+    if (timingSafeCompare(token, dashboardToken)) {
       return { valid: true };
     }
     return { valid: false, status: 401, message: "Invalid authorization token" };

@@ -83,6 +83,7 @@ export class TriggerDeduplicator {
     // 2. Cross-trigger content dedup check
     if (this.globalWindowMs > 0) {
       const hash = this.hashContent(actionContent);
+      this.lastCheckedHash = hash;
       const lastContent = this.contentHashes.get(hash);
       if (lastContent !== undefined && now - lastContent < this.globalWindowMs) {
         this.lastReason = "content_duplicate";
@@ -95,13 +96,18 @@ export class TriggerDeduplicator {
     return false;
   }
 
+  /** Cached hash from last shouldSuppress call to avoid double-hashing */
+  private lastCheckedHash: string | null = null;
+
   /**
    * Record that a trigger fired. Call this after successfully processing
    * the trigger action (after shouldSuppress returns false).
+   * Reuses the hash computed by shouldSuppress when available.
    */
   recordFired(triggerName: string, actionContent: string, now: number): void {
     this.lastFired.set(triggerName, now);
-    const hash = this.hashContent(actionContent);
+    const hash = this.lastCheckedHash ?? this.hashContent(actionContent);
+    this.lastCheckedHash = null;
     this.contentHashes.set(hash, now);
   }
 

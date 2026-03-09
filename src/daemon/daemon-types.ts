@@ -32,7 +32,7 @@ export type TriggerType = "cron" | "file-watch" | "checklist" | "webhook";
 export interface TriggerMetadata {
   readonly name: string;
   readonly description: string;
-  readonly type: string;
+  readonly type: TriggerType;
   /** Per-trigger cooldown in seconds for deduplication (TRIG-05) */
   readonly cooldownSeconds?: number;
 }

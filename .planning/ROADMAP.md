@@ -34,7 +34,7 @@
 - [x] **Phase 12: Persistent Identity + Startup Recovery** - Agent persists identity across restarts and recovers from crashes (completed 2026-03-08)
 - [x] **Phase 13: Cross-Session Learning Transfer** - Instincts flow across sessions with provenance and project-scope filtering (completed 2026-03-08)
 - [x] **Phase 14: Heartbeat Daemon Loop** - Core daemon loop with trigger evaluation, security policy, and cost guards (completed 2026-03-08)
-- [ ] **Phase 15: Proactive Triggers** - File watcher, webhook, checklist, and deduplication extend the daemon's senses
+- [x] **Phase 15: Proactive Triggers** - File watcher, webhook, checklist, and deduplication extend the daemon's senses (completed 2026-03-09)
 - [ ] **Phase 16: Interactive Goal Execution + Replanning** - Goals execute inline during chat with mid-execution replanning
 - [ ] **Phase 17: Dynamic Memory Re-retrieval** - Context refreshes during long PAOR loops to prevent stale reasoning
 - [ ] **Phase 18: Dual Reporting + Dashboard** - Periodic digest to chat and daemon endpoint on dashboard
@@ -214,7 +214,7 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 12. Persistent Identity + Startup Recovery | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 13. Cross-Session Learning Transfer | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 14. Heartbeat Daemon Loop | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
-| 15. Proactive Triggers | v2.0 | 2/3 | In Progress | - |
+| 15. Proactive Triggers | 3/3 | Complete   | 2026-03-09 | - |
 | 16. Interactive Goal Execution + Replanning | v2.0 | 0/TBD | Not started | - |
 | 17. Dynamic Memory Re-retrieval | v2.0 | 0/TBD | Not started | - |
 | 18. Dual Reporting + Dashboard | v2.0 | 0/TBD | Not started | - |
