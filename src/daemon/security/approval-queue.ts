@@ -95,6 +95,10 @@ export class ApprovalQueue {
         timestamp: now,
       });
     }
+
+    // Prune resolved entries older than 7 days to prevent unbounded table growth
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    this.storage.pruneOldApprovals(sevenDaysAgo);
   }
 
   /**

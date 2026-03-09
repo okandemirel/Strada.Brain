@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
@@ -435,8 +435,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       new Set(daemonConfig.security.autoApproveTools),
     );
 
-    // Parse HEARTBEAT.md and register triggers
-    const heartbeatPath = daemonConfig.heartbeat.heartbeatFile;
+    // Parse HEARTBEAT.md and register triggers (path validated against project root)
+    const heartbeatPath = resolve(process.cwd(), daemonConfig.heartbeat.heartbeatFile);
+    if (!heartbeatPath.startsWith(process.cwd() + "/") && heartbeatPath !== process.cwd()) {
+      throw new AppError("HEARTBEAT file path is outside project root", "DAEMON_CONFIG_ERROR", 400);
+    }
     try {
       const content = readFileSync(heartbeatPath, "utf-8");
       const triggerDefs = parseHeartbeatFile(content);

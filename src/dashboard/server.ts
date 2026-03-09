@@ -229,6 +229,13 @@ export class DashboardServer {
           return;
         }
 
+        const entry = this.daemonApprovalQueue.getById(approvalId);
+        if (!entry) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Approval not found" }));
+          return;
+        }
+
         try {
           if (action === "approve") {
             this.daemonApprovalQueue.approve(approvalId, "dashboard");

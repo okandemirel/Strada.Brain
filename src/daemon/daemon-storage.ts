@@ -284,6 +284,14 @@ export class DaemonStorage {
     return rows.map(this.rowToApprovalEntry);
   }
 
+  /** Delete resolved (non-pending) approval entries older than the given timestamp */
+  pruneOldApprovals(olderThan: number): void {
+    this.assertOpen();
+    this.db!.prepare(
+      `DELETE FROM approval_queue WHERE status != 'pending' AND created_at < ?`,
+    ).run(olderThan);
+  }
+
   // =========================================================================
   // Audit Log Methods
   // =========================================================================

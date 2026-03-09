@@ -29,11 +29,18 @@ export class DaemonSecurityPolicy {
   private readonly approvalQueue: ApprovalQueue;
   private readonly autoApproveList: Set<string>;
 
-  /** File-write tools that always require approval, even if auto-approved */
-  private static readonly FILE_WRITE_TOOLS = new Set([
+  /** Dangerous tools that always require approval, even if auto-approved */
+  private static readonly ALWAYS_QUEUE_TOOLS = new Set([
     "file_write",
     "file_create",
     "file_edit",
+    "file_delete",
+    "file_rename",
+    "file_delete_directory",
+    "shell_exec",
+    "git_commit",
+    "git_push",
+    "git_stash",
   ]);
 
   constructor(
@@ -59,7 +66,7 @@ export class DaemonSecurityPolicy {
    */
   checkPermission(toolName: string): PermissionResult {
     // File-write tools always require approval, even if auto-approved
-    if (DaemonSecurityPolicy.FILE_WRITE_TOOLS.has(toolName)) {
+    if (DaemonSecurityPolicy.ALWAYS_QUEUE_TOOLS.has(toolName)) {
       return "queue";
     }
 
