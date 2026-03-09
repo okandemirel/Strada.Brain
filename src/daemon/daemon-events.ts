@@ -64,6 +64,36 @@ export interface ApprovalDecidedEvent {
   readonly timestamp: number;
 }
 
+/** Emitted when a file-watch trigger detects file changes */
+export interface FileChangeEvent {
+  readonly triggerName: string;
+  readonly paths: string[];
+  readonly eventTypes: string[];
+  readonly timestamp: number;
+}
+
+/** Emitted when checklist items become due */
+export interface ChecklistDueEvent {
+  readonly triggerName: string;
+  readonly items: ReadonlyArray<{ text: string; priority: string }>;
+  readonly timestamp: number;
+}
+
+/** Emitted when a webhook trigger receives an HTTP POST */
+export interface WebhookReceivedEvent {
+  readonly triggerName: string;
+  readonly action: string;
+  readonly source?: string;
+  readonly timestamp: number;
+}
+
+/** Emitted when a trigger action is suppressed by deduplication */
+export interface TriggerDeduplicatedEvent {
+  readonly triggerName: string;
+  readonly reason: "cooldown" | "content_duplicate";
+  readonly timestamp: number;
+}
+
 // =============================================================================
 // EVENT MAP
 // =============================================================================
@@ -77,4 +107,8 @@ export interface DaemonEventMap {
   "daemon:budget_exceeded": BudgetExceededEvent;
   "daemon:approval_requested": ApprovalRequestedEvent;
   "daemon:approval_decided": ApprovalDecidedEvent;
+  "daemon:file_change": FileChangeEvent;
+  "daemon:checklist_due": ChecklistDueEvent;
+  "daemon:webhook_received": WebhookReceivedEvent;
+  "daemon:trigger_deduplicated": TriggerDeduplicatedEvent;
 }

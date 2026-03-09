@@ -116,7 +116,14 @@ export type EnvVarName =
   | "STRATA_DAEMON_BACKOFF_BASE"
   | "STRATA_DAEMON_BACKOFF_MAX"
   | "STRATA_DAEMON_FAILURE_THRESHOLD"
-  | "STRATA_DAEMON_IDLE_PAUSE";
+  | "STRATA_DAEMON_IDLE_PAUSE"
+  | "STRATA_WEBHOOK_SECRET"
+  | "STRATA_WEBHOOK_RATE_LIMIT"
+  | "STRATA_DAEMON_DEDUP_WINDOW_MS"
+  | "STRATA_DAEMON_DEFAULT_DEBOUNCE_MS"
+  | "STRATA_CHECKLIST_MORNING_HOUR"
+  | "STRATA_CHECKLIST_AFTERNOON_HOUR"
+  | "STRATA_CHECKLIST_EVENING_HOUR";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -590,6 +597,15 @@ export const configSchema = z
     daemonBackoffMax: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000).max(86400000)).default("3600000"),
     daemonFailureThreshold: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
     daemonIdlePause: boolFromString(false),
+
+    // Daemon Triggers (Phase 15)
+    webhookSecret: z.string().optional(),
+    webhookRateLimit: z.string().default("10/min"),
+    daemonDedupWindowMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(3600000)).default("300000"),
+    daemonDefaultDebounceMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100).max(60000)).default("500"),
+    checklistMorningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("9"),
+    checklistAfternoonHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("14"),
+    checklistEveningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("18"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -850,6 +866,15 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         failureThreshold: rawConfig.daemonFailureThreshold,
       },
       timezone: rawConfig.daemonTimezone,
+      triggers: {
+        webhookSecret: rawConfig.webhookSecret,
+        webhookRateLimit: rawConfig.webhookRateLimit,
+        dedupWindowMs: rawConfig.daemonDedupWindowMs,
+        defaultDebounceMs: rawConfig.daemonDefaultDebounceMs,
+        checklistMorningHour: rawConfig.checklistMorningHour,
+        checklistAfternoonHour: rawConfig.checklistAfternoonHour,
+        checklistEveningHour: rawConfig.checklistEveningHour,
+      },
     },
   };
 
@@ -1116,6 +1141,13 @@ interface EnvVars {
   daemonBackoffMax: string | undefined;
   daemonFailureThreshold: string | undefined;
   daemonIdlePause: string | undefined;
+  webhookSecret: string | undefined;
+  webhookRateLimit: string | undefined;
+  daemonDedupWindowMs: string | undefined;
+  daemonDefaultDebounceMs: string | undefined;
+  checklistMorningHour: string | undefined;
+  checklistAfternoonHour: string | undefined;
+  checklistEveningHour: string | undefined;
 }
 
 /**
@@ -1230,6 +1262,13 @@ function loadFromEnv(): EnvVars {
     daemonBackoffMax: process.env["STRATA_DAEMON_BACKOFF_MAX"],
     daemonFailureThreshold: process.env["STRATA_DAEMON_FAILURE_THRESHOLD"],
     daemonIdlePause: process.env["STRATA_DAEMON_IDLE_PAUSE"],
+    webhookSecret: process.env["STRATA_WEBHOOK_SECRET"],
+    webhookRateLimit: process.env["STRATA_WEBHOOK_RATE_LIMIT"],
+    daemonDedupWindowMs: process.env["STRATA_DAEMON_DEDUP_WINDOW_MS"],
+    daemonDefaultDebounceMs: process.env["STRATA_DAEMON_DEFAULT_DEBOUNCE_MS"],
+    checklistMorningHour: process.env["STRATA_CHECKLIST_MORNING_HOUR"],
+    checklistAfternoonHour: process.env["STRATA_CHECKLIST_AFTERNOON_HOUR"],
+    checklistEveningHour: process.env["STRATA_CHECKLIST_EVENING_HOUR"],
   };
 }
 

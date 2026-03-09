@@ -445,6 +445,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       const triggerDefs = parseHeartbeatFile(content);
       for (const def of triggerDefs) {
         if (def.enabled === false) continue;
+        // Only register cron triggers here; other types registered in Phase 15+
+        if (def.type !== "cron") continue;
         const trigger = new CronTrigger(
           { name: def.name, description: def.action, type: "cron" },
           def.cron,

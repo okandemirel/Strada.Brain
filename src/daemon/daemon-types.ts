@@ -25,6 +25,9 @@ export type TriggerState = "active" | "paused" | "backed_off" | "disabled";
 /** Circuit breaker states for per-trigger failure resilience */
 export type CircuitState = "CLOSED" | "OPEN" | "HALF_OPEN";
 
+/** Supported trigger types */
+export type TriggerType = "cron" | "file-watch" | "checklist" | "webhook";
+
 /** Metadata describing a registered trigger */
 export interface TriggerMetadata {
   readonly name: string;
@@ -43,16 +46,73 @@ export interface ITrigger {
   getNextRun(): Date | null;
   /** Get current trigger state */
   getState(): TriggerState;
+  /** Optional cleanup for resource-holding triggers (e.g., file watchers) */
+  dispose?(): Promise<void>;
 }
 
-/** Parsed trigger definition from HEARTBEAT.md */
-export interface HeartbeatTriggerDef {
+// =============================================================================
+// HEARTBEAT TRIGGER DEFINITIONS (Discriminated Union)
+// =============================================================================
+
+/** Shared fields for all trigger definitions parsed from HEARTBEAT.md */
+export interface BaseTriggerDef {
   name: string;
-  cron: string;
   action: string;
   timeout?: number;
   enabled?: boolean;
+  /** Per-trigger cooldown in seconds (TRIG-05) */
+  cooldown?: number;
 }
+
+/** Cron-based trigger: fires on a cron schedule */
+export interface CronTriggerDef extends BaseTriggerDef {
+  type: "cron";
+  cron: string;
+}
+
+/** File-watch trigger: fires when files change in a watched directory */
+export interface FileWatchTriggerDef extends BaseTriggerDef {
+  type: "file-watch";
+  /** Directory path to watch */
+  path: string;
+  /** Glob pattern filter (e.g., '*.cs') */
+  pattern?: string;
+  /** Debounce interval in ms */
+  debounce?: number;
+  /** Watch subdirectories (default true) */
+  recursive?: boolean;
+  /** Ignore patterns (e.g., ['node_modules', '.git']) */
+  ignore?: string[];
+}
+
+/** A single item in a checklist trigger */
+export interface ChecklistItem {
+  text: string;
+  checked: boolean;
+  priority: "high" | "medium" | "low";
+  /** Cron schedule derived from NL time reference */
+  schedule?: string;
+  /** Multi-line description from indented continuation lines */
+  multilineDescription?: string;
+}
+
+/** Checklist trigger: fires when checklist items are due */
+export interface ChecklistTriggerDef extends BaseTriggerDef {
+  type: "checklist";
+  items: ChecklistItem[];
+}
+
+/** Webhook trigger: fires on incoming HTTP POST (config is env-var driven) */
+export interface WebhookTriggerDef extends BaseTriggerDef {
+  type: "webhook";
+}
+
+/** Discriminated union of all trigger definition types */
+export type HeartbeatTriggerDef =
+  | CronTriggerDef
+  | FileWatchTriggerDef
+  | ChecklistTriggerDef
+  | WebhookTriggerDef;
 
 // =============================================================================
 // DAEMON CONFIGURATION
@@ -84,6 +144,24 @@ export interface DaemonBackoffConfig {
   readonly failureThreshold: number;
 }
 
+/** Phase 15 trigger-specific configuration */
+export interface DaemonTriggersConfig {
+  /** Webhook authentication secret (STRATA_WEBHOOK_SECRET) */
+  readonly webhookSecret?: string;
+  /** Webhook rate limit string e.g. '10/min' (STRATA_WEBHOOK_RATE_LIMIT) */
+  readonly webhookRateLimit: string;
+  /** Global cross-trigger dedup window in ms (STRATA_DAEMON_DEDUP_WINDOW_MS) */
+  readonly dedupWindowMs: number;
+  /** Default file watch debounce in ms (STRATA_DAEMON_DEFAULT_DEBOUNCE_MS) */
+  readonly defaultDebounceMs: number;
+  /** Hour for 'every morning' checklist items (STRATA_CHECKLIST_MORNING_HOUR) */
+  readonly checklistMorningHour: number;
+  /** Hour for 'every afternoon' checklist items (STRATA_CHECKLIST_AFTERNOON_HOUR) */
+  readonly checklistAfternoonHour: number;
+  /** Hour for 'every evening' checklist items (STRATA_CHECKLIST_EVENING_HOUR) */
+  readonly checklistEveningHour: number;
+}
+
 /** Complete daemon configuration -- added to Config interface */
 export interface DaemonConfig {
   readonly heartbeat: DaemonHeartbeatConfig;
@@ -91,6 +169,7 @@ export interface DaemonConfig {
   readonly budget: DaemonBudgetConfig;
   readonly backoff: DaemonBackoffConfig;
   readonly timezone: string;
+  readonly triggers: DaemonTriggersConfig;
 }
 
 // =============================================================================
