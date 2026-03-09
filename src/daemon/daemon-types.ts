@@ -33,6 +33,8 @@ export interface TriggerMetadata {
   readonly name: string;
   readonly description: string;
   readonly type: string;
+  /** Per-trigger cooldown in seconds for deduplication (TRIG-05) */
+  readonly cooldownSeconds?: number;
 }
 
 /** Pluggable trigger interface -- CronTrigger implements this in Plan 02 */

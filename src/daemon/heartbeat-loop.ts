@@ -30,6 +30,7 @@ import type { IEventBus } from "../core/event-bus.js";
 import type { TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES } from "../tasks/types.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
+import type { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
 import type * as winston from "winston";
 
 /** Identity manager interface -- only the subset HeartbeatLoop uses */
@@ -59,6 +60,7 @@ export class HeartbeatLoop {
     private readonly eventBus: IEventBus<DaemonEventMap>,
     private readonly config: DaemonConfig,
     private readonly logger: winston.Logger,
+    private readonly deduplicator?: TriggerDeduplicator,
   ) {}
 
   /**
@@ -107,8 +109,8 @@ export class HeartbeatLoop {
   }
 
   /**
-   * Stop the heartbeat loop. Persists circuit breaker states
-   * and marks daemon as not running.
+   * Stop the heartbeat loop. Persists circuit breaker states,
+   * disposes all triggers, and marks daemon as not running.
    */
   stop(): void {
     if (!this.running) return;
@@ -122,6 +124,14 @@ export class HeartbeatLoop {
     // Persist all circuit breaker states
     for (const [name, cb] of this.circuitBreakers) {
       this.persistCircuitState(name, cb);
+    }
+
+    // Dispose all triggers (fire-and-forget -- stop() is sync)
+    const triggers = this.registry.getAll();
+    if (triggers.length > 0) {
+      void Promise.allSettled(
+        triggers.map((t) => t.dispose?.()),
+      );
     }
 
     this.storage.setDaemonState("daemon_was_running", "false");
@@ -207,6 +217,23 @@ export class HeartbeatLoop {
       // 6. Evaluate trigger
       try {
         if (trigger.shouldFire(now)) {
+          // Dedup check (TRIG-05) -- before onFired and task submission
+          if (this.deduplicator) {
+            const cooldownMs = trigger.metadata.cooldownSeconds
+              ? (trigger.metadata.cooldownSeconds * 1000)
+              : 0;
+            if (this.deduplicator.shouldSuppress(name, trigger.metadata.description, now.getTime(), cooldownMs)) {
+              const reason = this.deduplicator.getSuppressionReason();
+              this.eventBus.emit("daemon:trigger_deduplicated", {
+                triggerName: name,
+                reason: reason ?? "cooldown",
+                timestamp: now.getTime(),
+              });
+              this.logger.debug("Trigger deduplicated", { trigger: name, reason });
+              continue;
+            }
+          }
+
           trigger.onFired(now);
 
           // Submit task via TaskManager with daemon origin
@@ -216,6 +243,11 @@ export class HeartbeatLoop {
             trigger.metadata.description,
             { origin: "daemon" },
           );
+
+          // Record dedup fire
+          if (this.deduplicator) {
+            this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime());
+          }
 
           // Track active task for overlap suppression
           this.activeTriggerTasks.set(name, task.id);
@@ -233,6 +265,9 @@ export class HeartbeatLoop {
             taskId: task.id,
             timestamp: now.getTime(),
           });
+
+          // Emit type-specific events for WebSocket broadcasting
+          this.emitTypedTriggerEvent(trigger, name, now);
 
           this.logger.info("Trigger fired", {
             trigger: name,
@@ -298,9 +333,55 @@ export class HeartbeatLoop {
     return this.securityPolicy;
   }
 
+  /**
+   * Get the deduplicator (for CLI stats display).
+   */
+  getDeduplicator(): TriggerDeduplicator | undefined {
+    return this.deduplicator;
+  }
+
   // ===========================================================================
   // Private
   // ===========================================================================
+
+  /**
+   * Emit a type-specific event based on the trigger type.
+   * These events are broadcast over WebSocket for real-time dashboard updates.
+   */
+  private emitTypedTriggerEvent(trigger: { metadata: { type: string; name: string; description: string }; getPendingEvents?: () => ReadonlyArray<unknown>; getDueItems?: () => ReadonlyArray<unknown> }, name: string, now: Date): void {
+    switch (trigger.metadata.type) {
+      case "file-watch": {
+        const fwTrigger = trigger as { getPendingEvents?: () => ReadonlyArray<{ path: string; event: string }> };
+        const events = fwTrigger.getPendingEvents?.() ?? [];
+        this.eventBus.emit("daemon:file_change", {
+          triggerName: name,
+          paths: events.map((e) => e.path),
+          eventTypes: events.map((e) => e.event),
+          timestamp: now.getTime(),
+        });
+        break;
+      }
+      case "checklist": {
+        const clTrigger = trigger as { getDueItems?: () => ReadonlyArray<{ text: string; priority: string }> };
+        const items = clTrigger.getDueItems?.() ?? [];
+        this.eventBus.emit("daemon:checklist_due", {
+          triggerName: name,
+          items,
+          timestamp: now.getTime(),
+        });
+        break;
+      }
+      case "webhook": {
+        this.eventBus.emit("daemon:webhook_received", {
+          triggerName: name,
+          action: trigger.metadata.description,
+          timestamp: now.getTime(),
+        });
+        break;
+      }
+      // cron: no additional typed event (trigger_fired is sufficient)
+    }
+  }
 
   private persistCircuitState(name: string, cb: CircuitBreaker): void {
     const snap = cb.serialize();

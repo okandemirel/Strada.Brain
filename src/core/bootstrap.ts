@@ -81,8 +81,13 @@ import { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import { DaemonSecurityPolicy } from "../daemon/security/daemon-security-policy.js";
 import { ApprovalQueue } from "../daemon/security/approval-queue.js";
 import { CronTrigger } from "../daemon/triggers/cron-trigger.js";
+import { FileWatchTrigger } from "../daemon/triggers/file-watch-trigger.js";
+import { ChecklistTrigger } from "../daemon/triggers/checklist-trigger.js";
+import { WebhookTrigger } from "../daemon/triggers/webhook-trigger.js";
+import { TriggerDeduplicator } from "../daemon/dedup/trigger-deduplicator.js";
 import { parseHeartbeatFile } from "../daemon/heartbeat-parser.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
+import type { ITrigger } from "../daemon/daemon-types.js";
 
 // Task system imports
 import {
@@ -440,22 +445,49 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     if (!heartbeatPath.startsWith(process.cwd() + "/") && heartbeatPath !== process.cwd()) {
       throw new AppError("HEARTBEAT file path is outside project root", "DAEMON_CONFIG_ERROR", 400);
     }
+    // Type-routed trigger creation from HEARTBEAT.md definitions
+    const webhookTriggers = new Map<string, WebhookTrigger>();
     try {
       const content = readFileSync(heartbeatPath, "utf-8");
       const triggerDefs = parseHeartbeatFile(content);
       for (const def of triggerDefs) {
         if (def.enabled === false) continue;
-        // Only register cron triggers here; other types registered in Phase 15+
-        if (def.type !== "cron") continue;
-        const trigger = new CronTrigger(
-          { name: def.name, description: def.action, type: "cron" },
-          def.cron,
-          daemonConfig.timezone || undefined,
-        );
+        let trigger: ITrigger;
+        switch (def.type) {
+          case "cron":
+            trigger = new CronTrigger(
+              { name: def.name, description: def.action, type: "cron", cooldownSeconds: def.cooldown },
+              def.cron,
+              daemonConfig.timezone || undefined,
+            );
+            break;
+          case "file-watch":
+            trigger = new FileWatchTrigger(def);
+            break;
+          case "checklist":
+            trigger = new ChecklistTrigger(def, daemonConfig.timezone || undefined);
+            break;
+          case "webhook": {
+            const wt = new WebhookTrigger(def.name, def.action);
+            webhookTriggers.set(def.name, wt);
+            trigger = wt;
+            break;
+          }
+          default:
+            logger.warn(`Unknown trigger type '${(def as { type: string }).type}', skipping`);
+            continue;
+        }
         triggerRegistry.register(trigger);
       }
+
+      // Log startup summary with trigger counts by type
+      const typeCounts = new Map<string, number>();
+      for (const t of triggerRegistry.getAll()) {
+        typeCounts.set(t.metadata.type, (typeCounts.get(t.metadata.type) ?? 0) + 1);
+      }
       logger.info("Daemon triggers loaded", {
-        count: triggerRegistry.count(),
+        total: triggerRegistry.count(),
+        byType: Object.fromEntries(typeCounts),
         file: heartbeatPath,
       });
     } catch (err: unknown) {
@@ -465,6 +497,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         throw err;
       }
     }
+
+    // Create TriggerDeduplicator (TRIG-05)
+    const deduplicator = new TriggerDeduplicator(daemonConfig.triggers.dedupWindowMs);
 
     // Create HeartbeatLoop
     heartbeatLoop = new HeartbeatLoop(
@@ -478,6 +513,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       daemonEventBus,
       daemonConfig,
       logger,
+      deduplicator,
     );
 
     // Build daemon context for CLI commands (Plan 05)
@@ -507,6 +543,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         heartbeatLoop,
         registry: triggerRegistry,
         approvalQueue: approvalQueueInstance,
+        webhookTriggers,
+        webhookSecret: daemonConfig.triggers.webhookSecret,
+        webhookRateLimit: daemonConfig.triggers.webhookRateLimit,
       });
     }
   }

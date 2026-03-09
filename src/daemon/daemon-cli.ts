@@ -92,12 +92,24 @@ export function registerDaemonCommands(
           const circuitState = circuitBreaker ? circuitBreaker.getState() : "CLOSED";
           const nextRun = trigger.getNextRun();
 
+          // Display next run based on trigger type
+          let nextRunStr: string;
+          if (nextRun) {
+            nextRunStr = nextRun.toISOString();
+          } else if (trigger.metadata.type === "file-watch" || trigger.metadata.type === "webhook") {
+            nextRunStr = "event-driven";
+          } else if (trigger.metadata.type === "checklist") {
+            nextRunStr = "on-tick";
+          } else {
+            nextRunStr = "N/A";
+          }
+
           console.log(
             padRight(name, 25) +
             padRight(trigger.metadata.type, 10) +
             padRight(trigger.getState(), 12) +
             padRight(circuitState, 12) +
-            padRight(nextRun ? nextRun.toISOString() : "N/A", 25),
+            padRight(nextRunStr, 25),
           );
         }
         console.log("");
@@ -111,6 +123,15 @@ export function registerDaemonCommands(
       const limitStr = budget.limitUsd !== undefined ? budget.limitUsd.toFixed(2) : "unlimited";
       const pctStr = budget.limitUsd !== undefined ? `(${(budget.pct * 100).toFixed(1)}%)` : "";
       console.log(`Budget: $${budget.usedUsd.toFixed(2)} / $${limitStr} ${pctStr}`);
+
+      // Dedup stats
+      const deduplicator = ctx.heartbeatLoop.getDeduplicator();
+      if (deduplicator) {
+        const dedupStats = deduplicator.getStats();
+        if (dedupStats.totalSuppressed > 0) {
+          console.log(`Dedup: ${dedupStats.totalSuppressed} suppressed (${dedupStats.byCooldown} cooldown, ${dedupStats.byContentDupe} content)`);
+        }
+      }
 
       // Pending approvals
       console.log(`Pending approvals: ${pending.length}`);
