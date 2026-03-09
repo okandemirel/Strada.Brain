@@ -339,19 +339,7 @@ export class Orchestrator {
     // ────────────────────────────────────────────────────────────────
 
     // ─── Memory Re-retrieval: create refresher for background path ───
-    let bgMemoryRefresher: MemoryRefresher | null = null;
-    if (this.reRetrievalConfig?.enabled) {
-      bgMemoryRefresher = new MemoryRefresher(this.reRetrievalConfig, {
-        memoryManager: this.memoryManager,
-        ragPipeline: this.ragPipeline,
-        instinctRetriever: this.instinctRetriever ?? undefined,
-        embeddingProvider: this.embeddingProvider,
-        eventBus: this.eventEmitter ?? undefined,
-      });
-      if (bgInitialContentHashes.length > 0) {
-        bgMemoryRefresher.seedContentHashes(bgInitialContentHashes);
-      }
-    }
+    const bgMemoryRefresher = this.createMemoryRefresher(bgInitialContentHashes);
     // ────────────────────────────────────────────────────────────────
 
     // Autonomy layer
@@ -812,19 +800,7 @@ export class Orchestrator {
     this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
 
     // ─── Memory Re-retrieval: create refresher ───────────────────────
-    let memoryRefresher: MemoryRefresher | null = null;
-    if (this.reRetrievalConfig?.enabled) {
-      memoryRefresher = new MemoryRefresher(this.reRetrievalConfig, {
-        memoryManager: this.memoryManager,
-        ragPipeline: this.ragPipeline,
-        instinctRetriever: this.instinctRetriever ?? undefined,
-        embeddingProvider: this.embeddingProvider,
-        eventBus: this.eventEmitter ?? undefined,
-      });
-      if (initialContentHashes.length > 0) {
-        memoryRefresher.seedContentHashes(initialContentHashes);
-      }
-    }
+    const memoryRefresher = this.createMemoryRefresher(initialContentHashes);
     // ────────────────────────────────────────────────────────────────
 
     // ─── Metrics: start recording ────────────────────────────────────
@@ -1215,7 +1191,10 @@ export class Orchestrator {
                 agentState = { ...agentState, learnedInsights: refreshed.newInsights };
               }
               if (refreshed.newInstinctIds?.length) {
-                matchedInstinctIds = [...matchedInstinctIds, ...refreshed.newInstinctIds];
+                // Deduplicate and cap instinct IDs to prevent unbounded growth
+                const idSet = new Set(matchedInstinctIds);
+                for (const id of refreshed.newInstinctIds) idSet.add(id);
+                matchedInstinctIds = [...idSet].slice(0, 200);
                 this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
               }
             }
@@ -1574,6 +1553,25 @@ export class Orchestrator {
       timestamp: Date.now(),
     });
   }
+
+  /**
+   * Create a MemoryRefresher if re-retrieval is enabled, seeded with initial content hashes.
+   * Returns null when re-retrieval is disabled.
+   */
+  private createMemoryRefresher(initialContentHashes: string[]): MemoryRefresher | null {
+    if (!this.reRetrievalConfig?.enabled) return null;
+    const refresher = new MemoryRefresher(this.reRetrievalConfig, {
+      memoryManager: this.memoryManager,
+      ragPipeline: this.ragPipeline,
+      instinctRetriever: this.instinctRetriever ?? undefined,
+      embeddingProvider: this.embeddingProvider,
+      eventBus: this.eventEmitter ?? undefined,
+    });
+    if (initialContentHashes.length > 0) {
+      refresher.seedContentHashes(initialContentHashes);
+    }
+    return refresher;
+  }
 }
 
 /**
@@ -1584,12 +1582,17 @@ export class Orchestrator {
 function replaceSection(prompt: string, tag: string, newContent: string): string {
   const startMarker = `<!-- ${tag}:start -->`;
   const endMarker = `<!-- ${tag}:end -->`;
+  // Sanitize newContent: strip any embedded markers to prevent injection
+  // of fake section boundaries from adversarial memory/RAG content.
+  const sanitized = newContent
+    .replace(/<!--\s*[\w:-]+:start\s*-->/g, "")
+    .replace(/<!--\s*[\w:-]+:end\s*-->/g, "");
   const startIdx = prompt.indexOf(startMarker);
   const endIdx = prompt.indexOf(endMarker);
   if (startIdx === -1 || endIdx === -1) {
-    return prompt + `\n\n${startMarker}\n${newContent}\n${endMarker}\n`;
+    return prompt + `\n\n${startMarker}\n${sanitized}\n${endMarker}\n`;
   }
-  return prompt.substring(0, startIdx) + startMarker + "\n" + newContent + "\n" + endMarker + prompt.substring(endIdx + endMarker.length);
+  return prompt.substring(0, startIdx) + startMarker + "\n" + sanitized + "\n" + endMarker + prompt.substring(endIdx + endMarker.length);
 }
 
 const REFLECTION_DECISION_RE = /\*\*\s*(DONE|REPLAN|CONTINUE)\s*\*\*/;

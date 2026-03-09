@@ -11,13 +11,15 @@
  * - Event emission for observability
  */
 
-import { createHash } from "node:crypto";
 import type { ReRetrievalConfig } from "../config/config.js";
 import type { IEventEmitter } from "../core/event-bus.js";
-import type { IMemoryManager, RetrievalOptions, RetrievalResult } from "../memory/memory.interface.js";
+import type { IMemoryManager, RetrievalOptions } from "../memory/memory.interface.js";
 import type { IRAGPipeline, SearchResult, SearchOptions, IEmbeddingProvider } from "../rag/rag.interface.js";
 import type { InsightResult, InstinctRetriever } from "./instinct-retriever.js";
+import { computeContentHash } from "../rag/chunker.js";
 import { denseCosineSimilarity } from "../rag/vector-math.js";
+import { isOk } from "../types/index.js";
+import { getLogger } from "../utils/logger.js";
 
 // =============================================================================
 // TYPES
@@ -54,6 +56,24 @@ export interface RefreshResult {
 }
 
 // =============================================================================
+// CONSTANTS
+// =============================================================================
+
+/**
+ * Maximum entries in the content-hash dedup Set.
+ * Prevents unbounded memory growth in long-running sessions.
+ * At 16 hex chars per hash, 10,000 entries ~= 160KB.
+ * Once the cap is reached, dedup becomes best-effort (new hashes are not tracked).
+ */
+const MAX_CONTENT_HASHES = 10_000;
+
+/**
+ * Maximum number of texts accepted by seedContentHashes.
+ * Prevents CPU-intensive hashing from an unexpectedly large initial context.
+ */
+const MAX_SEED_INPUTS = 500;
+
+// =============================================================================
 // IMPLEMENTATION
 // =============================================================================
 
@@ -84,7 +104,13 @@ export class MemoryRefresher {
     if (this.retrievalCount >= this.config.maxReRetrievals) {
       if (!this.budgetExhaustedLogged) {
         this.budgetExhaustedLogged = true;
-        this.logDebug(`Re-retrieval budget exhausted (${this.config.maxReRetrievals} max) for session ${sessionId}`);
+        // Sanitize sessionId to prevent log injection (newlines, ANSI escapes)
+        const safeSessionId = sessionId.replace(/[\n\r\x1b]/g, "");
+        try {
+          getLogger().debug(`Re-retrieval budget exhausted (${this.config.maxReRetrievals} max) for session ${safeSessionId}`);
+        } catch {
+          // Logger may not be initialized in test environments
+        }
       }
       return { should: false, reason: "budget_exhausted" };
     }
@@ -97,6 +123,13 @@ export class MemoryRefresher {
         if (embedding && embedding.length > 0) {
           const current = Array.isArray(embedding) ? embedding : Array.from(embedding as ArrayLike<number>);
           if (this.lastTopicEmbedding) {
+            // Guard against dimension mismatch (e.g., provider change between calls).
+            // Mismatched lengths would produce NaN from denseCosineSimilarity;
+            // treat as a topic shift to be safe and reset the baseline.
+            if (current.length !== this.lastTopicEmbedding.length) {
+              this.lastTopicEmbedding = current;
+              return { should: true, reason: "topic_shift" };
+            }
             const similarity = denseCosineSimilarity(current, this.lastTopicEmbedding);
             const distance = 1 - similarity;
             if (distance > this.config.topicShiftThreshold) {
@@ -111,7 +144,7 @@ export class MemoryRefresher {
         // null/empty embedding: skip topic shift (known Gemini issue)
       } catch {
         // Embedding failure is non-fatal: skip topic shift detection
-        this.logDebug("Topic shift embedding failed, skipping");
+        getLogger().debug("Topic shift embedding failed, skipping");
       }
     }
 
@@ -136,44 +169,43 @@ export class MemoryRefresher {
     const start = Date.now();
     const retrievalNumber = this.retrievalCount + 1;
 
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
-      // Wrap with timeout via Promise.race; clear timer on completion to avoid leaked handles
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<RefreshResult>((_, reject) => {
+      const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
           () => reject(new Error(`Re-retrieval timed out after ${this.config.timeoutMs}ms`)),
           this.config.timeoutMs,
         );
       });
-      try {
-        const result = await Promise.race([
-          this.doRefresh(query, sessionId, reason, iteration),
-          timeoutPromise,
-        ]);
-        return result;
-      } finally {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-      }
+      return await Promise.race([
+        this.doRefresh(query, sessionId, reason, iteration),
+        timeoutPromise,
+      ]);
     } catch (error) {
       // Non-fatal: return failure result
-      this.logWarn(`Re-retrieval failed: ${error instanceof Error ? error.message : String(error)}`);
+      getLogger().warn(`Re-retrieval failed: ${error instanceof Error ? error.message : String(error)}`);
       return {
         triggered: false,
         reason: "skipped",
         durationMs: Date.now() - start,
         retrievalNumber,
       };
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   }
 
   /**
    * Seed initial content hashes so that already-injected context is not re-injected.
    * Call after initial memory/RAG retrieval with the content strings.
+   * Capped at MAX_SEED_INPUTS to prevent CPU exhaustion from unexpectedly large inputs.
    */
   seedContentHashes(texts: string[]): void {
-    for (const text of texts) {
+    const limit = Math.min(texts.length, MAX_SEED_INPUTS);
+    for (let i = 0; i < limit; i++) {
+      const text = texts[i];
       if (text) {
-        this.injectedContentHashes.add(this.contentHash(text));
+        this.trackContentHash(computeContentHash(text));
       }
     }
   }
@@ -192,6 +224,16 @@ export class MemoryRefresher {
   // ---------------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------------
+
+  /**
+   * Track a content hash in the dedup Set, respecting MAX_CONTENT_HASHES cap.
+   * Once the cap is reached, new hashes are silently dropped (dedup becomes best-effort).
+   */
+  private trackContentHash(hash: string): void {
+    if (this.injectedContentHashes.size < MAX_CONTENT_HASHES) {
+      this.injectedContentHashes.add(hash);
+    }
+  }
 
   private async doRefresh(
     query: string,
@@ -229,15 +271,12 @@ export class MemoryRefresher {
     let newMemoryContext: string | undefined;
     let newMemoryCount = 0;
     if (memoryResult.status === "fulfilled" && memoryResult.value) {
-      const results = memoryResult.value;
-      // IMemoryManager.retrieve returns Result<RetrievalResult[], Error>
-      const entries = (results as { kind: string; value?: RetrievalResult[] }).kind === "ok"
-        ? ((results as { kind: string; value: RetrievalResult[] }).value ?? [])
-        : Array.isArray(results) ? results as RetrievalResult[] : [];
+      const result = memoryResult.value;
+      const entries = isOk(result) ? result.value : [];
       const deduped = entries.filter((r) => {
-        const hash = this.contentHash(r.entry.content);
+        const hash = computeContentHash(r.entry.content);
         if (this.injectedContentHashes.has(hash)) return false;
-        this.injectedContentHashes.add(hash);
+        this.trackContentHash(hash);
         return true;
       });
       if (deduped.length > 0) {
@@ -252,9 +291,9 @@ export class MemoryRefresher {
     if (ragResult.status === "fulfilled" && ragResult.value) {
       const results = ragResult.value as SearchResult[];
       const deduped = results.filter((r) => {
-        const hash = this.contentHash(r.chunk.content);
+        const hash = computeContentHash(r.chunk.content);
         if (this.injectedContentHashes.has(hash)) return false;
-        this.injectedContentHashes.add(hash);
+        this.trackContentHash(hash);
         return true;
       });
       if (deduped.length > 0) {
@@ -272,9 +311,9 @@ export class MemoryRefresher {
     if (insightResult.status === "fulfilled" && insightResult.value) {
       const result = insightResult.value as InsightResult;
       const dedupedInsights = result.insights.filter((insight) => {
-        const hash = this.contentHash(insight);
+        const hash = computeContentHash(insight);
         if (this.injectedContentHashes.has(hash)) return false;
-        this.injectedContentHashes.add(hash);
+        this.trackContentHash(hash);
         return true;
       });
       if (dedupedInsights.length > 0) {
@@ -327,24 +366,4 @@ export class MemoryRefresher {
     };
   }
 
-  /** SHA-256 content hash truncated to 16 hex chars (matches rag-pipeline.ts pattern) */
-  private contentHash(content: string): string {
-    return createHash("sha256").update(content).digest("hex").slice(0, 16);
-  }
-
-  private logDebug(message: string): void {
-    try {
-      void import("../utils/logger.js").then(({ getLogger }) => {
-        getLogger().debug(`MemoryRefresher: ${message}`);
-      }).catch(() => {/* Logger unavailable */});
-    } catch {/* Logger unavailable */}
-  }
-
-  private logWarn(message: string): void {
-    try {
-      void import("../utils/logger.js").then(({ getLogger }) => {
-        getLogger().warn(`MemoryRefresher: ${message}`);
-      }).catch(() => {/* Logger unavailable */});
-    } catch {/* Logger unavailable */}
-  }
 }
