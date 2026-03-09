@@ -44,6 +44,9 @@ export class CommandHandler {
       case "model":
         await this.handleModel(chatId, args);
         break;
+      case "goal":
+        await this.handleGoal(chatId, args);
+        break;
     }
   }
 
@@ -116,6 +119,33 @@ export class CommandHandler {
     await this.channel.sendMarkdown(chatId, this.formatTaskDetail(task));
   }
 
+  private async handleGoal(chatId: string, args: string[]): Promise<void> {
+    if (args.length === 0) {
+      await this.channel.sendText(
+        chatId,
+        "Usage: /goal <description> | /goal list | /goal cancel [id]",
+      );
+      return;
+    }
+
+    const subcommand = args[0]!.toLowerCase();
+
+    if (subcommand === "list") {
+      await this.handleTasks(chatId);
+      return;
+    }
+
+    if (subcommand === "cancel") {
+      await this.handleCancel(chatId, args[1] as TaskId | undefined);
+      return;
+    }
+
+    // Default: submit as a goal task
+    const prompt = args.join(" ");
+    await this.taskManager.submit(chatId, "goal", prompt);
+    await this.channel.sendText(chatId, `Goal submitted: ${prompt.slice(0, 80)}`);
+  }
+
   private async handleHelp(chatId: string): Promise<void> {
     const help = [
       "*Task Commands*",
@@ -128,6 +158,12 @@ export class CommandHandler {
       "`/resume [id]` - Resume a paused task",
       "`/help` - Show this help",
       "",
+      "*Goal Commands*",
+      "",
+      "`/goal <description>` - Start a goal",
+      "`/goal list` - List goals",
+      "`/goal cancel [id]` - Cancel a goal",
+      "",
       "*Model Commands*",
       "",
       "`/model` - Show current provider/model",
@@ -136,7 +172,7 @@ export class CommandHandler {
       "`/model <provider>/<model>` - Switch provider and model",
       "`/model reset` - Return to system default",
       "",
-      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /model listele, /model sıfırla",
+      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /model listele, /model sıfırla",
       "",
       "Send any other message to start a new background task.",
     ].join("\n");

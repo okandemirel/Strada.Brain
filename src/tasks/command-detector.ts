@@ -26,6 +26,8 @@ const PREFIX_COMMANDS: Record<string, TaskCommand> = {
   "/yardim": "help",
   "/duraklat": "pause",
   "/devam": "resume",
+  "/goal": "goal",
+  "/hedef": "goal",
 };
 
 // ─── Keyword Patterns (bilingual TR/EN) ──────────────────────────────────────────
