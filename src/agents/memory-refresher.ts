@@ -167,6 +167,18 @@ export class MemoryRefresher {
   }
 
   /**
+   * Seed initial content hashes so that already-injected context is not re-injected.
+   * Call after initial memory/RAG retrieval with the content strings.
+   */
+  seedContentHashes(texts: string[]): void {
+    for (const text of texts) {
+      if (text) {
+        this.injectedContentHashes.add(this.contentHash(text));
+      }
+    }
+  }
+
+  /**
    * Reset all state (for new conversation/session).
    */
   reset(): void {

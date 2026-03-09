@@ -33,6 +33,9 @@ import { getLogger } from "../utils/logger.js";
 import { AgentPhase, createInitialState, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
 import { buildPlanningPrompt, buildReflectionPrompt, buildReplanningPrompt, buildExecutionContext } from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
+import { MemoryRefresher } from "./memory-refresher.js";
+import type { ReRetrievalConfig } from "../config/config.js";
+import type { IEmbeddingProvider } from "../rag/rag.interface.js";
 import { shouldForceReplan } from "./failure-classifier.js";
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
 import { WRITE_OPERATIONS } from "./autonomy/constants.js";
@@ -97,6 +100,8 @@ export class Orchestrator {
   /** Per-session matched instinct IDs for appliedInstinctIds attribution in tool:result events */
   private readonly currentSessionInstinctIds = new Map<string, string[]>();
   private readonly goalDecomposer: GoalDecomposer | null;
+  private readonly reRetrievalConfig?: ReRetrievalConfig;
+  private readonly embeddingProvider?: IEmbeddingProvider;
   /** Active goal trees per session for proactive/reactive decomposition */
   private readonly activeGoalTrees = new Map<string, GoalTree>();
   /** Interrupted goal trees detected on startup, pending user resume/discard decision */
@@ -124,6 +129,8 @@ export class Orchestrator {
     interruptedGoalTrees?: GoalTree[];
     getIdentityState?: () => IdentityState;
     crashRecoveryContext?: CrashRecoveryContext;
+    reRetrievalConfig?: ReRetrievalConfig;
+    embeddingProvider?: IEmbeddingProvider;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -140,6 +147,8 @@ export class Orchestrator {
     this.metricsRecorder = opts.metricsRecorder ?? null;
     this.goalDecomposer = opts.goalDecomposer ?? null;
     this.pendingResumeTrees = opts.interruptedGoalTrees ?? [];
+    this.reRetrievalConfig = opts.reRetrievalConfig;
+    this.embeddingProvider = opts.embeddingProvider;
 
     // Build tool registry
     this.tools = new Map();
@@ -265,6 +274,7 @@ export class Orchestrator {
 
     // Build system prompt with memory/RAG context
     let systemPrompt = this.systemPrompt;
+    const bgInitialContentHashes: string[] = [];
     if (this.memoryManager) {
       try {
         const memoriesResult = await this.memoryManager.retrieve({
@@ -277,7 +287,8 @@ export class Orchestrator {
           const memories = memoriesResult.value;
           if (memories.length > 0) {
             const memoryContext = memories.map((m) => m.entry.content).join("\n---\n");
-            systemPrompt += `\n\n## Relevant Memory\n${memoryContext}\n`;
+            systemPrompt += `\n\n<!-- re-retrieval:memory:start -->\n## Relevant Memory\n${memoryContext}\n<!-- re-retrieval:memory:end -->\n`;
+            for (const m of memories) bgInitialContentHashes.push(m.entry.content);
           }
         }
       } catch {
@@ -288,7 +299,9 @@ export class Orchestrator {
         try {
           const ragResults = await this.ragPipeline.search(prompt, { topK: 6, minScore: 0.2 });
           if (ragResults.length > 0) {
-            systemPrompt += this.ragPipeline.formatContext(ragResults);
+            const ragFormatted = this.ragPipeline.formatContext(ragResults);
+            systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${ragFormatted}\n<!-- re-retrieval:rag:end -->\n`;
+            for (const r of ragResults) bgInitialContentHashes.push(r.chunk.content);
           }
         } catch {
           // RAG failure is non-fatal
@@ -307,6 +320,39 @@ export class Orchestrator {
         // Non-fatal
       }
     }
+
+    // ─── Background task instinct retrieval ────────────────────────────
+    if (this.instinctRetriever) {
+      try {
+        const insightResult = await this.instinctRetriever.getInsightsForTask(prompt);
+        if (insightResult.insights && (Array.isArray(insightResult.insights) ? insightResult.insights.length > 0 : insightResult.insights)) {
+          // Store insights in system prompt for background task context
+          const insightsText = Array.isArray(insightResult.insights)
+            ? insightResult.insights.join("\n")
+            : String(insightResult.insights);
+          systemPrompt += `\n\n## Learned Insights\n${insightsText}\n`;
+        }
+      } catch {
+        // Non-fatal
+      }
+    }
+    // ────────────────────────────────────────────────────────────────
+
+    // ─── Memory Re-retrieval: create refresher for background path ───
+    let bgMemoryRefresher: MemoryRefresher | null = null;
+    if (this.reRetrievalConfig?.enabled) {
+      bgMemoryRefresher = new MemoryRefresher(this.reRetrievalConfig, {
+        memoryManager: this.memoryManager,
+        ragPipeline: this.ragPipeline,
+        instinctRetriever: this.instinctRetriever ?? undefined,
+        embeddingProvider: this.embeddingProvider,
+        eventBus: this.eventEmitter ?? undefined,
+      });
+      if (bgInitialContentHashes.length > 0) {
+        bgMemoryRefresher.seedContentHashes(bgInitialContentHashes);
+      }
+    }
+    // ────────────────────────────────────────────────────────────────
 
     // Autonomy layer
     const errorRecovery = new ErrorRecoveryEngine();
@@ -431,6 +477,27 @@ export class Orchestrator {
           role: "user",
           content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
         });
+
+        // ─── Memory Re-retrieval (background path) ───────────────────────
+        if (bgMemoryRefresher) {
+          try {
+            const check = await bgMemoryRefresher.shouldRefresh(bgIteration, prompt, chatId);
+            if (check.should) {
+              const refreshed = await bgMemoryRefresher.refresh(prompt, chatId, check.reason, bgIteration);
+              if (refreshed.triggered) {
+                if (refreshed.newMemoryContext) {
+                  systemPrompt = replaceSection(systemPrompt, "re-retrieval:memory", `## Relevant Memory\n${refreshed.newMemoryContext}`);
+                }
+                if (refreshed.newRagContext) {
+                  systemPrompt = replaceSection(systemPrompt, "re-retrieval:rag", refreshed.newRagContext);
+                }
+              }
+            }
+          } catch {
+            // Re-retrieval failure is non-fatal
+          }
+        }
+        // ─────────────────────────────────────────────────────────────────
       }
 
       // ─── Metrics: record max iterations ──────────────────────────────
@@ -652,6 +719,7 @@ export class Orchestrator {
 
     // Retrieve relevant memory context for the first iteration
     let systemPrompt = this.systemPrompt;
+    const initialContentHashes: string[] = [];
     if (this.memoryManager && session.messages.length > 0) {
       const lastUserMsg = [...session.messages]
         .reverse()
@@ -668,7 +736,8 @@ export class Orchestrator {
             const memories = memoriesResult.value;
             if (memories.length > 0) {
               const memoryContext = memories.map((m) => m.entry.content).join("\n---\n");
-              systemPrompt += `\n\n## Relevant Memory\n${memoryContext}\n`;
+              systemPrompt += `\n\n<!-- re-retrieval:memory:start -->\n## Relevant Memory\n${memoryContext}\n<!-- re-retrieval:memory:end -->\n`;
+              for (const m of memories) initialContentHashes.push(m.entry.content);
               logger.debug("Injected memory context", {
                 chatId,
                 memoryCount: memories.length,
@@ -688,7 +757,9 @@ export class Orchestrator {
               minScore: 0.2,
             });
             if (ragResults.length > 0) {
-              systemPrompt += this.ragPipeline.formatContext(ragResults);
+              const ragFormatted = this.ragPipeline.formatContext(ragResults);
+              systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${ragFormatted}\n<!-- re-retrieval:rag:end -->\n`;
+              for (const r of ragResults) initialContentHashes.push(r.chunk.content);
               logger.debug("Injected RAG context", {
                 chatId,
                 resultCount: ragResults.length,
@@ -739,6 +810,22 @@ export class Orchestrator {
     }
     // Store per-session instinct IDs for appliedInstinctIds attribution
     this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
+
+    // ─── Memory Re-retrieval: create refresher ───────────────────────
+    let memoryRefresher: MemoryRefresher | null = null;
+    if (this.reRetrievalConfig?.enabled) {
+      memoryRefresher = new MemoryRefresher(this.reRetrievalConfig, {
+        memoryManager: this.memoryManager,
+        ragPipeline: this.ragPipeline,
+        instinctRetriever: this.instinctRetriever ?? undefined,
+        embeddingProvider: this.embeddingProvider,
+        eventBus: this.eventEmitter ?? undefined,
+      });
+      if (initialContentHashes.length > 0) {
+        memoryRefresher.seedContentHashes(initialContentHashes);
+      }
+    }
+    // ────────────────────────────────────────────────────────────────
 
     // ─── Metrics: start recording ────────────────────────────────────
     const metricId = this.metricsRecorder?.startTask({
@@ -1109,6 +1196,35 @@ export class Orchestrator {
         role: "user",
         content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
       });
+
+      // ─── Memory Re-retrieval ─────────────────────────────────────────
+      if (memoryRefresher) {
+        try {
+          const recentContext = this.extractLastUserMessage(session);
+          const check = await memoryRefresher.shouldRefresh(iteration, recentContext, chatId);
+          if (check.should) {
+            const refreshed = await memoryRefresher.refresh(recentContext, chatId, check.reason, iteration);
+            if (refreshed.triggered) {
+              if (refreshed.newMemoryContext) {
+                systemPrompt = replaceSection(systemPrompt, "re-retrieval:memory", `## Relevant Memory\n${refreshed.newMemoryContext}`);
+              }
+              if (refreshed.newRagContext) {
+                systemPrompt = replaceSection(systemPrompt, "re-retrieval:rag", refreshed.newRagContext);
+              }
+              if (refreshed.newInsights?.length) {
+                agentState = { ...agentState, learnedInsights: refreshed.newInsights };
+              }
+              if (refreshed.newInstinctIds?.length) {
+                matchedInstinctIds = [...matchedInstinctIds, ...refreshed.newInstinctIds];
+                this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
+              }
+            }
+          }
+        } catch {
+          // Re-retrieval failure is non-fatal
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────
     }
 
     // Hit max iterations
@@ -1458,6 +1574,22 @@ export class Orchestrator {
       timestamp: Date.now(),
     });
   }
+}
+
+/**
+ * Replace a section delimited by XML markers in a prompt string.
+ * Markers: `<!-- {tag}:start -->` and `<!-- {tag}:end -->`.
+ * If markers are not found, appends the section.
+ */
+function replaceSection(prompt: string, tag: string, newContent: string): string {
+  const startMarker = `<!-- ${tag}:start -->`;
+  const endMarker = `<!-- ${tag}:end -->`;
+  const startIdx = prompt.indexOf(startMarker);
+  const endIdx = prompt.indexOf(endMarker);
+  if (startIdx === -1 || endIdx === -1) {
+    return prompt + `\n\n${startMarker}\n${newContent}\n${endMarker}\n`;
+  }
+  return prompt.substring(0, startIdx) + startMarker + "\n" + newContent + "\n" + endMarker + prompt.substring(endIdx + endMarker.length);
 }
 
 const REFLECTION_DECISION_RE = /\*\*\s*(DONE|REPLAN|CONTINUE)\s*\*\*/;

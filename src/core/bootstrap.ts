@@ -353,6 +353,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     interruptedGoalTrees,
     getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
     crashRecoveryContext: crashContext ?? undefined,
+    reRetrievalConfig: config.reRetrieval,
+    embeddingProvider: cachedEmbeddingProvider,
   });
 
   // Initialize tool chain synthesis (TOOL-01 through TOOL-05)
