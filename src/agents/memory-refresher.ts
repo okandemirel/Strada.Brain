@@ -137,12 +137,23 @@ export class MemoryRefresher {
     const retrievalNumber = this.retrievalCount + 1;
 
     try {
-      // Wrap with timeout via Promise.race
-      const result = await Promise.race([
-        this.doRefresh(query, sessionId, reason, iteration),
-        this.createTimeout(),
-      ]);
-      return result;
+      // Wrap with timeout via Promise.race; clear timer on completion to avoid leaked handles
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<RefreshResult>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Re-retrieval timed out after ${this.config.timeoutMs}ms`)),
+          this.config.timeoutMs,
+        );
+      });
+      try {
+        const result = await Promise.race([
+          this.doRefresh(query, sessionId, reason, iteration),
+          timeoutPromise,
+        ]);
+        return result;
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      }
     } catch (error) {
       // Non-fatal: return failure result
       this.logWarn(`Re-retrieval failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -302,15 +313,6 @@ export class MemoryRefresher {
       durationMs,
       retrievalNumber,
     };
-  }
-
-  private createTimeout(): Promise<RefreshResult> {
-    return new Promise((_, reject) => {
-      setTimeout(
-        () => reject(new Error(`Re-retrieval timed out after ${this.config.timeoutMs}ms`)),
-        this.config.timeoutMs,
-      );
-    });
   }
 
   /** SHA-256 content hash truncated to 16 hex chars (matches rag-pipeline.ts pattern) */
