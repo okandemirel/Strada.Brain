@@ -20,13 +20,7 @@ import type {
   ChecklistTriggerDef,
   ChecklistItem,
 } from "../daemon-types.js";
-
-/**
- * Floor a timestamp to the start of its minute (for same-minute dedup).
- */
-function floorToMinute(date: Date): number {
-  return Math.floor(date.getTime() / 60_000);
-}
+import { floorToMinute } from "./trigger-utils.js";
 
 export class ChecklistTrigger implements ITrigger {
   private _metadata: TriggerMetadata;

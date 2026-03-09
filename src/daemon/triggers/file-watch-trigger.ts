@@ -14,6 +14,8 @@
 
 import { basename } from "node:path";
 import { watch, type FSWatcher } from "chokidar";
+// @ts-ignore -- picomatch is a transitive dep via chokidar, no bundled types
+import picomatch from "picomatch";
 import type {
   ITrigger,
   TriggerMetadata,
@@ -33,39 +35,10 @@ const DEFAULT_DEBOUNCE_MS = 500;
 /** Default ignore patterns applied to all file watchers */
 const DEFAULT_IGNORE_PATTERNS = ["**/node_modules/**", "**/.git/**"];
 
-/**
- * Convert a simple glob pattern (e.g., '*.cs', '*.{ts,tsx}') to a RegExp
- * that matches against a filename (basename only).
- *
- * Supports: * (wildcard), ? (single char), {a,b} (alternation).
- * This avoids depending on picomatch (no type declarations available).
- */
-function globToRegex(pattern: string): RegExp {
-  let regex = "";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i]!;
-    if (ch === "*") {
-      regex += ".*";
-    } else if (ch === "?") {
-      regex += ".";
-    } else if (ch === "{") {
-      const end = pattern.indexOf("}", i);
-      if (end !== -1) {
-        const alternatives = pattern.slice(i + 1, end).split(",").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-        regex += `(?:${alternatives})`;
-        i = end;
-      } else {
-        regex += "\\{";
-      }
-    } else if (".+^$|()[]\\".includes(ch)) {
-      regex += `\\${ch}`;
-    } else {
-      regex += ch;
-    }
-    i++;
-  }
-  return new RegExp(`^${regex}$`);
+/** Build a picomatch matcher for glob pattern filtering on basenames. */
+function buildPatternMatcher(pattern: string): (filePath: string) => boolean {
+  const isMatch = picomatch(pattern) as (input: string) => boolean;
+  return (filePath: string) => isMatch(basename(filePath));
 }
 
 /**
@@ -107,8 +80,7 @@ export class FileWatchTrigger implements ITrigger {
 
     // Build glob pattern matcher if a filter pattern is provided
     if (def.pattern) {
-      const re = globToRegex(def.pattern);
-      this.patternMatcher = (filePath: string) => re.test(basename(filePath));
+      this.patternMatcher = buildPatternMatcher(def.pattern);
     } else {
       this.patternMatcher = null;
     }

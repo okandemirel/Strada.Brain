@@ -184,7 +184,8 @@ export function parseRateLimit(rateStr: string): {
 export class WebhookRateLimiter {
   private readonly maxRequests: number;
   private readonly windowMs: number;
-  private readonly timestamps: number[] = [];
+  /** Per-source sliding windows: source key -> timestamps */
+  private readonly windows = new Map<string, number[]>();
 
   constructor(maxRequests: number, windowMs: number) {
     this.maxRequests = maxRequests;
@@ -192,21 +193,43 @@ export class WebhookRateLimiter {
   }
 
   /**
-   * Check if a request is allowed at the given timestamp.
+   * Check if a request from the given source is allowed.
    * Returns true if allowed (and records the timestamp), false if rate limited.
+   * Uses per-source isolation so one caller cannot exhaust the limit for others.
    */
-  isAllowed(now: number): boolean {
-    // Remove timestamps outside the window
-    while (this.timestamps.length > 0 && this.timestamps[0]! <= now - this.windowMs) {
-      this.timestamps.shift();
+  isAllowed(now: number, source: string = "global"): boolean {
+    let timestamps = this.windows.get(source);
+    if (!timestamps) {
+      timestamps = [];
+      this.windows.set(source, timestamps);
     }
 
-    if (this.timestamps.length >= this.maxRequests) {
+    // Advance past expired entries using a head pointer (O(1) amortized)
+    let head = 0;
+    while (head < timestamps.length && timestamps[head]! <= now - this.windowMs) {
+      head++;
+    }
+    if (head > 0) {
+      timestamps.splice(0, head);
+    }
+
+    if (timestamps.length >= this.maxRequests) {
       return false;
     }
 
-    this.timestamps.push(now);
+    timestamps.push(now);
     return true;
+  }
+
+  /**
+   * Clean up stale per-source windows (call periodically if needed).
+   */
+  cleanup(now: number): void {
+    for (const [source, timestamps] of this.windows) {
+      if (timestamps.length === 0 || timestamps[timestamps.length - 1]! <= now - this.windowMs) {
+        this.windows.delete(source);
+      }
+    }
   }
 }
 

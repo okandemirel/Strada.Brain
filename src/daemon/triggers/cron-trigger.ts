@@ -17,13 +17,7 @@ import type {
   TriggerMetadata,
   TriggerState,
 } from "../daemon-types.js";
-
-/**
- * Floor a timestamp to the start of its minute (for same-minute comparison).
- */
-function floorToMinute(date: Date): number {
-  return Math.floor(date.getTime() / 60_000);
-}
+import { floorToMinute } from "./trigger-utils.js";
 
 export class CronTrigger implements ITrigger {
   readonly metadata: TriggerMetadata;

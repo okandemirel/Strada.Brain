@@ -447,6 +447,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     }
     // Type-routed trigger creation from HEARTBEAT.md definitions
     const webhookTriggers = new Map<string, WebhookTrigger>();
+    const typeCounts = new Map<string, number>();
     try {
       const content = readFileSync(heartbeatPath, "utf-8");
       const triggerDefs = parseHeartbeatFile(content, {
@@ -494,13 +495,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
             continue;
         }
         triggerRegistry.register(trigger);
+        typeCounts.set(def.type, (typeCounts.get(def.type) ?? 0) + 1);
       }
 
       // Log startup summary with trigger counts by type
-      const typeCounts = new Map<string, number>();
-      for (const t of triggerRegistry.getAll()) {
-        typeCounts.set(t.metadata.type, (typeCounts.get(t.metadata.type) ?? 0) + 1);
-      }
       logger.info("Daemon triggers loaded", {
         total: triggerRegistry.count(),
         byType: Object.fromEntries(typeCounts),
