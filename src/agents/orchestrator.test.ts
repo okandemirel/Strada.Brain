@@ -816,6 +816,190 @@ describe("Orchestrator", () => {
     });
   });
 
+  describe("Goal Detection Short-Circuit", () => {
+    it("submits goal via taskManager when LLM response contains valid goal block", async () => {
+      const mockTaskManager = {
+        submit: vi.fn().mockReturnValue({ id: "task_abc123" }),
+      };
+
+      const goalOrch = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+      goalOrch.setTaskManager(mockTaskManager as any);
+
+      // LLM returns a plan with a goal block
+      const planWithGoal = `Plan:
+1. Set up database schema
+2. Create API endpoints
+3. Add authentication
+
+\`\`\`goal
+{"isGoal": true, "estimatedMinutes": 5, "nodes": [{"id": "s1", "task": "Set up database schema", "dependsOn": []}, {"id": "s2", "task": "Create API endpoints", "dependsOn": ["s1"]}, {"id": "s3", "task": "Add authentication", "dependsOn": ["s2"]}]}
+\`\`\``;
+
+      mockProvider.chat.mockResolvedValueOnce({
+        text: planWithGoal,
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 50, outputTokens: 100 },
+      });
+
+      const promise = goalOrch.handleMessage({
+        channelType: "cli",
+        chatId: "goal-detect-1",
+        userId: "user1",
+        text: "Build a REST API with database and auth",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // Should have submitted via taskManager with goalTree
+      expect(mockTaskManager.submit).toHaveBeenCalledWith(
+        "goal-detect-1",
+        "cli",
+        "Build a REST API with database and auth",
+        expect.objectContaining({ goalTree: expect.any(Object) }),
+      );
+    });
+
+    it("continues normal PAOR when no goal block in response", async () => {
+      const mockTaskManager = {
+        submit: vi.fn(),
+      };
+
+      const goalOrch = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+      goalOrch.setTaskManager(mockTaskManager as any);
+
+      // LLM returns a simple response (no goal block)
+      mockProvider.chat.mockResolvedValueOnce({
+        text: "Hello! How can I help you today?",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+      const promise = goalOrch.handleMessage({
+        channelType: "cli",
+        chatId: "goal-detect-2",
+        userId: "user1",
+        text: "What is TypeScript?",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // TaskManager should NOT have been called
+      expect(mockTaskManager.submit).not.toHaveBeenCalled();
+      // Normal response sent
+      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("goal-detect-2", "Hello! How can I help you today?");
+    });
+
+    it("sends acknowledgment message before submitting goal", async () => {
+      const mockTaskManager = {
+        submit: vi.fn().mockReturnValue({ id: "task_def456" }),
+      };
+
+      const goalOrch = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+      goalOrch.setTaskManager(mockTaskManager as any);
+
+      const planWithGoal = `Plan with goal:
+\`\`\`goal
+{"isGoal": true, "estimatedMinutes": 10, "nodes": [{"id": "s1", "task": "Step one", "dependsOn": []}]}
+\`\`\``;
+
+      mockProvider.chat.mockResolvedValueOnce({
+        text: planWithGoal,
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 50, outputTokens: 100 },
+      });
+
+      const promise = goalOrch.handleMessage({
+        channelType: "cli",
+        chatId: "goal-detect-3",
+        userId: "user1",
+        text: "Deploy the application",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // Acknowledgment should have been sent via sendText before submit
+      expect(mockChannel.sendText).toHaveBeenCalledWith(
+        "goal-detect-3",
+        expect.stringContaining("Deploy the application"),
+      );
+      // And it should mention steps and estimated time
+      const ackCall = mockChannel.sendText.mock.calls.find(
+        (c: any[]) => c[0] === "goal-detect-3" && c[1].includes("step"),
+      );
+      expect(ackCall).toBeDefined();
+    });
+
+    it("returns immediately after goal submission (short-circuit)", async () => {
+      const mockTaskManager = {
+        submit: vi.fn().mockReturnValue({ id: "task_ghi789" }),
+      };
+
+      const goalOrch = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+      goalOrch.setTaskManager(mockTaskManager as any);
+
+      const planWithGoal = `Plan:
+\`\`\`goal
+{"isGoal": true, "estimatedMinutes": 3, "nodes": [{"id": "s1", "task": "Do stuff", "dependsOn": []}]}
+\`\`\``;
+
+      mockProvider.chat.mockResolvedValueOnce({
+        text: planWithGoal,
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 50, outputTokens: 100 },
+      });
+
+      const promise = goalOrch.handleMessage({
+        channelType: "cli",
+        chatId: "goal-detect-4",
+        userId: "user1",
+        text: "Build something complex",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // Only one LLM call (plan phase) -- no EXECUTING phase
+      expect(mockProvider.chat).toHaveBeenCalledTimes(1);
+      // TaskManager was called
+      expect(mockTaskManager.submit).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("PAOR State Machine", () => {
     it("injects planning prompt on first call", async () => {
       const chatSpy = vi.fn()

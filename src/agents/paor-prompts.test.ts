@@ -164,3 +164,31 @@ describe("buildExecutionContext", () => {
     expect(result).toContain("3");
   });
 });
+
+describe("buildPlanningPrompt - Goal Classification", () => {
+  it("includes Goal Classification section when enableGoalDetection is true", () => {
+    const result = buildPlanningPrompt("Build a REST API", undefined, { enableGoalDetection: true });
+    expect(result).toContain("Goal Classification");
+    expect(result).toContain("goal");
+    expect(result).toContain("isGoal");
+  });
+
+  it("does NOT include goal classification when enableGoalDetection is false", () => {
+    const result = buildPlanningPrompt("Build a REST API", undefined, { enableGoalDetection: false });
+    expect(result).not.toContain("Goal Classification");
+  });
+
+  it("does NOT include goal classification when options is undefined", () => {
+    const result = buildPlanningPrompt("Build a REST API");
+    expect(result).not.toContain("Goal Classification");
+  });
+
+  it("includes both learned insights AND goal classification when both provided", () => {
+    const insights = ["Use TypeScript strictly", "Always add error handling"];
+    const result = buildPlanningPrompt("Build API", insights, { enableGoalDetection: true });
+    expect(result).toContain("Learned Patterns");
+    expect(result).toContain("Use TypeScript strictly");
+    expect(result).toContain("Goal Classification");
+    expect(result).toContain("isGoal");
+  });
+});

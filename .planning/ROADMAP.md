@@ -142,12 +142,12 @@ Plans:
   2. During multi-step execution, user sees progress reports for each completed goal step
   3. When a goal subtree fails, it re-decomposes with current context instead of simply failing
   4. When failure budget is exhausted, user receives an escalation prompt asking how to proceed
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 16-01: TBD
-- [ ] 16-02: TBD
-- [ ] 16-03: TBD
+- [ ] 16-01-PLAN.md -- Types, config, events, storage migration, /goal command foundation
+- [ ] 16-02-PLAN.md -- PAOR goal detection short-circuit + pre-decomposed tree path + wave progress
+- [ ] 16-03-PLAN.md -- LLM-driven re-decomposition on failure + enhanced escalation with auto-abort
 
 ### Phase 17: Dynamic Memory Re-retrieval
 **Goal**: Agent refreshes its memory context during long execution loops to prevent stale reasoning
@@ -214,8 +214,8 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 12. Persistent Identity + Startup Recovery | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 13. Cross-Session Learning Transfer | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 14. Heartbeat Daemon Loop | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
-| 15. Proactive Triggers | 3/3 | Complete   | 2026-03-09 | - |
-| 16. Interactive Goal Execution + Replanning | v2.0 | 0/TBD | Not started | - |
+| 15. Proactive Triggers | 3/3 | Complete    | 2026-03-09 | - |
+| 16. Interactive Goal Execution + Replanning | 1/3 | In Progress|  | - |
 | 17. Dynamic Memory Re-retrieval | v2.0 | 0/TBD | Not started | - |
 | 18. Dual Reporting + Dashboard | v2.0 | 0/TBD | Not started | - |
 | 19. Tool Validation Feedback Loop | v2.0 | 0/TBD | Not started | - |

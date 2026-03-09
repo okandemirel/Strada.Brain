@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
-status: completed
-stopped_at: Completed 15-03 WebhookTrigger, dedup integration, end-to-end wiring
-last_updated: "2026-03-09T12:07:00.000Z"
-last_activity: 2026-03-09 -- Completed Phase 15 (Proactive Triggers)
+status: in_progress
+stopped_at: Completed 16-01-PLAN.md
+last_updated: "2026-03-09T14:58:51.058Z"
+last_activity: 2026-03-09 -- Completed Phase 16 Plan 01 (Type Contracts)
 progress:
   total_phases: 10
   completed_phases: 6
-  total_plans: 16
-  completed_plans: 16
-  percent: 100
+  total_plans: 19
+  completed_plans: 17
+  percent: 89
 ---
 
 # State: Strada.Brain
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 15 -- Proactive Triggers (COMPLETE)
+**Current focus:** Phase 16 -- Interactive Goal Execution & Replanning
 
 ## Current Position
 
-Phase: 15 of 19 (Proactive Triggers)
-Plan: 3 of 3
-Status: Phase 15 complete
-Last activity: 2026-03-09 -- Completed Phase 15 (Proactive Triggers)
+Phase: 16 of 19 (Interactive Goal Execution & Replanning)
+Plan: 1 of 3
+Status: Plan 01 complete, Plan 02 next
+Last activity: 2026-03-09 -- Completed Phase 16 Plan 01 (Type Contracts)
 
-Progress: [██████████] 100%
+Progress: [█████████░] 89%
 
 ## Performance Metrics
 
@@ -49,11 +49,10 @@ Progress: [██████████] 100%
 | 13 | 3/3 | 24min | 8min |
 | 14 | 5/5 | 27min | 5.4min |
 | 15 | 3/3 | 19min | 6.3min |
+| 16 | 1/3 | 6min | 6min |
 
 *Updated after each plan completion*
-| Phase 15 P01 | 7min | 3 tasks | 8 files |
-| Phase 15 P02 | 5min | 2 tasks | 4 files |
-| Phase 15 P03 | 7min | 2 tasks | 7 files |
+| Phase 16 P01 | 6min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -132,6 +131,9 @@ Recent decisions affecting current work:
 - [15-03]: Promise.allSettled for trigger dispose on stop() -- fire-and-forget keeps stop() sync
 - [15-03]: TriggerMetadata.cooldownSeconds optional field for per-trigger dedup cooldown
 - [15-03]: Typed event emission in HeartbeatLoop for WebSocket broadcasting
+- [16-01]: GoalBlockOutput uses triple-backtick goal fenced block pattern for LLM response parsing
+- [16-01]: GoalConfig nested under Config.goal with STRATA_GOAL_* env var prefix
+- [16-01]: /goal command is explicit-only (no keyword patterns) -- NL detection deferred to Orchestrator
 
 ### Pending Todos
 
@@ -144,9 +146,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T12:07:00.000Z
-Stopped at: Completed Phase 15 (Proactive Triggers) -- all 3 plans done
-Resume file: None
+Last session: 2026-03-09T14:57:49Z
+Stopped at: Completed 16-01-PLAN.md
+Resume file: .planning/phases/16-interactive-goal-execution-replanning/16-02-PLAN.md
 
 ---
 *State initialized: 2026-03-06*
