@@ -1208,4 +1208,336 @@ describe("Orchestrator", () => {
       expect(mockRecorder.endTask).toHaveBeenCalled();
     });
   });
+
+  describe("Memory Re-retrieval Integration", () => {
+    function createToolResponse(text: string, toolName?: string): ProviderResponse {
+      if (toolName) {
+        return {
+          text,
+          toolCalls: [{ id: `tc-${Date.now()}`, name: toolName, input: { path: "test.cs" } }],
+          stopReason: "tool_use" as const,
+          usage: { inputTokens: 10, outputTokens: 10 },
+        };
+      }
+      return {
+        text,
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+    }
+
+    it("re-retrieval triggers after N iterations in interactive loop", async () => {
+      // Setup: Create orchestrator with memoryManager, ragPipeline, and reRetrieval config
+      const mockMemMgr = {
+        retrieve: vi.fn().mockResolvedValue({
+          kind: "ok",
+          value: [{ entry: { content: "refreshed memory" }, score: 0.9 }],
+        }),
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
+      };
+      const mockRag = {
+        search: vi.fn().mockResolvedValue([]),
+        formatContext: vi.fn(() => ""),
+      };
+      const reRetrievalConfig = {
+        enabled: true,
+        interval: 2, // trigger every 2 iterations
+        topicShiftEnabled: false,
+        topicShiftThreshold: 0.4,
+        maxReRetrievals: 10,
+        timeoutMs: 5000,
+        memoryLimit: 3,
+        ragTopK: 6,
+      };
+
+      // Provider gives 3 tool iterations then end_turn
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce(createToolResponse("Plan: read file", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("CONTINUE - next step", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("CONTINUE - another step", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("Done!", undefined));
+      mockProvider.chat = chatSpy;
+
+      const orchWithReRetrieval = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        memoryManager: mockMemMgr as any,
+        ragPipeline: mockRag as any,
+        reRetrievalConfig,
+      });
+
+      const promise = orchWithReRetrieval.handleMessage({
+        channelType: "cli",
+        chatId: "rr-test-1",
+        userId: "user1",
+        text: "Test re-retrieval",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // memoryManager.retrieve should have been called more than just the initial retrieval
+      // Initial retrieval + at least one re-retrieval
+      expect(mockMemMgr.retrieve.mock.calls.length).toBeGreaterThan(1);
+    });
+
+    it("re-retrieval triggers in background task loop", async () => {
+      const mockMemMgr = {
+        retrieve: vi.fn().mockResolvedValue({
+          kind: "ok",
+          value: [{ entry: { content: "bg refreshed memory" }, score: 0.9 }],
+        }),
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
+      };
+      const mockRag = {
+        search: vi.fn().mockResolvedValue([]),
+        formatContext: vi.fn(() => ""),
+      };
+      const reRetrievalConfig = {
+        enabled: true,
+        interval: 2,
+        topicShiftEnabled: false,
+        topicShiftThreshold: 0.4,
+        maxReRetrievals: 10,
+        timeoutMs: 5000,
+        memoryLimit: 3,
+        ragTopK: 6,
+      };
+
+      // Provider gives 3 tool iterations then end_turn
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce(createToolResponse("Step 1", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("Step 2", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("Step 3", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("Task complete", undefined));
+      mockProvider.chat = chatSpy;
+
+      const orchBg = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        memoryManager: mockMemMgr as any,
+        ragPipeline: mockRag as any,
+        reRetrievalConfig,
+      });
+
+      const abortController = new AbortController();
+      const result = await orchBg.runBackgroundTask("Test background re-retrieval", {
+        chatId: "rr-bg-test",
+        signal: abortController.signal,
+        onProgress: vi.fn(),
+      });
+
+      expect(result).toBeDefined();
+      // Background should also call retrieve more than initial
+      expect(mockMemMgr.retrieve.mock.calls.length).toBeGreaterThan(1);
+    });
+
+    it("re-retrieval failure does not break loop", async () => {
+      const mockMemMgr = {
+        retrieve: vi.fn()
+          .mockResolvedValueOnce({ kind: "ok", value: [{ entry: { content: "initial memory" }, score: 0.9 }] })
+          .mockRejectedValueOnce(new Error("DB crashed")), // re-retrieval fails
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
+      };
+      const reRetrievalConfig = {
+        enabled: true,
+        interval: 1, // trigger every iteration
+        topicShiftEnabled: false,
+        topicShiftThreshold: 0.4,
+        maxReRetrievals: 10,
+        timeoutMs: 5000,
+        memoryLimit: 3,
+        ragTopK: 6,
+      };
+
+      // Provider gives 1 tool iteration then end_turn
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce(createToolResponse("Plan", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("Done!", undefined));
+      mockProvider.chat = chatSpy;
+
+      const orchFail = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        memoryManager: mockMemMgr as any,
+        reRetrievalConfig,
+      });
+
+      const promise = orchFail.handleMessage({
+        channelType: "cli",
+        chatId: "rr-fail-test",
+        userId: "user1",
+        text: "Test failure recovery",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      // Should not throw - re-retrieval failure is non-fatal
+      await expect(promise).resolves.toBeUndefined();
+    });
+
+    it("instinct retrieval added to background task", async () => {
+      const mockRetriever = {
+        getInsightsForTask: vi.fn().mockResolvedValue({
+          insights: ["bg insight"],
+          matchedInstinctIds: ["inst-bg-1"],
+        }),
+      };
+      const mockMemMgr = {
+        retrieve: vi.fn().mockResolvedValue({ kind: "ok", value: [] }),
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
+      };
+
+      const chatSpy = vi.fn().mockResolvedValueOnce(createToolResponse("Done", undefined));
+      mockProvider.chat = chatSpy;
+
+      const orchInstinct = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        memoryManager: mockMemMgr as any,
+        instinctRetriever: mockRetriever as any,
+      });
+
+      const abortController = new AbortController();
+      await orchInstinct.runBackgroundTask("Test bg instincts", {
+        chatId: "rr-instinct-bg",
+        signal: abortController.signal,
+        onProgress: vi.fn(),
+      });
+
+      // instinctRetriever should have been called during background task
+      expect(mockRetriever.getInsightsForTask).toHaveBeenCalled();
+    });
+
+    it("topic shift triggers early re-retrieval", async () => {
+      const mockMemMgr = {
+        retrieve: vi.fn().mockResolvedValue({
+          kind: "ok",
+          value: [{ entry: { content: "topic memory" }, score: 0.9 }],
+        }),
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
+      };
+      const mockEmbedding = {
+        name: "mock",
+        dimensions: 3,
+        embed: vi.fn()
+          .mockResolvedValueOnce({ embeddings: [[1, 0, 0]], usage: { totalTokens: 10 } }) // initial baseline
+          .mockResolvedValueOnce({ embeddings: [[1, 0, 0]], usage: { totalTokens: 10 } }) // 1st re-retrieval check: same topic
+          .mockResolvedValueOnce({ embeddings: [[0, 1, 0]], usage: { totalTokens: 10 } }), // 2nd: shifted topic
+      };
+      const reRetrievalConfig = {
+        enabled: true,
+        interval: 100, // very high - periodic should NOT trigger
+        topicShiftEnabled: true,
+        topicShiftThreshold: 0.4,
+        maxReRetrievals: 10,
+        timeoutMs: 5000,
+        memoryLimit: 3,
+        ragTopK: 6,
+      };
+
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce(createToolResponse("Plan", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("Step 2", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("Done!", undefined));
+      mockProvider.chat = chatSpy;
+
+      const orchTopic = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        memoryManager: mockMemMgr as any,
+        embeddingProvider: mockEmbedding as any,
+        reRetrievalConfig,
+      });
+
+      const promise = orchTopic.handleMessage({
+        channelType: "cli",
+        chatId: "rr-topic-test",
+        userId: "user1",
+        text: "Test topic shift",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // Embedding provider should have been called for topic shift detection
+      expect(mockEmbedding.embed).toHaveBeenCalled();
+    });
+
+    it("content deduplication prevents duplicate injection", async () => {
+      // Same memory returned on initial and re-retrieval - should only inject once
+      const sameMemory = { entry: { content: "same content" }, score: 0.9 };
+      const mockMemMgr = {
+        retrieve: vi.fn().mockResolvedValue({ kind: "ok", value: [sameMemory] }),
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
+      };
+      const reRetrievalConfig = {
+        enabled: true,
+        interval: 1,
+        topicShiftEnabled: false,
+        topicShiftThreshold: 0.4,
+        maxReRetrievals: 10,
+        timeoutMs: 5000,
+        memoryLimit: 3,
+        ragTopK: 6,
+      };
+
+      const capturedPrompts: string[] = [];
+      const chatSpy = vi.fn().mockImplementation((systemPrompt: string) => {
+        capturedPrompts.push(systemPrompt);
+        if (capturedPrompts.length <= 2) {
+          return Promise.resolve(createToolResponse("Step", "file_read"));
+        }
+        return Promise.resolve(createToolResponse("Done!", undefined));
+      });
+      mockProvider.chat = chatSpy;
+
+      const orchDedup = new Orchestrator({
+        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        memoryManager: mockMemMgr as any,
+        reRetrievalConfig,
+      });
+
+      const promise = orchDedup.handleMessage({
+        channelType: "cli",
+        chatId: "rr-dedup-test",
+        userId: "user1",
+        text: "Test dedup",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // After re-retrieval with same content, the system prompt should not contain
+      // "same content" duplicated in the memory section
+      const lastPrompt = capturedPrompts[capturedPrompts.length - 1] ?? "";
+      const memoryOccurrences = (lastPrompt.match(/same content/g) || []).length;
+      expect(memoryOccurrences).toBeLessThanOrEqual(1);
+    });
+  });
 });

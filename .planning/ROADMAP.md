@@ -36,7 +36,7 @@
 - [x] **Phase 14: Heartbeat Daemon Loop** - Core daemon loop with trigger evaluation, security policy, and cost guards (completed 2026-03-08)
 - [x] **Phase 15: Proactive Triggers** - File watcher, webhook, checklist, and deduplication extend the daemon's senses (completed 2026-03-09)
 - [x] **Phase 16: Interactive Goal Execution + Replanning** - Goals execute inline during chat with mid-execution replanning (completed 2026-03-09)
-- [ ] **Phase 17: Dynamic Memory Re-retrieval** - Context refreshes during long PAOR loops to prevent stale reasoning
+- [ ] **Phase 17: Dynamic Memory Re-retrieval** - Context refreshes during long PAOR loops to prevent stale reasoning (1/2 plans complete)
 - [ ] **Phase 18: Dual Reporting + Dashboard** - Periodic digest to chat and daemon endpoint on dashboard
 - [ ] **Phase 19: Tool Validation Feedback Loop** - Composite tools validated post-synthesis with auto-deprecation on failure
 
@@ -157,11 +157,11 @@ Plans:
   1. During long PAOR loops, memory context is refreshed every N iterations (configurable)
   2. When the current topic shifts significantly (cosine distance above threshold), memory re-retrieval triggers automatically
   3. Re-retrieved memories are deduplicated against already-injected context
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 17-01: TBD
-- [ ] 17-02: TBD
+- [x] 17-01-PLAN.md -- Config schema, event types, MemoryRefresher class with unit/stress/perf tests
+- [ ] 17-02-PLAN.md -- Orchestrator integration (interactive + background loops), E2E tests, .env.example
 
 ### Phase 18: Dual Reporting + Dashboard
 **Goal**: Users get visibility into daemon behavior through periodic chat digests and a real-time dashboard endpoint
@@ -215,8 +215,8 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 13. Cross-Session Learning Transfer | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 14. Heartbeat Daemon Loop | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 15. Proactive Triggers | 3/3 | Complete    | 2026-03-09 | - |
-| 16. Interactive Goal Execution + Replanning | 3/3 | Complete   | 2026-03-09 | - |
-| 17. Dynamic Memory Re-retrieval | v2.0 | 0/TBD | Not started | - |
+| 16. Interactive Goal Execution + Replanning | 3/3 | Complete    | 2026-03-09 | - |
+| 17. Dynamic Memory Re-retrieval | v2.0 | 1/2 | In progress | - |
 | 18. Dual Reporting + Dashboard | v2.0 | 0/TBD | Not started | - |
 | 19. Tool Validation Feedback Loop | v2.0 | 0/TBD | Not started | - |
 

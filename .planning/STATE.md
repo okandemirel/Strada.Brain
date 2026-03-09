@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
-status: in_progress
-stopped_at: Completed 16-03-PLAN.md
-last_updated: "2026-03-09T15:32:04Z"
-last_activity: 2026-03-09 -- Completed Phase 16 Plan 03 (Failure Recovery & Enhanced Escalation)
+status: in-progress
+stopped_at: Completed 17-01-PLAN.md
+last_updated: "2026-03-09T19:41:48Z"
+last_activity: 2026-03-09 -- Completed Phase 17 Plan 01 (MemoryRefresher Engine)
 progress:
   total_phases: 10
   completed_phases: 7
-  total_plans: 19
-  completed_plans: 19
-  percent: 100
+  total_plans: 21
+  completed_plans: 20
+  percent: 95
 ---
 
 # State: Strada.Brain
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 16 complete -- ready for Phase 17 (Dynamic Memory Re-retrieval)
+**Current focus:** Phase 17 in progress -- MemoryRefresher engine complete, orchestrator integration next
 
 ## Current Position
 
-Phase: 16 of 19 (Interactive Goal Execution & Replanning)
-Plan: 3 of 3
-Status: Phase 16 complete
-Last activity: 2026-03-09 -- Completed Phase 16 Plan 03 (Failure Recovery & Enhanced Escalation)
+Phase: 17 of 19 (Dynamic Memory Re-retrieval)
+Plan: 1 of 2
+Status: Plan 17-01 complete
+Last activity: 2026-03-09 -- Completed Phase 17 Plan 01 (MemoryRefresher Engine)
 
-Progress: [██████████] 100%
+Progress: [█████████░] 95%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 19 (v2.0) / 43 (lifetime)
-- Average duration: 5.89min (v2.0)
-- Total execution time: 112min (v2.0)
+- Total plans completed: 20 (v2.0) / 44 (lifetime)
+- Average duration: 6.0min (v2.0)
+- Total execution time: 120min (v2.0)
 
 **By Phase:**
 
@@ -50,11 +50,13 @@ Progress: [██████████] 100%
 | 14 | 5/5 | 27min | 5.4min |
 | 15 | 3/3 | 19min | 6.3min |
 | 16 | 3/3 | 26min | 8.7min |
+| 17 | 1/2 | 8min | 8min |
 
 *Updated after each plan completion*
 | Phase 16 P01 | 6min | 2 tasks | 10 files |
 | Phase 16 P02 | 9min | 2 tasks | 9 files |
 | Phase 16 P03 | 11min | 2 tasks | 5 files |
+| Phase 17 P01 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -145,6 +147,11 @@ Recent decisions affecting current work:
 - [16-03]: Re-decomposition is silent -- no user notification, only learning events emitted
 - [16-03]: Escalation auto-abort uses Promise.race with configurable timeout from GoalConfig
 - [16-03]: Non-interactive channels auto-abort immediately with text progress report
+- [17-01]: Content hash uses SHA-256 truncated to 16 hex chars matching rag-pipeline.ts pattern
+- [17-01]: All MemoryRefresherDeps optional for graceful degradation -- missing dep = skipped source
+- [17-01]: Promise.race timeout with try/finally clearTimeout to prevent leaked timer handles
+- [17-01]: Budget exhaustion logged only once per session to prevent log spam
+- [17-01]: Null/empty embeddings from Gemini skip topic shift silently (known issue)
 
 ### Pending Todos
 
@@ -157,9 +164,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T15:32:04Z
-Stopped at: Completed 16-03-PLAN.md
-Resume file: Phase 17 planning next
+Last session: 2026-03-09T19:41:48Z
+Stopped at: Completed 17-01-PLAN.md
+Resume file: .planning/phases/17-dynamic-memory-re-retrieval/17-02-PLAN.md
 
 ---
 *State initialized: 2026-03-06*
