@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: in-progress
-stopped_at: Completed 14-04-PLAN.md
-last_updated: "2026-03-08T20:13:04Z"
-last_activity: 2026-03-08 -- Completed 14-04 HeartbeatLoop & Bootstrap Wiring
+stopped_at: Completed 14-05-PLAN.md
+last_updated: "2026-03-08T20:28:29Z"
+last_activity: 2026-03-08 -- Completed 14-05 Daemon CLI & Dashboard Surface
 progress:
   total_phases: 10
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 13
-  completed_plans: 12
-  percent: 85
+  completed_plans: 13
+  percent: 90
 ---
 
 # State: Strada.Brain
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 14 -- Heartbeat Daemon Loop (IN PROGRESS)
+**Current focus:** Phase 14 -- Heartbeat Daemon Loop (COMPLETE)
 
 ## Current Position
 
 Phase: 14 of 19 (Heartbeat Daemon Loop)
-Plan: 4 of 5
-Status: Plan 14-04 complete
-Last activity: 2026-03-08 -- Completed 14-04 HeartbeatLoop & Bootstrap Wiring
+Plan: 5 of 5
+Status: Phase 14 complete
+Last activity: 2026-03-08 -- Completed 14-05 Daemon CLI & Dashboard Surface
 
-Progress: [█████████░] 85%
+Progress: [██████████] 90%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12 (v2.0) / 36 (lifetime)
-- Average duration: 5.3min (v2.0)
-- Total execution time: 63min (v2.0)
+- Total plans completed: 13 (v2.0) / 37 (lifetime)
+- Average duration: 5.6min (v2.0)
+- Total execution time: 73min (v2.0)
 
 **By Phase:**
 
@@ -47,7 +47,7 @@ Progress: [█████████░] 85%
 | 11 | 2 | 7min | 3.5min |
 | 12 | 2/2 | 10min | 5min |
 | 13 | 3/3 | 24min | 8min |
-| 14 | 4/5 | 17min | 4.3min |
+| 14 | 5/5 | 27min | 5.4min |
 
 *Updated after each plan completion*
 
@@ -106,6 +106,9 @@ Recent decisions affecting current work:
 - [14-04]: Overlap suppression via activeTriggerTasks Map -- skips triggers with active tasks
 - [14-04]: Budget exceeded/warning events emit only once per state change (de-duplicated)
 - [14-04]: securityPolicy injected as dependency for future use, accessed via getSecurityPolicy()
+- [14-05]: Old gateway 'daemon' CLI command renamed to 'supervise' to free namespace for management subcommands
+- [14-05]: Lazy heartbeatLoopRef pattern for AgentStatusTool DI (tool registry inits before daemon)
+- [14-05]: Budget info in dashboard accessed via getDaemonStatus() -- no direct BudgetTracker dependency
 
 ### Pending Todos
 
@@ -118,9 +121,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T20:13:04Z
-Stopped at: Completed 14-04-PLAN.md
-Resume file: .planning/phases/14-heartbeat-daemon-loop/14-04-SUMMARY.md
+Last session: 2026-03-08T20:28:29Z
+Stopped at: Completed 14-05-PLAN.md (Phase 14 complete)
+Resume file: .planning/phases/14-heartbeat-daemon-loop/14-05-SUMMARY.md
 
 ---
 *State initialized: 2026-03-06*

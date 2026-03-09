@@ -22,6 +22,7 @@ import type { BudgetTracker } from "./budget/budget-tracker.js";
 import type { ApprovalQueue } from "./security/approval-queue.js";
 import type { DaemonStorage } from "./daemon-storage.js";
 import type { DaemonConfig } from "./daemon-types.js";
+import type { CircuitBreaker } from "./resilience/circuit-breaker.js";
 
 /**
  * Context for daemon CLI commands. Provided via callback since daemon
@@ -160,14 +161,7 @@ export function registerDaemonCommands(
       cb.reset();
 
       // Persist reset state
-      const snap = cb.serialize();
-      ctx.storage.upsertCircuitState(
-        name,
-        snap.state,
-        snap.consecutiveFailures,
-        snap.lastFailureTime,
-        snap.cooldownMs,
-      );
+      persistCircuitState(ctx.storage, name, cb);
 
       console.log(`Circuit breaker for '${name}' reset to CLOSED`);
     });
@@ -243,12 +237,12 @@ export function registerDaemonCommands(
         ["heartbeat.intervalMs", String(c.heartbeat.intervalMs), "STRATA_DAEMON_INTERVAL_MS"],
         ["heartbeat.heartbeatFile", c.heartbeat.heartbeatFile, "STRATA_DAEMON_HEARTBEAT_FILE"],
         ["heartbeat.idlePause", String(c.heartbeat.idlePause), "STRATA_DAEMON_IDLE_PAUSE"],
-        ["security.approvalTimeoutMin", String(c.security.approvalTimeoutMin), "STRATA_DAEMON_APPROVAL_TIMEOUT_MIN"],
+        ["security.approvalTimeoutMin", String(c.security.approvalTimeoutMin), "STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
         ["security.autoApproveTools", c.security.autoApproveTools.join(", ") || "(none)", "STRATA_DAEMON_AUTO_APPROVE_TOOLS"],
-        ["budget.dailyBudgetUsd", c.budget.dailyBudgetUsd !== undefined ? String(c.budget.dailyBudgetUsd) : "unlimited", "STRATA_DAEMON_DAILY_BUDGET_USD"],
-        ["budget.warnPct", String(c.budget.warnPct), "STRATA_DAEMON_WARN_PCT"],
-        ["backoff.baseCooldownMs", String(c.backoff.baseCooldownMs), "STRATA_DAEMON_BASE_COOLDOWN_MS"],
-        ["backoff.maxCooldownMs", String(c.backoff.maxCooldownMs), "STRATA_DAEMON_MAX_COOLDOWN_MS"],
+        ["budget.dailyBudgetUsd", c.budget.dailyBudgetUsd !== undefined ? String(c.budget.dailyBudgetUsd) : "unlimited", "STRATA_DAEMON_DAILY_BUDGET"],
+        ["budget.warnPct", String(c.budget.warnPct), "STRATA_DAEMON_BUDGET_WARN_PCT"],
+        ["backoff.baseCooldownMs", String(c.backoff.baseCooldownMs), "STRATA_DAEMON_BACKOFF_BASE"],
+        ["backoff.maxCooldownMs", String(c.backoff.maxCooldownMs), "STRATA_DAEMON_BACKOFF_MAX"],
         ["backoff.failureThreshold", String(c.backoff.failureThreshold), "STRATA_DAEMON_FAILURE_THRESHOLD"],
         ["timezone", c.timezone, "STRATA_DAEMON_TIMEZONE"],
       ];
@@ -287,6 +281,11 @@ export function registerDaemonCommands(
 // =============================================================================
 // Helpers
 // =============================================================================
+
+function persistCircuitState(storage: DaemonStorage, name: string, cb: CircuitBreaker): void {
+  const snap = cb.serialize();
+  storage.upsertCircuitState(name, snap.state, snap.consecutiveFailures, snap.lastFailureTime, snap.cooldownMs);
+}
 
 function padRight(str: string, width: number): string {
   if (str.length >= width) return str + " ";

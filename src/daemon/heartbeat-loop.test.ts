@@ -66,10 +66,12 @@ function makeTaskManager() {
 }
 
 function makeBudgetTracker(exceeded = false, warning = false) {
+  const pct = exceeded ? 1.5 : warning ? 0.85 : 0;
+  const usedUsd = exceeded ? 15 : warning ? 8.5 : 0;
   return {
     isExceeded: vi.fn(() => exceeded),
     isWarning: vi.fn(() => warning),
-    getUsage: vi.fn(() => ({ usedUsd: 0, limitUsd: 10, pct: 0 })),
+    getUsage: vi.fn(() => ({ usedUsd, limitUsd: 10, pct })),
     recordCost: vi.fn(),
     resetBudget: vi.fn(),
   };

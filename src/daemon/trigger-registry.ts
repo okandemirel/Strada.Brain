@@ -53,7 +53,11 @@ export class TriggerRegistry {
    * Includes active, paused, and backed_off -- excludes only 'disabled'.
    */
   getActive(): ITrigger[] {
-    return this.getAll().filter((t) => t.getState() !== "disabled");
+    const result: ITrigger[] = [];
+    for (const t of this.triggers.values()) {
+      if (t.getState() !== "disabled") result.push(t);
+    }
+    return result;
   }
 
   /**

@@ -2,6 +2,7 @@ import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.j
 import type { MetricsCollector } from "../../dashboard/metrics.js";
 import type { IdentityState } from "../../identity/identity-state.js";
 import { formatDowntime } from "../../identity/crash-recovery.js";
+import type { DaemonStatusSnapshot } from "../../daemon/daemon-types.js";
 import { buildSection, unavailableSection, checkToolRateLimit } from "./introspection-helpers.js";
 
 /**
@@ -41,15 +42,7 @@ export class AgentStatusTool implements ITool {
     | { totalEntries: number; hasAnalysisCache: boolean }
     | undefined;
   private readonly getIdentityState?: () => IdentityState | undefined;
-  private readonly getDaemonStatus?: () =>
-    | {
-        running: boolean;
-        intervalMs: number;
-        triggerCount: number;
-        lastTick: Date | null;
-        budgetUsage: { usedUsd: number; limitUsd: number | undefined; pct: number };
-      }
-    | undefined;
+  private readonly getDaemonStatus?: () => DaemonStatusSnapshot | undefined;
 
   constructor(
     metrics: MetricsCollector,
@@ -59,15 +52,7 @@ export class AgentStatusTool implements ITool {
       | { totalEntries: number; hasAnalysisCache: boolean }
       | undefined,
     getIdentityState?: () => IdentityState | undefined,
-    getDaemonStatus?: () =>
-      | {
-          running: boolean;
-          intervalMs: number;
-          triggerCount: number;
-          lastTick: Date | null;
-          budgetUsage: { usedUsd: number; limitUsd: number | undefined; pct: number };
-        }
-      | undefined,
+    getDaemonStatus?: () => DaemonStatusSnapshot | undefined,
   ) {
     this.metrics = metrics;
     this.getToolCount = getToolCount;

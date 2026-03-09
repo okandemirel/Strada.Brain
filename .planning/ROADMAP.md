@@ -33,7 +33,7 @@
 - [x] **Phase 11: LLM Self-Awareness + Identity Foundation** - Agent knows its own capabilities and can introspect its state (completed 2026-03-08)
 - [x] **Phase 12: Persistent Identity + Startup Recovery** - Agent persists identity across restarts and recovers from crashes (completed 2026-03-08)
 - [x] **Phase 13: Cross-Session Learning Transfer** - Instincts flow across sessions with provenance and project-scope filtering (completed 2026-03-08)
-- [ ] **Phase 14: Heartbeat Daemon Loop** - Core daemon loop with trigger evaluation, security policy, and cost guards
+- [x] **Phase 14: Heartbeat Daemon Loop** - Core daemon loop with trigger evaluation, security policy, and cost guards (completed 2026-03-08)
 - [ ] **Phase 15: Proactive Triggers** - File watcher, webhook, checklist, and deduplication extend the daemon's senses
 - [ ] **Phase 16: Interactive Goal Execution + Replanning** - Goals execute inline during chat with mid-execution replanning
 - [ ] **Phase 17: Dynamic Memory Re-retrieval** - Context refreshes during long PAOR loops to prevent stale reasoning
@@ -115,7 +115,7 @@ Plans:
 - [x] 14-02-PLAN.md -- CircuitBreaker, HEARTBEAT.md parser, CronTrigger, TriggerRegistry
 - [x] 14-03-PLAN.md -- BudgetTracker, DaemonSecurityPolicy, ApprovalQueue
 - [x] 14-04-PLAN.md -- HeartbeatLoop core + bootstrap wiring + --daemon CLI flag
-- [ ] 14-05-PLAN.md -- Daemon CLI commands + dashboard /api/daemon + AgentStatusTool extension
+- [x] 14-05-PLAN.md -- Daemon CLI commands + dashboard /api/daemon + AgentStatusTool extension
 
 ### Phase 15: Proactive Triggers
 **Goal**: Daemon responds to real-world events through file changes, webhooks, checklists, and deduplication
@@ -212,7 +212,7 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 11. LLM Self-Awareness + Identity Foundation | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 12. Persistent Identity + Startup Recovery | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 13. Cross-Session Learning Transfer | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
-| 14. Heartbeat Daemon Loop | v2.0 | 4/5 | In Progress | - |
+| 14. Heartbeat Daemon Loop | v2.0 | 5/5 | Complete | 2026-03-08 |
 | 15. Proactive Triggers | v2.0 | 0/TBD | Not started | - |
 | 16. Interactive Goal Execution + Replanning | v2.0 | 0/TBD | Not started | - |
 | 17. Dynamic Memory Re-retrieval | v2.0 | 0/TBD | Not started | - |

@@ -67,32 +67,14 @@ export class ApprovalQueue {
    * Approve a pending request.
    */
   approve(id: string, decidedBy?: string): void {
-    this.storage.updateApprovalDecision(id, "approved", decidedBy);
-
-    this.insertAuditForDecision(id, "approved", decidedBy);
-
-    this.eventBus?.emit("daemon:approval_decided", {
-      approvalId: id,
-      decision: "approved",
-      decidedBy,
-      timestamp: Date.now(),
-    });
+    this.decide(id, "approved", decidedBy);
   }
 
   /**
    * Deny a pending request.
    */
   deny(id: string, decidedBy?: string): void {
-    this.storage.updateApprovalDecision(id, "denied", decidedBy);
-
-    this.insertAuditForDecision(id, "denied", decidedBy);
-
-    this.eventBus?.emit("daemon:approval_decided", {
-      approvalId: id,
-      decision: "denied",
-      decidedBy,
-      timestamp: Date.now(),
-    });
+    this.decide(id, "denied", decidedBy);
   }
 
   /**
@@ -140,20 +122,24 @@ export class ApprovalQueue {
   // Private Helpers
   // =========================================================================
 
-  private insertAuditForDecision(
-    id: string,
-    decision: string,
-    decidedBy?: string,
-  ): void {
+  private decide(id: string, decision: "approved" | "denied", decidedBy?: string): void {
     const entry = this.storage.getApprovalById(id);
     if (!entry) return;
 
+    this.storage.updateApprovalDecision(id, decision, decidedBy);
     this.storage.insertAuditEntry({
       toolName: entry.toolName,
       paramsSummary: this.summarizeParams(entry.params),
       decision,
       decidedBy,
       triggerName: entry.triggerName,
+      timestamp: Date.now(),
+    });
+
+    this.eventBus?.emit("daemon:approval_decided", {
+      approvalId: id,
+      decision,
+      decidedBy,
       timestamp: Date.now(),
     });
   }

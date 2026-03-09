@@ -29,7 +29,7 @@ import { resolveEmbeddingProvider, collectApiKeys } from "../rag/embeddings/embe
 import { RateLimiter } from "../security/rate-limiter.js";
 import type { DIContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
-import { AppError } from "../common/errors.js";
+import { AppError, MissingConfigError } from "../common/errors.js";
 import { checkStradaDeps } from "../config/strada-deps.js";
 import {
   SESSION_CLEANUP_INTERVAL_MS,
@@ -248,8 +248,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   }
 
   // Initialize tool registry now that all deps are available
-  // getDaemonStatus uses callback-based DI -- heartbeatLoop is set later in daemon init
-  let heartbeatLoopRef: HeartbeatLoop | undefined;
+  // getDaemonStatus closure captures heartbeatLoop (declared below) via late binding
+  let heartbeatLoop: HeartbeatLoop | undefined;
+  let daemonContext: import("../daemon/daemon-cli.js").DaemonContext | undefined;
   await toolRegistry.initialize(config, {
     memoryManager,
     ragPipeline,
@@ -259,7 +260,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     getIdentityState: identityManager
       ? () => identityManager!.getState()
       : undefined,
-    getDaemonStatus: () => heartbeatLoopRef?.getDaemonStatus(),
+    getDaemonStatus: () => heartbeatLoop?.getDaemonStatus(),
   });
 
   // Initialize goal decomposition system (GOAL-01, GOAL-02)
@@ -404,18 +405,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   new ProgressReporter(channel, taskManager);
 
   // Initialize daemon heartbeat loop (if daemon mode enabled)
-  let heartbeatLoop: HeartbeatLoop | undefined;
-  let daemonContext: import("../daemon/daemon-cli.js").DaemonContext | undefined;
   if (options.daemonMode) {
     const daemonConfig = config.daemon;
 
     // Validate budget is configured (required for daemon mode)
     if (!daemonConfig.budget.dailyBudgetUsd) {
-      throw new AppError(
-        "STRATA_DAEMON_DAILY_BUDGET is required for daemon mode",
-        "DAEMON_CONFIG_ERROR",
-        400,
-      );
+      throw new MissingConfigError("STRATA_DAEMON_DAILY_BUDGET");
     }
 
     // Initialize daemon storage
@@ -442,7 +437,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
     // Parse HEARTBEAT.md and register triggers
     const heartbeatPath = daemonConfig.heartbeat.heartbeatFile;
-    if (existsSync(heartbeatPath)) {
+    try {
       const content = readFileSync(heartbeatPath, "utf-8");
       const triggerDefs = parseHeartbeatFile(content);
       for (const def of triggerDefs) {
@@ -458,8 +453,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         count: triggerRegistry.count(),
         file: heartbeatPath,
       });
-    } else {
-      logger.warn("HEARTBEAT.md not found", { path: heartbeatPath });
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        logger.warn("HEARTBEAT.md not found", { path: heartbeatPath });
+      } else {
+        throw err;
+      }
     }
 
     // Create HeartbeatLoop
@@ -475,9 +474,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       daemonConfig,
       logger,
     );
-
-    // Set heartbeat loop ref for AgentStatusTool callback-based DI (Plan 05)
-    heartbeatLoopRef = heartbeatLoop;
 
     // Build daemon context for CLI commands (Plan 05)
     daemonContext = {
@@ -497,13 +493,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       }
     }
 
-    // Start heartbeat
+    // Start heartbeat (HeartbeatLoop.start() logs startup details)
     heartbeatLoop.start();
-    logger.info("Daemon heartbeat started", {
-      intervalMs: daemonConfig.heartbeat.intervalMs,
-      triggers: triggerRegistry.count(),
-      budget: `$${daemonConfig.budget.dailyBudgetUsd}`,
-    });
 
     // Wire daemon context into dashboard (Plan 05)
     if (dashboard) {

@@ -24,7 +24,7 @@ import type { BudgetTracker } from "./budget/budget-tracker.js";
 import type { DaemonSecurityPolicy } from "./security/daemon-security-policy.js";
 import type { ApprovalQueue } from "./security/approval-queue.js";
 import type { DaemonStorage } from "./daemon-storage.js";
-import type { DaemonConfig } from "./daemon-types.js";
+import type { DaemonConfig, DaemonStatusSnapshot } from "./daemon-types.js";
 import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
 import type { TaskId } from "../tasks/types.js";
@@ -121,14 +121,7 @@ export class HeartbeatLoop {
 
     // Persist all circuit breaker states
     for (const [name, cb] of this.circuitBreakers) {
-      const snap = cb.serialize();
-      this.storage.upsertCircuitState(
-        name,
-        snap.state,
-        snap.consecutiveFailures,
-        snap.lastFailureTime,
-        snap.cooldownMs,
-      );
+      this.persistCircuitState(name, cb);
     }
 
     this.storage.setDaemonState("daemon_was_running", "false");
@@ -156,6 +149,9 @@ export class HeartbeatLoop {
       triggerCount: triggers.length,
     });
 
+    // Get budget usage once per tick (avoids up to 3 SQLite queries)
+    const budgetUsage = this.budgetTracker.getUsage();
+
     // Sequential evaluation -- prevents budget race conditions
     for (const trigger of triggers) {
       const name = trigger.metadata.name;
@@ -170,12 +166,11 @@ export class HeartbeatLoop {
       }
 
       // 3. Check budget
-      if (this.budgetTracker.isExceeded()) {
+      if (budgetUsage.pct >= 1.0) {
         if (!this.budgetExceededEmitted) {
-          const usage = this.budgetTracker.getUsage();
           this.eventBus.emit("daemon:budget_exceeded", {
-            usedUsd: usage.usedUsd,
-            limitUsd: usage.limitUsd ?? 0,
+            usedUsd: budgetUsage.usedUsd,
+            limitUsd: budgetUsage.limitUsd ?? 0,
             timestamp: now.getTime(),
           });
           this.budgetExceededEmitted = true;
@@ -184,12 +179,11 @@ export class HeartbeatLoop {
       }
 
       // 4. Check warning threshold
-      if (this.budgetTracker.isWarning() && !this.budgetWarningEmitted) {
-        const usage = this.budgetTracker.getUsage();
+      if (budgetUsage.pct >= this.config.budget.warnPct && !this.budgetWarningEmitted) {
         this.eventBus.emit("daemon:budget_warning", {
-          usedUsd: usage.usedUsd,
-          limitUsd: usage.limitUsd ?? 0,
-          pct: usage.pct,
+          usedUsd: budgetUsage.usedUsd,
+          limitUsd: budgetUsage.limitUsd ?? 0,
+          pct: budgetUsage.pct,
           timestamp: now.getTime(),
         });
         this.budgetWarningEmitted = true;
@@ -228,16 +222,7 @@ export class HeartbeatLoop {
 
           // Record circuit breaker success
           cb.recordSuccess();
-
-          // Persist circuit breaker state
-          const snap = cb.serialize();
-          this.storage.upsertCircuitState(
-            name,
-            snap.state,
-            snap.consecutiveFailures,
-            snap.lastFailureTime,
-            snap.cooldownMs,
-          );
+          this.persistCircuitState(name, cb);
 
           // Record activity in identity manager
           this.identityManager?.recordActivity();
@@ -257,16 +242,7 @@ export class HeartbeatLoop {
       } catch (error) {
         // Record circuit breaker failure
         cb.recordFailure();
-
-        // Persist circuit breaker state
-        const snap = cb.serialize();
-        this.storage.upsertCircuitState(
-          name,
-          snap.state,
-          snap.consecutiveFailures,
-          snap.lastFailureTime,
-          snap.cooldownMs,
-        );
+        this.persistCircuitState(name, cb);
 
         // Emit trigger failed event
         this.eventBus.emit("daemon:trigger_failed", {
@@ -298,13 +274,7 @@ export class HeartbeatLoop {
   /**
    * Returns the current daemon status for AgentStatusTool (Plan 05).
    */
-  getDaemonStatus(): {
-    running: boolean;
-    intervalMs: number;
-    triggerCount: number;
-    lastTick: Date | null;
-    budgetUsage: { usedUsd: number; limitUsd: number | undefined; pct: number };
-  } {
+  getDaemonStatus(): DaemonStatusSnapshot {
     return {
       running: this.running,
       intervalMs: this.config.heartbeat.intervalMs,
@@ -331,6 +301,17 @@ export class HeartbeatLoop {
   // ===========================================================================
   // Private
   // ===========================================================================
+
+  private persistCircuitState(name: string, cb: CircuitBreaker): void {
+    const snap = cb.serialize();
+    this.storage.upsertCircuitState(
+      name,
+      snap.state,
+      snap.consecutiveFailures,
+      snap.lastFailureTime,
+      snap.cooldownMs,
+    );
+  }
 
   private getOrCreateCircuitBreaker(triggerName: string): CircuitBreaker {
     let cb = this.circuitBreakers.get(triggerName);

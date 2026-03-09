@@ -129,6 +129,19 @@ export interface AuditEntry {
 }
 
 // =============================================================================
+// DAEMON STATUS SNAPSHOT
+// =============================================================================
+
+/** Status snapshot returned by HeartbeatLoop for introspection tools and dashboard */
+export interface DaemonStatusSnapshot {
+  running: boolean;
+  intervalMs: number;
+  triggerCount: number;
+  lastTick: Date | null;
+  budgetUsage: { usedUsd: number; limitUsd: number | undefined; pct: number };
+}
+
+// =============================================================================
 // BUDGET TRACKING
 // =============================================================================
 
