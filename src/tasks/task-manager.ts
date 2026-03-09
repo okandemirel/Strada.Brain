@@ -13,6 +13,7 @@ import type { TaskStorage } from "./task-storage.js";
 import type { BackgroundExecutor } from "./background-executor.js";
 import { getLogger } from "../utils/logger.js";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
+import type { GoalTree } from "../goals/types.js";
 
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
@@ -34,7 +35,7 @@ export class TaskManager extends EventEmitter {
     chatId: string,
     channelType: string,
     prompt: string,
-    options?: { origin?: TaskOrigin },
+    options?: { origin?: TaskOrigin; goalTree?: GoalTree },
   ): Task {
     const logger = getLogger();
     const now = Date.now();
@@ -50,6 +51,7 @@ export class TaskManager extends EventEmitter {
       createdAt: now,
       updatedAt: now,
       origin: options?.origin ?? "user",
+      goalTree: options?.goalTree,
     };
 
     this.storage.save(task);

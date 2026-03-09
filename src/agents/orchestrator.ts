@@ -42,7 +42,9 @@ import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import { renderGoalTree, summarizeTree } from "../goals/goal-renderer.js";
 import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.js";
-import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
+import type { GoalTree, GoalNode, GoalNodeId, GoalStatus } from "../goals/types.js";
+import { parseGoalBlock, generateGoalNodeId } from "../goals/types.js";
+import type { TaskManager } from "../tasks/task-manager.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -99,6 +101,8 @@ export class Orchestrator {
   private readonly activeGoalTrees = new Map<string, GoalTree>();
   /** Interrupted goal trees detected on startup, pending user resume/discard decision */
   private pendingResumeTrees: GoalTree[];
+  /** TaskManager reference for inline goal detection submission (lazy setter) */
+  private taskManager: TaskManager | null = null;
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -190,6 +194,14 @@ export class Orchestrator {
     if (idx >= 0) {
       this.toolDefinitions.splice(idx, 1);
     }
+  }
+
+  /**
+   * Set the task manager reference for inline goal detection submission.
+   * Uses lazy setter pattern to avoid circular dependency (same as BackgroundExecutor).
+   */
+  setTaskManager(tm: TaskManager): void {
+    this.taskManager = tm;
   }
 
   /**
@@ -617,7 +629,7 @@ export class Orchestrator {
     }, TYPING_INTERVAL_MS);
 
     try {
-      await this.runAgentLoop(chatId, session);
+      await this.runAgentLoop(chatId, session, msg.channelType);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
@@ -634,7 +646,7 @@ export class Orchestrator {
   /**
    * The core agent loop: LLM → Tool calls → LLM → ... → Response
    */
-  private async runAgentLoop(chatId: string, session: Session): Promise<void> {
+  private async runAgentLoop(chatId: string, session: Session, channelType?: string): Promise<void> {
     const logger = getLogger();
     const provider = this.providerManager.getProvider(chatId);
 
@@ -753,7 +765,11 @@ export class Orchestrator {
       let activePrompt = systemPrompt;
       switch (agentState.phase) {
         case AgentPhase.PLANNING:
-          activePrompt += "\n\n" + buildPlanningPrompt(agentState.taskDescription, agentState.learnedInsights);
+          activePrompt += "\n\n" + buildPlanningPrompt(
+            agentState.taskDescription,
+            agentState.learnedInsights,
+            { enableGoalDetection: !!this.taskManager },
+          );
           break;
         case AgentPhase.EXECUTING:
           activePrompt += buildExecutionContext(agentState);
@@ -882,6 +898,58 @@ export class Orchestrator {
         }
       }
       // ────────────────────────────────────────────────────────────────
+
+      // ─── Goal Detection: check for goal block in Plan phase response ───
+      // Must run BEFORE end_turn early return since goal detection responses
+      // may have no tool calls but should short-circuit to background execution.
+      if (agentState.phase === AgentPhase.PLANNING && this.taskManager) {
+        const goalBlock = parseGoalBlock(response.text ?? "");
+        if (goalBlock && goalBlock.isGoal) {
+          // Build GoalTree from LLM output
+          const rootId = generateGoalNodeId();
+          const now = Date.now();
+          const nodes = new Map<GoalNodeId, GoalNode>();
+          nodes.set(rootId, {
+            id: rootId, parentId: null, task: lastUserMessage,
+            dependsOn: [], depth: 0, status: "pending", createdAt: now, updatedAt: now,
+          });
+          const idMap = new Map<string, GoalNodeId>();
+          for (const n of goalBlock.nodes) { idMap.set(n.id, generateGoalNodeId()); }
+          for (const n of goalBlock.nodes) {
+            const nodeId = idMap.get(n.id)!;
+            nodes.set(nodeId, {
+              id: nodeId, parentId: rootId, task: n.task,
+              dependsOn: n.dependsOn.map(d => idMap.get(d)).filter((d): d is GoalNodeId => !!d),
+              depth: 1, status: "pending", createdAt: now, updatedAt: now,
+            });
+          }
+          const goalTree: GoalTree = {
+            rootId, sessionId: chatId, taskDescription: lastUserMessage,
+            planSummary: response.text ?? undefined, nodes, createdAt: now,
+          };
+
+          // Send acknowledgment
+          const nodeCount = goalTree.nodes.size - 1;
+          const ackMsg = `Working on: ${lastUserMessage.slice(0, 80)}` +
+            ` (${nodeCount} step${nodeCount !== 1 ? "s" : ""}, ~${goalBlock.estimatedMinutes} min). I'll update you as I go.`;
+          await this.channel.sendText(chatId, ackMsg);
+
+          // Submit as background task with pre-decomposed tree
+          this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, { goalTree });
+
+          // Record metric end for the interactive session (goal runs separately)
+          this.recordMetricEnd(metricId, {
+            agentPhase: AgentPhase.COMPLETE,
+            iterations: agentState.iteration,
+            toolCallCount: 0,
+            hitMaxIterations: false,
+          });
+
+          // Short-circuit: return immediately, session lock releases
+          return;
+        }
+      }
+      // ────────────────────────────────────────────────────────────────────
 
       // If no tool calls, send the final text response
       // (streaming already sent it, so skip for streamed end_turn)

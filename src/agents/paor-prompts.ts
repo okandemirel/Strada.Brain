@@ -3,10 +3,13 @@ import type { AgentState } from "./agent-state.js";
 /**
  * Builds a planning prompt that asks the LLM to create a numbered plan.
  * Optionally includes learned insights from previous iterations.
+ * When enableGoalDetection is true, appends goal classification instructions
+ * so the LLM can identify complex multi-step goals in the same call.
  */
 export function buildPlanningPrompt(
   taskDescription: string,
   learnedInsights?: readonly string[],
+  options?: { enableGoalDetection?: boolean },
 ): string {
   const lines: string[] = [
     "## PLAN Phase",
@@ -24,6 +27,26 @@ export function buildPlanningPrompt(
     for (const insight of learnedInsights) {
       lines.push(`- ${insight}`);
     }
+  }
+
+  if (options?.enableGoalDetection) {
+    lines.push(
+      "",
+      "### Goal Classification",
+      "",
+      "After creating the plan, evaluate if this request is a complex multi-step goal",
+      "that would benefit from autonomous background execution (3+ steps, multiple tools, or",
+      "significant time investment).",
+      "",
+      "If YES (complex goal worth autonomous execution), also output a goal tree:",
+      "```goal",
+      '{"isGoal": true, "estimatedMinutes": N, "nodes": [{"id": "s1", "task": "...", "dependsOn": []}]}',
+      "```",
+      "",
+      "If NO (simple question, quick action, single tool call), do NOT output a goal block.",
+      "Most messages are NOT goals. Only classify as a goal when the task genuinely requires",
+      "multiple independent steps that benefit from background parallel execution.",
+    );
   }
 
   return lines.join("\n");
