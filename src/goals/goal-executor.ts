@@ -123,6 +123,8 @@ export class GoalExecutor {
       onStatusChange?: OnNodeStatusChange;
       criticalityEvaluator?: CriticalityEvaluator;
       onFailureBudgetExceeded?: OnFailureBudgetExceeded;
+      /** Called after each wave of parallel nodes completes */
+      onWaveComplete?: (tree: GoalTree, waveIndex: number) => void;
     },
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
@@ -273,6 +275,7 @@ export class GoalExecutor {
     };
 
     // Main execution loop: find ready nodes and execute in waves
+    let waveNumber = 0;
     while (!aborted) {
       if (signal.aborted) {
         skipAllPending();
@@ -330,6 +333,10 @@ export class GoalExecutor {
           await executeNode(nodeId);
         }
       }
+
+      // Wave complete callback
+      waveNumber++;
+      opts?.onWaveComplete?.(buildTree(), waveNumber);
 
       // Check failure budget after each wave
       if (failureCount >= this.config.maxFailures) {

@@ -9,6 +9,10 @@
  * into goal trees. When GoalExecutor is available, executes sub-goals
  * in parallel waves with LLM criticality evaluation, failure budget UX,
  * channel-adaptive progress updates, and persistent tree state.
+ *
+ * Supports pre-decomposed goal trees (from inline goal detection) to
+ * skip redundant LLM decomposition. Emits goal lifecycle events to
+ * DaemonEventBus for WebSocket dashboard broadcasting.
  */
 
 import type { Task } from "./types.js";
@@ -30,6 +34,8 @@ import { renderGoalTree } from "../goals/goal-renderer.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import { supportsInteractivity } from "../channels/channel.interface.js";
+import type { IEventEmitter } from "../core/event-bus.js";
+import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import { getLogger } from "../utils/logger.js";
 
 const LLM_TIMEOUT_MS = 10_000;
@@ -64,6 +70,7 @@ export interface BackgroundExecutorOptions {
   goalExecutorConfig?: GoalExecutorConfig;
   aiProvider?: IAIProvider;
   channel?: IChannelAdapter;
+  daemonEventBus?: IEventEmitter<DaemonEventMap>;
 }
 
 export class BackgroundExecutor {
@@ -77,6 +84,7 @@ export class BackgroundExecutor {
   private readonly goalExecutorConfig?: GoalExecutorConfig;
   private readonly aiProvider?: IAIProvider;
   private readonly channel?: IChannelAdapter;
+  private daemonEventBus?: IEventEmitter<DaemonEventMap>;
 
   constructor(opts: BackgroundExecutorOptions) {
     this.orchestrator = opts.orchestrator;
@@ -86,6 +94,7 @@ export class BackgroundExecutor {
     this.goalExecutorConfig = opts.goalExecutorConfig;
     this.aiProvider = opts.aiProvider;
     this.channel = opts.channel;
+    this.daemonEventBus = opts.daemonEventBus;
   }
 
   /**
@@ -93,6 +102,13 @@ export class BackgroundExecutor {
    */
   setTaskManager(manager: TaskManager): void {
     this.taskManager = manager;
+  }
+
+  /**
+   * Set the daemon event bus for goal lifecycle events (lazy setter for daemon mode).
+   */
+  setDaemonEventBus(bus: IEventEmitter<DaemonEventMap>): void {
+    this.daemonEventBus = bus;
   }
 
   private static readonly MAX_QUEUE_SIZE = 100;
@@ -142,6 +158,14 @@ export class BackgroundExecutor {
     onProgress("Task started");
 
     try {
+      // Check for pre-decomposed goal tree (from inline goal detection)
+      if (task.goalTree) {
+        const result = await this.executeDecomposed(task, signal, onProgress, task.goalTree);
+        if (signal.aborted) return;
+        this.taskManager.complete(task.id, result);
+        return;
+      }
+
       // Check if task should be decomposed into subtasks
       if (this.decomposer?.shouldDecompose(task.prompt)) {
         const result = await this.executeDecomposed(task, signal, onProgress);
@@ -158,7 +182,7 @@ export class BackgroundExecutor {
       });
 
       if (signal.aborted) {
-        // Already cancelled — don't overwrite the cancelled status
+        // Already cancelled -- don't overwrite the cancelled status
         return;
       }
 
@@ -178,20 +202,35 @@ export class BackgroundExecutor {
    * Decompose a task into a goal tree, execute via GoalExecutor with parallel
    * wave-based execution, LLM criticality evaluation, failure budget UX,
    * channel-adaptive progress updates, and persistent tree state.
+   *
+   * When preBuiltTree is provided (from inline goal detection), uses it directly
+   * instead of calling decomposer.decomposeProactive -- zero extra LLM cost.
    */
   private async executeDecomposed(
     task: Task,
     signal: AbortSignal,
     onProgress: (message: string) => void,
+    preBuiltTree?: GoalTree,
   ): Promise<string> {
     const logger = getLogger();
+    const startTime = Date.now();
 
-    // Decompose the task into a goal tree
-    const goalTree = await this.decomposer!.decomposeProactive(task.chatId, task.prompt);
+    // Use pre-built tree if provided, otherwise decompose
+    const goalTree = preBuiltTree ?? await this.decomposer!.decomposeProactive(task.chatId, task.prompt);
     const nodeCount = goalTree.nodes.size - 1; // exclude root
-    logger.info("Task decomposed into goal tree", { taskId: task.id, nodeCount });
+    logger.info("Task decomposed into goal tree", { taskId: task.id, nodeCount, preBuilt: !!preBuiltTree });
     onProgress(`Decomposed into ${nodeCount} sub-goals`);
     onProgress(renderGoalTree(goalTree));
+
+    // Emit goal:started event
+    if (this.daemonEventBus) {
+      this.daemonEventBus.emit("goal:started", {
+        rootId: goalTree.rootId,
+        taskDescription: goalTree.taskDescription,
+        nodeCount,
+        timestamp: Date.now(),
+      });
+    }
 
     // Persist initial tree state
     if (this.goalStorage) {
@@ -240,6 +279,26 @@ export class BackgroundExecutor {
         const progress = calculateProgress(updatedTree);
         const progressContent = renderProgressBar(progress.completed, progress.total) + "\n" + renderGoalTree(updatedTree);
         onProgress(progressContent);
+      }
+    };
+
+    // Wave completion callback for progress and daemon events
+    let waveNumber = 0;
+    const onWaveComplete = (updatedTree: GoalTree): void => {
+      waveNumber++;
+      const progress = calculateProgress(updatedTree);
+      const progressContent = renderProgressBar(progress.completed, progress.total) + "\n" + renderGoalTree(updatedTree);
+      onProgress(progressContent);
+
+      // Emit daemon event
+      if (this.daemonEventBus) {
+        this.daemonEventBus.emit("goal:wave_complete", {
+          rootId: goalTree.rootId,
+          waveIndex: waveNumber,
+          completedCount: progress.completed,
+          totalCount: progress.total,
+          timestamp: Date.now(),
+        });
       }
     };
 
@@ -353,6 +412,7 @@ Provide a brief diagnosis (what likely went wrong) and actionable next steps.`,
       onStatusChange,
       criticalityEvaluator,
       onFailureBudgetExceeded,
+      onWaveComplete,
     });
 
     // Persist final tree state
@@ -363,6 +423,20 @@ Provide a brief diagnosis (what likely went wrong) and actionable next steps.`,
       } catch (e) {
         logger.debug("Goal tree final persistence failed", { error: e instanceof Error ? e.message : String(e) });
       }
+    }
+
+    // Emit goal:complete event
+    const durationMs = Date.now() - startTime;
+    if (this.daemonEventBus) {
+      const successCount = result.results.filter(r => r.result && !r.error).length;
+      this.daemonEventBus.emit("goal:complete", {
+        rootId: goalTree.rootId,
+        taskDescription: goalTree.taskDescription,
+        durationMs,
+        successCount,
+        failureCount: result.failureCount,
+        timestamp: Date.now(),
+      });
     }
 
     // Combine results

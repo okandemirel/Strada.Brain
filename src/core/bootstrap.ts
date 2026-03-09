@@ -402,6 +402,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   });
   const taskManager = new TaskManager(taskStorage, backgroundExecutor);
   backgroundExecutor.setTaskManager(taskManager);
+  orchestrator.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
 
   const commandHandler = new CommandHandler(taskManager, channel, providerManager);
@@ -425,6 +426,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
     // Create event bus for daemon events (separate from learning event bus)
     const daemonEventBus = new TypedEventBus<DaemonEventMap>();
+
+    // Wire daemon event bus to background executor for goal lifecycle events
+    backgroundExecutor.setDaemonEventBus(daemonEventBus);
 
     // Create subsystems
     const triggerRegistry = new TriggerRegistry();
