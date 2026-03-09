@@ -471,7 +471,7 @@ export class Orchestrator {
           try {
             const check = await bgMemoryRefresher.shouldRefresh(bgIteration, prompt, chatId);
             if (check.should) {
-              const refreshed = await bgMemoryRefresher.refresh(prompt, chatId, check.reason, bgIteration);
+              const refreshed = await bgMemoryRefresher.refresh(prompt, chatId, check.reason, bgIteration, check.cosineDistance);
               if (refreshed.triggered) {
                 if (refreshed.newMemoryContext) {
                   systemPrompt = replaceSection(systemPrompt, "re-retrieval:memory", `## Relevant Memory\n${refreshed.newMemoryContext}`);
@@ -1179,7 +1179,7 @@ export class Orchestrator {
           const recentContext = this.extractLastUserMessage(session);
           const check = await memoryRefresher.shouldRefresh(iteration, recentContext, chatId);
           if (check.should) {
-            const refreshed = await memoryRefresher.refresh(recentContext, chatId, check.reason, iteration);
+            const refreshed = await memoryRefresher.refresh(recentContext, chatId, check.reason, iteration, check.cosineDistance);
             if (refreshed.triggered) {
               if (refreshed.newMemoryContext) {
                 systemPrompt = replaceSection(systemPrompt, "re-retrieval:memory", `## Relevant Memory\n${refreshed.newMemoryContext}`);

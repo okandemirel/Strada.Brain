@@ -41,6 +41,8 @@ export type RefreshReason = "periodic" | "topic_shift" | "budget_exhausted" | "n
 export interface ShouldRefreshResult {
   readonly should: boolean;
   readonly reason: RefreshReason;
+  /** Cosine distance when reason is 'topic_shift' (for event emission) */
+  readonly cosineDistance?: number;
 }
 
 /** Result from a refresh() call */
@@ -115,7 +117,12 @@ export class MemoryRefresher {
       return { should: false, reason: "budget_exhausted" };
     }
 
-    // Topic shift detection
+    // Periodic check first — if due, skip topic shift to avoid unnecessary embedding API call
+    if (iteration >= this.lastRetrievalIteration + this.config.interval) {
+      return { should: true, reason: "periodic" };
+    }
+
+    // Topic shift detection (only as early trigger between periodic intervals)
     if (this.config.topicShiftEnabled && this.deps.embeddingProvider) {
       try {
         const batch = await this.deps.embeddingProvider.embed([recentContext]);
@@ -128,14 +135,14 @@ export class MemoryRefresher {
             // treat as a topic shift to be safe and reset the baseline.
             if (current.length !== this.lastTopicEmbedding.length) {
               this.lastTopicEmbedding = current;
-              return { should: true, reason: "topic_shift" };
+              return { should: true, reason: "topic_shift", cosineDistance: 1.0 };
             }
             const similarity = denseCosineSimilarity(current, this.lastTopicEmbedding);
             const distance = 1 - similarity;
             if (distance > this.config.topicShiftThreshold) {
               // Store the new embedding for future comparisons
               this.lastTopicEmbedding = current;
-              return { should: true, reason: "topic_shift" };
+              return { should: true, reason: "topic_shift", cosineDistance: distance };
             }
           }
           // Update embedding for next comparison (first call or within threshold)
@@ -146,11 +153,6 @@ export class MemoryRefresher {
         // Embedding failure is non-fatal: skip topic shift detection
         getLogger().debug("Topic shift embedding failed, skipping");
       }
-    }
-
-    // Periodic check
-    if (iteration >= this.lastRetrievalIteration + this.config.interval) {
-      return { should: true, reason: "periodic" };
     }
 
     return { should: false, reason: "none" };
@@ -165,6 +167,7 @@ export class MemoryRefresher {
     sessionId: string,
     reason: RefreshReason = "periodic",
     iteration: number = 0,
+    cosineDistance?: number,
   ): Promise<RefreshResult> {
     const start = Date.now();
     const retrievalNumber = this.retrievalCount + 1;
@@ -178,7 +181,7 @@ export class MemoryRefresher {
         );
       });
       return await Promise.race([
-        this.doRefresh(query, sessionId, reason, iteration),
+        this.doRefresh(query, sessionId, reason, iteration, cosineDistance),
         timeoutPromise,
       ]);
     } catch (error) {
@@ -240,6 +243,7 @@ export class MemoryRefresher {
     sessionId: string,
     reason: RefreshReason,
     iteration: number,
+    cosineDistance?: number,
   ): Promise<RefreshResult> {
     const start = Date.now();
     const retrievalNumber = this.retrievalCount + 1;
@@ -304,22 +308,24 @@ export class MemoryRefresher {
       }
     }
 
-    // Process instinct results with dedup
+    // Process instinct results with dedup (filter IDs in tandem with insights)
     let newInsights: string[] | undefined;
     let newInstinctIds: string[] | undefined;
     let newInsightCount = 0;
     if (insightResult.status === "fulfilled" && insightResult.value) {
       const result = insightResult.value as InsightResult;
-      const dedupedInsights = result.insights.filter((insight) => {
-        const hash = computeContentHash(insight);
-        if (this.injectedContentHashes.has(hash)) return false;
-        this.trackContentHash(hash);
-        return true;
-      });
-      if (dedupedInsights.length > 0) {
-        newInsights = dedupedInsights;
-        newInstinctIds = result.matchedInstinctIds;
-        newInsightCount = dedupedInsights.length;
+      const dedupedPairs = result.insights
+        .map((insight, i) => ({ insight, id: result.matchedInstinctIds[i] }))
+        .filter(({ insight }) => {
+          const hash = computeContentHash(insight);
+          if (this.injectedContentHashes.has(hash)) return false;
+          this.trackContentHash(hash);
+          return true;
+        });
+      if (dedupedPairs.length > 0) {
+        newInsights = dedupedPairs.map((p) => p.insight);
+        newInstinctIds = dedupedPairs.map((p) => p.id).filter((id): id is string => id !== undefined);
+        newInsightCount = dedupedPairs.length;
       }
     }
 
@@ -345,7 +351,7 @@ export class MemoryRefresher {
       if (reason === "topic_shift") {
         this.deps.eventBus.emit("memory:topic_shifted", {
           sessionId,
-          cosineDistance: 0, // Caller can provide more detail via shouldRefresh
+          cosineDistance: cosineDistance ?? this.config.topicShiftThreshold,
           threshold: this.config.topicShiftThreshold,
           previousTopic: query,
           currentTopic: query,

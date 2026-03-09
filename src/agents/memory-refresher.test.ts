@@ -39,6 +39,15 @@ vi.mock("dotenv", () => ({
   config: vi.fn(),
 }));
 
+vi.mock("../utils/logger.js", () => ({
+  getLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
 // =============================================================================
 // Helpers
 // =============================================================================
@@ -710,8 +719,7 @@ describe("MemoryRefresher", () => {
           .mockResolvedValueOnce({ embeddings: [[0.9, 0.1, 0]], usage: { totalTokens: 10 } }) // shouldRefresh(2): similar
           .mockResolvedValueOnce({ embeddings: [[0.92, 0.08, 0]], usage: { totalTokens: 10 } }) // shouldRefresh(3): similar
           .mockResolvedValueOnce({ embeddings: [[0.88, 0.12, 0]], usage: { totalTokens: 10 } }) // shouldRefresh(4): similar
-          // Iteration 5: periodic triggers (interval=5), embed still called for topic shift eval
-          .mockResolvedValueOnce({ embeddings: [[0.85, 0.15, 0]], usage: { totalTokens: 10 } }) // shouldRefresh(5): periodic fires first
+          // Iteration 5: periodic fires first (before topic shift check), no embedding call
           // Iteration 6: topic shift - orthogonal vector
           .mockResolvedValueOnce({ embeddings: [[0, 1, 0]], usage: { totalTokens: 10 } }), // shouldRefresh(6): big shift
       } as unknown as IEmbeddingProvider;
