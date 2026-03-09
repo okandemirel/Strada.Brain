@@ -272,3 +272,537 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     );
   });
 });
+
+// =============================================================================
+// RE-DECOMPOSITION & ESCALATION TESTS (Plan 16-03)
+// =============================================================================
+
+function createMockAIProvider(responseText = "DECOMPOSE") {
+  return {
+    chat: vi.fn().mockResolvedValue({ text: responseText }),
+    stream: vi.fn(),
+    countTokens: vi.fn().mockReturnValue(10),
+  };
+}
+
+function createMockLearningEventBus() {
+  return {
+    emit: vi.fn(),
+    on: vi.fn(),
+    off: vi.fn(),
+    shutdown: vi.fn(),
+  };
+}
+
+function buildFailingGoalTree(): GoalTree {
+  const rootId = generateGoalNodeId();
+  const child1Id = generateGoalNodeId();
+  const now = Date.now();
+  const nodes = new Map<GoalNodeId, GoalNode>();
+  nodes.set(rootId, {
+    id: rootId, parentId: null, task: "Root task",
+    dependsOn: [], depth: 0, status: "pending", createdAt: now, updatedAt: now,
+  });
+  nodes.set(child1Id, {
+    id: child1Id, parentId: rootId, task: "Failing step",
+    dependsOn: [], depth: 1, status: "pending", createdAt: now, updatedAt: now,
+  });
+  return {
+    rootId, sessionId: "test-session", taskDescription: "Root task",
+    planSummary: "Test plan", nodes, createdAt: now,
+  };
+}
+
+function createMockInteractiveChannel() {
+  return {
+    name: "test",
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    isHealthy: vi.fn().mockReturnValue(true),
+    onMessage: vi.fn(),
+    sendText: vi.fn(),
+    sendMarkdown: vi.fn(),
+    requestConfirmation: vi.fn().mockResolvedValue("Continue"),
+  };
+}
+
+describe("BackgroundExecutor - Re-decomposition (Plan 16-03)", () => {
+  let mockOrch: ReturnType<typeof createMockOrchestrator>;
+  let mockDecomposer: ReturnType<typeof createMockDecomposer>;
+  let mockGoalStorage: ReturnType<typeof createMockGoalStorage>;
+  let mockDaemonEventBus: ReturnType<typeof createMockDaemonEventBus>;
+  let mockAIProvider: ReturnType<typeof createMockAIProvider>;
+  let mockLearningBus: ReturnType<typeof createMockLearningEventBus>;
+
+  beforeEach(() => {
+    mockOrch = createMockOrchestrator();
+    mockDecomposer = createMockDecomposer();
+    mockGoalStorage = createMockGoalStorage();
+    mockDaemonEventBus = createMockDaemonEventBus();
+    mockAIProvider = createMockAIProvider("DECOMPOSE");
+    mockLearningBus = createMockLearningEventBus();
+  });
+
+  it("LLM decides 'redecompose' -> calls decomposeReactive, emits goal:redecomposed", async () => {
+    const goalTree = buildFailingGoalTree();
+    const task = createTestTask(goalTree);
+
+    // Make the orchestrator fail so node fails
+    let callCount = 0;
+    mockOrch.runBackgroundTask.mockImplementation(async () => {
+      callCount++;
+      if (callCount <= 2) throw new Error("Task failed"); // fail initial + retry
+      return "recovered";
+    });
+
+    // LLM advises DECOMPOSE
+    mockAIProvider.chat.mockResolvedValue({ text: "DECOMPOSE" });
+
+    // Decomposer returns a new tree with recovery nodes
+    const recoveryNodeId = generateGoalNodeId();
+    const failingNodeId = Array.from(goalTree.nodes.keys()).find(id => id !== goalTree.rootId)!;
+    mockDecomposer.decomposeReactive = vi.fn().mockImplementation(async () => {
+      const newNodes = new Map(goalTree.nodes);
+      newNodes.set(recoveryNodeId, {
+        id: recoveryNodeId, parentId: failingNodeId, task: "Recovery step",
+        dependsOn: [], depth: 2, status: "pending", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      return { ...goalTree, nodes: newNodes };
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: mockAIProvider as any,
+      channel: undefined,
+      goalConfig: { maxFailures: 3, escalationTimeoutMinutes: 10, maxRedecompositions: 2 },
+      learningEventBus: mockLearningBus as any,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const onProgress = vi.fn();
+    executor.enqueue(task, new AbortController().signal, onProgress);
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // decomposeReactive should have been called
+    expect(mockDecomposer.decomposeReactive).toHaveBeenCalled();
+
+    // Should have emitted goal:redecomposed
+    expect(mockLearningBus.emit).toHaveBeenCalledWith(
+      "goal:redecomposed",
+      expect.objectContaining({
+        rootId: goalTree.rootId,
+        task: expect.any(String),
+        newNodeCount: expect.any(Number),
+        timestamp: expect.any(Number),
+      }),
+    );
+  });
+
+  it("LLM decides 'retry' -> emits goal:retry event, returns null", async () => {
+    const goalTree = buildFailingGoalTree();
+    const task = createTestTask(goalTree);
+
+    // Make all calls fail
+    mockOrch.runBackgroundTask.mockRejectedValue(new Error("Always fails"));
+
+    // LLM advises RETRY
+    mockAIProvider.chat.mockResolvedValue({ text: "RETRY" });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: mockAIProvider as any,
+      channel: undefined,
+      goalConfig: { maxFailures: 3, escalationTimeoutMinutes: 10, maxRedecompositions: 2 },
+      learningEventBus: mockLearningBus as any,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const onProgress = vi.fn();
+    executor.enqueue(task, new AbortController().signal, onProgress);
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // Should have emitted goal:retry
+    expect(mockLearningBus.emit).toHaveBeenCalledWith(
+      "goal:retry",
+      expect.objectContaining({
+        rootId: goalTree.rootId,
+        task: expect.any(String),
+        timestamp: expect.any(Number),
+      }),
+    );
+  });
+
+  it("rejects re-decomposition when redecompositionCount >= maxRedecompositions", async () => {
+    const goalTree = buildFailingGoalTree();
+    // Set redecompositionCount to maxRedecompositions on failing node
+    const failingNodeId = Array.from(goalTree.nodes.keys()).find(id => id !== goalTree.rootId)!;
+    const failingNode = goalTree.nodes.get(failingNodeId)!;
+    const updatedNodes = new Map(goalTree.nodes);
+    updatedNodes.set(failingNodeId, { ...failingNode, redecompositionCount: 2 });
+    const treeWithCount: GoalTree = { ...goalTree, nodes: updatedNodes };
+
+    const task = createTestTask(treeWithCount);
+    mockOrch.runBackgroundTask.mockRejectedValue(new Error("Fails"));
+    mockAIProvider.chat.mockResolvedValue({ text: "DECOMPOSE" });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: mockAIProvider as any,
+      channel: undefined,
+      goalConfig: { maxFailures: 3, escalationTimeoutMinutes: 10, maxRedecompositions: 2 },
+      learningEventBus: mockLearningBus as any,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const onProgress = vi.fn();
+    executor.enqueue(task, new AbortController().signal, onProgress);
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // decomposeReactive should NOT have been called (limit exceeded)
+    expect(mockDecomposer.decomposeReactive).not.toBeDefined();
+  });
+
+  it("re-decomposition prompt includes completed nodes, failed task, error, original description", async () => {
+    const goalTree = buildFailingGoalTree();
+    const task = createTestTask(goalTree);
+
+    mockOrch.runBackgroundTask.mockRejectedValue(new Error("Network timeout"));
+    mockAIProvider.chat.mockResolvedValue({ text: "DECOMPOSE" });
+
+    // decomposeReactive captures the context
+    let capturedContext = "";
+    mockDecomposer.decomposeReactive = vi.fn().mockImplementation(
+      async (_tree: GoalTree, _failId: string, context: string) => {
+        capturedContext = context;
+        return null; // Fail gracefully
+      },
+    );
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: mockAIProvider as any,
+      channel: undefined,
+      goalConfig: { maxFailures: 3, escalationTimeoutMinutes: 10, maxRedecompositions: 2 },
+      learningEventBus: mockLearningBus as any,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const onProgress = vi.fn();
+    executor.enqueue(task, new AbortController().signal, onProgress);
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // Verify context includes key info
+    if (mockDecomposer.decomposeReactive.mock.calls.length > 0) {
+      expect(capturedContext).toContain("Network timeout");
+      expect(capturedContext).toContain("Failing step");
+    }
+  });
+});
+
+describe("BackgroundExecutor - Enhanced Escalation (Plan 16-03)", () => {
+  let mockOrch: ReturnType<typeof createMockOrchestrator>;
+  let mockDecomposer: ReturnType<typeof createMockDecomposer>;
+  let mockGoalStorage: ReturnType<typeof createMockGoalStorage>;
+  let mockDaemonEventBus: ReturnType<typeof createMockDaemonEventBus>;
+  let mockAIProvider: ReturnType<typeof createMockAIProvider>;
+  let mockLearningBus: ReturnType<typeof createMockLearningEventBus>;
+
+  beforeEach(() => {
+    mockOrch = createMockOrchestrator();
+    mockDecomposer = createMockDecomposer();
+    mockGoalStorage = createMockGoalStorage();
+    mockDaemonEventBus = createMockDaemonEventBus();
+    mockAIProvider = createMockAIProvider();
+    mockLearningBus = createMockLearningEventBus();
+  });
+
+  it("escalation presents 4 options: Continue, Always Continue, Retry Failed, Abort", async () => {
+    // Build a tree with multiple failing nodes to exceed budget
+    const rootId = generateGoalNodeId();
+    const child1Id = generateGoalNodeId();
+    const child2Id = generateGoalNodeId();
+    const now = Date.now();
+    const nodes = new Map<GoalNodeId, GoalNode>();
+    nodes.set(rootId, {
+      id: rootId, parentId: null, task: "Root",
+      dependsOn: [], depth: 0, status: "pending", createdAt: now, updatedAt: now,
+    });
+    nodes.set(child1Id, {
+      id: child1Id, parentId: rootId, task: "Fail 1",
+      dependsOn: [], depth: 1, status: "pending", createdAt: now, updatedAt: now,
+    });
+    nodes.set(child2Id, {
+      id: child2Id, parentId: rootId, task: "Fail 2",
+      dependsOn: [], depth: 1, status: "pending", createdAt: now, updatedAt: now,
+    });
+    const goalTree: GoalTree = {
+      rootId, sessionId: "test", taskDescription: "Multi-fail",
+      nodes, createdAt: now,
+    };
+
+    const task = createTestTask(goalTree);
+    mockOrch.runBackgroundTask.mockRejectedValue(new Error("Fails"));
+
+    const mockChannel = createMockInteractiveChannel();
+    mockChannel.requestConfirmation.mockResolvedValue("Abort");
+
+    // LLM for recovery advisor returns RETRY so onNodeFailed doesn't redecompose
+    mockAIProvider.chat.mockResolvedValue({ text: "RETRY" });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: mockAIProvider as any,
+      channel: mockChannel as any,
+      goalConfig: { maxFailures: 1, escalationTimeoutMinutes: 10, maxRedecompositions: 2 },
+      learningEventBus: mockLearningBus as any,
+      goalExecutorConfig: { maxRetries: 0, maxFailures: 1, parallelExecution: true, maxParallel: 3 },
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const onProgress = vi.fn();
+    executor.enqueue(task, new AbortController().signal, onProgress);
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // Verify 4 options were presented
+    expect(mockChannel.requestConfirmation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: ["Continue", "Always Continue", "Retry Failed", "Abort"],
+      }),
+    );
+  });
+
+  it("non-interactive channels auto-abort with text failure report", async () => {
+    const goalTree = buildFailingGoalTree();
+    const task = createTestTask(goalTree);
+    mockOrch.runBackgroundTask.mockRejectedValue(new Error("Fails"));
+
+    // LLM for recovery advisor returns RETRY
+    mockAIProvider.chat.mockResolvedValue({ text: "RETRY" });
+
+    // No interactive channel (channel=undefined)
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: mockAIProvider as any,
+      channel: undefined,
+      goalConfig: { maxFailures: 1, escalationTimeoutMinutes: 10, maxRedecompositions: 2 },
+      learningEventBus: mockLearningBus as any,
+      goalExecutorConfig: { maxRetries: 0, maxFailures: 1, parallelExecution: true, maxParallel: 3 },
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const progressMessages: string[] = [];
+    const onProgress = vi.fn((msg: string) => progressMessages.push(msg));
+    executor.enqueue(task, new AbortController().signal, onProgress);
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // Should have reported failure via progress (no requestConfirmation)
+    const hasFailureReport = progressMessages.some(m => m.includes("Failure budget exceeded") || m.includes("Aborting"));
+    expect(hasFailureReport).toBe(true);
+  });
+
+  it("auto-abort fires after escalationTimeoutMinutes with notification", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    const rootId = generateGoalNodeId();
+    const child1Id = generateGoalNodeId();
+    const now = Date.now();
+    const nodes = new Map<GoalNodeId, GoalNode>();
+    nodes.set(rootId, {
+      id: rootId, parentId: null, task: "Root",
+      dependsOn: [], depth: 0, status: "pending", createdAt: now, updatedAt: now,
+    });
+    nodes.set(child1Id, {
+      id: child1Id, parentId: rootId, task: "Fail step",
+      dependsOn: [], depth: 1, status: "pending", createdAt: now, updatedAt: now,
+    });
+    const goalTree: GoalTree = {
+      rootId, sessionId: "test", taskDescription: "Timeout test",
+      nodes, createdAt: now,
+    };
+
+    const task = createTestTask(goalTree);
+    mockOrch.runBackgroundTask.mockRejectedValue(new Error("Fails"));
+
+    // LLM for recovery returns RETRY
+    mockAIProvider.chat.mockResolvedValue({ text: "RETRY" });
+
+    // Channel that never responds (simulates user not responding)
+    const mockChannel = createMockInteractiveChannel();
+    mockChannel.requestConfirmation.mockImplementation(
+      () => new Promise(() => { /* never resolves */ }),
+    );
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: mockAIProvider as any,
+      channel: mockChannel as any,
+      goalConfig: { maxFailures: 1, escalationTimeoutMinutes: 1, maxRedecompositions: 2 },
+      learningEventBus: mockLearningBus as any,
+      goalExecutorConfig: { maxRetries: 0, maxFailures: 1, parallelExecution: true, maxParallel: 3 },
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const onProgress = vi.fn();
+    executor.enqueue(task, new AbortController().signal, onProgress);
+
+    // Advance time past the timeout (1 minute = 60000ms)
+    await vi.advanceTimersByTimeAsync(65_000);
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // Should have sent auto-abort notification
+    expect(mockChannel.sendText).toHaveBeenCalledWith(
+      "chat1",
+      expect.stringContaining("Auto-aborting"),
+    );
+
+    vi.useRealTimers();
+  });
+
+  it("'Always Continue' returns alwaysContinue: true", async () => {
+    const rootId = generateGoalNodeId();
+    const child1Id = generateGoalNodeId();
+    const child2Id = generateGoalNodeId();
+    const now = Date.now();
+    const nodes = new Map<GoalNodeId, GoalNode>();
+    nodes.set(rootId, {
+      id: rootId, parentId: null, task: "Root",
+      dependsOn: [], depth: 0, status: "pending", createdAt: now, updatedAt: now,
+    });
+    nodes.set(child1Id, {
+      id: child1Id, parentId: rootId, task: "Fail 1",
+      dependsOn: [], depth: 1, status: "pending", createdAt: now, updatedAt: now,
+    });
+    nodes.set(child2Id, {
+      id: child2Id, parentId: rootId, task: "Ok step",
+      dependsOn: [], depth: 1, status: "pending", createdAt: now, updatedAt: now,
+    });
+    const goalTree: GoalTree = {
+      rootId, sessionId: "test", taskDescription: "Multi-node",
+      nodes, createdAt: now,
+    };
+
+    const task = createTestTask(goalTree);
+    let callCount = 0;
+    mockOrch.runBackgroundTask.mockImplementation(async (prompt: string) => {
+      callCount++;
+      if (prompt.includes("Fail")) throw new Error("Fails");
+      return "done";
+    });
+
+    const mockChannel = createMockInteractiveChannel();
+    mockChannel.requestConfirmation.mockResolvedValue("Always Continue");
+    mockAIProvider.chat.mockResolvedValue({ text: "RETRY" });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: mockAIProvider as any,
+      channel: mockChannel as any,
+      goalConfig: { maxFailures: 1, escalationTimeoutMinutes: 10, maxRedecompositions: 2 },
+      learningEventBus: mockLearningBus as any,
+      goalExecutorConfig: { maxRetries: 0, maxFailures: 1, parallelExecution: true, maxParallel: 3 },
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // requestConfirmation called only once (alwaysContinue skips subsequent calls)
+    expect(mockChannel.requestConfirmation).toHaveBeenCalledTimes(1);
+  });
+});

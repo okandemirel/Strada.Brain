@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: in_progress
-stopped_at: Completed 16-01-PLAN.md
-last_updated: "2026-03-09T14:58:51.058Z"
-last_activity: 2026-03-09 -- Completed Phase 16 Plan 01 (Type Contracts)
+stopped_at: Completed 16-02-PLAN.md
+last_updated: "2026-03-09T15:13:37Z"
+last_activity: 2026-03-09 -- Completed Phase 16 Plan 02 (Goal Detection Pipeline)
 progress:
   total_phases: 10
   completed_phases: 6
   total_plans: 19
-  completed_plans: 17
-  percent: 89
+  completed_plans: 18
+  percent: 95
 ---
 
 # State: Strada.Brain
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 16 of 19 (Interactive Goal Execution & Replanning)
-Plan: 1 of 3
-Status: Plan 01 complete, Plan 02 next
-Last activity: 2026-03-09 -- Completed Phase 16 Plan 01 (Type Contracts)
+Plan: 2 of 3
+Status: Plan 02 complete, Plan 03 next
+Last activity: 2026-03-09 -- Completed Phase 16 Plan 02 (Goal Detection Pipeline)
 
-Progress: [█████████░] 89%
+Progress: [█████████░] 95%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 16 (v2.0) / 40 (lifetime)
-- Average duration: 5.75min (v2.0)
-- Total execution time: 92min (v2.0)
+- Total plans completed: 17 (v2.0) / 41 (lifetime)
+- Average duration: 5.94min (v2.0)
+- Total execution time: 101min (v2.0)
 
 **By Phase:**
 
@@ -49,10 +49,11 @@ Progress: [█████████░] 89%
 | 13 | 3/3 | 24min | 8min |
 | 14 | 5/5 | 27min | 5.4min |
 | 15 | 3/3 | 19min | 6.3min |
-| 16 | 1/3 | 6min | 6min |
+| 16 | 2/3 | 15min | 7.5min |
 
 *Updated after each plan completion*
 | Phase 16 P01 | 6min | 2 tasks | 10 files |
+| Phase 16 P02 | 9min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,10 @@ Recent decisions affecting current work:
 - [16-01]: GoalBlockOutput uses triple-backtick goal fenced block pattern for LLM response parsing
 - [16-01]: GoalConfig nested under Config.goal with STRATA_GOAL_* env var prefix
 - [16-01]: /goal command is explicit-only (no keyword patterns) -- NL detection deferred to Orchestrator
+- [16-02]: Goal detection runs BEFORE end_turn early return in PAOR loop (LLM may return goal block with no tool calls)
+- [16-02]: channelType passed through runAgentLoop for TaskManager submission context
+- [16-02]: setDaemonEventBus lazy setter on BackgroundExecutor for daemon mode wiring
+- [16-02]: onWaveComplete non-breaking callback extension to GoalExecutor.executeTree
 
 ### Pending Todos
 
@@ -146,9 +151,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T14:57:49Z
-Stopped at: Completed 16-01-PLAN.md
-Resume file: .planning/phases/16-interactive-goal-execution-replanning/16-02-PLAN.md
+Last session: 2026-03-09T15:13:37Z
+Stopped at: Completed 16-02-PLAN.md
+Resume file: .planning/phases/16-interactive-goal-execution-replanning/16-03-PLAN.md
 
 ---
 *State initialized: 2026-03-06*
