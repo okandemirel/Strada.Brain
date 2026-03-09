@@ -390,6 +390,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     }
   }
 
+  // Create daemon event bus early so it can be passed to BackgroundExecutor constructor
+  const daemonEventBus = options.daemonMode
+    ? new TypedEventBus<DaemonEventMap>()
+    : undefined;
+
   // Initialize task system
   const taskStorage = initializeTaskStorage(config, logger);
   const backgroundExecutor = new BackgroundExecutor({
@@ -399,6 +404,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     goalExecutorConfig,
     aiProvider: providerManager.getProvider(""),
     channel,
+    daemonEventBus,
     goalConfig: config.goal,
     learningEventBus: learningResult?.eventBus,
   });
@@ -421,16 +427,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       throw new MissingConfigError("STRATA_DAEMON_DAILY_BUDGET");
     }
 
+    // daemonEventBus is guaranteed defined when daemonMode is true
+    const daemonBus = daemonEventBus!;
+
     // Initialize daemon storage
     const daemonDbPath = join(config.memory.dbPath, "daemon.db");
     const daemonStorage = new DaemonStorage(daemonDbPath);
     daemonStorage.initialize();
-
-    // Create event bus for daemon events (separate from learning event bus)
-    const daemonEventBus = new TypedEventBus<DaemonEventMap>();
-
-    // Wire daemon event bus to background executor for goal lifecycle events
-    backgroundExecutor.setDaemonEventBus(daemonEventBus);
 
     // Create subsystems
     const triggerRegistry = new TriggerRegistry();
@@ -438,7 +441,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     const approvalQueueInstance = new ApprovalQueue(
       daemonStorage,
       daemonConfig.security.approvalTimeoutMin,
-      daemonEventBus,
+      daemonBus,
     );
     const securityPolicyInstance = new DaemonSecurityPolicy(
       (name) => toolRegistry.getMetadata(name),
@@ -530,7 +533,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       approvalQueueInstance,
       daemonStorage,
       identityManager,
-      daemonEventBus,
+      daemonBus,
       daemonConfig,
       logger,
       deduplicator,

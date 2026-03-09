@@ -87,7 +87,7 @@ export class BackgroundExecutor {
   private readonly goalExecutorConfig?: GoalExecutorConfig;
   private readonly aiProvider?: IAIProvider;
   private readonly channel?: IChannelAdapter;
-  private daemonEventBus?: IEventEmitter<DaemonEventMap>;
+  private readonly daemonEventBus?: IEventEmitter<DaemonEventMap>;
   private readonly goalConfig?: GoalConfig;
   private readonly learningEventBus?: IEventEmitter<LearningEventMap>;
 
@@ -109,13 +109,6 @@ export class BackgroundExecutor {
    */
   setTaskManager(manager: TaskManager): void {
     this.taskManager = manager;
-  }
-
-  /**
-   * Set the daemon event bus for goal lifecycle events (lazy setter for daemon mode).
-   */
-  setDaemonEventBus(bus: IEventEmitter<DaemonEventMap>): void {
-    this.daemonEventBus = bus;
   }
 
   private static readonly MAX_QUEUE_SIZE = 100;
@@ -289,19 +282,13 @@ export class BackgroundExecutor {
       }
     };
 
-    // Wave completion callback for progress and daemon events
-    let waveNumber = 0;
-    const onWaveComplete = (updatedTree: GoalTree): void => {
-      waveNumber++;
-      const progress = calculateProgress(updatedTree);
-      const progressContent = renderProgressBar(progress.completed, progress.total) + "\n" + renderGoalTree(updatedTree);
-      onProgress(progressContent);
-
-      // Emit daemon event
+    // Wave completion callback for daemon events (progress rendering handled by onStatusChange)
+    const onWaveComplete = (_updatedTree: GoalTree, waveIndex: number): void => {
       if (this.daemonEventBus) {
+        const progress = calculateProgress(_updatedTree);
         this.daemonEventBus.emit("goal:wave_complete", {
           rootId: goalTree.rootId,
-          waveIndex: waveNumber,
+          waveIndex,
           completedCount: progress.completed,
           totalCount: progress.total,
           timestamp: Date.now(),
@@ -359,17 +346,12 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
 
           // Ask LLM: RETRY or DECOMPOSE?
           try {
-            const completedNodes = Array.from(currentTree.nodes.values())
-              .filter(n => n.status === "completed")
-              .map(n => `- [completed] ${n.task}`)
-              .join("\n");
-
             const advisorResponse = await withTimeout(
               this.aiProvider!.chat(
                 "You are a goal execution recovery advisor. A sub-goal has failed. Decide the best recovery strategy. Respond with exactly RETRY or DECOMPOSE followed by a brief reason.",
                 [{
                   role: "user" as const,
-                  content: `Original goal: ${goalTree.taskDescription}\n\nFailed sub-goal: ${failedNode.task}\nError: ${sanitizeError(failedNode.error ?? "unknown")}\nRedecomposition count: ${currentCount}/${maxRedecompositions}\n\nCompleted so far:\n${completedNodes || "  (none)"}\n\nShould we RETRY the same approach or DECOMPOSE into smaller steps?`,
+                  content: `Original goal: ${goalTree.taskDescription}\n\nFailed sub-goal: ${failedNode.task}\nError: ${sanitizeError(failedNode.error ?? "unknown")}\nRedecomposition count: ${currentCount}/${maxRedecompositions}\n\nShould we RETRY the same approach or DECOMPOSE into smaller steps?`,
                 }],
                 [],
               ),
@@ -380,8 +362,8 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
             const decision = advisorResponse.text?.trim().toUpperCase() ?? "RETRY";
 
             if (decision.startsWith("DECOMPOSE") && this.decomposer) {
-              // Build reflection context with full execution state
-              const reflectionContext = `Error: ${failedNode.error ?? "unknown"}\nOriginal task: ${goalTree.taskDescription}\nFailed task: ${failedNode.task}\nCompleted nodes:\n${completedNodes || "  (none)"}`;
+              // decomposeReactive builds its own completed-nodes context internally
+              const reflectionContext = `Error: ${failedNode.error ?? "unknown"}\nFailed task: ${failedNode.task}`;
 
               const newTree = await this.decomposer.decomposeReactive(
                 currentTree,
@@ -489,21 +471,21 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
 
       if (interactiveChannel) {
         const timeoutMs = timeoutMinutes * 60_000;
-        let timer: ReturnType<typeof setTimeout>;
+        let timer: ReturnType<typeof setTimeout> | undefined;
         const choice = await Promise.race([
           interactiveChannel.requestConfirmation({
             chatId: task.chatId,
             question: `Failure budget exceeded (${report.failureCount}/${report.maxFailures}). How to proceed?`,
-            options: ["Continue", "Always Continue", "Retry Failed", "Abort"],
+            options: ["Continue", "Always Continue", "Abort"],
             details,
           }),
           new Promise<string>((resolve) => {
             timer = setTimeout(() => resolve("__timeout__"), timeoutMs);
           }),
-        ]).finally(() => clearTimeout(timer!));
+        ]).finally(() => { if (timer !== undefined) clearTimeout(timer); });
 
         if (choice === "__timeout__") {
-          await this.channel!.sendText(task.chatId,
+          await interactiveChannel.sendText(task.chatId,
             `Auto-aborting after ${timeoutMinutes}min timeout.${diagnosis ? `\n${diagnosis}` : ""}`);
           return { continue: false, alwaysContinue: false };
         }
@@ -511,7 +493,6 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
         const normalized = choice.toLowerCase().trim();
         if (normalized === "always continue") return { continue: true, alwaysContinue: true };
         if (normalized === "continue") return { continue: true, alwaysContinue: false };
-        if (normalized === "retry failed") return { continue: true, alwaysContinue: false };
         return { continue: false, alwaysContinue: false }; // Abort or unrecognized
       } else {
         // Non-interactive: send report via progress and auto-abort

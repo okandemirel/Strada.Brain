@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: in_progress
-stopped_at: Completed 16-02-PLAN.md
-last_updated: "2026-03-09T15:13:37Z"
-last_activity: 2026-03-09 -- Completed Phase 16 Plan 02 (Goal Detection Pipeline)
+stopped_at: Completed 16-03-PLAN.md
+last_updated: "2026-03-09T15:32:04Z"
+last_activity: 2026-03-09 -- Completed Phase 16 Plan 03 (Failure Recovery & Enhanced Escalation)
 progress:
   total_phases: 10
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 19
-  completed_plans: 18
-  percent: 95
+  completed_plans: 19
+  percent: 100
 ---
 
 # State: Strada.Brain
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 16 -- Interactive Goal Execution & Replanning
+**Current focus:** Phase 16 complete -- ready for Phase 17 (Dynamic Memory Re-retrieval)
 
 ## Current Position
 
 Phase: 16 of 19 (Interactive Goal Execution & Replanning)
-Plan: 2 of 3
-Status: Plan 02 complete, Plan 03 next
-Last activity: 2026-03-09 -- Completed Phase 16 Plan 02 (Goal Detection Pipeline)
+Plan: 3 of 3
+Status: Phase 16 complete
+Last activity: 2026-03-09 -- Completed Phase 16 Plan 03 (Failure Recovery & Enhanced Escalation)
 
-Progress: [█████████░] 95%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 17 (v2.0) / 41 (lifetime)
-- Average duration: 5.94min (v2.0)
-- Total execution time: 101min (v2.0)
+- Total plans completed: 19 (v2.0) / 43 (lifetime)
+- Average duration: 5.89min (v2.0)
+- Total execution time: 112min (v2.0)
 
 **By Phase:**
 
@@ -49,11 +49,12 @@ Progress: [█████████░] 95%
 | 13 | 3/3 | 24min | 8min |
 | 14 | 5/5 | 27min | 5.4min |
 | 15 | 3/3 | 19min | 6.3min |
-| 16 | 2/3 | 15min | 7.5min |
+| 16 | 3/3 | 26min | 8.7min |
 
 *Updated after each plan completion*
 | Phase 16 P01 | 6min | 2 tasks | 10 files |
 | Phase 16 P02 | 9min | 2 tasks | 9 files |
+| Phase 16 P03 | 11min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -139,6 +140,11 @@ Recent decisions affecting current work:
 - [16-02]: channelType passed through runAgentLoop for TaskManager submission context
 - [16-02]: setDaemonEventBus lazy setter on BackgroundExecutor for daemon mode wiring
 - [16-02]: onWaveComplete non-breaking callback extension to GoalExecutor.executeTree
+- [16-03]: onNodeFailed runs inside executeNode AFTER retries but BEFORE permanent failure tracking
+- [16-03]: LLM recovery advisor uses RETRY/DECOMPOSE binary prompt with full execution context
+- [16-03]: Re-decomposition is silent -- no user notification, only learning events emitted
+- [16-03]: Escalation auto-abort uses Promise.race with configurable timeout from GoalConfig
+- [16-03]: Non-interactive channels auto-abort immediately with text progress report
 
 ### Pending Todos
 
@@ -151,9 +157,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T15:13:37Z
-Stopped at: Completed 16-02-PLAN.md
-Resume file: .planning/phases/16-interactive-goal-execution-replanning/16-03-PLAN.md
+Last session: 2026-03-09T15:32:04Z
+Stopped at: Completed 16-03-PLAN.md
+Resume file: Phase 17 planning next
 
 ---
 *State initialized: 2026-03-06*

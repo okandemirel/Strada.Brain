@@ -124,7 +124,7 @@ export type EnvVarName =
   | "STRATA_CHECKLIST_MORNING_HOUR"
   | "STRATA_CHECKLIST_AFTERNOON_HOUR"
   | "STRATA_CHECKLIST_EVENING_HOUR"
-  | "STRATA_GOAL_MAX_FAILURES"
+
   | "STRATA_GOAL_ESCALATION_TIMEOUT_MINUTES"
   | "STRATA_GOAL_MAX_REDECOMPOSITIONS";
 
@@ -577,7 +577,6 @@ export const configSchema = z
     goalMaxParallel: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
 
     // Goal Interactive Execution (Phase 16)
-    strataGoalMaxFailures: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
     strataGoalEscalationTimeoutMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(120)).default("10"),
     strataGoalMaxRedecompositions: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(10)).default("2"),
 
@@ -842,7 +841,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     goalMaxParallel: rawConfig.goalMaxParallel,
 
     goal: {
-      maxFailures: rawConfig.strataGoalMaxFailures,
+      maxFailures: rawConfig.goalMaxFailures,
       escalationTimeoutMinutes: rawConfig.strataGoalEscalationTimeoutMinutes,
       maxRedecompositions: rawConfig.strataGoalMaxRedecompositions,
     },
@@ -1138,7 +1137,6 @@ interface EnvVars {
   goalMaxFailures: string | undefined;
   goalParallelExecution: string | undefined;
   goalMaxParallel: string | undefined;
-  strataGoalMaxFailures: string | undefined;
   strataGoalEscalationTimeoutMinutes: string | undefined;
   strataGoalMaxRedecompositions: string | undefined;
   toolChainEnabled: string | undefined;
@@ -1262,7 +1260,6 @@ function loadFromEnv(): EnvVars {
     goalMaxFailures: process.env["GOAL_MAX_FAILURES"],
     goalParallelExecution: process.env["GOAL_PARALLEL_EXECUTION"],
     goalMaxParallel: process.env["GOAL_MAX_PARALLEL"],
-    strataGoalMaxFailures: process.env["STRATA_GOAL_MAX_FAILURES"],
     strataGoalEscalationTimeoutMinutes: process.env["STRATA_GOAL_ESCALATION_TIMEOUT_MINUTES"],
     strataGoalMaxRedecompositions: process.env["STRATA_GOAL_MAX_REDECOMPOSITIONS"],
     toolChainEnabled: process.env["TOOL_CHAIN_ENABLED"],

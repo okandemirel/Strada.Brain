@@ -141,7 +141,7 @@ export class CommandHandler {
     }
 
     // Default: submit as a goal task
-    const prompt = args.join(" ");
+    const prompt = args.join(" ").slice(0, 2000);
     await this.taskManager.submit(chatId, "goal", prompt);
     await this.channel.sendText(chatId, `Goal submitted: ${prompt.slice(0, 80)}`);
   }

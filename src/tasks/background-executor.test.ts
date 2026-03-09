@@ -564,7 +564,7 @@ describe("BackgroundExecutor - Enhanced Escalation (Plan 16-03)", () => {
     mockLearningBus = createMockLearningEventBus();
   });
 
-  it("escalation presents 4 options: Continue, Always Continue, Retry Failed, Abort", async () => {
+  it("escalation presents 3 options: Continue, Always Continue, Abort", async () => {
     // Build a tree with multiple failing nodes to exceed budget
     const rootId = generateGoalNodeId();
     const child1Id = generateGoalNodeId();
@@ -626,7 +626,7 @@ describe("BackgroundExecutor - Enhanced Escalation (Plan 16-03)", () => {
     // Verify 4 options were presented
     expect(mockChannel.requestConfirmation).toHaveBeenCalledWith(
       expect.objectContaining({
-        options: ["Continue", "Always Continue", "Retry Failed", "Abort"],
+        options: ["Continue", "Always Continue", "Abort"],
       }),
     );
   });

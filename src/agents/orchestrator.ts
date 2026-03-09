@@ -42,8 +42,8 @@ import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import { renderGoalTree, summarizeTree } from "../goals/goal-renderer.js";
 import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.js";
-import type { GoalTree, GoalNode, GoalNodeId, GoalStatus } from "../goals/types.js";
-import { parseGoalBlock, generateGoalNodeId } from "../goals/types.js";
+import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
+import { parseGoalBlock, buildGoalTreeFromBlock } from "../goals/types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 
 const MAX_TOOL_ITERATIONS = 50;
@@ -905,28 +905,10 @@ export class Orchestrator {
       if (agentState.phase === AgentPhase.PLANNING && this.taskManager) {
         const goalBlock = parseGoalBlock(response.text ?? "");
         if (goalBlock && goalBlock.isGoal) {
-          // Build GoalTree from LLM output
-          const rootId = generateGoalNodeId();
-          const now = Date.now();
-          const nodes = new Map<GoalNodeId, GoalNode>();
-          nodes.set(rootId, {
-            id: rootId, parentId: null, task: lastUserMessage,
-            dependsOn: [], depth: 0, status: "pending", createdAt: now, updatedAt: now,
-          });
-          const idMap = new Map<string, GoalNodeId>();
-          for (const n of goalBlock.nodes) { idMap.set(n.id, generateGoalNodeId()); }
-          for (const n of goalBlock.nodes) {
-            const nodeId = idMap.get(n.id)!;
-            nodes.set(nodeId, {
-              id: nodeId, parentId: rootId, task: n.task,
-              dependsOn: n.dependsOn.map(d => idMap.get(d)).filter((d): d is GoalNodeId => !!d),
-              depth: 1, status: "pending", createdAt: now, updatedAt: now,
-            });
-          }
-          const goalTree: GoalTree = {
-            rootId, sessionId: chatId, taskDescription: lastUserMessage,
-            planSummary: response.text ?? undefined, nodes, createdAt: now,
-          };
+          // Build GoalTree from LLM output using shared factory
+          const goalTree = buildGoalTreeFromBlock(
+            goalBlock, chatId, lastUserMessage, response.text ?? undefined,
+          );
 
           // Send acknowledgment
           const nodeCount = goalTree.nodes.size - 1;

@@ -7,6 +7,7 @@
  */
 
 import type { ApprovalStatus, CircuitState } from "./daemon-types.js";
+import type { GoalStatus } from "../goals/types.js";
 
 // =============================================================================
 // EVENT PAYLOAD TYPES
@@ -121,7 +122,7 @@ export interface GoalNodeCompleteEvent {
   readonly rootId: string;
   readonly nodeId: string;
   readonly task: string;
-  readonly status: string;
+  readonly status: GoalStatus;
   readonly timestamp: number;
 }
 

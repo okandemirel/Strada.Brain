@@ -123,17 +123,51 @@ export interface GoalBlockOutput {
   }>;
 }
 
+/**
+ * Build a GoalTree from a GoalBlockOutput (shared factory).
+ * Used by both orchestrator (inline goal detection) and any future callers.
+ */
+export function buildGoalTreeFromBlock(
+  goalBlock: GoalBlockOutput,
+  sessionId: string,
+  taskDescription: string,
+  planSummary?: string,
+): GoalTree {
+  const rootId = generateGoalNodeId();
+  const now = Date.now();
+  const nodes = new Map<GoalNodeId, GoalNode>();
+  nodes.set(rootId, {
+    id: rootId, parentId: null, task: taskDescription,
+    dependsOn: [], depth: 0, status: "pending", createdAt: now, updatedAt: now,
+  });
+  const idMap = new Map<string, GoalNodeId>();
+  for (const n of goalBlock.nodes) { idMap.set(n.id, generateGoalNodeId()); }
+  for (const n of goalBlock.nodes) {
+    const nodeId = idMap.get(n.id)!;
+    nodes.set(nodeId, {
+      id: nodeId, parentId: rootId, task: n.task,
+      dependsOn: n.dependsOn.map(d => idMap.get(d)).filter((d): d is GoalNodeId => !!d),
+      depth: 1, status: "pending", createdAt: now, updatedAt: now,
+    });
+  }
+  return {
+    rootId, sessionId, taskDescription,
+    planSummary: planSummary?.slice(0, 4096),
+    nodes, createdAt: now,
+  };
+}
+
 const goalBlockNodeSchema = z.object({
   id: z.string().min(1),
   task: z.string().min(1),
-  dependsOn: z.array(z.string()).default([]),
+  dependsOn: z.array(z.string().max(64)).max(20).default([]),
 });
 
 /** Zod schema for validating GoalBlockOutput from LLM responses */
 export const goalBlockSchema = z.object({
   isGoal: z.boolean(),
-  estimatedMinutes: z.number().positive(),
-  nodes: z.array(goalBlockNodeSchema).min(1),
+  estimatedMinutes: z.number().positive().max(1440),
+  nodes: z.array(goalBlockNodeSchema).min(1).max(20),
 });
 
 /**
