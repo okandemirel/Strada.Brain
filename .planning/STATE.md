@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: completed
-stopped_at: Completed 15-01 Types/Config/Parser/Dedup Foundation
-last_updated: "2026-03-09T08:48:32.090Z"
-last_activity: 2026-03-09 -- Completed 15-01 Types/Config/Parser/Dedup Foundation
+stopped_at: Completed 15-02 FileWatchTrigger and ChecklistTrigger
+last_updated: "2026-03-09T11:56:00.000Z"
+last_activity: 2026-03-09 -- Completed 15-02 FileWatchTrigger and ChecklistTrigger
 progress:
   total_phases: 10
   completed_phases: 5
   total_plans: 16
-  completed_plans: 14
-  percent: 88
+  completed_plans: 15
+  percent: 94
 ---
 
 # State: Strada.Brain
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 ## Current Position
 
 Phase: 15 of 19 (Proactive Triggers)
-Plan: 1 of 3
-Status: 15-01 complete, continuing to 15-02
-Last activity: 2026-03-09 -- Completed 15-01 Types/Config/Parser/Dedup Foundation
+Plan: 2 of 3
+Status: 15-02 complete, continuing to 15-03
+Last activity: 2026-03-09 -- Completed 15-02 FileWatchTrigger and ChecklistTrigger
 
-Progress: [█████████░] 88%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 14 (v2.0) / 38 (lifetime)
+- Total plans completed: 15 (v2.0) / 39 (lifetime)
 - Average duration: 5.7min (v2.0)
-- Total execution time: 80min (v2.0)
+- Total execution time: 85min (v2.0)
 
 **By Phase:**
 
@@ -48,10 +48,11 @@ Progress: [█████████░] 88%
 | 12 | 2/2 | 10min | 5min |
 | 13 | 3/3 | 24min | 8min |
 | 14 | 5/5 | 27min | 5.4min |
-| 15 | 1/3 | 7min | 7min |
+| 15 | 2/3 | 12min | 6min |
 
 *Updated after each plan completion*
 | Phase 15 P01 | 7min | 3 tasks | 8 files |
+| Phase 15 P02 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,12 @@ Recent decisions affecting current work:
 - [15-01]: Default file-watch ignore: node_modules, .git, *.d.ts
 - [15-01]: Bootstrap.ts filters cron-only triggers in existing registration loop
 - [Phase 15]: HeartbeatTriggerDef as discriminated union on type field
+- [15-02]: Inline glob-to-regex over picomatch (no TS declarations available)
+- [15-02]: Per-path debounce Map collapses rapid file saves to single event
+- [15-02]: Event-buffered pattern bridges async chokidar events to sync shouldFire()
+- [15-02]: Minute-floor dedup in ChecklistTrigger matches CronTrigger pattern
+- [15-02]: Unscheduled checklist items fire every evaluation with minute dedup
+- [15-02]: Dynamic metadata description updates on onFired() for LLM context
 
 ### Pending Todos
 
@@ -131,8 +138,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T08:48:26.974Z
-Stopped at: Completed 15-01 Types/Config/Parser/Dedup Foundation
+Last session: 2026-03-09T11:56:00.000Z
+Stopped at: Completed 15-02 FileWatchTrigger and ChecklistTrigger
 Resume file: None
 
 ---
