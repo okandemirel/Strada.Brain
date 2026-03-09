@@ -81,6 +81,32 @@ export interface ChainInvalidatedEvent {
 }
 
 // =============================================================================
+// MEMORY RE-RETRIEVAL EVENT TYPES (Phase 17)
+// =============================================================================
+
+/** Emitted when memory re-retrieval completes during a conversation */
+export interface MemoryReRetrievedEvent {
+  readonly sessionId: string;
+  readonly reason: "periodic" | "topic_shift";
+  readonly newMemoryCount: number;
+  readonly newRagCount: number;
+  readonly newInsightCount: number;
+  readonly durationMs: number;
+  readonly retrievalNumber: number;
+  readonly timestamp: number;
+}
+
+/** Emitted when a topic shift is detected during conversation */
+export interface MemoryTopicShiftedEvent {
+  readonly sessionId: string;
+  readonly cosineDistance: number;
+  readonly threshold: number;
+  readonly previousTopic: string;
+  readonly currentTopic: string;
+  readonly timestamp: number;
+}
+
+// =============================================================================
 // GOAL RE-DECOMPOSITION EVENT TYPES (Phase 16)
 // =============================================================================
 
@@ -121,6 +147,8 @@ export interface LearningEventMap {
   "instinct:age_expired": InstinctAgeExpiredEvent;
   "goal:redecomposed": GoalRedecomposedEvent;
   "goal:retry": GoalRetryEvent;
+  "memory:re_retrieved": MemoryReRetrievedEvent;
+  "memory:topic_shifted": MemoryTopicShiftedEvent;
 }
 
 // =============================================================================

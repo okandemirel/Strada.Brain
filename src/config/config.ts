@@ -126,7 +126,17 @@ export type EnvVarName =
   | "STRATA_CHECKLIST_EVENING_HOUR"
 
   | "STRATA_GOAL_ESCALATION_TIMEOUT_MINUTES"
-  | "STRATA_GOAL_MAX_REDECOMPOSITIONS";
+  | "STRATA_GOAL_MAX_REDECOMPOSITIONS"
+
+  // Memory Re-Retrieval (Phase 17)
+  | "STRATA_MEMORY_RERETRIEVAL_ENABLED"
+  | "STRATA_MEMORY_RERETRIEVAL_INTERVAL"
+  | "STRATA_MEMORY_TOPIC_SHIFT_ENABLED"
+  | "STRATA_MEMORY_TOPIC_SHIFT_THRESHOLD"
+  | "STRATA_MEMORY_MAX_RERETRIEVALS"
+  | "STRATA_MEMORY_RERETRIEVAL_TIMEOUT_MS"
+  | "STRATA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"
+  | "STRATA_MEMORY_RERETRIEVAL_RAG_TOPK";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -170,6 +180,18 @@ export interface GoalConfig {
   readonly maxFailures: number;
   readonly escalationTimeoutMinutes: number;
   readonly maxRedecompositions: number;
+}
+
+/** Memory re-retrieval configuration (Phase 17) */
+export interface ReRetrievalConfig {
+  readonly enabled: boolean;
+  readonly interval: number;
+  readonly topicShiftEnabled: boolean;
+  readonly topicShiftThreshold: number;
+  readonly maxReRetrievals: number;
+  readonly timeoutMs: number;
+  readonly memoryLimit: number;
+  readonly ragTopK: number;
 }
 
 /** Rate limit configuration */
@@ -350,6 +372,9 @@ export interface Config {
 
   // Daemon
   readonly daemon: DaemonConfig;
+
+  // Memory Re-Retrieval (Phase 17)
+  readonly reRetrieval: ReRetrievalConfig;
 }
 
 /** Partial config for updates */
@@ -623,6 +648,16 @@ export const configSchema = z
     checklistMorningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("9"),
     checklistAfternoonHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("14"),
     checklistEveningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("18"),
+
+    // Memory Re-Retrieval (Phase 17)
+    strataMemoryReRetrievalEnabled: boolFromString(true),
+    strataMemoryReRetrievalInterval: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(100)).default("5"),
+    strataMemoryTopicShiftEnabled: boolFromString(true),
+    strataMemoryTopicShiftThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.1).max(1.0)).default("0.4"),
+    strataMemoryMaxReRetrievals: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(100)).default("10"),
+    strataMemoryReRetrievalTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100).max(60000)).default("5000"),
+    strataMemoryReRetrievalMemoryLimit: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("3"),
+    strataMemoryReRetrievalRagTopK: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("6"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -899,6 +934,17 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         checklistEveningHour: rawConfig.checklistEveningHour,
       },
     },
+
+    reRetrieval: {
+      enabled: rawConfig.strataMemoryReRetrievalEnabled,
+      interval: rawConfig.strataMemoryReRetrievalInterval,
+      topicShiftEnabled: rawConfig.strataMemoryTopicShiftEnabled,
+      topicShiftThreshold: rawConfig.strataMemoryTopicShiftThreshold,
+      maxReRetrievals: rawConfig.strataMemoryMaxReRetrievals,
+      timeoutMs: rawConfig.strataMemoryReRetrievalTimeoutMs,
+      memoryLimit: rawConfig.strataMemoryReRetrievalMemoryLimit,
+      ragTopK: rawConfig.strataMemoryReRetrievalRagTopK,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -1173,6 +1219,15 @@ interface EnvVars {
   checklistMorningHour: string | undefined;
   checklistAfternoonHour: string | undefined;
   checklistEveningHour: string | undefined;
+  // Memory Re-Retrieval (Phase 17)
+  strataMemoryReRetrievalEnabled: string | undefined;
+  strataMemoryReRetrievalInterval: string | undefined;
+  strataMemoryTopicShiftEnabled: string | undefined;
+  strataMemoryTopicShiftThreshold: string | undefined;
+  strataMemoryMaxReRetrievals: string | undefined;
+  strataMemoryReRetrievalTimeoutMs: string | undefined;
+  strataMemoryReRetrievalMemoryLimit: string | undefined;
+  strataMemoryReRetrievalRagTopK: string | undefined;
 }
 
 /**
@@ -1296,6 +1351,15 @@ function loadFromEnv(): EnvVars {
     checklistMorningHour: process.env["STRATA_CHECKLIST_MORNING_HOUR"],
     checklistAfternoonHour: process.env["STRATA_CHECKLIST_AFTERNOON_HOUR"],
     checklistEveningHour: process.env["STRATA_CHECKLIST_EVENING_HOUR"],
+    // Memory Re-Retrieval (Phase 17)
+    strataMemoryReRetrievalEnabled: process.env["STRATA_MEMORY_RERETRIEVAL_ENABLED"],
+    strataMemoryReRetrievalInterval: process.env["STRATA_MEMORY_RERETRIEVAL_INTERVAL"],
+    strataMemoryTopicShiftEnabled: process.env["STRATA_MEMORY_TOPIC_SHIFT_ENABLED"],
+    strataMemoryTopicShiftThreshold: process.env["STRATA_MEMORY_TOPIC_SHIFT_THRESHOLD"],
+    strataMemoryMaxReRetrievals: process.env["STRATA_MEMORY_MAX_RERETRIEVALS"],
+    strataMemoryReRetrievalTimeoutMs: process.env["STRATA_MEMORY_RERETRIEVAL_TIMEOUT_MS"],
+    strataMemoryReRetrievalMemoryLimit: process.env["STRATA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"],
+    strataMemoryReRetrievalRagTopK: process.env["STRATA_MEMORY_RERETRIEVAL_RAG_TOPK"],
   };
 }
 
@@ -1519,5 +1583,6 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     goal: { ...base.goal, ...((partial as Partial<Config>).goal ?? {}) },
     toolChain: { ...base.toolChain, ...(partial as Partial<Config>).toolChain },
     crossSession: { ...base.crossSession, ...(partial as Partial<Config>).crossSession },
+    reRetrieval: { ...base.reRetrieval, ...((partial as Partial<Config>).reRetrieval ?? {}) },
   } as Config;
 }
