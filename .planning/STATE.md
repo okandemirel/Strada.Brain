@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
-status: in-progress
-stopped_at: Completed 14-05-PLAN.md
-last_updated: "2026-03-08T20:28:29Z"
-last_activity: 2026-03-08 -- Completed 14-05 Daemon CLI & Dashboard Surface
+status: completed
+stopped_at: Completed 15-01 Types/Config/Parser/Dedup Foundation
+last_updated: "2026-03-09T08:48:32.090Z"
+last_activity: 2026-03-09 -- Completed 15-01 Types/Config/Parser/Dedup Foundation
 progress:
   total_phases: 10
   completed_phases: 5
-  total_plans: 13
-  completed_plans: 13
-  percent: 90
+  total_plans: 16
+  completed_plans: 14
+  percent: 88
 ---
 
 # State: Strada.Brain
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 14 -- Heartbeat Daemon Loop (COMPLETE)
+**Current focus:** Phase 15 -- Proactive Triggers (IN PROGRESS)
 
 ## Current Position
 
-Phase: 14 of 19 (Heartbeat Daemon Loop)
-Plan: 5 of 5
-Status: Phase 14 complete
-Last activity: 2026-03-08 -- Completed 14-05 Daemon CLI & Dashboard Surface
+Phase: 15 of 19 (Proactive Triggers)
+Plan: 1 of 3
+Status: 15-01 complete, continuing to 15-02
+Last activity: 2026-03-09 -- Completed 15-01 Types/Config/Parser/Dedup Foundation
 
-Progress: [██████████] 90%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 13 (v2.0) / 37 (lifetime)
-- Average duration: 5.6min (v2.0)
-- Total execution time: 73min (v2.0)
+- Total plans completed: 14 (v2.0) / 38 (lifetime)
+- Average duration: 5.7min (v2.0)
+- Total execution time: 80min (v2.0)
 
 **By Phase:**
 
@@ -48,8 +48,10 @@ Progress: [██████████] 90%
 | 12 | 2/2 | 10min | 5min |
 | 13 | 3/3 | 24min | 8min |
 | 14 | 5/5 | 27min | 5.4min |
+| 15 | 1/3 | 7min | 7min |
 
 *Updated after each plan completion*
+| Phase 15 P01 | 7min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -109,6 +111,14 @@ Recent decisions affecting current work:
 - [14-05]: Old gateway 'daemon' CLI command renamed to 'supervise' to free namespace for management subcommands
 - [14-05]: Lazy heartbeatLoopRef pattern for AgentStatusTool DI (tool registry inits before daemon)
 - [14-05]: Budget info in dashboard accessed via getDaemonStatus() -- no direct BudgetTracker dependency
+- [15-01]: HeartbeatTriggerDef as discriminated union on type field (CronTriggerDef | FileWatchTriggerDef | ChecklistTriggerDef | WebhookTriggerDef)
+- [15-01]: Backward compat: sections without type field but with cron field auto-default to cron type
+- [15-01]: NL time parser as separate exported function for testability
+- [15-01]: TriggerDeduplicator uses SHA-256 content hashing for cross-trigger dedup
+- [15-01]: Lazy cleanup in deduplicator to prevent unbounded memory growth
+- [15-01]: Default file-watch ignore: node_modules, .git, *.d.ts
+- [15-01]: Bootstrap.ts filters cron-only triggers in existing registration loop
+- [Phase 15]: HeartbeatTriggerDef as discriminated union on type field
 
 ### Pending Todos
 
@@ -121,10 +131,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T20:28:29Z
-Stopped at: Completed 14-05-PLAN.md (Phase 14 complete)
-Resume file: .planning/phases/14-heartbeat-daemon-loop/14-05-SUMMARY.md
+Last session: 2026-03-09T08:48:26.974Z
+Stopped at: Completed 15-01 Types/Config/Parser/Dedup Foundation
+Resume file: None
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-08*
+*Last updated: 2026-03-09*

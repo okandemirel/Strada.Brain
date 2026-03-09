@@ -126,11 +126,12 @@ Plans:
   2. ChecklistTrigger evaluates a natural-language task list (HEARTBEAT.md) and fires when items are due
   3. WebhookTrigger accepts HTTP POST on the dashboard server to initiate agent actions
   4. Duplicate trigger actions within a configurable time window are suppressed
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 15-01: TBD
-- [ ] 15-02: TBD
+- [ ] 15-01-PLAN.md -- Types, config, parser extension, deduplicator, and event map foundation
+- [ ] 15-02-PLAN.md -- FileWatchTrigger (chokidar event buffering) + ChecklistTrigger (NL time eval)
+- [ ] 15-03-PLAN.md -- WebhookTrigger + dashboard endpoints + HeartbeatLoop dedup + bootstrap wiring + CLI
 
 ### Phase 16: Interactive Goal Execution + Replanning
 **Goal**: Users trigger goal decomposition and execution directly in chat with progress reporting and mid-execution replanning on failure
@@ -212,8 +213,8 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 11. LLM Self-Awareness + Identity Foundation | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 12. Persistent Identity + Startup Recovery | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 13. Cross-Session Learning Transfer | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
-| 14. Heartbeat Daemon Loop | v2.0 | 5/5 | Complete | 2026-03-08 |
-| 15. Proactive Triggers | v2.0 | 0/TBD | Not started | - |
+| 14. Heartbeat Daemon Loop | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
+| 15. Proactive Triggers | 1/3 | In Progress|  | - |
 | 16. Interactive Goal Execution + Replanning | v2.0 | 0/TBD | Not started | - |
 | 17. Dynamic Memory Re-retrieval | v2.0 | 0/TBD | Not started | - |
 | 18. Dual Reporting + Dashboard | v2.0 | 0/TBD | Not started | - |
@@ -222,4 +223,4 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 ---
 *Roadmap created: 2026-03-06*
 *v2.0 phases added: 2026-03-08*
-*Last updated: 2026-03-08*
+*Last updated: 2026-03-09*
