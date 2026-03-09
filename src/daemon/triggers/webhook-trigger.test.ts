@@ -233,11 +233,14 @@ describe("WebhookRateLimiter", () => {
     limiter.isAllowed(now); // count: 1
     limiter.isAllowed(now + 500); // count: 2
 
-    // At now + 1001, the first timestamp expires but second doesn't
-    // So we should have room for 1 more
+    // At now + 1001, the first timestamp (now) expires but second (now+500) doesn't
+    // Window contains: [now+500]. Adding now+1001 makes [now+500, now+1001] = 2 entries = limit
     expect(limiter.isAllowed(now + 1001)).toBe(true);
-    expect(limiter.isAllowed(now + 1002)).toBe(true);
-    expect(limiter.isAllowed(now + 1003)).toBe(false); // sliding: now+500, now+1001, now+1002 = 3 > 2 (wait, 2 limit hit)
+    // Now at limit [now+500, now+1001], next should be denied
+    expect(limiter.isAllowed(now + 1002)).toBe(false);
+
+    // After now+500 also expires (at now+1501), we have room again
+    expect(limiter.isAllowed(now + 1502)).toBe(true);
   });
 });
 

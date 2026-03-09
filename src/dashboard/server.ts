@@ -16,6 +16,12 @@ import { calculateProgress } from "../goals/goal-progress.js";
 import type { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
 import type { TriggerRegistry } from "../daemon/trigger-registry.js";
 import type { ApprovalQueue } from "../daemon/security/approval-queue.js";
+import type { WebhookTrigger } from "../daemon/triggers/webhook-trigger.js";
+import {
+  WebhookRateLimiter,
+  parseRateLimit,
+  validateWebhookAuth,
+} from "../daemon/triggers/webhook-trigger.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -66,6 +72,12 @@ export class DashboardServer {
   private daemonRegistry?: TriggerRegistry;
   private daemonApprovalQueue?: ApprovalQueue;
 
+  // Webhook context (set when webhook triggers are registered)
+  private webhookTriggers?: Map<string, WebhookTrigger>;
+  private webhookSecret?: string;
+  private webhookRateLimiter?: WebhookRateLimiter;
+  private dashboardToken?: string;
+
   constructor(
     port: number,
     metrics: MetricsCollector,
@@ -110,10 +122,28 @@ export class DashboardServer {
     heartbeatLoop?: HeartbeatLoop;
     registry?: TriggerRegistry;
     approvalQueue?: ApprovalQueue;
+    webhookTriggers?: Map<string, WebhookTrigger>;
+    webhookSecret?: string;
+    webhookRateLimit?: string;
+    dashboardToken?: string;
   }): void {
     this.daemonHeartbeatLoop = ctx.heartbeatLoop;
     this.daemonRegistry = ctx.registry;
     this.daemonApprovalQueue = ctx.approvalQueue;
+
+    if (ctx.webhookTriggers) {
+      this.webhookTriggers = ctx.webhookTriggers;
+    }
+    if (ctx.webhookSecret) {
+      this.webhookSecret = ctx.webhookSecret;
+    }
+    if (ctx.dashboardToken) {
+      this.dashboardToken = ctx.dashboardToken;
+    }
+    if (ctx.webhookRateLimit) {
+      const { maxRequests, windowMs } = parseRateLimit(ctx.webhookRateLimit);
+      this.webhookRateLimiter = new WebhookRateLimiter(maxRequests, windowMs);
+    }
   }
 
   async start(): Promise<void> {
@@ -300,6 +330,108 @@ export class DashboardServer {
             expiresAt: e.expiresAt,
           })),
         }));
+        return;
+      }
+
+      // POST /api/webhook -- Accept webhook events with dual auth and rate limiting
+      if (req.method === "POST" && (url === "/api/webhook" || url.startsWith("/api/webhook?"))) {
+        let body = "";
+        req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+        req.on("end", () => {
+          try {
+            // Auth check
+            const headers: Record<string, string | undefined> = {
+              "x-webhook-secret": req.headers["x-webhook-secret"] as string | undefined,
+              "authorization": req.headers["authorization"] as string | undefined,
+            };
+            const authResult = validateWebhookAuth(
+              headers,
+              this.webhookSecret,
+              this.dashboardToken,
+            );
+            if (!authResult.valid) {
+              res.writeHead(authResult.status ?? 401, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: authResult.message }));
+              return;
+            }
+
+            // Rate limit check
+            if (this.webhookRateLimiter && !this.webhookRateLimiter.isAllowed(Date.now())) {
+              res.writeHead(429, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Rate limit exceeded" }));
+              return;
+            }
+
+            // Parse body
+            const parsed = JSON.parse(body || "{}") as {
+              action?: string;
+              trigger?: string;
+              context?: Record<string, unknown>;
+            };
+            if (!parsed.action) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Missing required field: action" }));
+              return;
+            }
+
+            // Find webhook trigger
+            if (!this.webhookTriggers || this.webhookTriggers.size === 0) {
+              res.writeHead(503, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "No webhook triggers registered" }));
+              return;
+            }
+
+            let target: WebhookTrigger | undefined;
+            if (parsed.trigger) {
+              target = this.webhookTriggers.get(parsed.trigger);
+              if (!target) {
+                res.writeHead(404, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: `Webhook trigger '${parsed.trigger}' not found` }));
+                return;
+              }
+            } else {
+              // Use first registered webhook trigger
+              target = this.webhookTriggers.values().next().value as WebhookTrigger | undefined;
+            }
+
+            if (!target) {
+              res.writeHead(503, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "No webhook triggers available" }));
+              return;
+            }
+
+            const source = req.headers["x-webhook-source"] as string | undefined;
+            target.pushEvent(parsed.action, source, parsed.context);
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              status: "accepted",
+              triggerId: target.metadata.name,
+            }));
+          } catch {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid JSON body" }));
+          }
+        });
+        return;
+      }
+
+      // GET /api/triggers -- List all registered triggers
+      if (req.method === "GET" && (url === "/api/triggers" || url.startsWith("/api/triggers?"))) {
+        const triggers = this.daemonRegistry?.getAll() ?? [];
+
+        const triggerList = triggers.map((t) => {
+          const nextRun = t.getNextRun();
+          return {
+            name: t.metadata.name,
+            type: t.metadata.type,
+            state: t.getState(),
+            nextRun: nextRun ? nextRun.toISOString() : null,
+          };
+        });
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(triggerList));
         return;
       }
 
