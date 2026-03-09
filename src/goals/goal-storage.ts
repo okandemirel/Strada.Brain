@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS goal_trees (
   task_description TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  plan_summary TEXT
 );
 
 CREATE TABLE IF NOT EXISTS goal_nodes (
@@ -61,6 +62,7 @@ interface GoalTreeRow {
   status: string;
   created_at: number;
   updated_at: number;
+  plan_summary: string | null;
 }
 
 interface GoalNodeRow {
@@ -139,8 +141,8 @@ export class GoalStorage {
 
     const stmts: Record<string, string> = {
       insertTree: `
-        INSERT INTO goal_trees (root_id, session_id, task_description, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO goal_trees (root_id, session_id, task_description, status, created_at, updated_at, plan_summary)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       insertNode: `
         INSERT INTO goal_nodes (id, root_id, parent_id, task, depends_on, depth, status, result, error, created_at, updated_at, started_at, completed_at, retry_count)
@@ -154,8 +156,8 @@ export class GoalStorage {
       getTreesBySession: `SELECT * FROM goal_trees WHERE session_id = ? ORDER BY created_at DESC LIMIT 50`,
       deleteTree: `DELETE FROM goal_trees WHERE root_id = ?`,
       upsertTree: `
-        INSERT OR REPLACE INTO goal_trees (root_id, session_id, task_description, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO goal_trees (root_id, session_id, task_description, status, created_at, updated_at, plan_summary)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       deleteNodesByRoot: `DELETE FROM goal_nodes WHERE root_id = ?`,
       getInterruptedTrees: `SELECT * FROM goal_trees WHERE status = 'executing' ORDER BY updated_at DESC LIMIT 20`,
@@ -198,6 +200,7 @@ export class GoalStorage {
         "pending",
         tree.createdAt,
         now,
+        tree.planSummary ?? null,
       );
 
       for (const [, node] of tree.nodes) {
@@ -302,6 +305,7 @@ export class GoalStorage {
       taskDescription: treeRow.task_description,
       nodes,
       createdAt: treeRow.created_at,
+      planSummary: treeRow.plan_summary ?? undefined,
     };
   }
 
@@ -319,6 +323,7 @@ export class GoalStorage {
         treeStatus,
         tree.createdAt,
         now,
+        tree.planSummary ?? null,
       );
       // Delete existing nodes and re-insert (atomic replacement)
       this.getStatement("deleteNodesByRoot").run(tree.rootId);

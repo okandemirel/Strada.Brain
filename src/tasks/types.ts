@@ -7,6 +7,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
+import type { GoalTree } from "../goals/types.js";
 
 // ─── Task Identity ──────────────────────────────────────────────────────────────
 
@@ -70,11 +71,13 @@ export interface Task {
   parentId?: TaskId;
   /** Origin of the task -- 'user' for interactive, 'daemon' for daemon-initiated */
   origin?: TaskOrigin;
+  /** Pre-decomposed goal tree for goal tasks (passed from Orchestrator to BackgroundExecutor) */
+  goalTree?: GoalTree;
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────────
 
-export type TaskCommand = "status" | "cancel" | "tasks" | "detail" | "help" | "pause" | "resume" | "model";
+export type TaskCommand = "status" | "cancel" | "tasks" | "detail" | "help" | "pause" | "resume" | "model" | "goal";
 
 export interface ParsedCommand {
   type: "command";

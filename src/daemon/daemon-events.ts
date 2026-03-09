@@ -95,6 +95,55 @@ export interface TriggerDeduplicatedEvent {
 }
 
 // =============================================================================
+// GOAL LIFECYCLE EVENT TYPES (Phase 16)
+// =============================================================================
+
+/** Emitted when a goal tree starts execution */
+export interface GoalStartedEvent {
+  readonly rootId: string;
+  readonly taskDescription: string;
+  readonly nodeCount: number;
+  readonly estimatedMinutes?: number;
+  readonly timestamp: number;
+}
+
+/** Emitted when a wave of parallel goal nodes completes */
+export interface GoalWaveCompleteEvent {
+  readonly rootId: string;
+  readonly waveIndex: number;
+  readonly completedCount: number;
+  readonly totalCount: number;
+  readonly timestamp: number;
+}
+
+/** Emitted when a single goal node completes */
+export interface GoalNodeCompleteEvent {
+  readonly rootId: string;
+  readonly nodeId: string;
+  readonly task: string;
+  readonly status: string;
+  readonly timestamp: number;
+}
+
+/** Emitted when a goal fails (node failure or budget exceeded) */
+export interface GoalFailedEvent {
+  readonly rootId: string;
+  readonly error: string;
+  readonly failureCount: number;
+  readonly timestamp: number;
+}
+
+/** Emitted when a goal tree completes successfully */
+export interface GoalCompleteEvent {
+  readonly rootId: string;
+  readonly taskDescription: string;
+  readonly durationMs: number;
+  readonly successCount: number;
+  readonly failureCount: number;
+  readonly timestamp: number;
+}
+
+// =============================================================================
 // EVENT MAP
 // =============================================================================
 
@@ -111,4 +160,9 @@ export interface DaemonEventMap {
   "daemon:checklist_due": ChecklistDueEvent;
   "daemon:webhook_received": WebhookReceivedEvent;
   "daemon:trigger_deduplicated": TriggerDeduplicatedEvent;
+  "goal:started": GoalStartedEvent;
+  "goal:wave_complete": GoalWaveCompleteEvent;
+  "goal:node_complete": GoalNodeCompleteEvent;
+  "goal:failed": GoalFailedEvent;
+  "goal:complete": GoalCompleteEvent;
 }

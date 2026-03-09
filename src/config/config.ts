@@ -123,7 +123,10 @@ export type EnvVarName =
   | "STRATA_DAEMON_DEFAULT_DEBOUNCE_MS"
   | "STRATA_CHECKLIST_MORNING_HOUR"
   | "STRATA_CHECKLIST_AFTERNOON_HOUR"
-  | "STRATA_CHECKLIST_EVENING_HOUR";
+  | "STRATA_CHECKLIST_EVENING_HOUR"
+  | "STRATA_GOAL_MAX_FAILURES"
+  | "STRATA_GOAL_ESCALATION_TIMEOUT_MINUTES"
+  | "STRATA_GOAL_MAX_REDECOMPOSITIONS";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -161,6 +164,13 @@ export type AIProviderName =
   | "fireworks"
   | "gemini"
   | "ollama";
+
+/** Goal interactive execution configuration (Phase 16) */
+export interface GoalConfig {
+  readonly maxFailures: number;
+  readonly escalationTimeoutMinutes: number;
+  readonly maxRedecompositions: number;
+}
 
 /** Rate limit configuration */
 export interface RateLimitConfig {
@@ -325,6 +335,9 @@ export interface Config {
   readonly goalMaxFailures: number;
   readonly goalParallelExecution: boolean;
   readonly goalMaxParallel: number;
+
+  // Goal Interactive Execution (Phase 16)
+  readonly goal: GoalConfig;
 
   // Tool Chain Synthesis
   readonly toolChain: ToolChainConfig;
@@ -562,6 +575,11 @@ export const configSchema = z
     goalMaxFailures: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
     goalParallelExecution: boolFromString(true),
     goalMaxParallel: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
+
+    // Goal Interactive Execution (Phase 16)
+    strataGoalMaxFailures: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
+    strataGoalEscalationTimeoutMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(120)).default("10"),
+    strataGoalMaxRedecompositions: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(10)).default("2"),
 
     // Tool Chain Synthesis
     toolChainEnabled: boolFromString(true),
@@ -822,6 +840,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     goalMaxFailures: rawConfig.goalMaxFailures,
     goalParallelExecution: rawConfig.goalParallelExecution,
     goalMaxParallel: rawConfig.goalMaxParallel,
+
+    goal: {
+      maxFailures: rawConfig.strataGoalMaxFailures,
+      escalationTimeoutMinutes: rawConfig.strataGoalEscalationTimeoutMinutes,
+      maxRedecompositions: rawConfig.strataGoalMaxRedecompositions,
+    },
 
     toolChain: {
       enabled: rawConfig.toolChainEnabled,
@@ -1114,6 +1138,9 @@ interface EnvVars {
   goalMaxFailures: string | undefined;
   goalParallelExecution: string | undefined;
   goalMaxParallel: string | undefined;
+  strataGoalMaxFailures: string | undefined;
+  strataGoalEscalationTimeoutMinutes: string | undefined;
+  strataGoalMaxRedecompositions: string | undefined;
   toolChainEnabled: string | undefined;
   toolChainMinOccurrences: string | undefined;
   toolChainSuccessRateThreshold: string | undefined;
@@ -1235,6 +1262,9 @@ function loadFromEnv(): EnvVars {
     goalMaxFailures: process.env["GOAL_MAX_FAILURES"],
     goalParallelExecution: process.env["GOAL_PARALLEL_EXECUTION"],
     goalMaxParallel: process.env["GOAL_MAX_PARALLEL"],
+    strataGoalMaxFailures: process.env["STRATA_GOAL_MAX_FAILURES"],
+    strataGoalEscalationTimeoutMinutes: process.env["STRATA_GOAL_ESCALATION_TIMEOUT_MINUTES"],
+    strataGoalMaxRedecompositions: process.env["STRATA_GOAL_MAX_REDECOMPOSITIONS"],
     toolChainEnabled: process.env["TOOL_CHAIN_ENABLED"],
     toolChainMinOccurrences: process.env["TOOL_CHAIN_MIN_OCCURRENCES"],
     toolChainSuccessRateThreshold: process.env["TOOL_CHAIN_SUCCESS_RATE_THRESHOLD"],
@@ -1489,6 +1519,7 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     goalMaxFailures: (partial as Partial<Config>).goalMaxFailures ?? base.goalMaxFailures,
     goalParallelExecution: (partial as Partial<Config>).goalParallelExecution ?? base.goalParallelExecution,
     goalMaxParallel: (partial as Partial<Config>).goalMaxParallel ?? base.goalMaxParallel,
+    goal: { ...base.goal, ...((partial as Partial<Config>).goal ?? {}) },
     toolChain: { ...base.toolChain, ...(partial as Partial<Config>).toolChain },
     crossSession: { ...base.crossSession, ...(partial as Partial<Config>).crossSession },
   } as Config;

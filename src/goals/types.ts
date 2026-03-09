@@ -47,6 +47,7 @@ export interface GoalNode {
   readonly startedAt?: number;
   readonly completedAt?: number;
   readonly retryCount?: number;
+  readonly redecompositionCount?: number;
 }
 
 /** A goal tree rooted at a single node */
@@ -56,6 +57,7 @@ export interface GoalTree {
   readonly taskDescription: string;
   readonly nodes: ReadonlyMap<GoalNodeId, GoalNode>;
   readonly createdAt: number;
+  readonly planSummary?: string;
 }
 
 // =============================================================================
@@ -106,6 +108,59 @@ export const llmDecompositionSchema = z.object({
  * Strips markdown code fences, parses JSON, and validates with Zod.
  * Returns null on any failure (invalid JSON, schema mismatch, etc.).
  */
+// =============================================================================
+// GOAL BLOCK OUTPUT (Phase 16: Interactive Goal Execution)
+// =============================================================================
+
+/** Structure returned by LLM when it identifies a user request as a goal */
+export interface GoalBlockOutput {
+  isGoal: boolean;
+  estimatedMinutes: number;
+  nodes: Array<{
+    id: string;
+    task: string;
+    dependsOn: string[];
+  }>;
+}
+
+const goalBlockNodeSchema = z.object({
+  id: z.string().min(1),
+  task: z.string().min(1),
+  dependsOn: z.array(z.string()).default([]),
+});
+
+/** Zod schema for validating GoalBlockOutput from LLM responses */
+export const goalBlockSchema = z.object({
+  isGoal: z.boolean(),
+  estimatedMinutes: z.number().positive(),
+  nodes: z.array(goalBlockNodeSchema).min(1),
+});
+
+/**
+ * Parse a goal block from LLM text output.
+ * Extracts triple-backtick goal fenced blocks (```goal ... ```),
+ * strips fences, parses JSON, and validates with Zod.
+ * Returns null on any failure (no goal block, invalid JSON, schema mismatch).
+ */
+export function parseGoalBlock(text: string): GoalBlockOutput | null {
+  try {
+    const fenceMatch = text.match(/```goal\s*\n([\s\S]*?)\n\s*```/);
+    if (!fenceMatch?.[1]) {
+      return null;
+    }
+
+    const cleaned = fenceMatch[1].trim();
+    const parsed = JSON.parse(cleaned);
+    const result = goalBlockSchema.safeParse(parsed);
+    if (!result.success) {
+      return null;
+    }
+    return result.data;
+  } catch {
+    return null;
+  }
+}
+
 export function parseLLMOutput(text: string): LLMDecompositionOutput | null {
   try {
     // Strip markdown code fences (```json ... ``` or ``` ... ```)

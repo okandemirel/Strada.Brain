@@ -81,6 +81,28 @@ export interface ChainInvalidatedEvent {
 }
 
 // =============================================================================
+// GOAL RE-DECOMPOSITION EVENT TYPES (Phase 16)
+// =============================================================================
+
+/** Emitted when a goal node is re-decomposed into sub-goals */
+export interface GoalRedecomposedEvent {
+  readonly rootId: string;
+  readonly nodeId: string;
+  readonly task: string;
+  readonly newNodeCount: number;
+  readonly timestamp: number;
+}
+
+/** Emitted when a goal node execution is retried */
+export interface GoalRetryEvent {
+  readonly rootId: string;
+  readonly nodeId: string;
+  readonly task: string;
+  readonly attempt: number;
+  readonly timestamp: number;
+}
+
+// =============================================================================
 // EVENT MAP
 // =============================================================================
 
@@ -97,6 +119,8 @@ export interface LearningEventMap {
   "instinct:scope_promoted": InstinctScopeEvent;
   "instinct:merged": InstinctMergedEvent;
   "instinct:age_expired": InstinctAgeExpiredEvent;
+  "goal:redecomposed": GoalRedecomposedEvent;
+  "goal:retry": GoalRetryEvent;
 }
 
 // =============================================================================
