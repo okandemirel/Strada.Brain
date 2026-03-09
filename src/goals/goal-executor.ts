@@ -125,6 +125,8 @@ export class GoalExecutor {
       onFailureBudgetExceeded?: OnFailureBudgetExceeded;
       /** Called after each wave of parallel nodes completes */
       onWaveComplete?: (tree: GoalTree, waveIndex: number) => void;
+      /** Called when a node exhausts retries -- returns new tree for recovery or null to proceed normally */
+      onNodeFailed?: (tree: GoalTree, failedNode: GoalNode) => Promise<GoalTree | null>;
     },
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
@@ -251,6 +253,24 @@ export class GoalExecutor {
             completedAt: Date.now(),
             retryCount: this.config.maxRetries,
           });
+
+          // LLM-driven recovery: ask whether to retry or re-decompose
+          if (opts?.onNodeFailed) {
+            const failedNode = mutableNodes.get(nodeId)!;
+            const recoveredTree = await opts.onNodeFailed(buildTree(), failedNode);
+            if (recoveredTree) {
+              // Merge new nodes into mutableNodes
+              for (const [id, n] of recoveredTree.nodes) {
+                if (!mutableNodes.has(id)) {
+                  mutableNodes.set(id, { ...n });
+                }
+              }
+              // Reset the failed node to pending (now a parent of new children)
+              updateNode(nodeId, { status: "pending" as const, error: undefined });
+              return; // New children picked up in next wave
+            }
+          }
+
           failedIds.add(nodeId);
           failureCount++;
           failedNodeInfos.push({

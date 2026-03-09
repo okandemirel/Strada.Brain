@@ -399,6 +399,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     goalExecutorConfig,
     aiProvider: providerManager.getProvider(""),
     channel,
+    goalConfig: config.goal,
+    learningEventBus: learningResult?.eventBus,
   });
   const taskManager = new TaskManager(taskStorage, backgroundExecutor);
   backgroundExecutor.setTaskManager(taskManager);

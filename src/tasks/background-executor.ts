@@ -34,8 +34,9 @@ import { renderGoalTree } from "../goals/goal-renderer.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import { supportsInteractivity } from "../channels/channel.interface.js";
-import type { IEventEmitter } from "../core/event-bus.js";
+import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
+import type { GoalConfig } from "../config/config.js";
 import { getLogger } from "../utils/logger.js";
 
 const LLM_TIMEOUT_MS = 10_000;
@@ -71,6 +72,8 @@ export interface BackgroundExecutorOptions {
   aiProvider?: IAIProvider;
   channel?: IChannelAdapter;
   daemonEventBus?: IEventEmitter<DaemonEventMap>;
+  goalConfig?: GoalConfig;
+  learningEventBus?: IEventEmitter<LearningEventMap>;
 }
 
 export class BackgroundExecutor {
@@ -85,6 +88,8 @@ export class BackgroundExecutor {
   private readonly aiProvider?: IAIProvider;
   private readonly channel?: IChannelAdapter;
   private daemonEventBus?: IEventEmitter<DaemonEventMap>;
+  private readonly goalConfig?: GoalConfig;
+  private readonly learningEventBus?: IEventEmitter<LearningEventMap>;
 
   constructor(opts: BackgroundExecutorOptions) {
     this.orchestrator = opts.orchestrator;
@@ -95,6 +100,8 @@ export class BackgroundExecutor {
     this.aiProvider = opts.aiProvider;
     this.channel = opts.channel;
     this.daemonEventBus = opts.daemonEventBus;
+    this.goalConfig = opts.goalConfig;
+    this.learningEventBus = opts.learningEventBus;
   }
 
   /**
@@ -334,78 +341,184 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
         }
       : undefined;
 
-    // Failure budget exceeded handler: detailed report, LLM diagnosis, force-continue UX
+    // LLM-driven re-decomposition on node failure (Plan 16-03)
+    const onNodeFailed = this.decomposer && this.aiProvider
+      ? async (currentTree: GoalTree, failedNode: GoalNode): Promise<GoalTree | null> => {
+          const maxRedecompositions = this.goalConfig?.maxRedecompositions ?? 2;
+          const currentCount = failedNode.redecompositionCount ?? 0;
+
+          // Enforce per-node redecomposition limit
+          if (currentCount >= maxRedecompositions) {
+            logger.debug("Re-decomposition limit reached for node", {
+              nodeId: failedNode.id,
+              count: currentCount,
+              max: maxRedecompositions,
+            });
+            return null;
+          }
+
+          // Ask LLM: RETRY or DECOMPOSE?
+          try {
+            const completedNodes = Array.from(currentTree.nodes.values())
+              .filter(n => n.status === "completed")
+              .map(n => `- [completed] ${n.task}`)
+              .join("\n");
+
+            const advisorResponse = await withTimeout(
+              this.aiProvider!.chat(
+                "You are a goal execution recovery advisor. A sub-goal has failed. Decide the best recovery strategy. Respond with exactly RETRY or DECOMPOSE followed by a brief reason.",
+                [{
+                  role: "user" as const,
+                  content: `Original goal: ${goalTree.taskDescription}\n\nFailed sub-goal: ${failedNode.task}\nError: ${sanitizeError(failedNode.error ?? "unknown")}\nRedecomposition count: ${currentCount}/${maxRedecompositions}\n\nCompleted so far:\n${completedNodes || "  (none)"}\n\nShould we RETRY the same approach or DECOMPOSE into smaller steps?`,
+                }],
+                [],
+              ),
+              LLM_TIMEOUT_MS,
+              { text: "RETRY" } as Awaited<ReturnType<IAIProvider["chat"]>>,
+            );
+
+            const decision = advisorResponse.text?.trim().toUpperCase() ?? "RETRY";
+
+            if (decision.startsWith("DECOMPOSE") && this.decomposer) {
+              // Build reflection context with full execution state
+              const reflectionContext = `Error: ${failedNode.error ?? "unknown"}\nOriginal task: ${goalTree.taskDescription}\nFailed task: ${failedNode.task}\nCompleted nodes:\n${completedNodes || "  (none)"}`;
+
+              const newTree = await this.decomposer.decomposeReactive(
+                currentTree,
+                failedNode.id,
+                reflectionContext,
+              );
+
+              if (newTree) {
+                // Increment redecompositionCount on the failed node in the new tree
+                const updatedFailedNode = newTree.nodes.get(failedNode.id);
+                if (updatedFailedNode) {
+                  const mutableNodes = new Map(newTree.nodes);
+                  mutableNodes.set(failedNode.id, {
+                    ...updatedFailedNode,
+                    redecompositionCount: currentCount + 1,
+                  });
+                  const updatedTree = { ...newTree, nodes: mutableNodes };
+
+                  // Emit goal:redecomposed event
+                  if (this.learningEventBus) {
+                    const newNodeCount = newTree.nodes.size - currentTree.nodes.size;
+                    this.learningEventBus.emit("goal:redecomposed", {
+                      rootId: goalTree.rootId,
+                      nodeId: failedNode.id,
+                      task: failedNode.task,
+                      newNodeCount,
+                      timestamp: Date.now(),
+                    });
+                  }
+
+                  return updatedTree;
+                }
+                return newTree;
+              }
+            }
+
+            // RETRY decision or DECOMPOSE failed
+            if (this.learningEventBus) {
+              this.learningEventBus.emit("goal:retry", {
+                rootId: goalTree.rootId,
+                nodeId: failedNode.id,
+                task: failedNode.task,
+                attempt: (failedNode.retryCount ?? 0) + 1,
+                timestamp: Date.now(),
+              });
+            }
+            return null;
+          } catch (e) {
+            logger.debug("onNodeFailed recovery failed", {
+              error: e instanceof Error ? e.message : String(e),
+            });
+            return null;
+          }
+        }
+      : undefined;
+
+    // Failure budget exceeded handler: detailed report, LLM diagnosis, 4-option escalation UX
     const interactiveChannel = this.channel && supportsInteractivity(this.channel)
       ? this.channel
       : undefined;
 
-    const onFailureBudgetExceeded: OnFailureBudgetExceeded | undefined = interactiveChannel
-        ? async (report: FailureReport) => {
-            // Build detailed failure report
-            const failureLines: string[] = [
-              `Failure budget exceeded (${report.failureCount}/${report.maxFailures} failures):`,
-              "",
-            ];
-            for (const fn of report.failedNodes) {
-              failureLines.push(`[!] ${fn.task}`);
-              failureLines.push(`    Error: ${sanitizeError(fn.error)}`);
-              if (fn.retryCount > 0) failureLines.push(`    Retries: ${fn.retryCount}`);
-              failureLines.push("");
-            }
+    const onFailureBudgetExceeded: OnFailureBudgetExceeded = async (report: FailureReport) => {
+      // Build detailed failure report
+      const failureLines: string[] = [
+        `Failure budget exceeded (${report.failureCount}/${report.maxFailures} failures):`,
+        "",
+      ];
+      for (const fn of report.failedNodes) {
+        failureLines.push(`[!] ${fn.task}`);
+        failureLines.push(`    Error: ${sanitizeError(fn.error)}`);
+        if (fn.retryCount > 0) failureLines.push(`    Retries: ${fn.retryCount}`);
+        failureLines.push("");
+      }
 
-            // LLM-generated fix suggestions (best-effort)
-            let diagnosis = "";
-            if (this.aiProvider) {
-              try {
-                const diagResponse = await withTimeout(
-                  this.aiProvider.chat(
-                    "You are a task failure diagnostician. Provide a brief diagnosis and actionable next steps. Be concise (2-3 sentences).",
-                    [{
-                      role: "user" as const,
-                      content: `The following sub-goals failed during execution of a task.
+      // LLM-generated diagnosis (best-effort, lightweight model)
+      let diagnosis = "";
+      if (this.aiProvider) {
+        try {
+          const diagResponse = await withTimeout(
+            this.aiProvider.chat(
+              "You are a task failure diagnostician. Provide a brief diagnosis and actionable fix suggestions. Be concise (2-3 sentences).",
+              [{
+                role: "user" as const,
+                content: `Task: ${goalTree.taskDescription}\n\nFailed sub-goals:\n${report.failedNodes.map(fn =>
+                  `- ${fn.task}: ${sanitizeError(fn.error)} (${fn.retryCount} retries)`
+                ).join("\n")}`,
+              }],
+              [],
+            ),
+            LLM_TIMEOUT_MS,
+            { text: "" } as Awaited<ReturnType<IAIProvider["chat"]>>,
+          );
+          diagnosis = diagResponse.text?.trim() ?? "";
+        } catch {
+          // LLM diagnosis is best-effort
+        }
+      }
 
-<task_description>${goalTree.taskDescription}</task_description>
-<failures>
-${report.failedNodes.map(fn => `<failure task="${fn.task}">${sanitizeError(fn.error)}</failure>`).join("\n")}
-</failures>
+      if (diagnosis) {
+        failureLines.push("Diagnosis:", diagnosis, "");
+      }
 
-Provide a brief diagnosis (what likely went wrong) and actionable next steps.`,
-                    }],
-                    [],
-                  ),
-                  LLM_TIMEOUT_MS,
-                  { text: "" } as Awaited<ReturnType<IAIProvider["chat"]>>,
-                );
-                diagnosis = diagResponse.text?.trim() ?? "";
-              } catch {
-                // LLM diagnosis is best-effort
-              }
-            }
+      const details = failureLines.join("\n");
+      const timeoutMinutes = this.goalConfig?.escalationTimeoutMinutes ?? 10;
 
-            if (diagnosis) {
-              failureLines.push("Diagnosis:", diagnosis, "");
-            }
+      if (interactiveChannel) {
+        const timeoutMs = timeoutMinutes * 60_000;
+        let timer: ReturnType<typeof setTimeout>;
+        const choice = await Promise.race([
+          interactiveChannel.requestConfirmation({
+            chatId: task.chatId,
+            question: `Failure budget exceeded (${report.failureCount}/${report.maxFailures}). How to proceed?`,
+            options: ["Continue", "Always Continue", "Retry Failed", "Abort"],
+            details,
+          }),
+          new Promise<string>((resolve) => {
+            timer = setTimeout(() => resolve("__timeout__"), timeoutMs);
+          }),
+        ]).finally(() => clearTimeout(timer!));
 
-            const details = failureLines.join("\n");
+        if (choice === "__timeout__") {
+          await this.channel!.sendText(task.chatId,
+            `Auto-aborting after ${timeoutMinutes}min timeout.${diagnosis ? `\n${diagnosis}` : ""}`);
+          return { continue: false, alwaysContinue: false };
+        }
 
-            // Present force-continue / abort options to user
-            const choice = await interactiveChannel.requestConfirmation({
-              chatId: task.chatId,
-              question: `Failure budget exceeded (${report.failureCount}/${report.maxFailures}). How would you like to proceed?`,
-              options: ["Force continue", "Always continue", "Abort"],
-              details,
-            });
-
-            const normalized = choice.toLowerCase().trim();
-            if (normalized === "always continue") {
-              return { continue: true, alwaysContinue: true };
-            } else if (normalized === "force continue") {
-              return { continue: true, alwaysContinue: false };
-            } else {
-              return { continue: false, alwaysContinue: false };
-            }
-          }
-        : undefined;
+        const normalized = choice.toLowerCase().trim();
+        if (normalized === "always continue") return { continue: true, alwaysContinue: true };
+        if (normalized === "continue") return { continue: true, alwaysContinue: false };
+        if (normalized === "retry failed") return { continue: true, alwaysContinue: false };
+        return { continue: false, alwaysContinue: false }; // Abort or unrecognized
+      } else {
+        // Non-interactive: send report via progress and auto-abort
+        onProgress(`Failure budget exceeded. ${diagnosis || "Aborting."}`);
+        return { continue: false, alwaysContinue: false };
+      }
+    };
 
     // Execute the tree with all callbacks
     const result = await executor.executeTree(goalTree, nodeExecutor, signal, {
@@ -413,6 +526,7 @@ Provide a brief diagnosis (what likely went wrong) and actionable next steps.`,
       criticalityEvaluator,
       onFailureBudgetExceeded,
       onWaveComplete,
+      onNodeFailed,
     });
 
     // Persist final tree state
