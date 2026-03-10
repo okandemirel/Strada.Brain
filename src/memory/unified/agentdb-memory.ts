@@ -37,6 +37,22 @@ import type {
   Vector,
 } from "../../types/index.js";
 import { ok, err, some, none, createBrand } from "../../types/index.js";
+
+// ---------------------------------------------------------------------------
+// Memory Decay Configuration
+// ---------------------------------------------------------------------------
+
+/** Decay configuration passed from MemoryConfig.decay */
+export interface MemoryDecayConfig {
+  readonly enabled: boolean;
+  readonly lambdas: {
+    readonly working: number;
+    readonly ephemeral: number;
+    readonly persistent: number;
+  };
+  readonly exemptDomains: string[];
+  readonly timeoutMs: number;
+}
 import { HnswWriteMutex } from "./hnsw-write-mutex.js";
 
 // ---------------------------------------------------------------------------
@@ -96,8 +112,20 @@ function getLoggerSafe() {
 }
 
 /** Get current timestamp as TimestampMs */
+let _nowFn: () => TimestampMs = () => createBrand(Date.now(), "TimestampMs" as const);
+
 function getNow(): TimestampMs {
-  return createBrand(Date.now(), "TimestampMs" as const);
+  return _nowFn();
+}
+
+/** @internal Test-only: override the clock */
+export function _setNowFn(fn: () => TimestampMs): void {
+  _nowFn = fn;
+}
+
+/** @internal Test-only: reset the clock to real time */
+export function _resetNowFn(): void {
+  _nowFn = () => createBrand(Date.now(), "TimestampMs" as const);
 }
 
 /**
@@ -123,6 +151,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   private tieringTimer: ReturnType<typeof setInterval> | null = null;
   private sqliteDb: Database.Database | null = null;
   private sqliteStatements: Map<string, Database.Statement> = new Map();
+  private decayConfig: MemoryDecayConfig | null = null;
 
   constructor(config: Partial<UnifiedMemoryConfig> = {}) {
     this.config = { ...DEFAULT_MEMORY_CONFIG, ...config };
@@ -215,6 +244,15 @@ export class AgentDBMemory implements IUnifiedMemory {
   }
 
   // ---------------------------------------------------------------------------
+  // Decay Configuration
+  // ---------------------------------------------------------------------------
+
+  /** Configure memory decay parameters. Called by bootstrap after config load. */
+  setDecayConfig(config: MemoryDecayConfig): void {
+    this.decayConfig = config;
+  }
+
+  // ---------------------------------------------------------------------------
   // Auto-Tiering
   // ---------------------------------------------------------------------------
 
@@ -240,6 +278,40 @@ export class AgentDBMemory implements IUnifiedMemory {
     const tierOrder = { [MemoryTier.Working]: 0, [MemoryTier.Ephemeral]: 1, [MemoryTier.Persistent]: 2 };
     let promoted = 0;
     let demoted = 0;
+
+    // --- Decay pass (before tiering) ---
+    if (this.decayConfig?.enabled) {
+      const lambdas: Record<MemoryTier, number> = {
+        [MemoryTier.Working]: this.decayConfig.lambdas.working,
+        [MemoryTier.Ephemeral]: this.decayConfig.lambdas.ephemeral,
+        [MemoryTier.Persistent]: this.decayConfig.lambdas.persistent,
+      };
+      const exemptDomains = this.decayConfig.exemptDomains;
+      let decayedCount = 0;
+
+      for (const entry of this.entries.values()) {
+        // Skip exempt domains
+        if (entry.domain && exemptDomains.includes(entry.domain)) continue;
+
+        const daysSinceAccess = (now - (entry.lastAccessedAt as number)) / (1000 * 60 * 60 * 24);
+        if (daysSinceAccess <= 0) continue; // just accessed, no decay
+
+        const lambda = lambdas[entry.tier];
+        const decayed = entry.importanceScore * Math.exp(-daysSinceAccess * lambda);
+        const newScore = Math.max(decayed, 0.01) as NormalizedScore;
+
+        if (newScore !== entry.importanceScore) {
+          entry.importanceScore = newScore;
+          decayedCount++;
+        }
+      }
+
+      // Batch persist decayed entries in transaction
+      if (decayedCount > 0) {
+        this.persistDecayedEntries();
+        getLoggerSafe().debug("[AgentDBMemory] Decay sweep complete", { decayedCount });
+      }
+    }
 
     for (const entry of this.entries.values()) {
       const daysSinceAccess = (now - (entry.lastAccessedAt as number)) / (1000 * 60 * 60 * 24);
@@ -1411,6 +1483,59 @@ export class AgentDBMemory implements IUnifiedMemory {
     } catch (error) {
       getLoggerSafe().error("[AgentDBMemory] Failed to persist entry", {
         id: entry.id as string,
+        error: String(error),
+      });
+    }
+  }
+
+  /**
+   * Batch-persist all in-memory entries to SQLite inside a single transaction.
+   * Used after decay sweep to atomically update all importance scores.
+   */
+  private persistDecayedEntries(): void {
+    if (!this.sqliteDb) return;
+
+    try {
+      const stmt = this.sqliteStatements.get("upsertMemory");
+      if (!stmt) return;
+      const db = this.sqliteDb;
+      const entries = this.entries;
+
+      const persistAll = db.transaction(() => {
+        for (const entry of entries.values()) {
+          const value = JSON.stringify({
+            type: entry.type,
+            content: entry.content,
+            tags: entry.tags,
+            importance: entry.importance,
+            archived: entry.archived,
+            tier: entry.tier,
+            accessCount: entry.accessCount,
+            lastAccessedAt: entry.lastAccessedAt,
+            expiresAt: entry.expiresAt,
+            hnswIndex: entry.hnswIndex,
+            version: "version" in entry ? entry.version : 1,
+            importanceScore: entry.importanceScore,
+            domain: entry.domain,
+            chatId: entry.chatId,
+          });
+          const metadata = JSON.stringify(entry.metadata ?? {});
+          const embeddingBuf = entry.embedding ? this.embeddingToBuffer(entry.embedding) : null;
+          stmt.run(
+            entry.id as string,
+            entry.type,
+            value,
+            metadata,
+            embeddingBuf,
+            entry.createdAt as number,
+            Date.now(),
+          );
+        }
+      });
+
+      persistAll();
+    } catch (error) {
+      getLoggerSafe().error("[AgentDBMemory] Failed to persist decayed entries", {
         error: String(error),
       });
     }
