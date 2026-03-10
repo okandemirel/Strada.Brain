@@ -368,3 +368,87 @@ describe("daemon notify", () => {
     expect(stdout).toContain("high");
   });
 });
+
+// =============================================================================
+// MEMORY:DECAY-STATUS SUBCOMMAND (Plan 21-03)
+// =============================================================================
+
+describe("daemon memory:decay-status", () => {
+  const MOCK_DECAY_STATS = {
+    enabled: true,
+    tiers: {
+      working: { entries: 42, avgScore: 0.65, atFloor: 3, lambda: 0.10 },
+      ephemeral: { entries: 128, avgScore: 0.72, atFloor: 8, lambda: 0.05 },
+      persistent: { entries: 512, avgScore: 0.84, atFloor: 12, lambda: 0.01 },
+    },
+    exemptDomains: ["instinct", "analysis-cache"],
+    totalExempt: 15,
+  };
+
+  it("prints formatted table with per-tier stats", async () => {
+    const ctx = makeMockContext({
+      memoryManager: {
+        getDecayStats: vi.fn().mockReturnValue(MOCK_DECAY_STATS),
+      } as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["memory:decay-status"]);
+
+    expect(stdout).toContain("Memory Decay Status");
+    expect(stdout).toContain("Working");
+    expect(stdout).toContain("42");
+    expect(stdout).toContain("0.65");
+    expect(stdout).toContain("Ephemeral");
+    expect(stdout).toContain("128");
+    expect(stdout).toContain("Persistent");
+    expect(stdout).toContain("512");
+    expect(stdout).toContain("0.01");
+    expect(stdout).toContain("instinct");
+    expect(stdout).toContain("15 entries");
+  });
+
+  it("outputs JSON when --json flag is passed", async () => {
+    const ctx = makeMockContext({
+      memoryManager: {
+        getDecayStats: vi.fn().mockReturnValue(MOCK_DECAY_STATS),
+      } as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["memory:decay-status", "--json"]);
+
+    const parsed = JSON.parse(stdout);
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.tiers.working.entries).toBe(42);
+    expect(parsed.tiers.persistent.lambda).toBe(0.01);
+    expect(parsed.exemptDomains).toEqual(["instinct", "analysis-cache"]);
+  });
+
+  it("shows disabled message when decay is off", async () => {
+    const ctx = makeMockContext({
+      memoryManager: {
+        getDecayStats: vi.fn().mockReturnValue({ ...MOCK_DECAY_STATS, enabled: false }),
+      } as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["memory:decay-status"]);
+
+    expect(stdout).toContain("Memory decay is disabled");
+    expect(stdout).toContain("MEMORY_DECAY_ENABLED=false");
+  });
+
+  it("errors when daemon is not running", async () => {
+    const { stderr } = await runDaemonCommand(() => undefined, ["memory:decay-status"]);
+
+    expect(stderr).toContain("Daemon is not running");
+  });
+
+  it("errors when memory manager has no getDecayStats", async () => {
+    const ctx = makeMockContext({
+      memoryManager: {} as any,
+    });
+
+    const { stderr } = await runDaemonCommand(() => ctx, ["memory:decay-status"]);
+
+    expect(stderr).toContain("not available");
+  });
+});

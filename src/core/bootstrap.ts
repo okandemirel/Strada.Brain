@@ -610,7 +610,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
     digestReporterInstance.start();
 
-    // Build daemon context for CLI commands (Plan 05 + Plan 18-02 reporting)
+    // Build daemon context for CLI commands (Plan 05 + Plan 18-02 reporting + Plan 21-03 decay stats)
     daemonContext = {
       heartbeatLoop,
       registry: triggerRegistry,
@@ -620,6 +620,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       config: daemonConfig,
       digestReporter: digestReporterInstance,
       notificationRouter: notificationRouterInstance,
+      memoryManager,
     };
 
     // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)

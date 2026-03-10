@@ -29,6 +29,7 @@ import type { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import type { DigestReporter } from "./reporting/digest-reporter.js";
 import type { NotificationRouter } from "./reporting/notification-router.js";
 import type { UrgencyLevel } from "./reporting/notification-types.js";
+import type { IMemoryManager } from "../memory/memory.interface.js";
 
 /**
  * Context for daemon CLI commands. Provided via callback since daemon
@@ -43,6 +44,7 @@ export interface DaemonContext {
   config: DaemonConfig;
   digestReporter?: DigestReporter;
   notificationRouter?: NotificationRouter;
+  memoryManager?: IMemoryManager;
 }
 
 /**
@@ -427,6 +429,71 @@ export function registerDaemonCommands(
       });
       console.log(`Notification sent (level: ${opts.level})`);
     });
+
+  // =========================================================================
+  // daemon memory:decay-status
+  // =========================================================================
+  daemon
+    .command("memory:decay-status")
+    .description("Show memory decay status per tier")
+    .option("--json", "Output as JSON instead of table")
+    .action((opts: { json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running. Start with: strata daemon start");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!ctx.memoryManager?.getDecayStats) {
+        console.error("Memory decay stats not available (memory manager does not support getDecayStats)");
+        process.exitCode = 1;
+        return;
+      }
+
+      const stats = ctx.memoryManager.getDecayStats();
+
+      if (!stats.enabled) {
+        console.log("Memory decay is disabled (MEMORY_DECAY_ENABLED=false)");
+        return;
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify(stats, null, 2));
+        return;
+      }
+
+      // Table format
+      console.log("Memory Decay Status:");
+      console.log("");
+      console.log(
+        padRight("Tier", 14) +
+        padLeft("Entries", 10) +
+        padLeft("Avg Score", 12) +
+        padLeft("At Floor", 10) +
+        padLeft("Lambda", 10),
+      );
+      console.log("-".repeat(56));
+
+      const tierNames = ["working", "ephemeral", "persistent"];
+      for (const name of tierNames) {
+        const t = stats.tiers[name];
+        if (!t) continue;
+        const displayName = name.charAt(0).toUpperCase() + name.slice(1);
+        console.log(
+          padRight(displayName, 14) +
+          padLeft(String(t.entries), 10) +
+          padLeft(t.avgScore.toFixed(2), 12) +
+          padLeft(String(t.atFloor), 10) +
+          padLeft(t.lambda.toFixed(2), 10),
+        );
+      }
+
+      console.log("");
+      if (stats.exemptDomains.length > 0) {
+        console.log(`Exempt domains: ${stats.exemptDomains.join(", ")} (${stats.totalExempt} entries)`);
+      }
+    });
 }
 
 // =============================================================================
@@ -441,4 +508,9 @@ function persistCircuitState(storage: DaemonStorage, name: string, cb: CircuitBr
 function padRight(str: string, width: number): string {
   if (str.length >= width) return str + " ";
   return str + " ".repeat(width - str.length);
+}
+
+function padLeft(str: string, width: number): string {
+  if (str.length >= width) return str;
+  return " ".repeat(width - str.length) + str;
 }
