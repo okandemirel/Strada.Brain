@@ -8,11 +8,14 @@
  *   strata daemon audit   -- Show recent approval/denial decisions
  *   strata daemon config  -- Show all daemon settings
  *   strata daemon budget  -- Budget management (reset)
+ *   strata daemon digest  -- Send immediate digest (or --dry-run to preview)
+ *   strata daemon notifications -- Show notification history
+ *   strata daemon notify  -- Send a test notification
  *
  * Uses callback-based DI: getDaemonContext() returns the running daemon's
  * context or undefined if daemon is not running.
  *
- * Requirements: DAEMON-01, DAEMON-04
+ * Requirements: DAEMON-01, DAEMON-04, RPT-01, RPT-03
  */
 
 import type { Command } from "commander";
@@ -23,6 +26,9 @@ import type { ApprovalQueue } from "./security/approval-queue.js";
 import type { DaemonStorage } from "./daemon-storage.js";
 import type { DaemonConfig } from "./daemon-types.js";
 import type { CircuitBreaker } from "./resilience/circuit-breaker.js";
+import type { DigestReporter } from "./reporting/digest-reporter.js";
+import type { NotificationRouter } from "./reporting/notification-router.js";
+import type { UrgencyLevel } from "./reporting/notification-types.js";
 
 /**
  * Context for daemon CLI commands. Provided via callback since daemon
@@ -35,6 +41,8 @@ export interface DaemonContext {
   approvalQueue: ApprovalQueue;
   storage: DaemonStorage;
   config: DaemonConfig;
+  digestReporter?: DigestReporter;
+  notificationRouter?: NotificationRouter;
 }
 
 /**
@@ -296,6 +304,115 @@ export function registerDaemonCommands(
 
       ctx.budgetTracker.resetBudget();
       console.log("Budget counter reset");
+    });
+
+  // =========================================================================
+  // daemon digest
+  // =========================================================================
+  daemon
+    .command("digest")
+    .description("Send an immediate digest to the active channel")
+    .option("--dry-run", "Format digest and print to stdout instead of sending")
+    .action(async (opts: { dryRun?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running.");
+        return;
+      }
+
+      if (!ctx.digestReporter) {
+        console.error("DigestReporter is not available.");
+        return;
+      }
+
+      if (opts.dryRun) {
+        const markdown = await ctx.digestReporter.sendDigest();
+        console.log("--- Digest Preview (dry-run) ---");
+        console.log(markdown);
+        console.log("--- End Preview ---");
+      } else {
+        await ctx.digestReporter.sendDigest();
+        console.log("Digest sent to active channel");
+      }
+    });
+
+  // =========================================================================
+  // daemon notifications
+  // =========================================================================
+  daemon
+    .command("notifications")
+    .description("Show recent notification history")
+    .option("--level <level>", "Filter by urgency level")
+    .option("--limit <n>", "Number of entries to show", "20")
+    .action((opts: { level?: string; limit: string }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.log("Daemon: not running");
+        return;
+      }
+
+      if (!ctx.notificationRouter) {
+        console.error("NotificationRouter is not available.");
+        return;
+      }
+
+      const limit = parseInt(opts.limit, 10) || 20;
+      const levelFilter = opts.level as UrgencyLevel | undefined;
+      const entries = ctx.notificationRouter.getHistory(limit, levelFilter);
+
+      if (entries.length === 0) {
+        console.log("No notification history found.");
+        return;
+      }
+
+      console.log("Recent Notifications:");
+      console.log(
+        padRight("Timestamp", 25) +
+        padRight("Level", 10) +
+        padRight("Title", 35) +
+        padRight("Delivered To", 20),
+      );
+      console.log("-".repeat(90));
+
+      for (const entry of entries) {
+        const ts = new Date(entry.createdAt).toISOString();
+        const delivered = entry.deliveredTo.join(", ") || "-";
+        console.log(
+          padRight(ts, 25) +
+          padRight(entry.urgency, 10) +
+          padRight(entry.title.slice(0, 34), 35) +
+          padRight(delivered, 20),
+        );
+      }
+    });
+
+  // =========================================================================
+  // daemon notify
+  // =========================================================================
+  daemon
+    .command("notify")
+    .description("Send a test notification")
+    .requiredOption("--level <level>", "Urgency level (silent, low, medium, high, critical)")
+    .requiredOption("--message <message>", "Notification message")
+    .action(async (opts: { level: string; message: string }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running.");
+        return;
+      }
+
+      if (!ctx.notificationRouter) {
+        console.error("NotificationRouter is not available.");
+        return;
+      }
+
+      await ctx.notificationRouter.notify({
+        level: opts.level as UrgencyLevel,
+        title: "Manual test",
+        message: opts.message,
+        timestamp: Date.now(),
+      });
+      console.log(`Notification sent (level: ${opts.level})`);
     });
 }
 

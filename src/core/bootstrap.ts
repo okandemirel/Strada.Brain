@@ -89,6 +89,8 @@ import { TriggerDeduplicator } from "../daemon/dedup/trigger-deduplicator.js";
 import { parseHeartbeatFile } from "../daemon/heartbeat-parser.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import type { ITrigger } from "../daemon/daemon-types.js";
+import { NotificationRouter } from "../daemon/reporting/notification-router.js";
+import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 
 // Task system imports
 import {
@@ -256,6 +258,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Initialize tool registry now that all deps are available
   // getDaemonStatus closure captures heartbeatLoop (declared below) via late binding
   let heartbeatLoop: HeartbeatLoop | undefined;
+  let digestReporterInstance: DigestReporter | undefined;
+  let notificationRouterInstance: NotificationRouter | undefined;
   let daemonContext: import("../daemon/daemon-cli.js").DaemonContext | undefined;
   await toolRegistry.initialize(config, {
     memoryManager,
@@ -542,16 +546,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       deduplicator,
     );
 
-    // Build daemon context for CLI commands (Plan 05)
-    daemonContext = {
-      heartbeatLoop,
-      registry: triggerRegistry,
-      budgetTracker: budgetTrackerInstance,
-      approvalQueue: approvalQueueInstance,
-      storage: daemonStorage,
-      config: daemonConfig,
-    };
-
     // Auto-restart after crash recovery
     if (crashContext?.wasCrash) {
       const wasDaemonRunning = daemonStorage.getDaemonState("daemon_was_running");
@@ -562,6 +556,47 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
     // Start heartbeat (HeartbeatLoop.start() logs startup details)
     heartbeatLoop.start();
+
+    // Create NotificationRouter (RPT-03, RPT-04)
+    notificationRouterInstance = new NotificationRouter({
+      config: config.notification,
+      quietHoursConfig: config.quietHours,
+      eventBus: daemonBus,
+      storage: daemonStorage,
+      channelSender: channel,
+      chatId: undefined, // Will be set on first message
+    });
+    notificationRouterInstance.start();
+
+    // Create DigestReporter (RPT-01)
+    digestReporterInstance = new DigestReporter({
+      config: config.digest,
+      daemonConfig: { timezone: daemonConfig.timezone },
+      storage: daemonStorage,
+      channelSender: channel,
+      chatId: undefined, // Will be set on first message
+      channelType,
+      eventBus: daemonBus,
+      heartbeatLoop,
+      metricsStorage,
+      learningStorage: learningResult.storage,
+      budgetTracker: budgetTrackerInstance,
+      dashboardPort: config.dashboard.port,
+      logger,
+    });
+    digestReporterInstance.start();
+
+    // Build daemon context for CLI commands (Plan 05 + Plan 18-02 reporting)
+    daemonContext = {
+      heartbeatLoop,
+      registry: triggerRegistry,
+      budgetTracker: budgetTrackerInstance,
+      approvalQueue: approvalQueueInstance,
+      storage: daemonStorage,
+      config: daemonConfig,
+      digestReporter: digestReporterInstance,
+      notificationRouter: notificationRouterInstance,
+    };
 
     // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
     if (dashboard) {
@@ -623,6 +658,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       identityManager,
       uptimeInterval,
       heartbeatLoop,
+      digestReporter: digestReporterInstance,
+      notificationRouter: notificationRouterInstance,
     }),
   };
 }
@@ -1246,6 +1283,8 @@ interface ShutdownOptions {
   identityManager?: IdentityStateManager;
   uptimeInterval?: ReturnType<typeof setInterval>;
   heartbeatLoop?: HeartbeatLoop;
+  digestReporter?: DigestReporter;
+  notificationRouter?: NotificationRouter;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -1257,6 +1296,14 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
     logger.info("Shutting down Strata Brain...");
 
     clearInterval(cleanupInterval);
+
+    // Stop reporting before heartbeat loop
+    if (options.digestReporter) {
+      options.digestReporter.stop();
+    }
+    if (options.notificationRouter) {
+      options.notificationRouter.stop();
+    }
 
     // Stop heartbeat loop before draining events
     if (options.heartbeatLoop) {

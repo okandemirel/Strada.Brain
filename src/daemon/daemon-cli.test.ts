@@ -272,3 +272,90 @@ describe("daemon budget reset", () => {
     expect(stdout.toLowerCase()).toContain("reset");
   });
 });
+
+// =============================================================================
+// DIGEST SUBCOMMAND (Plan 18-02)
+// =============================================================================
+
+describe("daemon digest", () => {
+  it("calls digestReporter.sendDigest()", async () => {
+    const sendDigest = vi.fn().mockResolvedValue("**All quiet** -- no activity");
+    const ctx = makeMockContext({
+      digestReporter: { sendDigest, start: vi.fn(), stop: vi.fn(), getLastDigestTime: vi.fn() } as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["digest"]);
+
+    expect(sendDigest).toHaveBeenCalled();
+    expect(stdout.toLowerCase()).toContain("digest sent");
+  });
+
+  it("prints to stdout in --dry-run mode", async () => {
+    const sendDigest = vi.fn().mockResolvedValue("**3 tasks done, 1 error**\n\n---\nDashboard: http://localhost:3100");
+    const ctx = makeMockContext({
+      digestReporter: { sendDigest, start: vi.fn(), stop: vi.fn(), getLastDigestTime: vi.fn() } as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["digest", "--dry-run"]);
+
+    expect(sendDigest).toHaveBeenCalled();
+    expect(stdout).toContain("Preview");
+    expect(stdout).toContain("3 tasks done");
+  });
+});
+
+// =============================================================================
+// NOTIFICATIONS SUBCOMMAND (Plan 18-02)
+// =============================================================================
+
+describe("daemon notifications", () => {
+  it("shows notification history filtered by --level", async () => {
+    const getHistory = vi.fn().mockReturnValue([
+      { id: 1, urgency: "high", title: "Budget exceeded", message: "Budget exhausted", deliveredTo: ["chat"], createdAt: Date.now() },
+    ]);
+    const ctx = makeMockContext({
+      notificationRouter: {
+        notify: vi.fn(),
+        getHistory,
+        start: vi.fn(),
+        stop: vi.fn(),
+      } as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["notifications", "--level", "high"]);
+
+    expect(getHistory).toHaveBeenCalledWith(20, "high");
+    expect(stdout).toContain("Budget exceeded");
+    expect(stdout).toContain("high");
+  });
+});
+
+// =============================================================================
+// NOTIFY SUBCOMMAND (Plan 18-02)
+// =============================================================================
+
+describe("daemon notify", () => {
+  it("calls notificationRouter.notify() with level and message", async () => {
+    const notifyFn = vi.fn().mockResolvedValue(undefined);
+    const ctx = makeMockContext({
+      notificationRouter: {
+        notify: notifyFn,
+        getHistory: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      } as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["notify", "--level", "high", "--message", "test notification"]);
+
+    expect(notifyFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "high",
+        title: "Manual test",
+        message: "test notification",
+      }),
+    );
+    expect(stdout).toContain("Notification sent");
+    expect(stdout).toContain("high");
+  });
+});
