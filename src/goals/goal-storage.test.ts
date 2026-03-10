@@ -16,10 +16,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { GoalStorage } from "./goal-storage.js";
 import type { GoalNode, GoalTree, GoalNodeId, GoalStatus } from "./types.js";
 import { generateGoalNodeId } from "./types.js";
+import Database from "better-sqlite3";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, mkdirSync } from "node:fs";
 
 // =============================================================================
 // HELPERS
@@ -342,6 +343,61 @@ describe("GoalStorage", () => {
       expect(rootNode.retryCount).toBe(0);
       expect(rootNode.startedAt).toBeUndefined();
       expect(rootNode.completedAt).toBeUndefined();
+    });
+  });
+
+  // ===========================================================================
+  // Phase 20: plan_summary migration (TD-16)
+  // ===========================================================================
+
+  describe("plan_summary column migration (TD-16)", () => {
+    it("migrates existing goal_trees table to add plan_summary column", () => {
+      // Create a temporary DB with the OLD schema (no plan_summary)
+      const migrationDbDir = join(tmpdir(), `goal-migration-${randomBytes(4).toString("hex")}`);
+      mkdirSync(migrationDbDir, { recursive: true });
+      const migrationDbPath = join(migrationDbDir, "goals.db");
+
+      // Open directly with better-sqlite3 and create old schema
+      const rawDb = new Database(migrationDbPath);
+      rawDb.exec(`
+        CREATE TABLE goal_trees (
+          root_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          task_description TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE goal_nodes (
+          id TEXT PRIMARY KEY,
+          root_id TEXT NOT NULL,
+          parent_id TEXT,
+          task TEXT NOT NULL,
+          depends_on TEXT NOT NULL DEFAULT '[]',
+          depth INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'pending',
+          result TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (root_id) REFERENCES goal_trees(root_id) ON DELETE CASCADE
+        );
+      `);
+      rawDb.close();
+
+      // Now construct GoalStorage with this DB -- constructor should run migration
+      const migrationStorage = new GoalStorage(migrationDbPath);
+      migrationStorage.initialize();
+
+      // Verify plan_summary column exists by inserting a row with it
+      const rawDbCheck = new Database(migrationDbPath);
+      const cols = rawDbCheck.pragma("table_info(goal_trees)") as Array<{ name: string }>;
+      const colNames = cols.map((c) => c.name);
+      expect(colNames).toContain("plan_summary");
+      rawDbCheck.close();
+
+      migrationStorage.close();
+      rmSync(migrationDbDir, { recursive: true, force: true });
     });
   });
 });
