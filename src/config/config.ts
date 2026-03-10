@@ -1015,9 +1015,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
   return { kind: "valid", value: config };
 }
 
-/** Split a comma-separated string into a trimmed, non-empty array */
+/** Known valid notification channel names */
+const VALID_CHANNELS = new Set(["chat", "dashboard"]);
+
+/** Split a comma-separated string into a trimmed, non-empty, allowlist-validated array */
 function splitCsv(value: string): string[] {
-  return value.split(",").map((s) => s.trim()).filter(Boolean);
+  return value.split(",").map((s) => s.trim()).filter(Boolean).filter((ch) => VALID_CHANNELS.has(ch));
 }
 
 /**

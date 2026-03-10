@@ -81,6 +81,18 @@ export class DigestReporter {
 
     const tz = this.deps.config.timezone || this.deps.daemonConfig.timezone || undefined;
 
+    // Validate cron expression before scheduling to prevent DoS via malformed/sub-second patterns
+    try {
+      const test = new Cron(this.deps.config.schedule, { paused: true });
+      test.stop();
+    } catch (err) {
+      this.deps.logger.error("Invalid digest cron schedule, digest disabled", {
+        schedule: this.deps.config.schedule,
+        error: err,
+      });
+      return;
+    }
+
     this.cronJob = new Cron(
       this.deps.config.schedule,
       { timezone: tz },

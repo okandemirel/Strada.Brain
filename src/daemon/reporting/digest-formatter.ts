@@ -45,6 +45,19 @@ export interface DigestDeltas {
 // CHANNEL LIMITS
 // =============================================================================
 
+/** Validate and sanitize a URL string for safe embedding in markdown */
+function sanitizeUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "http://localhost:3100";
+    }
+    return parsed.href;
+  } catch {
+    return "http://localhost:3100";
+  }
+}
+
 /** Per-channel message length limits */
 const CHANNEL_LIMITS: Record<string, number> = {
   telegram: 4096,
@@ -75,10 +88,11 @@ export function formatDigest(snapshot: DigestSnapshot, deltas: DigestDeltas): st
   const hasGoals = snapshot.goalProgress !== null;
 
   const hasActivity = hasErrors || hasTriggers || hasTasks || hasLearning;
+  const safeUrl = sanitizeUrl(snapshot.dashboardUrl);
 
   // "All quiet" case: no meaningful activity
   if (!hasActivity && !hasBudget) {
-    return `**All quiet** -- no activity since last digest\n\n---\nDashboard: ${snapshot.dashboardUrl}`;
+    return `**All quiet** -- no activity since last digest\n\n---\nDashboard: ${safeUrl}`;
   }
 
   const sections: string[] = [];
@@ -119,7 +133,7 @@ export function formatDigest(snapshot: DigestSnapshot, deltas: DigestDeltas): st
 
   // Footer
   sections.push("---");
-  sections.push(`Dashboard: ${snapshot.dashboardUrl}`);
+  sections.push(`Dashboard: ${safeUrl}`);
 
   return sections.join("\n\n");
 }
@@ -142,7 +156,8 @@ export function truncateForChannel(markdown: string, channelType: string, dashbo
     return markdown;
   }
 
-  const suffix = `\n\n... view full details on dashboard\nDashboard: ${dashboardUrl}`;
+  const safeUrl = sanitizeUrl(dashboardUrl);
+  const suffix = `\n\n... view full details on dashboard\nDashboard: ${safeUrl}`;
   const maxContent = limit - suffix.length;
 
   // Find nearest newline before the max content length

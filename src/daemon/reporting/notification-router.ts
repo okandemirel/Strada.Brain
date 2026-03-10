@@ -102,6 +102,9 @@ export class NotificationRouter {
       return;
     }
 
+    // Evict stale group entries to prevent unbounded memory growth
+    this.evictStaleGroups(payload.timestamp);
+
     // 2. Apply time-window grouping
     const groupKey = payload.sourceEvent || payload.title;
     const now = payload.timestamp;
@@ -331,6 +334,16 @@ export class NotificationRouter {
       buffered,
       timestamp: payload.timestamp,
     });
+  }
+
+  /** Remove group entries whose window has expired to bound memory usage */
+  private evictStaleGroups(now: number): void {
+    const windowMs = this.config.groupingWindowMs;
+    for (const [key, entry] of this.groupMap) {
+      if (now - entry.windowStart >= windowMs) {
+        this.groupMap.delete(key);
+      }
+    }
   }
 
   private formatNotification(payload: NotificationPayload): string {

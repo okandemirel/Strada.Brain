@@ -357,7 +357,14 @@ export function registerDaemonCommands(
       }
 
       const limit = parseInt(opts.limit, 10) || 20;
-      const levelFilter = opts.level as UrgencyLevel | undefined;
+      const VALID_LEVELS: UrgencyLevel[] = ["silent", "low", "medium", "high", "critical"];
+      const levelFilter = opts.level && VALID_LEVELS.includes(opts.level as UrgencyLevel)
+        ? opts.level as UrgencyLevel
+        : undefined;
+      if (opts.level && !levelFilter) {
+        console.error(`Invalid level filter: ${opts.level}. Must be one of: ${VALID_LEVELS.join(", ")}`);
+        return;
+      }
       const entries = ctx.notificationRouter.getHistory(limit, levelFilter);
 
       if (entries.length === 0) {
@@ -403,6 +410,12 @@ export function registerDaemonCommands(
 
       if (!ctx.notificationRouter) {
         console.error("NotificationRouter is not available.");
+        return;
+      }
+
+      const VALID_LEVELS: UrgencyLevel[] = ["silent", "low", "medium", "high", "critical"];
+      if (!VALID_LEVELS.includes(opts.level as UrgencyLevel)) {
+        console.error(`Invalid level: ${opts.level}. Must be one of: ${VALID_LEVELS.join(", ")}`);
         return;
       }
 
