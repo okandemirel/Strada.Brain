@@ -29,6 +29,7 @@ import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
 import type { TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES } from "../tasks/types.js";
+import { MS_PER_DAY } from "../learning/types.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import type { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
 import type * as winston from "winston";
@@ -152,7 +153,7 @@ export class HeartbeatLoop {
 
     // Prune old trigger fire history entries (Phase 21, OPS-01)
     try {
-      const retentionMs = this.config.triggerFireRetentionDays * 86400000;
+      const retentionMs = this.config.triggerFireRetentionDays * MS_PER_DAY;
       const pruned = this.storage.pruneTriggerFireHistoryByAge(retentionMs);
       if (pruned > 0) {
         this.logger.debug("Trigger fire history pruned", { count: pruned });

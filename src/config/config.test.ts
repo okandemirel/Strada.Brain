@@ -424,6 +424,16 @@ describe("loadConfig", () => {
           failureThreshold: 3,
         },
         timezone: "",
+        triggers: {
+          webhookSecret: undefined,
+          webhookRateLimit: "10/min",
+          dedupWindowMs: 300000,
+          defaultDebounceMs: 500,
+          checklistMorningHour: 9,
+          checklistAfternoonHour: 14,
+          checklistEveningHour: 18,
+        },
+        triggerFireRetentionDays: 30,
       });
     });
 

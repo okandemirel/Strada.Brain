@@ -335,6 +335,38 @@ export interface MemoryHealth {
 }
 
 // =============================================================================
+// MEMORY DECAY TYPES (Phase 21)
+// =============================================================================
+
+/** Per-tier decay statistics returned by getDecayStats() */
+export interface DecayTierStats {
+  readonly entries: number;
+  readonly avgScore: number;
+  readonly atFloor: number;
+  readonly lambda: number;
+}
+
+/** Aggregate decay statistics for observability */
+export interface DecayStats {
+  readonly enabled: boolean;
+  readonly tiers: Record<string, DecayTierStats>;
+  readonly exemptDomains: string[];
+  readonly totalExempt: number;
+}
+
+/** Decay configuration passed from MemoryConfig.decay */
+export interface MemoryDecayConfig {
+  readonly enabled: boolean;
+  readonly lambdas: {
+    readonly working: number;
+    readonly ephemeral: number;
+    readonly persistent: number;
+  };
+  readonly exemptDomains: string[];
+  readonly timeoutMs: number;
+}
+
+// =============================================================================
 // MEMORY MANAGER INTERFACE
 // =============================================================================
 
@@ -483,12 +515,7 @@ export interface IMemoryManager {
   getHealth(): MemoryHealth;
 
   /** Get per-tier decay statistics for observability (optional, implemented by AgentDBMemory) */
-  getDecayStats?(): {
-    enabled: boolean;
-    tiers: Record<string, { entries: number; avgScore: number; atFloor: number; lambda: number }>;
-    exemptDomains: string[];
-    totalExempt: number;
-  };
+  getDecayStats?(): DecayStats;
 
   /** Export memory to JSON */
   export(options?: { 

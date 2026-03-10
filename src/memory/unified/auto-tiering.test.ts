@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AgentDBMemory, _setNowFn, _resetNowFn } from "./agentdb-memory.js";
+import type { MemoryDecayConfig } from "../memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { TimestampMs } from "../../types/index.js";
 import { createBrand } from "../../types/index.js";
@@ -393,24 +394,23 @@ describe("AgentDBMemory Auto-Tiering", () => {
 // Memory Decay Tests (Phase 21, MEM-08..MEM-11)
 // =============================================================================
 
-/** Helper to set the decayConfig on an AgentDBMemory instance */
-function setDecayConfig(
+const DEFAULT_DECAY_CONFIG: MemoryDecayConfig = {
+  enabled: true,
+  lambdas: {
+    working: 0.10,
+    ephemeral: 0.05,
+    persistent: 0.01,
+  },
+  exemptDomains: ["instinct", "analysis-cache"],
+  timeoutMs: 30000,
+};
+
+/** Helper to configure memory decay on an AgentDBMemory instance */
+function configureDecay(
   mem: AgentDBMemory,
-  overrides: Record<string, unknown> = {},
+  overrides: Partial<MemoryDecayConfig> = {},
 ): void {
-  const defaultDecay = {
-    enabled: true,
-    lambdas: {
-      working: 0.10,
-      ephemeral: 0.05,
-      persistent: 0.01,
-    },
-    exemptDomains: ["instinct", "analysis-cache"],
-    timeoutMs: 30000,
-  };
-  const config = { ...defaultDecay, ...overrides };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (mem as any).decayConfig = config;
+  mem.setDecayConfig({ ...DEFAULT_DECAY_CONFIG, ...overrides });
 }
 
 describe("memory decay", () => {
@@ -426,7 +426,7 @@ describe("memory decay", () => {
       dimensions: 128,
     });
     await memory.initialize();
-    setDecayConfig(memory);
+    configureDecay(memory);
   });
 
   afterEach(() => {
@@ -524,7 +524,7 @@ describe("memory decay", () => {
   });
 
   it("MEMORY_DECAY_ENABLED=false leaves all scores unchanged (backward compatible)", async () => {
-    setDecayConfig(memory, { enabled: false });
+    configureDecay(memory, { enabled: false });
 
     const tenDaysAgo = BASE_TIME - 10 * 24 * 60 * 60 * 1000;
     const entry = createTestEntry({
@@ -588,7 +588,7 @@ describe("memory decay", () => {
   });
 
   it("custom exempt domain added to config is respected", async () => {
-    setDecayConfig(memory, {
+    configureDecay(memory, {
       exemptDomains: ["instinct", "analysis-cache", "custom-domain"],
     });
 

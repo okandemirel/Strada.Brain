@@ -637,6 +637,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         capabilityManifest: buildCapabilityManifest(),
         daemonStorage,
         historyDepth: 10,
+        triggerFireRetentionDays: daemonConfig.triggerFireRetentionDays,
       });
     }
   }

@@ -37,23 +37,10 @@ import type {
   Vector,
 } from "../../types/index.js";
 import { ok, err, some, none, createBrand } from "../../types/index.js";
-
-// ---------------------------------------------------------------------------
-// Memory Decay Configuration
-// ---------------------------------------------------------------------------
-
-/** Decay configuration passed from MemoryConfig.decay */
-export interface MemoryDecayConfig {
-  readonly enabled: boolean;
-  readonly lambdas: {
-    readonly working: number;
-    readonly ephemeral: number;
-    readonly persistent: number;
-  };
-  readonly exemptDomains: string[];
-  readonly timeoutMs: number;
-}
 import { HnswWriteMutex } from "./hnsw-write-mutex.js";
+import { MS_PER_DAY } from "../../learning/types.js";
+import type { DecayStats, DecayTierStats, MemoryDecayConfig } from "../memory.interface.js";
+export type { MemoryDecayConfig } from "../memory.interface.js";
 
 // ---------------------------------------------------------------------------
 // SQLite Schema & Row Types
@@ -256,17 +243,12 @@ export class AgentDBMemory implements IUnifiedMemory {
    * Get per-tier decay statistics for observability.
    * Returns entry counts, average importance scores, at-floor counts, and lambda values.
    */
-  getDecayStats(): {
-    enabled: boolean;
-    tiers: Record<string, { entries: number; avgScore: number; atFloor: number; lambda: number }>;
-    exemptDomains: string[];
-    totalExempt: number;
-  } {
+  getDecayStats(): DecayStats {
     const enabled = this.decayConfig?.enabled ?? false;
     const lambdas = this.decayConfig?.lambdas ?? { working: 0, ephemeral: 0, persistent: 0 };
     const exemptDomains = this.decayConfig?.exemptDomains ?? [];
 
-    const tierData: Record<string, { entries: number; totalScore: number; atFloor: number; lambda: number }> = {
+    const tierAccumulators: Record<string, { entries: number; totalScore: number; atFloor: number; lambda: number }> = {
       [MemoryTier.Working]: { entries: 0, totalScore: 0, atFloor: 0, lambda: lambdas.working },
       [MemoryTier.Ephemeral]: { entries: 0, totalScore: 0, atFloor: 0, lambda: lambdas.ephemeral },
       [MemoryTier.Persistent]: { entries: 0, totalScore: 0, atFloor: 0, lambda: lambdas.persistent },
@@ -279,22 +261,22 @@ export class AgentDBMemory implements IUnifiedMemory {
         totalExempt++;
         continue;
       }
-      const td = tierData[entry.tier];
-      if (!td) continue;
-      td.entries++;
-      td.totalScore += entry.importanceScore;
+      const acc = tierAccumulators[entry.tier];
+      if (!acc) continue;
+      acc.entries++;
+      acc.totalScore += entry.importanceScore;
       if (entry.importanceScore <= 0.01) {
-        td.atFloor++;
+        acc.atFloor++;
       }
     }
 
-    const tiers: Record<string, { entries: number; avgScore: number; atFloor: number; lambda: number }> = {};
-    for (const [tier, data] of Object.entries(tierData)) {
+    const tiers: Record<string, DecayTierStats> = {};
+    for (const [tier, acc] of Object.entries(tierAccumulators)) {
       tiers[tier] = {
-        entries: data.entries,
-        avgScore: data.entries > 0 ? data.totalScore / data.entries : 0,
-        atFloor: data.atFloor,
-        lambda: data.lambda,
+        entries: acc.entries,
+        avgScore: acc.entries > 0 ? acc.totalScore / acc.entries : 0,
+        atFloor: acc.atFloor,
+        lambda: acc.lambda,
       };
     }
 
@@ -323,7 +305,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   }
 
   private async autoTieringSweep(promotionThreshold: number, demotionTimeoutDays: number): Promise<void> {
-    const now = Date.now();
+    const now = getNow() as number;
     const tierOrder = { [MemoryTier.Working]: 0, [MemoryTier.Ephemeral]: 1, [MemoryTier.Persistent]: 2 };
     let promoted = 0;
     let demoted = 0;
@@ -336,13 +318,13 @@ export class AgentDBMemory implements IUnifiedMemory {
         [MemoryTier.Persistent]: this.decayConfig.lambdas.persistent,
       };
       const exemptDomains = this.decayConfig.exemptDomains;
-      let decayedCount = 0;
+      const decayedEntryIds: string[] = [];
 
       for (const entry of this.entries.values()) {
         // Skip exempt domains
         if (entry.domain && exemptDomains.includes(entry.domain)) continue;
 
-        const daysSinceAccess = (now - (entry.lastAccessedAt as number)) / (1000 * 60 * 60 * 24);
+        const daysSinceAccess = (now - (entry.lastAccessedAt as number)) / MS_PER_DAY;
         if (daysSinceAccess <= 0) continue; // just accessed, no decay
 
         const lambda = lambdas[entry.tier];
@@ -351,19 +333,19 @@ export class AgentDBMemory implements IUnifiedMemory {
 
         if (newScore !== entry.importanceScore) {
           entry.importanceScore = newScore;
-          decayedCount++;
+          decayedEntryIds.push(entry.id as string);
         }
       }
 
-      // Batch persist decayed entries in transaction
-      if (decayedCount > 0) {
-        this.persistDecayedEntries();
-        getLoggerSafe().debug("[AgentDBMemory] Decay sweep complete", { decayedCount });
+      // Batch persist only the entries whose scores actually changed
+      if (decayedEntryIds.length > 0) {
+        this.persistDecayedEntries(decayedEntryIds);
+        getLoggerSafe().debug("[AgentDBMemory] Decay sweep complete", { decayedCount: decayedEntryIds.length });
       }
     }
 
     for (const entry of this.entries.values()) {
-      const daysSinceAccess = (now - (entry.lastAccessedAt as number)) / (1000 * 60 * 60 * 24);
+      const daysSinceAccess = (now - (entry.lastAccessedAt as number)) / MS_PER_DAY;
       const currentTier = entry.tier;
       let targetTier = currentTier;
 
@@ -1491,6 +1473,41 @@ export class AgentDBMemory implements IUnifiedMemory {
   }
 
   /**
+   * Serialize an entry and run the upsert prepared statement.
+   * Shared by persistEntry and persistDecayedEntries to avoid duplication.
+   */
+  private upsertEntryRow(stmt: Database.Statement, entry: UnifiedMemoryEntry): void {
+    const value = JSON.stringify({
+      type: entry.type,
+      content: entry.content,
+      tags: entry.tags,
+      importance: entry.importance,
+      archived: entry.archived,
+      tier: entry.tier,
+      accessCount: entry.accessCount,
+      lastAccessedAt: entry.lastAccessedAt,
+      expiresAt: entry.expiresAt,
+      hnswIndex: entry.hnswIndex,
+      version: "version" in entry ? entry.version : 1,
+      importanceScore: entry.importanceScore,
+      domain: entry.domain,
+      chatId: entry.chatId,
+    });
+    const metadata = JSON.stringify(entry.metadata ?? {});
+    const embeddingBuf = entry.embedding ? this.embeddingToBuffer(entry.embedding) : null;
+
+    stmt.run(
+      entry.id as string,
+      entry.type,
+      value,
+      metadata,
+      embeddingBuf,
+      entry.createdAt as number,
+      Date.now(),
+    );
+  }
+
+  /**
    * Persist a single entry to SQLite (called after in-memory store).
    */
   private persistEntry(entry: UnifiedMemoryEntry): void {
@@ -1499,36 +1516,7 @@ export class AgentDBMemory implements IUnifiedMemory {
     try {
       const stmt = this.sqliteStatements.get("upsertMemory");
       if (!stmt) return;
-
-      const value = JSON.stringify({
-        type: entry.type,
-        content: entry.content,
-        tags: entry.tags,
-        importance: entry.importance,
-        archived: entry.archived,
-        tier: entry.tier,
-        accessCount: entry.accessCount,
-        lastAccessedAt: entry.lastAccessedAt,
-        expiresAt: entry.expiresAt,
-        hnswIndex: entry.hnswIndex,
-        version: "version" in entry ? entry.version : 1,
-        importanceScore: entry.importanceScore,
-        domain: entry.domain,
-        chatId: entry.chatId,
-      });
-
-      const metadata = JSON.stringify(entry.metadata ?? {});
-      const embeddingBuf = entry.embedding ? this.embeddingToBuffer(entry.embedding) : null;
-
-      stmt.run(
-        entry.id as string,
-        entry.type, // key = type for quick filtering
-        value,
-        metadata,
-        embeddingBuf,
-        entry.createdAt as number,
-        Date.now(),
-      );
+      this.upsertEntryRow(stmt, entry);
     } catch (error) {
       getLoggerSafe().error("[AgentDBMemory] Failed to persist entry", {
         id: entry.id as string,
@@ -1538,51 +1526,25 @@ export class AgentDBMemory implements IUnifiedMemory {
   }
 
   /**
-   * Batch-persist all in-memory entries to SQLite inside a single transaction.
-   * Used after decay sweep to atomically update all importance scores.
+   * Batch-persist decayed entries to SQLite inside a single transaction.
+   * Only writes entries whose IDs are in the provided set, avoiding
+   * unnecessary write amplification for unchanged entries.
+   * @param entryIds IDs of entries that were actually decayed
    */
-  private persistDecayedEntries(): void {
+  private persistDecayedEntries(entryIds: string[]): void {
     if (!this.sqliteDb) return;
 
     try {
       const stmt = this.sqliteStatements.get("upsertMemory");
       if (!stmt) return;
-      const db = this.sqliteDb;
-      const entries = this.entries;
+      const idSet = new Set(entryIds);
 
-      const persistAll = db.transaction(() => {
-        for (const entry of entries.values()) {
-          const value = JSON.stringify({
-            type: entry.type,
-            content: entry.content,
-            tags: entry.tags,
-            importance: entry.importance,
-            archived: entry.archived,
-            tier: entry.tier,
-            accessCount: entry.accessCount,
-            lastAccessedAt: entry.lastAccessedAt,
-            expiresAt: entry.expiresAt,
-            hnswIndex: entry.hnswIndex,
-            version: "version" in entry ? entry.version : 1,
-            importanceScore: entry.importanceScore,
-            domain: entry.domain,
-            chatId: entry.chatId,
-          });
-          const metadata = JSON.stringify(entry.metadata ?? {});
-          const embeddingBuf = entry.embedding ? this.embeddingToBuffer(entry.embedding) : null;
-          stmt.run(
-            entry.id as string,
-            entry.type,
-            value,
-            metadata,
-            embeddingBuf,
-            entry.createdAt as number,
-            Date.now(),
-          );
+      this.sqliteDb.transaction(() => {
+        for (const entry of this.entries.values()) {
+          if (!idSet.has(entry.id as string)) continue;
+          this.upsertEntryRow(stmt, entry);
         }
-      });
-
-      persistAll();
+      })();
     } catch (error) {
       getLoggerSafe().error("[AgentDBMemory] Failed to persist decayed entries", {
         error: String(error),

@@ -243,6 +243,8 @@ export class DaemonStorage {
     // Trigger Fire History (Phase 18)
     insertFireHistory?: Database.Statement;
     getFireHistory?: Database.Statement;
+    // Trigger Fire History Pruning (Phase 21)
+    pruneFireHistoryByAge?: Database.Statement;
   } = {};
 
   constructor(dbPath: string) {
@@ -633,9 +635,7 @@ export class DaemonStorage {
   pruneTriggerFireHistoryByAge(retentionMs: number): number {
     this.assertOpen();
     const cutoff = Date.now() - retentionMs;
-    const result = this.db!.prepare(
-      `DELETE FROM trigger_fire_history WHERE timestamp < ?`,
-    ).run(cutoff);
+    const result = this.stmts.pruneFireHistoryByAge!.run(cutoff);
     return result.changes;
   }
 
@@ -764,6 +764,11 @@ export class DaemonStorage {
     );
     this.stmts.getFireHistory = db.prepare(
       `SELECT * FROM trigger_fire_history WHERE trigger_name = ? ORDER BY timestamp DESC LIMIT ?`,
+    );
+
+    // Trigger Fire History Pruning (Phase 21)
+    this.stmts.pruneFireHistoryByAge = db.prepare(
+      `DELETE FROM trigger_fire_history WHERE timestamp < ?`,
     );
   }
 

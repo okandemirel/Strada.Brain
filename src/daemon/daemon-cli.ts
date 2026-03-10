@@ -506,7 +506,7 @@ function persistCircuitState(storage: DaemonStorage, name: string, cb: CircuitBr
 }
 
 function padRight(str: string, width: number): string {
-  if (str.length >= width) return str + " ";
+  if (str.length >= width) return str;
   return str + " ".repeat(width - str.length);
 }
 

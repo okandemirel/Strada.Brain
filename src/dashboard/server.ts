@@ -85,6 +85,7 @@ export class DashboardServer {
   private capabilityManifest?: string;
   private daemonStorage?: DaemonStorage;
   private historyDepth: number = 10;
+  private triggerFireRetentionDays: number = 30;
 
   constructor(
     port: number,
@@ -138,6 +139,7 @@ export class DashboardServer {
     capabilityManifest?: string;
     daemonStorage?: DaemonStorage;
     historyDepth?: number;
+    triggerFireRetentionDays?: number;
   }): void {
     this.daemonHeartbeatLoop = ctx.heartbeatLoop;
     this.daemonRegistry = ctx.registry;
@@ -167,6 +169,9 @@ export class DashboardServer {
     }
     if (ctx.historyDepth !== undefined) {
       this.historyDepth = ctx.historyDepth;
+    }
+    if (ctx.triggerFireRetentionDays !== undefined) {
+      this.triggerFireRetentionDays = ctx.triggerFireRetentionDays;
     }
   }
 
@@ -724,14 +729,10 @@ export class DashboardServer {
    * Combines memory decay stats with trigger pruning info.
    */
   private getMaintenanceData(): Record<string, unknown> {
-    // Decay stats from memory manager (if available)
-    let decay: Record<string, unknown> = {
-      enabled: false,
-      tiers: {},
-      exemptDomains: [],
-      totalExempt: 0,
-    };
+    const DEFAULT_DECAY = { enabled: false, tiers: {}, exemptDomains: [], totalExempt: 0 };
+    const DEFAULT_PRUNING = { retentionDays: this.triggerFireRetentionDays, lastPrunedCount: 0 };
 
+    let decay: unknown = DEFAULT_DECAY;
     if (this.memoryManager?.getDecayStats) {
       try {
         decay = this.memoryManager.getDecayStats();
@@ -740,25 +741,7 @@ export class DashboardServer {
       }
     }
 
-    // Pruning stats from daemon storage
-    let pruning: Record<string, unknown> = {
-      retentionDays: 30,
-      lastPrunedCount: 0,
-    };
-
-    if (this.daemonStorage) {
-      try {
-        const retentionDays = 30; // Default; actual config value wired via daemon context
-        pruning = {
-          retentionDays,
-          lastPrunedCount: 0,
-        };
-      } catch {
-        // Fall through to defaults
-      }
-    }
-
-    return { decay, pruning };
+    return { decay, pruning: DEFAULT_PRUNING };
   }
 
   /**
