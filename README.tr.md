@@ -1,36 +1,39 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Strada.Brain Logo" width="200"/>
+  <img src="icon/strada-brain-icon.png" alt="Strada.Brain Logosu" width="200"/>
 </p>
 
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>Unity / Strada.Core Projeleri icin AI Destekli Gelistirme Ajani</strong><br/>
-  Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir ve hatalarindan ogrenir.
+  <strong>Unity / Strada.Core Projeleri icin Yapay Zeka Destekli Gelistirme Ajani</strong><br/>
+  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="Testler">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lisans">
 </p>
 
 <p align="center">
   <a href="README.md">English</a> |
-  <strong>Türkçe</strong> |
-  <a href="README.zh.md">中文</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.ko.md">한국어</a> |
+  <strong>T&uuml;rk&ccedil;e</strong> |
+  <a href="README.zh.md">&#20013;&#25991;</a> |
+  <a href="README.ja.md">&#26085;&#26412;&#35486;</a> |
+  <a href="README.ko.md">&#54620;&#44397;&#50612;</a> |
   <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a>
+  <a href="README.es.md">Espa&ntilde;ol</a> |
+  <a href="README.fr.md">Fran&ccedil;ais</a>
 </p>
 
 ---
 
 ## Bu Nedir?
 
-Strada.Brain, bir sohbet kanali uzerinden konustugu bir AI ajanidir. Ne istediginizi tanimlarsiniz -- "oyuncu hareketi icin yeni bir ECS sistemi olustur" veya "saglik kullanan tum bilesenleri bul" -- ve ajan C# projenizi okur, kodu yazar, `dotnet build` calistirir, hatalari otomatik olarak duzeltir ve sonucu size gonderir. Kalici hafizasi vardir, gecmis hatalardan ogrenir ve otomatik yedekleme ile birden fazla AI saglayici kullanabilir.
+Strada.Brain, bir sohbet kanali uzerinden konustugunuz bir yapay zeka ajanidir. Ne istediginizi tanimlayarak -- "oyuncu hareketi icin yeni bir ECS sistemi olustur" veya "saglik kullanan tum bilesenleri bul" -- ajanin C# projenizi okumasini, kodu yazmasini, `dotnet build` calistirmasini, hatalari otomatik olarak duzeltmesini ve sonucu size gondermesini saglayabilirsiniz.
+
+Ajan, SQLite + HNSW vektorler ile desteklenen kalici hafizaya sahiptir; gecmis hatalardan Bayesian guven puanlamasi ile ogrenir; karmasik hedefleri paralel DAG yurutmesine ayristirir; cok aracli zincirleri otomatik olarak sentezler; ve proaktif tetikleyicilerle 7/24 daemon olarak calisabilir.
 
 **Bu bir kutuphane veya API degildir.** Calistirdiginiz bagimsiz bir uygulamadir. Sohbet platformunuza baglanir, diskteki Unity projenizi okur ve yapilandirdiginiz sinirlar dahilinde otonom olarak calisir.
 
@@ -69,8 +72,8 @@ JWT_SECRET=<su sekilde olusturun: openssl rand -hex 64>
 ### 3. Calistirma
 
 ```bash
-# Web kanali (varsayilan) - kurulum asistani localhost:3000 adresinde acilir
-# Eger .env yoksa, asistan sizi ilk kurulumda yonlendirir
+# Web kanali (varsayilan) - kurulum sihirbazi localhost:3000 adresinde acilir
+# .env dosyasi yoksa, sihirbaz sizi ilk kurulumda yonlendirir
 npm start
 
 # Veya web kanali ile acikca
@@ -78,6 +81,9 @@ npm run dev -- start --channel web
 
 # Etkilesimli CLI modu (test etmenin en hizli yolu)
 npm run dev -- cli
+
+# Daemon modu (proaktif tetikleyicilerle 7/24 otonom calisma)
+npm run dev -- daemon --channel web
 
 # Veya diger sohbet kanallari ile
 npm run dev -- start --channel telegram
@@ -97,7 +103,7 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 > Derlemeyi calistir ve hatalari duzelt
 ```
 
-**Web kanali:** Terminal gerekmez -- web paneli uzerinden `localhost:3000` adresinde etkilesim kurun.
+**Web kanali:** Terminal gerekmez -- `localhost:3000` adresindeki web paneli uzerinden etkilesim kurun.
 
 ---
 
@@ -112,38 +118,191 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
                     IChannelAdapter arayuzu
                                |
 +------------------------------v----------------------------------+
-|  Orkestratör (PAOR Ajan Döngüsü)                                |
-|  Plan -> Eylem -> Gözlem -> Yansıma durum makinesi               |
-|  Mesaj başına 50 araç iterasyonuna kadar                         |
-|  İçgüdü getirme, hata sınıflandırma, otomatik yeniden planlama  |
-+------------------------------+----------------------------------+
+|  Orkestrator (PAOR Ajan Dongusu)                                 |
+|  Plan -> Eylem -> Gozlem -> Yansima durum makinesi               |
+|  Icgudu getirme, hata siniflandirma, otomatik yeniden planlama   |
++-------+--------------+-------------+-----------+----------------+
+        |              |             |           |
++-------v------+ +-----v------+ +---v--------+ +v-----------------+
+| AI Saglayici | | 30+ Arac   | | Baglam     | | Ogrenme Sistemi  |
+| Claude (brnc)| | Dosya I/O  | | AgentDB    | | TypedEventBus    |
+| OpenAI, Kimi | | Git islem  | | (SQLite +  | | Bayesian Beta    |
+| DeepSeek,Qwen| | Kabuk cali | |  HNSW)     | | Icgudu yasam     |
+| MiniMax, Groq| | .NET derle | | RAG vektor | |  dongusu          |
+| Ollama +daha | | Strata ure | | Kimlik     | | Arac zincirleri  |
++--------------+ +------+-----+ +---+--------+ +--+---------------+
+                        |           |              |
+                +-------v-----------v--------------v------+
+                |  Hedef Ayristirici + Hedef Yurutucu     |
+                |  DAG tabanli ayristirma, dalga tabanli   |
+                |  paralel yurutme, basarisizlik butceleri |
+                +-----------------------------------------+
                                |
-          +--------------------+--------------------+
-          |                    |                    |
-+---------v------+  +---------v------+  +----------v---------+
-| AI Saglayicilar|  | 30+ Arac       |  | Baglam Kaynaklari  |
-| Claude (birincl|  | Dosya I/O      |  | Hafiza (TF-IDF)    |
-| OpenAI, Kimi   |  | Git islemleri  |  | RAG (HNSW vektorler|
-| DeepSeek, Qwen |  | Kabuk calistirm|  | Proje analizi      |
-| MiniMax, Groq  |  | .NET derleme/te|  | Ogrenme kaliplari  |
-| Ollama (yerel) |  | Tarayici       |  +--------------------+
-| + 4 fazlasi    |  | Strata kod ure |
-+----------------+  +----------------+
+            +------------------v-------------------+
+            |  Daemon (HeartbeatLoop)              |
+            |  Cron, dosya izleme, kontrol listesi,|
+            |  webhook tetikleyiciler              |
+            |  Devre kesiciler, butce takibi,      |
+            |  tetikleyici tekilestirme            |
+            |  Bildirim yonlendirici + ozet rapor  |
+            +--------------------------------------+
 ```
 
 ### Ajan Dongusu Nasil Calisir
 
-1. **Mesaj gelir** -- sohbet kanalından
-2. **Hafıza getirme** -- en alakalı 3 geçmiş sohbeti bulur (TF-IDF)
-3. **RAG getirme** -- C# kod tabanında anlamsal arama (HNSW vektörler, ilk 6 sonuç)
-4. **İçgüdü getirme** -- göreve uygun öğrenilmiş kalıpları proaktif olarak sorgular
-5. **PLAN aşaması** -- LLM öğrenilmiş içgörüler ve geçmiş hatalarla bilgilendirilmiş numaralı bir plan oluşturur
-6. **EYLEM aşaması** -- LLM plana göre araç çağrıları yürütür
-7. **GÖZLEM** -- sonuçlar kaydedilir; hata kurtarma başarısızlıkları analiz eder; hata sınıflandırıcı hataları kategorize eder
-8. **YANSIMA** -- her 3 adımda (veya hata durumunda), LLM karar verir: **DEVAM**, **YENİDEN PLANLA** veya **TAMAMLANDI**
-9. **Otomatik yeniden planlama** -- 3+ ardışık aynı türde hata oluşursa, başarısız stratejilerden kaçınan yeni bir yaklaşım zorlar
-10. **50 iterasyona kadar tekrarla**
-11. **Yanıt** kullanıcıya kanal üzerinden gönderilir (destekleniyorsa akış halinde)
+1. **Mesaj gelir** -- sohbet kanalindan
+2. **Hafiza getirme** -- AgentDB hibrit aramasi (%70 anlamsal HNSW + %30 TF-IDF) en alakali gecmis konusmalari bulur
+3. **RAG getirme** -- C# kod tabaninizda anlamsal arama (HNSW vektorler, ilk 6 sonuc)
+4. **Icgudu getirme** -- goreve uygun ogrenilmis kaliplari proaktif olarak sorgular (anlamsal + anahtar kelime eslesmesi)
+5. **Kimlik baglami** -- kalici ajan kimligini enjekte eder (UUID, baslangic sayisi, calisma suresi, cokme kurtarma durumu)
+6. **PLAN asamasi** -- LLM, ogrenilmis icgoruler ve gecmis hatalarla bilgilendirilmis numarali bir plan olusturur
+7. **EYLEM asamasi** -- LLM plana gore arac cagrilarini yurutur
+8. **GOZLEM** -- sonuclar kaydedilir; hata kurtarma basarisizliklari analiz eder; hata siniflandirici hatalari kategorize eder
+9. **YANSIMA** -- her 3 adimda (veya hata durumunda), LLM karar verir: **DEVAM**, **YENIDEN PLANLA** veya **TAMAMLANDI**
+10. **Otomatik yeniden planlama** -- 3+ ardisik ayni turde hata olusursa, basarisiz stratejilerden kacinan yeni bir yaklasim zorlar
+11. **50 iterasyona kadar tekrarla**
+12. **Ogrenme** -- arac sonuclari, anlik kalip depolamasi icin TypedEventBus uzerinden ogrenme hattina akar
+13. **Yanit** kullaniciya kanal uzerinden gonderilir (destekleniyorsa akis halinde)
+
+---
+
+## Hafiza Sistemi
+
+Aktif hafiza arka ucu `AgentDBMemory`'dir -- HNSW vektor indeksleme ve uc katmanli otomatik kademelenme mimarisi ile SQLite.
+
+**Uc katmanli hafiza:**
+- **Calisma hafizasi** -- aktif oturum baglami, surekli kullanim sonrasi otomatik terfi edilir
+- **Gecici hafiza** -- kisa sureli depolama, kapasite esikleri asildiginda otomatik olarak temizlenir
+- **Kalici hafiza** -- uzun sureli depolama, erisim sikligi ve onem durumuna gore gecici hafizadan terfi edilir
+
+**Nasil calisir:**
+- Oturum gecmisi 40 mesaji astiginda, eski mesajlar ozetlenir ve konusma kayitlari olarak saklanir
+- Hibrit getirme, %70 anlamsal benzerlik (HNSW vektorler) ile %30 TF-IDF anahtar kelime eslemesini birlestirir
+- `strata_analyze_project` araci, anlik baglam enjeksiyonu icin proje yapisi analizini onbellege alir
+- Hafiza, `MEMORY_DB_PATH` dizininde (varsayilan: `.strata-memory/`) yeniden baslatmalar arasinda kalicidir
+- Eski FileMemoryManager'dan otomatik goc, ilk baslatmada calisir
+
+**Yedek:** AgentDB baslatma islemi basarisiz olursa, sistem otomatik olarak `FileMemoryManager`'a (JSON + TF-IDF) geri doner.
+
+---
+
+## Ogrenme Sistemi
+
+Ogrenme sistemi, ajan davranisini gozlemler ve hatalardan olay gudumlut bir hat uzerinden ogrenir.
+
+**Olay gudumlu hat:**
+- Arac sonuclari, anlik isleme icin `TypedEventBus` uzerinden seri `LearningQueue`'ya akar
+- Zamanlayici tabanli toplu isleme yoktur -- kalipler olustukca tespit edilir ve depolanir
+- `LearningQueue`, hata izolasyonlu sinirli FIFO kullanir (ogrenme hatalari ajani asla cokmesine neden olmaz)
+
+**Bayesian guven puanlamasi:**
+- Icguduler, bilgi vermeyen `Beta(1,1)` onculu ile **Beta sonsal cikarim** (`guven = alfa / (alfa + beta)`) kullanir
+- Karar puanlari (0.0-1.0), nuansli guncellemeler icin kesirli kanit agirliklari olarak islev gorur
+- Harmanla veya zamansal indirgeme yoktur -- saf Bayesian sonsal ortalama
+
+**Icgudu yasam dongusu:**
+- **Onerilen** (yeni) -- 0.7 guvenin altinda
+- **Aktif** -- 0.7 ile 0.9 guven arasinda
+- **Gelismis** -- 0.9 uzerinde, kalici statiye terfi icin onerilir
+- **Kullanim disi** -- 0.3 altinda, kaldirilmak uzere isaretlenir
+- **Soguma donemi** -- durum degisikliklerinden once minimum gozlem gereksinimleri olan 7 gunluk pencere
+- **Kalici** -- dondurulmus, daha fazla guven guncellemesi yapilmaz
+
+**Aktif getirme:** Icguduler, her gorev basinda `InstinctRetriever` kullanilarak proaktif olarak sorgulanir. Anahtar kelime benzerligi ve HNSW vektor gommeleri ile alakali ogrenilmis kaliplari arar ve bunlar PLAN asamasi promptuna enjekte edilir.
+
+**Oturumlar arasi ogrenme:** Icguduler, oturumlar arasi bilgi aktarimi icin koken meta verisi (kaynak oturum, oturum sayisi) tasir.
+
+---
+
+## Hedef Ayristirma
+
+Karmasik cok adimli istekler, otomatik olarak yonlu dongusuz cizge (DAG) yapili alt hedeflere ayristirilir.
+
+**GoalDecomposer:**
+- Sezgisel on kontrol, basit gorevler icin LLM cagrilarindan kacinir (karmasiklik gostergeleri icin kalip eslesmesi)
+- LLM, bagimlilik kenarlari ve istege bagli tekrarli derinlik (3 seviyeye kadar) ile DAG yapilari olusturur
+- Kahn algoritmasi dongu icermeyen DAG yapisini dogrular
+- Reaktif yeniden ayristirma: bir dugum basarisiz oldugunda, daha kucuk kurtarma adimlarina bolunebilir
+
+**GoalExecutor:**
+- Dalga tabanli paralel yurutme, bagimlilik siralamasina uyar
+- Semafor tabanli es zamanlilik sinirlamasi (`GOAL_MAX_PARALLEL`)
+- Basarisizlik butceleri (`GOAL_MAX_FAILURES`) ile kullaniciya yonelik devam ettirme istemleri
+- LLM kritiklik degerlendirmesi, basarisiz bir dugumun bagimlilari engelleyip engellemeyecegini belirler
+- Dugum basina yeniden deneme mantigi (`GOAL_MAX_RETRIES`) ve tukenmede kurtarma ayristirmasi
+- AbortSignal ile iptal destegi
+- Yeniden baslatma sonrasi devam icin `GoalStorage` (SQLite) ile kalici hedef agaci durumu
+
+---
+
+## Arac Zinciri Sentezi
+
+Ajan, cok aracli zincir kaliplarini otomatik olarak tespit eder ve yeniden kullanilabilir bilesik araclara sentezler.
+
+**Hat:**
+1. **ChainDetector** -- yinelenen arac dizilerini bulmak icin yol verisini analiz eder (orn. `file_read` -> `file_edit` -> `dotnet_build`)
+2. **ChainSynthesizer** -- uygun girdi/cikti esleme ve aciklamasiyla bir `CompositeTool` olusturmak icin LLM kullanir
+3. **ChainValidator** -- calisma zamani geri bildirimi ile sentez sonrasi dogrulama; Bayesian guven araciligiyla zincir yurutme basarisini izler
+4. **ChainManager** -- yasam dongusu orkestratorü: baslatmada mevcut zincirleri yukler, periyodik algilama calistirir, bilesen araclar kaldirildiginda zincirleri otomatik gecersiz kilar
+
+**Guvenlik:** Bilesik araclar, bilesen araclarindan en kisitlayici guvenlik bayraklarini miras alir.
+
+**Guven kademesi:** Zincir icguduleri, normal icgudularle ayni Bayesian yasam dongusunu izler. Kullanim disi birakma esiginin altina dusen zincirler otomatik olarak kayittan silinir.
+
+---
+
+## Daemon Modu
+
+Daemon, kalp atisi gudumlu tetikleyici sistemi ile 7/24 otonom calisma saglar.
+
+```bash
+npm run dev -- daemon --channel web
+```
+
+**HeartbeatLoop:**
+- Yapilandirilabilir tik araligi, her dongude kayitli tetikleyicileri degerlendirir
+- Sirayla tetikleyici degerlendirmesi, butce yarisi kosullarini onler
+- Cokme kurtarmasi icin calisma durumunu kalici olarak saklar
+
+**Tetikleyici turleri:**
+- **Cron** -- cron ifadeleri ile zamanlanmis gorevler
+- **Dosya izleme** -- yapilandirilmis yollardaki dosya sistemi degisikliklerini izler
+- **Kontrol listesi** -- kontrol listesi ogeleri vadesi geldiginde tetiklenir
+- **Webhook** -- gelen isteklerde gorev tetikleyen HTTP POST uc noktasi
+
+**Dayaniklilik:**
+- **Devre kesiciler** -- ustel geri cekilme soguma sureli, yeniden baslatmalar arasinda kalici, tetikleyici bazinda
+- **Butce takibi** -- uyari esigi olaylariyla gunluk USD harcama siniri
+- **Tetikleyici tekilestirme** -- tekrarlanan ateslemeleri onlemek icin icerik tabanli ve soguma tabanli bastirma
+- **Cakisma bastirma** -- zaten aktif bir gorevi olan tetikleyicileri atlar
+
+**Guvenlik:**
+- `DaemonSecurityPolicy`, daemon tetikleyicileri tarafindan cagrilan araclarin hangilerinin kullanici onayi gerektirdigini kontrol eder
+- Yazma islemleri icin yapilandirilabilir sure dolumu ile `ApprovalQueue`
+
+**Raporlama:**
+- `NotificationRouter`, olaylari aciliyet duzeyine gore (sessiz/dusuk/orta/yuksek/kritik) yapilandirilmis kanallara yonlendirir
+- Aciliyet bazinda hiz sinirlamasi ve sessiz saat destegi (kritik olmayan bildirimler tamponlanir)
+- `DigestReporter` periyodik ozet raporlar olusturur
+- Tum bildirimler SQLite gecmisine kaydedilir
+
+---
+
+## Kimlik Sistemi
+
+Ajan, oturumlar ve yeniden baslatmalar arasinda kalici bir kimlik surdurir.
+
+**IdentityStateManager** (SQLite destekli):
+- Ilk baslatmada olusturulan benzersiz ajan UUID'si
+- Baslangic sayisi, kumulatif calisma suresi, son etkinlik zaman damgalari
+- Toplam mesaj ve gorev sayaclari
+- Cokme kurtarmasi icin temiz kapatma tespiti
+- SQLite yazmalarini en aza indirmek icin periyodik temizleme ile bellek ici sayac onbellegi
+
+**Cokme kurtarmasi:**
+- Baslatmada, onceki oturum temiz bir sekilde kapatilmadiysa, bir `CrashRecoveryContext` olusturur
+- Kesinti suresi, yarida kalan hedef agaclari ve baslangic sayisini icerir
+- LLM'in cokmeyi dogal olarak kabul edip yarida kalan isi devam ettirebilmesi icin sistem promptuna enjekte edilir
 
 ---
 
@@ -198,7 +357,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | Degisken | Aciklama |
 |----------|----------|
 | `DISCORD_BOT_TOKEN` | Discord bot token'i |
-| `DISCORD_CLIENT_ID` | Discord uygulama istemci kimligii |
+| `DISCORD_CLIENT_ID` | Discord uygulama istemci kimligi |
 | `ALLOWED_DISCORD_USER_IDS` | Virgule ayrilmis kullanici kimlikleri (bos ise tumu reddedilir) |
 | `ALLOWED_DISCORD_ROLE_IDS` | Rol tabanli erisim icin virgule ayrilmis rol kimlikleri |
 
@@ -221,7 +380,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 
 | Degisken | Varsayilan | Aciklama |
 |----------|------------|----------|
-| `RAG_ENABLED` | `true` | C# projeniz uzerinde semantik kod aramasini etkinlestir |
+| `RAG_ENABLED` | `true` | C# projeniz uzerinde anlamsal kod aramasini etkinlestir |
 | `EMBEDDING_PROVIDER` | `openai` | Gomme saglayici: `openai` veya `ollama` |
 | `MEMORY_ENABLED` | `true` | Kalici konusma hafizasini etkinlestir |
 | `MEMORY_DB_PATH` | `.strata-memory` | Hafiza veritabani dosyalari icin dizin |
@@ -229,7 +388,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `DASHBOARD_ENABLED` | `false` | HTTP izleme panelini etkinlestir |
 | `DASHBOARD_PORT` | `3001` | Panel sunucu portu |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket gercek zamanli paneli etkinlestir |
-| `ENABLE_PROMETHEUS` | `false` | Prometheus metrik ucnoktasini etkinlestir (port 9090) |
+| `ENABLE_PROMETHEUS` | `false` | Prometheus metrik uc noktasini etkinlestir (port 9090) |
 | `READ_ONLY_MODE` | `false` | Tum yazma islemlerini engelle |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` veya `debug` |
 
@@ -266,7 +425,7 @@ Ajan, kategorilere gore duzenlenmis 30'dan fazla yerlesik araca sahiptir:
 | `file_edit` | Benzersizlik zorunlulugu ile bul-ve-degistir duzenleme |
 | `file_delete` | Tek bir dosyayi silme |
 | `file_rename` | Proje icinde dosya yeniden adlandirma veya tasima |
-| `file_delete_directory` | Tekrarli dizin silme (50 dosya guvenlik siniri) |
+| `file_delete_directory` | Tekrarlamali dizin silme (50 dosya guvenlik siniri) |
 
 ### Arama
 | Arac | Aciklama |
@@ -274,7 +433,7 @@ Ajan, kategorilere gore duzenlenmis 30'dan fazla yerlesik araca sahiptir:
 | `glob_search` | Glob deseni ile dosya bulma (maksimum 50 sonuc) |
 | `grep_search` | Dosyalar arasi regex icerik aramasi (maksimum 20 eslesme) |
 | `list_directory` | Dosya boyutlari ile dizin listeleme |
-| `code_search` | RAG uzerinden semantik/vektor arama -- dogal dil sorgulari |
+| `code_search` | RAG uzerinden anlamsal/vektor arama -- dogal dil sorgulari |
 | `memory_search` | Kalici konusma hafizasinda arama |
 
 ### Strada Kod Uretimi
@@ -312,13 +471,34 @@ Ajan, kategorilere gore duzenlenmis 30'dan fazla yerlesik araca sahiptir:
 
 ---
 
+## RAG Boru Hatti
+
+RAG (Retrieval-Augmented Generation) boru hatti, anlamsal arama icin C# kaynak kodunuzu indeksler.
+
+**Indeksleme akisi:**
+1. Unity projenizde `**/*.cs` dosyalarini tarar
+2. Kodu yapisal olarak parcalar -- dosya baslikari, siniflar, metodlar, yapilandiricilar
+3. OpenAI (`text-embedding-3-small`) veya Ollama (`nomic-embed-text`) ile gomme vektorleri olusturur
+4. Hizli yaklasik en yakin komsu aramasi icin vektorleri HNSW indeksinde saklar
+5. Baslatmada otomatik olarak calisir (arka planda, engellemesiz)
+
+**Arama akisi:**
+1. Sorgu, ayni saglayici kullanilarak gomulur
+2. HNSW aramasi `topK * 3` aday dondurur
+3. Yeniden siralayici puanlar: vektor benzerligi (%60) + anahtar kelime eslesmesi (%25) + yapisal bonus (%15)
+4. En iyi 6 sonuc (0.2 puanin uzerinde) LLM baglamina enjekte edilir
+
+**Not:** RAG boru hatti su anda yalnizca C# dosyalarini destekler. Parcalayici C#'a ozeldir.
+
+---
+
 ## Kanal Yetenekleri
 
 | Yetenek | Web | Telegram | Discord | Slack | WhatsApp | CLI |
 |---------|-----|----------|---------|-------|----------|-----|
 | Metin mesajlasma | Evet | Evet | Evet | Evet | Evet | Evet |
 | Akis (yerinde duzenleme) | Evet | Evet | Evet | Evet | Evet | Evet |
-| Yazma gostergesi | Evet | Evet | Evet | Islemsiz | Evet | Hayir |
+| Yazma gostergesi | Evet | Evet | Evet | Islevsiz | Evet | Hayir |
 | Onay diyaloglari | Evet (modal) | Evet (satirici klavye) | Evet (butonlar) | Evet (Block Kit) | Evet (numarali yanit) | Evet (readline) |
 | Dosya yukleme | Evet | Hayir | Hayir | Evet | Evet | Hayir |
 | Konu destegi | Hayir | Hayir | Evet | Evet | Hayir | Hayir |
@@ -332,62 +512,8 @@ Tum kanallar yerinde duzenleme akisi uygular. Ajanin yaniti, LLM urettikce asama
 
 - **Telegram**: Varsayilan olarak tumu reddeder. `ALLOWED_TELEGRAM_USER_IDS` ayarlanmalidir.
 - **Discord**: Varsayilan olarak tumu reddeder. `ALLOWED_DISCORD_USER_IDS` veya `ALLOWED_DISCORD_ROLE_IDS` ayarlanmalidir.
-- **Slack**: **Varsayilan olarak herkese aciktir.** `ALLOWED_SLACK_USER_IDS` bos ise, herhangi bir Slack kullanicisi bota erisebilir. Uretim icin izin listesini ayarlayin.
+- **Slack**: **Varsayilan olarak herkese aciktir.** `ALLOWED_SLACK_USER_IDS` bos ise, herhangi bir Slack kullanicisi bota erisebilir. Uretim ortami icin izin listesini ayarlayin.
 - **WhatsApp**: Adaptorde yerel olarak kontrol edilen `WHATSAPP_ALLOWED_NUMBERS` izin listesini kullanir.
-
----
-
-## Hafiza Sistemi
-
-Uretim hafiza arka ucu `FileMemoryManager`'dir -- arama icin TF-IDF metin indeksleme ile JSON dosyalari.
-
-**Nasil calisir:**
-- Oturum gecmisi 40 mesaji astiginda, eski mesajlar ozetlenir ve konusma kayitlari olarak saklanir
-- Ajan, her LLM cagrisindan once otomatik olarak en alakali 3 hafizayi getirir
-- `strata_analyze_project` araci, aninda baglam enjeksiyonu icin proje yapisi analizini onbellege alir
-- Hafiza, `MEMORY_DB_PATH` dizininde (varsayilan: `.strata-memory/`) yeniden baslatmalar arasinda kalicidir
-
-**Gelismis arka uc (uygulanmis, henuz baglanmamis):** SQLite + HNSW vektor arama ile `AgentDBMemory`, uc katmanli hafiza (calisma/gecici/kalici), hibrit getirme (%70 semantik + %30 TF-IDF). Bu tamamen kodlanmistir ancak baslatma surecinde baglanmamistir -- `FileMemoryManager` aktif arka uctur.
-
----
-
-## RAG Boru Hatti
-
-RAG (Retrieval-Augmented Generation -- Getirme ile Zenginlestirilmis Uretim) boru hatti, semantik arama icin C# kaynak kodunuzu indeksler.
-
-**Indeksleme akisi:**
-1. Unity projenizde `**/*.cs` dosyalarini tarar
-2. Kodu yapisal olarak parcalar -- dosya baslikari, siniflar, metodlar, yapilandiricilar
-3. OpenAI (`text-embedding-3-small`) veya Ollama (`nomic-embed-text`) ile gomme vektorleri olusturur
-4. Hizli yaklasik en yakin komsu aramasi icin vektorleri HNSW indeksinde saklar
-5. Baslangitta otomatik olarak calisir (arka planda, engellemesiz)
-
-**Arama akisi:**
-1. Sorgu ayni saglayici kullanilarak gomulur
-2. HNSW aramasi `topK * 3` aday dondurur
-3. Yeniden siralayici puanlar: vektor benzerligi (%60) + anahtar kelime eslesmesi (%25) + yapisal bonus (%15)
-4. En iyi 6 sonuc (0.2 puanin uzerinde) LLM baglamina enjekte edilir
-
-**Not:** RAG boru hatti su anda yalnizca C# dosyalarini destekler. Parcalayici C#'a ozeldir.
-
----
-
-## Ogrenme Sistemi
-
-Ogrenme sistemi ajan davranisini gozlemler ve hatalardan ogrenir:
-
-- **Hata kaliplari** tam metin arama indekslemesi ile yakalanir
-- **Cozumler** gelecekte getirme icin hata kaliplarina baglanir
-- **Icguduler** Bayesian guven puanlari ile atomik ogrenilmis davranislardir
-- **Yollar** sonuclari ile arac cagrisi dizilerini kaydeder
-- Guven puanlari istatistiksel gecerlilik icin **Elo degerlendirmesi** ve **Wilson puan araliklari** kullanir
-- 0.3 guvenin altindaki icguduler kullanim disi birakilir; 0.9 uzeri terfi icin onerilir
-
-Ogrenme boru hatti zamanlayicilarla calisir: her 5 dakikada kalip algilama, her saatte evrim onerileri. Veriler ayri bir SQLite veritabaninda (`learning.db`) saklanir.
-
-**Aktif getirme (yeni):** İçgüdüler, her görevin başında `InstinctRetriever` kullanılarak proaktif olarak sorgulanır. Anahtar kelime benzerliği ve HNSW vektör gömmeleri ile alakalı öğrenilmiş kalıpları arar ve bunlar PLAN aşaması promptuna enjekte edilir.
-
-**Görev ayrıştırma:** Karmaşık çok adımlı istekler, sezgisel analiz ile otomatik olarak tespit edilir ve yürütülmeden önce LLM aracılığıyla 3-8 sıralı alt göreve ayrıştırılır.
 
 ---
 
@@ -417,6 +543,9 @@ Tum arac sonuclari 8192 karakter ile sinirlandirilir ve LLM'e geri beslenmeden o
 ### Katman 8: RBAC (Dahili)
 9 kaynak turunu kapsayan izin matrisi ile 5 rol (superadmin, admin, developer, viewer, service). Politika motoru zaman tabanli, IP tabanli ve ozel kosullari destekler.
 
+### Katman 9: Daemon Guvenligi
+`DaemonSecurityPolicy`, daemon tarafindan tetiklenen islemler icin arac duzeyli onay gereksinimlerini zorlar. Yazma araclari, yurutmeden once `ApprovalQueue` araciligiyla acik kullanici onayi gerektirir.
+
 ---
 
 ## Panel ve Izleme
@@ -432,7 +561,10 @@ Tum arac sonuclari 8192 karakter ile sinirlandirilir ve LLM'e geri beslenmeden o
 `http://localhost:9090/metrics` adresinde metrikler. Mesajlar, arac cagrilari, token'lar icin sayaclar. Istek suresi, arac suresi, LLM gecikmesi icin histogramlar. Varsayilan Node.js metrikleri (CPU, heap, GC, olay dongusu).
 
 ### WebSocket Paneli (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-Her saniye gonderilen gercek zamanli metrikler. Kimlik dogrulanmis baglantilari ve uzak komutlari (eklenti yeniden yukleme, onbellek temizleme, log alma) destekler.
+Her saniye gonderilen gercek zamanli metrikler. Kimlik dogrulanmis baglantilari ve uzak komutlari (eklenti yeniden yukleme, onbellek temizleme, log alma) destekler. Daemon olaylari (tetikleyici ateslemeleri, butce uyarilari, hedef ilerlemesi) WebSocket uzerinden yayinlanir.
+
+### Metrik Sistemi
+`MetricsStorage` (SQLite) gorev tamamlama oranini, iterasyon sayilarini, arac kullanimini ve kalip yeniden kullanimini kaydeder. `MetricsRecorder` oturum basina metrikleri yakalar. `metrics` CLI komutu gecmis metrikleri goruntulur.
 
 ---
 
@@ -449,7 +581,10 @@ docker-compose up -d
 ### Daemon Modu
 
 ```bash
-# Cokme durumunda ustel geri cekilme ile otomatik yeniden baslatma (1sn - 60sn, 10 yeniden baslatmaya kadar)
+# Kalp atisi dongusu ve proaktif tetikleyicilerle 7/24 otonom calisma
+node dist/index.js daemon --channel web
+
+# Ustel geri cekilme ile cokme durumunda otomatik yeniden baslatma (1sn - 60sn, 10 yeniden baslatmaya kadar)
 node dist/index.js daemon --channel telegram
 ```
 
@@ -463,21 +598,20 @@ node dist/index.js daemon --channel telegram
 - [ ] Izleme icin `DASHBOARD_ENABLED=true` etkinlestirin
 - [ ] Metrik toplama icin `ENABLE_PROMETHEUS=true` etkinlestirin
 - [ ] Guclu bir `JWT_SECRET` olusturun
+- [ ] Daemon butce sinirlarini yapilandirin (`RATE_LIMIT_DAILY_BUDGET_USD`)
 
 ---
 
 ## Test
 
 ```bash
-npm test                         # Tum 1730+ testi calistir
+npm test                         # Tum 2775 testi calistir
 npm run test:watch               # Izleme modu
 npm test -- --coverage           # Kapsam ile
 npm test -- src/agents/tools/file-read.test.ts  # Tekli dosya
 npm run typecheck                # TypeScript tip kontrolu
 npm run lint                     # ESLint
 ```
-
-110 test dosyasi kapsam alani: ajanlar, kanallar, guvenlik, RAG, hafiza, ogrenme, panel, entegrasyon akislari.
 
 ---
 
@@ -487,17 +621,17 @@ npm run lint                     # ESLint
 src/
   index.ts              # CLI giris noktasi (Commander.js)
   core/
-    bootstrap.ts        # Tam baslatma sirasi -- tum baglantiler burada yapilir
-    di-container.ts     # DI konteyneri (mevcut ama manuel baglanti baskin)
+    bootstrap.ts        # Tam baslatma sirasi -- tum baglanti burada yapilir
+    event-bus.ts        # Ayrisik olay gudumlu iletisim icin TypedEventBus
     tool-registry.ts    # Arac ornekleme ve kayit
   agents/
-    orchestrator.ts     # PAOR ajan döngüsü, oturum yönetimi, akış
-    agent-state.ts      # Aşama durum makinesi (Plan/Eylem/Gözlem/Yansıma)
-    paor-prompts.ts     # Aşama-farkında prompt oluşturucular
-    instinct-retriever.ts # Proaktif öğrenilmiş kalıp getirme
+    orchestrator.ts     # PAOR ajan dongusu, oturum yonetimi, akis
+    agent-state.ts      # Asama durum makinesi (Plan/Eylem/Gozlem/Yansima)
+    paor-prompts.ts     # Asama duyarli prompt olusturucular
+    instinct-retriever.ts # Proaktif ogrenilmis kalip getirme
     failure-classifier.ts # Hata kategorilendirme ve otomatik yeniden planlama tetikleyicileri
-    autonomy/           # Hata kurtarma, görev planlama, öz-doğrulama
-    context/            # Sistem istemi (Strada.Core bilgi tabanli)
+    autonomy/           # Hata kurtarma, gorev planlama, oz-dogrulama
+    context/            # Sistem istemi (Strada.Core bilgi tabani)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + dahasi
     tools/              # 30+ arac uygulamasi
     plugins/            # Harici eklenti yukleyici
@@ -506,18 +640,88 @@ src/
     discord/            # discord.js bot, slash komutlari ile
     slack/              # Slack Bolt (soket modu) Block Kit ile
     whatsapp/           # Baileys tabanli istemci, oturum yonetimi ile
+    web/                # Express + WebSocket web paneli
     cli/                # Readline REPL
   memory/
-    file-memory-manager.ts   # Aktif arka uc: JSON + TF-IDF
-    unified/                 # AgentDB arka ucu: SQLite + HNSW (henuz baglanmamis)
+    file-memory-manager.ts   # Eski arka uc: JSON + TF-IDF (yedek)
+    unified/
+      agentdb-memory.ts      # Aktif arka uc: SQLite + HNSW, 3 katmanli otomatik kademelenme
+      agentdb-adapter.ts     # AgentDBMemory icin IMemoryManager adaptoru
+      migration.ts           # Eski FileMemoryManager -> AgentDB gocu
   rag/
     rag-pipeline.ts     # Indeksleme + arama + bicimlendirme orkestrasyonu
     chunker.ts          # C#'a ozel yapisal parcalama
     hnsw/               # HNSW vektor deposu (hnswlib-node)
     embeddings/         # OpenAI ve Ollama gomme saglayicilari
     reranker.ts         # Agirlikli yeniden siralama (vektor + anahtar kelime + yapisal)
+  learning/
+    pipeline/
+      learning-pipeline.ts  # Kalip tespiti, icgudu olusturma, gelisim onerileri
+      learning-queue.ts     # Olay gudumlu ogrenme icin seri asenkron isleyici
+      embedding-queue.ts    # Sinirli asenkron gomme olusturma
+    scoring/
+      confidence-scorer.ts  # Bayesian Beta sonsal guven, Elo, Wilson araliklari
+    matching/
+      pattern-matcher.ts    # Anahtar kelime + anlamsal kalip esleme
+    hooks/
+      error-learning-hooks.ts  # Hata/cozum yakalama kancarilari
+    storage/
+      learning-storage.ts  # Icguduler, yollar, kalipler icin SQLite depolama
+      migrations/          # Sema gocleri (oturumlar arasi koken)
+    chains/
+      chain-detector.ts    # Yinelenen arac dizisi tespiti
+      chain-synthesizer.ts # LLM tabanli bilesik arac olusturma
+      composite-tool.ts    # Yurutulebilir bilesik arac
+      chain-validator.ts   # Sentez sonrasi dogrulama, calisma zamani geri bildirimi
+      chain-manager.ts     # Tam yasam dongusu orkestrasyonu
+  goals/
+    goal-decomposer.ts  # DAG tabanli hedef ayristirma (proaktif + reaktif)
+    goal-executor.ts    # Basarisizlik butceli dalga tabanli paralel yurutme
+    goal-validator.ts   # Kahn algoritmasi ile DAG dongu tespiti
+    goal-storage.ts     # Hedef agaclari icin SQLite kaliciligi
+    goal-progress.ts    # Ilerleme takibi ve raporlama
+    goal-resume.ts      # Yeniden baslatma sonrasi yarida kalan hedef agaclarini devam ettirme
+    goal-renderer.ts    # Hedef agaci gorselltestirmesi
+  daemon/
+    heartbeat-loop.ts   # Temel tik-degerlendir-atesle dongusu
+    trigger-registry.ts # Tetikleyici kayit ve yasam dongusu
+    daemon-storage.ts   # Daemon durumu icin SQLite kaliciligi
+    daemon-events.ts    # Daemon alt sistemi icin tipli olay tanimlari
+    daemon-cli.ts       # Daemon yonetimi icin CLI komutlari
+    budget/
+      budget-tracker.ts # Gunluk USD butce takibi
+    resilience/
+      circuit-breaker.ts # Ustel geri cekilmeli tetikleyici bazinda devre kesici
+    security/
+      daemon-security-policy.ts  # Daemon icin arac onay gereksinimleri
+      approval-queue.ts          # Sure dolumlu onay istegi kuyrugu
+    dedup/
+      trigger-deduplicator.ts    # Icerik + soguma tekilestirmesi
+    triggers/
+      cron-trigger.ts        # Cron ifadesi zamanlama
+      file-watch-trigger.ts  # Dosya sistemi degisiklik izleme
+      checklist-trigger.ts   # Vadesi gelen kontrol listesi ogeleri
+      webhook-trigger.ts     # HTTP POST webhook uc noktasi
+    reporting/
+      notification-router.ts # Aciliyet tabanli bildirim yonlendirme
+      digest-reporter.ts     # Periyodik ozet rapor olusturma
+      digest-formatter.ts    # Kanallar icin ozet rapor bicimlendirme
+      quiet-hours.ts         # Kritik olmayan bildirim tamponlama
+  identity/
+    identity-state.ts   # Kalici ajan kimligi (UUID, baslangic sayisi, calisma suresi)
+    crash-recovery.ts   # Cokme tespiti ve kurtarma baglami
+  tasks/
+    task-manager.ts     # Gorev yasam dongusu yonetimi
+    task-storage.ts     # SQLite gorev kaliciligi
+    background-executor.ts # Hedef entegrasyonlu arka plan gorev yurutmesi
+    message-router.ts   # Orkestratora mesaj yonlendirme
+    command-detector.ts # Egikcizgi komut tespiti
+    command-handler.ts  # Komut yurutme
+  metrics/
+    metrics-storage.ts  # SQLite metrik depolama
+    metrics-recorder.ts # Oturum basina metrik yakalama
+    metrics-cli.ts      # CLI metrik goruntuleme komutu
   security/             # Kimlik dogrulama, RBAC, yol korumasi, hiz sinirlamasi, gizli bilgi temizleyici
-  learning/             # Kalıp eşleme, güven puanlama, içgüdü yaşam döngüsü, HNSW anlamsal arama
   intelligence/         # C# ayristirma, proje analizi, kod kalitesi
   dashboard/            # HTTP, WebSocket, Prometheus panelleri
   config/               # Zod ile dogrulanmis ortam yapilandirmasi

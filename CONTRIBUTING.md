@@ -61,6 +61,7 @@ npm run dev -- cli
 - Mock external dependencies (AI providers, file system, network) in unit tests.
 - Test edge cases: empty inputs, large inputs, error conditions.
 - Integration tests go in `src/tests/`.
+- Current test suite: 2775+ tests across 130+ test files.
 
 ## Adding a New Tool
 

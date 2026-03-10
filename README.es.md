@@ -1,36 +1,39 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Strada.Brain Logo" width="200"/>
+  <img src="icon/strada-brain-icon.png" alt="Logo de Strada.Brain" width="200"/>
 </p>
 
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
   <strong>Agente de Desarrollo con IA para Proyectos Unity / Strada.Core</strong><br/>
-  Un agente de programacion autonomo que se conecta a Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds y aprende de sus errores.
+  Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="Pruebas">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Licencia">
 </p>
 
 <p align="center">
   <a href="README.md">English</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.zh.md">中文</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.ko.md">한국어</a> |
+  <a href="README.tr.md">T&uuml;rk&ccedil;e</a> |
+  <a href="README.zh.md">&#20013;&#25991;</a> |
+  <a href="README.ja.md">&#26085;&#26412;&#35486;</a> |
+  <a href="README.ko.md">&#54620;&#44397;&#50612;</a> |
   <a href="README.de.md">Deutsch</a> |
-  <strong>Español</strong> |
-  <a href="README.fr.md">Français</a>
+  <strong>Espa&ntilde;ol</strong> |
+  <a href="README.fr.md">Fran&ccedil;ais</a>
 </p>
 
 ---
 
 ## Que es esto?
 
-Strada.Brain es un agente de IA con el que hablas a traves de un canal de chat. Describes lo que quieres -- "crea un nuevo sistema ECS para movimiento del jugador" o "encuentra todos los componentes que usan health" -- y el agente lee tu proyecto C#, escribe el codigo, ejecuta `dotnet build`, corrige errores automaticamente y te envia el resultado. Tiene memoria persistente, aprende de errores pasados y puede usar multiples proveedores de IA con failover automatico.
+Strada.Brain es un agente de IA con el que hablas a traves de un canal de chat. Describes lo que quieres -- "crea un nuevo sistema ECS para movimiento del jugador" o "encuentra todos los componentes que usan health" -- y el agente lee tu proyecto C#, escribe el codigo, ejecuta `dotnet build`, corrige errores automaticamente y te envia el resultado.
+
+Tiene memoria persistente respaldada por SQLite + vectores HNSW, aprende de errores pasados usando puntuacion de confianza bayesiana, descompone objetivos complejos en ejecucion paralela de DAGs, sintetiza automaticamente cadenas de herramientas multiples y puede ejecutarse como un daemon 24/7 con disparadores proactivos.
 
 **Esto no es una biblioteca ni una API.** Es una aplicacion independiente que ejecutas. Se conecta a tu plataforma de chat, lee tu proyecto Unity en disco y opera de forma autonoma dentro de los limites que configures.
 
@@ -79,6 +82,9 @@ npm run dev -- start --channel web
 # Modo CLI interactivo (la forma mas rapida de probar)
 npm run dev -- cli
 
+# Modo daemon (operacion autonoma 24/7 con disparadores proactivos)
+npm run dev -- daemon --channel web
+
 # O con otros canales de chat
 npm run dev -- start --channel telegram
 npm run dev -- start --channel discord
@@ -106,44 +112,199 @@ Una vez en ejecucion, envia un mensaje a traves de tu canal configurado:
 ```
 +-----------------------------------------------------------------+
 |  Canales de Chat                                                 |
-|  Telegram | Discord | Slack | WhatsApp | CLI                    |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
 +------------------------------+----------------------------------+
                                |
                     Interfaz IChannelAdapter
                                |
 +------------------------------v----------------------------------+
 |  Orquestador (Bucle de Agente PAOR)                              |
-|  Planificar -> Actuar -> Observar -> Reflexionar máquina estados |
-|  Hasta 50 iteraciones de herramientas por mensaje                |
-|  Recuperación de instintos, clasificación de fallos, replanificación automática |
-+------------------------------+----------------------------------+
+|  Planificar -> Actuar -> Observar -> Reflexionar maquina estados |
+|  Recuperacion de instintos, clasificacion de fallos, replan. aut.|
++-------+--------------+-------------+-----------+----------------+
+        |              |             |           |
++-------v------+ +-----v------+ +---v--------+ +v-----------------+
+| Proveedores  | | 30+ Herram.| | Contexto   | | Sistema de       |
+| de IA        | | E/S Archiv.| | AgentDB    | |  Aprendizaje     |
+| Claude (pri.)| | Ops. Git   | | (SQLite +  | | TypedEventBus    |
+| OpenAI, Kimi | | Ejec. Shell| |  HNSW)     | | Beta Bayesiano   |
+| DeepSeek,Qwen| | .NET Build | | Vectores   | | Ciclo de vida    |
+| MiniMax, Groq| | Strata Gen | | RAG        | |  de instintos    |
+| Ollama + mas | |            | | Identidad  | | Cadenas herram.  |
++--------------+ +------+-----+ +---+--------+ +--+---------------+
+                        |           |              |
+                +-------v-----------v--------------v------+
+                |  GoalDecomposer + GoalExecutor           |
+                |  Descomposicion basada en DAG, ejecucion |
+                |  paralela por olas, presupuestos de fallo|
+                +-----------------------------------------+
                                |
-          +--------------------+--------------------+
-          |                    |                    |
-+---------v------+  +---------v------+  +----------v---------+
-| Proveedores IA |  | 30+ Tools      |  | Fuentes de Contexto|
-| Claude (prim.) |  | E/S Archivos   |  | Memoria (TF-IDF)   |
-| OpenAI, Kimi   |  | Ops. Git       |  | RAG (vectores HNSW)|
-| DeepSeek, Qwen |  | Ejec. Shell    |  | Analisis proyecto  |
-| MiniMax, Groq  |  | .NET Build/Test|  | Patrones aprendidos|
-| Ollama (local) |  | Navegador      |  +--------------------+
-| + 4 mas        |  | Strata Codegen |
-+----------------+  +----------------+
+            +------------------v-------------------+
+            |  Daemon (HeartbeatLoop)              |
+            |  Cron, vigilancia de archivos,       |
+            |  checklist, disparadores webhook     |
+            |  Circuit breakers, seguimiento de    |
+            |  presupuesto, dedup. de disparadores |
+            |  Enrutador de notificaciones +       |
+            |  reportes de resumen                 |
+            +--------------------------------------+
 ```
 
 ### Como funciona el bucle del agente
 
-1. **Mensaje recibido** -- del canal de chat
-2. **Recuperacion de memoria** -- encuentra las 3 conversaciones pasadas mas relevantes (TF-IDF)
+1. **Mensaje recibido** desde un canal de chat
+2. **Recuperacion de memoria** -- busqueda hibrida de AgentDB (70% semantica HNSW + 30% TF-IDF) encuentra las conversaciones pasadas mas relevantes
 3. **Recuperacion RAG** -- busqueda semantica sobre tu codigo C# (vectores HNSW, top 6 resultados)
-4. **Recuperacion de instintos** -- consulta proactivamente patrones aprendidos relevantes para la tarea
-5. **Fase PLAN** -- LLM crea un plan numerado, informado por conocimientos aprendidos y fallos pasados
-6. **Fase ACTUAR** -- LLM ejecuta llamadas de herramientas siguiendo el plan
-7. **OBSERVAR** -- se registran resultados; recuperacion de errores analiza fallos; clasificador categoriza errores
-8. **REFLEXIONAR** -- cada 3 pasos (o en error), LLM decide: **CONTINUAR**, **REPLANIFICAR** o **HECHO**
-9. **Replanificacion automatica** -- si ocurren 3+ fallos consecutivos del mismo tipo, fuerza un nuevo enfoque
-10. **Repetir** hasta 50 iteraciones hasta completar
-11. **Respuesta enviada** -- al usuario a traves del canal (streaming si es compatible)
+4. **Recuperacion de instintos** -- consulta proactivamente patrones aprendidos relevantes para la tarea (coincidencia semantica + palabras clave)
+5. **Contexto de identidad** -- inyecta la identidad persistente del agente (UUID, conteo de arranques, tiempo activo, estado de recuperacion de fallos)
+6. **Fase PLAN** -- el LLM crea un plan numerado, informado por conocimientos aprendidos y fallos pasados
+7. **Fase ACTUAR** -- el LLM ejecuta llamadas a herramientas siguiendo el plan
+8. **OBSERVAR** -- se registran resultados; recuperacion de errores analiza fallos; el clasificador de fallos categoriza errores
+9. **REFLEXIONAR** -- cada 3 pasos (o en error), el LLM decide: **CONTINUAR**, **REPLANIFICAR** o **HECHO**
+10. **Replanificacion automatica** -- si ocurren 3+ fallos consecutivos del mismo tipo, fuerza un nuevo enfoque evitando estrategias fallidas
+11. **Repetir** hasta 50 iteraciones hasta completar
+12. **Aprendizaje** -- los resultados de herramientas fluyen a traves del TypedEventBus al pipeline de aprendizaje para almacenamiento inmediato de patrones
+13. **Respuesta enviada** al usuario a traves del canal (streaming si es compatible)
+
+---
+
+## Sistema de Memoria
+
+El backend de memoria activo es `AgentDBMemory` -- SQLite con indexacion vectorial HNSW y una arquitectura de auto-clasificacion en tres niveles.
+
+**Memoria de tres niveles:**
+- **Memoria de trabajo** -- contexto de sesion activa, promovida automaticamente tras uso sostenido
+- **Memoria efimera** -- almacenamiento a corto plazo, desalojada automaticamente al alcanzar umbrales de capacidad
+- **Memoria persistente** -- almacenamiento a largo plazo, promovida desde la efimera segun frecuencia de acceso e importancia
+
+**Como funciona:**
+- Cuando el historial de sesion supera los 40 mensajes, los mensajes antiguos se resumen y almacenan como entradas de conversacion
+- La recuperacion hibrida combina 70% de similitud semantica (vectores HNSW) con 30% de coincidencia de palabras clave TF-IDF
+- La herramienta `strata_analyze_project` almacena en cache el analisis de estructura del proyecto para inyeccion instantanea de contexto
+- La memoria persiste entre reinicios en el directorio `MEMORY_DB_PATH` (por defecto: `.strata-memory/`)
+- La migracion automatica desde el legado FileMemoryManager se ejecuta en el primer inicio
+
+**Respaldo:** Si la inicializacion de AgentDB falla, el sistema recurre automaticamente a `FileMemoryManager` (JSON + TF-IDF).
+
+---
+
+## Sistema de Aprendizaje
+
+El sistema de aprendizaje observa el comportamiento del agente y aprende de los errores a traves de un pipeline orientado a eventos.
+
+**Pipeline orientado a eventos:**
+- Los resultados de herramientas fluyen a traves del `TypedEventBus` hacia un `LearningQueue` serial para procesamiento inmediato
+- Sin procesamiento por lotes basado en temporizadores -- los patrones se detectan y almacenan a medida que ocurren
+- El `LearningQueue` usa FIFO acotado con aislamiento de errores (los fallos de aprendizaje nunca provocan un fallo del agente)
+
+**Puntuacion de confianza bayesiana:**
+- Los instintos usan **inferencia posterior Beta** (`confianza = alfa / (alfa + beta)`) con un prior no informativo `Beta(1,1)`
+- Las puntuaciones de veredicto (0.0-1.0) actuan como pesos de evidencia fraccionarios para actualizaciones mas precisas
+- Sin mezcla ni descuento temporal -- media posterior bayesiana pura
+
+**Ciclo de vida de instintos:**
+- **Propuesto** (nuevo) -- por debajo de 0.7 de confianza
+- **Activo** -- entre 0.7 y 0.9 de confianza
+- **Evolucionado** -- por encima de 0.9, propuesto para promocion a permanente
+- **Obsoleto** -- por debajo de 0.3, marcado para eliminacion
+- **Periodo de enfriamiento** -- ventana de 7 dias con requisitos minimos de observacion antes de cambios de estado
+- **Permanente** -- congelado, sin mas actualizaciones de confianza
+
+**Recuperacion activa:** Los instintos se consultan proactivamente al inicio de cada tarea usando el `InstinctRetriever`. Busca por similitud de palabras clave y embeddings vectoriales HNSW para encontrar patrones aprendidos relevantes, que se inyectan en el prompt de la fase PLAN.
+
+**Aprendizaje entre sesiones:** Los instintos llevan metadatos de procedencia (sesion de origen, conteo de sesiones) para transferencia de conocimiento entre sesiones.
+
+---
+
+## Descomposicion de Objetivos
+
+Las solicitudes complejas de multiples pasos se descomponen automaticamente en un grafo aciclico dirigido (DAG) de sub-objetivos.
+
+**GoalDecomposer:**
+- La verificacion previa heuristica evita llamadas al LLM para tareas simples (coincidencia de patrones para indicadores de complejidad)
+- El LLM genera estructuras DAG con aristas de dependencia y profundidad recursiva opcional (hasta 3 niveles)
+- El algoritmo de Kahn valida la estructura DAG libre de ciclos
+- Re-descomposicion reactiva: cuando un nodo falla, puede dividirse en pasos de recuperacion mas pequenos
+
+**GoalExecutor:**
+- Ejecucion paralela por olas que respeta el orden de dependencias
+- Limitacion de concurrencia basada en semaforo (`GOAL_MAX_PARALLEL`)
+- Presupuestos de fallo (`GOAL_MAX_FAILURES`) con solicitudes de continuacion al usuario
+- Evaluacion de criticidad por LLM para determinar si un nodo fallido debe bloquear a sus dependientes
+- Logica de reintentos por nodo (`GOAL_MAX_RETRIES`) con descomposicion de recuperacion al agotarse
+- Soporte de AbortSignal para cancelacion
+- Estado persistente del arbol de objetivos via `GoalStorage` (SQLite) para reanudacion tras reinicio
+
+---
+
+## Sintesis de Cadenas de Herramientas
+
+El agente detecta y sintetiza automaticamente patrones de cadenas de herramientas multiples en herramientas compuestas reutilizables.
+
+**Pipeline:**
+1. **ChainDetector** -- analiza datos de trayectorias para encontrar secuencias recurrentes de herramientas (ej., `file_read` -> `file_edit` -> `dotnet_build`)
+2. **ChainSynthesizer** -- usa el LLM para generar un `CompositeTool` con mapeo adecuado de entradas/salidas y descripcion
+3. **ChainValidator** -- validacion post-sintesis con retroalimentacion en tiempo de ejecucion; rastrea el exito de ejecucion de cadenas via confianza bayesiana
+4. **ChainManager** -- orquestador de ciclo de vida: carga cadenas existentes al inicio, ejecuta deteccion periodica, invalida automaticamente cadenas cuando se eliminan herramientas componentes
+
+**Seguridad:** Las herramientas compuestas heredan los indicadores de seguridad mas restrictivos de sus herramientas componentes.
+
+**Cascada de confianza:** Los instintos de cadena siguen el mismo ciclo de vida bayesiano que los instintos regulares. Las cadenas que caen por debajo del umbral de obsolescencia se desregistran automaticamente.
+
+---
+
+## Modo Daemon
+
+El daemon proporciona operacion autonoma 24/7 con un sistema de disparadores impulsado por latidos.
+
+```bash
+npm run dev -- daemon --channel web
+```
+
+**HeartbeatLoop:**
+- Intervalo de tick configurable que evalua los disparadores registrados en cada ciclo
+- Evaluacion secuencial de disparadores que previene condiciones de carrera en el presupuesto
+- Persiste el estado de ejecucion para recuperacion ante fallos
+
+**Tipos de disparadores:**
+- **Cron** -- tareas programadas usando expresiones cron
+- **Vigilancia de archivos** -- monitorea cambios en el sistema de archivos en rutas configuradas
+- **Checklist** -- se dispara cuando los items del checklist vencen
+- **Webhook** -- endpoint HTTP POST que activa tareas ante solicitudes entrantes
+
+**Resiliencia:**
+- **Circuit breakers** -- por disparador con enfriamiento por backoff exponencial, persistidos entre reinicios
+- **Seguimiento de presupuesto** -- tope diario de gasto en USD con eventos de alerta de umbral
+- **Deduplicacion de disparadores** -- supresion basada en contenido y en enfriamiento para prevenir disparos duplicados
+- **Supresion de solapamiento** -- omite disparadores que ya tienen una tarea activa en ejecucion
+
+**Seguridad:**
+- `DaemonSecurityPolicy` controla que herramientas requieren aprobacion del usuario cuando son invocadas por disparadores del daemon
+- `ApprovalQueue` con expiracion configurable para operaciones de escritura
+
+**Reportes:**
+- `NotificationRouter` enruta eventos a canales configurados segun nivel de urgencia (silencioso/bajo/medio/alto/critico)
+- Limitacion de tasa por urgencia y soporte de horas de silencio (notificaciones no criticas se almacenan en buffer)
+- `DigestReporter` genera reportes de resumen periodicos
+- Todas las notificaciones se registran en el historial SQLite
+
+---
+
+## Sistema de Identidad
+
+El agente mantiene una identidad persistente entre sesiones y reinicios.
+
+**IdentityStateManager** (respaldado por SQLite):
+- UUID unico del agente generado en el primer arranque
+- Conteo de arranques, tiempo activo acumulado, marcas de tiempo de ultima actividad
+- Contadores totales de mensajes y tareas
+- Deteccion de apagado limpio para recuperacion ante fallos
+- Cache de contadores en memoria con volcado periodico para minimizar escrituras en SQLite
+
+**Recuperacion ante fallos:**
+- Al iniciar, si la sesion anterior no se cerro limpiamente, construye un `CrashRecoveryContext`
+- Incluye duracion de la inactividad, arboles de objetivos interrumpidos y conteo de arranques
+- Se inyecta en el prompt del sistema para que el LLM reconozca naturalmente el fallo y pueda reanudar el trabajo interrumpido
 
 ---
 
@@ -161,7 +322,7 @@ Toda la configuracion se realiza mediante variables de entorno. Consulta `.env.e
 
 ### Proveedores de IA
 
-Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listados abajo estan implementados y solo necesitan una clave de API para activarse.
+Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listados a continuacion estan implementados y solo necesitan una clave de API para activarse.
 
 | Variable | Proveedor | Modelo por Defecto |
 |----------|-----------|-------------------|
@@ -312,6 +473,27 @@ El agente tiene mas de 30 herramientas integradas organizadas por categoria:
 
 ---
 
+## Pipeline RAG
+
+El pipeline RAG (Retrieval-Augmented Generation) indexa tu codigo fuente C# para busqueda semantica.
+
+**Flujo de indexacion:**
+1. Escanea archivos `**/*.cs` en tu proyecto Unity
+2. Divide el codigo estructuralmente -- encabezados de archivo, clases, metodos, constructores
+3. Genera embeddings via OpenAI (`text-embedding-3-small`) u Ollama (`nomic-embed-text`)
+4. Almacena vectores en el indice HNSW para busqueda rapida de vecinos mas cercanos aproximados
+5. Se ejecuta automaticamente al inicio (en segundo plano, no bloqueante)
+
+**Flujo de busqueda:**
+1. La consulta se convierte en embedding usando el mismo proveedor
+2. La busqueda HNSW devuelve `topK * 3` candidatos
+3. El reranker puntua: similitud vectorial (60%) + coincidencia de palabras clave (25%) + bonus estructural (15%)
+4. Los 6 mejores resultados (por encima de puntuacion 0.2) se inyectan en el contexto del LLM
+
+**Nota:** El pipeline RAG actualmente solo soporta archivos C#. El chunker es especifico para C#.
+
+---
+
 ## Capacidades de Canal
 
 | Capacidad | Web | Telegram | Discord | Slack | WhatsApp | CLI |
@@ -334,60 +516,6 @@ Todos los canales implementan streaming con edicion in situ. La respuesta del ag
 - **Discord**: Bloquea todo por defecto. Se debe configurar `ALLOWED_DISCORD_USER_IDS` o `ALLOWED_DISCORD_ROLE_IDS`.
 - **Slack**: **Abierto por defecto.** Si `ALLOWED_SLACK_USER_IDS` esta vacio, cualquier usuario de Slack puede acceder al bot. Configura la lista de permitidos para produccion.
 - **WhatsApp**: Usa la lista de permitidos `WHATSAPP_ALLOWED_NUMBERS` verificada localmente en el adaptador.
-
----
-
-## Sistema de Memoria
-
-El backend de memoria en produccion es `FileMemoryManager` -- archivos JSON con indexacion de texto TF-IDF para busqueda.
-
-**Como funciona:**
-- Cuando el historial de sesion supera los 40 mensajes, los mensajes antiguos se resumen y almacenan como entradas de conversacion
-- El agente recupera automaticamente las 3 memorias mas relevantes antes de cada llamada al LLM
-- La herramienta `strata_analyze_project` almacena en cache el analisis de estructura del proyecto para inyeccion instantanea de contexto
-- La memoria persiste entre reinicios en el directorio `MEMORY_DB_PATH` (por defecto: `.strata-memory/`)
-
-**Backend avanzado (implementado, aun no conectado):** `AgentDBMemory` con SQLite + busqueda vectorial HNSW, memoria de tres niveles (trabajo/efimera/persistente), recuperacion hibrida (70% semantica + 30% TF-IDF). Esta completamente programado pero no conectado en el bootstrap -- `FileMemoryManager` es el backend activo.
-
----
-
-## Pipeline RAG
-
-La pipeline RAG (Retrieval-Augmented Generation) indexa tu codigo fuente C# para busqueda semantica.
-
-**Flujo de indexacion:**
-1. Escanea archivos `**/*.cs` en tu proyecto Unity
-2. Divide el codigo estructuralmente -- encabezados de archivo, clases, metodos, constructores
-3. Genera embeddings via OpenAI (`text-embedding-3-small`) u Ollama (`nomic-embed-text`)
-4. Almacena vectores en el indice HNSW para busqueda rapida de vecinos mas cercanos aproximados
-5. Se ejecuta automaticamente al inicio (en segundo plano, no bloqueante)
-
-**Flujo de busqueda:**
-1. La consulta se convierte en embedding usando el mismo proveedor
-2. La busqueda HNSW devuelve `topK * 3` candidatos
-3. El reranker puntua: similitud vectorial (60%) + coincidencia de palabras clave (25%) + bonus estructural (15%)
-4. Los 6 mejores resultados (por encima de puntuacion 0.2) se inyectan en el contexto del LLM
-
-**Nota:** La pipeline RAG actualmente solo soporta archivos C#. El chunker es especifico para C#.
-
----
-
-## Sistema de Aprendizaje
-
-El sistema de aprendizaje observa el comportamiento del agente y aprende de los errores:
-
-- Los **patrones de error** se capturan con indexacion de busqueda de texto completo
-- Las **soluciones** se vinculan a patrones de error para recuperacion futura
-- Los **instintos** son comportamientos aprendidos atomicos con puntuaciones de confianza bayesianas
-- Las **trayectorias** registran secuencias de llamadas a herramientas con resultados
-- Las puntuaciones de confianza usan **rating Elo** e **intervalos de puntuacion Wilson** para validez estadistica
-- Los instintos por debajo de 0.3 de confianza se marcan como obsoletos; por encima de 0.9 se proponen para promocion
-
-La pipeline de aprendizaje se ejecuta con temporizadores: deteccion de patrones cada 5 minutos, propuestas de evolucion cada hora. Los datos se almacenan en una base de datos SQLite separada (`learning.db`).
-
-**Recuperacion activa (nuevo):** Los instintos se consultan proactivamente al inicio de cada tarea usando el `InstinctRetriever`. Busca patrones aprendidos relevantes mediante similitud de palabras clave y embeddings vectoriales HNSW, inyectandolos en el prompt de la fase PLAN.
-
-**Descomposicion de tareas:** Las solicitudes complejas de multiples pasos se detectan automaticamente mediante analisis heuristico y se descomponen en 3-8 subtareas ordenadas a traves del LLM antes de la ejecucion.
 
 ---
 
@@ -417,6 +545,9 @@ Todos los resultados de herramientas se limitan a 8192 caracteres y se limpian d
 ### Capa 8: RBAC (Interno)
 5 roles (superadmin, admin, desarrollador, visualizador, servicio) con una matriz de permisos que cubre 9 tipos de recursos. El motor de politicas soporta condiciones basadas en tiempo, IP y condiciones personalizadas.
 
+### Capa 9: Seguridad del Daemon
+`DaemonSecurityPolicy` impone requisitos de aprobacion a nivel de herramienta para operaciones activadas por el daemon. Las herramientas de escritura requieren aprobacion explicita del usuario a traves del `ApprovalQueue` antes de su ejecucion.
+
 ---
 
 ## Dashboard y Monitoreo
@@ -432,7 +563,10 @@ Accesible en `http://localhost:3001` (solo localhost). Muestra: tiempo de activi
 Metricas en `http://localhost:9090/metrics`. Contadores para mensajes, llamadas a herramientas, tokens. Histogramas para duracion de solicitudes, duracion de herramientas, latencia LLM. Metricas estandar de Node.js (CPU, heap, GC, event loop).
 
 ### Dashboard WebSocket (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-Metricas en tiempo real enviadas cada segundo. Soporta conexiones autenticadas y comandos remotos (recarga de plugins, limpieza de cache, recuperacion de logs).
+Metricas en tiempo real enviadas cada segundo. Soporta conexiones autenticadas y comandos remotos (recarga de plugins, limpieza de cache, recuperacion de logs). Los eventos del daemon (disparos de disparadores, alertas de presupuesto, progreso de objetivos) se transmiten por WebSocket.
+
+### Sistema de Metricas
+`MetricsStorage` (SQLite) registra tasa de completitud de tareas, conteos de iteraciones, uso de herramientas y reutilizacion de patrones. `MetricsRecorder` captura metricas por sesion. El comando CLI `metrics` muestra metricas historicas.
 
 ---
 
@@ -444,11 +578,14 @@ Metricas en tiempo real enviadas cada segundo. Soporta conexiones autenticadas y
 docker-compose up -d
 ```
 
-El `docker-compose.yml` incluye la aplicacion, el stack de monitoreo y el reverse proxy Nginx.
+El `docker-compose.yml` incluye la aplicacion, el stack de monitoreo y el reverse proxy nginx.
 
 ### Modo Daemon
 
 ```bash
+# Operacion autonoma 24/7 con bucle de latido y disparadores proactivos
+node dist/index.js daemon --channel web
+
 # Auto-reinicio en caso de fallo con backoff exponencial (1s a 60s, hasta 10 reinicios)
 node dist/index.js daemon --channel telegram
 ```
@@ -463,21 +600,20 @@ node dist/index.js daemon --channel telegram
 - [ ] Habilitar `DASHBOARD_ENABLED=true` para monitoreo
 - [ ] Habilitar `ENABLE_PROMETHEUS=true` para recopilacion de metricas
 - [ ] Generar un `JWT_SECRET` seguro
+- [ ] Configurar limites de presupuesto del daemon (`RATE_LIMIT_DAILY_BUDGET_USD`)
 
 ---
 
 ## Pruebas
 
 ```bash
-npm test                         # Ejecutar las 1730+ pruebas
+npm test                         # Ejecutar las 2775 pruebas
 npm run test:watch               # Modo observacion
 npm test -- --coverage           # Con cobertura
 npm test -- src/agents/tools/file-read.test.ts  # Archivo individual
 npm run typecheck                # Verificacion de tipos TypeScript
 npm run lint                     # ESLint
 ```
-
-110 archivos de prueba que cubren: agentes, canales, seguridad, RAG, memoria, aprendizaje, dashboard, flujos de integracion.
 
 ---
 
@@ -488,7 +624,7 @@ src/
   index.ts              # Punto de entrada CLI (Commander.js)
   core/
     bootstrap.ts        # Secuencia de inicializacion completa -- toda la configuracion ocurre aqui
-    di-container.ts     # Contenedor DI (disponible pero la configuracion manual predomina)
+    event-bus.ts        # TypedEventBus para comunicacion desacoplada orientada a eventos
     tool-registry.ts    # Instanciacion y registro de herramientas
   agents/
     orchestrator.ts     # Bucle de agente PAOR, gestion de sesiones, streaming
@@ -506,18 +642,88 @@ src/
     discord/            # Bot discord.js con comandos slash
     slack/              # Slack Bolt (modo socket) con Block Kit
     whatsapp/           # Cliente basado en Baileys con gestion de sesiones
+    web/                # Dashboard web Express + WebSocket
     cli/                # REPL Readline
   memory/
-    file-memory-manager.ts   # Backend activo: JSON + TF-IDF
-    unified/                 # Backend AgentDB: SQLite + HNSW (aun no conectado)
+    file-memory-manager.ts   # Backend legado: JSON + TF-IDF (respaldo)
+    unified/
+      agentdb-memory.ts      # Backend activo: SQLite + HNSW, auto-clasificacion en 3 niveles
+      agentdb-adapter.ts     # Adaptador IMemoryManager para AgentDBMemory
+      migration.ts           # Migracion de FileMemoryManager legado -> AgentDB
   rag/
     rag-pipeline.ts     # Orquestacion de indice + busqueda + formato
     chunker.ts          # Chunking estructural especifico para C#
     hnsw/               # Almacen de vectores HNSW (hnswlib-node)
     embeddings/         # Proveedores de embeddings OpenAI y Ollama
     reranker.ts         # Reranking ponderado (vector + palabra clave + estructura)
+  learning/
+    pipeline/
+      learning-pipeline.ts  # Deteccion de patrones, creacion de instintos, propuestas de evolucion
+      learning-queue.ts     # Procesador asincrono serial para aprendizaje orientado a eventos
+      embedding-queue.ts    # Generacion asincrona acotada de embeddings
+    scoring/
+      confidence-scorer.ts  # Confianza posterior bayesiana Beta, Elo, intervalos de Wilson
+    matching/
+      pattern-matcher.ts    # Coincidencia de patrones por palabras clave + semantica
+    hooks/
+      error-learning-hooks.ts  # Hooks de captura de errores/resoluciones
+    storage/
+      learning-storage.ts  # Almacenamiento SQLite para instintos, trayectorias, patrones
+      migrations/          # Migraciones de esquema (procedencia entre sesiones)
+    chains/
+      chain-detector.ts    # Deteccion de secuencias recurrentes de herramientas
+      chain-synthesizer.ts # Generacion de herramientas compuestas basada en LLM
+      composite-tool.ts    # Herramienta compuesta ejecutable
+      chain-validator.ts   # Validacion post-sintesis, retroalimentacion en tiempo de ejecucion
+      chain-manager.ts     # Orquestador de ciclo de vida completo
+  goals/
+    goal-decomposer.ts  # Descomposicion de objetivos basada en DAG (proactiva + reactiva)
+    goal-executor.ts    # Ejecucion paralela por olas con presupuestos de fallo
+    goal-validator.ts   # Deteccion de ciclos en DAG con algoritmo de Kahn
+    goal-storage.ts     # Persistencia SQLite para arboles de objetivos
+    goal-progress.ts    # Seguimiento y reporte de progreso
+    goal-resume.ts      # Reanudacion de arboles de objetivos interrumpidos tras reinicio
+    goal-renderer.ts    # Visualizacion del arbol de objetivos
+  daemon/
+    heartbeat-loop.ts   # Bucle central tick-evaluar-disparar
+    trigger-registry.ts # Registro y ciclo de vida de disparadores
+    daemon-storage.ts   # Persistencia SQLite para estado del daemon
+    daemon-events.ts    # Definiciones de eventos tipados para el subsistema daemon
+    daemon-cli.ts       # Comandos CLI para gestion del daemon
+    budget/
+      budget-tracker.ts # Seguimiento de presupuesto diario en USD
+    resilience/
+      circuit-breaker.ts # Circuit breaker por disparador con backoff exponencial
+    security/
+      daemon-security-policy.ts  # Requisitos de aprobacion de herramientas para el daemon
+      approval-queue.ts          # Cola de solicitudes de aprobacion con expiracion
+    dedup/
+      trigger-deduplicator.ts    # Deduplicacion por contenido + enfriamiento
+    triggers/
+      cron-trigger.ts        # Programacion con expresiones cron
+      file-watch-trigger.ts  # Monitoreo de cambios en el sistema de archivos
+      checklist-trigger.ts   # Items de checklist con fecha de vencimiento
+      webhook-trigger.ts     # Endpoint de webhook HTTP POST
+    reporting/
+      notification-router.ts # Enrutamiento de notificaciones basado en urgencia
+      digest-reporter.ts     # Generacion de resumenes periodicos
+      digest-formatter.ts    # Formateo de reportes de resumen para canales
+      quiet-hours.ts         # Almacenamiento en buffer de notificaciones no criticas
+  identity/
+    identity-state.ts   # Identidad persistente del agente (UUID, conteo de arranques, tiempo activo)
+    crash-recovery.ts   # Deteccion de fallos y contexto de recuperacion
+  tasks/
+    task-manager.ts     # Gestion del ciclo de vida de tareas
+    task-storage.ts     # Persistencia SQLite de tareas
+    background-executor.ts # Ejecucion de tareas en segundo plano con integracion de objetivos
+    message-router.ts   # Enrutamiento de mensajes al orquestador
+    command-detector.ts # Deteccion de comandos slash
+    command-handler.ts  # Ejecucion de comandos
+  metrics/
+    metrics-storage.ts  # Almacenamiento SQLite de metricas
+    metrics-recorder.ts # Captura de metricas por sesion
+    metrics-cli.ts      # Comando CLI para visualizacion de metricas
   security/             # Auth, RBAC, proteccion de rutas, limitador de tasa, sanitizacion de secretos
-  learning/             # Coincidencia de patrones, busqueda semantica HNSW, puntuacion de confianza, ciclo de vida de instintos
   intelligence/         # Parsing C#, analisis de proyecto, calidad de codigo
   dashboard/            # Dashboards HTTP, WebSocket, Prometheus
   config/               # Configuracion de entorno validada con Zod

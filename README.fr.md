@@ -1,48 +1,51 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Strada.Brain Logo" width="200"/>
+  <img src="icon/strada-brain-icon.png" alt="Logo Strada.Brain" width="200"/>
 </p>
 
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
-  <strong>Agent de Developpement Propulse par l'IA pour les Projets Unity / Strada.Core</strong><br/>
-  Un agent de programmation autonome qui se connecte a un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, ecrit du code, lance les builds et apprend de ses erreurs.
+  <strong>Agent de D&eacute;veloppement Propuls&eacute; par l'IA pour les Projets Unity / Strada.Core</strong><br/>
+  Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
+  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Licence">
 </p>
 
 <p align="center">
   <a href="README.md">English</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.zh.md">中文</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.ko.md">한국어</a> |
+  <a href="README.tr.md">T&uuml;rk&ccedil;e</a> |
+  <a href="README.zh.md">&#20013;&#25991;</a> |
+  <a href="README.ja.md">&#26085;&#26412;&#35486;</a> |
+  <a href="README.ko.md">&#54620;&#44397;&#50612;</a> |
   <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <strong>Français</strong>
+  <a href="README.es.md">Espa&ntilde;ol</a> |
+  <strong>Fran&ccedil;ais</strong>
 </p>
 
 ---
 
 ## Qu'est-ce que c'est ?
 
-Strada.Brain est un agent IA avec lequel vous communiquez via un canal de chat. Vous decrivez ce que vous voulez -- "cree un nouveau systeme ECS pour le mouvement du joueur" ou "trouve tous les composants qui utilisent la sante" -- et l'agent lit votre projet C#, ecrit le code, lance `dotnet build`, corrige les erreurs automatiquement et vous envoie le resultat. Il dispose d'une memoire persistante, apprend de ses erreurs passees et peut utiliser plusieurs fournisseurs d'IA avec basculement automatique.
+Strada.Brain est un agent IA avec lequel vous communiquez via un canal de chat. Vous d&eacute;crivez ce que vous voulez -- "cr&eacute;e un nouveau syst&egrave;me ECS pour le mouvement du joueur" ou "trouve tous les composants qui utilisent la sant&eacute;" -- et l'agent lit votre projet C#, &eacute;crit le code, lance `dotnet build`, corrige les erreurs automatiquement et vous envoie le r&eacute;sultat.
 
-**Ceci n'est pas une bibliotheque ni une API.** C'est une application autonome que vous executez. Elle se connecte a votre plateforme de chat, lit votre projet Unity sur le disque et fonctionne de maniere autonome dans les limites que vous configurez.
+Il dispose d'une m&eacute;moire persistante adoss&eacute;e &agrave; SQLite + vecteurs HNSW, apprend des erreurs pass&eacute;es gr&acirc;ce &agrave; un scoring de confiance bay&eacute;sien, d&eacute;compose les objectifs complexes en ex&eacute;cution parall&egrave;le via un DAG, synth&eacute;tise automatiquement des cha&icirc;nes d'outils multi-&eacute;tapes et peut fonctionner en tant que daemon 24/7 avec des d&eacute;clencheurs proactifs.
+
+**Ceci n'est pas une biblioth&egrave;que ni une API.** C'est une application autonome que vous ex&eacute;cutez. Elle se connecte &agrave; votre plateforme de chat, lit votre projet Unity sur le disque et fonctionne de mani&egrave;re autonome dans les limites que vous configurez.
 
 ---
 
-## Demarrage Rapide
+## D&eacute;marrage Rapide
 
-### Prerequis
+### Pr&eacute;requis
 
 - **Node.js 20+** et npm
-- Une **cle API Anthropic** (Claude) -- les autres fournisseurs sont optionnels
-- Un **projet Unity** avec le framework Strada.Core (le chemin que vous donnez a l'agent)
+- Une **cl&eacute; API Anthropic** (Claude) -- les autres fournisseurs sont optionnels
+- Un **projet Unity** avec le framework Strada.Core (le chemin que vous donnez &agrave; l'agent)
 
 ### 1. Installation
 
@@ -58,19 +61,19 @@ npm install
 cp .env.example .env
 ```
 
-Ouvrez `.env` et definissez au minimum :
+Ouvrez `.env` et d&eacute;finissez au minimum :
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...      # Votre cle API Claude
+ANTHROPIC_API_KEY=sk-ant-...      # Votre cl&eacute; API Claude
 UNITY_PROJECT_PATH=/path/to/your/UnityProject  # Doit contenir Assets/
-JWT_SECRET=<generer avec : openssl rand -hex 64>
+JWT_SECRET=<g&eacute;n&eacute;rer avec : openssl rand -hex 64>
 ```
 
 ### 3. Lancement
 
 ```bash
-# Canal web (defaut) - l'assistant de configuration s'ouvre sur localhost:3000
-# Si aucun .env n'existe, l'assistant vous guide a travers la configuration initiale
+# Canal web (d&eacute;faut) - l'assistant de configuration s'ouvre sur localhost:3000
+# Si aucun .env n'existe, l'assistant vous guide &agrave; travers la configuration initiale
 npm start
 
 # Ou explicitement avec le canal web
@@ -79,7 +82,10 @@ npm run dev -- start --channel web
 # Mode CLI interactif (moyen le plus rapide pour tester)
 npm run dev -- cli
 
-# Ou avec un canal de chat
+# Mode daemon (fonctionnement autonome 24/7 avec d&eacute;clencheurs proactifs)
+npm run dev -- daemon --channel web
+
+# Ou avec d'autres canaux de chat
 npm run dev -- start --channel telegram
 npm run dev -- start --channel discord
 npm run dev -- start --channel slack
@@ -88,16 +94,16 @@ npm run dev -- start --channel whatsapp
 
 ### 4. Communiquez avec l'agent
 
-Une fois lance, envoyez un message via votre canal configure :
+Une fois lanc&eacute;, envoyez un message via votre canal configur&eacute; :
 
 ```
 > Analyse la structure du projet
-> Cree un nouveau module appele "Combat" avec un DamageSystem et un HealthComponent
-> Trouve tous les systemes qui requetent PositionComponent
+> Cr&eacute;e un nouveau module appel&eacute; "Combat" avec un DamageSystem et un HealthComponent
+> Trouve tous les syst&egrave;mes qui requ&ecirc;tent PositionComponent
 > Lance le build et corrige les erreurs
 ```
 
-**Canal web :** Pas de terminal necessaire -- interagissez via le tableau de bord web sur `localhost:3000`.
+**Canal web :** Pas de terminal n&eacute;cessaire -- interagissez via le tableau de bord web sur `localhost:3000`.
 
 ---
 
@@ -113,57 +119,213 @@ Une fois lance, envoyez un message via votre canal configure :
                                |
 +------------------------------v----------------------------------+
 |  Orchestrateur (Boucle d'Agent PAOR)                             |
-|  Planifier -> Agir -> Observer -> Réfléchir machine à états      |
-|  Jusqu'à 50 itérations d'outils par message                     |
-|  Récupération d'instincts, classification des pannes, replanification automatique |
-+------------------------------+----------------------------------+
+|  Planifier -> Agir -> Observer -> R&eacute;fl&eacute;chir machine &agrave; &eacute;tats      |
+|  R&eacute;cup&eacute;ration d'instincts, classification des pannes,          |
+|  replanification automatique                                     |
++-------+--------------+-------------+-----------+----------------+
+        |              |             |           |
++-------v------+ +-----v------+ +---v--------+ +v-----------------+
+| Fournisseurs | | 30+ Outils | | Contexte   | | Apprentissage    |
+| IA           | |            | |            | |                  |
+| Claude (pri.)| | E/S fich.  | | AgentDB    | | TypedEventBus    |
+| OpenAI, Kimi | | Ops Git    | | (SQLite +  | | Bay&eacute;sien Beta   |
+| DeepSeek,Qwen| | Exec shell | |  HNSW)     | | Cycle de vie     |
+| MiniMax, Groq| | Build .NET | | Vect. RAG  | |  des instincts   |
+| Ollama +autr.| | G&eacute;n Strata| | Identit&eacute;  | | Cha&icirc;nes d'outils |
++--------------+ +------+-----+ +---+--------+ +--+---------------+
+                        |           |              |
+                +-------v-----------v--------------v------+
+                |  D&eacute;composeur + Ex&eacute;cuteur d'objectifs     |
+                |  D&eacute;composition en DAG, ex&eacute;cution         |
+                |  parall&egrave;le par vagues, budgets d'&eacute;checs  |
+                +-----------------------------------------+
                                |
-          +--------------------+--------------------+
-          |                    |                    |
-+---------v------+  +---------v------+  +----------v---------+
-| Fournisseurs IA|  | 30+ Outils     |  | Sources de Contexte|
-| Claude (princ.)|  | E/S fichiers   |  | Memoire (TF-IDF)   |
-| OpenAI, Kimi   |  | Operations Git |  | RAG (vecteurs HNSW)|
-| DeepSeek, Qwen |  | Exec. shell    |  | Analyse de projet  |
-| MiniMax, Groq  |  | Build/test .NET|  | Modeles appris     |
-| Ollama (local) |  | Navigateur     |  +--------------------+
-| + 4 autres     |  | Codegen Strata |
-+----------------+  +----------------+
+            +------------------v-------------------+
+            |  Daemon (HeartbeatLoop)              |
+            |  Cron, surveillance fichiers,        |
+            |  checklist, d&eacute;clencheurs webhook     |
+            |  Disjoncteurs, suivi du budget,      |
+            |  d&eacute;duplication de d&eacute;clencheurs       |
+            |  Routeur de notifications +          |
+            |  rapports de synth&egrave;se                |
+            +--------------------------------------+
 ```
 
 ### Fonctionnement de la Boucle Agent
 
-1. **Message reçu** — du canal de chat
-2. **Récupération mémoire** — trouve les 3 conversations passées les plus pertinentes (TF-IDF)
-3. **Récupération RAG** — recherche sémantique sur votre code C# (vecteurs HNSW, top 6 résultats)
-4. **Récupération d'instincts** — interroge proactivement les motifs appris pertinents pour la tâche
-5. **Phase PLAN** — LLM crée un plan numéroté, informé par les connaissances apprises et les échecs passés
-6. **Phase AGIR** — LLM exécute les appels d'outils selon le plan
-7. **OBSERVER** — les résultats sont enregistrés ; la récupération d'erreurs analyse les échecs ; le classificateur catégorise les erreurs
-8. **RÉFLÉCHIR** — tous les 3 pas (ou en cas d'erreur), LLM décide : **CONTINUER**, **REPLANIFIER** ou **TERMINÉ**
-9. **Replanification automatique** — si 3+ échecs consécutifs du même type, force une nouvelle approche
-10. **Répéter** jusqu'à 50 itérations jusqu'à complétion
-11. **Réponse envoyée** — à l'utilisateur via le canal (streaming si supporté)
+1. **Message re&ccedil;u** depuis un canal de chat
+2. **R&eacute;cup&eacute;ration m&eacute;moire** -- recherche hybride AgentDB (70% s&eacute;mantique HNSW + 30% TF-IDF) pour trouver les conversations pass&eacute;es les plus pertinentes
+3. **R&eacute;cup&eacute;ration RAG** -- recherche s&eacute;mantique sur votre code C# (vecteurs HNSW, top 6 r&eacute;sultats)
+4. **R&eacute;cup&eacute;ration d'instincts** -- interroge proactivement les motifs appris pertinents pour la t&acirc;che (correspondance s&eacute;mantique + par mots-cl&eacute;s)
+5. **Contexte d'identit&eacute;** -- injecte l'identit&eacute; persistante de l'agent (UUID, nombre de d&eacute;marrages, temps de fonctionnement, &eacute;tat de r&eacute;cup&eacute;ration apr&egrave;s crash)
+6. **Phase PLAN** -- le LLM cr&eacute;e un plan num&eacute;rot&eacute;, inform&eacute; par les connaissances apprises et les &eacute;checs pass&eacute;s
+7. **Phase AGIR** -- le LLM ex&eacute;cute les appels d'outils selon le plan
+8. **OBSERVER** -- les r&eacute;sultats sont enregistr&eacute;s ; la r&eacute;cup&eacute;ration d'erreurs analyse les pannes ; le classificateur cat&eacute;gorise les erreurs
+9. **R&Eacute;FL&Eacute;CHIR** -- tous les 3 pas (ou en cas d'erreur), le LLM d&eacute;cide : **CONTINUER**, **REPLANIFIER** ou **TERMIN&Eacute;**
+10. **Replanification automatique** -- si 3+ &eacute;checs cons&eacute;cutifs du m&ecirc;me type, force une nouvelle approche en &eacute;vitant les strat&eacute;gies ayant &eacute;chou&eacute;
+11. **R&eacute;p&eacute;ter** jusqu'&agrave; 50 it&eacute;rations jusqu'&agrave; compl&eacute;tion
+12. **Apprentissage** -- les r&eacute;sultats des outils transitent par le TypedEventBus vers le pipeline d'apprentissage pour un stockage imm&eacute;diat des motifs
+13. **R&eacute;ponse envoy&eacute;e** &agrave; l'utilisateur via le canal (streaming si support&eacute;)
 
 ---
 
-## Reference de Configuration
+## Syst&egrave;me de M&eacute;moire
 
-Toute la configuration se fait via des variables d'environnement. Consultez `.env.example` pour la liste complete.
+Le backend de m&eacute;moire actif est `AgentDBMemory` -- SQLite avec indexation vectorielle HNSW et une architecture &agrave; trois niveaux avec placement automatique.
+
+**M&eacute;moire &agrave; trois niveaux :**
+- **M&eacute;moire de travail** -- contexte de la session active, promue automatiquement apr&egrave;s une utilisation soutenue
+- **M&eacute;moire &eacute;ph&eacute;m&egrave;re** -- stockage &agrave; court terme, &eacute;vinc&eacute;e automatiquement lorsque les seuils de capacit&eacute; sont atteints
+- **M&eacute;moire persistante** -- stockage &agrave; long terme, promue depuis l'&eacute;ph&eacute;m&egrave;re en fonction de la fr&eacute;quence d'acc&egrave;s et de l'importance
+
+**Fonctionnement :**
+- Lorsque l'historique de session d&eacute;passe 40 messages, les anciens messages sont r&eacute;sum&eacute;s et stock&eacute;s comme entr&eacute;es de conversation
+- La r&eacute;cup&eacute;ration hybride combine 70% de similarit&eacute; s&eacute;mantique (vecteurs HNSW) avec 30% de correspondance par mots-cl&eacute;s TF-IDF
+- L'outil `strata_analyze_project` met en cache l'analyse de la structure du projet pour une injection de contexte instantan&eacute;e
+- La m&eacute;moire persiste entre les red&eacute;marrages dans le r&eacute;pertoire `MEMORY_DB_PATH` (d&eacute;faut : `.strata-memory/`)
+- La migration automatique depuis l'ancien FileMemoryManager s'ex&eacute;cute au premier d&eacute;marrage
+
+**Repli :** Si l'initialisation d'AgentDB &eacute;choue, le syst&egrave;me bascule automatiquement vers `FileMemoryManager` (JSON + TF-IDF).
+
+---
+
+## Syst&egrave;me d'Apprentissage
+
+Le syst&egrave;me d'apprentissage observe le comportement de l'agent et apprend de ses erreurs via un pipeline &eacute;v&eacute;nementiel.
+
+**Pipeline &eacute;v&eacute;nementiel :**
+- Les r&eacute;sultats des outils transitent par le `TypedEventBus` vers une `LearningQueue` s&eacute;rielle pour un traitement imm&eacute;diat
+- Pas de traitement par lots bas&eacute; sur des minuteurs -- les motifs sont d&eacute;tect&eacute;s et stock&eacute;s au fur et &agrave; mesure
+- La `LearningQueue` utilise un FIFO born&eacute; avec isolation des erreurs (les &eacute;checs d'apprentissage ne font jamais planter l'agent)
+
+**Scoring de confiance bay&eacute;sien :**
+- Les instincts utilisent l'**inf&eacute;rence post&eacute;rieure Beta** (`confidence = alpha / (alpha + beta)`) avec un a priori non informatif `Beta(1,1)`
+- Les scores de verdict (0.0-1.0) agissent comme des poids de preuve fractionnaires pour des mises &agrave; jour nuanc&eacute;es
+- Pas de pond&eacute;ration ni d'escompte temporel -- moyenne post&eacute;rieure bay&eacute;sienne pure
+
+**Cycle de vie des instincts :**
+- **Propos&eacute;** (nouveau) -- confiance inf&eacute;rieure &agrave; 0.7
+- **Actif** -- confiance entre 0.7 et 0.9
+- **&Eacute;volu&eacute;** -- sup&eacute;rieure &agrave; 0.9, propos&eacute; pour promotion en permanent
+- **D&eacute;pr&eacute;ci&eacute;** -- inf&eacute;rieure &agrave; 0.3, marqu&eacute; pour suppression
+- **P&eacute;riode de refroidissement** -- fen&ecirc;tre de 7 jours avec exigences minimales d'observation avant les changements de statut
+- **Permanent** -- gel&eacute;, plus aucune mise &agrave; jour de confiance
+
+**R&eacute;cup&eacute;ration active :** Les instincts sont interrog&eacute;s proactivement au d&eacute;but de chaque t&acirc;che via l'`InstinctRetriever`. Il recherche par similarit&eacute; de mots-cl&eacute;s et par embeddings vectoriels HNSW pour trouver les motifs appris pertinents, qui sont inject&eacute;s dans le prompt de la phase PLAN.
+
+**Apprentissage inter-sessions :** Les instincts portent des m&eacute;tadonn&eacute;es de provenance (session source, nombre de sessions) pour le transfert de connaissances entre sessions.
+
+---
+
+## D&eacute;composition d'Objectifs
+
+Les requ&ecirc;tes complexes multi-&eacute;tapes sont automatiquement d&eacute;compos&eacute;es en un graphe acyclique dirig&eacute; (DAG) de sous-objectifs.
+
+**GoalDecomposer :**
+- La v&eacute;rification heuristique pr&eacute;alable &eacute;vite les appels LLM pour les t&acirc;ches simples (correspondance de motifs pour les indicateurs de complexit&eacute;)
+- Le LLM g&eacute;n&egrave;re des structures DAG avec des ar&ecirc;tes de d&eacute;pendance et une profondeur r&eacute;cursive optionnelle (jusqu'&agrave; 3 niveaux)
+- L'algorithme de Kahn valide l'absence de cycles dans la structure DAG
+- Red&eacute;composition r&eacute;active : lorsqu'un noeud &eacute;choue, il peut &ecirc;tre d&eacute;compos&eacute; en &eacute;tapes de r&eacute;cup&eacute;ration plus petites
+
+**GoalExecutor :**
+- Ex&eacute;cution parall&egrave;le par vagues respectant l'ordre des d&eacute;pendances
+- Limitation de la concurrence par s&eacute;maphore (`GOAL_MAX_PARALLEL`)
+- Budgets d'&eacute;checs (`GOAL_MAX_FAILURES`) avec invites de continuation pour l'utilisateur
+- &Eacute;valuation de criticit&eacute; par le LLM pour d&eacute;terminer si un noeud en &eacute;chec doit bloquer ses d&eacute;pendants
+- Logique de r&eacute;essai par noeud (`GOAL_MAX_RETRIES`) avec d&eacute;composition de r&eacute;cup&eacute;ration en cas d'&eacute;puisement
+- Support AbortSignal pour l'annulation
+- &Eacute;tat persistant de l'arbre d'objectifs via `GoalStorage` (SQLite) pour la reprise apr&egrave;s red&eacute;marrage
+
+---
+
+## Synth&egrave;se de Cha&icirc;nes d'Outils
+
+L'agent d&eacute;tecte et synth&eacute;tise automatiquement des motifs de cha&icirc;nes d'outils multi-&eacute;tapes en outils composites r&eacute;utilisables.
+
+**Pipeline :**
+1. **ChainDetector** -- analyse les donn&eacute;es de trajectoire pour trouver des s&eacute;quences d'outils r&eacute;currentes (ex. : `file_read` -> `file_edit` -> `dotnet_build`)
+2. **ChainSynthesizer** -- utilise le LLM pour g&eacute;n&eacute;rer un `CompositeTool` avec un mapping entr&eacute;e/sortie et une description ad&eacute;quats
+3. **ChainValidator** -- validation post-synth&egrave;se avec retour d'information &agrave; l'ex&eacute;cution ; suit le succ&egrave;s d'ex&eacute;cution des cha&icirc;nes via la confiance bay&eacute;sienne
+4. **ChainManager** -- orchestrateur du cycle de vie : charge les cha&icirc;nes existantes au d&eacute;marrage, lance la d&eacute;tection p&eacute;riodique, invalide automatiquement les cha&icirc;nes lorsque des outils composants sont supprim&eacute;s
+
+**S&eacute;curit&eacute; :** Les outils composites h&eacute;ritent des indicateurs de s&eacute;curit&eacute; les plus restrictifs de leurs outils composants.
+
+**Cascade de confiance :** Les instincts de cha&icirc;nes suivent le m&ecirc;me cycle de vie bay&eacute;sien que les instincts classiques. Les cha&icirc;nes qui passent sous le seuil de d&eacute;pr&eacute;ciation sont automatiquement d&eacute;senregistr&eacute;es.
+
+---
+
+## Mode Daemon
+
+Le daemon fournit un fonctionnement autonome 24/7 avec un syst&egrave;me de d&eacute;clencheurs pilot&eacute; par un battement de coeur.
+
+```bash
+npm run dev -- daemon --channel web
+```
+
+**HeartbeatLoop :**
+- Intervalle de tick configurable &eacute;valuant les d&eacute;clencheurs enregistr&eacute;s &agrave; chaque cycle
+- &Eacute;valuation s&eacute;quentielle des d&eacute;clencheurs pour &eacute;viter les conditions de course sur le budget
+- Persistance de l'&eacute;tat d'ex&eacute;cution pour la r&eacute;cup&eacute;ration apr&egrave;s crash
+
+**Types de d&eacute;clencheurs :**
+- **Cron** -- t&acirc;ches planifi&eacute;es utilisant des expressions cron
+- **Surveillance de fichiers** -- surveille les modifications du syst&egrave;me de fichiers dans les chemins configur&eacute;s
+- **Checklist** -- se d&eacute;clenche lorsque des &eacute;l&eacute;ments de la checklist arrivent &agrave; &eacute;ch&eacute;ance
+- **Webhook** -- endpoint HTTP POST d&eacute;clenchant des t&acirc;ches sur les requ&ecirc;tes entrantes
+
+**R&eacute;silience :**
+- **Disjoncteurs** -- par d&eacute;clencheur avec refroidissement &agrave; backoff exponentiel, persist&eacute;s entre les red&eacute;marrages
+- **Suivi du budget** -- plafond de d&eacute;penses journalier en USD avec &eacute;v&eacute;nements de seuil d'alerte
+- **D&eacute;duplication des d&eacute;clencheurs** -- suppression bas&eacute;e sur le contenu et sur les p&eacute;riodes de refroidissement pour &eacute;viter les d&eacute;clenchements en double
+- **Suppression de chevauchement** -- ignore les d&eacute;clencheurs qui ont d&eacute;j&agrave; une t&acirc;che active en cours d'ex&eacute;cution
+
+**S&eacute;curit&eacute; :**
+- `DaemonSecurityPolicy` contr&ocirc;le quels outils n&eacute;cessitent l'approbation de l'utilisateur lorsqu'ils sont invoqu&eacute;s par des d&eacute;clencheurs du daemon
+- `ApprovalQueue` avec expiration configurable pour les op&eacute;rations d'&eacute;criture
+
+**Rapports :**
+- `NotificationRouter` achemine les &eacute;v&eacute;nements vers les canaux configur&eacute;s selon le niveau d'urgence (silencieux/bas/moyen/haut/critique)
+- Limitation du d&eacute;bit par urgence et support des heures calmes (notifications non critiques mises en tampon)
+- `DigestReporter` g&eacute;n&egrave;re des rapports de synth&egrave;se p&eacute;riodiques
+- Toutes les notifications sont journalis&eacute;es dans un historique SQLite
+
+---
+
+## Syst&egrave;me d'Identit&eacute;
+
+L'agent maintient une identit&eacute; persistante entre les sessions et les red&eacute;marrages.
+
+**IdentityStateManager** (adoss&eacute; &agrave; SQLite) :
+- UUID unique g&eacute;n&eacute;r&eacute; au premier d&eacute;marrage
+- Nombre de d&eacute;marrages, temps de fonctionnement cumul&eacute;, horodatages de derni&egrave;re activit&eacute;
+- Compteurs totaux de messages et de t&acirc;ches
+- D&eacute;tection d'arr&ecirc;t propre pour la r&eacute;cup&eacute;ration apr&egrave;s crash
+- Cache de compteurs en m&eacute;moire avec vidage p&eacute;riodique pour minimiser les &eacute;critures SQLite
+
+**R&eacute;cup&eacute;ration apr&egrave;s crash :**
+- Au d&eacute;marrage, si la session pr&eacute;c&eacute;dente ne s'est pas termin&eacute;e proprement, un `CrashRecoveryContext` est construit
+- Inclut la dur&eacute;e d'indisponibilit&eacute;, les arbres d'objectifs interrompus et le nombre de d&eacute;marrages
+- Inject&eacute; dans le prompt syst&egrave;me pour que le LLM reconnaisse naturellement le crash et puisse reprendre le travail interrompu
+
+---
+
+## R&eacute;f&eacute;rence de Configuration
+
+Toute la configuration se fait via des variables d'environnement. Consultez `.env.example` pour la liste compl&egrave;te.
 
 ### Obligatoires
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Cle API Claude (fournisseur LLM principal) |
+| `ANTHROPIC_API_KEY` | Cl&eacute; API Claude (fournisseur LLM principal) |
 | `UNITY_PROJECT_PATH` | Chemin absolu vers la racine de votre projet Unity (doit contenir `Assets/`) |
-| `JWT_SECRET` | Secret pour la signature JWT. Generer : `openssl rand -hex 64` |
+| `JWT_SECRET` | Secret pour la signature JWT. G&eacute;n&eacute;rer : `openssl rand -hex 64` |
 
 ### Fournisseurs d'IA
 
-Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous sont deja implementes et n'ont besoin que d'une cle API pour etre actives.
+Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous sont d&eacute;j&agrave; impl&eacute;ment&eacute;s et n'ont besoin que d'une cl&eacute; API pour &ecirc;tre activ&eacute;s.
 
-| Variable | Fournisseur | Modele par Defaut |
+| Variable | Fournisseur | Mod&egrave;le par D&eacute;faut |
 |----------|-------------|-------------------|
 | `ANTHROPIC_API_KEY` | Claude (principal) | `claude-sonnet-4-20250514` |
 | `OPENAI_API_KEY` | OpenAI | `gpt-4o` |
@@ -179,28 +341,28 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `OLLAMA_BASE_URL` | Ollama (local) | `llama3` |
 | `PROVIDER_CHAIN` | Ordre de basculement | ex. `claude,kimi,deepseek,ollama` |
 
-**Chaine de fournisseurs :** Definissez `PROVIDER_CHAIN` avec une liste de noms de fournisseurs separes par des virgules. Le systeme essaie chacun dans l'ordre, basculant en cas d'echec. Exemple : `PROVIDER_CHAIN=kimi,deepseek,claude` utilise Kimi en premier, DeepSeek si Kimi echoue, puis Claude.
+**Cha&icirc;ne de fournisseurs :** D&eacute;finissez `PROVIDER_CHAIN` avec une liste de noms de fournisseurs s&eacute;par&eacute;s par des virgules. Le syst&egrave;me essaie chacun dans l'ordre, basculant en cas d'&eacute;chec. Exemple : `PROVIDER_CHAIN=kimi,deepseek,claude` utilise Kimi en premier, DeepSeek si Kimi &eacute;choue, puis Claude.
 
 ### Canaux de Chat
 
 **Web :**
 | Variable | Description |
 |----------|-------------|
-| `WEB_CHANNEL_PORT` | Port du tableau de bord web (defaut : `3000`) |
+| `WEB_CHANNEL_PORT` | Port du tableau de bord web (d&eacute;faut : `3000`) |
 
 **Telegram :**
 | Variable | Description |
 |----------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Token obtenu de @BotFather |
-| `ALLOWED_TELEGRAM_USER_IDS` | IDs utilisateur Telegram separes par des virgules (obligatoire, refuse tout si vide) |
+| `ALLOWED_TELEGRAM_USER_IDS` | IDs utilisateur Telegram s&eacute;par&eacute;s par des virgules (obligatoire, refuse tout si vide) |
 
 **Discord :**
 | Variable | Description |
 |----------|-------------|
 | `DISCORD_BOT_TOKEN` | Token du bot Discord |
 | `DISCORD_CLIENT_ID` | ID client de l'application Discord |
-| `ALLOWED_DISCORD_USER_IDS` | IDs utilisateur separes par des virgules (refuse tout si vide) |
-| `ALLOWED_DISCORD_ROLE_IDS` | IDs de role separes par des virgules pour l'acces par role |
+| `ALLOWED_DISCORD_USER_IDS` | IDs utilisateur s&eacute;par&eacute;s par des virgules (refuse tout si vide) |
+| `ALLOWED_DISCORD_ROLE_IDS` | IDs de r&ocirc;le s&eacute;par&eacute;s par des virgules pour l'acc&egrave;s par r&ocirc;le |
 
 **Slack :**
 | Variable | Description |
@@ -208,83 +370,83 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `SLACK_BOT_TOKEN` | Token de bot `xoxb-...` |
 | `SLACK_APP_TOKEN` | Token au niveau application `xapp-...` (pour le mode socket) |
 | `SLACK_SIGNING_SECRET` | Secret de signature de l'application Slack |
-| `ALLOWED_SLACK_USER_IDS` | IDs utilisateur separes par des virgules (**ouvert a tous si vide**) |
-| `ALLOWED_SLACK_WORKSPACES` | IDs d'espace de travail separes par des virgules (**ouvert a tous si vide**) |
+| `ALLOWED_SLACK_USER_IDS` | IDs utilisateur s&eacute;par&eacute;s par des virgules (**ouvert &agrave; tous si vide**) |
+| `ALLOWED_SLACK_WORKSPACES` | IDs d'espace de travail s&eacute;par&eacute;s par des virgules (**ouvert &agrave; tous si vide**) |
 
 **WhatsApp :**
 | Variable | Description |
 |----------|-------------|
-| `WHATSAPP_SESSION_PATH` | Repertoire pour les fichiers de session (defaut : `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Numeros de telephone separes par des virgules |
+| `WHATSAPP_SESSION_PATH` | R&eacute;pertoire pour les fichiers de session (d&eacute;faut : `.whatsapp-session`) |
+| `WHATSAPP_ALLOWED_NUMBERS` | Num&eacute;ros de t&eacute;l&eacute;phone s&eacute;par&eacute;s par des virgules |
 
-### Fonctionnalites
+### Fonctionnalit&eacute;s
 
-| Variable | Defaut | Description |
+| Variable | D&eacute;faut | Description |
 |----------|--------|-------------|
-| `RAG_ENABLED` | `true` | Active la recherche semantique de code sur votre projet C# |
+| `RAG_ENABLED` | `true` | Active la recherche s&eacute;mantique de code sur votre projet C# |
 | `EMBEDDING_PROVIDER` | `openai` | Fournisseur d'embeddings : `openai` ou `ollama` |
-| `MEMORY_ENABLED` | `true` | Active la memoire persistante des conversations |
-| `MEMORY_DB_PATH` | `.strata-memory` | Repertoire des fichiers de la base de donnees memoire |
+| `MEMORY_ENABLED` | `true` | Active la m&eacute;moire persistante des conversations |
+| `MEMORY_DB_PATH` | `.strata-memory` | R&eacute;pertoire des fichiers de la base de donn&eacute;es m&eacute;moire |
 | `WEB_CHANNEL_PORT` | `3000` | Port du tableau de bord web |
 | `DASHBOARD_ENABLED` | `false` | Active le tableau de bord de surveillance HTTP |
 | `DASHBOARD_PORT` | `3001` | Port du serveur du tableau de bord |
-| `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Active le tableau de bord en temps reel WebSocket |
-| `ENABLE_PROMETHEUS` | `false` | Active l'endpoint de metriques Prometheus (port 9090) |
-| `READ_ONLY_MODE` | `false` | Bloque toutes les operations d'ecriture |
+| `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Active le tableau de bord en temps r&eacute;el WebSocket |
+| `ENABLE_PROMETHEUS` | `false` | Active l'endpoint de m&eacute;triques Prometheus (port 9090) |
+| `READ_ONLY_MODE` | `false` | Bloque toutes les op&eacute;rations d'&eacute;criture |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, ou `debug` |
 
-### Limitation de Debit
+### Limitation de D&eacute;bit
 
-| Variable | Defaut | Description |
+| Variable | D&eacute;faut | Description |
 |----------|--------|-------------|
-| `RATE_LIMIT_ENABLED` | `false` | Active la limitation de debit |
-| `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | Limite de messages par utilisateur par minute (0 = illimite) |
+| `RATE_LIMIT_ENABLED` | `false` | Active la limitation de d&eacute;bit |
+| `RATE_LIMIT_MESSAGES_PER_MINUTE` | `0` | Limite de messages par utilisateur par minute (0 = illimit&eacute;) |
 | `RATE_LIMIT_MESSAGES_PER_HOUR` | `0` | Limite horaire par utilisateur |
 | `RATE_LIMIT_TOKENS_PER_DAY` | `0` | Quota journalier global de tokens |
-| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | Plafond de depenses journalier en USD |
-| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | Plafond de depenses mensuel en USD |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | `0` | Plafond de d&eacute;penses journalier en USD |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | `0` | Plafond de d&eacute;penses mensuel en USD |
 
-### Securite
+### S&eacute;curit&eacute;
 
-| Variable | Defaut | Description |
+| Variable | D&eacute;faut | Description |
 |----------|--------|-------------|
 | `REQUIRE_MFA` | `false` | Exige l'authentification multi-facteurs |
-| `BROWSER_HEADLESS` | `true` | Execute l'automatisation du navigateur en mode headless |
-| `BROWSER_MAX_CONCURRENT` | `5` | Nombre maximal de sessions de navigateur simultanees |
+| `BROWSER_HEADLESS` | `true` | Ex&eacute;cute l'automatisation du navigateur en mode headless |
+| `BROWSER_MAX_CONCURRENT` | `5` | Nombre maximal de sessions de navigateur simultan&eacute;es |
 
 ---
 
 ## Outils
 
-L'agent dispose de plus de 30 outils integres organises par categorie :
+L'agent dispose de plus de 30 outils int&eacute;gr&eacute;s organis&eacute;s par cat&eacute;gorie :
 
-### Operations sur les Fichiers
+### Op&eacute;rations sur les Fichiers
 | Outil | Description |
 |-------|-------------|
-| `file_read` | Lit les fichiers avec numeros de ligne, pagination offset/limit (limite 512Ko) |
-| `file_write` | Cree ou ecrase les fichiers (limite 256Ko, creation automatique des repertoires) |
-| `file_edit` | Edition par recherche-remplacement avec verification d'unicite |
+| `file_read` | Lit les fichiers avec num&eacute;ros de ligne, pagination offset/limit (limite 512 Ko) |
+| `file_write` | Cr&eacute;e ou &eacute;crase les fichiers (limite 256 Ko, cr&eacute;ation automatique des r&eacute;pertoires) |
+| `file_edit` | &Eacute;dition par recherche-remplacement avec v&eacute;rification d'unicit&eacute; |
 | `file_delete` | Supprime un fichier unique |
-| `file_rename` | Renomme ou deplace des fichiers au sein du projet |
-| `file_delete_directory` | Suppression recursive de repertoire (limite de securite de 50 fichiers) |
+| `file_rename` | Renomme ou d&eacute;place des fichiers au sein du projet |
+| `file_delete_directory` | Suppression r&eacute;cursive de r&eacute;pertoire (limite de s&eacute;curit&eacute; de 50 fichiers) |
 
 ### Recherche
 | Outil | Description |
 |-------|-------------|
-| `glob_search` | Recherche de fichiers par motif glob (max 50 resultats) |
+| `glob_search` | Recherche de fichiers par motif glob (max 50 r&eacute;sultats) |
 | `grep_search` | Recherche de contenu par regex dans les fichiers (max 20 correspondances) |
-| `list_directory` | Listage de repertoire avec tailles de fichiers |
-| `code_search` | Recherche semantique/vectorielle via RAG -- requetes en langage naturel |
-| `memory_search` | Recherche dans la memoire persistante des conversations |
+| `list_directory` | Listage de r&eacute;pertoire avec tailles de fichiers |
+| `code_search` | Recherche s&eacute;mantique/vectorielle via RAG -- requ&ecirc;tes en langage naturel |
+| `memory_search` | Recherche dans la m&eacute;moire persistante des conversations |
 
-### Generation de Code Strada
+### G&eacute;n&eacute;ration de Code Strada
 | Outil | Description |
 |-------|-------------|
-| `strata_analyze_project` | Scan complet du projet C# -- modules, systemes, composants, services |
-| `strata_create_module` | Genere un echafaudage de module complet (`.asmdef`, config, repertoires) |
-| `strata_create_component` | Genere des structs de composants ECS avec definitions de champs |
-| `strata_create_mediator` | Genere un `EntityMediator<TView>` avec liaisons de composants |
-| `strata_create_system` | Genere `SystemBase`/`JobSystemBase`/`SystemGroup` |
+| `strata_analyze_project` | Scan complet du projet C# -- modules, syst&egrave;mes, composants, services |
+| `strata_create_module` | G&eacute;n&egrave;re un &eacute;chafaudage de module complet (`.asmdef`, config, r&eacute;pertoires) |
+| `strata_create_component` | G&eacute;n&egrave;re des structs de composants ECS avec d&eacute;finitions de champs |
+| `strata_create_mediator` | G&eacute;n&egrave;re un `EntityMediator<TView>` avec liaisons de composants |
+| `strata_create_system` | G&eacute;n&egrave;re `SystemBase`/`JobSystemBase`/`SystemGroup` |
 
 ### Git
 | Outil | Description |
@@ -293,150 +455,123 @@ L'agent dispose de plus de 30 outils integres organises par categorie :
 | `git_diff` | Afficher les modifications |
 | `git_log` | Historique des commits |
 | `git_commit` | Indexer et committer |
-| `git_push` | Pousser vers le depot distant |
-| `git_branch` | Lister, creer ou basculer de branche |
+| `git_push` | Pousser vers le d&eacute;p&ocirc;t distant |
+| `git_branch` | Lister, cr&eacute;er ou basculer de branche |
 | `git_stash` | Push, pop, list ou drop du stash |
 
 ### .NET / Unity
 | Outil | Description |
 |-------|-------------|
-| `dotnet_build` | Lance `dotnet build`, analyse les erreurs MSBuild en sortie structuree |
-| `dotnet_test` | Lance `dotnet test`, analyse les resultats pass/fail/skip |
+| `dotnet_build` | Lance `dotnet build`, analyse les erreurs MSBuild en sortie structur&eacute;e |
+| `dotnet_test` | Lance `dotnet test`, analyse les r&eacute;sultats pass/fail/skip |
 
 ### Autres
 | Outil | Description |
 |-------|-------------|
-| `shell_exec` | Execute des commandes shell (timeout 30s, liste de blocage de commandes dangereuses) |
-| `code_quality` | Analyse de qualite de code par fichier ou par projet |
-| `rag_index` | Declenche la re-indexation incrementale ou complete du projet |
-
----
-
-## Capacites des Canaux
-
-| Capacite | Web | Telegram | Discord | Slack | WhatsApp | CLI |
-|----------|-----|----------|---------|-------|----------|-----|
-| Messagerie texte | Oui | Oui | Oui | Oui | Oui | Oui |
-| Streaming (edition en place) | Oui | Oui | Oui | Oui | Oui | Oui |
-| Indicateur de saisie | Oui | Oui | Oui | No-op | Oui | Non |
-| Dialogues de confirmation | Oui (modal) | Oui (clavier inline) | Oui (boutons) | Oui (Block Kit) | Oui (reponse numerotee) | Oui (readline) |
-| Envoi de fichiers | Oui | Non | Non | Oui | Oui | Non |
-| Support des fils | Non | Non | Oui | Oui | Non | Non |
-| Limiteur de debit (sortant) | Oui (par-session) | Non | Oui (token bucket) | Oui (fenetre glissante 4 niveaux) | Limitation en ligne | Non |
-
-### Streaming
-
-Tous les canaux implementent le streaming par edition en place. La reponse de l'agent apparait progressivement au fur et a mesure que le LLM la genere. Les mises a jour sont limitees par plateforme pour eviter les limites de debit (WhatsApp/Discord : 1/s, Slack : 2/s).
-
-### Authentification
-
-- **Telegram** : Refus par defaut. Vous devez definir `ALLOWED_TELEGRAM_USER_IDS`.
-- **Discord** : Refus par defaut. Vous devez definir `ALLOWED_DISCORD_USER_IDS` ou `ALLOWED_DISCORD_ROLE_IDS`.
-- **Slack** : **Ouvert par defaut.** Si `ALLOWED_SLACK_USER_IDS` est vide, tout utilisateur Slack peut acceder au bot. Definissez la liste d'autorisation pour la production.
-- **WhatsApp** : Utilise la liste d'autorisation `WHATSAPP_ALLOWED_NUMBERS` verifiee localement dans l'adaptateur.
-
----
-
-## Systeme de Memoire
-
-Le backend de memoire en production est `FileMemoryManager` -- des fichiers JSON avec indexation textuelle TF-IDF pour la recherche.
-
-**Fonctionnement :**
-- Lorsque l'historique de session depasse 40 messages, les anciens messages sont resumes et stockes comme entrees de conversation
-- L'agent recupere automatiquement les 3 souvenirs les plus pertinents avant chaque appel LLM
-- L'outil `strata_analyze_project` met en cache l'analyse de la structure du projet pour une injection de contexte instantanee
-- La memoire persiste entre les redemarrages dans le repertoire `MEMORY_DB_PATH` (defaut : `.strata-memory/`)
-
-**Backend avance (implemente, pas encore connecte) :** `AgentDBMemory` avec SQLite + recherche vectorielle HNSW, memoire a trois niveaux (travail/ephemere/persistante), recuperation hybride (70% semantique + 30% TF-IDF). Entierement code mais non connecte au bootstrap -- `FileMemoryManager` est le backend actif.
+| `shell_exec` | Ex&eacute;cute des commandes shell (timeout 30s, liste de blocage de commandes dangereuses) |
+| `code_quality` | Analyse de qualit&eacute; de code par fichier ou par projet |
+| `rag_index` | D&eacute;clenche la r&eacute;-indexation incr&eacute;mentale ou compl&egrave;te du projet |
 
 ---
 
 ## Pipeline RAG
 
-Le pipeline RAG (Retrieval-Augmented Generation) indexe votre code source C# pour la recherche semantique.
+Le pipeline RAG (Retrieval-Augmented Generation) indexe votre code source C# pour la recherche s&eacute;mantique.
 
 **Flux d'indexation :**
 1. Scanne les fichiers `**/*.cs` dans votre projet Unity
-2. Decoupe le code de maniere structurelle -- en-tetes de fichiers, classes, methodes, constructeurs
-3. Genere les embeddings via OpenAI (`text-embedding-3-small`) ou Ollama (`nomic-embed-text`)
+2. D&eacute;coupe le code de mani&egrave;re structurelle -- en-t&ecirc;tes de fichiers, classes, m&eacute;thodes, constructeurs
+3. G&eacute;n&egrave;re les embeddings via OpenAI (`text-embedding-3-small`) ou Ollama (`nomic-embed-text`)
 4. Stocke les vecteurs dans un index HNSW pour une recherche rapide par plus proches voisins approximatifs
-5. S'execute automatiquement au demarrage (en arriere-plan, non bloquant)
+5. S'ex&eacute;cute automatiquement au d&eacute;marrage (en arri&egrave;re-plan, non bloquant)
 
 **Flux de recherche :**
-1. La requete est convertie en embedding par le meme fournisseur
+1. La requ&ecirc;te est convertie en embedding par le m&ecirc;me fournisseur
 2. La recherche HNSW retourne `topK * 3` candidats
-3. Le re-classeur attribue un score : similarite vectorielle (60%) + chevauchement de mots-cles (25%) + bonus structurel (15%)
-4. Les 6 meilleurs resultats (au-dessus du score 0.2) sont injectes dans le contexte du LLM
+3. Le reclasseur attribue un score : similarit&eacute; vectorielle (60%) + chevauchement de mots-cl&eacute;s (25%) + bonus structurel (15%)
+4. Les 6 meilleurs r&eacute;sultats (au-dessus du score 0.2) sont inject&eacute;s dans le contexte du LLM
 
-**Note :** Le pipeline RAG ne supporte actuellement que les fichiers C#. Le decoupeur est specifique au C#.
-
----
-
-## Systeme d'Apprentissage
-
-Le systeme d'apprentissage observe le comportement de l'agent et apprend de ses erreurs :
-
-- Les **modeles d'erreur** sont captures avec indexation en texte integral
-- Les **solutions** sont liees aux modeles d'erreur pour une recuperation future
-- Les **instincts** sont des comportements appris atomiques avec des scores de confiance bayesiens
-- Les **trajectoires** enregistrent les sequences d'appels d'outils avec leurs resultats
-- Les scores de confiance utilisent le **classement Elo** et les **intervalles de score de Wilson** pour la validite statistique
-- Les instincts en dessous de 0.3 de confiance sont deprecies ; au-dessus de 0.9, ils sont proposes pour promotion
-
-Le pipeline d'apprentissage s'execute sur des minuteurs : detection de modeles toutes les 5 minutes, propositions d'evolution toutes les heures. Les donnees sont stockees dans une base de donnees SQLite separee (`learning.db`).
-
-**Récupération active (nouveau) :** Les instincts sont interrogés proactivement au début de chaque tâche via l'`InstinctRetriever`. Il recherche les motifs appris pertinents par similarité de mots-clés et embeddings vectoriels HNSW, et les injecte dans le prompt de la phase PLAN.
-
-**Décomposition de tâches :** Les requêtes complexes multi-étapes sont automatiquement détectées par analyse heuristique et décomposées en 3-8 sous-tâches ordonnées via le LLM avant exécution.
+**Note :** Le pipeline RAG ne supporte actuellement que les fichiers C#. Le d&eacute;coupeur est sp&eacute;cifique au C#.
 
 ---
 
-## Securite
+## Capacit&eacute;s des Canaux
+
+| Capacit&eacute; | Web | Telegram | Discord | Slack | WhatsApp | CLI |
+|----------|-----|----------|---------|-------|----------|-----|
+| Messagerie texte | Oui | Oui | Oui | Oui | Oui | Oui |
+| Streaming (&eacute;dition en place) | Oui | Oui | Oui | Oui | Oui | Oui |
+| Indicateur de saisie | Oui | Oui | Oui | No-op | Oui | Non |
+| Dialogues de confirmation | Oui (modal) | Oui (clavier inline) | Oui (boutons) | Oui (Block Kit) | Oui (r&eacute;ponse num&eacute;rot&eacute;e) | Oui (readline) |
+| Envoi de fichiers | Oui | Non | Non | Oui | Oui | Non |
+| Support des fils | Non | Non | Oui | Oui | Non | Non |
+| Limiteur de d&eacute;bit (sortant) | Oui (par session) | Non | Oui (token bucket) | Oui (fen&ecirc;tre glissante 4 niveaux) | Limitation en ligne | Non |
+
+### Streaming
+
+Tous les canaux impl&eacute;mentent le streaming par &eacute;dition en place. La r&eacute;ponse de l'agent appara&icirc;t progressivement au fur et &agrave; mesure que le LLM la g&eacute;n&egrave;re. Les mises &agrave; jour sont limit&eacute;es par plateforme pour &eacute;viter les limites de d&eacute;bit (WhatsApp/Discord : 1/s, Slack : 2/s).
+
+### Authentification
+
+- **Telegram** : Refus par d&eacute;faut. Vous devez d&eacute;finir `ALLOWED_TELEGRAM_USER_IDS`.
+- **Discord** : Refus par d&eacute;faut. Vous devez d&eacute;finir `ALLOWED_DISCORD_USER_IDS` ou `ALLOWED_DISCORD_ROLE_IDS`.
+- **Slack** : **Ouvert par d&eacute;faut.** Si `ALLOWED_SLACK_USER_IDS` est vide, tout utilisateur Slack peut acc&eacute;der au bot. D&eacute;finissez la liste d'autorisation pour la production.
+- **WhatsApp** : Utilise la liste d'autorisation `WHATSAPP_ALLOWED_NUMBERS` v&eacute;rifi&eacute;e localement dans l'adaptateur.
+
+---
+
+## S&eacute;curit&eacute;
 
 ### Couche 1 : Authentification des Canaux
-Listes d'autorisation specifiques a chaque plateforme, verifiees a l'arrivee du message (avant tout traitement).
+Listes d'autorisation sp&eacute;cifiques &agrave; chaque plateforme, v&eacute;rifi&eacute;es &agrave; l'arriv&eacute;e du message (avant tout traitement).
 
-### Couche 2 : Limitation de Debit
-Fenetre glissante par utilisateur (minute/heure) + plafonds globaux quotidiens/mensuels en tokens et en USD.
+### Couche 2 : Limitation de D&eacute;bit
+Fen&ecirc;tre glissante par utilisateur (minute/heure) + plafonds globaux quotidiens/mensuels en tokens et en USD.
 
 ### Couche 3 : Gardien de Chemin
-Chaque operation sur les fichiers resout les liens symboliques et valide que le chemin reste dans la racine du projet. Plus de 30 motifs sensibles sont bloques (`.env`, `.git/credentials`, cles SSH, certificats, `node_modules/`).
+Chaque op&eacute;ration sur les fichiers r&eacute;sout les liens symboliques et valide que le chemin reste dans la racine du projet. Plus de 30 motifs sensibles sont bloqu&eacute;s (`.env`, `.git/credentials`, cl&eacute;s SSH, certificats, `node_modules/`).
 
 ### Couche 4 : Assainisseur de Secrets
-24 motifs regex detectent et masquent les identifiants dans toutes les sorties d'outils avant qu'elles n'atteignent le LLM. Couvre : cles OpenAI, tokens GitHub, tokens Slack/Discord/Telegram, cles AWS, JWT, authentification Bearer, cles PEM, URLs de bases de donnees et motifs generiques de secrets.
+24 motifs regex d&eacute;tectent et masquent les identifiants dans toutes les sorties d'outils avant qu'elles n'atteignent le LLM. Couvre : cl&eacute;s OpenAI, tokens GitHub, tokens Slack/Discord/Telegram, cl&eacute;s AWS, JWT, authentification Bearer, cl&eacute;s PEM, URLs de bases de donn&eacute;es et motifs g&eacute;n&eacute;riques de secrets.
 
 ### Couche 5 : Mode Lecture Seule
-Quand `READ_ONLY_MODE=true`, 23 outils d'ecriture sont entierement retires de la liste d'outils de l'agent -- le LLM ne peut meme pas tenter de les appeler.
+Quand `READ_ONLY_MODE=true`, 23 outils d'&eacute;criture sont enti&egrave;rement retir&eacute;s de la liste d'outils de l'agent -- le LLM ne peut m&ecirc;me pas tenter de les appeler.
 
-### Couche 6 : Confirmation des Operations
-Les operations d'ecriture (ecriture de fichiers, commits Git, execution shell) peuvent necessiter une confirmation de l'utilisateur via l'interface interactive du canal (boutons, claviers inline, invites texte).
+### Couche 6 : Confirmation des Op&eacute;rations
+Les op&eacute;rations d'&eacute;criture (&eacute;criture de fichiers, commits Git, ex&eacute;cution shell) peuvent n&eacute;cessiter une confirmation de l'utilisateur via l'interface interactive du canal (boutons, claviers inline, invites texte).
 
 ### Couche 7 : Assainissement des Sorties d'Outils
-Toutes les sorties d'outils sont limitees a 8192 caracteres et nettoyees des motifs de cles API avant d'etre renvoyees au LLM.
+Toutes les sorties d'outils sont limit&eacute;es &agrave; 8192 caract&egrave;res et nettoy&eacute;es des motifs de cl&eacute;s API avant d'&ecirc;tre renvoy&eacute;es au LLM.
 
 ### Couche 8 : RBAC (Interne)
-5 roles (superadmin, admin, developer, viewer, service) avec une matrice de permissions couvrant 9 types de ressources. Le moteur de politiques supporte des conditions basees sur le temps, l'IP et des conditions personnalisees.
+5 r&ocirc;les (superadmin, admin, developer, viewer, service) avec une matrice de permissions couvrant 9 types de ressources. Le moteur de politiques supporte des conditions bas&eacute;es sur le temps, l'IP et des conditions personnalis&eacute;es.
+
+### Couche 9 : S&eacute;curit&eacute; du Daemon
+`DaemonSecurityPolicy` impose des exigences d'approbation au niveau des outils pour les op&eacute;rations d&eacute;clench&eacute;es par le daemon. Les outils d'&eacute;criture n&eacute;cessitent l'approbation explicite de l'utilisateur via l'`ApprovalQueue` avant ex&eacute;cution.
 
 ---
 
 ## Tableau de Bord et Surveillance
 
 ### Tableau de Bord HTTP (`DASHBOARD_ENABLED=true`)
-Accessible a `http://localhost:3001` (localhost uniquement). Affiche : disponibilite, nombre de messages, utilisation des tokens, sessions actives, tableau d'utilisation des outils, statistiques de securite. Rafraichissement automatique toutes les 3 secondes.
+Accessible &agrave; `http://localhost:3001` (localhost uniquement). Affiche : disponibilit&eacute;, nombre de messages, utilisation des tokens, sessions actives, tableau d'utilisation des outils, statistiques de s&eacute;curit&eacute;. Rafra&icirc;chissement automatique toutes les 3 secondes.
 
-### Endpoints de Sante
-- `GET /health` -- Sonde de vivacite (`{"status":"ok"}`)
-- `GET /ready` -- Verification approfondie de disponibilite : verifie la memoire et la sante des canaux. Retourne 200 (pret), 207 (degrade), ou 503 (non pret)
+### Endpoints de Sant&eacute;
+- `GET /health` -- Sonde de vivacit&eacute; (`{"status":"ok"}`)
+- `GET /ready` -- V&eacute;rification approfondie de disponibilit&eacute; : v&eacute;rifie la m&eacute;moire et la sant&eacute; des canaux. Retourne 200 (pr&ecirc;t), 207 (d&eacute;grad&eacute;), ou 503 (non pr&ecirc;t)
 
 ### Prometheus (`ENABLE_PROMETHEUS=true`)
-Metriques a `http://localhost:9090/metrics`. Compteurs pour les messages, appels d'outils, tokens. Histogrammes pour la duree des requetes, duree des outils, latence LLM. Metriques Node.js par defaut (CPU, heap, GC, boucle d'evenements).
+M&eacute;triques &agrave; `http://localhost:9090/metrics`. Compteurs pour les messages, appels d'outils, tokens. Histogrammes pour la dur&eacute;e des requ&ecirc;tes, dur&eacute;e des outils, latence LLM. M&eacute;triques Node.js par d&eacute;faut (CPU, heap, GC, boucle d'&eacute;v&eacute;nements).
 
 ### Tableau de Bord WebSocket (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-Metriques en temps reel poussees chaque seconde. Supporte les connexions authentifiees et les commandes a distance (rechargement de plugins, vidage du cache, recuperation des logs).
+M&eacute;triques en temps r&eacute;el pouss&eacute;es chaque seconde. Supporte les connexions authentifi&eacute;es et les commandes &agrave; distance (rechargement de plugins, vidage du cache, r&eacute;cup&eacute;ration des logs). Les &eacute;v&eacute;nements du daemon (d&eacute;clenchements, alertes de budget, progression des objectifs) sont diffus&eacute;s via WebSocket.
+
+### Syst&egrave;me de M&eacute;triques
+`MetricsStorage` (SQLite) enregistre le taux de compl&eacute;tion des t&acirc;ches, le nombre d'it&eacute;rations, l'utilisation des outils et la r&eacute;utilisation des motifs. `MetricsRecorder` capture les m&eacute;triques par session. La commande CLI `metrics` affiche les m&eacute;triques historiques.
 
 ---
 
-## Deploiement
+## D&eacute;ploiement
 
 ### Docker
 
@@ -449,35 +584,37 @@ Le fichier `docker-compose.yml` inclut l'application, la stack de surveillance e
 ### Mode Daemon
 
 ```bash
-# Redemarrage automatique en cas de crash avec backoff exponentiel (1s a 60s, jusqu'a 10 redemarrages)
+# Fonctionnement autonome 24/7 avec boucle de battement de coeur et d&eacute;clencheurs proactifs
+node dist/index.js daemon --channel web
+
+# Red&eacute;marrage automatique en cas de crash avec backoff exponentiel (1s &agrave; 60s, jusqu'&agrave; 10 red&eacute;marrages)
 node dist/index.js daemon --channel telegram
 ```
 
 ### Checklist de Production
 
-- [ ] Definir `NODE_ENV=production`
-- [ ] Definir `LOG_LEVEL=warn` ou `error`
+- [ ] D&eacute;finir `NODE_ENV=production`
+- [ ] D&eacute;finir `LOG_LEVEL=warn` ou `error`
 - [ ] Configurer `RATE_LIMIT_ENABLED=true` avec des plafonds de budget
-- [ ] Definir les listes d'autorisation des canaux (surtout Slack -- ouvert par defaut)
-- [ ] Definir `READ_ONLY_MODE=true` si vous ne souhaitez qu'une exploration securisee
+- [ ] D&eacute;finir les listes d'autorisation des canaux (surtout Slack -- ouvert par d&eacute;faut)
+- [ ] D&eacute;finir `READ_ONLY_MODE=true` si vous ne souhaitez qu'une exploration s&eacute;curis&eacute;e
 - [ ] Activer `DASHBOARD_ENABLED=true` pour la surveillance
-- [ ] Activer `ENABLE_PROMETHEUS=true` pour la collecte de metriques
-- [ ] Generer un `JWT_SECRET` robuste
+- [ ] Activer `ENABLE_PROMETHEUS=true` pour la collecte de m&eacute;triques
+- [ ] G&eacute;n&eacute;rer un `JWT_SECRET` robuste
+- [ ] Configurer les limites de budget du daemon (`RATE_LIMIT_DAILY_BUDGET_USD`)
 
 ---
 
 ## Tests
 
 ```bash
-npm test                         # Lancer les 1730+ tests
+npm test                         # Lancer les 2775 tests
 npm run test:watch               # Mode watch
 npm test -- --coverage           # Avec couverture
 npm test -- src/agents/tools/file-read.test.ts  # Fichier unique
-npm run typecheck                # Verification de types TypeScript
+npm run typecheck                # V&eacute;rification de types TypeScript
 npm run lint                     # ESLint
 ```
-
-110 fichiers de test couvrant : agents, canaux, securite, RAG, memoire, apprentissage, tableau de bord, flux d'integration.
 
 ---
 
@@ -485,53 +622,123 @@ npm run lint                     # ESLint
 
 ```
 src/
-  index.ts              # Point d'entree CLI (Commander.js)
+  index.ts              # Point d'entr&eacute;e CLI (Commander.js)
   core/
-    bootstrap.ts        # Sequence complete d'initialisation -- tout le cablage se fait ici
-    di-container.ts     # Conteneur DI (disponible mais le cablage manuel domine)
+    bootstrap.ts        # S&eacute;quence compl&egrave;te d'initialisation -- tout le c&acirc;blage se fait ici
+    event-bus.ts        # TypedEventBus pour la communication &eacute;v&eacute;nementielle d&eacute;coupl&eacute;e
     tool-registry.ts    # Instanciation et enregistrement des outils
   agents/
     orchestrator.ts     # Boucle d'agent PAOR, gestion de sessions, streaming
-    agent-state.ts      # Machine à états de phase (Planifier/Agir/Observer/Réfléchir)
-    paor-prompts.ts     # Constructeurs de prompts conscients des phases
-    instinct-retriever.ts # Récupération proactive de motifs appris
-    failure-classifier.ts # Catégorisation des erreurs et déclencheurs de replanification automatique
-    autonomy/           # Récupération d'erreurs, planification de tâches, auto-vérification
-    context/            # Prompt systeme (base de connaissances Strada.Core)
+    agent-state.ts      # Machine &agrave; &eacute;tats de phase (Planifier/Agir/Observer/R&eacute;fl&eacute;chir)
+    paor-prompts.ts     # Constructeurs de prompts sensibles aux phases
+    instinct-retriever.ts # R&eacute;cup&eacute;ration proactive de motifs appris
+    failure-classifier.ts # Cat&eacute;gorisation des erreurs et d&eacute;clencheurs de replanification automatique
+    autonomy/           # R&eacute;cup&eacute;ration d'erreurs, planification de t&acirc;ches, auto-v&eacute;rification
+    context/            # Prompt syst&egrave;me (base de connaissances Strada.Core)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + autres
-    tools/              # 30+ implementations d'outils
+    tools/              # 30+ impl&eacute;mentations d'outils
     plugins/            # Chargeur de plugins externes
   channels/
-    telegram/           # Bot base sur Grammy
+    telegram/           # Bot bas&eacute; sur Grammy
     discord/            # Bot discord.js avec commandes slash
     slack/              # Slack Bolt (mode socket) avec Block Kit
-    whatsapp/           # Client base sur Baileys avec gestion de sessions
+    whatsapp/           # Client bas&eacute; sur Baileys avec gestion de sessions
+    web/                # Tableau de bord Express + WebSocket
     cli/                # REPL Readline
   memory/
-    file-memory-manager.ts   # Backend actif : JSON + TF-IDF
-    unified/                 # Backend AgentDB : SQLite + HNSW (pas encore connecte)
+    file-memory-manager.ts   # Backend historique : JSON + TF-IDF (repli)
+    unified/
+      agentdb-memory.ts      # Backend actif : SQLite + HNSW, placement automatique &agrave; 3 niveaux
+      agentdb-adapter.ts     # Adaptateur IMemoryManager pour AgentDBMemory
+      migration.ts           # Migration FileMemoryManager historique -> AgentDB
   rag/
     rag-pipeline.ts     # Orchestration indexation + recherche + formatage
-    chunker.ts          # Decoupage structurel specifique au C#
+    chunker.ts          # D&eacute;coupage structurel sp&eacute;cifique au C#
     hnsw/               # Stockage vectoriel HNSW (hnswlib-node)
     embeddings/         # Fournisseurs d'embeddings OpenAI et Ollama
-    reranker.ts         # Re-classement pondere (vectoriel + mots-cles + structurel)
-  security/             # Auth, RBAC, gardien de chemin, limiteur de debit, assainisseur de secrets
-  learning/             # Correspondance de modèles, score de confiance, cycle de vie des instincts, recherche sémantique HNSW
-  intelligence/         # Analyse C#, analyse de projet, qualite de code
+    reranker.ts         # Reclassement pond&eacute;r&eacute; (vectoriel + mots-cl&eacute;s + structurel)
+  learning/
+    pipeline/
+      learning-pipeline.ts  # D&eacute;tection de motifs, cr&eacute;ation d'instincts, propositions d'&eacute;volution
+      learning-queue.ts     # Processeur asynchrone s&eacute;riel pour l'apprentissage &eacute;v&eacute;nementiel
+      embedding-queue.ts    # G&eacute;n&eacute;ration d'embeddings asynchrone born&eacute;e
+    scoring/
+      confidence-scorer.ts  # Confiance post&eacute;rieure bay&eacute;sienne Beta, Elo, intervalles de Wilson
+    matching/
+      pattern-matcher.ts    # Correspondance de motifs par mots-cl&eacute;s + s&eacute;mantique
+    hooks/
+      error-learning-hooks.ts  # Hooks de capture erreur/r&eacute;solution
+    storage/
+      learning-storage.ts  # Stockage SQLite pour instincts, trajectoires, motifs
+      migrations/          # Migrations de sch&eacute;ma (provenance inter-sessions)
+    chains/
+      chain-detector.ts    # D&eacute;tection de s&eacute;quences d'outils r&eacute;currentes
+      chain-synthesizer.ts # G&eacute;n&eacute;ration d'outils composites par LLM
+      composite-tool.ts    # Outil composite ex&eacute;cutable
+      chain-validator.ts   # Validation post-synth&egrave;se, retour d'information &agrave; l'ex&eacute;cution
+      chain-manager.ts     # Orchestrateur du cycle de vie complet
+  goals/
+    goal-decomposer.ts  # D&eacute;composition d'objectifs en DAG (proactive + r&eacute;active)
+    goal-executor.ts    # Ex&eacute;cution parall&egrave;le par vagues avec budgets d'&eacute;checs
+    goal-validator.ts   # D&eacute;tection de cycles DAG par algorithme de Kahn
+    goal-storage.ts     # Persistance SQLite des arbres d'objectifs
+    goal-progress.ts    # Suivi et rapports de progression
+    goal-resume.ts      # Reprise des arbres d'objectifs interrompus apr&egrave;s red&eacute;marrage
+    goal-renderer.ts    # Visualisation de l'arbre d'objectifs
+  daemon/
+    heartbeat-loop.ts   # Boucle principale tick-&eacute;valuation-d&eacute;clenchement
+    trigger-registry.ts # Enregistrement et cycle de vie des d&eacute;clencheurs
+    daemon-storage.ts   # Persistance SQLite de l'&eacute;tat du daemon
+    daemon-events.ts    # D&eacute;finitions d'&eacute;v&eacute;nements typ&eacute;s du sous-syst&egrave;me daemon
+    daemon-cli.ts       # Commandes CLI de gestion du daemon
+    budget/
+      budget-tracker.ts # Suivi du budget journalier en USD
+    resilience/
+      circuit-breaker.ts # Disjoncteur par d&eacute;clencheur avec backoff exponentiel
+    security/
+      daemon-security-policy.ts  # Exigences d'approbation pour le daemon
+      approval-queue.ts          # File d'approbation avec expiration
+    dedup/
+      trigger-deduplicator.ts    # D&eacute;duplication par contenu + p&eacute;riode de refroidissement
+    triggers/
+      cron-trigger.ts        # Planification par expression cron
+      file-watch-trigger.ts  # Surveillance des modifications du syst&egrave;me de fichiers
+      checklist-trigger.ts   # &Eacute;l&eacute;ments de checklist &agrave; &eacute;ch&eacute;ance
+      webhook-trigger.ts     # Endpoint webhook HTTP POST
+    reporting/
+      notification-router.ts # Routage des notifications par urgence
+      digest-reporter.ts     # G&eacute;n&eacute;ration de synth&egrave;ses p&eacute;riodiques
+      digest-formatter.ts    # Formatage des rapports pour les canaux
+      quiet-hours.ts         # Mise en tampon des notifications non critiques
+  identity/
+    identity-state.ts   # Identit&eacute; persistante de l'agent (UUID, nombre de d&eacute;marrages, temps de fonctionnement)
+    crash-recovery.ts   # D&eacute;tection de crash et contexte de r&eacute;cup&eacute;ration
+  tasks/
+    task-manager.ts     # Gestion du cycle de vie des t&acirc;ches
+    task-storage.ts     # Persistance SQLite des t&acirc;ches
+    background-executor.ts # Ex&eacute;cution de t&acirc;ches en arri&egrave;re-plan avec int&eacute;gration des objectifs
+    message-router.ts   # Routage des messages vers l'orchestrateur
+    command-detector.ts # D&eacute;tection des commandes slash
+    command-handler.ts  # Ex&eacute;cution des commandes
+  metrics/
+    metrics-storage.ts  # Stockage SQLite des m&eacute;triques
+    metrics-recorder.ts # Capture de m&eacute;triques par session
+    metrics-cli.ts      # Commande CLI d'affichage des m&eacute;triques
+  security/             # Auth, RBAC, gardien de chemin, limiteur de d&eacute;bit, assainisseur de secrets
+  intelligence/         # Analyse C#, analyse de projet, qualit&eacute; de code
   dashboard/            # Tableaux de bord HTTP, WebSocket, Prometheus
-  config/               # Configuration d'environnement validee par Zod
-  validation/           # Schemas de validation d'entree
+  config/               # Configuration d'environnement valid&eacute;e par Zod
+  validation/           # Sch&eacute;mas de validation d'entr&eacute;e
 ```
 
 ---
 
 ## Contribuer
 
-Consultez [CONTRIBUTING.md](CONTRIBUTING.md) pour la configuration du developpement, les conventions de code et les directives pour les PR.
+Consultez [CONTRIBUTING.md](CONTRIBUTING.md) pour la configuration du d&eacute;veloppement, les conventions de code et les directives pour les PR.
 
 ---
 
 ## Licence
 
-Licence MIT - voir [LICENSE](LICENSE) pour les details.
+Licence MIT - voir [LICENSE](LICENSE) pour les d&eacute;tails.

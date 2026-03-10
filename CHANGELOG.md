@@ -7,9 +7,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Comprehensive documentation rewrite covering all 21 subsystem READMEs and root project docs
+- Phase 20 gap closure: trigger fire history persistence, goal:failed event emission, plan_summary column migration
+
+---
+
+## [2.0.0] - 2026-03-10 — Full Daemon (Level 4 → 5)
+
+v2.0 added 10 phases (10-19), shipping 33 requirements across 26 plans with 2775 tests and 118K LOC, transforming Strada.Brain into a 24/7 autonomous daemon.
+
+### Added
+- WebSocket Origin validation and auth rate-limiting (5 failures = 5min block)
+- LLM self-awareness with capability manifest in system prompt and introspection tools
+- Persistent identity state (boot count, uptime) with unclean shutdown recovery
+- Cross-session learning transfer with project-scope filtering for instincts
+- HeartbeatLoop background service with two-tier trigger evaluation (deterministic then LLM)
+- TriggerRegistry with pluggable ITrigger lifecycle (CronTrigger, FileWatchTrigger, ChecklistTrigger, WebhookTrigger)
+- Trigger deduplication with per-trigger cooldown and content-based dedup
+- Interactive goal execution during chat with mid-execution replanning
+- Dynamic memory re-retrieval on iteration count and topic shift during PAOR loops
+- DigestReporter with configurable schedule and quiet hours buffering
+- NotificationRouter with urgency levels (silent/low/medium/high/critical)
+- Dashboard /api/daemon endpoint with identity state, trigger history, and uptime
+- ChainValidator for post-synthesis validation against historical input/output pairs
 
 ### Changed
+- GoalExecutor runs inline during interactive chat, not just background /task
+- Failed goal subtrees re-decompose with current context instead of failing permanently
+- Failure budget with user escalation prompt when budget exhausted
+
+### Security
+- DaemonSecurityPolicy enforces read-only default for daemon-initiated tool calls
+- Daemon write operations queue for user approval, visible in dashboard
+- Daily LLM budget cap halts daemon when exceeded and notifies user
+- Exponential backoff and circuit breaker prevent runaway trigger re-evaluation
+
+---
+
+## [1.0.0] - 2026-03-08 — Agent Evolution (Level 3 → 4)
+
+v1.0 was the first major milestone, 9 phases (1-9) shipping 32 requirements across 24 plans with 2142 tests and 97K LOC, transforming the agent from a chatbot wrapper into a genuine autonomous agent.
+
+### Added
+- AgentDB activation replacing FileMemoryManager with SQLite + HNSW vector memory
+- MemoryMigrator for lossless import of existing JSON data into AgentDB
+- HNSW semantic search for conversation retrieval (replaces TF-IDF)
+- Write mutex preventing HNSW index corruption from concurrent writes
+- 3-tier auto-tiering (Working/Ephemeral/Persistent) based on access patterns
+- CachedEmbeddingProvider wired to learning pipeline for instinct embeddings
+- SQLite pragma standardization (WAL mode, cache_size, busy_timeout) across all databases
+- TypedEventBus decoupling orchestrator, learning pipeline, and memory subsystems
+- LearningQueue with serial async processing and FIFO eviction
+- Event-driven learning triggers replacing 5-minute batch timer
+- MetricsStorage and MetricsRecorder for task completion rate, iterations, and pattern reuse
+- Dashboard /api/agent-metrics endpoint with query filters
+- CLI metrics command with table/JSON output
+- Bayesian Beta posterior confidence scoring replacing LLM-only judgment
+- Instinct lifecycle: cooling, deprecation (confidence < 0.3), and promotion (confidence > 0.95)
+- GoalNode DAG with Kahn's algorithm cycle detection and max depth 3
+- GoalDecomposer with proactive/reactive decomposition and dependency edges
+- GoalExecutor with wave-based parallel execution, semaphore, and failure budgets
+- Goal resume detecting interrupted trees on startup with staleness checks
+- ChainDetector identifying recurring tool sequences (3+ occurrences, >80% success)
+- ChainSynthesizer and CompositeTool registered as ITool in tool registry at runtime
+- Comprehensive documentation rewrite covering all 21 subsystem READMEs
+
+### Changed
+- Confidence threshold gap enforced (new patterns start at max 0.5, not 0.8)
 - Skip 100K-entry HNSW performance test in standard runs to avoid CI timeouts
 
 ---

@@ -1,36 +1,39 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Strada.Brain Logo" width="200"/>
+  <img src="icon/strada-brain-icon.png" alt="Strada.Brain-Logo" width="200"/>
 </p>
 
 <h1 align="center">Strada.Brain</h1>
 
 <p align="center">
   <strong>KI-gesteuerter Entwicklungs-Agent fuer Unity / Strada.Core-Projekte</strong><br/>
-  Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt und aus seinen Fehlern lernt.
+  Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt, Fehler automatisch behebt und aus seinen Fehlern lernt &mdash; und mit einer 24/7-Daemon-Schleife autonom arbeitet.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lizenz">
 </p>
 
 <p align="center">
   <a href="README.md">English</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.zh.md">中文</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.ko.md">한국어</a> |
+  <a href="README.tr.md">T&uuml;rk&ccedil;e</a> |
+  <a href="README.zh.md">&#20013;&#25991;</a> |
+  <a href="README.ja.md">&#26085;&#26412;&#35486;</a> |
+  <a href="README.ko.md">&#54620;&#44397;&#50612;</a> |
   <strong>Deutsch</strong> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a>
+  <a href="README.es.md">Espa&ntilde;ol</a> |
+  <a href="README.fr.md">Fran&ccedil;ais</a>
 </p>
 
 ---
 
 ## Was ist das?
 
-Strada.Brain ist ein KI-Agent, mit dem Sie ueber einen Chat-Kanal kommunizieren. Sie beschreiben, was Sie moechten -- "erstelle ein neues ECS-System fuer Spielerbewegung" oder "finde alle Komponenten, die Health verwenden" -- und der Agent liest Ihr C#-Projekt, schreibt den Code, fuehrt `dotnet build` aus, behebt Fehler automatisch und sendet Ihnen das Ergebnis. Er verfuegt ueber persistenten Speicher, lernt aus vergangenen Fehlern und kann mehrere KI-Anbieter mit automatischem Failover nutzen.
+Strada.Brain ist ein KI-Agent, mit dem Sie ueber einen Chat-Kanal kommunizieren. Sie beschreiben, was Sie moechten -- "erstelle ein neues ECS-System fuer Spielerbewegung" oder "finde alle Komponenten, die Health verwenden" -- und der Agent liest Ihr C#-Projekt, schreibt den Code, fuehrt `dotnet build` aus, behebt Fehler automatisch und sendet Ihnen das Ergebnis.
+
+Er verfuegt ueber persistenten Speicher auf Basis von SQLite + HNSW-Vektoren, lernt aus vergangenen Fehlern mittels Bayesscher Konfidenzbewertung, zerlegt komplexe Ziele in parallele DAG-Ausfuehrung, synthetisiert automatisch mehrstufige Tool-Ketten und kann als 24/7-Daemon mit proaktiven Ausloesern betrieben werden.
 
 **Dies ist keine Bibliothek und keine API.** Es ist eine eigenstaendige Anwendung, die Sie ausfuehren. Sie verbindet sich mit Ihrer Chat-Plattform, liest Ihr Unity-Projekt von der Festplatte und arbeitet autonom innerhalb der von Ihnen konfigurierten Grenzen.
 
@@ -69,7 +72,7 @@ JWT_SECRET=<generieren mit: openssl rand -hex 64>
 ### 3. Starten
 
 ```bash
-# Web-Kanal (Standard) -- Setup-Assistent wird unter localhost:3000 oeffnet
+# Web-Kanal (Standard) -- Setup-Assistent oeffnet sich unter localhost:3000
 # Falls keine .env vorhanden ist, leitet der Assistent Sie durch die Ersteinrichtung
 npm start
 
@@ -78,6 +81,9 @@ npm run dev -- start --channel web
 
 # Interaktiver CLI-Modus (schnellster Weg zum Testen)
 npm run dev -- cli
+
+# Daemon-Modus (24/7 autonomer Betrieb mit proaktiven Ausloesern)
+npm run dev -- daemon --channel web
 
 # Oder mit anderen Chat-Kanaelen
 npm run dev -- start --channel telegram
@@ -114,36 +120,190 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 +------------------------------v----------------------------------+
 |  Orchestrator (PAOR-Agentenschleife)                             |
 |  Planen -> Handeln -> Beobachten -> Reflektieren Zustandsmaschine|
-|  Bis zu 50 Werkzeug-Iterationen pro Nachricht                   |
 |  Instinktabruf, Fehlerklassifikation, automatische Neuplanung   |
-+------------------------------+----------------------------------+
++-------+--------------+-------------+-----------+----------------+
+        |              |             |           |
++-------v------+ +-----v------+ +---v--------+ +v-----------------+
+| KI-Anbieter  | | 30+ Tools  | | Kontext    | | Lernsystem       |
+| Claude (prim)| | Datei-I/O  | | AgentDB    | | TypedEventBus    |
+| OpenAI, Kimi | | Git-Ops    | | (SQLite +  | | Bayessche Beta-  |
+| DeepSeek,Qwen| | Shell-Ausf.| |  HNSW)     | |  Bewertung       |
+| MiniMax, Groq| | .NET Build | | RAG-Vekt.  | | Instinkt-Lebens- |
+| Ollama +mehr | | Strata-Gen | | Identitaet | |  zyklus          |
++--------------+ +------+-----+ +---+--------+ | Tool-Ketten      |
+                        |           |           +--+---------------+
+                +-------v-----------v--------------v------+
+                |  GoalDecomposer + GoalExecutor           |
+                |  DAG-basierte Zerlegung, wellenbasierte  |
+                |  parallele Ausfuehrung, Fehlerbudgets    |
+                +-----------------------------------------+
                                |
-          +--------------------+--------------------+
-          |                    |                    |
-+---------v------+  +---------v------+  +----------v---------+
-| KI-Anbieter    |  | 30+ Tools      |  | Kontextquellen     |
-| Claude (prim.) |  | Datei-I/O      |  | Speicher (TF-IDF)  |
-| OpenAI, Kimi   |  | Git-Operationen|  | RAG (HNSW-Vektoren)|
-| DeepSeek, Qwen |  | Shell-Ausfuehr.|  | Projektanalyse     |
-| MiniMax, Groq  |  | .NET Build/Test|  | Lernmuster         |
-| Ollama (lokal) |  | Browser        |  +--------------------+
-| + 4 weitere    |  | Strata Codegen |
-+----------------+  +----------------+
+            +------------------v-------------------+
+            |  Daemon (HeartbeatLoop)              |
+            |  Cron, File-Watch, Checkliste,       |
+            |  Webhook-Ausloeser                   |
+            |  Circuit Breakers, Budget-Tracking,  |
+            |  Ausloeser-Deduplizierung            |
+            |  Benachrichtigungs-Router +           |
+            |  Zusammenfassungsberichte            |
+            +--------------------------------------+
 ```
 
 ### Wie die Agent-Schleife funktioniert
 
-1. **Nachricht eingeht** -- vom Chat-Kanal
-2. **Gedaechtnisabruf** -- findet die 3 relevantesten vergangenen Gespraeche (TF-IDF)
+1. **Nachricht eingeht** von einem Chat-Kanal
+2. **Gedaechtnisabruf** -- AgentDB-Hybridsuche (70% semantisch HNSW + 30% TF-IDF) findet die relevantesten vergangenen Gespraeche
 3. **RAG-Abruf** -- semantische Suche ueber Ihre C#-Codebasis (HNSW-Vektoren, Top 6 Ergebnisse)
-4. **Instinktabruf** -- fragt proaktiv aufgabenrelevante gelernte Muster ab
-5. **PLAN-Phase** -- LLM erstellt einen nummerierten Plan, informiert durch gelernte Erkenntnisse und vergangene Fehler
-6. **HANDELN-Phase** -- LLM fuehrt Werkzeugaufrufe gemaess dem Plan aus
-7. **BEOBACHTEN** -- Ergebnisse werden aufgezeichnet; Fehlerwiederherstellung analysiert Ausfaelle; Fehlerklassifikator kategorisiert Fehler
-8. **REFLEKTIEREN** -- alle 3 Schritte (oder bei Fehler) entscheidet LLM: **FORTFAHREN**, **NEU PLANEN** oder **FERTIG**
-9. **Automatische Neuplanung** -- bei 3+ aufeinanderfolgenden gleichartigen Fehlern wird ein neuer Ansatz erzwungen
-10. **Wiederholung** bis zu 50 Iterationen bis zur Fertigstellung
-11. **Antwort gesendet** -- ueber den Kanal an den Benutzer (Streaming wenn unterstuetzt)
+4. **Instinktabruf** -- fragt proaktiv aufgabenrelevante gelernte Muster ab (semantisch + Schluesselwort-Abgleich)
+5. **Identitaetskontext** -- injiziert persistente Agentenidentitaet (UUID, Startzaehler, Betriebszeit, Absturz-Wiederherstellungsstatus)
+6. **PLAN-Phase** -- LLM erstellt einen nummerierten Plan, informiert durch gelernte Erkenntnisse und vergangene Fehler
+7. **HANDELN-Phase** -- LLM fuehrt Werkzeugaufrufe gemaess dem Plan aus
+8. **BEOBACHTEN** -- Ergebnisse werden aufgezeichnet; Fehlerwiederherstellung analysiert Ausfaelle; Fehlerklassifikator kategorisiert Fehler
+9. **REFLEKTIEREN** -- alle 3 Schritte (oder bei Fehler) entscheidet das LLM: **FORTFAHREN**, **NEU PLANEN** oder **FERTIG**
+10. **Automatische Neuplanung** -- bei 3+ aufeinanderfolgenden gleichartigen Fehlern wird ein neuer Ansatz erzwungen, der fehlgeschlagene Strategien vermeidet
+11. **Wiederholung** bis zu 50 Iterationen bis zur Fertigstellung
+12. **Lernen** -- Tool-Ergebnisse fliessen ueber TypedEventBus in die Lern-Pipeline zur sofortigen Musterspeicherung
+13. **Antwort gesendet** an den Benutzer ueber den Kanal (Streaming wenn unterstuetzt)
+
+---
+
+## Speichersystem
+
+Das aktive Speicher-Backend ist `AgentDBMemory` -- SQLite mit HNSW-Vektorindizierung und einer dreistufigen Auto-Tiering-Architektur.
+
+**Dreistufiger Speicher:**
+- **Arbeitsspeicher** -- aktiver Sitzungskontext, automatische Befoerderung nach anhaltender Nutzung
+- **Ephemerer Speicher** -- Kurzzeitablage, automatische Bereinigung bei Erreichen der Kapazitaetsgrenzen
+- **Persistenter Speicher** -- Langzeitablage, Befoerderung aus dem ephemeren Speicher basierend auf Zugriffshaeufigkeit und Wichtigkeit
+
+**Funktionsweise:**
+- Wenn der Sitzungsverlauf 40 Nachrichten ueberschreitet, werden alte Nachrichten zusammengefasst und als Konversationseintraege gespeichert
+- Hybridabruf kombiniert 70% semantische Aehnlichkeit (HNSW-Vektoren) mit 30% TF-IDF-Schluesselwort-Abgleich
+- Das Tool `strata_analyze_project` speichert die Projektstrukturanalyse im Cache fuer sofortige Kontexteinspeisung
+- Der Speicher bleibt ueber Neustarts hinweg im Verzeichnis `MEMORY_DB_PATH` erhalten (Standard: `.strata-memory/`)
+- Automatische Migration vom alten FileMemoryManager erfolgt beim ersten Start
+
+**Fallback:** Falls die AgentDB-Initialisierung fehlschlaegt, wechselt das System automatisch zum `FileMemoryManager` (JSON + TF-IDF).
+
+---
+
+## Lernsystem
+
+Das Lernsystem beobachtet das Agentenverhalten und lernt aus Fehlern durch eine ereignisgesteuerte Pipeline.
+
+**Ereignisgesteuerte Pipeline:**
+- Tool-Ergebnisse fliessen ueber `TypedEventBus` in eine serielle `LearningQueue` zur sofortigen Verarbeitung
+- Keine Timer-basierte Stapelverarbeitung -- Muster werden erkannt und gespeichert, sobald sie auftreten
+- Die `LearningQueue` verwendet begrenztes FIFO mit Fehlerisolation (Lernfehler bringen den Agenten nie zum Absturz)
+
+**Bayessche Konfidenzbewertung:**
+- Instinkte verwenden **Beta-Posterior-Inferenz** (`confidence = alpha / (alpha + beta)`) mit einem uninformativen `Beta(1,1)`-Prior
+- Bewertungswerte (0.0-1.0) fungieren als fraktionale Evidenzgewichte fuer differenzierte Aktualisierungen
+- Keine Mischung oder zeitliche Diskontierung -- reiner Bayesscher Posterior-Mittelwert
+
+**Instinkt-Lebenszyklus:**
+- **Vorgeschlagen** (neu) -- unter 0.7 Konfidenz
+- **Aktiv** -- zwischen 0.7 und 0.9 Konfidenz
+- **Entwickelt** -- ueber 0.9, zur Befoerderung auf permanent vorgeschlagen
+- **Veraltet** -- unter 0.3, zur Entfernung markiert
+- **Abkuehlphase** -- 7-Tage-Fenster mit Mindestbeobachtungsanforderungen vor Statusaenderungen
+- **Permanent** -- eingefroren, keine weiteren Konfidenz-Aktualisierungen
+
+**Aktiver Abruf:** Instinkte werden zu Beginn jeder Aufgabe ueber den `InstinctRetriever` proaktiv abgefragt. Er sucht mit Schluesselwort-Aehnlichkeit und HNSW-Vektor-Einbettungen nach relevanten gelernten Mustern, die in den PLAN-Phasen-Prompt injiziert werden.
+
+**Sitzungsuebergreifendes Lernen:** Instinkte tragen Herkunftsmetadaten (Quellsitzung, Sitzungsanzahl) fuer den sitzungsuebergreifenden Wissenstransfer.
+
+---
+
+## Zielzerlegung
+
+Komplexe mehrstufige Anfragen werden automatisch in einen gerichteten azyklischen Graphen (DAG) von Teilzielen zerlegt.
+
+**GoalDecomposer:**
+- Heuristische Vorpruefung vermeidet LLM-Aufrufe fuer einfache Aufgaben (Musterabgleich auf Komplexitaetsindikatoren)
+- LLM generiert DAG-Strukturen mit Abhaengigkeitskanten und optionaler rekursiver Tiefe (bis zu 3 Ebenen)
+- Kahn-Algorithmus validiert zyklenfreie DAG-Struktur
+- Reaktive Neuzerlegung: Wenn ein Knoten fehlschlaegt, kann er in kleinere Wiederherstellungsschritte aufgeteilt werden
+
+**GoalExecutor:**
+- Wellenbasierte parallele Ausfuehrung respektiert die Abhaengigkeitsreihenfolge
+- Semaphor-basierte Nebenlaeufigkeitsbegrenzung (`GOAL_MAX_PARALLEL`)
+- Fehlerbudgets (`GOAL_MAX_FAILURES`) mit Benutzer-Fortsetzungsaufforderungen
+- LLM-Kritikalitaetsbewertung bestimmt, ob ein fehlgeschlagener Knoten Abhaengige blockieren soll
+- Knotenweise Wiederholungslogik (`GOAL_MAX_RETRIES`) mit Wiederherstellungszerlegung bei Erschoepfung
+- AbortSignal-Unterstuetzung fuer Abbruch
+- Persistenter Zielbaum-Status ueber `GoalStorage` (SQLite) fuer Wiederaufnahme nach Neustart
+
+---
+
+## Tool-Ketten-Synthese
+
+Der Agent erkennt und synthetisiert automatisch mehrstufige Tool-Kettenmuster zu wiederverwendbaren zusammengesetzten Tools.
+
+**Pipeline:**
+1. **ChainDetector** -- analysiert Trajektoriendaten, um wiederkehrende Tool-Sequenzen zu finden (z.B. `file_read` -> `file_edit` -> `dotnet_build`)
+2. **ChainSynthesizer** -- nutzt LLM zur Generierung eines `CompositeTool` mit korrektem Ein-/Ausgabe-Mapping und Beschreibung
+3. **ChainValidator** -- Validierung nach der Synthese mit Laufzeit-Feedback; verfolgt den Ausfuehrungserfolg von Ketten ueber Bayessche Konfidenz
+4. **ChainManager** -- Lebenszyklus-Orchestrator: laedt bestehende Ketten beim Start, fuehrt periodische Erkennung durch, invalidiert Ketten automatisch wenn Komponenten-Tools entfernt werden
+
+**Sicherheit:** Zusammengesetzte Tools erben die restriktivsten Sicherheitsflags ihrer Komponenten-Tools.
+
+**Konfidenz-Kaskade:** Ketten-Instinkte folgen demselben Bayesschen Lebenszyklus wie regulaere Instinkte. Ketten, die unter die Veraltungsschwelle fallen, werden automatisch deregistriert.
+
+---
+
+## Daemon-Modus
+
+Der Daemon bietet 24/7-Autonombetrieb mit einem Heartbeat-gesteuerten Ausloesersystem.
+
+```bash
+npm run dev -- daemon --channel web
+```
+
+**HeartbeatLoop:**
+- Konfigurierbares Tick-Intervall wertet registrierte Ausloeser in jedem Zyklus aus
+- Sequentielle Ausloeserauswertung verhindert Budget-Wettlaufbedingungen
+- Persistiert den Laufzustand fuer Absturz-Wiederherstellung
+
+**Ausloesertypen:**
+- **Cron** -- geplante Aufgaben mit Cron-Ausdruecken
+- **File Watch** -- ueberwacht Dateisystemaenderungen in konfigurierten Pfaden
+- **Checkliste** -- loest aus, wenn Checklisten-Eintraege faellig werden
+- **Webhook** -- HTTP-POST-Endpunkt loest Aufgaben bei eingehenden Anfragen aus
+
+**Widerstandsfaehigkeit:**
+- **Circuit Breakers** -- pro Ausloeser mit exponentiellem Backoff-Cooldown, ueber Neustarts hinweg persistiert
+- **Budget-Tracking** -- taegliche USD-Ausgabenobergrenze mit Warnschwellen-Ereignissen
+- **Ausloeser-Deduplizierung** -- inhaltsbasierte und Cooldown-basierte Unterdrueckung verhindert doppelte Ausloesung
+- **Ueberlappungsunterdrueckung** -- ueberspringt Ausloeser, die bereits eine aktive Aufgabe ausfuehren
+
+**Sicherheit:**
+- `DaemonSecurityPolicy` steuert, welche Tools bei Daemon-ausgeloesten Operationen eine Benutzergenehmigung erfordern
+- `ApprovalQueue` mit konfigurierbarer Ablaufzeit fuer Schreiboperationen
+
+**Berichtswesen:**
+- `NotificationRouter` leitet Ereignisse basierend auf Dringlichkeitsstufe (still/niedrig/mittel/hoch/kritisch) an konfigurierte Kanaele weiter
+- Ratenbegrenzung pro Dringlichkeit und Ruhezeitenunterstuetzung (nicht-kritische Benachrichtigungen werden gepuffert)
+- `DigestReporter` generiert periodische Zusammenfassungsberichte
+- Alle Benachrichtigungen werden im SQLite-Verlauf protokolliert
+
+---
+
+## Identitaetssystem
+
+Der Agent pflegt eine persistente Identitaet ueber Sitzungen und Neustarts hinweg.
+
+**IdentityStateManager** (SQLite-gestuetzt):
+- Einzigartige Agenten-UUID, generiert beim ersten Start
+- Startzaehler, kumulative Betriebszeit, Zeitstempel der letzten Aktivitaet
+- Gesamtzaehler fuer Nachrichten und Aufgaben
+- Erkennung sauberer Herunterfahrvorgaenge fuer Absturz-Wiederherstellung
+- In-Memory-Zaehler-Cache mit periodischer Speicherung zur Minimierung von SQLite-Schreibvorgaengen
+
+**Absturz-Wiederherstellung:**
+- Beim Start wird, falls die vorherige Sitzung nicht sauber beendet wurde, ein `CrashRecoveryContext` erstellt
+- Enthaelt Ausfallzeitdauer, unterbrochene Zielbaeume und Startzaehler
+- Wird in den System-Prompt injiziert, damit das LLM den Absturz natuerlich bestaetigen und unterbrochene Arbeit fortsetzen kann
 
 ---
 
@@ -179,7 +339,7 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | `OLLAMA_BASE_URL` | Ollama (lokal) | `llama3` |
 | `PROVIDER_CHAIN` | Failover-Reihenfolge | z.B. `claude,kimi,deepseek,ollama` |
 
-**Anbieter-Kette:** Setzen Sie `PROVIDER_CHAIN` auf eine kommagetrennte Liste von Anbieternamen. Das System probiert jeden der Reihe nach aus und faellt bei einem Fehler auf den naechsten zurueck. Beispiel: `PROVIDER_CHAIN=kimi,deepseek,claude` verwendet Kimi zuerst, DeepSeek wenn Kimi fehlschlaegt, dann Claude.
+**Anbieter-Kette:** Setzen Sie `PROVIDER_CHAIN` auf eine kommagetrennte Liste von Anbieternamen. Das System probiert jeden der Reihe nach und faellt bei einem Fehler auf den naechsten zurueck. Beispiel: `PROVIDER_CHAIN=kimi,deepseek,claude` verwendet Kimi zuerst, DeepSeek wenn Kimi fehlschlaegt, dann Claude.
 
 ### Chat-Kanaele
 
@@ -266,7 +426,7 @@ Der Agent verfuegt ueber mehr als 30 integrierte Tools, organisiert nach Kategor
 | `file_edit` | Suchen-und-Ersetzen-Bearbeitung mit Eindeutigkeitspruefung |
 | `file_delete` | Eine einzelne Datei loeschen |
 | `file_rename` | Dateien innerhalb des Projekts umbenennen oder verschieben |
-| `file_delete_directory` | Rekursive Verzeichnislöschung (50-Dateien-Sicherheitsgrenze) |
+| `file_delete_directory` | Rekursive Verzeichnisloeschung (50-Dateien-Sicherheitsgrenze) |
 
 ### Suche
 | Tool | Beschreibung |
@@ -312,45 +472,6 @@ Der Agent verfuegt ueber mehr als 30 integrierte Tools, organisiert nach Kategor
 
 ---
 
-## Kanal-Funktionen
-
-| Funktion | Web | Telegram | Discord | Slack | WhatsApp | CLI |
-|----------|-----|----------|---------|-------|----------|-----|
-| Textnachrichten | Ja | Ja | Ja | Ja | Ja | Ja |
-| Streaming (In-Place-Bearbeitung) | Ja | Ja | Ja | Ja | Ja | Ja |
-| Tipp-Anzeige | Ja | Ja | Ja | Nein | Ja | Nein |
-| Bestaetigungsdialoge | Ja (Modal) | Ja (Inline-Tastatur) | Ja (Buttons) | Ja (Block Kit) | Ja (nummerierte Antwort) | Ja (Readline) |
-| Datei-Uploads | Ja | Nein | Nein | Ja | Ja | Nein |
-| Thread-Unterstuetzung | Nein | Nein | Ja | Ja | Nein | Nein |
-| Ratenbegrenzer (ausgehend) | Ja (pro-Sitzung) | Nein | Ja (Token Bucket) | Ja (4-stufiges Schiebefenster) | Inline-Drosselung | Nein |
-
-### Streaming
-
-Alle Kanaele implementieren In-Place-Streaming. Die Antwort des Agenten erscheint progressiv, waehrend das LLM sie generiert. Updates werden plattformspezifisch gedrosselt, um Ratenlimits zu vermeiden (WhatsApp/Discord: 1/Sek., Slack: 2/Sek.).
-
-### Authentifizierung
-
-- **Telegram**: Standardmaessig alles blockiert. `ALLOWED_TELEGRAM_USER_IDS` muss gesetzt werden.
-- **Discord**: Standardmaessig alles blockiert. `ALLOWED_DISCORD_USER_IDS` oder `ALLOWED_DISCORD_ROLE_IDS` muss gesetzt werden.
-- **Slack**: **Standardmaessig offen.** Wenn `ALLOWED_SLACK_USER_IDS` leer ist, kann jeder Slack-Benutzer auf den Bot zugreifen. Setzen Sie die Erlaubnisliste fuer die Produktion.
-- **WhatsApp**: Verwendet die `WHATSAPP_ALLOWED_NUMBERS`-Erlaubnisliste, die lokal im Adapter geprueft wird.
-
----
-
-## Speichersystem
-
-Das produktive Speicher-Backend ist `FileMemoryManager` -- JSON-Dateien mit TF-IDF-Textindizierung fuer die Suche.
-
-**Funktionsweise:**
-- Wenn der Sitzungsverlauf 40 Nachrichten ueberschreitet, werden alte Nachrichten zusammengefasst und als Konversationseintraege gespeichert
-- Der Agent ruft automatisch die 3 relevantesten Erinnerungen vor jedem LLM-Aufruf ab
-- Das Tool `strata_analyze_project` speichert die Projektstrukturanalyse im Cache fuer sofortige Kontexteinspeisung
-- Der Speicher bleibt ueber Neustarts hinweg im Verzeichnis `MEMORY_DB_PATH` erhalten (Standard: `.strata-memory/`)
-
-**Erweitertes Backend (implementiert, noch nicht verbunden):** `AgentDBMemory` mit SQLite + HNSW-Vektorsuche, dreistufiger Speicher (Arbeits-/Ephemer-/Persistentspeicher), hybride Abfrage (70% semantisch + 30% TF-IDF). Dies ist vollstaendig programmiert, aber nicht im Bootstrap verbunden -- `FileMemoryManager` ist das aktive Backend.
-
----
-
 ## RAG-Pipeline
 
 Die RAG-Pipeline (Retrieval-Augmented Generation) indiziert Ihren C#-Quellcode fuer die semantische Suche.
@@ -372,20 +493,28 @@ Die RAG-Pipeline (Retrieval-Augmented Generation) indiziert Ihren C#-Quellcode f
 
 ---
 
-## Lernsystem
+## Kanal-Funktionen
 
-Das Lernsystem beobachtet das Agentenverhalten und lernt aus Fehlern:
+| Funktion | Web | Telegram | Discord | Slack | WhatsApp | CLI |
+|----------|-----|----------|---------|-------|----------|-----|
+| Textnachrichten | Ja | Ja | Ja | Ja | Ja | Ja |
+| Streaming (In-Place-Bearbeitung) | Ja | Ja | Ja | Ja | Ja | Ja |
+| Tipp-Anzeige | Ja | Ja | Ja | Nein | Ja | Nein |
+| Bestaetigungsdialoge | Ja (Modal) | Ja (Inline-Tastatur) | Ja (Buttons) | Ja (Block Kit) | Ja (nummerierte Antwort) | Ja (Readline) |
+| Datei-Uploads | Ja | Nein | Nein | Ja | Ja | Nein |
+| Thread-Unterstuetzung | Nein | Nein | Ja | Ja | Nein | Nein |
+| Ratenbegrenzer (ausgehend) | Ja (pro Sitzung) | Nein | Ja (Token Bucket) | Ja (4-stufiges Schiebefenster) | Inline-Drosselung | Nein |
 
-- **Fehlermuster** werden mit Volltextsuche-Indizierung erfasst
-- **Loesungen** werden mit Fehlermustern fuer zukuenftige Abfragen verknuepft
-- **Instinkte** sind atomare gelernte Verhaltensweisen mit Bayesschen Konfidenzwerten
-- **Trajektorien** zeichnen Sequenzen von Tool-Aufrufen mit Ergebnissen auf
-- Konfidenzwerte verwenden **Elo-Rating** und **Wilson-Score-Intervalle** fuer statistische Validitaet
-- Instinkte unter 0.3 Konfidenz werden als veraltet markiert; ueber 0.9 werden zur Befoerderung vorgeschlagen
-- **Aktiver Abruf (neu):** Instinkte werden zu Beginn jeder Aufgabe proaktiv ueber den `InstinctRetriever` abgefragt. Er sucht mit Schluesselwort-Aehnlichkeit und HNSW-Vektor-Einbettungen nach relevanten gelernten Mustern und injiziert sie in den PLAN-Phasen-Prompt.
-- **Aufgabenzerlegung:** Komplexe mehrstufige Anfragen werden durch heuristische Analyse automatisch erkannt und vor der Ausfuehrung ueber das LLM in 3-8 geordnete Teilaufgaben zerlegt.
+### Streaming
 
-Die Lern-Pipeline laeuft auf Timern: Mustererkennung alle 5 Minuten, Evolutionsvorschlaege jede Stunde. Die Daten werden in einer separaten SQLite-Datenbank (`learning.db`) gespeichert.
+Alle Kanaele implementieren In-Place-Streaming. Die Antwort des Agenten erscheint progressiv, waehrend das LLM sie generiert. Updates werden plattformspezifisch gedrosselt, um Ratenlimits zu vermeiden (WhatsApp/Discord: 1/Sek., Slack: 2/Sek.).
+
+### Authentifizierung
+
+- **Telegram**: Standardmaessig alles blockiert. `ALLOWED_TELEGRAM_USER_IDS` muss gesetzt werden.
+- **Discord**: Standardmaessig alles blockiert. `ALLOWED_DISCORD_USER_IDS` oder `ALLOWED_DISCORD_ROLE_IDS` muss gesetzt werden.
+- **Slack**: **Standardmaessig offen.** Wenn `ALLOWED_SLACK_USER_IDS` leer ist, kann jeder Slack-Benutzer auf den Bot zugreifen. Setzen Sie die Erlaubnisliste fuer die Produktion.
+- **WhatsApp**: Verwendet die `WHATSAPP_ALLOWED_NUMBERS`-Erlaubnisliste, die lokal im Adapter geprueft wird.
 
 ---
 
@@ -415,9 +544,12 @@ Alle Tool-Ergebnisse werden auf 8192 Zeichen begrenzt und vor der Rueckgabe an d
 ### Schicht 8: RBAC (intern)
 5 Rollen (Superadmin, Admin, Entwickler, Betrachter, Service) mit einer Berechtigungsmatrix fuer 9 Ressourcentypen. Die Richtlinien-Engine unterstuetzt zeit-, IP- und benutzerdefinierte Bedingungen.
 
+### Schicht 9: Daemon-Sicherheit
+`DaemonSecurityPolicy` erzwingt Tool-spezifische Genehmigungsanforderungen fuer Daemon-ausgeloeste Operationen. Schreib-Tools erfordern eine ausdrueckliche Benutzergenehmigung ueber die `ApprovalQueue` vor der Ausfuehrung.
+
 ---
 
-## Dashboard & Monitoring
+## Dashboard und Monitoring
 
 ### HTTP-Dashboard (`DASHBOARD_ENABLED=true`)
 Erreichbar unter `http://localhost:3001` (nur Localhost). Zeigt: Betriebszeit, Nachrichtenanzahl, Token-Verbrauch, aktive Sitzungen, Tool-Nutzungstabelle, Sicherheitsstatistiken. Automatische Aktualisierung alle 3 Sekunden.
@@ -430,7 +562,10 @@ Erreichbar unter `http://localhost:3001` (nur Localhost). Zeigt: Betriebszeit, N
 Metriken unter `http://localhost:9090/metrics`. Zaehler fuer Nachrichten, Tool-Aufrufe, Tokens. Histogramme fuer Anfragedauer, Tool-Dauer, LLM-Latenz. Standard-Node.js-Metriken (CPU, Heap, GC, Event Loop).
 
 ### WebSocket-Dashboard (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-Echtzeit-Metriken, die jede Sekunde gepusht werden. Unterstuetzt authentifizierte Verbindungen und Remote-Befehle (Plugin-Neuladen, Cache-Leerung, Log-Abruf).
+Echtzeit-Metriken, die jede Sekunde gepusht werden. Unterstuetzt authentifizierte Verbindungen und Remote-Befehle (Plugin-Neuladen, Cache-Leerung, Log-Abruf). Daemon-Ereignisse (Ausloeseraktivierungen, Budget-Warnungen, Zielfortschritt) werden ueber WebSocket uebertragen.
+
+### Metrik-System
+`MetricsStorage` (SQLite) zeichnet Aufgabenabschlussrate, Iterationszaehler, Tool-Nutzung und Musterwiederverwendung auf. `MetricsRecorder` erfasst Metriken pro Sitzung. Der `metrics`-CLI-Befehl zeigt historische Metriken an.
 
 ---
 
@@ -447,6 +582,9 @@ Die `docker-compose.yml` beinhaltet die Anwendung, den Monitoring-Stack und den 
 ### Daemon-Modus
 
 ```bash
+# 24/7 autonomer Betrieb mit Heartbeat-Schleife und proaktiven Ausloesern
+node dist/index.js daemon --channel web
+
 # Automatischer Neustart bei Absturz mit exponentiellem Backoff (1s bis 60s, bis zu 10 Neustarts)
 node dist/index.js daemon --channel telegram
 ```
@@ -461,21 +599,20 @@ node dist/index.js daemon --channel telegram
 - [ ] `DASHBOARD_ENABLED=true` fuer Monitoring aktivieren
 - [ ] `ENABLE_PROMETHEUS=true` fuer Metrik-Erfassung aktivieren
 - [ ] Einen starken `JWT_SECRET` generieren
+- [ ] Daemon-Budget-Limits konfigurieren (`RATE_LIMIT_DAILY_BUDGET_USD`)
 
 ---
 
 ## Testen
 
 ```bash
-npm test                         # Alle 1730+ Tests ausfuehren
+npm test                         # Alle 2775 Tests ausfuehren
 npm run test:watch               # Watch-Modus
 npm test -- --coverage           # Mit Coverage
 npm test -- src/agents/tools/file-read.test.ts  # Einzelne Datei
 npm run typecheck                # TypeScript-Typpruefung
 npm run lint                     # ESLint
 ```
-
-110 Testdateien, die abdecken: Agenten, Kanaele, Sicherheit, RAG, Speicher, Lernen, Dashboard, Integrationsablaeufe.
 
 ---
 
@@ -486,7 +623,7 @@ src/
   index.ts              # CLI-Einstiegspunkt (Commander.js)
   core/
     bootstrap.ts        # Vollstaendige Initialisierungssequenz -- gesamte Verdrahtung hier
-    di-container.ts     # DI-Container (verfuegbar, aber manuelle Verdrahtung dominiert)
+    event-bus.ts        # TypedEventBus fuer entkoppelte ereignisgesteuerte Kommunikation
     tool-registry.ts    # Tool-Instanziierung und -Registrierung
   agents/
     orchestrator.ts     # PAOR-Agentenschleife, Sitzungsverwaltung, Streaming
@@ -504,18 +641,88 @@ src/
     discord/            # discord.js-Bot mit Slash-Befehlen
     slack/              # Slack Bolt (Socket-Modus) mit Block Kit
     whatsapp/           # Baileys-basierter Client mit Sitzungsverwaltung
+    web/                # Express + WebSocket Web-Dashboard
     cli/                # Readline-REPL
   memory/
-    file-memory-manager.ts   # Aktives Backend: JSON + TF-IDF
-    unified/                 # AgentDB-Backend: SQLite + HNSW (noch nicht verbunden)
+    file-memory-manager.ts   # Altes Backend: JSON + TF-IDF (Fallback)
+    unified/
+      agentdb-memory.ts      # Aktives Backend: SQLite + HNSW, 3-stufiges Auto-Tiering
+      agentdb-adapter.ts     # IMemoryManager-Adapter fuer AgentDBMemory
+      migration.ts           # Legacy FileMemoryManager -> AgentDB-Migration
   rag/
     rag-pipeline.ts     # Index + Suche + Format-Orchestrierung
     chunker.ts          # C#-spezifisches strukturelles Chunking
     hnsw/               # HNSW-Vektorspeicher (hnswlib-node)
     embeddings/         # OpenAI- und Ollama-Embedding-Anbieter
     reranker.ts         # Gewichtetes Reranking (Vektor + Schluesselwort + Struktur)
+  learning/
+    pipeline/
+      learning-pipeline.ts  # Mustererkennung, Instinkt-Erstellung, Evolutionsvorschlaege
+      learning-queue.ts     # Serieller Async-Prozessor fuer ereignisgesteuertes Lernen
+      embedding-queue.ts    # Begrenzte asynchrone Embedding-Generierung
+    scoring/
+      confidence-scorer.ts  # Bayessche Beta-Posterior-Konfidenz, Elo, Wilson-Intervalle
+    matching/
+      pattern-matcher.ts    # Schluesselwort- + semantischer Musterabgleich
+    hooks/
+      error-learning-hooks.ts  # Fehler-/Loesungs-Erfassungs-Hooks
+    storage/
+      learning-storage.ts  # SQLite-Speicher fuer Instinkte, Trajektorien, Muster
+      migrations/          # Schema-Migrationen (sitzungsuebergreifende Herkunft)
+    chains/
+      chain-detector.ts    # Erkennung wiederkehrender Tool-Sequenzen
+      chain-synthesizer.ts # LLM-basierte Generierung zusammengesetzter Tools
+      composite-tool.ts    # Ausfuehrbares zusammengesetztes Tool
+      chain-validator.ts   # Validierung nach Synthese, Laufzeit-Feedback
+      chain-manager.ts     # Vollstaendiger Lebenszyklus-Orchestrator
+  goals/
+    goal-decomposer.ts  # DAG-basierte Zielzerlegung (proaktiv + reaktiv)
+    goal-executor.ts    # Wellenbasierte parallele Ausfuehrung mit Fehlerbudgets
+    goal-validator.ts   # Kahn-Algorithmus DAG-Zykluserkennung
+    goal-storage.ts     # SQLite-Persistenz fuer Zielbaeume
+    goal-progress.ts    # Fortschrittsverfolgung und -berichterstattung
+    goal-resume.ts      # Wiederaufnahme unterbrochener Zielbaeume nach Neustart
+    goal-renderer.ts    # Zielbaum-Visualisierung
+  daemon/
+    heartbeat-loop.ts   # Kern-Tick-Auswertungs-Ausloeser-Schleife
+    trigger-registry.ts # Ausloeser-Registrierung und -Lebenszyklus
+    daemon-storage.ts   # SQLite-Persistenz fuer Daemon-Zustand
+    daemon-events.ts    # Typisierte Ereignisdefinitionen fuer Daemon-Subsystem
+    daemon-cli.ts       # CLI-Befehle fuer Daemon-Verwaltung
+    budget/
+      budget-tracker.ts # Taegliches USD-Budget-Tracking
+    resilience/
+      circuit-breaker.ts # Circuit Breaker pro Ausloeser mit exponentiellem Backoff
+    security/
+      daemon-security-policy.ts  # Tool-Genehmigungsanforderungen fuer Daemon
+      approval-queue.ts          # Genehmigungswarteschlange mit Ablaufzeit
+    dedup/
+      trigger-deduplicator.ts    # Inhalts- + Cooldown-Deduplizierung
+    triggers/
+      cron-trigger.ts        # Cron-Ausdruck-Planung
+      file-watch-trigger.ts  # Dateisystem-Aenderungsueberwachung
+      checklist-trigger.ts   # Faellige Checklisten-Eintraege
+      webhook-trigger.ts     # HTTP-POST-Webhook-Endpunkt
+    reporting/
+      notification-router.ts # Dringlichkeitsbasierte Benachrichtigungsweiterleitung
+      digest-reporter.ts     # Periodische Zusammenfassungsgenerierung
+      digest-formatter.ts    # Zusammenfassungsberichte fuer Kanaele formatieren
+      quiet-hours.ts         # Nicht-kritische Benachrichtigungspufferung
+  identity/
+    identity-state.ts   # Persistente Agentenidentitaet (UUID, Startzaehler, Betriebszeit)
+    crash-recovery.ts   # Absturzerkennung und Wiederherstellungskontext
+  tasks/
+    task-manager.ts     # Aufgaben-Lebenszyklus-Verwaltung
+    task-storage.ts     # SQLite-Aufgabenpersistenz
+    background-executor.ts # Hintergrund-Aufgabenausfuehrung mit Zielintegration
+    message-router.ts   # Nachrichtenweiterleitung zum Orchestrator
+    command-detector.ts # Slash-Befehl-Erkennung
+    command-handler.ts  # Befehlsausfuehrung
+  metrics/
+    metrics-storage.ts  # SQLite-Metrik-Speicher
+    metrics-recorder.ts # Metrik-Erfassung pro Sitzung
+    metrics-cli.ts      # CLI-Befehl zur Metrikanzeige
   security/             # Auth, RBAC, Pfadschutz, Ratenbegrenzer, Geheimnis-Bereinigung
-  learning/             # Mustererkennung, Konfidenzbewertung, Instinkt-Lebenszyklus, HNSW-semantische Suche
   intelligence/         # C#-Parsing, Projektanalyse, Code-Qualitaet
   dashboard/            # HTTP-, WebSocket-, Prometheus-Dashboards
   config/               # Zod-validierte Umgebungskonfiguration

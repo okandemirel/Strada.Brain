@@ -1,545 +1,198 @@
-# Strata.Brain Security Hardening Guide
+# Security
 
-This document describes the comprehensive security hardening implemented in Strata.Brain.
+Strada.Brain runs AI agents with access to your file system, shell, and git. Security is layered to prevent unintended access and data leakage. This document describes the security features that are implemented in the codebase today.
 
-## Table of Contents
+## Reporting Security Issues
 
-1. [Security Architecture](#security-architecture)
-2. [Input Validation](#input-validation)
-3. [Authentication](#authentication)
-4. [Authorization](#authorization)
-5. [Communication Security](#communication-security)
-6. [Data Protection](#data-protection)
-7. [File System Security](#file-system-security)
-8. [Network Security](#network-security)
-9. [Audit & Monitoring](#audit--monitoring)
-10. [Dependency Security](#dependency-security)
-11. [Container Security](#container-security)
-12. [Quick Start](#quick-start)
+If you discover a security vulnerability, please report it privately via email rather than opening a public issue. Contact the maintainers directly so the issue can be assessed and patched before disclosure.
 
----
+## Security Layers
 
-## Security Architecture
+### 1. Channel Authentication
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Security Layers                          │
-├─────────────────────────────────────────────────────────────────┤
-│  1. Network Security (Firewall, DDoS, Rate Limiting)           │
-│  2. TLS/SSL (Encryption in Transit)                            │
-│  3. Authentication (JWT, MFA, Session Management)              │
-│  4. Authorization (RBAC, ABAC, Policies)                       │
-│  5. Input Validation (Zod Schemas, Sanitization)              │
-│  6. Application Security (Secure Coding)                       │
-│  7. Data Protection (Encryption at Rest)                       │
-│  8. File System Security (Chroot, Integrity)                  │
-│  9. Audit Logging (Security Events, SIEM)                     │
-│ 10. Container Security (Docker Hardening)                      │
-└─────────────────────────────────────────────────────────────────┘
-```
+Each messaging channel enforces an allowlist of authorized users. Unauthorized requests are rejected before reaching the agent.
 
----
+- **Telegram**: `ALLOWED_TELEGRAM_USER_IDS` -- comma-separated numeric IDs. If empty, all users are denied.
+- **Slack**: `ALLOWED_SLACK_USER_IDS` and `ALLOWED_SLACK_WORKSPACES` -- if empty, all users are allowed (open by default).
+- **Discord**: `ALLOWED_DISCORD_USER_IDS` and `ALLOWED_DISCORD_ROLE_IDS` -- if empty, all users are denied (closed by default). Supports both user-level and role-level authorization.
+- **Web**: JWT-based authentication (see below).
 
-## Input Validation
+Implementation: `src/security/auth.ts`
 
-### Zod Schema Validation
+### 2. Rate Limiting and Budget Caps
 
-All inputs are validated using strict Zod schemas:
+A token-bucket rate limiter enforces per-user and global limits to prevent abuse and runaway costs.
 
-```typescript
-import { validate, fileReadSchema, shellCommandSchema } from "./src/validation/index.js";
+- **Per-user**: configurable messages per minute and per hour.
+- **Global**: daily token quota, daily spend cap (USD), monthly spend cap (USD).
+- **Cost model**: built-in cost estimates for Claude, OpenAI, DeepSeek, Groq, Mistral, and Ollama.
+- **Auto-rotation**: counters reset at UTC day/month boundaries.
 
-// Validate file read operation
-const result = validate(fileReadSchema, {
-  path: "src/index.ts",
-  encoding: "utf-8",
-});
+When any limit is hit, the request is rejected with a reason string and optional `retryAfterMs`.
 
-if (!result.success) {
-  console.error("Validation failed:", result.errors);
-}
-```
+Implementation: `src/security/rate-limiter.ts`
 
-### Sanitization Functions
+### 3. Path Guard
 
-```typescript
-import { sanitizeInput, sanitizeHtml, sanitizePath } from "./src/validation/index.js";
+All file tool operations pass through a path validator that prevents escape from the project directory.
 
-// Remove dangerous characters
-const clean = sanitizeInput(userInput);
+- **Symlink resolution**: uses `realpath()` to resolve symlinks before checking boundaries. Prevents symlink escape attacks.
+- **Trailing separator check**: avoids prefix collisions (e.g., `/project` vs `/project-evil`).
+- **Null byte rejection**: blocks null bytes in paths (defense-in-depth).
+- **Sensitive file blocklist**: denies access to `.env`, `.git/config`, `.git/credentials`, `credentials.json`, `secrets.json`, `.ssh/`, `node_modules/`, private keys (`.pem`, `.key`, `id_rsa`, `id_ed25519`), keystores (`.pfx`, `.p12`, `.jks`), `google-services.json`, `GoogleService-Info.plist`, `.npmrc`, `.netrc`.
+- **C# identifier validation**: prevents code injection in generated Unity files.
 
-// Escape HTML entities
-const safeHtml = sanitizeHtml(userInput);
+Implementation: `src/security/path-guard.ts`
 
-// Normalize file paths
-const safePath = sanitizePath(userPath);
-```
+### 4. Secret Sanitizer
 
----
+All tool output is scrubbed for credentials before being returned to the LLM or displayed to users. Detection uses pattern-matching against known credential formats.
 
-## Authentication
+Detected patterns include:
+- OpenAI keys (`sk-`, `sk-proj-`), Anthropic keys (`sk-ant-api03-`), GCP keys (`AIza...`)
+- GitHub tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`)
+- Slack tokens (`xox[bpas]-`), Slack webhooks
+- AWS access keys (`AKIA...`), AWS secret keys
+- Discord tokens, Telegram bot tokens, WhatsApp/Meta tokens (`EAA...`)
+- Azure keys, Firebase service account fields
+- JWT tokens (`eyJ...`), Bearer tokens, Basic auth headers
+- Database connection strings (postgres, mysql, mongodb, redis URLs with embedded credentials)
+- Private keys (PEM-encoded RSA, DSA, EC, OpenSSH)
+- Generic `password=`, `api_key=`, `secret=`, `token=` patterns
+- Bare `KEY=VALUE` lines (catches `.env` content)
 
-### JWT Implementation
+Output is also capped at 8192 characters to prevent context window flooding.
 
-```typescript
-import { JwtManager, HardenedAuthManager } from "./src/security/index.js";
+Implementation: `src/security/secret-sanitizer.ts`, `src/agents/orchestrator.ts` (inline `sanitizeToolResult`)
 
-const jwt = new JwtManager({
-  jwtSecret: process.env.JWT_SECRET,
-  jwtExpiresIn: 900, // 15 minutes
-});
+### 5. Read-Only Mode
 
-// Generate token
-const token = jwt.generateToken(user);
+When `READ_ONLY_MODE=true`, all write tools are removed from the agent's tool set entirely -- not just blocked at execution time, but filtered out before the LLM sees them. The system prompt is augmented to inform the agent that write operations are unavailable.
 
-// Verify token
-const result = jwt.verifyToken(token);
-if (result.valid) {
-  console.log("Payload:", result.payload);
-}
-```
+Blocked tools include: `file_write`, `file_edit`, `file_delete`, `file_rename`, `git_commit`, `git_push`, `git_branch`, `git_reset`, `git_merge`, `git_rebase`, `shell_exec`, `strata_create_module`, `strata_create_component`, `dotnet_add_package`, and others.
 
-### Multi-Factor Authentication (MFA)
+Allowed tools: `file_read`, `file_search`, `file_list`, `git_status`, `git_log`, `git_diff`, `code_search`, `memory_search`, `analyze_project`, and others.
 
-```typescript
-import { authManager } from "./src/security/index.js";
+Implementation: `src/security/read-only-guard.ts`
 
-// Enable MFA for user
-const { secret, backupCodes } = authManager.enableMfa(userId);
+### 6. Operation Confirmation
 
-// Verify MFA code
-const mfaResult = authManager.verifyMfaAndAuthenticate(
-  mfaToken,
-  code,
-  ipAddress,
-  userAgent
-);
-```
+Write operations can require explicit user approval before execution. The DM (Diff/Merge) policy supports four approval levels:
 
-### Brute Force Protection
+- **always**: every write operation requires confirmation.
+- **destructive_only**: only high-risk operations require confirmation (file_delete, shell_exec, git_push, git_reset, etc.).
+- **smart**: confirmation triggered when changes exceed thresholds (file count, line count).
+- **never**: no confirmation required.
 
-```typescript
-const auth = new HardenedAuthManager({
-  maxLoginAttempts: 5,
-  lockoutDuration: 1800000, // 30 minutes
-});
-```
+Controlled by `REQUIRE_EDIT_CONFIRMATION`. The confirmation flow shows a diff preview to the user and waits for approval (default timeout: 5 minutes).
 
----
+Implementation: `src/security/dm-policy.ts`, `src/security/dm-state.ts`
 
-## Authorization
+### 7. Tool Output Sanitization (Orchestrator)
 
-### Role-Based Access Control (RBAC)
+Beyond the SecretSanitizer, the orchestrator applies an additional pass on every tool result:
 
-```typescript
-import { rbacManager, type Resource, type Action } from "./src/security/index.js";
+- Regex-based stripping of API key patterns (`sk-`, `key-`, `token-`, `ghp_`, `Bearer`, etc.).
+- Hard length cap at 8192 characters with truncation marker.
+- Learning event inputs are also sanitized and capped at 2048 characters before storage.
+- Prompt injection defense: embedded section markers (`<!-- section:start -->`) are stripped from memory/RAG content before injection into prompts.
 
-const context = {
-  user: currentUser,
-  resource: { type: "file", id: "src/index.ts" },
-  action: "read" as Action,
-};
+Implementation: `src/agents/orchestrator.ts`
 
-const result = rbacManager.authorize(context);
-if (result.allowed) {
-  // Proceed with operation
-}
-```
+### 8. Role-Based Access Control (RBAC)
 
-### Permission Checking
+A full RBAC system with role hierarchy, permission matrix, and policy engine.
 
-```typescript
-import { hasPermission, hasAnyPermission, hasAllPermissions } from "./src/security/index.js";
+**Roles** (highest to lowest privilege): `superadmin`, `admin`, `developer`, `viewer`, `service`.
 
-// Check single permission
-if (hasPermission(user, "files:write")) {
-  // Allow file write
-}
+**Permission matrix** maps resource types (file, directory, system, config, shell_command, user, agent, memory, log, api_key) to actions (create, read, update, delete, execute, manage, admin) with minimum role requirements.
 
-// Check any of multiple permissions
-if (hasAnyPermission(user, ["files:write", "system:full"])) {
-  // Allow operation
-}
-```
+**Policy engine**: supports custom policies with conditions based on role, permission, ownership, time window, IP address, and custom functions. Policies are priority-ordered. Default behavior is deny-all with explicit allow policies.
 
----
+**ABAC engine**: attribute-based access control for fine-grained rules based on subject, resource, action, and environment attributes.
 
-## Communication Security
+Implementation: `src/security/rbac.ts`, `src/security/auth-hardened.ts`
 
-### TLS Configuration
+### 9. WebSocket Origin Validation
 
-```typescript
-import { tlsSecurity, TLS13_CIPHERS } from "./src/security/index.js";
+WebSocket connections are validated against an origin allowlist. By default, only `localhost` and `127.0.0.1` are accepted. Additional origins can be configured via `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS`.
 
-// Configure TLS
-const tlsConfig = {
-  certPath: "/etc/ssl/certs/server.crt",
-  keyPath: "/etc/ssl/private/server.key",
-  minVersion: "TLSv1.2" as const,
-  cipherSuites: TLS13_CIPHERS,
-  hstsEnabled: true,
-};
+Connections with empty or `"null"` Origin headers are rejected. Non-browser clients (no Origin header) are permitted. Malformed Origin URLs are rejected.
 
-const manager = new TlsSecurityManager(tlsConfig);
-```
+Implementation: `src/security/origin-validation.ts`
 
-### Certificate Pinning
+### 10. JWT Authentication
 
-```typescript
-// Pin a certificate
-manager.pinCertificate({
-  hostname: "api.strata-brain.com",
-  fingerprint: "sha256/abcd1234...",
-  expiresAt: new Date("2025-12-31"),
-});
+The web channel uses JWT (HS256) for authentication with the following protections:
 
-// Verify connection
-const result = manager.verifyCertificate(hostname, cert);
-```
+- **Secure defaults**: 15-minute access token expiry, 7-day refresh tokens, 30-minute session timeout.
+- **Brute-force protection**: account lockout after 5 failed attempts (30-minute lockout with exponential escalation up to 32x).
+- **Token revocation**: in-memory revocation list checked on every request.
+- **Timing-safe comparison**: signature verification uses `timingSafeEqual` to prevent timing attacks.
+- **Claims validation**: issuer and audience are checked on every token.
+- **Password hashing**: scrypt with 32-byte salt (N=16384, r=8, p=1).
+- **Session management**: per-user session tracking, idle timeout, forced logout.
+- **MFA support**: TOTP framework with backup codes and rate-limited verification (5 attempts per 5-minute window). Note: TOTP verification requires installing `otplib` for production use.
 
-### Secure WebSocket
+Implementation: `src/security/auth-hardened.ts`
 
-```typescript
-import { wsSecurity } from "./src/security/index.js";
+### 11. Input Validation
 
-// Configure WebSocket security
-wsSecurity.validateConnection({
-  secure: true,
-  origin: "https://app.strata-brain.com",
-  headers: {},
-}, authToken);
-```
+All inputs are validated using Zod schemas before processing.
 
----
+- **Path safety**: blocks null bytes, path traversal (`..`, `~/`), absolute paths.
+- **Shell commands**: whitelist of allowed base commands (`ls`, `git`, `dotnet`, `npm`, etc.) with dangerous pattern rejection (`;`, `|`, `&`, backticks, `$()`, etc.).
+- **C# identifiers**: validated against strict regex patterns to prevent code injection.
+- **Message inputs**: channel-specific schemas enforce size limits and format requirements.
+- **URL validation**: enforces HTTPS/WSS protocols, blocks private/internal webhook targets.
+- **API keys and tokens**: format validation with character and length constraints.
 
-## Data Protection
+Implementation: `src/validation/schemas.ts`, `src/validation/index.ts`
 
-### Encryption at Rest
+### 12. Communication Security
 
-```typescript
-import { encryptionService, keyManager } from "./src/encryption/data-protection.js";
+TLS and WebSocket security hardening:
 
-// Encrypt data
-const encrypted = encryptionService.encryptToString("sensitive data");
+- **TLS configuration**: minimum TLS 1.2, configurable cipher suites with forbidden cipher blocklist.
+- **Certificate pinning**: SHA-256 fingerprint pinning with expiration tracking.
+- **HSTS support**: configurable max-age, subdomain inclusion, and preload.
+- **Security headers**: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy`, `Permissions-Policy`.
 
-// Decrypt data
-const decrypted = encryptionService.decryptFromString(encrypted);
-```
+Implementation: `src/security/communication.ts`
 
-### Key Management
+## Configuration
 
-```typescript
-// Generate new encryption key
-const newKey = keyManager.generateKey();
+Security-related environment variables:
 
-// Schedule key rotation
-keyManager.scheduleRotation((rotatedKey) => {
-  console.log("Key rotated:", rotatedKey.id);
-});
-```
+| Variable | Description | Default |
+|---|---|---|
+| `ALLOWED_TELEGRAM_USER_IDS` | Comma-separated Telegram user IDs | (empty = deny all) |
+| `ALLOWED_SLACK_USER_IDS` | Comma-separated Slack user IDs | (empty = allow all) |
+| `ALLOWED_SLACK_WORKSPACES` | Comma-separated Slack workspace IDs | (empty = allow all) |
+| `ALLOWED_DISCORD_USER_IDS` | Comma-separated Discord user IDs | (empty = deny all) |
+| `ALLOWED_DISCORD_ROLE_IDS` | Comma-separated Discord role IDs | (empty) |
+| `JWT_SECRET` | Secret for JWT signing (required for web channel) | (none) |
+| `REQUIRE_MFA` | Require MFA for authentication | `false` |
+| `REQUIRE_EDIT_CONFIRMATION` | Require user approval for write operations | `true` |
+| `READ_ONLY_MODE` | Disable all write tools | `false` |
+| `SHELL_ENABLED` | Allow shell command execution | `false` |
+| `RATE_LIMIT_ENABLED` | Enable rate limiting | `true` |
+| `RATE_LIMIT_MESSAGES_PER_MINUTE` | Max messages per user per minute | `30` |
+| `RATE_LIMIT_MESSAGES_PER_HOUR` | Max messages per user per hour | `500` |
+| `RATE_LIMIT_TOKENS_PER_DAY` | Max API tokens per day (all users) | `1000000` |
+| `RATE_LIMIT_DAILY_BUDGET_USD` | Max daily spend | `50` |
+| `RATE_LIMIT_MONTHLY_BUDGET_USD` | Max monthly spend | `1000` |
+| `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | Additional allowed WebSocket origins | (localhost only) |
 
-### Data Masking
+## Deployment Recommendations
 
-```typescript
-import { DataMasking } from "./src/encryption/data-protection.js";
-
-// Mask credit card
-const masked = DataMasking.mask("4111111111111111", { type: "credit_card" });
-// Result: ************1111
-
-// Mask email
-const maskedEmail = DataMasking.mask("user@example.com", { type: "email" });
-// Result: u**r@example.com
-```
-
----
-
-## File System Security
-
-### Chroot Jail
-
-```typescript
-import { ChrootJail } from "./src/security/index.js";
-
-const jail = new ChrootJail({
-  rootPath: "/app/data",
-  allowedPaths: ["projects", "temp"],
-  readOnly: false,
-  allowedExtensions: ["cs", "json", "md"],
-});
-
-// File operations within jail
-await jail.writeFile("projects/test.cs", content);
-const data = await jail.readFile("projects/test.cs");
-```
-
-### File Integrity Monitoring
-
-```typescript
-import { fileIntegrityMonitor } from "./src/security/index.js";
-
-// Add file to monitoring
-await fileIntegrityMonitor.addPath("/app/config/production.json");
-
-// Check integrity
-const check = await fileIntegrityMonitor.checkIntegrity("/app/config/production.json");
-if (!check.valid) {
-  console.error("File modified:", check.changes);
-}
-```
-
-### Audit Logging
-
-```typescript
-import { fileAuditLogger } from "./src/security/index.js";
-
-// Log file operation
-fileAuditLogger.log({
-  operation: "write",
-  path: "src/index.ts",
-  success: true,
-  userId: "user-123",
-  ipAddress: "192.168.1.1",
-});
-```
-
----
-
-## Network Security
-
-### Firewall
-
-```typescript
-import { firewall } from "./src/security/index.js";
-
-// Add firewall rule
-firewall.addRule({
-  name: "Allow internal API",
-  action: "allow",
-  direction: "inbound",
-  sourceIps: [{ type: "cidr", value: "10.0.0.0/8" }],
-  ports: [3000],
-  priority: 100,
-  enabled: true,
-  log: true,
-});
-
-// Check connection
-const result = firewall.checkConnection(
-  "192.168.1.100",
-  "10.0.0.1",
-  3000,
-  "tcp"
-);
-```
-
-### DDoS Protection
-
-```typescript
-import { ddosProtection } from "./src/security/index.js";
-
-// Check IP
-const check = ddosProtection.checkIp(clientIp);
-if (!check.allowed) {
-  // Block connection
-}
-
-// Record request
-ddosProtection.recordRequest(clientIp);
-```
-
----
-
-## Audit & Monitoring
-
-### Security Event Logging
-
-```typescript
-import { securityAudit } from "./src/security/index.js";
-
-// Log security event
-const event = securityAudit.log({
-  type: "authentication_failure",
-  severity: "medium",
-  source: { ip: "192.168.1.100" },
-  context: { requestId: "req-123" },
-  details: { username: "admin", reason: "Invalid password" },
-});
-```
-
-### Alert Management
-
-```typescript
-import { alertManager } from "./src/security/index.js";
-
-// Add alert rule
-alertManager.addRule({
-  name: "Brute Force Detection",
-  conditions: [
-    { field: "type", operator: "equals", value: "authentication_failure" },
-  ],
-  severity: "high",
-  channels: ["email", "slack"],
-});
-
-// Process event for alerts
-alertManager.processEvent(event);
-```
-
-### Anomaly Detection
-
-```typescript
-import { anomalyDetector } from "./src/security/index.js";
-
-// Update baseline
-anomalyDetector.updateBaseline("requests_per_minute", 100);
-
-// Detect anomalies
-const detection = anomalyDetector.detect("requests_per_minute", 500);
-if (detection.isAnomaly) {
-  console.log("Anomaly detected! Confidence:", detection.confidence);
-}
-```
-
----
-
-## Dependency Security
-
-### Vulnerability Scanning
-
-```typescript
-import { dependencyScanner } from "./src/security/index.js";
-
-// Run security check
-const result = await dependencyScanner.runSecurityCheck();
-
-// Generate report
-const report = dependencyScanner.generateReport(result);
-```
-
-### npm Audit
-
-```bash
-# Run npm audit
-npm audit
-
-# Fix vulnerabilities
-npm audit fix
-
-# Run security scan
-npm run security:scan
-```
-
----
-
-## Container Security
-
-### Build Hardened Image
-
-```bash
-# Build hardened Docker image
-docker build -f docker/Dockerfile.hardened -t strata-brain:hardened .
-
-# Run with security options
-docker run -d \
-  --read-only \
-  --security-opt=no-new-privileges:true \
-  --cap-drop=ALL \
-  --user=1001:1001 \
-  -p 3000:3000 \
-  strata-brain:hardened
-```
-
-### Security Scan
-
-```bash
-# Run security scan
-cd docker && ./security-scan.sh
-
-# Or with docker-compose
-docker-compose -f docker/docker-compose.security.yml up -d
-```
-
----
-
-## Quick Start
-
-### 1. Environment Configuration
-
-```bash
-# Copy security configuration
-cp .env.security.example .env
-
-# Edit with your values
-# Generate encryption key: openssl rand -hex 32
-# Generate JWT secret: openssl rand -base64 32
-```
-
-### 2. Initialize Security
-
-```typescript
-import { initializeSecurity } from "./src/security/index.js";
-
-// Initialize all security modules
-initializeSecurity();
-```
-
-### 3. Enable Security Middleware
-
-```typescript
-import { createSecurityMiddleware } from "./src/security/index.js";
-
-const security = createSecurityMiddleware();
-
-// Apply to your server
-app.use((req, res, next) => {
-  // Add security headers
-  Object.entries(security.securityHeaders).forEach(([key, value]) => {
-    res.setHeader(key, value);
-  });
-  next();
-});
-```
-
----
-
-## Security Checklist
-
-### Pre-Deployment
-
-- [ ] Encryption keys generated and secured
-- [ ] JWT secrets configured
-- [ ] MFA enabled for admin accounts
-- [ ] TLS certificates installed
-- [ ] Firewall rules configured
-- [ ] Rate limiting enabled
-- [ ] Input validation enabled
-- [ ] Audit logging configured
-- [ ] File integrity monitoring enabled
-- [ ] Dependencies audited
-- [ ] Container image scanned
-- [ ] Security headers configured
-
-### Runtime
-
-- [ ] Security events monitored
-- [ ] Alerts configured
-- [ ] Backups enabled
-- [ ] Log rotation configured
-- [ ] Health checks enabled
-- [ ] Resource limits set
-
----
-
-## Security Contacts
-
-For security issues, please contact:
-
-- Security Team: security@strata-brain.com
-- Incident Response: incident@strata-brain.com
-
----
-
-## License
-
-This security module is part of Strata.Brain and follows the same license terms.
+1. **Set `JWT_SECRET`** to a cryptographically random value (at least 32 bytes). Never reuse across environments.
+2. **Configure channel allowlists** -- especially `ALLOWED_TELEGRAM_USER_IDS` and `ALLOWED_DISCORD_USER_IDS`, which deny all users when empty.
+3. **Keep `SHELL_ENABLED=false`** unless you specifically need shell access. Shell commands are validated against a whitelist, but the attack surface is inherently larger.
+4. **Set budget caps** -- configure `RATE_LIMIT_DAILY_BUDGET_USD` and `RATE_LIMIT_MONTHLY_BUDGET_USD` to prevent runaway API costs.
+5. **Use read-only mode** for analysis-only deployments by setting `READ_ONLY_MODE=true`.
+6. **Bind to localhost** -- the web channel binds to `127.0.0.1` by default. Use a reverse proxy (nginx, Caddy) for external access.
+7. **Enable confirmation** -- keep `REQUIRE_EDIT_CONFIRMATION=true` in production so destructive operations require explicit user approval.
+8. **Never commit `.env` files** -- the path guard blocks access to `.env` files, but they should also be in `.gitignore`.
+9. **Monitor logs** -- the security audit logger records authentication failures, suspicious activity, and policy violations. Review these regularly.
+10. **Keep dependencies updated** -- the dependency security scanner (`src/security/dependency-security.ts`) can audit packages for known vulnerabilities.
