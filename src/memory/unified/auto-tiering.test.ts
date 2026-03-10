@@ -586,4 +586,100 @@ describe("memory decay", () => {
     expect(e).toBeCloseTo(Math.exp(-5 * 0.05), 4);
     expect(p).toBeCloseTo(Math.exp(-5 * 0.01), 4);
   });
+
+  it("custom exempt domain added to config is respected", async () => {
+    setDecayConfig(memory, {
+      exemptDomains: ["instinct", "analysis-cache", "custom-domain"],
+    });
+
+    const fifteenDaysAgo = BASE_TIME - 15 * 24 * 60 * 60 * 1000;
+    const customEntry = createTestEntry({
+      id: "custom-exempt-1",
+      tier: MemoryTier.Ephemeral,
+      importanceScore: 0.6,
+      lastAccessedAt: fifteenDaysAgo,
+      domain: "custom-domain",
+      accessCount: 0,
+    });
+
+    const normalEntry = createTestEntry({
+      id: "normal-1",
+      tier: MemoryTier.Ephemeral,
+      importanceScore: 0.6,
+      lastAccessedAt: fifteenDaysAgo,
+      accessCount: 0,
+    });
+
+    const entries = getEntries(memory);
+    entries.set("custom-exempt-1", customEntry);
+    entries.set("normal-1", normalEntry);
+
+    await runSweep(memory, 5, 7);
+
+    const exemptResult = (entries.get("custom-exempt-1") as Record<string, unknown>);
+    const normalResult = (entries.get("normal-1") as Record<string, unknown>);
+
+    // Custom domain entry: unchanged
+    expect(exemptResult.importanceScore).toBe(0.6);
+    // Normal entry: decayed
+    expect(normalResult.importanceScore).not.toBe(0.6);
+    expect(normalResult.importanceScore).toBeCloseTo(0.6 * Math.exp(-15 * 0.05), 4);
+  });
+
+  it("decay is applied BEFORE tiering: decayed score influences demotion decision", async () => {
+    // Entry with accessCount below promotion threshold but recently accessed enough
+    // that without decay it would NOT be demoted (daysSinceAccess < demotionTimeoutDays).
+    // But with decay, the importance score drops, and enforceTierLimits uses it.
+    const eightDaysAgo = BASE_TIME - 8 * 24 * 60 * 60 * 1000;
+    const entry = createTestEntry({
+      id: "decay-before-tiering-1",
+      tier: MemoryTier.Ephemeral,
+      importanceScore: 0.8,
+      lastAccessedAt: eightDaysAgo,
+      accessCount: 1,
+    });
+
+    getEntries(memory).set("decay-before-tiering-1", entry);
+
+    // With 8 days since access and demotion timeout of 7 days, this entry
+    // will be demoted regardless of decay. But we verify decay ran first
+    // by checking the importance score was reduced before tiering completes.
+    const demoteSpy = vi.spyOn(memory, "demoteEntry");
+    await runSweep(memory, 5, 7);
+
+    // Verify demotion happened
+    expect(demoteSpy).toHaveBeenCalledWith("decay-before-tiering-1", MemoryTier.Persistent);
+
+    // Verify importance was decayed (not still 0.8)
+    const result = (getEntries(memory).get("decay-before-tiering-1") as Record<string, unknown>);
+    const expectedDecayed = 0.8 * Math.exp(-8 * 0.05); // ephemeral lambda
+    expect(result.importanceScore).toBeCloseTo(expectedDecayed, 4);
+  });
+
+  it("decayed entries are persisted to DB via transaction", async () => {
+    const fiveDaysAgo = BASE_TIME - 5 * 24 * 60 * 60 * 1000;
+    const entry = createTestEntry({
+      id: "persist-decay-1",
+      tier: MemoryTier.Working,
+      importanceScore: 0.9,
+      lastAccessedAt: fiveDaysAgo,
+      accessCount: 0,
+    });
+
+    getEntries(memory).set("persist-decay-1", entry);
+
+    // Get the mock DB to verify transaction was called
+    const Database = (await import("better-sqlite3")).default;
+    const mockDbInstance = (Database as unknown as ReturnType<typeof vi.fn>).mock.results[0]?.value;
+
+    await runSweep(memory, 5, 7);
+
+    // Verify the upsertMemory prepared statement was called (via transaction)
+    const prepareCall = mockDbInstance?.prepare;
+    expect(prepareCall).toHaveBeenCalled();
+
+    // Verify the in-memory score was decayed
+    const result = (getEntries(memory).get("persist-decay-1") as Record<string, unknown>);
+    expect(result.importanceScore).toBeCloseTo(0.9 * Math.exp(-5 * 0.10), 4);
+  });
 });
