@@ -121,7 +121,20 @@ export class GoalStorage {
       this.db.exec("ALTER TABLE goal_nodes ADD COLUMN completed_at INTEGER");
     }
     if (!colNames.has("retry_count")) {
-      this.db.exec("ALTER TABLE goal_nodes ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
+      this.db.exec(
+        "ALTER TABLE goal_nodes ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+      );
+    }
+
+    // Phase 20: Add plan_summary column if missing (safe migration for pre-Phase-16 DBs)
+    const treeCols = this.db.pragma("table_info(goal_trees)") as Array<{
+      name: string;
+    }>;
+    const treeColNames = new Set(treeCols.map((c) => c.name));
+    if (!treeColNames.has("plan_summary")) {
+      this.db.exec(
+        "ALTER TABLE goal_trees ADD COLUMN plan_summary TEXT",
+      );
     }
 
     this.prepareStatements();
