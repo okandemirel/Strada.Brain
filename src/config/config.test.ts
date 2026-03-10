@@ -294,6 +294,16 @@ describe("loadConfig", () => {
           },
           ephemeralTtlHours: 24,
         },
+        decay: {
+          enabled: true,
+          lambdas: {
+            working: 0.10,
+            ephemeral: 0.05,
+            persistent: 0.01,
+          },
+          exemptDomains: ["instinct", "analysis-cache"],
+          timeoutMs: 30000,
+        },
       });
     });
   });

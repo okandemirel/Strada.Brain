@@ -151,7 +151,17 @@ export type EnvVarName =
   | "STRATA_MEMORY_MAX_RERETRIEVALS"
   | "STRATA_MEMORY_RERETRIEVAL_TIMEOUT_MS"
   | "STRATA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"
-  | "STRATA_MEMORY_RERETRIEVAL_RAG_TOPK";
+  | "STRATA_MEMORY_RERETRIEVAL_RAG_TOPK"
+
+  // Memory Decay (Phase 21)
+  | "MEMORY_DECAY_ENABLED"
+  | "MEMORY_DECAY_LAMBDA_WORKING"
+  | "MEMORY_DECAY_LAMBDA_EPHEMERAL"
+  | "MEMORY_DECAY_LAMBDA_PERSISTENT"
+  | "MEMORY_DECAY_EXEMPT_DOMAINS"
+  | "MEMORY_DECAY_TIMEOUT_MS"
+  // Trigger Fire History Pruning (Phase 21)
+  | "TRIGGER_FIRE_RETENTION_DAYS";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -239,6 +249,16 @@ export interface MemoryConfig {
       readonly persistent: number;
     };
     readonly ephemeralTtlHours: number;
+  };
+  readonly decay: {
+    readonly enabled: boolean;
+    readonly lambdas: {
+      readonly working: number;
+      readonly ephemeral: number;
+      readonly persistent: number;
+    };
+    readonly exemptDomains: string[];
+    readonly timeoutMs: number;
   };
 }
 
@@ -548,6 +568,14 @@ export const configSchema = z
       .pipe(z.number().int().min(1).max(8760))
       .default("24"),
 
+    // Memory Decay (Phase 21)
+    memoryDecayEnabled: boolFromString(true),
+    memoryDecayLambdaWorking: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.001).max(1.0)).default("0.10"),
+    memoryDecayLambdaEphemeral: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.001).max(1.0)).default("0.05"),
+    memoryDecayLambdaPersistent: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.001).max(1.0)).default("0.01"),
+    memoryDecayExemptDomains: z.string().default("instinct,analysis-cache"),
+    memoryDecayTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1000).max(300000)).default("30000"),
+
     // RAG
     ragEnabled: boolFromString(true),
     embeddingProvider: embeddingProviderSchema.default("auto"),
@@ -672,6 +700,9 @@ export const configSchema = z
     checklistMorningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("9"),
     checklistAfternoonHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("14"),
     checklistEveningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("18"),
+
+    // Trigger Fire History Pruning (Phase 21)
+    triggerFireRetentionDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(365)).default("30"),
 
     // Notification, Quiet Hours, Digest (Phase 18)
     strataDigestEnabled: boolFromString(true),
@@ -861,6 +892,16 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         },
         ephemeralTtlHours: rawConfig.memoryEphemeralTtlHours,
       },
+      decay: {
+        enabled: rawConfig.memoryDecayEnabled,
+        lambdas: {
+          working: rawConfig.memoryDecayLambdaWorking,
+          ephemeral: rawConfig.memoryDecayLambdaEphemeral,
+          persistent: rawConfig.memoryDecayLambdaPersistent,
+        },
+        exemptDomains: rawConfig.memoryDecayExemptDomains.split(",").map((s: string) => s.trim()).filter(Boolean),
+        timeoutMs: rawConfig.memoryDecayTimeoutMs,
+      },
     },
 
     rag: {
@@ -971,6 +1012,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         checklistAfternoonHour: rawConfig.checklistAfternoonHour,
         checklistEveningHour: rawConfig.checklistEveningHour,
       },
+      triggerFireRetentionDays: rawConfig.triggerFireRetentionDays,
     },
 
     reRetrieval: {
@@ -1292,6 +1334,8 @@ interface EnvVars {
   checklistMorningHour: string | undefined;
   checklistAfternoonHour: string | undefined;
   checklistEveningHour: string | undefined;
+  // Trigger Fire History Pruning (Phase 21)
+  triggerFireRetentionDays: string | undefined;
   // Notification, Quiet Hours, Digest (Phase 18)
   strataDigestEnabled: string | undefined;
   strataDigestSchedule: string | undefined;
@@ -1314,6 +1358,13 @@ interface EnvVars {
   strataMemoryReRetrievalTimeoutMs: string | undefined;
   strataMemoryReRetrievalMemoryLimit: string | undefined;
   strataMemoryReRetrievalRagTopK: string | undefined;
+  // Memory Decay (Phase 21)
+  memoryDecayEnabled: string | undefined;
+  memoryDecayLambdaWorking: string | undefined;
+  memoryDecayLambdaEphemeral: string | undefined;
+  memoryDecayLambdaPersistent: string | undefined;
+  memoryDecayExemptDomains: string | undefined;
+  memoryDecayTimeoutMs: string | undefined;
 }
 
 /**
@@ -1459,6 +1510,13 @@ function loadFromEnv(): EnvVars {
     strataMemoryReRetrievalTimeoutMs: process.env["STRATA_MEMORY_RERETRIEVAL_TIMEOUT_MS"],
     strataMemoryReRetrievalMemoryLimit: process.env["STRATA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"],
     strataMemoryReRetrievalRagTopK: process.env["STRATA_MEMORY_RERETRIEVAL_RAG_TOPK"],
+    // Memory Decay (Phase 21)
+    memoryDecayEnabled: process.env["MEMORY_DECAY_ENABLED"],
+    memoryDecayLambdaWorking: process.env["MEMORY_DECAY_LAMBDA_WORKING"],
+    memoryDecayLambdaEphemeral: process.env["MEMORY_DECAY_LAMBDA_EPHEMERAL"],
+    memoryDecayLambdaPersistent: process.env["MEMORY_DECAY_LAMBDA_PERSISTENT"],
+    memoryDecayExemptDomains: process.env["MEMORY_DECAY_EXEMPT_DOMAINS"],
+    memoryDecayTimeoutMs: process.env["MEMORY_DECAY_TIMEOUT_MS"],
   };
 }
 
