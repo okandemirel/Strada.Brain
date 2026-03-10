@@ -80,6 +80,15 @@ export interface ChainInvalidatedEvent {
   readonly timestamp: number;
 }
 
+/** Emitted after post-synthesis validation of a chain */
+export interface ChainValidatedEvent {
+  readonly chainName: string;
+  readonly validationCount: number;
+  readonly resultingConfidence: number;
+  readonly deprecated: boolean;
+  readonly timestamp: number;
+}
+
 // =============================================================================
 // MEMORY RE-RETRIEVAL EVENT TYPES (Phase 17)
 // =============================================================================
@@ -142,6 +151,7 @@ export interface LearningEventMap {
   "chain:detected": ChainDetectedEvent;
   "chain:executed": ChainExecutionEvent;
   "chain:invalidated": ChainInvalidatedEvent;
+  "chain:validated": ChainValidatedEvent;
   "instinct:scope_promoted": InstinctScopeEvent;
   "instinct:merged": InstinctMergedEvent;
   "instinct:age_expired": InstinctAgeExpiredEvent;
