@@ -680,38 +680,29 @@ export class DashboardServer {
   }
 
   /**
-   * Build trigger history from registered triggers.
-   * If DaemonStorage has getTriggerFireHistory (Plan 01 adds this), use it.
-   * Otherwise, build basic entries from trigger metadata.
+   * Build trigger history from registered triggers using DaemonStorage fire history.
    */
   private buildTriggerHistory(
     triggers: Array<import("../daemon/daemon-types.js").ITrigger>,
   ): Array<{ triggerName: string; type: string; fires: Array<{ timestamp: string | null; result: string; durationMs: number | null }> }> {
-    // Check if daemonStorage has persistent fire history (added by Plan 01 if executed)
-    const storage = this.daemonStorage as Record<string, unknown> | undefined;
-    const hasPersistentHistory =
-      storage != null && typeof storage.getTriggerFireHistory === "function";
-
     return triggers.map((t) => {
-      if (hasPersistentHistory) {
+      if (this.daemonStorage) {
         try {
-          const history = (storage as { getTriggerFireHistory: (name: string, limit: number) => Array<{ timestamp: number; result: string; durationMs: number }> })
-            .getTriggerFireHistory(t.metadata.name, this.historyDepth);
+          const history = this.daemonStorage.getTriggerFireHistory(t.metadata.name, this.historyDepth);
           return {
             triggerName: t.metadata.name,
             type: t.metadata.type,
             fires: history.map((h) => ({
               timestamp: new Date(h.timestamp).toISOString(),
               result: h.result,
-              durationMs: h.durationMs,
+              durationMs: h.durationMs ?? null,
             })),
           };
         } catch {
-          // Fall through to basic metadata approach
+          // Fall through to empty history
         }
       }
 
-      // Fallback: basic trigger info (no persistent fire history available)
       return {
         triggerName: t.metadata.name,
         type: t.metadata.type,

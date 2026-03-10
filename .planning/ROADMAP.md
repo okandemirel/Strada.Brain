@@ -37,7 +37,7 @@
 - [x] **Phase 15: Proactive Triggers** - File watcher, webhook, checklist, and deduplication extend the daemon's senses (completed 2026-03-09)
 - [x] **Phase 16: Interactive Goal Execution + Replanning** - Goals execute inline during chat with mid-execution replanning (completed 2026-03-09)
 - [x] **Phase 17: Dynamic Memory Re-retrieval** - Context refreshes during long PAOR loops to prevent stale reasoning (completed 2026-03-09)
-- [ ] **Phase 18: Dual Reporting + Dashboard** - Periodic digest to chat and daemon endpoint on dashboard
+- [x] **Phase 18: Dual Reporting + Dashboard** - Periodic digest to chat and daemon endpoint on dashboard (completed 2026-03-10)
 - [ ] **Phase 19: Tool Validation Feedback Loop** - Composite tools validated post-synthesis with auto-deprecation on failure
 
 ## Phase Details
@@ -175,9 +175,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 18-01-PLAN.md -- Notification types, config schema, storage extension, NotificationRouter, QuietHoursManager
-- [ ] 18-02-PLAN.md -- DigestReporter, DigestFormatter, CLI commands, bootstrap wiring
-- [ ] 18-03-PLAN.md -- Dashboard /api/daemon enrichment with identity, capability manifest, trigger history
+- [x] 18-01-PLAN.md -- Notification types, config schema, storage extension, NotificationRouter, QuietHoursManager
+- [x] 18-02-PLAN.md -- DigestReporter, DigestFormatter, CLI commands, bootstrap wiring
+- [x] 18-03-PLAN.md -- Dashboard /api/daemon enrichment with identity, capability manifest, trigger history
 
 ### Phase 19: Tool Validation Feedback Loop
 **Goal**: Composite tools are validated after synthesis and auto-deprecate when they consistently fail
@@ -218,7 +218,7 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 15. Proactive Triggers | 3/3 | Complete    | 2026-03-09 | - |
 | 16. Interactive Goal Execution + Replanning | 3/3 | Complete    | 2026-03-09 | - |
 | 17. Dynamic Memory Re-retrieval | v2.0 | Complete    | 2026-03-09 | 2026-03-09 |
-| 18. Dual Reporting + Dashboard | v2.0 | 2/3 | In progress | - |
+| 18. Dual Reporting + Dashboard | v2.0 | 3/3 | Complete | 2026-03-10 |
 | 19. Tool Validation Feedback Loop | v2.0 | 0/TBD | Not started | - |
 
 ---

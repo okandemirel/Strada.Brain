@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: in-progress
-stopped_at: Completed 18-01-PLAN.md
-last_updated: "2026-03-10T10:19:25.000Z"
-last_activity: 2026-03-10 -- Completed Phase 18 Plan 01 (Notification Infrastructure)
+stopped_at: Completed 18-02-PLAN.md
+last_updated: "2026-03-10T10:33:38Z"
+last_activity: 2026-03-10 -- Completed Phase 18 Plan 02 (Digest Reporter)
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 24
-  completed_plans: 23
-  percent: 96
+  completed_plans: 24
+  percent: 100
 ---
 
 # State: Strada.Brain
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 
 Phase: 18 of 19 (Dual Reporting & Dashboard)
 Plan: 3 of 3
-Status: Phase 18 Plans 01 + 03 complete
-Last activity: 2026-03-10 -- Completed Phase 18 Plan 01 (Notification Infrastructure)
+Status: Phase 18 complete (all 3 plans done)
+Last activity: 2026-03-10 -- Completed Phase 18 Plan 02 (Digest Reporter)
 
-Progress: [█████████░] 96%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -51,7 +51,7 @@ Progress: [█████████░] 96%
 | 15 | 3/3 | 19min | 6.3min |
 | 16 | 3/3 | 26min | 8.7min |
 | 17 | 2/2 | 15min | 7.5min |
-| 18 | 2/3 | 19min | 9.5min |
+| 18 | 3/3 | 27min | 9min |
 
 *Updated after each plan completion*
 | Phase 16 P01 | 6min | 2 tasks | 10 files |
@@ -60,6 +60,7 @@ Progress: [█████████░] 96%
 | Phase 17 P01 | 8min | 2 tasks | 4 files |
 | Phase 17 P02 | 7min | 2 tasks | 6 files |
 | Phase 18 P01 | 13min | 2 tasks | 9 files |
+| Phase 18 P02 | 8min | 2 tasks | 7 files |
 | Phase 18 P03 | 6min | 1 task | 3 files |
 
 ## Accumulated Context
@@ -170,6 +171,12 @@ Recent decisions affecting current work:
 - [18-03]: Parallel fetch of /api/daemon and /api/metrics in dashboard JS for responsive UI
 - [18-03]: Identity panel uses card grid layout consistent with existing dashboard cards
 - [18-03]: Trigger history table with color-coded result badges (success=green, failure=red, deduplicated=gray)
+- [18-02]: Snapshot at send time over continuous EventBus listeners for digest data collection
+- [18-02]: Fire-and-forget digest text (only delta counters persisted in digest_state)
+- [18-02]: Empty digest sends "All quiet" one-liner rather than skipping silently
+- [18-02]: Wait for cron schedule on startup, don't send immediately (no meaningful deltas)
+- [18-02]: IChannelSender directly for digest delivery (not AlertManager)
+- [18-02]: Channel-aware truncation with per-channel limits map and nearest-newline cut
 
 ### Pending Todos
 
@@ -182,9 +189,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T10:19:25.000Z
-Stopped at: Completed 18-01-PLAN.md
-Resume file: .planning/phases/18-dual-reporting-dashboard/18-01-SUMMARY.md
+Last session: 2026-03-10T10:33:38Z
+Stopped at: Completed 18-02-PLAN.md
+Resume file: .planning/phases/18-dual-reporting-dashboard/18-02-SUMMARY.md
 
 ---
 *State initialized: 2026-03-06*

@@ -38,13 +38,6 @@ export interface DigestReporterDeps {
   readonly chatId?: string;
   readonly channelType?: string;
   readonly eventBus: IEventBus<DaemonEventMap>;
-  readonly heartbeatLoop?: {
-    getDaemonStatus(): {
-      running: boolean;
-      triggerCount: number;
-      budgetUsage: { usedUsd: number; limitUsd?: number; pct: number };
-    };
-  };
   readonly metricsStorage?: {
     getAggregation(filter: Record<string, unknown>): {
       totalTasks: number;
@@ -58,7 +51,6 @@ export interface DigestReporterDeps {
       instinctCount: number;
       activeInstinctCount: number;
     };
-    getInstincts(options?: { status?: string }): ReadonlyArray<{ id: string; type: string; status: string }>;
   };
   readonly budgetTracker?: {
     getUsage(): { usedUsd: number; limitUsd: number | undefined };
@@ -197,8 +189,6 @@ export class DigestReporter {
         const stats = this.deps.learningStorage.getStats();
         totalActiveInstincts = stats.activeInstinctCount;
         instinctsLearned = stats.instinctCount;
-        // Promoted count: difference from last digest
-        instinctsPromoted = 0; // Will be derived from deltas
       } catch {
         // Learning unavailable -- skip
       }
@@ -217,21 +207,9 @@ export class DigestReporter {
       }
     }
 
-    // Trigger data from heartbeat loop status (errors and triggers require
-    // daemon storage trigger_fire_history -- gather from storage if available)
+    // Trigger and error data (gathered from storage if available in future phases)
     const triggers: Array<{ name: string; fireCount: number; lastResult: string }> = [];
     const errors: Array<{ message: string; timestamp: number }> = [];
-
-    // Gather trigger fire history from storage
-    if (this.deps.heartbeatLoop) {
-      try {
-        const status = this.deps.heartbeatLoop.getDaemonStatus();
-        // Trigger info is limited from getDaemonStatus -- triggers are tracked via fire history
-        void status;
-      } catch {
-        // Heartbeat unavailable -- skip
-      }
-    }
 
     return {
       errors,

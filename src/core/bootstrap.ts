@@ -577,7 +577,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       chatId: undefined, // Will be set on first message
       channelType,
       eventBus: daemonBus,
-      heartbeatLoop,
       metricsStorage,
       learningStorage: learningResult.storage,
       budgetTracker: budgetTrackerInstance,

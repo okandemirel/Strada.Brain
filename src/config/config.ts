@@ -987,11 +987,11 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     notification: {
       minLevel: rawConfig.strataNotifyMinLevel,
       routing: {
-        silent: rawConfig.strataNotifySilent.split(",").map((s: string) => s.trim()).filter(Boolean),
-        low: rawConfig.strataNotifyLow.split(",").map((s: string) => s.trim()).filter(Boolean),
-        medium: rawConfig.strataNotifyMedium.split(",").map((s: string) => s.trim()).filter(Boolean),
-        high: rawConfig.strataNotifyHigh.split(",").map((s: string) => s.trim()).filter(Boolean),
-        critical: rawConfig.strataNotifyCritical.split(",").map((s: string) => s.trim()).filter(Boolean),
+        silent: splitCsv(rawConfig.strataNotifySilent),
+        low: splitCsv(rawConfig.strataNotifyLow),
+        medium: splitCsv(rawConfig.strataNotifyMedium),
+        high: splitCsv(rawConfig.strataNotifyHigh),
+        critical: splitCsv(rawConfig.strataNotifyCritical),
       },
       groupingWindowMs: 30000,
     },
@@ -1013,6 +1013,11 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
   };
 
   return { kind: "valid", value: config };
+}
+
+/** Split a comma-separated string into a trimmed, non-empty array */
+function splitCsv(value: string): string[] {
+  return value.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
 /**

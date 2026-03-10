@@ -124,16 +124,16 @@ export class NotificationRouter {
     // Start new group window
     this.groupMap.set(groupKey, { count: 1, lastPayload: payload, windowStart: now });
 
-    // 3. Apply per-urgency rate limiting (except critical which is unlimited)
+    // 3. Silent urgency: log to history only (never delivered to channels)
+    if (payload.level === "silent") {
+      this.logToHistory(deliveryPayload, ["dashboard"]);
+      this.emitRoutedEvent(deliveryPayload, ["dashboard"], false);
+      return;
+    }
+
+    // 4. Apply per-urgency rate limiting (critical is unlimited)
     if (payload.level !== "critical") {
       const limit = RATE_LIMITS[payload.level];
-      if (limit === 0) {
-        // Silent: log only
-        this.logToHistory(deliveryPayload, ["dashboard"]);
-        this.emitRoutedEvent(deliveryPayload, ["dashboard"], false);
-        return;
-      }
-
       const windowMs = 60000; // 1 minute sliding window
       const timestamps = this.rateLimitMap.get(payload.level) ?? [];
       const windowStart = now - windowMs;
@@ -145,13 +145,6 @@ export class NotificationRouter {
 
       recent.push(now);
       this.rateLimitMap.set(payload.level, recent);
-    }
-
-    // 4. Silent urgency: log to history only
-    if (deliveryPayload.level === "silent") {
-      this.logToHistory(deliveryPayload, ["dashboard"]);
-      this.emitRoutedEvent(deliveryPayload, ["dashboard"], false);
-      return;
     }
 
     // 5. Check quiet hours
