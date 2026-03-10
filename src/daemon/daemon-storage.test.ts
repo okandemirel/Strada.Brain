@@ -462,6 +462,119 @@ describe("DaemonStorage", () => {
     });
   });
 
+  // =========================================================================
+  // Phase 21: Time-based trigger fire history pruning
+  // =========================================================================
+
+  describe("pruneTriggerFireHistoryByAge", () => {
+    it("deletes entries with timestamp older than retentionMs", () => {
+      const now = Date.now();
+      const oneDay = 86400000;
+      // Insert old entries (2 days ago)
+      storage.insertTriggerFireHistory({
+        triggerName: "old-trigger",
+        result: "success",
+        timestamp: now - 2 * oneDay,
+      });
+      storage.insertTriggerFireHistory({
+        triggerName: "old-trigger",
+        result: "failure",
+        timestamp: now - 3 * oneDay,
+      });
+      // Insert recent entry
+      storage.insertTriggerFireHistory({
+        triggerName: "old-trigger",
+        result: "success",
+        timestamp: now - 1000,
+      });
+
+      const deleted = storage.pruneTriggerFireHistoryByAge(oneDay);
+      expect(deleted).toBe(2);
+
+      const remaining = storage.getTriggerFireHistory("old-trigger", 100);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].timestamp).toBe(now - 1000);
+    });
+
+    it("keeps entries newer than cutoff", () => {
+      const now = Date.now();
+      const oneDay = 86400000;
+      // Insert only recent entries
+      storage.insertTriggerFireHistory({
+        triggerName: "fresh",
+        result: "success",
+        timestamp: now - 1000,
+      });
+      storage.insertTriggerFireHistory({
+        triggerName: "fresh",
+        result: "success",
+        timestamp: now - 2000,
+      });
+
+      const deleted = storage.pruneTriggerFireHistoryByAge(oneDay);
+      expect(deleted).toBe(0);
+
+      const remaining = storage.getTriggerFireHistory("fresh", 100);
+      expect(remaining).toHaveLength(2);
+    });
+
+    it("returns count of deleted entries", () => {
+      const now = Date.now();
+      const oneHour = 3600000;
+      for (let i = 0; i < 5; i++) {
+        storage.insertTriggerFireHistory({
+          triggerName: "count-test",
+          result: "success",
+          timestamp: now - 2 * oneHour,
+        });
+      }
+
+      const deleted = storage.pruneTriggerFireHistoryByAge(oneHour);
+      expect(deleted).toBe(5);
+    });
+
+    it("returns 0 when no entries to prune (no-op)", () => {
+      // Empty table, nothing to prune
+      const deleted = storage.pruneTriggerFireHistoryByAge(86400000);
+      expect(deleted).toBe(0);
+    });
+
+    it("deletes across all triggers in a single call (not per-trigger)", () => {
+      const now = Date.now();
+      const oneDay = 86400000;
+      // Insert old entries for multiple triggers
+      storage.insertTriggerFireHistory({
+        triggerName: "trigger-a",
+        result: "success",
+        timestamp: now - 2 * oneDay,
+      });
+      storage.insertTriggerFireHistory({
+        triggerName: "trigger-b",
+        result: "failure",
+        timestamp: now - 3 * oneDay,
+      });
+      storage.insertTriggerFireHistory({
+        triggerName: "trigger-c",
+        result: "success",
+        timestamp: now - 5 * oneDay,
+      });
+      // Insert recent entry for trigger-a
+      storage.insertTriggerFireHistory({
+        triggerName: "trigger-a",
+        result: "success",
+        timestamp: now - 1000,
+      });
+
+      const deleted = storage.pruneTriggerFireHistoryByAge(oneDay);
+      expect(deleted).toBe(3);
+
+      // Only the recent trigger-a entry remains
+      expect(storage.getTriggerFireHistory("trigger-a", 100)).toHaveLength(1);
+      expect(storage.getTriggerFireHistory("trigger-b", 100)).toHaveLength(0);
+      expect(storage.getTriggerFireHistory("trigger-c", 100)).toHaveLength(0);
+    });
+  });
+
   describe("digest_state via daemon state pattern", () => {
     it("digest_state get/set works via existing setDaemonState/getDaemonState pattern", () => {
       storage.setDaemonState("digest:last_sent", String(Date.now()));

@@ -624,7 +624,25 @@ export class DaemonStorage {
     return rows.map(this.rowToTriggerFireHistory);
   }
 
-  /** Prune trigger fire history, keeping only the most recent entries per trigger */
+  /**
+   * Prune trigger fire history entries older than the given retention period.
+   * Deletes across all triggers in a single SQL DELETE.
+   * @param retentionMs Retention period in milliseconds
+   * @returns Number of deleted entries
+   */
+  pruneTriggerFireHistoryByAge(retentionMs: number): number {
+    this.assertOpen();
+    const cutoff = Date.now() - retentionMs;
+    const result = this.db!.prepare(
+      `DELETE FROM trigger_fire_history WHERE timestamp < ?`,
+    ).run(cutoff);
+    return result.changes;
+  }
+
+  /**
+   * @deprecated Use pruneTriggerFireHistoryByAge for time-based pruning.
+   * Prune trigger fire history, keeping only the most recent entries per trigger.
+   */
   pruneTriggerFireHistory(triggerName: string, keepCount: number): void {
     this.assertOpen();
     this.db!.prepare(

@@ -172,6 +172,8 @@ export interface DaemonConfig {
   readonly backoff: DaemonBackoffConfig;
   readonly timezone: string;
   readonly triggers: DaemonTriggersConfig;
+  /** Retention period for trigger fire history entries in days (Phase 21) */
+  readonly triggerFireRetentionDays: number;
 }
 
 // =============================================================================

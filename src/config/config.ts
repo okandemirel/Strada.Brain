@@ -1488,6 +1488,8 @@ function loadFromEnv(): EnvVars {
     checklistMorningHour: process.env["STRATA_CHECKLIST_MORNING_HOUR"],
     checklistAfternoonHour: process.env["STRATA_CHECKLIST_AFTERNOON_HOUR"],
     checklistEveningHour: process.env["STRATA_CHECKLIST_EVENING_HOUR"],
+    // Trigger Fire History Pruning (Phase 21)
+    triggerFireRetentionDays: process.env["TRIGGER_FIRE_RETENTION_DAYS"],
     // Notification, Quiet Hours, Digest (Phase 18)
     strataDigestEnabled: process.env["STRATA_DIGEST_ENABLED"],
     strataDigestSchedule: process.env["STRATA_DIGEST_SCHEDULE"],

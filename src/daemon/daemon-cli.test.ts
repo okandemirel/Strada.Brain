@@ -21,6 +21,15 @@ function makeDaemonConfig(overrides?: Partial<DaemonConfig>): DaemonConfig {
     budget: { dailyBudgetUsd: 5.0, warnPct: 0.8 },
     backoff: { baseCooldownMs: 60000, maxCooldownMs: 3600000, failureThreshold: 3 },
     timezone: "UTC",
+    triggers: {
+      webhookRateLimit: "10/min",
+      dedupWindowMs: 300000,
+      defaultDebounceMs: 500,
+      checklistMorningHour: 9,
+      checklistAfternoonHour: 14,
+      checklistEveningHour: 18,
+    },
+    triggerFireRetentionDays: 30,
     ...overrides,
   };
 }
