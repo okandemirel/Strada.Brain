@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
-status: in-progress
-stopped_at: Completed 18-02-PLAN.md
-last_updated: "2026-03-10T10:33:38Z"
-last_activity: 2026-03-10 -- Completed Phase 18 Plan 02 (Digest Reporter)
+status: completed
+stopped_at: Completed 19-02-PLAN.md -- v2.0 milestone complete
+last_updated: "2026-03-10T12:01:57.108Z"
+last_activity: 2026-03-10 -- Completed Phase 19 Plan 02 (ChainValidator Integration)
 progress:
   total_phases: 10
-  completed_phases: 8
-  total_plans: 24
-  completed_plans: 24
+  completed_phases: 10
+  total_plans: 26
+  completed_plans: 26
   percent: 100
 ---
 
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 18 in progress -- dual reporting and dashboard enrichment.
+**Current focus:** v2.0 milestone complete -- all 10 phases, 26 plans delivered.
 
 ## Current Position
 
-Phase: 18 of 19 (Dual Reporting & Dashboard)
-Plan: 3 of 3
-Status: Phase 18 complete (all 3 plans done)
-Last activity: 2026-03-10 -- Completed Phase 18 Plan 02 (Digest Reporter)
+Phase: 19 of 19 (Tool Validation Feedback Loop)
+Plan: 2 of 2
+Status: All plans complete -- v2.0 milestone finished
+Last activity: 2026-03-10 -- Completed Phase 19 Plan 02 (ChainValidator Integration)
 
 Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 23 (v2.0) / 47 (lifetime)
-- Average duration: 6.3min (v2.0)
-- Total execution time: 146min (v2.0)
+- Total plans completed: 26 (v2.0) / 50 (lifetime)
+- Average duration: 5.9min (v2.0)
+- Total execution time: 153min (v2.0)
 
 **By Phase:**
 
@@ -52,6 +52,7 @@ Progress: [██████████] 100%
 | 16 | 3/3 | 26min | 8.7min |
 | 17 | 2/2 | 15min | 7.5min |
 | 18 | 3/3 | 27min | 9min |
+| 19 | 2/2 | 7min | 3.5min |
 
 *Updated after each plan completion*
 | Phase 16 P01 | 6min | 2 tasks | 10 files |
@@ -62,6 +63,8 @@ Progress: [██████████] 100%
 | Phase 18 P01 | 13min | 2 tasks | 9 files |
 | Phase 18 P02 | 8min | 2 tasks | 7 files |
 | Phase 18 P03 | 6min | 1 task | 3 files |
+| Phase 19 P01 | 3min | 1 task | 3 files |
+| Phase 19 P02 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -177,6 +180,12 @@ Recent decisions affecting current work:
 - [18-02]: Wait for cron schedule on startup, don't send immediately (no meaningful deltas)
 - [18-02]: IChannelSender directly for digest delivery (not AlertManager)
 - [18-02]: Channel-aware truncation with per-channel limits map and nearest-newline cut
+- [19-01]: Callback-based DI for onChainDeprecated and updateInstinctStatus to avoid circular deps
+- [19-01]: Linear scan of tool_chain instincts acceptable (maxActive=10)
+- [19-01]: isContiguousSubsequence reused from chain-types.ts for trajectory matching
+- [Phase 19]: [19-02]: Callback-based DI for deprecation cascade: ChainValidator calls onChainDeprecated -> ChainManager.handleChainDeprecated
+- [Phase 19]: [19-02]: LearningQueue for chain:executed events prevents SQLite lock contention (matches tool:result pattern)
+- [Phase 19]: [19-02]: Optional ChainValidator on ChainManager constructor preserves backward compatibility
 
 ### Pending Todos
 
@@ -189,9 +198,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-10T10:33:38Z
-Stopped at: Completed 18-02-PLAN.md
-Resume file: .planning/phases/18-dual-reporting-dashboard/18-02-SUMMARY.md
+Last session: 2026-03-10T12:01:57.106Z
+Stopped at: Completed 19-02-PLAN.md -- v2.0 milestone complete
+Resume file: None
 
 ---
 *State initialized: 2026-03-06*

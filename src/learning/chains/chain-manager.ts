@@ -21,6 +21,11 @@ import type { IEventEmitter, LearningEventMap } from "../../core/event-bus.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
+/** Type guard for CompositeTool duck-typing (supports both real instances and test mocks) */
+function isCompositeTool(tool: ITool): tool is CompositeTool {
+  return "toolSequence" in tool && "containsTool" in tool;
+}
+
 export class ChainManager {
   private detectionTimer: ReturnType<typeof setInterval> | null = null;
   private readonly activeChainNames = new Set<string>();
@@ -155,9 +160,9 @@ export class ChainManager {
       }
 
       // Post-synthesis validation (INTEL-05)
-      if (this.chainValidator) {
+      if (this.chainValidator && newTools.length > 0) {
+        const instincts = this.learningStorage.getInstincts({ type: "tool_chain" });
         for (const tool of newTools) {
-          const instincts = this.learningStorage.getInstincts({ type: "tool_chain" });
           const instinct = instincts.find(i => i.name === tool.name);
           if (instinct) {
             this.chainValidator.validatePostSynthesis(tool.name, tool.toolSequence, instinct.id);
@@ -186,8 +191,8 @@ export class ChainManager {
       const tool = this.toolRegistry.get(chainName);
       if (!tool) continue;
 
-      if ("containsTool" in tool && typeof tool.containsTool === "function" && (tool as CompositeTool).containsTool(toolName)) {
-        const candidateKey = (tool as CompositeTool).toolSequence.join(",");
+      if (isCompositeTool(tool) && tool.containsTool(toolName)) {
+        const candidateKey = tool.toolSequence.join(",");
         this.toolRegistry.unregister(chainName);
         this.orchestrator.removeTool(chainName);
         this.activeChainNames.delete(chainName);
@@ -213,9 +218,8 @@ export class ChainManager {
    */
   handleChainDeprecated(chainName: string): void {
     const tool = this.toolRegistry.get(chainName);
-    if (tool && "toolSequence" in tool) {
-      const candidateKey = (tool as CompositeTool).toolSequence.join(",");
-      this.activeCandidateKeys.delete(candidateKey);
+    if (tool && isCompositeTool(tool)) {
+      this.activeCandidateKeys.delete(tool.toolSequence.join(","));
     }
 
     this.toolRegistry.unregister(chainName);

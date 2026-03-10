@@ -68,23 +68,15 @@ export class ChainValidator {
     toolSequence: string[],
     instinctId: string,
   ): void {
-    // Look up the instinct
     const instincts = this.storage.getInstincts({ type: "tool_chain" });
     const instinct = instincts.find((i) => i.id === instinctId);
     if (!instinct) return;
 
-    // Fetch trajectories within maxAgeDays
     const since = Date.now() - this.maxAgeDays * 86_400_000;
     const trajectories = this.storage.getTrajectories({ since, limit: 100 });
-
-    // Filter trajectories containing the tool sequence as a contiguous subsequence
-    const matching = this.filterMatchingTrajectories(
-      trajectories,
-      toolSequence,
-    );
+    const matching = this.filterMatchingTrajectories(trajectories, toolSequence);
     if (matching.length === 0) return;
 
-    // Replay each matching trajectory against confidence
     let currentInstinct = instinct;
     for (const traj of matching) {
       const success = this.isSequenceSuccessful(traj, toolSequence);
@@ -95,14 +87,12 @@ export class ChainValidator {
       this.storage.updateInstinct(currentInstinct);
     }
 
-    // Check deprecation threshold
     const deprecated =
       currentInstinct.confidence < CONFIDENCE_THRESHOLDS.DEPRECATED;
     if (deprecated) {
-      this.handleDeprecation(chainName, currentInstinct);
+      this.handleDeprecation(chainName);
     }
 
-    // Emit chain:validated event
     this.eventBus.emit("chain:validated", {
       chainName,
       validationCount: matching.length,
@@ -122,29 +112,24 @@ export class ChainValidator {
    * Triggers deprecation cascade if instinct becomes deprecated after lifecycle update.
    */
   handleChainExecuted(event: ChainExecutionEvent): void {
-    // Look up tool_chain instincts and find one matching the chain name
     const instincts = this.storage.getInstincts({ type: "tool_chain" });
     const instinct = instincts.find((i) => i.name === event.chainName);
     if (!instinct) return;
 
-    // Skip permanent and deprecated instincts
     if (instinct.status === "permanent" || instinct.status === "deprecated") {
       return;
     }
 
-    // Update confidence
     const updated = this.confidenceScorer.updateConfidence(
       instinct,
       event.success,
     );
     this.storage.updateInstinct(updated);
-
-    // Run lifecycle management
     this.updateInstinctStatus(updated);
 
-    // Re-read instinct to check if status changed to deprecated
+    // Re-read to check if lifecycle update changed status to deprecated
     const reRead = this.storage.getInstinct(updated.id);
-    if (reRead && reRead.status === "deprecated") {
+    if (reRead?.status === "deprecated") {
       this.onChainDeprecated(event.chainName);
     }
   }
@@ -156,7 +141,7 @@ export class ChainValidator {
   /**
    * Handle deprecation: notify chain manager and emit invalidation event.
    */
-  private handleDeprecation(chainName: string, _instinct: Instinct): void {
+  private handleDeprecation(chainName: string): void {
     this.onChainDeprecated(chainName);
     this.eventBus.emit("chain:invalidated", {
       chainName,
@@ -184,32 +169,37 @@ export class ChainValidator {
 
   /**
    * Check if the contiguous subsequence steps within a trajectory all succeeded.
+   * Assumes the trajectory is already confirmed to contain the tool sequence
+   * (pre-filtered by filterMatchingTrajectories).
    */
   private isSequenceSuccessful(
     trajectory: Trajectory,
     toolSequence: string[],
   ): boolean {
-    const stepTools = trajectory.steps.map((s) => s.toolName);
+    const startIndex = this.findSubsequenceIndex(
+      trajectory.steps.map((s) => s.toolName),
+      toolSequence,
+    );
+    if (startIndex === -1) return false;
 
-    // Find the starting index of the contiguous subsequence
-    for (let i = 0; i <= stepTools.length - toolSequence.length; i++) {
-      let match = true;
-      for (let j = 0; j < toolSequence.length; j++) {
-        if (stepTools[i + j] !== toolSequence[j]) {
-          match = false;
-          break;
-        }
-      }
-      if (match) {
-        // Check if all matched steps have success result
-        for (let j = 0; j < toolSequence.length; j++) {
-          if (trajectory.steps[i + j]!.result.kind !== "success") {
-            return false;
-          }
-        }
-        return true;
+    return toolSequence.every(
+      (_, j) => trajectory.steps[startIndex + j]!.result.kind === "success",
+    );
+  }
+
+  /**
+   * Find the starting index of a contiguous subsequence within a longer array.
+   * Returns -1 if not found.
+   */
+  private findSubsequenceIndex(
+    haystack: string[],
+    needle: string[],
+  ): number {
+    for (let i = 0; i <= haystack.length - needle.length; i++) {
+      if (needle.every((tool, j) => haystack[i + j] === tool)) {
+        return i;
       }
     }
-    return false;
+    return -1;
   }
 }
