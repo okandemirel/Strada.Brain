@@ -25,3 +25,4 @@ export { ChainDetector } from "./chain-detector.js";
 export { ChainSynthesizer } from "./chain-synthesizer.js";
 export { CompositeTool, type CompositeToolMetadata } from "./composite-tool.js";
 export { ChainManager } from "./chain-manager.js";
+export { ChainValidator } from "./chain-validator.js";

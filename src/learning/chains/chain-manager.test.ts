@@ -22,6 +22,7 @@ import type { ToolRegistry } from "../../core/tool-registry.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
 import type { IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
+import type { ChainValidator } from "./chain-validator.js";
 
 // =============================================================================
 // TEST HELPERS
@@ -89,6 +90,13 @@ function createMockEventBus(): IEventBus<LearningEventMap> {
   } as unknown as IEventBus<LearningEventMap>;
 }
 
+function createMockChainValidator(): ChainValidator {
+  return {
+    validatePostSynthesis: vi.fn(),
+    handleChainExecuted: vi.fn(),
+  } as unknown as ChainValidator;
+}
+
 function createMockCompositeTool(name: string, toolSequence: string[]): CompositeTool {
   const tool = {
     name,
@@ -129,7 +137,7 @@ describe("ChainManager", () => {
     vi.useRealTimers();
   });
 
-  function createManager(configOverrides: Partial<ToolChainConfig> = {}) {
+  function createManager(configOverrides: Partial<ToolChainConfig> = {}, chainValidator?: ChainValidator) {
     return new ChainManager(
       detector,
       synthesizer,
@@ -138,6 +146,7 @@ describe("ChainManager", () => {
       orchestrator,
       eventBus,
       { ...config, ...configOverrides },
+      chainValidator,
     );
   }
 
@@ -415,6 +424,134 @@ describe("ChainManager", () => {
       expect(detector.detect).toHaveBeenCalled();
 
       manager.stop();
+    });
+  });
+
+  describe("ChainValidator integration", () => {
+    it("accepts optional ChainValidator in constructor", () => {
+      const validator = createMockChainValidator();
+      const manager = createManager({}, validator);
+      expect(manager).toBeDefined();
+      expect(manager.activeCount).toBe(0);
+    });
+
+    it("works without ChainValidator (backward compat)", async () => {
+      const candidate: CandidateChain = {
+        toolNames: ["file_read", "grep_search"],
+        occurrences: 5,
+        successCount: 4,
+        sampleSteps: [],
+        key: "file_read,grep_search",
+      };
+      (detector.detect as ReturnType<typeof vi.fn>).mockReturnValue([candidate]);
+
+      const newTool = createMockCompositeTool("read_and_grep", ["file_read", "grep_search"]);
+      (synthesizer.synthesize as ReturnType<typeof vi.fn>).mockResolvedValue([newTool]);
+
+      const manager = createManager(); // no validator
+      await manager.runDetectionCycle();
+
+      expect(orchestrator.addTool).toHaveBeenCalledWith(newTool);
+      expect(manager.activeCount).toBe(1);
+    });
+
+    it("runDetectionCycle calls validatePostSynthesis for each newly synthesized tool", async () => {
+      const validator = createMockChainValidator();
+      const candidate: CandidateChain = {
+        toolNames: ["file_read", "grep_search"],
+        occurrences: 5,
+        successCount: 4,
+        sampleSteps: [],
+        key: "file_read,grep_search",
+      };
+      (detector.detect as ReturnType<typeof vi.fn>).mockReturnValue([candidate]);
+
+      const newTool = createMockCompositeTool("read_and_grep", ["file_read", "grep_search"]);
+      (synthesizer.synthesize as ReturnType<typeof vi.fn>).mockResolvedValue([newTool]);
+
+      // Return matching instinct when getInstincts is called for validation
+      (learningStorage.getInstincts as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "instinct_123",
+          name: "read_and_grep",
+          type: "tool_chain",
+          status: "active",
+          confidence: 0.5,
+          triggerPattern: "file_read,grep_search",
+          action: "{}",
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]);
+
+      const manager = createManager({}, validator);
+      await manager.runDetectionCycle();
+
+      expect(validator.validatePostSynthesis).toHaveBeenCalledWith(
+        "read_and_grep",
+        ["file_read", "grep_search"],
+        "instinct_123",
+      );
+    });
+
+    it("handleChainDeprecated unregisters chain from ToolRegistry and Orchestrator", () => {
+      const validator = createMockChainValidator();
+      const compositeTool = createMockCompositeTool("read_and_write", ["file_read", "file_write"]);
+      toolRegistry._tools.set("read_and_write", compositeTool);
+      (toolRegistry.get as ReturnType<typeof vi.fn>).mockReturnValue(compositeTool);
+
+      const manager = createManager({}, validator);
+      // Add chain to active sets
+      (manager as unknown as { activeChainNames: Set<string> }).activeChainNames.add("read_and_write");
+      (manager as unknown as { activeCandidateKeys: Set<string> }).activeCandidateKeys.add("file_read,file_write");
+
+      manager.handleChainDeprecated("read_and_write");
+
+      expect(toolRegistry.unregister).toHaveBeenCalledWith("read_and_write");
+      expect(orchestrator.removeTool).toHaveBeenCalledWith("read_and_write");
+      expect(manager.activeCount).toBe(0);
+    });
+
+    it("handleChainDeprecated emits chain:invalidated event", () => {
+      const validator = createMockChainValidator();
+      const compositeTool = createMockCompositeTool("read_and_write", ["file_read", "file_write"]);
+      toolRegistry._tools.set("read_and_write", compositeTool);
+      (toolRegistry.get as ReturnType<typeof vi.fn>).mockReturnValue(compositeTool);
+
+      const manager = createManager({}, validator);
+      (manager as unknown as { activeChainNames: Set<string> }).activeChainNames.add("read_and_write");
+
+      manager.handleChainDeprecated("read_and_write");
+
+      expect(eventBus.emit).toHaveBeenCalledWith(
+        "chain:invalidated",
+        expect.objectContaining({
+          chainName: "read_and_write",
+          reason: expect.stringContaining("Bayesian confidence"),
+        }),
+      );
+    });
+
+    it("handleChainDeprecated removes chain from activeChainNames and activeCandidateKeys", () => {
+      const validator = createMockChainValidator();
+      const compositeTool = createMockCompositeTool("read_and_write", ["file_read", "file_write"]);
+      toolRegistry._tools.set("read_and_write", compositeTool);
+      (toolRegistry.get as ReturnType<typeof vi.fn>).mockReturnValue(compositeTool);
+
+      const manager = createManager({}, validator);
+      const internal = manager as unknown as {
+        activeChainNames: Set<string>;
+        activeCandidateKeys: Set<string>;
+      };
+      internal.activeChainNames.add("read_and_write");
+      internal.activeCandidateKeys.add("file_read,file_write");
+
+      manager.handleChainDeprecated("read_and_write");
+
+      expect(internal.activeChainNames.has("read_and_write")).toBe(false);
+      expect(internal.activeCandidateKeys.has("file_read,file_write")).toBe(false);
     });
   });
 });

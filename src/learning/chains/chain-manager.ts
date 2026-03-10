@@ -11,6 +11,7 @@
 
 import type { ChainDetector } from "./chain-detector.js";
 import type { ChainSynthesizer } from "./chain-synthesizer.js";
+import type { ChainValidator } from "./chain-validator.js";
 import { CompositeTool } from "./composite-tool.js";
 import { ChainMetadataSchema, computeCompositeMetadata } from "./chain-types.js";
 import type { ToolChainConfig } from "./chain-types.js";
@@ -34,6 +35,7 @@ export class ChainManager {
     private readonly orchestrator: { addTool(tool: ITool): void; removeTool(name: string): void },
     private readonly eventBus: IEventEmitter<LearningEventMap>,
     private readonly config: ToolChainConfig,
+    private readonly chainValidator?: ChainValidator,
   ) {}
 
   /**
@@ -152,6 +154,17 @@ export class ChainManager {
         this.activeCandidateKeys.add(tool.toolSequence.join(","));
       }
 
+      // Post-synthesis validation (INTEL-05)
+      if (this.chainValidator) {
+        for (const tool of newTools) {
+          const instincts = this.learningStorage.getInstincts({ type: "tool_chain" });
+          const instinct = instincts.find(i => i.name === tool.name);
+          if (instinct) {
+            this.chainValidator.validatePostSynthesis(tool.name, tool.toolSequence, instinct.id);
+          }
+        }
+      }
+
       if (newTools.length > 0) {
         getLogger().info(
           `Chain synthesis: ${newTools.length} new composite tool(s) registered`,
@@ -191,6 +204,33 @@ export class ChainManager {
         );
       }
     }
+  }
+
+  /**
+   * Handle chain deprecation from ChainValidator confidence cascade.
+   * Unregisters the chain from ToolRegistry and Orchestrator, removes from
+   * internal tracking sets, and emits chain:invalidated event.
+   */
+  handleChainDeprecated(chainName: string): void {
+    const tool = this.toolRegistry.get(chainName);
+    if (tool && "toolSequence" in tool) {
+      const candidateKey = (tool as CompositeTool).toolSequence.join(",");
+      this.activeCandidateKeys.delete(candidateKey);
+    }
+
+    this.toolRegistry.unregister(chainName);
+    this.orchestrator.removeTool(chainName);
+    this.activeChainNames.delete(chainName);
+
+    this.eventBus.emit("chain:invalidated", {
+      chainName,
+      reason: "Bayesian confidence below deprecation threshold",
+      timestamp: Date.now(),
+    });
+
+    getLogger().info(
+      `Chain deprecated '${chainName}': Bayesian confidence below threshold`,
+    );
   }
 
   /** Get count of active composite tools */
