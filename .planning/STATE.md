@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Full Daemon
 status: in-progress
-stopped_at: Completed 17-01-PLAN.md
-last_updated: "2026-03-09T19:41:48Z"
-last_activity: 2026-03-09 -- Completed Phase 17 Plan 01 (MemoryRefresher Engine)
+stopped_at: Completed 18-01-PLAN.md
+last_updated: "2026-03-10T10:19:25.000Z"
+last_activity: 2026-03-10 -- Completed Phase 18 Plan 01 (Notification Infrastructure)
 progress:
   total_phases: 10
-  completed_phases: 7
-  total_plans: 21
-  completed_plans: 20
-  percent: 95
+  completed_phases: 8
+  total_plans: 24
+  completed_plans: 23
+  percent: 96
 ---
 
 # State: Strada.Brain
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- not just respond to prompts.
-**Current focus:** Phase 17 in progress -- MemoryRefresher engine complete, orchestrator integration next
+**Current focus:** Phase 18 in progress -- dual reporting and dashboard enrichment.
 
 ## Current Position
 
-Phase: 17 of 19 (Dynamic Memory Re-retrieval)
-Plan: 1 of 2
-Status: Plan 17-01 complete
-Last activity: 2026-03-09 -- Completed Phase 17 Plan 01 (MemoryRefresher Engine)
+Phase: 18 of 19 (Dual Reporting & Dashboard)
+Plan: 3 of 3
+Status: Phase 18 Plans 01 + 03 complete
+Last activity: 2026-03-10 -- Completed Phase 18 Plan 01 (Notification Infrastructure)
 
-Progress: [█████████░] 95%
+Progress: [█████████░] 96%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 20 (v2.0) / 44 (lifetime)
-- Average duration: 6.0min (v2.0)
-- Total execution time: 120min (v2.0)
+- Total plans completed: 23 (v2.0) / 47 (lifetime)
+- Average duration: 6.3min (v2.0)
+- Total execution time: 146min (v2.0)
 
 **By Phase:**
 
@@ -50,13 +50,17 @@ Progress: [█████████░] 95%
 | 14 | 5/5 | 27min | 5.4min |
 | 15 | 3/3 | 19min | 6.3min |
 | 16 | 3/3 | 26min | 8.7min |
-| 17 | 1/2 | 8min | 8min |
+| 17 | 2/2 | 15min | 7.5min |
+| 18 | 2/3 | 19min | 9.5min |
 
 *Updated after each plan completion*
 | Phase 16 P01 | 6min | 2 tasks | 10 files |
 | Phase 16 P02 | 9min | 2 tasks | 9 files |
 | Phase 16 P03 | 11min | 2 tasks | 5 files |
 | Phase 17 P01 | 8min | 2 tasks | 4 files |
+| Phase 17 P02 | 7min | 2 tasks | 6 files |
+| Phase 18 P01 | 13min | 2 tasks | 9 files |
+| Phase 18 P03 | 6min | 1 task | 3 files |
 
 ## Accumulated Context
 
@@ -152,6 +156,20 @@ Recent decisions affecting current work:
 - [17-01]: Promise.race timeout with try/finally clearTimeout to prevent leaked timer handles
 - [17-01]: Budget exhaustion logged only once per session to prevent log spam
 - [17-01]: Null/empty embeddings from Gemini skip topic shift silently (known issue)
+- [17-02]: MemoryRefresher created per-loop (not constructor) to avoid circular deps and stale state
+- [17-02]: XML comment markers for prompt section replacement over regex (more robust)
+- [17-02]: seedContentHashes() pre-registers initial content to prevent re-injection on first re-retrieval
+- [17-02]: embeddingProvider as optional Orchestrator constructor dep (uses CachedEmbeddingProvider)
+- [17-02]: Background instinct retrieval as system prompt text section (agentState unavailable in bg path)
+- [18-01]: IChannelSender directly for delivery (not AlertManager) -- AlertManager has 3 levels vs 5 needed, wrong channel model
+- [18-01]: Critical-only quiet hours bypass -- high urgency can wait until morning, critical cannot
+- [18-01]: Per-urgency sliding window rate limits: low=1/min, medium=5/min, high=10/min, critical=unlimited
+- [18-01]: Notification/quietHours/digest config at Config top level (not under daemon) -- cross-cutting concern
+- [18-01]: Buffer prune drops oldest low-urgency first, never drops high/critical entries
+- [18-03]: Duck-typed getTriggerFireHistory check for cross-plan compatibility (works regardless of Plan 01 execution order)
+- [18-03]: Parallel fetch of /api/daemon and /api/metrics in dashboard JS for responsive UI
+- [18-03]: Identity panel uses card grid layout consistent with existing dashboard cards
+- [18-03]: Trigger history table with color-coded result badges (success=green, failure=red, deduplicated=gray)
 
 ### Pending Todos
 
@@ -164,10 +182,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T19:41:48Z
-Stopped at: Completed 17-01-PLAN.md
-Resume file: .planning/phases/17-dynamic-memory-re-retrieval/17-02-PLAN.md
+Last session: 2026-03-10T10:19:25.000Z
+Stopped at: Completed 18-01-PLAN.md
+Resume file: .planning/phases/18-dual-reporting-dashboard/18-01-SUMMARY.md
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-09*
+*Last updated: 2026-03-10*

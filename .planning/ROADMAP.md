@@ -36,7 +36,7 @@
 - [x] **Phase 14: Heartbeat Daemon Loop** - Core daemon loop with trigger evaluation, security policy, and cost guards (completed 2026-03-08)
 - [x] **Phase 15: Proactive Triggers** - File watcher, webhook, checklist, and deduplication extend the daemon's senses (completed 2026-03-09)
 - [x] **Phase 16: Interactive Goal Execution + Replanning** - Goals execute inline during chat with mid-execution replanning (completed 2026-03-09)
-- [ ] **Phase 17: Dynamic Memory Re-retrieval** - Context refreshes during long PAOR loops to prevent stale reasoning (1/2 plans complete)
+- [x] **Phase 17: Dynamic Memory Re-retrieval** - Context refreshes during long PAOR loops to prevent stale reasoning (completed 2026-03-09)
 - [ ] **Phase 18: Dual Reporting + Dashboard** - Periodic digest to chat and daemon endpoint on dashboard
 - [ ] **Phase 19: Tool Validation Feedback Loop** - Composite tools validated post-synthesis with auto-deprecation on failure
 
@@ -161,7 +161,7 @@ Plans:
 
 Plans:
 - [x] 17-01-PLAN.md -- Config schema, event types, MemoryRefresher class with unit/stress/perf tests
-- [ ] 17-02-PLAN.md -- Orchestrator integration (interactive + background loops), E2E tests, .env.example
+- [x] 17-02-PLAN.md -- Orchestrator integration (interactive + background loops), E2E tests, .env.example
 
 ### Phase 18: Dual Reporting + Dashboard
 **Goal**: Users get visibility into daemon behavior through periodic chat digests and a real-time dashboard endpoint
@@ -172,11 +172,12 @@ Plans:
   2. Dashboard exposes /api/daemon endpoint showing identity state, trigger history, and uptime
   3. Notifications have urgency levels (silent/low/medium/high/critical) that determine delivery channel
   4. During quiet hours, notifications are buffered and delivered as a morning digest
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 18-01: TBD
-- [ ] 18-02: TBD
+- [ ] 18-01-PLAN.md -- Notification types, config schema, storage extension, NotificationRouter, QuietHoursManager
+- [ ] 18-02-PLAN.md -- DigestReporter, DigestFormatter, CLI commands, bootstrap wiring
+- [ ] 18-03-PLAN.md -- Dashboard /api/daemon enrichment with identity, capability manifest, trigger history
 
 ### Phase 19: Tool Validation Feedback Loop
 **Goal**: Composite tools are validated after synthesis and auto-deprecate when they consistently fail
@@ -216,11 +217,11 @@ Note: Phases 15, 16, 18, 19 have partially independent dependencies (see phase d
 | 14. Heartbeat Daemon Loop | v2.0 | Complete    | 2026-03-08 | 2026-03-08 |
 | 15. Proactive Triggers | 3/3 | Complete    | 2026-03-09 | - |
 | 16. Interactive Goal Execution + Replanning | 3/3 | Complete    | 2026-03-09 | - |
-| 17. Dynamic Memory Re-retrieval | v2.0 | 1/2 | In progress | - |
-| 18. Dual Reporting + Dashboard | v2.0 | 0/TBD | Not started | - |
+| 17. Dynamic Memory Re-retrieval | v2.0 | Complete    | 2026-03-09 | 2026-03-09 |
+| 18. Dual Reporting + Dashboard | v2.0 | 2/3 | In progress | - |
 | 19. Tool Validation Feedback Loop | v2.0 | 0/TBD | Not started | - |
 
 ---
 *Roadmap created: 2026-03-06*
 *v2.0 phases added: 2026-03-08*
-*Last updated: 2026-03-09*
+*Last updated: 2026-03-10*
