@@ -16,6 +16,7 @@ vi.mock("../memory/unified/agentdb-memory.js", () => {
   const MockAgentDBMemory = vi.fn().mockImplementation(() => ({
     initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
     shutdown: vi.fn(),
+    setDecayConfig: vi.fn(),
   }));
   return { AgentDBMemory: MockAgentDBMemory };
 });
@@ -91,6 +92,12 @@ function createTestConfig(overrides: {
         },
         ephemeralTtlHours: 24,
       },
+      decay: {
+        enabled: true,
+        lambdas: { working: 0.10, ephemeral: 0.05, persistent: 0.01 },
+        exemptDomains: ["instinct"],
+        timeoutMs: 30000,
+      },
     },
     rag: {
       enabled: overrides.ragEnabled ?? false,
@@ -105,6 +112,7 @@ function resetMocksToDefaults(): void {
   vi.mocked(AgentDBMemory).mockImplementation(() => ({
     initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
     shutdown: vi.fn(),
+    setDecayConfig: vi.fn(),
   }) as unknown as InstanceType<typeof AgentDBMemory>);
 
   vi.mocked(AgentDBAdapter).mockImplementation((agentdb: unknown) => ({
@@ -164,6 +172,7 @@ describe("initializeMemory", () => {
         return { kind: "ok", value: undefined };
       }),
       shutdown: vi.fn(),
+      setDecayConfig: vi.fn(),
     }) as unknown as InstanceType<typeof AgentDBMemory>);
 
     const config = createTestConfig({ backend: "agentdb" });
@@ -185,6 +194,7 @@ describe("initializeMemory", () => {
     vi.mocked(AgentDBMemory).mockImplementation(() => ({
       initialize: vi.fn().mockResolvedValue({ kind: "err", error: new Error("init failed") }),
       shutdown: vi.fn(),
+      setDecayConfig: vi.fn(),
     }) as unknown as InstanceType<typeof AgentDBMemory>);
 
     const config = createTestConfig({ backend: "agentdb" });
@@ -304,6 +314,7 @@ describe("initializeMemory", () => {
           return { kind: "ok", value: undefined };
         }),
         shutdown: vi.fn(),
+        setDecayConfig: vi.fn(),
       }) as unknown as InstanceType<typeof AgentDBMemory>);
 
       const config = createTestConfig({ backend: "agentdb" });
