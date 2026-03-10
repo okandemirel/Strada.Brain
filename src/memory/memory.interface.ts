@@ -482,6 +482,14 @@ export interface IMemoryManager {
   /** Get health status */
   getHealth(): MemoryHealth;
 
+  /** Get per-tier decay statistics for observability (optional, implemented by AgentDBMemory) */
+  getDecayStats?(): {
+    enabled: boolean;
+    tiers: Record<string, { entries: number; avgScore: number; atFloor: number; lambda: number }>;
+    exemptDomains: string[];
+    totalExempt: number;
+  };
+
   /** Export memory to JSON */
   export(options?: { 
     types?: MemoryEntryType[]; 

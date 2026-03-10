@@ -252,6 +252,55 @@ export class AgentDBMemory implements IUnifiedMemory {
     this.decayConfig = config;
   }
 
+  /**
+   * Get per-tier decay statistics for observability.
+   * Returns entry counts, average importance scores, at-floor counts, and lambda values.
+   */
+  getDecayStats(): {
+    enabled: boolean;
+    tiers: Record<string, { entries: number; avgScore: number; atFloor: number; lambda: number }>;
+    exemptDomains: string[];
+    totalExempt: number;
+  } {
+    const enabled = this.decayConfig?.enabled ?? false;
+    const lambdas = this.decayConfig?.lambdas ?? { working: 0, ephemeral: 0, persistent: 0 };
+    const exemptDomains = this.decayConfig?.exemptDomains ?? [];
+
+    const tierData: Record<string, { entries: number; totalScore: number; atFloor: number; lambda: number }> = {
+      [MemoryTier.Working]: { entries: 0, totalScore: 0, atFloor: 0, lambda: lambdas.working },
+      [MemoryTier.Ephemeral]: { entries: 0, totalScore: 0, atFloor: 0, lambda: lambdas.ephemeral },
+      [MemoryTier.Persistent]: { entries: 0, totalScore: 0, atFloor: 0, lambda: lambdas.persistent },
+    };
+
+    let totalExempt = 0;
+
+    for (const entry of this.entries.values()) {
+      if (entry.domain && exemptDomains.includes(entry.domain)) {
+        totalExempt++;
+        continue;
+      }
+      const td = tierData[entry.tier];
+      if (!td) continue;
+      td.entries++;
+      td.totalScore += entry.importanceScore;
+      if (entry.importanceScore <= 0.01) {
+        td.atFloor++;
+      }
+    }
+
+    const tiers: Record<string, { entries: number; avgScore: number; atFloor: number; lambda: number }> = {};
+    for (const [tier, data] of Object.entries(tierData)) {
+      tiers[tier] = {
+        entries: data.entries,
+        avgScore: data.entries > 0 ? data.totalScore / data.entries : 0,
+        atFloor: data.atFloor,
+        lambda: data.lambda,
+      };
+    }
+
+    return { enabled, tiers, exemptDomains, totalExempt };
+  }
+
   // ---------------------------------------------------------------------------
   // Auto-Tiering
   // ---------------------------------------------------------------------------

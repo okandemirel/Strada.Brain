@@ -1,16 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Gap Closure
-status: complete
-stopped_at: Completed 20-01-PLAN.md
-last_updated: "2026-03-10T15:54:47.099Z"
+milestone: v3.0
+milestone_name: Multi-Agent & Hardening
+status: executing
+stopped_at: Completed 21-01-PLAN.md
+last_updated: "2026-03-10T18:46:33.705Z"
+last_activity: 2026-03-10 -- Completed 21-02 Memory Decay implementation
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
-  percent: 100
+  total_phases: 5
+  completed_phases: 0
+  total_plans: 3
+  completed_plans: 2
+  percent: 75
 ---
 
 # State: Strada.Brain
@@ -20,18 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-10)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- runs 24/7 as a proactive daemon.
-**Current focus:** v2.0 gap closure (Phase 20: Daemon Event Wiring)
+**Current focus:** v3.0 Multi-Agent & Hardening -- Phase 21 executing
 
 ## Current Position
 
-**Phase 20: Daemon Event Wiring** — COMPLETE (1/1 plans)
+Phase: 21 of 25 (Operational Health & Memory Decay)
+Plan: 2 of 3 complete
+Status: Executing
+Last activity: 2026-03-10 -- Completed 21-02 Memory Decay implementation
 
-Closed audit gaps:
-- INT-01: Wire `insertTriggerFireHistory()` after trigger fires -- DONE
-- INT-02: Emit `goal:failed` from BackgroundExecutor -- DONE
-- TD-16: ALTER TABLE migration for `goal_trees.plan_summary` -- DONE
-
-Progress: [##########] 100%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -45,9 +44,18 @@ Progress: [##########] 100%
 
 ### Decisions
 
-- Phase 20-01: goal:failed emitted for aborted OR failureCount>0; goal:complete only for clean successes
-- Phase 20-01: Followed Phase 8 PRAGMA table_info pattern for plan_summary migration
-- Decisions also logged in PROJECT.md Key Decisions table.
+- v3.0: Single-process multi-session model (not worker_threads) -- better-sqlite3 N-API bindings, I/O-bound work
+- v3.0: Memory decay NEVER applies to instincts (Bayesian lifecycle governs instinct lifespan)
+- v3.0: Rollback only for fully reversible chains; irreversible steps use forward-recovery
+- v3.0: Multi-agent is opt-in via config; disabled = identical to v2.0
+- v3.0: Max delegation depth = 2; sub-agents cannot delegate further
+- v3.0: Deployment defaults to disabled, requires explicit opt-in
+- 21-01: Keep deprecated count-based pruning alongside new time-based pruning for backward compatibility
+- 21-01: Generic daemon:maintenance event type for all maintenance metrics (reusable pattern)
+- 21-02: Decay runs BEFORE promotion/demotion in autoTieringSweep so decayed scores influence tiering
+- 21-02: Injectable getNow via module-level _nowFn for testable time control
+- 21-02: Floor at 0.01 minimum importance via Math.max (never zero)
+- 21-02: persistDecayedEntries wraps all entries in DB transaction for atomicity
 
 ### Pending Todos
 
@@ -59,10 +67,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-10T15:54:47.097Z
-Stopped at: Completed 20-01-PLAN.md
+Last session: 2026-03-10T18:46:33.702Z
+Stopped at: Completed 21-01-PLAN.md
 Resume file: None
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-10 after Phase 20 plan 01 complete*
+*Last updated: 2026-03-10 after 21-02 Memory Decay completion*

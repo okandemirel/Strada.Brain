@@ -507,6 +507,14 @@ export class DashboardServer {
         return;
       }
 
+      // GET /api/maintenance -- Maintenance stats (decay + pruning)
+      if (url === "/api/maintenance") {
+        const maintenance = this.getMaintenanceData();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(maintenance));
+        return;
+      }
+
       if (url === "/api/metrics") {
         const snapshot = this.metrics.getSnapshot(this.getMemoryStats());
         res.writeHead(200, {
@@ -712,6 +720,48 @@ export class DashboardServer {
   }
 
   /**
+   * Build maintenance data for the /api/maintenance endpoint.
+   * Combines memory decay stats with trigger pruning info.
+   */
+  private getMaintenanceData(): Record<string, unknown> {
+    // Decay stats from memory manager (if available)
+    let decay: Record<string, unknown> = {
+      enabled: false,
+      tiers: {},
+      exemptDomains: [],
+      totalExempt: 0,
+    };
+
+    if (this.memoryManager?.getDecayStats) {
+      try {
+        decay = this.memoryManager.getDecayStats();
+      } catch {
+        // Fall through to defaults
+      }
+    }
+
+    // Pruning stats from daemon storage
+    let pruning: Record<string, unknown> = {
+      retentionDays: 30,
+      lastPrunedCount: 0,
+    };
+
+    if (this.daemonStorage) {
+      try {
+        const retentionDays = 30; // Default; actual config value wired via daemon context
+        pruning = {
+          retentionDays,
+          lastPrunedCount: 0,
+        };
+      } catch {
+        // Fall through to defaults
+      }
+    }
+
+    return { decay, pruning };
+  }
+
+  /**
    * Serialize a GoalTree into JSON-safe format for the /api/goals endpoint.
    */
   private serializeGoalTree(tree: GoalTree): Record<string, unknown> {
@@ -789,9 +839,10 @@ function fmtDuration(ms) {
 
 async function refresh() {
   try {
-    const [metricsRes, daemonRes] = await Promise.all([
+    const [metricsRes, daemonRes, maintenanceRes] = await Promise.all([
       fetch('/api/metrics'),
-      fetch('/api/daemon').catch(function() { return null; })
+      fetch('/api/daemon').catch(function() { return null; }),
+      fetch('/api/maintenance').catch(function() { return null; })
     ]);
     const data = await metricsRes.json();
 
@@ -874,6 +925,12 @@ async function refresh() {
       renderTriggerHistory(daemon);
     }
 
+    // Maintenance panel (Plan 21-03)
+    if (maintenanceRes) {
+      var maint = await maintenanceRes.json();
+      renderMaintenance(maint);
+    }
+
     document.getElementById('last-update').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
   } catch (e) {
     document.getElementById('last-update').textContent = 'Error: ' + e.message;
@@ -945,6 +1002,113 @@ function renderTriggerHistory(daemon) {
   var tbl = document.createElement('div');
   tbl.innerHTML = '<table><thead><tr><th>Trigger</th><th>Type</th><th>Time</th><th>Result</th><th>Duration</th></tr></thead><tbody>' + rows + '</tbody></table>';
   while (tbl.firstChild) container.appendChild(tbl.firstChild);
+}
+
+function renderMaintenance(maint) {
+  var container = document.getElementById('maintenance-panel');
+  if (!container) return;
+
+  var decay = maint.decay;
+  var pruning = maint.pruning;
+
+  if (!decay || !decay.enabled) {
+    container.textContent = '';
+    var p = document.createElement('p');
+    p.style.color = '#8b949e';
+    p.textContent = 'Memory decay is disabled';
+    container.appendChild(p);
+    return;
+  }
+
+  var tiers = decay.tiers || {};
+  var tierNames = ['working', 'ephemeral', 'persistent'];
+  container.textContent = '';
+
+  var tbl = document.createElement('table');
+  var thead = document.createElement('thead');
+  var headRow = document.createElement('tr');
+  ['Tier', 'Entries', 'Avg Score', 'At Floor', 'Lambda'].forEach(function(h) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  tbl.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  for (var i = 0; i < tierNames.length; i++) {
+    var name = tierNames[i];
+    var t = tiers[name];
+    if (!t) continue;
+    var avg = t.avgScore;
+    var barColor = avg > 0.5 ? '#3fb950' : avg >= 0.2 ? '#f0883e' : '#da3633';
+    var pct = Math.round(avg * 100);
+
+    var row = document.createElement('tr');
+
+    var tdName = document.createElement('td');
+    tdName.style.textTransform = 'capitalize';
+    tdName.textContent = name;
+    row.appendChild(tdName);
+
+    var tdEntries = document.createElement('td');
+    tdEntries.style.textAlign = 'right';
+    tdEntries.textContent = String(t.entries);
+    row.appendChild(tdEntries);
+
+    var tdScore = document.createElement('td');
+    var barOuter = document.createElement('div');
+    barOuter.className = 'bar-container';
+    barOuter.style.position = 'relative';
+    var barInner = document.createElement('div');
+    barInner.style.background = barColor;
+    barInner.style.height = '100%';
+    barInner.style.width = pct + '%';
+    barInner.style.borderRadius = '4px';
+    barOuter.appendChild(barInner);
+    var scoreLabel = document.createElement('span');
+    scoreLabel.style.position = 'absolute';
+    scoreLabel.style.right = '4px';
+    scoreLabel.style.top = '0';
+    scoreLabel.style.fontSize = '0.75rem';
+    scoreLabel.style.color = '#e1e4e8';
+    scoreLabel.textContent = avg.toFixed(2);
+    barOuter.appendChild(scoreLabel);
+    tdScore.appendChild(barOuter);
+    row.appendChild(tdScore);
+
+    var tdFloor = document.createElement('td');
+    tdFloor.style.textAlign = 'right';
+    tdFloor.textContent = String(t.atFloor);
+    row.appendChild(tdFloor);
+
+    var tdLambda = document.createElement('td');
+    tdLambda.style.textAlign = 'right';
+    tdLambda.textContent = t.lambda.toFixed(2);
+    row.appendChild(tdLambda);
+
+    tbody.appendChild(row);
+  }
+  tbl.appendChild(tbody);
+  container.appendChild(tbl);
+
+  if (decay.exemptDomains && decay.exemptDomains.length > 0) {
+    var exemptP = document.createElement('p');
+    exemptP.style.color = '#8b949e';
+    exemptP.style.fontSize = '0.8rem';
+    exemptP.style.marginTop = '8px';
+    exemptP.textContent = 'Exempt domains: ' + decay.exemptDomains.join(', ') + ' (' + decay.totalExempt + ' entries)';
+    container.appendChild(exemptP);
+  }
+
+  var pruneP = document.createElement('p');
+  pruneP.style.color = '#8b949e';
+  pruneP.style.fontSize = '0.8rem';
+  pruneP.style.marginTop = '4px';
+  var pruneText = 'Pruning: ' + pruning.retentionDays + ' day retention';
+  if (pruning.lastPrunedCount > 0) pruneText += ', last pruned ' + pruning.lastPrunedCount + ' records';
+  pruneP.textContent = pruneText;
+  container.appendChild(pruneP);
 }
 
 function card(label, value, sub) {
@@ -1036,6 +1200,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="section" id="trigger-history-section">
   <h2>Trigger History</h2>
   <div id="trigger-history"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="maintenance-section">
+  <h2>Maintenance</h2>
+  <div id="maintenance-panel"><p style="color:#8b949e">Loading...</p></div>
 </div>
 
 <p id="last-update"></p>

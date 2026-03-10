@@ -439,4 +439,77 @@ describe("DashboardServer", () => {
       expect(html).toContain("api/daemon");
     });
   });
+
+  describe("/api/maintenance (21-03)", () => {
+    function getPort(srv: DashboardServer): number {
+      const addr = (srv as unknown as { server: { address: () => { port: number } } }).server.address();
+      if (!addr || typeof addr === "string") throw new Error("No address");
+      return addr.port;
+    }
+
+    it("returns default maintenance data when no memory manager registered", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/maintenance`);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.decay).toBeDefined();
+      expect(data.decay.enabled).toBe(false);
+      expect(data.pruning).toBeDefined();
+      expect(data.pruning.retentionDays).toBe(30);
+    });
+
+    it("returns decay stats from memory manager when getDecayStats is available", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const mockMemoryManager = {
+        getHealth: vi.fn().mockReturnValue({ healthy: true, issues: [], storageUsagePercent: 10, indexHealth: "healthy" }),
+        getDecayStats: vi.fn().mockReturnValue({
+          enabled: true,
+          tiers: {
+            working: { entries: 42, avgScore: 0.65, atFloor: 3, lambda: 0.10 },
+            ephemeral: { entries: 128, avgScore: 0.72, atFloor: 8, lambda: 0.05 },
+            persistent: { entries: 512, avgScore: 0.84, atFloor: 12, lambda: 0.01 },
+          },
+          exemptDomains: ["instinct", "analysis-cache"],
+          totalExempt: 15,
+        }),
+      };
+
+      server.registerServices({ memoryManager: mockMemoryManager as any });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/maintenance`);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.decay.enabled).toBe(true);
+      expect(data.decay.tiers.working.entries).toBe(42);
+      expect(data.decay.tiers.working.avgScore).toBe(0.65);
+      expect(data.decay.tiers.ephemeral.atFloor).toBe(8);
+      expect(data.decay.tiers.persistent.lambda).toBe(0.01);
+      expect(data.decay.exemptDomains).toEqual(["instinct", "analysis-cache"]);
+      expect(data.decay.totalExempt).toBe(15);
+    });
+
+    it("dashboard HTML includes maintenance section", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/`);
+      const html = await res.text();
+
+      expect(html).toContain("maintenance-panel");
+      expect(html).toContain("Maintenance");
+      expect(html).toContain("api/maintenance");
+    });
+  });
 });
