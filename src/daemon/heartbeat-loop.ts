@@ -229,6 +229,11 @@ export class HeartbeatLoop {
                 reason: reason ?? "cooldown",
                 timestamp: now.getTime(),
               });
+              this.storage.insertTriggerFireHistory({
+                triggerName: name,
+                result: "deduplicated",
+                timestamp: now.getTime(),
+              });
               this.logger.debug("Trigger deduplicated", { trigger: name, reason });
               continue;
             }
@@ -268,6 +273,12 @@ export class HeartbeatLoop {
             taskId: task.id,
             timestamp: now.getTime(),
           });
+          this.storage.insertTriggerFireHistory({
+            triggerName: name,
+            result: "success",
+            taskId: task.id,
+            timestamp: now.getTime(),
+          });
 
           this.logger.info("Trigger fired", {
             trigger: name,
@@ -284,6 +295,11 @@ export class HeartbeatLoop {
           triggerName: name,
           error: error instanceof Error ? error.message : String(error),
           circuitState: cb.getState(),
+          timestamp: now.getTime(),
+        });
+        this.storage.insertTriggerFireHistory({
+          triggerName: name,
+          result: "failure",
           timestamp: now.getTime(),
         });
 

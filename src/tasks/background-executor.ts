@@ -520,18 +520,29 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
       }
     }
 
-    // Emit goal:complete event
+    // Emit goal event -- goal:failed for failures/aborts, goal:complete for successes only (INT-02)
     const durationMs = Date.now() - startTime;
     if (this.daemonEventBus) {
-      const successCount = result.results.filter(r => r.result && !r.error).length;
-      this.daemonEventBus.emit("goal:complete", {
-        rootId: goalTree.rootId,
-        taskDescription: goalTree.taskDescription,
-        durationMs,
-        successCount,
-        failureCount: result.failureCount,
-        timestamp: Date.now(),
-      });
+      if (result.aborted || result.failureCount > 0) {
+        this.daemonEventBus.emit("goal:failed", {
+          rootId: goalTree.rootId,
+          error: result.aborted
+            ? "Goal aborted"
+            : `${result.failureCount} sub-goal(s) failed`,
+          failureCount: result.failureCount,
+          timestamp: Date.now(),
+        });
+      } else {
+        const successCount = result.results.filter(r => r.result && !r.error).length;
+        this.daemonEventBus.emit("goal:complete", {
+          rootId: goalTree.rootId,
+          taskDescription: goalTree.taskDescription,
+          durationMs,
+          successCount,
+          failureCount: 0,
+          timestamp: Date.now(),
+        });
+      }
     }
 
     // Combine results
