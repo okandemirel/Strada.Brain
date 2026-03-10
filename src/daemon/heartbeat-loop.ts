@@ -208,6 +208,12 @@ export class HeartbeatLoop {
             trigger: name,
             taskId: existingTaskId,
           });
+          this.storage.insertTriggerFireHistory({
+            triggerName: name,
+            result: "deduplicated",
+            taskId: existingTaskId,
+            timestamp: now.getTime(),
+          });
           continue;
         }
         // Task is done -- clean up
@@ -297,11 +303,18 @@ export class HeartbeatLoop {
           circuitState: cb.getState(),
           timestamp: now.getTime(),
         });
-        this.storage.insertTriggerFireHistory({
-          triggerName: name,
-          result: "failure",
-          timestamp: now.getTime(),
-        });
+        try {
+          this.storage.insertTriggerFireHistory({
+            triggerName: name,
+            result: "failure",
+            timestamp: now.getTime(),
+          });
+        } catch (histErr) {
+          this.logger.warn("Failed to persist trigger fire history", {
+            trigger: name,
+            error: histErr instanceof Error ? histErr.message : String(histErr),
+          });
+        }
 
         this.logger.error("Trigger evaluation failed", {
           trigger: name,

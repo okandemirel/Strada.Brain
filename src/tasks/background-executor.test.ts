@@ -383,16 +383,10 @@ describe("BackgroundExecutor - goal:failed event emission (INT-02)", () => {
     ac.abort();
 
     await vi.waitFor(() => {
-      // After abort, either complete or the task is done via abort path
-      expect(mockDaemonEventBus.emit).toHaveBeenCalled();
-    }, { timeout: 5000 });
-
-    // Check if goal:failed was emitted for abort
-    const failedCalls = mockDaemonEventBus.emit.mock.calls.filter(
-      (call: unknown[]) => call[0] === "goal:failed",
-    );
-    // If the abort path triggered event emission, verify it
-    if (failedCalls.length > 0) {
+      const failedCalls = mockDaemonEventBus.emit.mock.calls.filter(
+        (call: unknown[]) => call[0] === "goal:failed",
+      );
+      expect(failedCalls.length).toBeGreaterThan(0);
       expect(failedCalls[0][1]).toEqual(
         expect.objectContaining({
           rootId: goalTree.rootId,
@@ -400,7 +394,7 @@ describe("BackgroundExecutor - goal:failed event emission (INT-02)", () => {
           timestamp: expect.any(Number),
         }),
       );
-    }
+    }, { timeout: 5000 });
   });
 });
 

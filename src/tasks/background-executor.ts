@@ -195,6 +195,16 @@ export class BackgroundExecutor {
       const errMsg = error instanceof Error ? error.message : String(error);
       logger.error("Background task execution error", { taskId: task.id, error: errMsg });
       this.taskManager.fail(task.id, errMsg);
+
+      // Emit goal:failed if we have a goal tree context (INT-02 catch path)
+      if (this.daemonEventBus && task.goalTree) {
+        this.daemonEventBus.emit("goal:failed", {
+          rootId: task.goalTree.rootId,
+          error: errMsg,
+          failureCount: 0,
+          timestamp: Date.now(),
+        });
+      }
     }
   }
 
@@ -511,19 +521,18 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
     });
 
     // Persist final tree state
+    const hasFailed = result.aborted || result.failureCount > 0;
     if (this.goalStorage) {
       try {
-        const finalStatus = result.aborted ? "failed" : result.failureCount > 0 ? "failed" : "completed";
-        this.goalStorage.upsertTree(result.tree, finalStatus);
+        this.goalStorage.upsertTree(result.tree, hasFailed ? "failed" : "completed");
       } catch (e) {
         logger.debug("Goal tree final persistence failed", { error: e instanceof Error ? e.message : String(e) });
       }
     }
 
     // Emit goal event -- goal:failed for failures/aborts, goal:complete for successes only (INT-02)
-    const durationMs = Date.now() - startTime;
     if (this.daemonEventBus) {
-      if (result.aborted || result.failureCount > 0) {
+      if (hasFailed) {
         this.daemonEventBus.emit("goal:failed", {
           rootId: goalTree.rootId,
           error: result.aborted
@@ -537,7 +546,7 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
         this.daemonEventBus.emit("goal:complete", {
           rootId: goalTree.rootId,
           taskDescription: goalTree.taskDescription,
-          durationMs,
+          durationMs: Date.now() - startTime,
           successCount,
           failureCount: 0,
           timestamp: Date.now(),
