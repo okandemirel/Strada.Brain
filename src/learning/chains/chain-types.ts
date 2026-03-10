@@ -136,7 +136,7 @@ export function safeStringify(value: unknown, maxLen = 500): string {
 
 /** Check if shorter toolNames appear as a contiguous subsequence within longer toolNames */
 export function isContiguousSubsequence(shorter: string[], longer: string[]): boolean {
-  if (shorter.length >= longer.length) return false;
+  if (shorter.length > longer.length) return false;
   for (let i = 0; i <= longer.length - shorter.length; i++) {
     let match = true;
     for (let j = 0; j < shorter.length; j++) {

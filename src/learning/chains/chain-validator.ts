@@ -75,7 +75,16 @@ export class ChainValidator {
     const since = Date.now() - this.maxAgeDays * 86_400_000;
     const trajectories = this.storage.getTrajectories({ since, limit: 100 });
     const matching = this.filterMatchingTrajectories(trajectories, toolSequence);
-    if (matching.length === 0) return;
+    if (matching.length === 0) {
+      this.eventBus.emit("chain:validated", {
+        chainName,
+        validationCount: 0,
+        resultingConfidence: instinct.confidence,
+        deprecated: false,
+        timestamp: Date.now(),
+      });
+      return;
+    }
 
     let currentInstinct = instinct;
     for (const traj of matching) {
@@ -143,11 +152,6 @@ export class ChainValidator {
    */
   private handleDeprecation(chainName: string): void {
     this.onChainDeprecated(chainName);
-    this.eventBus.emit("chain:invalidated", {
-      chainName,
-      reason: "Bayesian confidence below threshold",
-      timestamp: Date.now(),
-    });
   }
 
   // ===========================================================================

@@ -176,7 +176,13 @@ export class CompositeTool implements ITool {
     try {
       const parsed = JSON.parse(content);
       if (typeof parsed === "object" && parsed !== null) {
-        return parsed as Record<string, unknown>;
+        const safe: Record<string, unknown> = {};
+        for (const key of Object.keys(parsed)) {
+          if (key !== "__proto__" && key !== "constructor" && key !== "prototype") {
+            safe[key] = (parsed as Record<string, unknown>)[key];
+          }
+        }
+        return safe;
       }
       return { result: content };
     } catch {

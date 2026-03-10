@@ -213,6 +213,15 @@ describe("ChainValidator", () => {
 
       expect(deps.confidenceScorer.updateConfidence).not.toHaveBeenCalled();
       expect(deps.storage.updateInstinct).not.toHaveBeenCalled();
+      // Should still emit chain:validated with validationCount: 0
+      expect(deps.eventBus.emit).toHaveBeenCalledWith(
+        "chain:validated",
+        expect.objectContaining({
+          chainName: "test_chain",
+          validationCount: 0,
+          deprecated: false,
+        }),
+      );
     });
 
     it("returns early when instinct is not found", () => {
@@ -285,15 +294,8 @@ describe("ChainValidator", () => {
         "instinct_test_001",
       );
 
-      // Should trigger deprecation cascade
+      // Should trigger deprecation cascade via callback (ChainManager emits chain:invalidated)
       expect(deps.onChainDeprecated).toHaveBeenCalledWith("test_chain");
-      expect(deps.eventBus.emit).toHaveBeenCalledWith(
-        "chain:invalidated",
-        expect.objectContaining({
-          chainName: "test_chain",
-          reason: expect.stringContaining("confidence below threshold"),
-        }),
-      );
       expect(deps.eventBus.emit).toHaveBeenCalledWith(
         "chain:validated",
         expect.objectContaining({

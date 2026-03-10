@@ -406,11 +406,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       await chainManager.start();
 
       // Chain validation feedback loop (INTEL-05, INTEL-06)
-      (learningResult.eventBus as IEventBus<LearningEventMap>).on("chain:executed", (event) => {
-        learningResult.learningQueue!.enqueue(async () => {
-          chainValidator.handleChainExecuted(event);
+      if (learningResult.learningQueue) {
+        (learningResult.eventBus as IEventBus<LearningEventMap>).on("chain:executed", (event) => {
+          learningResult.learningQueue!.enqueue(async () => {
+            chainValidator.handleChainExecuted(event);
+          });
         });
-      });
+      }
 
       logger.info("Tool chain synthesis initialized");
     } catch (error) {
