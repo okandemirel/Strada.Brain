@@ -67,6 +67,7 @@ import type { GoalTree } from "../goals/types.js";
 import { ChainDetector, ChainSynthesizer, ChainManager } from "../learning/chains/index.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
 import { IdentityStateManager } from "../identity/identity-state.js";
+import { buildCapabilityManifest } from "../agents/context/strata-knowledge.js";
 import { buildCrashRecoveryContext } from "../identity/crash-recovery.js";
 import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
 import { MigrationRunner } from "../learning/storage/migrations/index.js";
@@ -562,7 +563,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     // Start heartbeat (HeartbeatLoop.start() logs startup details)
     heartbeatLoop.start();
 
-    // Wire daemon context into dashboard (Plan 05)
+    // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
     if (dashboard) {
       dashboard.setDaemonContext({
         heartbeatLoop,
@@ -572,6 +573,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         webhookSecret: daemonConfig.triggers.webhookSecret,
         webhookRateLimit: daemonConfig.triggers.webhookRateLimit,
         dashboardToken: config.websocketDashboard.authToken,
+        identityManager,
+        capabilityManifest: buildCapabilityManifest(),
+        daemonStorage,
+        historyDepth: 10,
       });
     }
   }

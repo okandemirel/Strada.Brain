@@ -22,6 +22,8 @@ import {
   parseRateLimit,
   validateWebhookAuth,
 } from "../daemon/triggers/webhook-trigger.js";
+import type { IdentityStateManager, IdentityState } from "../identity/identity-state.js";
+import type { DaemonStorage } from "../daemon/daemon-storage.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -78,6 +80,12 @@ export class DashboardServer {
   private webhookRateLimiter?: WebhookRateLimiter;
   private dashboardToken?: string;
 
+  // Identity and enrichment context (Plan 18-03)
+  private identityManager?: IdentityStateManager;
+  private capabilityManifest?: string;
+  private daemonStorage?: DaemonStorage;
+  private historyDepth: number = 10;
+
   constructor(
     port: number,
     metrics: MetricsCollector,
@@ -126,6 +134,10 @@ export class DashboardServer {
     webhookSecret?: string;
     webhookRateLimit?: string;
     dashboardToken?: string;
+    identityManager?: IdentityStateManager;
+    capabilityManifest?: string;
+    daemonStorage?: DaemonStorage;
+    historyDepth?: number;
   }): void {
     this.daemonHeartbeatLoop = ctx.heartbeatLoop;
     this.daemonRegistry = ctx.registry;
@@ -143,6 +155,18 @@ export class DashboardServer {
     if (ctx.webhookRateLimit) {
       const { maxRequests, windowMs } = parseRateLimit(ctx.webhookRateLimit);
       this.webhookRateLimiter = new WebhookRateLimiter(maxRequests, windowMs);
+    }
+    if (ctx.identityManager) {
+      this.identityManager = ctx.identityManager;
+    }
+    if (ctx.capabilityManifest !== undefined) {
+      this.capabilityManifest = ctx.capabilityManifest;
+    }
+    if (ctx.daemonStorage) {
+      this.daemonStorage = ctx.daemonStorage;
+    }
+    if (ctx.historyDepth !== undefined) {
+      this.historyDepth = ctx.historyDepth;
     }
   }
 
@@ -304,6 +328,9 @@ export class DashboardServer {
             triggers: [],
             budget: { usedUsd: 0, limitUsd: 0, pct: 0 },
             approvalQueue: [],
+            identity: null,
+            capabilityManifest: null,
+            triggerHistory: [],
           }));
           return;
         }
@@ -325,6 +352,19 @@ export class DashboardServer {
           };
         });
 
+        // Identity enrichment (Plan 18-03)
+        let identity: IdentityState | null = null;
+        if (this.identityManager) {
+          try {
+            identity = this.identityManager.getState();
+          } catch {
+            identity = null;
+          }
+        }
+
+        // Trigger history from registry metadata (fallback: no persistent history yet)
+        const triggerHistory = this.buildTriggerHistory(triggers);
+
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           running: status.running,
@@ -343,6 +383,9 @@ export class DashboardServer {
             createdAt: e.createdAt,
             expiresAt: e.expiresAt,
           })),
+          identity,
+          capabilityManifest: this.capabilityManifest ?? null,
+          triggerHistory,
         }));
         return;
       }
@@ -637,6 +680,47 @@ export class DashboardServer {
   }
 
   /**
+   * Build trigger history from registered triggers.
+   * If DaemonStorage has getTriggerFireHistory (Plan 01 adds this), use it.
+   * Otherwise, build basic entries from trigger metadata.
+   */
+  private buildTriggerHistory(
+    triggers: Array<import("../daemon/daemon-types.js").ITrigger>,
+  ): Array<{ triggerName: string; type: string; fires: Array<{ timestamp: string | null; result: string; durationMs: number | null }> }> {
+    // Check if daemonStorage has persistent fire history (added by Plan 01 if executed)
+    const storage = this.daemonStorage as Record<string, unknown> | undefined;
+    const hasPersistentHistory =
+      storage != null && typeof storage.getTriggerFireHistory === "function";
+
+    return triggers.map((t) => {
+      if (hasPersistentHistory) {
+        try {
+          const history = (storage as { getTriggerFireHistory: (name: string, limit: number) => Array<{ timestamp: number; result: string; durationMs: number }> })
+            .getTriggerFireHistory(t.metadata.name, this.historyDepth);
+          return {
+            triggerName: t.metadata.name,
+            type: t.metadata.type,
+            fires: history.map((h) => ({
+              timestamp: new Date(h.timestamp).toISOString(),
+              result: h.result,
+              durationMs: h.durationMs,
+            })),
+          };
+        } catch {
+          // Fall through to basic metadata approach
+        }
+      }
+
+      // Fallback: basic trigger info (no persistent fire history available)
+      return {
+        triggerName: t.metadata.name,
+        type: t.metadata.type,
+        fires: [],
+      };
+    });
+  }
+
+  /**
    * Serialize a GoalTree into JSON-safe format for the /api/goals endpoint.
    */
   private serializeGoalTree(tree: GoalTree): Record<string, unknown> {
@@ -714,8 +798,11 @@ function fmtDuration(ms) {
 
 async function refresh() {
   try {
-    const res = await fetch('/api/metrics');
-    const data = await res.json();
+    const [metricsRes, daemonRes] = await Promise.all([
+      fetch('/api/metrics'),
+      fetch('/api/daemon').catch(function() { return null; })
+    ]);
+    const data = await metricsRes.json();
 
     // Read-only mode indicator
     const banner = document.getElementById('readonly-banner');
@@ -748,25 +835,34 @@ async function refresh() {
       cards.push(card('Mode', '\\u{1F512} Read-Only', 'Write operations disabled'));
     }
 
-    document.getElementById('cards').innerHTML = cards.join('');
+    document.getElementById('cards').textContent = '';
+    var cardsEl = document.getElementById('cards');
+    cardsEl.textContent = '';
+    var tmp = document.createElement('div');
+    tmp.innerHTML = cards.join('');
+    while (tmp.firstChild) cardsEl.appendChild(tmp.firstChild);
 
     // Tool table
     const tbody = document.querySelector('#tool-table tbody');
     const tools = Object.entries(data.toolCallCounts).sort((a,b) => b[1] - a[1]);
     const maxCalls = Math.max(...tools.map(t => t[1]), 1);
-    tbody.innerHTML = tools.map(([name, calls]) => {
+    var toolRows = tools.map(([name, calls]) => {
       const errors = data.toolErrorCounts[name] || 0;
       const pct = (calls / maxCalls * 100).toFixed(0);
       return '<tr><td>' + esc(name) + '</td><td>' + esc(calls) + '</td>'
         + '<td>' + (errors > 0 ? '<span class="badge badge-err">' + errors + '</span>' : '<span class="badge badge-ok">0</span>') + '</td>'
         + '<td><div class="bar-container"><div class="bar bar-input" style="width:' + pct + '%"></div></div></td></tr>';
     }).join('');
+    tbody.textContent = '';
+    var toolTmp = document.createElement('tbody');
+    toolTmp.innerHTML = toolRows;
+    while (toolTmp.firstChild) tbody.appendChild(toolTmp.firstChild);
 
     // Token chart (sparkline)
     const chart = document.getElementById('token-chart');
     const recent = data.recentTokenUsage.slice(-50);
     const maxTokens = Math.max(...recent.map(t => t.inputTokens + t.outputTokens), 1);
-    chart.innerHTML = recent.map(t => {
+    var chartHtml = recent.map(t => {
       const total = t.inputTokens + t.outputTokens;
       const h = Math.max(4, (total / maxTokens) * 100);
       const inPct = t.inputTokens / (total || 1) * 100;
@@ -775,11 +871,89 @@ async function refresh() {
         + '<div class="bar-output" style="height:' + (100-inPct) + '%;border-radius:0 0 2px 2px"></div>'
         + '</div>';
     }).join('');
+    chart.textContent = '';
+    var chartTmp = document.createElement('div');
+    chartTmp.innerHTML = chartHtml;
+    while (chartTmp.firstChild) chart.appendChild(chartTmp.firstChild);
+
+    // Identity panel and trigger history (Plan 18-03)
+    if (daemonRes) {
+      var daemon = await daemonRes.json();
+      renderIdentityPanel(daemon);
+      renderTriggerHistory(daemon);
+    }
 
     document.getElementById('last-update').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
   } catch (e) {
     document.getElementById('last-update').textContent = 'Error: ' + e.message;
   }
+}
+
+function renderIdentityPanel(daemon) {
+  var panel = document.getElementById('identity-panel');
+  if (!panel) return;
+  if (!daemon.identity) {
+    panel.textContent = '';
+    var p = document.createElement('p');
+    p.style.color = '#8b949e';
+    p.textContent = 'Identity not available';
+    panel.appendChild(p);
+    return;
+  }
+  var id = daemon.identity;
+  var crashStatus = id.cleanShutdown ? 'Clean' : 'Crash Detected';
+  var crashColor = id.cleanShutdown ? '#3fb950' : '#f0883e';
+  var html =
+    '<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">'
+    + card('Agent', esc(id.agentName), esc(id.agentUuid.substring(0, 8)) + '...')
+    + card('Boot Count', id.bootCount)
+    + card('Cumulative Uptime', fmtDuration(id.cumulativeUptimeMs))
+    + card('Last Activity', id.lastActivityTs ? new Date(id.lastActivityTs).toLocaleString() : 'N/A')
+    + card('Messages / Tasks', id.totalMessages + ' / ' + id.totalTasks)
+    + '<div class="card"><div class="label">Shutdown Status</div><div class="value" style="font-size:1rem;color:' + crashColor + '">' + esc(crashStatus) + '</div></div>'
+    + '</div>';
+  panel.textContent = '';
+  var tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  while (tmp.firstChild) panel.appendChild(tmp.firstChild);
+}
+
+function renderTriggerHistory(daemon) {
+  var container = document.getElementById('trigger-history');
+  if (!container) return;
+  var history = daemon.triggerHistory;
+  if (!history || history.length === 0) {
+    container.textContent = '';
+    var p = document.createElement('p');
+    p.style.color = '#8b949e';
+    p.textContent = 'No triggers registered';
+    container.appendChild(p);
+    return;
+  }
+  var rows = '';
+  for (var i = 0; i < history.length; i++) {
+    var t = history[i];
+    if (t.fires.length === 0) {
+      rows += '<tr><td>' + esc(t.triggerName) + '</td><td>' + esc(t.type) + '</td><td colspan="3" style="color:#8b949e">No fire history</td></tr>';
+    } else {
+      for (var j = 0; j < t.fires.length; j++) {
+        var f = t.fires[j];
+        var badge = 'badge-info';
+        if (f.result === 'success') badge = 'badge-ok';
+        else if (f.result === 'failure') badge = 'badge-err';
+        else if (f.result === 'deduplicated') badge = 'badge-warn';
+        rows += '<tr><td>' + (j === 0 ? esc(t.triggerName) : '') + '</td>'
+          + '<td>' + (j === 0 ? esc(t.type) : '') + '</td>'
+          + '<td>' + (f.timestamp ? new Date(f.timestamp).toLocaleString() : 'N/A') + '</td>'
+          + '<td><span class="badge ' + badge + '">' + esc(f.result) + '</span></td>'
+          + '<td>' + (f.durationMs != null ? f.durationMs + 'ms' : 'N/A') + '</td></tr>';
+      }
+    }
+  }
+  container.textContent = '';
+  var tbl = document.createElement('div');
+  tbl.innerHTML = '<table><thead><tr><th>Trigger</th><th>Type</th><th>Time</th><th>Result</th><th>Duration</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  while (tbl.firstChild) container.appendChild(tbl.firstChild);
 }
 
 function card(label, value, sub) {
@@ -861,6 +1035,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="section">
   <h2>Recent Token Usage</h2>
   <div id="token-chart" style="height:120px;display:flex;align-items:flex-end;gap:2px;"></div>
+</div>
+
+<div class="section" id="identity-section">
+  <h2>Agent Identity</h2>
+  <div id="identity-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="trigger-history-section">
+  <h2>Trigger History</h2>
+  <div id="trigger-history"><p style="color:#8b949e">Loading...</p></div>
 </div>
 
 <p id="last-update"></p>
