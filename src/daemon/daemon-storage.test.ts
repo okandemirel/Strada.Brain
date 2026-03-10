@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ApprovalStatus, CircuitState } from "./daemon-types.js";
+import type { UrgencyLevel } from "./reporting/notification-types.js";
 
 describe("DaemonStorage", () => {
   let storage: DaemonStorage;
@@ -274,6 +275,202 @@ describe("DaemonStorage", () => {
 
     it("getDaemonState returns undefined for non-existent key", () => {
       expect(storage.getDaemonState("non-existent")).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // Phase 18: Notification Buffer, Notification History, Trigger Fire History
+  // =========================================================================
+
+  describe("initialize() creates Phase 18 tables", () => {
+    it("creates notification_buffer, notification_history, digest_state, and trigger_fire_history tables", () => {
+      const tables = storage.getTableNames();
+      expect(tables).toContain("notification_buffer");
+      expect(tables).toContain("notification_history");
+      expect(tables).toContain("digest_state");
+      expect(tables).toContain("trigger_fire_history");
+    });
+  });
+
+  describe("notification buffer", () => {
+    it("insertNotificationBuffer persists a row, getBufferedNotifications returns it", () => {
+      const now = Date.now();
+      storage.insertNotificationBuffer({
+        urgency: "medium",
+        title: "Budget warning",
+        message: "Budget at 80%",
+        actionHint: "Run: strata daemon budget reset",
+        sourceEvent: "daemon:budget_warning",
+        createdAt: now,
+      });
+      const buffered = storage.getBufferedNotifications();
+      expect(buffered).toHaveLength(1);
+      expect(buffered[0].urgency).toBe("medium");
+      expect(buffered[0].title).toBe("Budget warning");
+      expect(buffered[0].message).toBe("Budget at 80%");
+      expect(buffered[0].actionHint).toBe("Run: strata daemon budget reset");
+      expect(buffered[0].sourceEvent).toBe("daemon:budget_warning");
+      expect(buffered[0].createdAt).toBe(now);
+    });
+
+    it("clearNotificationBuffer removes all rows", () => {
+      storage.insertNotificationBuffer({
+        urgency: "low",
+        title: "Test 1",
+        message: "msg",
+        createdAt: Date.now(),
+      });
+      storage.insertNotificationBuffer({
+        urgency: "high",
+        title: "Test 2",
+        message: "msg",
+        createdAt: Date.now(),
+      });
+      storage.clearNotificationBuffer();
+      expect(storage.getBufferedNotifications()).toHaveLength(0);
+    });
+
+    it("notification buffer respects max size -- oldest low-urgency dropped when full, high/critical never dropped", () => {
+      // Fill buffer to max=5 with mixed urgency
+      for (let i = 0; i < 3; i++) {
+        storage.insertNotificationBuffer({
+          urgency: "low",
+          title: `Low ${i}`,
+          message: "msg",
+          createdAt: Date.now() + i,
+        });
+      }
+      storage.insertNotificationBuffer({
+        urgency: "high",
+        title: "High 1",
+        message: "msg",
+        createdAt: Date.now() + 10,
+      });
+      storage.insertNotificationBuffer({
+        urgency: "critical",
+        title: "Critical 1",
+        message: "msg",
+        createdAt: Date.now() + 20,
+      });
+
+      // Prune to max 3, protecting high and critical
+      storage.pruneNotificationBuffer(3, ["high", "critical"]);
+
+      const remaining = storage.getBufferedNotifications();
+      // Should have 3 total: high, critical, and 1 low
+      expect(remaining).toHaveLength(3);
+      const urgencies = remaining.map((r) => r.urgency);
+      expect(urgencies).toContain("high");
+      expect(urgencies).toContain("critical");
+    });
+  });
+
+  describe("notification history", () => {
+    it("insertNotificationHistory persists, getNotificationHistory returns sorted by created_at DESC", () => {
+      const now = Date.now();
+      storage.insertNotificationHistory({
+        urgency: "low",
+        title: "Task complete",
+        message: "Goal finished",
+        deliveredTo: ["dashboard"],
+        createdAt: now - 1000,
+      });
+      storage.insertNotificationHistory({
+        urgency: "high",
+        title: "Budget exceeded",
+        message: "Over limit",
+        deliveredTo: ["chat", "dashboard"],
+        createdAt: now,
+      });
+
+      const history = storage.getNotificationHistory(10);
+      expect(history).toHaveLength(2);
+      expect(history[0].title).toBe("Budget exceeded"); // most recent first
+      expect(history[0].deliveredTo).toEqual(["chat", "dashboard"]);
+      expect(history[1].title).toBe("Task complete");
+    });
+
+    it("getNotificationHistory respects level filter", () => {
+      const now = Date.now();
+      storage.insertNotificationHistory({
+        urgency: "low",
+        title: "Low entry",
+        message: "msg",
+        deliveredTo: ["dashboard"],
+        createdAt: now,
+      });
+      storage.insertNotificationHistory({
+        urgency: "high",
+        title: "High entry",
+        message: "msg",
+        deliveredTo: ["chat"],
+        createdAt: now + 1,
+      });
+
+      const highOnly = storage.getNotificationHistory(10, "high");
+      expect(highOnly).toHaveLength(1);
+      expect(highOnly[0].title).toBe("High entry");
+    });
+  });
+
+  describe("trigger fire history", () => {
+    it("insertTriggerFireHistory persists, getTriggerFireHistory returns per-trigger sorted by timestamp DESC with limit", () => {
+      const now = Date.now();
+      for (let i = 0; i < 5; i++) {
+        storage.insertTriggerFireHistory({
+          triggerName: "daily-check",
+          result: i % 2 === 0 ? "success" : "failure",
+          durationMs: 100 + i * 10,
+          taskId: `task-${i}`,
+          timestamp: now + i * 1000,
+        });
+      }
+      // Different trigger
+      storage.insertTriggerFireHistory({
+        triggerName: "morning-scan",
+        result: "success",
+        durationMs: 50,
+        timestamp: now + 10000,
+      });
+
+      const dailyHistory = storage.getTriggerFireHistory("daily-check", 3);
+      expect(dailyHistory).toHaveLength(3);
+      // Most recent first
+      expect(dailyHistory[0].timestamp).toBeGreaterThan(dailyHistory[1].timestamp);
+      expect(dailyHistory[0].result).toBe("success"); // i=4
+      expect(dailyHistory[1].result).toBe("failure"); // i=3
+    });
+
+    it("trigger fire history auto-prunes entries beyond configured depth per trigger", () => {
+      const now = Date.now();
+      // Insert 10 entries
+      for (let i = 0; i < 10; i++) {
+        storage.insertTriggerFireHistory({
+          triggerName: "auto-prune-test",
+          result: "success",
+          timestamp: now + i * 1000,
+        });
+      }
+
+      // Prune to keep 3
+      storage.pruneTriggerFireHistory("auto-prune-test", 3);
+
+      const remaining = storage.getTriggerFireHistory("auto-prune-test", 100);
+      expect(remaining).toHaveLength(3);
+      // Should keep the 3 most recent
+      expect(remaining[0].timestamp).toBe(now + 9000);
+    });
+  });
+
+  describe("digest_state via daemon state pattern", () => {
+    it("digest_state get/set works via existing setDaemonState/getDaemonState pattern", () => {
+      storage.setDaemonState("digest:last_sent", String(Date.now()));
+      storage.setDaemonState("digest:trigger_count", "15");
+      storage.setDaemonState("digest:task_count", "8");
+
+      expect(storage.getDaemonState("digest:last_sent")).toBeDefined();
+      expect(storage.getDaemonState("digest:trigger_count")).toBe("15");
+      expect(storage.getDaemonState("digest:task_count")).toBe("8");
     });
   });
 });

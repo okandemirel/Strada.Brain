@@ -16,6 +16,7 @@ import type { DeepPartial, Result, ValidationResult, ValidationError } from "../
 import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
 import type { DaemonConfig } from "../daemon/daemon-types.js";
+import type { NotificationConfig, QuietHoursConfig, DigestConfig } from "../daemon/reporting/notification-types.js";
 
 dotenv.config();
 
@@ -127,6 +128,20 @@ export type EnvVarName =
 
   | "STRATA_GOAL_ESCALATION_TIMEOUT_MINUTES"
   | "STRATA_GOAL_MAX_REDECOMPOSITIONS"
+
+  // Notification, Quiet Hours, Digest (Phase 18)
+  | "STRATA_DIGEST_ENABLED"
+  | "STRATA_DIGEST_SCHEDULE"
+  | "STRATA_NOTIFY_MIN_LEVEL"
+  | "STRATA_NOTIFY_SILENT"
+  | "STRATA_NOTIFY_LOW"
+  | "STRATA_NOTIFY_MEDIUM"
+  | "STRATA_NOTIFY_HIGH"
+  | "STRATA_NOTIFY_CRITICAL"
+  | "STRATA_QUIET_START"
+  | "STRATA_QUIET_END"
+  | "STRATA_QUIET_BUFFER_MAX"
+  | "STRATA_DASHBOARD_HISTORY_DEPTH"
 
   // Memory Re-Retrieval (Phase 17)
   | "STRATA_MEMORY_RERETRIEVAL_ENABLED"
@@ -375,6 +390,15 @@ export interface Config {
 
   // Memory Re-Retrieval (Phase 17)
   readonly reRetrieval: ReRetrievalConfig;
+
+  // Notification Routing (Phase 18)
+  readonly notification: NotificationConfig;
+
+  // Quiet Hours (Phase 18)
+  readonly quietHours: QuietHoursConfig;
+
+  // Digest Reporting (Phase 18)
+  readonly digest: DigestConfig;
 }
 
 /** Partial config for updates */
@@ -648,6 +672,20 @@ export const configSchema = z
     checklistMorningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("9"),
     checklistAfternoonHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("14"),
     checklistEveningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("18"),
+
+    // Notification, Quiet Hours, Digest (Phase 18)
+    strataDigestEnabled: boolFromString(true),
+    strataDigestSchedule: z.string().default("0 9 * * *"),
+    strataNotifyMinLevel: z.enum(["silent", "low", "medium", "high", "critical"]).default("low"),
+    strataNotifySilent: z.string().default("dashboard"),
+    strataNotifyLow: z.string().default("dashboard"),
+    strataNotifyMedium: z.string().default("chat,dashboard"),
+    strataNotifyHigh: z.string().default("chat,dashboard"),
+    strataNotifyCritical: z.string().default("chat,dashboard"),
+    strataQuietStart: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).optional(),
+    strataQuietEnd: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("8"),
+    strataQuietBufferMax: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10).max(10000)).default("100"),
+    strataDashboardHistoryDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1000)).default("10"),
 
     // Memory Re-Retrieval (Phase 17)
     strataMemoryReRetrievalEnabled: boolFromString(true),
@@ -945,6 +983,33 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       memoryLimit: rawConfig.strataMemoryReRetrievalMemoryLimit,
       ragTopK: rawConfig.strataMemoryReRetrievalRagTopK,
     },
+
+    notification: {
+      minLevel: rawConfig.strataNotifyMinLevel,
+      routing: {
+        silent: rawConfig.strataNotifySilent.split(",").map((s: string) => s.trim()).filter(Boolean),
+        low: rawConfig.strataNotifyLow.split(",").map((s: string) => s.trim()).filter(Boolean),
+        medium: rawConfig.strataNotifyMedium.split(",").map((s: string) => s.trim()).filter(Boolean),
+        high: rawConfig.strataNotifyHigh.split(",").map((s: string) => s.trim()).filter(Boolean),
+        critical: rawConfig.strataNotifyCritical.split(",").map((s: string) => s.trim()).filter(Boolean),
+      },
+      groupingWindowMs: 30000,
+    },
+
+    quietHours: {
+      enabled: rawConfig.strataQuietStart !== undefined,
+      startHour: rawConfig.strataQuietStart ?? 22,
+      endHour: rawConfig.strataQuietEnd,
+      timezone: rawConfig.daemonTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      bufferMax: rawConfig.strataQuietBufferMax,
+    },
+
+    digest: {
+      enabled: rawConfig.strataDigestEnabled,
+      schedule: rawConfig.strataDigestSchedule,
+      timezone: rawConfig.daemonTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      dashboardHistoryDepth: rawConfig.strataDashboardHistoryDepth,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -1219,6 +1284,19 @@ interface EnvVars {
   checklistMorningHour: string | undefined;
   checklistAfternoonHour: string | undefined;
   checklistEveningHour: string | undefined;
+  // Notification, Quiet Hours, Digest (Phase 18)
+  strataDigestEnabled: string | undefined;
+  strataDigestSchedule: string | undefined;
+  strataNotifyMinLevel: string | undefined;
+  strataNotifySilent: string | undefined;
+  strataNotifyLow: string | undefined;
+  strataNotifyMedium: string | undefined;
+  strataNotifyHigh: string | undefined;
+  strataNotifyCritical: string | undefined;
+  strataQuietStart: string | undefined;
+  strataQuietEnd: string | undefined;
+  strataQuietBufferMax: string | undefined;
+  strataDashboardHistoryDepth: string | undefined;
   // Memory Re-Retrieval (Phase 17)
   strataMemoryReRetrievalEnabled: string | undefined;
   strataMemoryReRetrievalInterval: string | undefined;
@@ -1351,6 +1429,19 @@ function loadFromEnv(): EnvVars {
     checklistMorningHour: process.env["STRATA_CHECKLIST_MORNING_HOUR"],
     checklistAfternoonHour: process.env["STRATA_CHECKLIST_AFTERNOON_HOUR"],
     checklistEveningHour: process.env["STRATA_CHECKLIST_EVENING_HOUR"],
+    // Notification, Quiet Hours, Digest (Phase 18)
+    strataDigestEnabled: process.env["STRATA_DIGEST_ENABLED"],
+    strataDigestSchedule: process.env["STRATA_DIGEST_SCHEDULE"],
+    strataNotifyMinLevel: process.env["STRATA_NOTIFY_MIN_LEVEL"],
+    strataNotifySilent: process.env["STRATA_NOTIFY_SILENT"],
+    strataNotifyLow: process.env["STRATA_NOTIFY_LOW"],
+    strataNotifyMedium: process.env["STRATA_NOTIFY_MEDIUM"],
+    strataNotifyHigh: process.env["STRATA_NOTIFY_HIGH"],
+    strataNotifyCritical: process.env["STRATA_NOTIFY_CRITICAL"],
+    strataQuietStart: process.env["STRATA_QUIET_START"],
+    strataQuietEnd: process.env["STRATA_QUIET_END"],
+    strataQuietBufferMax: process.env["STRATA_QUIET_BUFFER_MAX"],
+    strataDashboardHistoryDepth: process.env["STRATA_DASHBOARD_HISTORY_DEPTH"],
     // Memory Re-Retrieval (Phase 17)
     strataMemoryReRetrievalEnabled: process.env["STRATA_MEMORY_RERETRIEVAL_ENABLED"],
     strataMemoryReRetrievalInterval: process.env["STRATA_MEMORY_RERETRIEVAL_INTERVAL"],
@@ -1584,5 +1675,8 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     toolChain: { ...base.toolChain, ...(partial as Partial<Config>).toolChain },
     crossSession: { ...base.crossSession, ...(partial as Partial<Config>).crossSession },
     reRetrieval: { ...base.reRetrieval, ...((partial as Partial<Config>).reRetrieval ?? {}) },
+    notification: { ...base.notification, ...((partial as Partial<Config>).notification ?? {}) },
+    quietHours: { ...base.quietHours, ...((partial as Partial<Config>).quietHours ?? {}) },
+    digest: { ...base.digest, ...((partial as Partial<Config>).digest ?? {}) },
   } as Config;
 }

@@ -20,6 +20,12 @@ import type {
   BudgetEntry,
   CircuitState,
 } from "./daemon-types.js";
+import type {
+  UrgencyLevel,
+  BufferedNotification,
+  NotificationHistoryEntry,
+  TriggerFireHistoryEntry,
+} from "./reporting/notification-types.js";
 
 // =============================================================================
 // SCHEMA
@@ -76,6 +82,43 @@ CREATE TABLE IF NOT EXISTS daemon_state (
 CREATE INDEX IF NOT EXISTS idx_budget_timestamp ON budget_entries(timestamp);
 CREATE INDEX IF NOT EXISTS idx_approval_status ON approval_queue(status);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
+
+CREATE TABLE IF NOT EXISTS digest_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS notification_buffer (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  urgency TEXT NOT NULL,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  action_hint TEXT,
+  source_event TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notif_buffer_urgency ON notification_buffer(urgency);
+
+CREATE TABLE IF NOT EXISTS trigger_fire_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  trigger_name TEXT NOT NULL,
+  result TEXT NOT NULL,
+  duration_ms INTEGER,
+  task_id TEXT,
+  timestamp INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fire_history_trigger ON trigger_fire_history(trigger_name, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS notification_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  urgency TEXT NOT NULL,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  delivered_to TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notif_history_time ON notification_history(created_at DESC);
 `;
 
 // =============================================================================
@@ -129,6 +172,34 @@ interface DaemonStateRow {
   updated_at: number;
 }
 
+interface NotificationBufferRow {
+  id: number;
+  urgency: string;
+  title: string;
+  message: string;
+  action_hint: string | null;
+  source_event: string | null;
+  created_at: number;
+}
+
+interface NotificationHistoryRow {
+  id: number;
+  urgency: string;
+  title: string;
+  message: string;
+  delivered_to: string | null;
+  created_at: number;
+}
+
+interface TriggerFireHistoryRow {
+  id: number;
+  trigger_name: string;
+  result: string;
+  duration_ms: number | null;
+  task_id: string | null;
+  timestamp: number;
+}
+
 interface SumRow {
   total: number | null;
 }
@@ -160,6 +231,18 @@ export class DaemonStorage {
     deleteCircuit?: Database.Statement;
     setState?: Database.Statement;
     getState?: Database.Statement;
+    // Notification Buffer (Phase 18)
+    insertNotifBuffer?: Database.Statement;
+    getNotifBuffer?: Database.Statement;
+    clearNotifBuffer?: Database.Statement;
+    deleteNotifBufferById?: Database.Statement;
+    // Notification History (Phase 18)
+    insertNotifHistory?: Database.Statement;
+    getNotifHistory?: Database.Statement;
+    getNotifHistoryFiltered?: Database.Statement;
+    // Trigger Fire History (Phase 18)
+    insertFireHistory?: Database.Statement;
+    getFireHistory?: Database.Statement;
   } = {};
 
   constructor(dbPath: string) {
@@ -419,6 +502,143 @@ export class DaemonStorage {
   }
 
   // =========================================================================
+  // Notification Buffer Methods (Phase 18)
+  // =========================================================================
+
+  /** Insert a notification into the quiet hours buffer */
+  insertNotificationBuffer(entry: {
+    urgency: UrgencyLevel;
+    title: string;
+    message: string;
+    actionHint?: string;
+    sourceEvent?: string;
+    createdAt: number;
+  }): void {
+    this.assertOpen();
+    this.stmts.insertNotifBuffer!.run(
+      entry.urgency,
+      entry.title,
+      entry.message,
+      entry.actionHint ?? null,
+      entry.sourceEvent ?? null,
+      entry.createdAt,
+    );
+  }
+
+  /** Get all buffered notifications */
+  getBufferedNotifications(): BufferedNotification[] {
+    this.assertOpen();
+    const rows = this.stmts.getNotifBuffer!.all() as NotificationBufferRow[];
+    return rows.map(this.rowToBufferedNotification);
+  }
+
+  /** Clear all buffered notifications */
+  clearNotificationBuffer(): void {
+    this.assertOpen();
+    this.stmts.clearNotifBuffer!.run();
+  }
+
+  /**
+   * Prune notification buffer to max size.
+   * Drops oldest entries first, but never drops entries with protected urgency levels.
+   */
+  pruneNotificationBuffer(maxSize: number, protectedLevels: UrgencyLevel[]): void {
+    this.assertOpen();
+    const all = this.getBufferedNotifications();
+    if (all.length <= maxSize) return;
+
+    const toRemove = all.length - maxSize;
+    // Sort: unprotected first (oldest first), then protected
+    const removable = all.filter((n) => !protectedLevels.includes(n.urgency));
+    // Remove oldest removable entries
+    const idsToDelete = removable
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .slice(0, toRemove)
+      .map((n) => n.id);
+
+    for (const id of idsToDelete) {
+      this.stmts.deleteNotifBufferById!.run(id);
+    }
+  }
+
+  // =========================================================================
+  // Notification History Methods (Phase 18)
+  // =========================================================================
+
+  /** Insert a notification history entry */
+  insertNotificationHistory(entry: {
+    urgency: UrgencyLevel;
+    title: string;
+    message: string;
+    deliveredTo: string[];
+    createdAt: number;
+  }): void {
+    this.assertOpen();
+    this.stmts.insertNotifHistory!.run(
+      entry.urgency,
+      entry.title,
+      entry.message,
+      JSON.stringify(entry.deliveredTo),
+      entry.createdAt,
+    );
+  }
+
+  /** Get notification history sorted by created_at DESC with optional level filter */
+  getNotificationHistory(limit: number, levelFilter?: UrgencyLevel): NotificationHistoryEntry[] {
+    this.assertOpen();
+    let rows: NotificationHistoryRow[];
+    if (levelFilter) {
+      rows = this.stmts.getNotifHistoryFiltered!.all(levelFilter, limit) as NotificationHistoryRow[];
+    } else {
+      rows = this.stmts.getNotifHistory!.all(limit) as NotificationHistoryRow[];
+    }
+    return rows.map(this.rowToNotificationHistory);
+  }
+
+  // =========================================================================
+  // Trigger Fire History Methods (Phase 18)
+  // =========================================================================
+
+  /** Insert a trigger fire history entry */
+  insertTriggerFireHistory(entry: {
+    triggerName: string;
+    result: "success" | "failure" | "deduplicated";
+    durationMs?: number;
+    taskId?: string;
+    timestamp: number;
+  }): void {
+    this.assertOpen();
+    this.stmts.insertFireHistory!.run(
+      entry.triggerName,
+      entry.result,
+      entry.durationMs ?? null,
+      entry.taskId ?? null,
+      entry.timestamp,
+    );
+  }
+
+  /** Get trigger fire history for a specific trigger, sorted by timestamp DESC */
+  getTriggerFireHistory(triggerName: string, limit: number): TriggerFireHistoryEntry[] {
+    this.assertOpen();
+    const rows = this.stmts.getFireHistory!.all(triggerName, limit) as TriggerFireHistoryRow[];
+    return rows.map(this.rowToTriggerFireHistory);
+  }
+
+  /** Prune trigger fire history, keeping only the most recent entries per trigger */
+  pruneTriggerFireHistory(triggerName: string, keepCount: number): void {
+    this.assertOpen();
+    this.db!.prepare(
+      `DELETE FROM trigger_fire_history
+       WHERE trigger_name = ? AND id NOT IN (
+         SELECT id FROM trigger_fire_history
+         WHERE trigger_name = ?
+         ORDER BY timestamp DESC
+         LIMIT ?
+       )`,
+    ).run(triggerName, triggerName, keepCount);
+  }
+
+  // =========================================================================
   // Private Helpers
   // =========================================================================
 
@@ -493,6 +713,40 @@ export class DaemonStorage {
     this.stmts.getState = db.prepare(
       `SELECT * FROM daemon_state WHERE key = ?`,
     );
+
+    // Notification Buffer (Phase 18)
+    this.stmts.insertNotifBuffer = db.prepare(
+      `INSERT INTO notification_buffer (urgency, title, message, action_hint, source_event, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmts.getNotifBuffer = db.prepare(
+      `SELECT * FROM notification_buffer ORDER BY created_at ASC`,
+    );
+    this.stmts.clearNotifBuffer = db.prepare(`DELETE FROM notification_buffer`);
+    this.stmts.deleteNotifBufferById = db.prepare(
+      `DELETE FROM notification_buffer WHERE id = ?`,
+    );
+
+    // Notification History (Phase 18)
+    this.stmts.insertNotifHistory = db.prepare(
+      `INSERT INTO notification_history (urgency, title, message, delivered_to, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    this.stmts.getNotifHistory = db.prepare(
+      `SELECT * FROM notification_history ORDER BY created_at DESC LIMIT ?`,
+    );
+    this.stmts.getNotifHistoryFiltered = db.prepare(
+      `SELECT * FROM notification_history WHERE urgency = ? ORDER BY created_at DESC LIMIT ?`,
+    );
+
+    // Trigger Fire History (Phase 18)
+    this.stmts.insertFireHistory = db.prepare(
+      `INSERT INTO trigger_fire_history (trigger_name, result, duration_ms, task_id, timestamp)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    this.stmts.getFireHistory = db.prepare(
+      `SELECT * FROM trigger_fire_history WHERE trigger_name = ? ORDER BY timestamp DESC LIMIT ?`,
+    );
   }
 
   // Row mappers
@@ -530,6 +784,40 @@ export class DaemonStorage {
       decision: row.decision,
       decidedBy: row.decided_by ?? undefined,
       triggerName: row.trigger_name ?? undefined,
+      timestamp: row.timestamp,
+    };
+  }
+
+  private rowToBufferedNotification(row: NotificationBufferRow): BufferedNotification {
+    return {
+      id: row.id,
+      urgency: row.urgency as UrgencyLevel,
+      title: row.title,
+      message: row.message,
+      actionHint: row.action_hint ?? undefined,
+      sourceEvent: row.source_event ?? undefined,
+      createdAt: row.created_at,
+    };
+  }
+
+  private rowToNotificationHistory(row: NotificationHistoryRow): NotificationHistoryEntry {
+    return {
+      id: row.id,
+      urgency: row.urgency as UrgencyLevel,
+      title: row.title,
+      message: row.message,
+      deliveredTo: row.delivered_to ? (JSON.parse(row.delivered_to) as string[]) : [],
+      createdAt: row.created_at,
+    };
+  }
+
+  private rowToTriggerFireHistory(row: TriggerFireHistoryRow): TriggerFireHistoryEntry {
+    return {
+      id: row.id,
+      triggerName: row.trigger_name,
+      result: row.result as "success" | "failure" | "deduplicated",
+      durationMs: row.duration_ms ?? undefined,
+      taskId: row.task_id ?? undefined,
       timestamp: row.timestamp,
     };
   }

@@ -145,6 +145,27 @@ export interface GoalCompleteEvent {
 }
 
 // =============================================================================
+// REPORTING EVENT TYPES (Phase 18)
+// =============================================================================
+
+/** Emitted when a digest report is sent to a channel */
+export interface DigestSentEvent {
+  readonly channelType: string;
+  readonly sectionCount: number;
+  readonly truncated: boolean;
+  readonly timestamp: number;
+}
+
+/** Emitted when a notification is routed (delivered or buffered) */
+export interface NotificationRoutedEvent {
+  readonly urgency: string;
+  readonly title: string;
+  readonly deliveredTo: string[];
+  readonly buffered: boolean;
+  readonly timestamp: number;
+}
+
+// =============================================================================
 // EVENT MAP
 // =============================================================================
 
@@ -166,4 +187,6 @@ export interface DaemonEventMap {
   "goal:node_complete": GoalNodeCompleteEvent;
   "goal:failed": GoalFailedEvent;
   "goal:complete": GoalCompleteEvent;
+  "daemon:digest_sent": DigestSentEvent;
+  "daemon:notification_routed": NotificationRoutedEvent;
 }
