@@ -150,6 +150,24 @@ export class HeartbeatLoop {
     // Expire stale approval requests
     this.approvalQueue.expireStale();
 
+    // Prune old trigger fire history entries (Phase 21, OPS-01)
+    try {
+      const retentionMs = this.config.triggerFireRetentionDays * 86400000;
+      const pruned = this.storage.pruneTriggerFireHistoryByAge(retentionMs);
+      if (pruned > 0) {
+        this.logger.debug("Trigger fire history pruned", { count: pruned });
+        this.eventBus.emit("daemon:maintenance", {
+          type: "trigger_history_pruned",
+          count: pruned,
+          timestamp: now.getTime(),
+        });
+      }
+    } catch (error) {
+      this.logger.warn("Failed to prune trigger fire history", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     // Get active triggers
     const triggers = this.registry.getActive();
 

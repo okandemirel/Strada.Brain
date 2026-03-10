@@ -646,4 +646,132 @@ describe("HeartbeatLoop", () => {
       timestamp: expect.any(Number),
     });
   });
+
+  // =========================================================================
+  // Trigger fire history pruning (Phase 21, OPS-01)
+  // =========================================================================
+
+  describe("trigger fire history pruning", () => {
+    it("tick() calls pruneTriggerFireHistoryByAge before trigger evaluation", async () => {
+      const trigger = makeTrigger("prune-order", { shouldFire: false });
+      registry.register(trigger);
+
+      const callOrder: string[] = [];
+      storage.pruneTriggerFireHistoryByAge = vi.fn(() => {
+        callOrder.push("prune");
+        return 0;
+      });
+      const origGetActive = registry.getActive.bind(registry);
+      vi.spyOn(registry, "getActive").mockImplementation(() => {
+        callOrder.push("getActive");
+        return origGetActive();
+      });
+
+      loop = new HeartbeatLoop(
+        registry, taskManager as any, budgetTracker as any, securityPolicy as any,
+        approvalQueue as any, storage as any, identityManager as any, eventBus,
+        config, logger as any,
+      );
+      loop.start();
+      await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+      expect(callOrder.indexOf("prune")).toBeLessThan(callOrder.indexOf("getActive"));
+    });
+
+    it("tick() uses config.triggerFireRetentionDays * 86400000 as retentionMs", async () => {
+      storage.pruneTriggerFireHistoryByAge = vi.fn(() => 0);
+      config = makeDaemonConfig({ triggerFireRetentionDays: 7 });
+
+      loop = new HeartbeatLoop(
+        registry, taskManager as any, budgetTracker as any, securityPolicy as any,
+        approvalQueue as any, storage as any, identityManager as any, eventBus,
+        config, logger as any,
+      );
+      loop.start();
+      await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+      expect(storage.pruneTriggerFireHistoryByAge).toHaveBeenCalledWith(7 * 86400000);
+    });
+
+    it("when pruned count > 0, emits daemon:maintenance event", async () => {
+      storage.pruneTriggerFireHistoryByAge = vi.fn(() => 5);
+
+      loop = new HeartbeatLoop(
+        registry, taskManager as any, budgetTracker as any, securityPolicy as any,
+        approvalQueue as any, storage as any, identityManager as any, eventBus,
+        config, logger as any,
+      );
+      loop.start();
+      await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+      expect(eventBus.emit).toHaveBeenCalledWith(
+        "daemon:maintenance",
+        expect.objectContaining({ type: "trigger_history_pruned", count: 5 }),
+      );
+    });
+
+    it("when pruned count is 0, no maintenance event is emitted and no log output", async () => {
+      storage.pruneTriggerFireHistoryByAge = vi.fn(() => 0);
+
+      loop = new HeartbeatLoop(
+        registry, taskManager as any, budgetTracker as any, securityPolicy as any,
+        approvalQueue as any, storage as any, identityManager as any, eventBus,
+        config, logger as any,
+      );
+      loop.start();
+      logger.debug.mockClear();
+      await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+      const maintenanceCalls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === "daemon:maintenance",
+      );
+      expect(maintenanceCalls).toHaveLength(0);
+
+      const pruneLogs = logger.debug.mock.calls.filter(
+        (c: unknown[]) => typeof c[0] === "string" && c[0].includes("prune"),
+      );
+      expect(pruneLogs).toHaveLength(0);
+    });
+
+    it("when pruning throws, tick logs warn and continues to trigger evaluation", async () => {
+      storage.pruneTriggerFireHistoryByAge = vi.fn(() => {
+        throw new Error("pruning failed");
+      });
+      const trigger = makeTrigger("after-prune-fail", { shouldFire: false });
+      registry.register(trigger);
+
+      loop = new HeartbeatLoop(
+        registry, taskManager as any, budgetTracker as any, securityPolicy as any,
+        approvalQueue as any, storage as any, identityManager as any, eventBus,
+        config, logger as any,
+      );
+      loop.start();
+      await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+      // Should have logged a warning
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Failed to prune trigger fire history",
+        expect.objectContaining({ error: expect.any(String) }),
+      );
+      // Should have continued to trigger evaluation
+      expect(trigger.shouldFire).toHaveBeenCalled();
+    });
+
+    it("emits debug-level log when entries are actually pruned", async () => {
+      storage.pruneTriggerFireHistoryByAge = vi.fn(() => 3);
+
+      loop = new HeartbeatLoop(
+        registry, taskManager as any, budgetTracker as any, securityPolicy as any,
+        approvalQueue as any, storage as any, identityManager as any, eventBus,
+        config, logger as any,
+      );
+      loop.start();
+      await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        "Trigger fire history pruned",
+        expect.objectContaining({ count: 3 }),
+      );
+    });
+  });
 });

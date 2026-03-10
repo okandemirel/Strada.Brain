@@ -166,6 +166,17 @@ export interface NotificationRoutedEvent {
 }
 
 // =============================================================================
+// MAINTENANCE EVENT TYPES (Phase 21)
+// =============================================================================
+
+/** Emitted when a daemon maintenance task completes (e.g., pruning) */
+export interface DaemonMaintenanceEvent {
+  readonly type: string;
+  readonly count: number;
+  readonly timestamp: number;
+}
+
+// =============================================================================
 // EVENT MAP
 // =============================================================================
 
@@ -189,4 +200,5 @@ export interface DaemonEventMap {
   "goal:complete": GoalCompleteEvent;
   "daemon:digest_sent": DigestSentEvent;
   "daemon:notification_routed": NotificationRoutedEvent;
+  "daemon:maintenance": DaemonMaintenanceEvent;
 }
