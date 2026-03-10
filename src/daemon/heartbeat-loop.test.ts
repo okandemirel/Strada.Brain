@@ -113,6 +113,7 @@ function makeStorage() {
     getCircuitState: vi.fn((name: string) => circuitStates.get(name)),
     getAllCircuitStates: vi.fn(() => circuitStates),
     deleteCircuitState: vi.fn(),
+    insertTriggerFireHistory: vi.fn(),
     initialize: vi.fn(),
     close: vi.fn(),
   };
@@ -573,5 +574,67 @@ describe("HeartbeatLoop", () => {
   it("getCircuitBreaker returns undefined for unknown trigger", () => {
     loop.start();
     expect(loop.getCircuitBreaker("nonexistent")).toBeUndefined();
+  });
+
+  // =========================================================================
+  // Trigger fire history persistence (INT-01)
+  // =========================================================================
+
+  it("calls insertTriggerFireHistory with success after trigger fires", async () => {
+    const trigger = makeTrigger("history-success", { shouldFire: true });
+    registry.register(trigger);
+
+    loop.start();
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+    expect(storage.insertTriggerFireHistory).toHaveBeenCalledWith({
+      triggerName: "history-success",
+      result: "success",
+      taskId: expect.any(String),
+      timestamp: expect.any(Number),
+    });
+  });
+
+  it("calls insertTriggerFireHistory with failure when trigger throws", async () => {
+    const trigger = makeTrigger("history-failure", { shouldFire: true });
+    (trigger.shouldFire as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("trigger error");
+    });
+    registry.register(trigger);
+
+    loop.start();
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+    expect(storage.insertTriggerFireHistory).toHaveBeenCalledWith({
+      triggerName: "history-failure",
+      result: "failure",
+      timestamp: expect.any(Number),
+    });
+  });
+
+  it("calls insertTriggerFireHistory with deduplicated when suppressed", async () => {
+    const trigger = makeTrigger("history-dedup", { shouldFire: true });
+    registry.register(trigger);
+
+    const deduplicator = {
+      shouldSuppress: vi.fn().mockReturnValue(true),
+      getSuppressionReason: vi.fn().mockReturnValue("cooldown"),
+      recordFired: vi.fn(),
+      getStats: vi.fn(),
+    };
+
+    loop = new HeartbeatLoop(
+      registry, taskManager as any, budgetTracker as any, securityPolicy as any,
+      approvalQueue as any, storage as any, identityManager as any, eventBus,
+      config, logger as any, deduplicator as any,
+    );
+    loop.start();
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+
+    expect(storage.insertTriggerFireHistory).toHaveBeenCalledWith({
+      triggerName: "history-dedup",
+      result: "deduplicated",
+      timestamp: expect.any(Number),
+    });
   });
 });

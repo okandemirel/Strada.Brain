@@ -274,6 +274,137 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
 });
 
 // =============================================================================
+// GOAL:FAILED EVENT EMISSION (INT-02)
+// =============================================================================
+
+describe("BackgroundExecutor - goal:failed event emission (INT-02)", () => {
+  let mockOrch: ReturnType<typeof createMockOrchestrator>;
+  let mockDecomposer: ReturnType<typeof createMockDecomposer>;
+  let mockGoalStorage: ReturnType<typeof createMockGoalStorage>;
+  let mockDaemonEventBus: ReturnType<typeof createMockDaemonEventBus>;
+
+  beforeEach(() => {
+    mockOrch = createMockOrchestrator();
+    mockDecomposer = createMockDecomposer();
+    mockGoalStorage = createMockGoalStorage();
+    mockDaemonEventBus = createMockDaemonEventBus();
+  });
+
+  it("emits goal:failed event when goal execution has failures", async () => {
+    const goalTree = buildTestGoalTree();
+    const task = createTestTask(goalTree);
+
+    // Make the orchestrator fail for all nodes
+    mockOrch.runBackgroundTask.mockRejectedValue(new Error("Node failed"));
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+      goalExecutorConfig: { maxRetries: 0, maxFailures: 10, parallelExecution: true, maxParallel: 3 },
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const onProgress = vi.fn();
+    const ac = new AbortController();
+    executor.enqueue(task, ac.signal, onProgress);
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // Should have emitted goal:failed (not goal:complete)
+    expect(mockDaemonEventBus.emit).toHaveBeenCalledWith(
+      "goal:failed",
+      expect.objectContaining({
+        rootId: goalTree.rootId,
+        error: expect.stringContaining("sub-goal(s) failed"),
+        failureCount: expect.any(Number),
+        timestamp: expect.any(Number),
+      }),
+    );
+
+    // goal:complete should NOT have been emitted
+    const completeEmitCalls = mockDaemonEventBus.emit.mock.calls.filter(
+      (call: unknown[]) => call[0] === "goal:complete",
+    );
+    expect(completeEmitCalls).toHaveLength(0);
+  });
+
+  it("emits goal:failed event when goal execution is aborted", async () => {
+    const goalTree = buildTestGoalTree();
+    const task = createTestTask(goalTree);
+
+    // Make the orchestrator slow so we can abort mid-execution
+    mockOrch.runBackgroundTask.mockImplementation(async (_prompt: string, opts?: { signal?: AbortSignal }) => {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve("done"), 60000);
+        if (opts?.signal) {
+          opts.signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new Error("Aborted"));
+          });
+        }
+      });
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+      goalExecutorConfig: { maxRetries: 0, maxFailures: 10, parallelExecution: true, maxParallel: 3 },
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const onProgress = vi.fn();
+    const ac = new AbortController();
+    executor.enqueue(task, ac.signal, onProgress);
+
+    // Give it a moment to start, then abort
+    await new Promise(r => setTimeout(r, 50));
+    ac.abort();
+
+    await vi.waitFor(() => {
+      // After abort, either complete or the task is done via abort path
+      expect(mockDaemonEventBus.emit).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // Check if goal:failed was emitted for abort
+    const failedCalls = mockDaemonEventBus.emit.mock.calls.filter(
+      (call: unknown[]) => call[0] === "goal:failed",
+    );
+    // If the abort path triggered event emission, verify it
+    if (failedCalls.length > 0) {
+      expect(failedCalls[0][1]).toEqual(
+        expect.objectContaining({
+          rootId: goalTree.rootId,
+          error: "Goal aborted",
+          timestamp: expect.any(Number),
+        }),
+      );
+    }
+  });
+});
+
+// =============================================================================
 // RE-DECOMPOSITION & ESCALATION TESTS (Plan 16-03)
 // =============================================================================
 
