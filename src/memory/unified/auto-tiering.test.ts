@@ -7,8 +7,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { AgentDBMemory } from "./agentdb-memory.js";
+import { AgentDBMemory, _setNowFn, _resetNowFn } from "./agentdb-memory.js";
 import { MemoryTier } from "./unified-memory.interface.js";
+import type { TimestampMs } from "../../types/index.js";
+import { createBrand } from "../../types/index.js";
 
 // Mock better-sqlite3 and HNSW dependencies
 vi.mock("better-sqlite3", () => {
@@ -384,5 +386,204 @@ describe("AgentDBMemory Auto-Tiering", () => {
       expect(promoteSpy).not.toHaveBeenCalledWith("mixed-stable", expect.anything());
       expect(demoteSpy).not.toHaveBeenCalledWith("mixed-stable", expect.anything());
     });
+  });
+});
+
+// =============================================================================
+// Memory Decay Tests (Phase 21, MEM-08..MEM-11)
+// =============================================================================
+
+/** Helper to set the decayConfig on an AgentDBMemory instance */
+function setDecayConfig(
+  mem: AgentDBMemory,
+  overrides: Record<string, unknown> = {},
+): void {
+  const defaultDecay = {
+    enabled: true,
+    lambdas: {
+      working: 0.10,
+      ephemeral: 0.05,
+      persistent: 0.01,
+    },
+    exemptDomains: ["instinct", "analysis-cache"],
+    timeoutMs: 30000,
+  };
+  const config = { ...defaultDecay, ...overrides };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (mem as any).decayConfig = config;
+}
+
+describe("memory decay", () => {
+  let memory: AgentDBMemory;
+  const BASE_TIME = 1700000000000; // fixed timestamp for deterministic tests
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+    _setNowFn(() => createBrand(BASE_TIME, "TimestampMs" as const));
+    memory = new AgentDBMemory({
+      dbPath: "/tmp/test-decay",
+      dimensions: 128,
+    });
+    await memory.initialize();
+    setDecayConfig(memory);
+  });
+
+  afterEach(() => {
+    _resetNowFn();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("decay formula: after 10 days at lambda 0.10, score is ~0.37 of original", async () => {
+    const tenDaysAgo = BASE_TIME - 10 * 24 * 60 * 60 * 1000;
+    const entry = createTestEntry({
+      id: "decay-formula-1",
+      tier: MemoryTier.Working,
+      importanceScore: 1.0,
+      lastAccessedAt: tenDaysAgo,
+      accessCount: 0,
+    });
+
+    getEntries(memory).set("decay-formula-1", entry);
+    await runSweep(memory, 5, 7);
+
+    // Expected: 1.0 * exp(-10 * 0.10) = 0.3679...
+    const decayed = (getEntries(memory).get("decay-formula-1") as Record<string, unknown>);
+    expect(decayed.importanceScore).toBeCloseTo(Math.exp(-10 * 0.10), 4);
+  });
+
+  it("entries with domain 'instinct' are exempt from decay (MEM-11)", async () => {
+    const thirtyDaysAgo = BASE_TIME - 30 * 24 * 60 * 60 * 1000;
+    const entry = createTestEntry({
+      id: "instinct-1",
+      tier: MemoryTier.Persistent,
+      importanceScore: 0.8,
+      lastAccessedAt: thirtyDaysAgo,
+      domain: "instinct",
+      accessCount: 0,
+    });
+
+    getEntries(memory).set("instinct-1", entry);
+    await runSweep(memory, 5, 7);
+
+    const result = (getEntries(memory).get("instinct-1") as Record<string, unknown>);
+    expect(result.importanceScore).toBe(0.8);
+  });
+
+  it("entries with domain 'analysis-cache' are exempt from decay", async () => {
+    const twentyDaysAgo = BASE_TIME - 20 * 24 * 60 * 60 * 1000;
+    const entry = createTestEntry({
+      id: "analysis-cache-1",
+      tier: MemoryTier.Persistent,
+      importanceScore: 0.9,
+      lastAccessedAt: twentyDaysAgo,
+      domain: "analysis-cache",
+      accessCount: 0,
+    });
+
+    getEntries(memory).set("analysis-cache-1", entry);
+    await runSweep(memory, 5, 7);
+
+    const result = (getEntries(memory).get("analysis-cache-1") as Record<string, unknown>);
+    expect(result.importanceScore).toBe(0.9);
+  });
+
+  it("accessing a memory resets decay (daysSinceAccess ~ 0)", async () => {
+    const entry = createTestEntry({
+      id: "recent-access-1",
+      tier: MemoryTier.Ephemeral,
+      importanceScore: 0.8,
+      lastAccessedAt: BASE_TIME, // just accessed
+      accessCount: 5,
+    });
+
+    getEntries(memory).set("recent-access-1", entry);
+    await runSweep(memory, 5, 7);
+
+    const result = (getEntries(memory).get("recent-access-1") as Record<string, unknown>);
+    // No decay since daysSinceAccess = 0
+    expect(result.importanceScore).toBe(0.8);
+  });
+
+  it("importance score never drops below 0.01 floor", async () => {
+    const longAgo = BASE_TIME - 365 * 24 * 60 * 60 * 1000; // 1 year ago
+    const entry = createTestEntry({
+      id: "floor-test-1",
+      tier: MemoryTier.Working,
+      importanceScore: 0.5,
+      lastAccessedAt: longAgo,
+      accessCount: 0,
+    });
+
+    getEntries(memory).set("floor-test-1", entry);
+    await runSweep(memory, 5, 7);
+
+    const result = (getEntries(memory).get("floor-test-1") as Record<string, unknown>);
+    expect(result.importanceScore).toBe(0.01);
+  });
+
+  it("MEMORY_DECAY_ENABLED=false leaves all scores unchanged (backward compatible)", async () => {
+    setDecayConfig(memory, { enabled: false });
+
+    const tenDaysAgo = BASE_TIME - 10 * 24 * 60 * 60 * 1000;
+    const entry = createTestEntry({
+      id: "disabled-1",
+      tier: MemoryTier.Working,
+      importanceScore: 0.7,
+      lastAccessedAt: tenDaysAgo,
+      accessCount: 0,
+    });
+
+    getEntries(memory).set("disabled-1", entry);
+    await runSweep(memory, 5, 7);
+
+    const result = (getEntries(memory).get("disabled-1") as Record<string, unknown>);
+    expect(result.importanceScore).toBe(0.7);
+  });
+
+  it("per-tier lambda rates: Working decays faster than Ephemeral, Ephemeral faster than Persistent", async () => {
+    const fiveDaysAgo = BASE_TIME - 5 * 24 * 60 * 60 * 1000;
+
+    const workingEntry = createTestEntry({
+      id: "tier-rate-working",
+      tier: MemoryTier.Working,
+      importanceScore: 1.0,
+      lastAccessedAt: fiveDaysAgo,
+      accessCount: 0,
+    });
+    const ephemeralEntry = createTestEntry({
+      id: "tier-rate-ephemeral",
+      tier: MemoryTier.Ephemeral,
+      importanceScore: 1.0,
+      lastAccessedAt: fiveDaysAgo,
+      accessCount: 0,
+    });
+    const persistentEntry = createTestEntry({
+      id: "tier-rate-persistent",
+      tier: MemoryTier.Persistent,
+      importanceScore: 1.0,
+      lastAccessedAt: fiveDaysAgo,
+      accessCount: 0,
+    });
+
+    const entries = getEntries(memory);
+    entries.set("tier-rate-working", workingEntry);
+    entries.set("tier-rate-ephemeral", ephemeralEntry);
+    entries.set("tier-rate-persistent", persistentEntry);
+
+    await runSweep(memory, 5, 7);
+
+    const w = (entries.get("tier-rate-working") as Record<string, unknown>).importanceScore as number;
+    const e = (entries.get("tier-rate-ephemeral") as Record<string, unknown>).importanceScore as number;
+    const p = (entries.get("tier-rate-persistent") as Record<string, unknown>).importanceScore as number;
+
+    // Working (lambda=0.10) decays most, Persistent (lambda=0.01) decays least
+    expect(w).toBeLessThan(e);
+    expect(e).toBeLessThan(p);
+    // Verify exact values
+    expect(w).toBeCloseTo(Math.exp(-5 * 0.10), 4);
+    expect(e).toBeCloseTo(Math.exp(-5 * 0.05), 4);
+    expect(p).toBeCloseTo(Math.exp(-5 * 0.01), 4);
   });
 });
