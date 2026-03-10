@@ -251,4 +251,192 @@ describe("DashboardServer", () => {
       expect(filter.since).toBeLessThanOrEqual(before);
     });
   });
+
+  describe("/api/daemon enrichment (18-03)", () => {
+    function getPort(srv: DashboardServer): number {
+      const addr = (srv as unknown as { server: { address: () => { port: number } } }).server.address();
+      if (!addr || typeof addr === "string") throw new Error("No address");
+      return addr.port;
+    }
+
+    function createMockIdentityManager() {
+      return {
+        getState: vi.fn().mockReturnValue({
+          agentUuid: "uuid-1234-5678-abcd",
+          agentName: "TestAgent",
+          firstBootTs: 1700000000000,
+          bootCount: 5,
+          cumulativeUptimeMs: 3600000,
+          lastActivityTs: 1700001000000,
+          totalMessages: 42,
+          totalTasks: 10,
+          projectContext: "/test/project",
+          cleanShutdown: true,
+        }),
+      };
+    }
+
+    function createMockHeartbeatLoop() {
+      return {
+        getDaemonStatus: vi.fn().mockReturnValue({
+          running: true,
+          intervalMs: 60000,
+          budgetUsage: { usedUsd: 0.5, limitUsd: 10, pct: 5 },
+        }),
+        getCircuitBreaker: vi.fn().mockReturnValue(null),
+      };
+    }
+
+    function createMockTriggerRegistry(triggers: Array<{
+      name: string;
+      type: string;
+      state: string;
+      nextRun: Date | null;
+    }> = []) {
+      const mockTriggers = triggers.map((t) => ({
+        metadata: { name: t.name, description: `${t.name} trigger`, type: t.type },
+        shouldFire: vi.fn().mockReturnValue(false),
+        onFired: vi.fn(),
+        getNextRun: vi.fn().mockReturnValue(t.nextRun),
+        getState: vi.fn().mockReturnValue(t.state),
+      }));
+      return {
+        getAll: vi.fn().mockReturnValue(mockTriggers),
+      };
+    }
+
+    it("includes identity object when identityManager is set", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const mockIdentity = createMockIdentityManager();
+      const mockLoop = createMockHeartbeatLoop();
+      const mockRegistry = createMockTriggerRegistry();
+
+      server.setDaemonContext({
+        heartbeatLoop: mockLoop as never,
+        registry: mockRegistry as never,
+        identityManager: mockIdentity as never,
+      });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/daemon`);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.identity).toBeDefined();
+      expect(data.identity.agentName).toBe("TestAgent");
+      expect(data.identity.agentUuid).toBe("uuid-1234-5678-abcd");
+      expect(data.identity.bootCount).toBe(5);
+      expect(data.identity.cumulativeUptimeMs).toBe(3600000);
+      expect(data.identity.lastActivityTs).toBe(1700001000000);
+      expect(data.identity.firstBootTs).toBe(1700000000000);
+      expect(data.identity.totalMessages).toBe(42);
+      expect(data.identity.totalTasks).toBe(10);
+      expect(data.identity.cleanShutdown).toBe(true);
+    });
+
+    it("includes capabilityManifest string when set", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const mockLoop = createMockHeartbeatLoop();
+      const mockRegistry = createMockTriggerRegistry();
+
+      server.setDaemonContext({
+        heartbeatLoop: mockLoop as never,
+        registry: mockRegistry as never,
+        capabilityManifest: "## Agent Capabilities\nGoal decomposition, learning, etc.",
+      });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/daemon`);
+      const data = await res.json();
+
+      expect(data.capabilityManifest).toBe("## Agent Capabilities\nGoal decomposition, learning, etc.");
+    });
+
+    it("includes triggerHistory from trigger registry metadata", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const mockLoop = createMockHeartbeatLoop();
+      const mockRegistry = createMockTriggerRegistry([
+        { name: "daily-review", type: "cron", state: "active", nextRun: new Date("2026-03-11T00:00:00Z") },
+        { name: "file-watcher", type: "file-watch", state: "active", nextRun: null },
+      ]);
+
+      server.setDaemonContext({
+        heartbeatLoop: mockLoop as never,
+        registry: mockRegistry as never,
+      });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/daemon`);
+      const data = await res.json();
+
+      expect(data.triggerHistory).toBeDefined();
+      expect(Array.isArray(data.triggerHistory)).toBe(true);
+      expect(data.triggerHistory.length).toBe(2);
+      expect(data.triggerHistory[0].triggerName).toBe("daily-review");
+      expect(data.triggerHistory[1].triggerName).toBe("file-watcher");
+    });
+
+    it("returns identity: null when identityManager is not set", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const mockLoop = createMockHeartbeatLoop();
+      const mockRegistry = createMockTriggerRegistry();
+
+      server.setDaemonContext({
+        heartbeatLoop: mockLoop as never,
+        registry: mockRegistry as never,
+      });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/daemon`);
+      const data = await res.json();
+
+      expect(data.identity).toBeNull();
+    });
+
+    it("returns capabilityManifest: null when not set", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const mockLoop = createMockHeartbeatLoop();
+      const mockRegistry = createMockTriggerRegistry();
+
+      server.setDaemonContext({
+        heartbeatLoop: mockLoop as never,
+        registry: mockRegistry as never,
+      });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/daemon`);
+      const data = await res.json();
+
+      expect(data.capabilityManifest).toBeNull();
+    });
+
+    it("dashboard HTML includes identity section and trigger history table", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/`);
+      const html = await res.text();
+
+      expect(html).toContain("identity-panel");
+      expect(html).toContain("trigger-history");
+      expect(html).toContain("api/daemon");
+    });
+  });
 });
