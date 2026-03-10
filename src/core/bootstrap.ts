@@ -844,6 +844,8 @@ export async function initializeMemory(
       });
     }
 
+    agentdb.setDecayConfig(config.memory.decay);
+
     return new AgentDBAdapter(agentdb);
   }
 
