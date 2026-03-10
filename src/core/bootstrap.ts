@@ -64,7 +64,7 @@ import { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import { GoalStorage, GoalDecomposer, detectInterruptedTrees } from "../goals/index.js";
 import type { GoalExecutorConfig } from "../goals/index.js";
 import type { GoalTree } from "../goals/types.js";
-import { ChainDetector, ChainSynthesizer, ChainManager } from "../learning/chains/index.js";
+import { ChainDetector, ChainSynthesizer, ChainManager, ChainValidator } from "../learning/chains/index.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
 import { IdentityStateManager } from "../identity/identity-state.js";
 import { buildCapabilityManifest } from "../agents/context/strata-knowledge.js";
@@ -377,6 +377,20 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       // Use the same provider as orchestrator for LLM chain synthesis
       chainSynthesizer.setProvider(providerManager.getProvider(""));
 
+      // Create chain validator for post-synthesis and runtime feedback (INTEL-05, INTEL-06)
+      const chainValidator = new ChainValidator({
+        storage: learningResult.storage,
+        confidenceScorer: new ConfidenceScorer(),
+        eventBus: learningResult.eventBus as IEventBus<LearningEventMap>,
+        updateInstinctStatus: (instinct) => {
+          learningResult.pipeline?.updateInstinctStatus(instinct);
+        },
+        onChainDeprecated: (chainName) => {
+          chainManager?.handleChainDeprecated(chainName);
+        },
+        maxAgeDays: chainConfig.maxAgeDays,
+      });
+
       chainManager = new ChainManager(
         chainDetector,
         chainSynthesizer,
@@ -385,10 +399,19 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         orchestrator,
         learningResult.eventBus as IEventBus<LearningEventMap>,
         chainConfig,
+        chainValidator,
       );
 
       // Start chain manager (loads existing chains, starts detection timer)
       await chainManager.start();
+
+      // Chain validation feedback loop (INTEL-05, INTEL-06)
+      (learningResult.eventBus as IEventBus<LearningEventMap>).on("chain:executed", (event) => {
+        learningResult.learningQueue!.enqueue(async () => {
+          chainValidator.handleChainExecuted(event);
+        });
+      });
+
       logger.info("Tool chain synthesis initialized");
     } catch (error) {
       logger.warn("Tool chain synthesis initialization failed", {
