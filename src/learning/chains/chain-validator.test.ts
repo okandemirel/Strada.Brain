@@ -454,4 +454,168 @@ describe("ChainValidator", () => {
       expect(deps.updateInstinctStatus).not.toHaveBeenCalled();
     });
   });
+
+  // ===========================================================================
+  // TESTS: CHAIN-03 (Rollback Confidence Penalty -- Phase 22)
+  // ===========================================================================
+
+  describe("handleChainExecuted -- rollback confidence penalty", () => {
+    it("applies double confidence penalty when rollbackReport present (fully_rolled_back)", () => {
+      const instinct = makeInstinct({ confidence: 0.6 });
+      deps.storage.getInstincts.mockReturnValue([instinct]);
+
+      // Each updateConfidence call returns progressively lower confidence
+      const after1 = makeInstinct({ confidence: 0.5 });
+      const after2 = makeInstinct({ confidence: 0.4 });
+      deps.confidenceScorer.updateConfidence
+        .mockReturnValueOnce(after1)
+        .mockReturnValueOnce(after2);
+      deps.storage.getInstinct.mockReturnValue(after2);
+
+      const event = makeChainExecutionEvent({
+        success: false,
+        rollbackReport: {
+          stepsCompleted: ["step_0"],
+          stepsRolledBack: [
+            { stepId: "step_0", tool: "undo_a", success: true, durationMs: 10, state: "rolledBack" },
+          ],
+          rollbackFailures: [],
+          finalState: "fully_rolled_back",
+        },
+      });
+      validator.handleChainExecuted(event);
+
+      // Should call updateConfidence twice: initial failure + rollback penalty
+      expect(deps.confidenceScorer.updateConfidence).toHaveBeenCalledTimes(2);
+      // Both calls should be with success=false
+      expect(deps.confidenceScorer.updateConfidence).toHaveBeenNthCalledWith(1, instinct, false);
+      expect(deps.confidenceScorer.updateConfidence).toHaveBeenNthCalledWith(2, after1, false);
+    });
+
+    it("applies triple confidence penalty when rollbackReport.finalState is 'rollback_failed'", () => {
+      const instinct = makeInstinct({ confidence: 0.7 });
+      deps.storage.getInstincts.mockReturnValue([instinct]);
+
+      const after1 = makeInstinct({ confidence: 0.6 });
+      const after2 = makeInstinct({ confidence: 0.5 });
+      const after3 = makeInstinct({ confidence: 0.4 });
+      deps.confidenceScorer.updateConfidence
+        .mockReturnValueOnce(after1)
+        .mockReturnValueOnce(after2)
+        .mockReturnValueOnce(after3);
+      deps.storage.getInstinct.mockReturnValue(after3);
+
+      const event = makeChainExecutionEvent({
+        success: false,
+        rollbackReport: {
+          stepsCompleted: ["step_0"],
+          stepsRolledBack: [
+            { stepId: "step_0", tool: "undo_a", success: false, durationMs: 10, state: "rollbackFailed" },
+          ],
+          rollbackFailures: ["step_0"],
+          finalState: "rollback_failed",
+        },
+      });
+      validator.handleChainExecuted(event);
+
+      // Triple penalty: initial + rollback + failed rollback
+      expect(deps.confidenceScorer.updateConfidence).toHaveBeenCalledTimes(3);
+    });
+
+    it("applies triple confidence penalty when rollbackReport.finalState is 'partially_rolled_back'", () => {
+      const instinct = makeInstinct({ confidence: 0.7 });
+      deps.storage.getInstincts.mockReturnValue([instinct]);
+
+      const after1 = makeInstinct({ confidence: 0.6 });
+      const after2 = makeInstinct({ confidence: 0.5 });
+      const after3 = makeInstinct({ confidence: 0.4 });
+      deps.confidenceScorer.updateConfidence
+        .mockReturnValueOnce(after1)
+        .mockReturnValueOnce(after2)
+        .mockReturnValueOnce(after3);
+      deps.storage.getInstinct.mockReturnValue(after3);
+
+      const event = makeChainExecutionEvent({
+        success: false,
+        rollbackReport: {
+          stepsCompleted: ["step_0", "step_1"],
+          stepsRolledBack: [
+            { stepId: "step_1", tool: "undo_b", success: true, durationMs: 10, state: "rolledBack" },
+            { stepId: "step_0", tool: "undo_a", success: false, durationMs: 10, state: "rollbackFailed" },
+          ],
+          rollbackFailures: ["step_0"],
+          finalState: "partially_rolled_back",
+        },
+      });
+      validator.handleChainExecuted(event);
+
+      // Triple penalty: initial + rollback + partial rollback failure
+      expect(deps.confidenceScorer.updateConfidence).toHaveBeenCalledTimes(3);
+    });
+
+    it("applies single standard penalty when forwardRecovery=true (no extra penalty)", () => {
+      const instinct = makeInstinct({ confidence: 0.6 });
+      deps.storage.getInstincts.mockReturnValue([instinct]);
+
+      const after1 = makeInstinct({ confidence: 0.5 });
+      deps.confidenceScorer.updateConfidence.mockReturnValue(after1);
+      deps.storage.getInstinct.mockReturnValue(after1);
+
+      const event = makeChainExecutionEvent({
+        success: false,
+        forwardRecovery: true,
+      });
+      validator.handleChainExecuted(event);
+
+      // Only 1 call: standard failure penalty, no extra for forward-recovery
+      expect(deps.confidenceScorer.updateConfidence).toHaveBeenCalledTimes(1);
+      expect(deps.confidenceScorer.updateConfidence).toHaveBeenCalledWith(instinct, false);
+    });
+
+    it("does not change behavior for events without rollbackReport (no regression)", () => {
+      const instinct = makeInstinct({ confidence: 0.6 });
+      deps.storage.getInstincts.mockReturnValue([instinct]);
+
+      const after1 = makeInstinct({ confidence: 0.5 });
+      deps.confidenceScorer.updateConfidence.mockReturnValue(after1);
+      deps.storage.getInstinct.mockReturnValue(after1);
+
+      const event = makeChainExecutionEvent({ success: false });
+      validator.handleChainExecuted(event);
+
+      // Standard single penalty
+      expect(deps.confidenceScorer.updateConfidence).toHaveBeenCalledTimes(1);
+    });
+
+    it("triggers deprecation cascade when rollback penalties drop confidence below threshold", () => {
+      const instinct = makeInstinct({ confidence: 0.35 });
+      deps.storage.getInstincts.mockReturnValue([instinct]);
+
+      // After double penalty, confidence drops below DEPRECATED threshold (0.3)
+      const after1 = makeInstinct({ confidence: 0.28 });
+      const after2 = makeInstinct({ confidence: 0.2 });
+      deps.confidenceScorer.updateConfidence
+        .mockReturnValueOnce(after1)
+        .mockReturnValueOnce(after2);
+
+      // After lifecycle update, re-read returns deprecated
+      const deprecated = makeInstinct({ confidence: 0.2, status: "deprecated" });
+      deps.storage.getInstinct.mockReturnValue(deprecated);
+
+      const event = makeChainExecutionEvent({
+        success: false,
+        rollbackReport: {
+          stepsCompleted: ["step_0"],
+          stepsRolledBack: [
+            { stepId: "step_0", tool: "undo_a", success: true, durationMs: 10, state: "rolledBack" },
+          ],
+          rollbackFailures: [],
+          finalState: "fully_rolled_back",
+        },
+      });
+      validator.handleChainExecuted(event);
+
+      expect(deps.onChainDeprecated).toHaveBeenCalledWith("test_chain");
+    });
+  });
 });
