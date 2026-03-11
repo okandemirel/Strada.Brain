@@ -74,6 +74,9 @@ import { MigrationRunner } from "../learning/storage/migrations/index.js";
 import { migration001CrossSessionProvenance } from "../learning/storage/migrations/001-cross-session-provenance.js";
 import type { ScopeContext } from "../learning/matching/pattern-matcher.js";
 
+// Multi-agent type-only import (Plan 23-03: AGENT-01, AGENT-06, AGENT-07)
+import type { AgentManager as AgentManagerType } from "../agents/multi/agent-manager.js";
+
 // Daemon imports
 import { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
 import { TriggerRegistry } from "../daemon/trigger-registry.js";
@@ -122,6 +125,7 @@ export interface BootstrapResult {
   shutdown: () => Promise<void>;
   heartbeatLoop?: HeartbeatLoop;
   daemonContext?: import("../daemon/daemon-cli.js").DaemonContext;
+  agentManager?: AgentManagerType;
 }
 
 /**
@@ -261,6 +265,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let digestReporterInstance: DigestReporter | undefined;
   let notificationRouterInstance: NotificationRouter | undefined;
   let daemonContext: import("../daemon/daemon-cli.js").DaemonContext | undefined;
+  let agentManager: AgentManagerType | undefined;
   await toolRegistry.initialize(config, {
     memoryManager,
     ragPipeline,
@@ -625,6 +630,54 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       chainResilienceConfig: config.toolChain.resilience,
     };
 
+    // Initialize multi-agent system (Phase 23: AGENT-01, AGENT-02, AGENT-06)
+    if (config.agent.enabled) {
+      const { AgentManager } = await import("../agents/multi/agent-manager.js");
+      const { AgentRegistry } = await import("../agents/multi/agent-registry.js");
+      const { AgentBudgetTracker } = await import("../agents/multi/agent-budget-tracker.js");
+
+      // Agent registry uses daemon.db for persistence
+      const agentRegistry = new AgentRegistry(daemonStorage.getDatabase());
+      agentRegistry.initialize();
+
+      const agentBudgetTrackerInstance = new AgentBudgetTracker(daemonStorage);
+
+      agentManager = new AgentManager({
+        config: config.agent,
+        registry: agentRegistry,
+        budgetTracker: agentBudgetTrackerInstance,
+        eventBus: learningResult.eventBus as IEventBus<LearningEventMap>,
+        providerManager,
+        toolRegistry,
+        channel,
+        projectPath: config.unityProjectPath,
+        readOnly: config.security.readOnlyMode,
+        requireConfirmation: config.security.requireEditConfirmation,
+        metrics,
+        ragPipeline,
+        rateLimiter,
+        streamingEnabled: config.streamingEnabled,
+        stradaDeps,
+        instinctRetriever,
+        metricsRecorder,
+        goalDecomposer,
+        getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
+        reRetrievalConfig: config.reRetrieval,
+        embeddingProvider: cachedEmbeddingProvider,
+        memoryConfig: { dimensions: config.memory.unified.dimensions, dbBasePath: config.memory.dbPath },
+      });
+
+      // Add agentManager to daemon context for CLI commands
+      daemonContext!.agentManager = agentManager;
+      daemonContext!.agentBudgetTracker = agentBudgetTrackerInstance;
+
+      logger.info("Multi-agent system initialized", {
+        maxConcurrent: config.agent.maxConcurrent,
+        defaultBudget: config.agent.defaultBudgetUsd,
+        idleTimeoutMs: config.agent.idleTimeoutMs,
+      });
+    }
+
     // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
     if (dashboard) {
       dashboard.setDaemonContext({
@@ -645,14 +698,29 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   }
 
   // Wire up message handler
-  wireMessageHandler(
-    channel,
-    messageRouter,
-    orchestrator,
-    learningResult.taskPlanner,
-    learningResult.pipeline,
-    identityManager,
-  );
+  if (agentManager) {
+    // Multi-agent mode: route through AgentManager (AGENT-06)
+    channel.onMessage(async (msg) => {
+      if (identityManager) {
+        identityManager.recordActivity();
+        identityManager.incrementMessages();
+      }
+      if (learningResult.taskPlanner) {
+        learningResult.taskPlanner.startTask({
+          sessionId: msg.chatId ?? generateSessionId(),
+          taskDescription: msg.text.slice(0, 200),
+          learningPipeline: learningResult.pipeline,
+        });
+      }
+      await agentManager!.routeMessage(msg);
+      if (learningResult.taskPlanner?.isActive()) {
+        learningResult.taskPlanner.endTask({ success: true, hadErrors: false, errorCount: 0 });
+      }
+    });
+  } else {
+    // v2.0 single-agent mode: unchanged path (AGENT-07)
+    wireMessageHandler(channel, messageRouter, orchestrator, learningResult.taskPlanner, learningResult.pipeline, identityManager);
+  }
 
   // Setup cleanup
   const cleanupInterval = setupCleanup(orchestrator);
@@ -660,6 +728,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Start channel
   await channel.connect();
   logger.info("Strata Brain is running!");
+
+  // Register AgentManager with dashboard (Plan 23-03)
+  if (dashboard && agentManager) {
+    dashboard.registerAgentServices({ agentManager });
+  }
 
   // Return result with shutdown function
   return {
@@ -669,6 +742,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     container,
     heartbeatLoop,
     daemonContext,
+    agentManager,
     shutdown: createShutdownHandler({
       dashboard,
       ragPipeline,
@@ -688,6 +762,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       heartbeatLoop,
       digestReporter: digestReporterInstance,
       notificationRouter: notificationRouterInstance,
+      agentManager,
     }),
   };
 }
@@ -1315,6 +1390,7 @@ interface ShutdownOptions {
   heartbeatLoop?: HeartbeatLoop;
   digestReporter?: DigestReporter;
   notificationRouter?: NotificationRouter;
+  agentManager?: AgentManagerType;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -1333,6 +1409,11 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
     }
     if (options.notificationRouter) {
       options.notificationRouter.stop();
+    }
+
+    // Shut down multi-agent system before heartbeat loop
+    if (options.agentManager) {
+      await options.agentManager.shutdown();
     }
 
     // Stop heartbeat loop before draining events

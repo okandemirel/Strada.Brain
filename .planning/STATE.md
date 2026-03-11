@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Multi-Agent & Hardening
 status: executing
-stopped_at: Completed 23-01-PLAN.md
-last_updated: "2026-03-11T18:09:19.993Z"
-last_activity: 2026-03-11 -- Completed 23-01 (Multi-Agent Foundation Types & Registry)
+stopped_at: Completed 23-02-PLAN.md
+last_updated: "2026-03-11T18:17:55.000Z"
+last_activity: 2026-03-11 -- Completed 23-02 (AgentManager Routing, Isolation & Lifecycle)
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 12
-  completed_plans: 10
-  percent: 85
+  completed_plans: 11
+  percent: 92
 ---
 
 # State: Strada.Brain
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 23 of 25 (Multi-Agent Foundation)
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 Status: In Progress
-Last activity: 2026-03-11 -- Completed 23-01 (Multi-Agent Foundation Types & Registry)
+Last activity: 2026-03-11 -- Completed 23-02 (AgentManager Routing, Isolation & Lifecycle)
 
-Progress: [█████████░] 85%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -40,8 +40,8 @@ Progress: [█████████░] 85%
 - v2.0 gap closure: 1 phase, 1 plan, 5 min (2026-03-10)
 - v3.0 Phase 21: 1 phase, 4 plans including gap closure (2026-03-10)
 - v3.0 Phase 22: Plan 01 in 7 min, Plan 02 in 7 min, Plan 03 in 6 min, Plan 04 in 6 min, Plan 05 in 3 min (2026-03-11)
-- v3.0 Phase 23: Plan 01 in 7 min (2026-03-11)
-- Total: 22 phases, 59 plans, 6 days
+- v3.0 Phase 23: Plan 01 in 7 min, Plan 02 in 7 min (2026-03-11)
+- Total: 22 phases, 60 plans, 6 days
 
 ## Accumulated Context
 
@@ -85,6 +85,10 @@ Progress: [█████████░] 85%
 - 23-01: Upsert ON CONFLICT(key) preserves original agent id while updating mutable fields
 - 23-01: Agent budget migration is idempotent (safe to call multiple times)
 - 23-01: Legacy null agent_id entries contribute to global but not per-agent budget usage
+- 23-02: routeMessage returns string|void -- string for error cases (budget/stopped), void for normal orchestrator flow
+- 23-02: Memory cast via `as unknown as IMemoryManager` since AgentDBMemory implements IUnifiedMemory not IMemoryManager
+- 23-02: Idle check interval uses unref() so it doesn't keep the process alive during shutdown
+- 23-02: evictOldestIdle picks lowest lastActivity across all agents regardless of status
 
 ### Pending Todos
 
@@ -96,10 +100,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-11T18:09:19.989Z
-Stopped at: Completed 23-01-PLAN.md
+Last session: 2026-03-11T18:17:55Z
+Stopped at: Completed 23-02-PLAN.md
 Resume file: None
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-11 after Phase 23 Plan 01 (Multi-Agent Foundation Types & Registry)*
+*Last updated: 2026-03-11 after Phase 23 Plan 02 (AgentManager Routing, Isolation & Lifecycle)*

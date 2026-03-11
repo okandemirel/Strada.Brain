@@ -57,6 +57,8 @@ export interface DaemonContext {
   memoryManager?: IMemoryManager;
   learningStorage?: LearningStorage;
   chainResilienceConfig?: ChainResilienceConfig;
+  agentManager?: import("../agents/multi/agent-manager.js").AgentManager;
+  agentBudgetTracker?: import("../agents/multi/agent-budget-tracker.js").AgentBudgetTracker;
 }
 
 /**

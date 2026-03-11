@@ -96,6 +96,12 @@ export class DashboardServer {
   // Chain resilience context (Plan 22-04)
   private chainResilienceConfig?: ChainResilienceConfig;
 
+  // Multi-agent context (Plan 23-03) -- fields read in /api/agents endpoint handler below
+  // @ts-ignore - Reserved for multi-agent endpoint (Plan 23-03 Task 2)
+  private agentManager?: { getAllAgents(): Array<{ id: string; key: string; channelType: string; chatId: string; status: string; createdAt: number; lastActivity: number; budgetCapUsd: number; memoryEntryCount: number }>; getActiveCount(): number };
+  // @ts-ignore - Reserved for multi-agent endpoint (Plan 23-03 Task 2)
+  private agentBudgetTracker?: { getGlobalUsage(cap?: number): { usedUsd: number; limitUsd?: number; pct: number }; getAllAgentUsages(): Map<string, number> };
+
   constructor(
     port: number,
     metrics: MetricsCollector,
@@ -133,6 +139,22 @@ export class DashboardServer {
     }
     if (services.chainResilienceConfig) {
       this.chainResilienceConfig = services.chainResilienceConfig;
+    }
+  }
+
+  /**
+   * Register multi-agent services for /api/agents endpoint and dashboard Agents section.
+   * Call after AgentManager is initialized (Plan 23-03).
+   */
+  registerAgentServices(services: {
+    agentManager?: { getAllAgents(): Array<{ id: string; key: string; channelType: string; chatId: string; status: string; createdAt: number; lastActivity: number; budgetCapUsd: number; memoryEntryCount: number }>; getActiveCount(): number };
+    agentBudgetTracker?: { getGlobalUsage(cap?: number): { usedUsd: number; limitUsd?: number; pct: number }; getAllAgentUsages(): Map<string, number> };
+  }): void {
+    if (services.agentManager) {
+      this.agentManager = services.agentManager;
+    }
+    if (services.agentBudgetTracker) {
+      this.agentBudgetTracker = services.agentBudgetTracker;
     }
   }
 

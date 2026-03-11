@@ -92,8 +92,8 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 23-01-PLAN.md -- Agent types, config, registry, budget tracker, and event bus extensions (AGENT-01, AGENT-02, AGENT-07)
-- [ ] 23-02-PLAN.md -- AgentManager: routing, isolation, budget enforcement, lifecycle management (AGENT-01, AGENT-02, AGENT-06)
+- [x] 23-01-PLAN.md -- Agent types, config, registry, budget tracker, and event bus extensions (AGENT-01, AGENT-02, AGENT-07)
+- [x] 23-02-PLAN.md -- AgentManager: routing, isolation, budget enforcement, lifecycle management (AGENT-01, AGENT-02, AGENT-06)
 - [ ] 23-03-PLAN.md -- Bootstrap wiring, CLI agent commands, Dashboard Agents section, backward compat verification (AGENT-01, AGENT-02, AGENT-06, AGENT-07)
 
 ### Phase 24: Task Delegation
@@ -139,10 +139,10 @@ Phases 21 and 22 can execute in parallel (independent subsystems). Phase 23 foll
 | 20 | v2.0 gap closure | 1/1 | Complete | 2026-03-10 |
 | 21. Operational Health & Memory Decay | 4/4 | Complete    | 2026-03-10 | 2026-03-10 |
 | 22. Tool Chain Resilience | 5/5 | Complete    | 2026-03-11 | 2026-03-11 |
-| 23. Multi-Agent Foundation | 1/3 | In Progress|  | - |
+| 23. Multi-Agent Foundation | 2/3 | In Progress|  | - |
 | 24. Task Delegation | v3.0 | 0/TBD | Not started | - |
 | 25. Memory Consolidation & Deployment | v3.0 | 0/TBD | Not started | - |
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-11 after Phase 23 planning complete (3 plans, 3 waves)*
+*Last updated: 2026-03-11 after Phase 23 Plan 02 complete (AgentManager Routing, Isolation & Lifecycle)*

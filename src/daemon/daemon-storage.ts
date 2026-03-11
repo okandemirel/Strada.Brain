@@ -254,6 +254,17 @@ export class DaemonStorage {
     this.dbPath = dbPath;
   }
 
+  /**
+   * Get the underlying better-sqlite3 Database instance.
+   * Used by AgentRegistry to share the daemon.db connection (Plan 23-03).
+   */
+  getDatabase(): Database.Database {
+    if (!this.db) {
+      throw new Error("DaemonStorage not initialized. Call initialize() first.");
+    }
+    return this.db;
+  }
+
   /** Initialize the database connection and create all daemon tables */
   initialize(): void {
     const dir = dirname(this.dbPath);
