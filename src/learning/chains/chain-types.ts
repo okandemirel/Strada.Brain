@@ -261,6 +261,14 @@ export interface ChainResilienceConfig {
   readonly compensationTimeoutMs: number;
 }
 
+/** Default chain resilience config (used when no config is provided) */
+export const DEFAULT_RESILIENCE_CONFIG: ChainResilienceConfig = {
+  rollbackEnabled: false,
+  parallelEnabled: false,
+  maxParallelBranches: 4,
+  compensationTimeoutMs: 5000,
+};
+
 // =============================================================================
 // V1 -> V2 MIGRATION
 // =============================================================================

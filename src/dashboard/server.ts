@@ -27,7 +27,7 @@ import type { DaemonStorage } from "../daemon/daemon-storage.js";
 import {
   ChainMetadataV2Schema,
   ChainMetadataSchema,
-  migrateV1toV2,
+  DEFAULT_RESILIENCE_CONFIG,
 } from "../learning/chains/chain-types.js";
 import type { ChainResilienceConfig } from "../learning/chains/chain-types.js";
 
@@ -770,13 +770,6 @@ export class DashboardServer {
    * Reads tool_chain instincts, parses V2/V1 metadata, and computes resilience indicators.
    */
   private getChainResilienceData(): Record<string, unknown> {
-    const DEFAULT_CONFIG = {
-      rollbackEnabled: false,
-      parallelEnabled: false,
-      maxParallelBranches: 4,
-      compensationTimeoutMs: 5000,
-    };
-
     const chains: Array<Record<string, unknown>> = [];
 
     if (this.learningStorage) {
@@ -839,7 +832,7 @@ export class DashboardServer {
       }
     }
 
-    const config = this.chainResilienceConfig ?? DEFAULT_CONFIG;
+    const config = this.chainResilienceConfig ?? DEFAULT_RESILIENCE_CONFIG;
 
     return {
       chains,

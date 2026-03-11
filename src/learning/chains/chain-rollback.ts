@@ -100,13 +100,16 @@ export async function executeRollback(
         input[paramName] = stepOutput[sourceKey];
       }
 
-      // Execute compensation tool
+      // Execute compensation tool with per-step timeout
       const tool = toolRegistry.get(compensatingAction.toolName);
       if (!tool) {
         throw new Error(`Compensation tool '${compensatingAction.toolName}' not found`);
       }
 
-      await tool.execute(input, context);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`Compensation timed out after ${timeoutMs}ms`)), timeoutMs);
+      });
+      await Promise.race([tool.execute(input, context), timeoutPromise]);
 
       results.push({
         stepId,

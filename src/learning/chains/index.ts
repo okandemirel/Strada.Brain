@@ -15,6 +15,7 @@ export {
   migrateV1toV2,
   computeSuccessRate,
   COMPOSITE_TOOL_METADATA,
+  DEFAULT_RESILIENCE_CONFIG,
   computeCompositeMetadata,
   parseLLMJsonOutput,
   safeStringify,

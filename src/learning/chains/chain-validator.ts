@@ -99,7 +99,7 @@ export class ChainValidator {
     const deprecated =
       currentInstinct.confidence < CONFIDENCE_THRESHOLDS.DEPRECATED;
     if (deprecated) {
-      this.handleDeprecation(chainName);
+      this.onChainDeprecated(chainName);
     }
 
     this.eventBus.emit("chain:validated", {
@@ -164,17 +164,6 @@ export class ChainValidator {
     if (reRead?.status === "deprecated") {
       this.onChainDeprecated(event.chainName);
     }
-  }
-
-  // ===========================================================================
-  // PRIVATE: Deprecation Cascade
-  // ===========================================================================
-
-  /**
-   * Handle deprecation: notify chain manager and emit invalidation event.
-   */
-  private handleDeprecation(chainName: string): void {
-    this.onChainDeprecated(chainName);
   }
 
   // ===========================================================================

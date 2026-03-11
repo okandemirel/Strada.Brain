@@ -14,7 +14,7 @@ import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
 import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
-import type { ToolChainConfig, ChainResilienceConfig } from "../learning/chains/index.js";
+import type { ToolChainConfig } from "../learning/chains/index.js";
 import type { DaemonConfig } from "../daemon/daemon-types.js";
 import type { NotificationConfig, QuietHoursConfig, DigestConfig } from "../daemon/reporting/notification-types.js";
 
@@ -675,8 +675,8 @@ export const configSchema = z
     toolChainDetectionIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000).max(3600000)).default("300000"),
 
     // Chain Resilience (Phase 22)
-    chainRollbackEnabled: boolFromString(true),
-    chainParallelEnabled: boolFromString(true),
+    chainRollbackEnabled: boolFromString(false),
+    chainParallelEnabled: boolFromString(false),
     chainMaxParallelBranches: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("4"),
     chainCompensationTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1000).max(300000)).default("30000"),
 

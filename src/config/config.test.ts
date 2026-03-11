@@ -484,8 +484,8 @@ describe("loadConfig", () => {
       setEnv();
       const config = loadConfig();
       expect(config.toolChain.resilience).toEqual({
-        rollbackEnabled: true,
-        parallelEnabled: true,
+        rollbackEnabled: false,
+        parallelEnabled: false,
         maxParallelBranches: 4,
         compensationTimeoutMs: 30000,
       });

@@ -27,6 +27,7 @@ import type {
   ChainStepNode,
   RollbackReport,
 } from "./chain-types.js";
+import { DEFAULT_RESILIENCE_CONFIG } from "./chain-types.js";
 import { computeChainWaves } from "./chain-dag.js";
 import { executeRollback } from "./chain-rollback.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
@@ -44,6 +45,7 @@ export interface CompositeToolMetadata {
 }
 
 interface StepRecord {
+  stepId: string;
   tool: string;
   success: boolean;
   durationMs: number;
@@ -69,12 +71,7 @@ export class CompositeTool implements ITool {
     this.description = metadata.description;
     this.inputSchema = metadata.inputSchema;
     this.chainMetadata = metadata.chainMetadata;
-    this.resilienceConfig = metadata.resilienceConfig ?? {
-      rollbackEnabled: false,
-      parallelEnabled: false,
-      maxParallelBranches: 4,
-      compensationTimeoutMs: 5000,
-    };
+    this.resilienceConfig = metadata.resilienceConfig ?? DEFAULT_RESILIENCE_CONFIG;
   }
 
   /** Get the ordered tool sequence for this chain */
@@ -122,8 +119,9 @@ export class CompositeTool implements ITool {
 
   /** Check if chainMetadata is V2 format with steps array */
   private isV2Metadata(): boolean {
-    const meta = this.chainMetadata as Record<string, unknown>;
-    return meta["version"] === 2 && Array.isArray(meta["steps"]);
+    return "version" in this.chainMetadata
+      && (this.chainMetadata as ChainMetadataV2).version === 2
+      && "steps" in this.chainMetadata;
   }
 
   // ===========================================================================
@@ -148,7 +146,7 @@ export class CompositeTool implements ITool {
       const stepDuration = Date.now() - stepStart;
       const success = !result.isError;
 
-      stepResults.push({ tool: toolName, success, durationMs: stepDuration });
+      stepResults.push({ stepId: `step_${i}`, tool: toolName, success, durationMs: stepDuration });
 
       if (result.isError) {
         this.emitChainEvent(false, stepResults, startTime);
@@ -196,7 +194,7 @@ export class CompositeTool implements ITool {
       const stepDuration = Date.now() - stepStart;
       const success = !result.isError;
 
-      stepResults.push({ tool: step.toolName, success, durationMs: stepDuration });
+      stepResults.push({ stepId: step.stepId, tool: step.toolName, success, durationMs: stepDuration });
 
       if (result.isError) {
         return this.handleFailure(
@@ -280,7 +278,7 @@ export class CompositeTool implements ITool {
             step,
             result,
             aborted: false,
-            record: { tool: step.toolName, success, durationMs: stepDuration } as StepRecord,
+            record: { stepId: step.stepId, tool: step.toolName, success, durationMs: stepDuration } as StepRecord,
           };
         });
 
@@ -309,7 +307,7 @@ export class CompositeTool implements ITool {
             for (const other of batch) {
               if (other.stepId !== step.stepId && !completedStepIds.includes(other.stepId)) {
                 const alreadyCounted = cancelledSteps.includes(other.stepId)
-                  || stepResults.some((r) => r.tool === other.toolName);
+                  || stepResults.some((r) => r.stepId === other.stepId);
                 if (!alreadyCounted) {
                   cancelledSteps.push(other.stepId);
                 }
@@ -333,7 +331,7 @@ export class CompositeTool implements ITool {
             !completedStepIds.includes(step.stepId)
             && step.stepId !== failedStepId
             && !cancelledSteps.includes(step.stepId)
-            && !stepResults.some((r) => r.tool === step.toolName && !r.success)
+            && !stepResults.some((r) => r.stepId === step.stepId && !r.success)
           ) {
             cancelledSteps.push(step.stepId);
           }
@@ -497,7 +495,7 @@ export class CompositeTool implements ITool {
       }
     }
 
-    // Fallback: try as a direct key in the last completed step's output
+    // Fallback: search all completed step outputs (insertion-order, earliest first)
     for (const [, output] of stepOutputMap) {
       if (sourceKey in output) {
         return output[sourceKey];

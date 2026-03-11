@@ -36,7 +36,9 @@ import {
   ChainMetadataV2Schema,
   ChainMetadataSchema,
   migrateV1toV2,
+  DEFAULT_RESILIENCE_CONFIG,
 } from "../learning/chains/chain-types.js";
+import { computeChainWaves } from "../learning/chains/chain-dag.js";
 import type { ChainResilienceConfig, ChainMetadataV2 } from "../learning/chains/chain-types.js";
 
 /**
@@ -591,12 +593,7 @@ export function registerDaemonCommands(
         return;
       }
 
-      const resilienceConfig = ctx.chainResilienceConfig ?? {
-        rollbackEnabled: false,
-        parallelEnabled: false,
-        maxParallelBranches: 4,
-        compensationTimeoutMs: 5000,
-      };
+      const resilienceConfig = ctx.chainResilienceConfig ?? DEFAULT_RESILIENCE_CONFIG;
 
       if (opts.json) {
         const jsonOutput = {
@@ -657,43 +654,24 @@ export function registerDaemonCommands(
 
 /**
  * Build a topology string from V2 chain metadata steps.
- * Groups steps into waves based on dependsOn.
+ * Uses computeChainWaves to group steps into parallel waves.
  * Parallel steps within a wave are shown in brackets: "step_0 -> [step_1, step_2] -> step_3"
  */
 function buildTopologyString(meta: ChainMetadataV2): string {
-  const steps = meta.steps;
-  if (steps.length === 0) return "";
+  if (meta.steps.length === 0) return "";
 
-  // Build waves using simple topological grouping
-  const completed = new Set<string>();
-  const waves: string[][] = [];
-
-  while (completed.size < steps.length) {
-    const wave: string[] = [];
-    for (const step of steps) {
-      if (completed.has(step.stepId)) continue;
-      const depsResolved = step.dependsOn.every((d) => completed.has(d));
-      if (depsResolved) {
-        wave.push(step.toolName);
-      }
-    }
-    if (wave.length === 0) break; // Avoid infinite loop on cyclic DAG
-
-    // Mark wave steps as completed
-    for (const step of steps) {
-      if (completed.has(step.stepId)) continue;
-      const depsResolved = step.dependsOn.every((d) => completed.has(d));
-      if (depsResolved) {
-        completed.add(step.stepId);
-      }
-    }
-
-    waves.push(wave);
+  try {
+    const waves = computeChainWaves(meta.steps);
+    return waves
+      .map((w) => {
+        const names = w.map((s) => s.toolName);
+        return names.length > 1 ? `[${names.join(", ")}]` : names[0];
+      })
+      .join(" -> ");
+  } catch {
+    // Fallback for invalid DAGs: show linear tool sequence
+    return meta.toolSequence.join(" -> ");
   }
-
-  return waves
-    .map((w) => (w.length > 1 ? `[${w.join(", ")}]` : w[0]))
-    .join(" -> ");
 }
 
 function persistCircuitState(storage: DaemonStorage, name: string, cb: CircuitBreaker): void {

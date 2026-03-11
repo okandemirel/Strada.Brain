@@ -166,7 +166,7 @@ export function computeChainWaves(steps: ChainStepNode[]): ChainStepNode[][] {
 
   for (const step of steps) {
     const d = depth.get(step.stepId)!;
-    waves[d].push(step);
+    waves[d]!.push(step);
   }
 
   return waves;

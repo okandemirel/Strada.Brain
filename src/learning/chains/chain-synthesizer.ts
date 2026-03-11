@@ -261,10 +261,10 @@ export class ChainSynthesizer {
 
     this.learningStorage.createInstinct(instinct);
 
-    // Create CompositeTool (uses V1 chainMetadata fields for execution;
-    // V2 data stored in instinct.action for Plan 03 to access)
+    // Create CompositeTool with V1-compatible fields for execution;
+    // V2 data is stored in instinct.action for Plan 03 to access
     const v1Compat: ChainMetadata = {
-      toolSequence: "toolSequence" in chainMetadata ? chainMetadata.toolSequence : [],
+      toolSequence: chainMetadata.toolSequence,
       parameterMappings: chainMetadata.parameterMappings,
       successRate: chainMetadata.successRate,
       occurrences: chainMetadata.occurrences,
@@ -392,9 +392,11 @@ export class ChainSynthesizer {
         const flags: string[] = [];
         if (meta.dangerous) flags.push("dangerous");
         if (meta.readOnly) flags.push("readOnly");
-        lines.push(`  - ${name}${flags.length > 0 ? ` (${flags.join(", ")})` : ""}`);
+        const safeName = name.replace(/[^\w.-]/g, "_");
+        lines.push(`  - ${safeName}${flags.length > 0 ? ` (${flags.join(", ")})` : ""}`);
       } else {
-        lines.push(`  - ${name}`);
+        const safeName = name.replace(/[^\w.-]/g, "_");
+        lines.push(`  - ${safeName}`);
       }
     }
     return lines.join("\n");
@@ -430,7 +432,7 @@ export class ChainSynthesizer {
    */
   private buildUserMessage(candidate: CandidateChain): string {
     const lines = [
-      `Tool sequence: ${candidate.toolNames.join(" -> ")}`,
+      `Tool sequence: ${candidate.toolNames.map((n) => n.replace(/[^\w.-]/g, "_")).join(" -> ")}`,
       `Occurrences: ${candidate.occurrences}`,
       `Success count: ${candidate.successCount}`,
       `Success rate: ${computeSuccessRate(candidate).toFixed(2)}`,
