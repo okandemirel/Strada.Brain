@@ -7,9 +7,10 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ChainSynthesizer } from "./chain-synthesizer.js";
-import type { CandidateChain, ToolChainConfig } from "./chain-types.js";
+import type { CandidateChain, ToolChainConfig, ChainMetadataV2 } from "./chain-types.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
+import type { ToolMetadata } from "../../core/tool-registry.js";
 import type { IEventBus, LearningEventMap, ChainDetectedEvent } from "../../core/event-bus.js";
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
 import type { Instinct } from "../types.js";
@@ -86,11 +87,19 @@ function makeMockStorage(activeChainCount = 0): LearningStorage {
   } as unknown as LearningStorage;
 }
 
-function makeToolRegistry(existingTools: string[]): ToolRegistry {
+function makeToolRegistry(
+  existingTools: string[],
+  metadataMap?: Record<string, Partial<ToolMetadata>>,
+): ToolRegistry {
   const toolSet = new Set(existingTools);
   return {
     has: vi.fn((name: string) => toolSet.has(name)),
-    getMetadata: vi.fn().mockReturnValue(undefined),
+    getMetadata: vi.fn((name: string) => {
+      if (metadataMap && name in metadataMap) {
+        return { name, description: name, category: "custom", dangerous: false, requiresConfirmation: false, readOnly: false, ...metadataMap[name] };
+      }
+      return undefined;
+    }),
     registerOrUpdate: vi.fn(),
   } as unknown as ToolRegistry;
 }
@@ -106,6 +115,25 @@ function makeEventBus(): IEventBus<LearningEventMap> & { emitCalls: Array<{ even
     shutdown: vi.fn(),
     emitCalls,
   } as unknown as IEventBus<LearningEventMap> & { emitCalls: Array<{ event: string; payload: unknown }> };
+}
+
+/**
+ * Build a mock V2 LLM response with steps, compensation, and reversibility.
+ */
+function makeLLMV2Response(
+  name: string,
+  description: string,
+  steps: Array<{ stepId: string; toolName: string; dependsOn?: string[]; reversible?: boolean; compensatingAction?: { toolName: string; inputMappings: Record<string, string> } }>,
+  isFullyReversible: boolean,
+): string {
+  return JSON.stringify({
+    name,
+    description,
+    parameterMappings: [],
+    inputSchema: { type: "object" },
+    steps,
+    isFullyReversible,
+  });
 }
 
 // =============================================================================
@@ -272,6 +300,239 @@ describe("ChainSynthesizer", () => {
       const tools = await synthesizer.synthesize(candidates);
 
       expect(tools).toHaveLength(0);
+    });
+  });
+
+  describe("V2 synthesis", () => {
+    it("V2 synthesis creates instinct with version:2 metadata", async () => {
+      const storage = makeMockStorage(0);
+      const registry = makeToolRegistry(["tool_a", "tool_b"], {
+        tool_a: { readOnly: true },
+        tool_b: { readOnly: true },
+      });
+      const v2Response = makeLLMV2Response(
+        "read_then_write",
+        "Reads a file then writes it",
+        [
+          { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+        ],
+        true,
+      );
+      const provider = makeProvider([v2Response]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      const tools = await synthesizer.synthesize(candidates);
+
+      expect(tools).toHaveLength(1);
+      const createdInstinct = vi.mocked(storage.createInstinct).mock.calls[0][0];
+      const action: ChainMetadataV2 = JSON.parse(createdInstinct.action);
+      expect(action.version).toBe(2);
+      expect(action.steps).toHaveLength(2);
+      expect(action.steps[0].stepId).toBe("step_0");
+    });
+
+    it("compensation referencing non-existent tool is stripped, chain registered without rollback", async () => {
+      const storage = makeMockStorage(0);
+      // tool_a and tool_b exist, but "undo_tool" does NOT exist
+      const registry = makeToolRegistry(["tool_a", "tool_b"], {
+        tool_a: { dangerous: false, readOnly: false },
+        tool_b: { dangerous: false, readOnly: false },
+      });
+      const v2Response = makeLLMV2Response(
+        "chain_with_bad_comp",
+        "Chain with invalid compensation tool reference",
+        [
+          { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: true, compensatingAction: { toolName: "undo_tool", inputMappings: { key: "step_0.output" } } },
+          { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+        ],
+        true,
+      );
+      const provider = makeProvider([v2Response]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      const tools = await synthesizer.synthesize(candidates);
+
+      expect(tools).toHaveLength(1);
+      const createdInstinct = vi.mocked(storage.createInstinct).mock.calls[0][0];
+      const action: ChainMetadataV2 = JSON.parse(createdInstinct.action);
+      // step_0 should have compensation stripped and reversible=false
+      expect(action.steps[0].compensatingAction).toBeUndefined();
+      expect(action.steps[0].reversible).toBe(false);
+      // chain is NOT fully reversible since step_0 is irreversible
+      expect(action.isFullyReversible).toBe(false);
+    });
+
+    it("readOnly tool forced reversible regardless of LLM classification", async () => {
+      const storage = makeMockStorage(0);
+      // tool_a is readOnly
+      const registry = makeToolRegistry(["tool_a", "tool_b"], {
+        tool_a: { readOnly: true, dangerous: false },
+        tool_b: { readOnly: false, dangerous: false },
+      });
+      // LLM says tool_a reversible=false (wrong for readOnly)
+      const v2Response = makeLLMV2Response(
+        "read_chain",
+        "Chain with read-only tool",
+        [
+          { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: false },
+          { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+        ],
+        false,
+      );
+      const provider = makeProvider([v2Response]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      await synthesizer.synthesize(candidates);
+
+      const createdInstinct = vi.mocked(storage.createInstinct).mock.calls[0][0];
+      const action: ChainMetadataV2 = JSON.parse(createdInstinct.action);
+      // readOnly tool should be forced reversible
+      expect(action.steps[0].reversible).toBe(true);
+    });
+
+    it("dangerous tool with no compensation forced irreversible", async () => {
+      const storage = makeMockStorage(0);
+      // tool_a is dangerous with no compensation
+      const registry = makeToolRegistry(["tool_a", "tool_b"], {
+        tool_a: { dangerous: true, readOnly: false },
+        tool_b: { readOnly: false, dangerous: false },
+      });
+      // LLM says tool_a reversible=true but no compensation -- should be forced false
+      const v2Response = makeLLMV2Response(
+        "dangerous_chain",
+        "Chain with dangerous tool",
+        [
+          { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+        ],
+        true,
+      );
+      const provider = makeProvider([v2Response]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      await synthesizer.synthesize(candidates);
+
+      const createdInstinct = vi.mocked(storage.createInstinct).mock.calls[0][0];
+      const action: ChainMetadataV2 = JSON.parse(createdInstinct.action);
+      // dangerous tool with no compensation -> forced irreversible
+      expect(action.steps[0].reversible).toBe(false);
+      expect(action.isFullyReversible).toBe(false);
+    });
+
+    it("[rollback-capable] appended to description for fully reversible chains", async () => {
+      const storage = makeMockStorage(0);
+      const registry = makeToolRegistry(["tool_a", "tool_b"], {
+        tool_a: { readOnly: true },
+        tool_b: { readOnly: true },
+      });
+      const v2Response = makeLLMV2Response(
+        "reversible_chain",
+        "A fully reversible chain",
+        [
+          { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+        ],
+        true,
+      );
+      const provider = makeProvider([v2Response]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      const tools = await synthesizer.synthesize(candidates);
+
+      expect(tools).toHaveLength(1);
+      expect(tools[0].description).toContain("[rollback-capable]");
+    });
+
+    it("cyclic DAG from LLM falls back to sequential", async () => {
+      const storage = makeMockStorage(0);
+      const registry = makeToolRegistry(["tool_a", "tool_b"], {
+        tool_a: { readOnly: false, dangerous: false },
+        tool_b: { readOnly: false, dangerous: false },
+      });
+      // Cyclic: step_0 depends on step_1, step_1 depends on step_0
+      const v2Response = makeLLMV2Response(
+        "cyclic_chain",
+        "Chain with cyclic DAG from LLM",
+        [
+          { stepId: "step_0", toolName: "tool_a", dependsOn: ["step_1"], reversible: true },
+          { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+        ],
+        true,
+      );
+      const provider = makeProvider([v2Response]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      const tools = await synthesizer.synthesize(candidates);
+
+      expect(tools).toHaveLength(1);
+      const createdInstinct = vi.mocked(storage.createInstinct).mock.calls[0][0];
+      const action: ChainMetadataV2 = JSON.parse(createdInstinct.action);
+      // Should fallback to sequential: step_0 has no deps, step_1 depends on step_0
+      expect(action.steps[0].dependsOn).toEqual([]);
+      expect(action.steps[1].dependsOn).toEqual(["step_0"]);
+    });
+
+    it("V1 LLM output still works (backward compat)", async () => {
+      const storage = makeMockStorage(0);
+      const registry = makeToolRegistry(["tool_a", "tool_b"]);
+      // V1 response -- no steps or isFullyReversible fields
+      const provider = makeProvider([makeLLMResponse("v1_chain", "A V1 chain description")]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      const tools = await synthesizer.synthesize(candidates);
+
+      expect(tools).toHaveLength(1);
+      expect(tools[0].name).toBe("v1_chain");
+      // V1 path should NOT have version:2 in action
+      const createdInstinct = vi.mocked(storage.createInstinct).mock.calls[0][0];
+      const action = JSON.parse(createdInstinct.action);
+      expect(action.version).toBeUndefined();
+      expect(action.toolSequence).toEqual(["tool_a", "tool_b"]);
+    });
+
+    it("LLM prompt includes tool registry context for compensation", async () => {
+      const storage = makeMockStorage(0);
+      const registry = makeToolRegistry(["tool_a", "tool_b"], {
+        tool_a: { dangerous: true, readOnly: false },
+        tool_b: { dangerous: false, readOnly: true },
+      });
+      const v2Response = makeLLMV2Response(
+        "prompt_test_chain",
+        "Test chain for prompt inspection",
+        [
+          { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: false },
+          { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+        ],
+        false,
+      );
+      const provider = makeProvider([v2Response]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      await synthesizer.synthesize(candidates);
+
+      // Verify the user message passed to LLM includes tool registry context
+      const chatCall = vi.mocked(provider.chat).mock.calls[0];
+      const userMsg = chatCall[1][0].content;
+      expect(userMsg).toContain("tool_a");
+      expect(userMsg).toContain("dangerous");
+      expect(userMsg).toContain("readOnly");
     });
   });
 });

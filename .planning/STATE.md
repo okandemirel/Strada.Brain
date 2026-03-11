@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Multi-Agent & Hardening
-status: executing
-stopped_at: Completed 21-01-PLAN.md
-last_updated: "2026-03-10T18:46:33.705Z"
-last_activity: 2026-03-10 -- Completed 21-02 Memory Decay implementation
+status: in_progress
+stopped_at: Completed 22-01 (Chain Resilience Foundation)
+last_updated: "2026-03-11T15:38:10Z"
+last_activity: 2026-03-11 -- Completed 22-01 (V2 schemas, DAG validator, rollback executor)
 progress:
   total_phases: 5
-  completed_phases: 0
-  total_plans: 3
-  completed_plans: 2
-  percent: 75
+  completed_phases: 1
+  total_plans: 5
+  completed_plans: 5
+  percent: 25
 ---
 
 # State: Strada.Brain
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-10)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- runs 24/7 as a proactive daemon.
-**Current focus:** v3.0 Multi-Agent & Hardening -- Phase 21 executing
+**Current focus:** v3.0 Multi-Agent & Hardening -- Phase 22 Plan 01 complete, 3 plans remaining
 
 ## Current Position
 
-Phase: 21 of 25 (Operational Health & Memory Decay)
-Plan: 2 of 3 complete
-Status: Executing
-Last activity: 2026-03-10 -- Completed 21-02 Memory Decay implementation
+Phase: 22 of 25 (Tool Chain Resilience)
+Plan: 1 of 4 complete
+Status: In Progress
+Last activity: 2026-03-11 -- Completed 22-01 (V2 schemas, DAG validator, rollback executor)
 
-Progress: [████████░░] 75%
+Progress: [███░░░░░░░] 25%
 
 ## Performance Metrics
 
@@ -38,7 +38,9 @@ Progress: [████████░░] 75%
 - v1.0: 9 phases, 24 plans, 3 days (2026-03-06 -> 2026-03-08)
 - v2.0: 10 phases, 26 plans, 3 days (2026-03-08 -> 2026-03-10)
 - v2.0 gap closure: 1 phase, 1 plan, 5 min (2026-03-10)
-- Total: 20 phases, 51 plans, 5 days
+- v3.0 Phase 21: 1 phase, 4 plans including gap closure (2026-03-10)
+- v3.0 Phase 22: Plan 01 in 7 min (2026-03-11)
+- Total: 22 phases, 56 plans, 6 days
 
 ## Accumulated Context
 
@@ -56,6 +58,14 @@ Progress: [████████░░] 75%
 - 21-02: Injectable getNow via module-level _nowFn for testable time control
 - 21-02: Floor at 0.01 minimum importance via Math.max (never zero)
 - 21-02: persistDecayedEntries wraps all entries in DB transaction for atomicity
+- 21-03: Optional getDecayStats() on IMemoryManager to avoid breaking non-AgentDB implementations
+- 21-03: Safe DOM createElement pattern for maintenance panel (security best practice)
+- 21-03: memoryManager added to DaemonContext for CLI decay stats access
+- 21-04: No conditional guard on setDecayConfig -- enabled/disabled check is inside autoTieringSweep
+- 22-01: V2 schemas alongside V1 -- V1 untouched for backward compat, migrateV1toV2 converts in-memory
+- 22-01: RollbackReport as TypeScript interface (not Zod) -- runtime-only data
+- 22-01: DAG validation reuses Kahn's algorithm pattern from GoalDecomposer
+- 22-01: Rollback uses log-and-continue on compensation failures (continues to next step)
 
 ### Pending Todos
 
@@ -67,10 +77,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-10T18:46:33.702Z
-Stopped at: Completed 21-01-PLAN.md
-Resume file: None
+Last session: 2026-03-11T15:38:10Z
+Stopped at: Completed 22-01 (Chain Resilience Foundation)
+Resume file: .planning/phases/22-tool-chain-resilience/22-02-PLAN.md
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-10 after 21-02 Memory Decay completion*
+*Last updated: 2026-03-11 after Phase 22 Plan 01 (V2 schemas, DAG validator, rollback executor)*
