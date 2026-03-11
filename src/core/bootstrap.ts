@@ -74,8 +74,9 @@ import { MigrationRunner } from "../learning/storage/migrations/index.js";
 import { migration001CrossSessionProvenance } from "../learning/storage/migrations/001-cross-session-provenance.js";
 import type { ScopeContext } from "../learning/matching/pattern-matcher.js";
 
-// Multi-agent type-only import (Plan 23-03: AGENT-01, AGENT-06, AGENT-07)
+// Multi-agent type-only imports (Plan 23-03: AGENT-01, AGENT-06, AGENT-07)
 import type { AgentManager as AgentManagerType } from "../agents/multi/agent-manager.js";
+import type { AgentBudgetTracker as AgentBudgetTrackerType } from "../agents/multi/agent-budget-tracker.js";
 
 // Daemon imports
 import { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
@@ -266,6 +267,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let notificationRouterInstance: NotificationRouter | undefined;
   let daemonContext: import("../daemon/daemon-cli.js").DaemonContext | undefined;
   let agentManager: AgentManagerType | undefined;
+  let agentBudgetTrackerOuter: AgentBudgetTrackerType | undefined;
   await toolRegistry.initialize(config, {
     memoryManager,
     ragPipeline,
@@ -641,6 +643,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       agentRegistry.initialize();
 
       const agentBudgetTrackerInstance = new AgentBudgetTracker(daemonStorage);
+      agentBudgetTrackerInstance.initialize();
+      agentBudgetTrackerOuter = agentBudgetTrackerInstance;
 
       agentManager = new AgentManager({
         config: config.agent,
@@ -731,7 +735,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Register AgentManager with dashboard (Plan 23-03)
   if (dashboard && agentManager) {
-    dashboard.registerAgentServices({ agentManager });
+    dashboard.registerAgentServices({ agentManager, agentBudgetTracker: agentBudgetTrackerOuter });
   }
 
   // Return result with shutdown function

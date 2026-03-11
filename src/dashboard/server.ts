@@ -49,6 +49,22 @@ export interface ReadinessResponse {
   timestamp: string;
 }
 
+/** Structural interface for AgentManager methods used by the dashboard */
+interface DashboardAgentManager {
+  getAllAgents(): Array<{
+    id: string; key: string; channelType: string; chatId: string;
+    status: string; createdAt: number; lastActivity: number;
+    budgetCapUsd: number; memoryEntryCount: number;
+  }>;
+  getActiveCount(): number;
+}
+
+/** Structural interface for AgentBudgetTracker methods used by the dashboard */
+interface DashboardAgentBudgetTracker {
+  getGlobalUsage(cap?: number): { usedUsd: number; limitUsd?: number; pct: number };
+  getAllAgentUsages(): Map<string, number>;
+}
+
 /**
  * Lightweight HTTP dashboard server.
  * No external dependencies — uses Node.js built-in http module.
@@ -97,8 +113,8 @@ export class DashboardServer {
   private chainResilienceConfig?: ChainResilienceConfig;
 
   // Multi-agent context (Plan 23-03)
-  private agentManager?: { getAllAgents(): Array<{ id: string; key: string; channelType: string; chatId: string; status: string; createdAt: number; lastActivity: number; budgetCapUsd: number; memoryEntryCount: number }>; getActiveCount(): number };
-  private agentBudgetTracker?: { getGlobalUsage(cap?: number): { usedUsd: number; limitUsd?: number; pct: number }; getAllAgentUsages(): Map<string, number> };
+  private agentManager?: DashboardAgentManager;
+  private agentBudgetTracker?: DashboardAgentBudgetTracker;
 
   constructor(
     port: number,
@@ -145,8 +161,8 @@ export class DashboardServer {
    * Call after AgentManager is initialized (Plan 23-03).
    */
   registerAgentServices(services: {
-    agentManager?: { getAllAgents(): Array<{ id: string; key: string; channelType: string; chatId: string; status: string; createdAt: number; lastActivity: number; budgetCapUsd: number; memoryEntryCount: number }>; getActiveCount(): number };
-    agentBudgetTracker?: { getGlobalUsage(cap?: number): { usedUsd: number; limitUsd?: number; pct: number }; getAllAgentUsages(): Map<string, number> };
+    agentManager?: DashboardAgentManager;
+    agentBudgetTracker?: DashboardAgentBudgetTracker;
   }): void {
     if (services.agentManager) {
       this.agentManager = services.agentManager;

@@ -26,7 +26,13 @@ export class AgentBudgetTracker {
 
   constructor(storage: DaemonStorage) {
     this.storage = storage;
-    // Apply migration for agent_id column support
+  }
+
+  /**
+   * Apply migration for agent_id column support.
+   * Must be called after construction, before any budget operations.
+   */
+  initialize(): void {
     this.storage.migrateAgentBudget();
   }
 
@@ -60,9 +66,7 @@ export class AgentBudgetTracker {
   getAgentUsage(agentId: AgentId, capUsd?: number): BudgetUsage {
     const windowStart = Date.now() - ROLLING_WINDOW_MS;
     const usedUsd = this.storage.sumBudgetSinceForAgent(windowStart, agentId);
-    const limitUsd = capUsd;
-    const pct = limitUsd !== undefined && limitUsd > 0 ? usedUsd / limitUsd : 0;
-    return { usedUsd, limitUsd, pct };
+    return toBudgetUsage(usedUsd, capUsd);
   }
 
   /**
@@ -71,11 +75,8 @@ export class AgentBudgetTracker {
    */
   getGlobalUsage(globalCapUsd?: number): BudgetUsage {
     const windowStart = Date.now() - ROLLING_WINDOW_MS;
-    // sumBudgetSince sums ALL entries regardless of agent_id
     const usedUsd = this.storage.sumBudgetSince(windowStart);
-    const limitUsd = globalCapUsd;
-    const pct = limitUsd !== undefined && limitUsd > 0 ? usedUsd / limitUsd : 0;
-    return { usedUsd, limitUsd, pct };
+    return toBudgetUsage(usedUsd, globalCapUsd);
   }
 
   /**
@@ -100,4 +101,10 @@ export class AgentBudgetTracker {
     }
     return result;
   }
+}
+
+/** Build a BudgetUsage object from used amount and optional cap */
+function toBudgetUsage(usedUsd: number, limitUsd?: number): BudgetUsage {
+  const pct = limitUsd !== undefined && limitUsd > 0 ? usedUsd / limitUsd : 0;
+  return { usedUsd, limitUsd, pct };
 }

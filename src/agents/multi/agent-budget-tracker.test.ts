@@ -24,6 +24,7 @@ describe("AgentBudgetTracker", () => {
     storage = new DaemonStorage(dbPath);
     storage.initialize();
     tracker = new AgentBudgetTracker(storage);
+    tracker.initialize();
     agentA = createAgentId();
     agentB = createAgentId();
   });
@@ -233,10 +234,10 @@ describe("AgentBudgetTracker", () => {
   // =========================================================================
 
   describe("migration idempotency", () => {
-    it("calling migrateAgentBudget multiple times does not throw", () => {
-      // Constructor already called it once, call it again
-      expect(() => storage.migrateAgentBudget()).not.toThrow();
-      expect(() => storage.migrateAgentBudget()).not.toThrow();
+    it("calling initialize multiple times does not throw", () => {
+      // beforeEach already called initialize() once, call it again
+      expect(() => tracker.initialize()).not.toThrow();
+      expect(() => tracker.initialize()).not.toThrow();
     });
   });
 });

@@ -32,6 +32,7 @@ import type { NotificationRouter } from "./reporting/notification-router.js";
 import type { UrgencyLevel } from "./reporting/notification-types.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
+import type { AgentId } from "../agents/multi/agent-types.js";
 import {
   ChainMetadataV2Schema,
   ChainMetadataSchema,
@@ -681,22 +682,22 @@ export function registerDaemonCommands(
 
       console.log("Agent Sessions:");
       console.log(
-        padRight("ID", 14) +
+        padRight("ID", 38) +
         padRight("Channel", 16) +
         padRight("Status", 18) +
         padRight("Budget", 22) +
         padRight("Memory", 10) +
         padRight("Uptime", 12),
       );
-      console.log("-".repeat(92));
+      console.log("-".repeat(116));
 
       for (const a of agents) {
-        const used = usages?.get(a.id as import("../agents/multi/agent-types.js").AgentId) ?? 0;
+        const used = usages?.get(a.id as AgentId) ?? 0;
         const pct = a.budgetCapUsd > 0 ? ((used / a.budgetCapUsd) * 100).toFixed(0) : "0";
         const budgetStr = `$${used.toFixed(2)} / $${a.budgetCapUsd.toFixed(2)} (${pct}%)`;
         const uptimeMs = now - a.createdAt;
         console.log(
-          padRight(a.id.slice(0, 12) + "..", 14) +
+          padRight(a.id, 38) +
           padRight(`${a.channelType}:${a.chatId.slice(0, 8)}`, 16) +
           padRight(a.status, 18) +
           padRight(budgetStr, 22) +
@@ -712,13 +713,14 @@ export function registerDaemonCommands(
     .description("Show detailed agent status")
     .option("--json", "Output as JSON")
     .action((id: string, opts: { json?: boolean }) => {
+      if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
       if (!ctx?.agentManager) {
         console.error("Multi-agent mode is not enabled.");
         process.exitCode = 1;
         return;
       }
-      const agentInstance = ctx.agentManager.getAgent(id as import("../agents/multi/agent-types.js").AgentId);
+      const agentInstance = ctx.agentManager.getAgent(id as AgentId);
       if (!agentInstance) {
         console.error(`Agent '${id}' not found.`);
         process.exitCode = 1;
@@ -726,7 +728,7 @@ export function registerDaemonCommands(
       }
 
       const usage = ctx.agentBudgetTracker?.getAgentUsage(
-        agentInstance.id as import("../agents/multi/agent-types.js").AgentId,
+        agentInstance.id as AgentId,
         agentInstance.budgetCapUsd,
       );
 
@@ -760,6 +762,7 @@ export function registerDaemonCommands(
     .description("Stop an agent session")
     .option("--force", "Hard stop (close memory immediately)")
     .action(async (id: string, opts: { force?: boolean }) => {
+      if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
       if (!ctx?.agentManager) {
         console.error("Multi-agent mode is not enabled.");
@@ -767,7 +770,7 @@ export function registerDaemonCommands(
         return;
       }
       try {
-        await ctx.agentManager.stopAgent(id as import("../agents/multi/agent-types.js").AgentId, opts.force);
+        await ctx.agentManager.stopAgent(id as AgentId, opts.force);
         console.log(`Agent '${id}' stopped${opts.force ? " (force)" : ""}.`);
       } catch (err) {
         console.error(`Failed to stop agent: ${err instanceof Error ? err.message : String(err)}`);
@@ -780,6 +783,7 @@ export function registerDaemonCommands(
     .command("start <id>")
     .description("Resume a stopped agent")
     .action(async (id: string) => {
+      if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
       if (!ctx?.agentManager) {
         console.error("Multi-agent mode is not enabled.");
@@ -787,7 +791,7 @@ export function registerDaemonCommands(
         return;
       }
       try {
-        await ctx.agentManager.startAgent(id as import("../agents/multi/agent-types.js").AgentId);
+        await ctx.agentManager.startAgent(id as AgentId);
         console.log(`Agent '${id}' started.`);
       } catch (err) {
         console.error(`Failed to start agent: ${err instanceof Error ? err.message : String(err)}`);
@@ -801,6 +805,7 @@ export function registerDaemonCommands(
     .command("set <id> <amount>")
     .description("Set per-agent budget cap (USD)")
     .action((id: string, amount: string) => {
+      if (!isValidAgentId(id)) return;
       const ctx = getDaemonContext();
       if (!ctx?.agentManager) {
         console.error("Multi-agent mode is not enabled.");
@@ -813,7 +818,7 @@ export function registerDaemonCommands(
         process.exitCode = 1;
         return;
       }
-      ctx.agentManager.setBudgetCap(id as import("../agents/multi/agent-types.js").AgentId, usd);
+      ctx.agentManager.setBudgetCap(id as AgentId, usd);
       console.log(`Agent '${id}' budget cap set to $${usd.toFixed(2)}.`);
     });
 }
@@ -842,6 +847,21 @@ function buildTopologyString(meta: ChainMetadataV2): string {
     // Fallback for invalid DAGs: show linear tool sequence
     return meta.toolSequence.join(" -> ");
   }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Validate that a CLI-supplied agent ID is a valid UUID.
+ * Prints an error and sets exitCode if invalid. Returns true if valid.
+ */
+function isValidAgentId(id: string): boolean {
+  if (!UUID_RE.test(id)) {
+    console.error("Invalid agent ID format. Expected UUID.");
+    process.exitCode = 1;
+    return false;
+  }
+  return true;
 }
 
 function persistCircuitState(storage: DaemonStorage, name: string, cb: CircuitBreaker): void {

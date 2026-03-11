@@ -186,6 +186,7 @@ export interface LearningEventMap {
   "memory:re_retrieved": MemoryReRetrievedEvent;
   "memory:topic_shifted": MemoryTopicShiftedEvent;
   "agent:created": AgentLifecycleEvent;
+  "agent:started": AgentLifecycleEvent;
   "agent:stopped": AgentLifecycleEvent;
   "agent:budget_exceeded": AgentBudgetEvent;
   "agent:evicted": AgentLifecycleEvent;

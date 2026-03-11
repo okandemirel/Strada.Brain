@@ -41,7 +41,6 @@ import {
   type AgentId,
   type AgentInstance,
   type AgentLifecycleEvent,
-  type AgentBudgetEvent,
 } from "./agent-types.js";
 
 // =============================================================================
@@ -107,6 +106,9 @@ export class AgentManager {
   /** Live agents keyed by channelType:chatId */
   private readonly agents = new Map<string, LiveAgent>();
 
+  /** In-flight agent creation promises to prevent duplicate creation races */
+  private readonly creating = new Map<string, Promise<LiveAgent>>();
+
   /** Idle check interval handle */
   private idleCheckInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -149,17 +151,12 @@ export class AgentManager {
 
       // Emit budget exceeded event
       const usage = this.budgetTracker.getAgentUsage(liveAgent.instance.id, liveAgent.instance.budgetCapUsd);
-      const budgetEvent: AgentBudgetEvent = {
-        agentId: liveAgent.instance.id,
-        key: liveAgent.instance.key,
-        channelType: liveAgent.instance.channelType,
-        chatId: liveAgent.instance.chatId,
-        timestamp: Date.now(),
+      this.eventBus.emit("agent:budget_exceeded", {
+        ...this.buildLifecycleEvent(liveAgent.instance),
         usedUsd: usage.usedUsd,
         capUsd: liveAgent.instance.budgetCapUsd,
         pct: usage.pct,
-      };
-      this.eventBus.emit("agent:budget_exceeded", budgetEvent);
+      });
 
       return `Agent budget exceeded ($${usage.usedUsd.toFixed(2)} / $${liveAgent.instance.budgetCapUsd.toFixed(2)}). Please increase the budget or wait for the rolling window to reset.`;
     }
@@ -194,14 +191,7 @@ export class AgentManager {
       await liveAgent.memory.shutdown();
     }
 
-    const event: AgentLifecycleEvent = {
-      agentId: id,
-      key: liveAgent.instance.key,
-      channelType: liveAgent.instance.channelType,
-      chatId: liveAgent.instance.chatId,
-      timestamp: Date.now(),
-    };
-    this.eventBus.emit("agent:stopped", event);
+    this.eventBus.emit("agent:stopped", this.buildLifecycleEvent(liveAgent.instance));
   }
 
   /** Restart a stopped agent */
@@ -220,14 +210,7 @@ export class AgentManager {
     this.registry.updateStatus(id, "active");
     liveAgent.instance = { ...liveAgent.instance, status: "active" };
 
-    const event: AgentLifecycleEvent = {
-      agentId: id,
-      key: liveAgent.instance.key,
-      channelType: liveAgent.instance.channelType,
-      chatId: liveAgent.instance.chatId,
-      timestamp: Date.now(),
-    };
-    this.eventBus.emit("agent:created", event);
+    this.eventBus.emit("agent:started", this.buildLifecycleEvent(liveAgent.instance));
   }
 
   /** Evict agents that have been idle longer than idleTimeoutMs */
@@ -237,7 +220,7 @@ export class AgentManager {
 
     for (const [key, liveAgent] of this.agents) {
       if (
-        liveAgent.instance.status === "active" &&
+        (liveAgent.instance.status === "active" || liveAgent.instance.status === "budget_exceeded") &&
         now - liveAgent.instance.lastActivity > this.config.idleTimeoutMs
       ) {
         toEvict.push(key);
@@ -311,6 +294,7 @@ export class AgentManager {
   /**
    * Resolve a live agent for a message. Checks in-memory Map first,
    * then registry (persisted from previous run), then creates new.
+   * Uses a creation lock to prevent duplicate agents from concurrent calls.
    */
   private async resolveAgent(msg: IncomingMessage): Promise<LiveAgent> {
     const key = resolveAgentKey(msg.channelType, msg.chatId);
@@ -319,14 +303,37 @@ export class AgentManager {
     const existing = this.agents.get(key);
     if (existing) return existing;
 
-    // 2. Check registry (may have been persisted from a previous run)
+    // 2. Check if creation is already in-flight for this key (race guard)
+    const inflight = this.creating.get(key);
+    if (inflight) return inflight;
+
+    // 3. Check registry (may have been persisted from a previous run)
     const persisted = this.registry.getByKey(key);
     if (persisted) {
-      return this.loadAgent(persisted);
+      const loadPromise = this.loadAgent(persisted).then((liveAgent) => {
+        // I1: Reset status to active if agent was previously evicted
+        if (liveAgent.instance.status === "evicted") {
+          this.registry.updateStatus(liveAgent.instance.id, "active");
+          liveAgent.instance = { ...liveAgent.instance, status: "active" };
+        }
+        return liveAgent;
+      });
+      this.creating.set(key, loadPromise);
+      try {
+        return await loadPromise;
+      } finally {
+        this.creating.delete(key);
+      }
     }
 
-    // 3. Create new agent
-    return this.createAgent(key, msg.channelType, msg.chatId);
+    // 4. Create new agent (with race guard)
+    const createPromise = this.createAgent(key, msg.channelType, msg.chatId);
+    this.creating.set(key, createPromise);
+    try {
+      return await createPromise;
+    } finally {
+      this.creating.delete(key);
+    }
   }
 
   /** Create a new agent for a channelType:chatId key */
@@ -343,42 +350,7 @@ export class AgentManager {
     const id = createAgentId();
     const now = Date.now();
 
-    // Create per-agent memory directory and initialize memory
-    const agentMemoryDir = join(this.opts.memoryConfig.dbBasePath, "agents", id);
-    try {
-      mkdirSync(agentMemoryDir, { recursive: true });
-    } catch {
-      // Directory might already exist, that's fine
-    }
-
-    const memory = new AgentDBMemory({
-      dbPath: join(agentMemoryDir, "memory.db"),
-      dimensions: this.opts.memoryConfig.dimensions,
-    });
-    await memory.initialize();
-
-    // Create per-agent Orchestrator with shared resources but agent's own memory
-    const orchestrator = new Orchestrator({
-      providerManager: this.opts.providerManager,
-      tools: this.opts.toolRegistry.getAllTools(),
-      channel: this.opts.channel,
-      projectPath: this.opts.projectPath,
-      readOnly: this.opts.readOnly,
-      requireConfirmation: this.opts.requireConfirmation,
-      memoryManager: memory as unknown as IMemoryManager,
-      metrics: this.opts.metrics,
-      ragPipeline: this.opts.ragPipeline,
-      rateLimiter: this.opts.rateLimiter,
-      streamingEnabled: this.opts.streamingEnabled,
-      stradaDeps: this.opts.stradaDeps,
-      instinctRetriever: this.opts.instinctRetriever,
-      eventEmitter: this.eventBus,
-      metricsRecorder: this.opts.metricsRecorder,
-      goalDecomposer: this.opts.goalDecomposer,
-      getIdentityState: this.opts.getIdentityState,
-      reRetrievalConfig: this.opts.reRetrievalConfig,
-      embeddingProvider: this.opts.embeddingProvider,
-    });
+    const { memory, orchestrator } = await this.buildAgentResources(id);
 
     // Build instance
     const instance: AgentInstance = {
@@ -400,28 +372,37 @@ export class AgentManager {
     const liveAgent: LiveAgent = { instance, orchestrator, memory };
     this.agents.set(key, liveAgent);
 
-    // Emit created event
-    const event: AgentLifecycleEvent = {
-      agentId: id,
-      key,
-      channelType,
-      chatId,
-      timestamp: now,
-    };
-    this.eventBus.emit("agent:created", event);
+    this.eventBus.emit("agent:created", this.buildLifecycleEvent(instance));
 
     return liveAgent;
   }
 
   /** Reload a persisted agent from disk (re-create Orchestrator + open memory) */
   private async loadAgent(persisted: AgentInstance): Promise<LiveAgent> {
-    const agentMemoryDir = join(this.opts.memoryConfig.dbBasePath, "agents", persisted.id);
+    const { memory, orchestrator } = await this.buildAgentResources(persisted.id);
+
+    const liveAgent: LiveAgent = { instance: persisted, orchestrator, memory };
+    this.agents.set(persisted.key, liveAgent);
+
+    return liveAgent;
+  }
+
+  /** Create per-agent memory and orchestrator for a given agent id */
+  private async buildAgentResources(agentId: AgentId): Promise<{ memory: AgentDBMemory; orchestrator: Orchestrator }> {
+    // L2: Validate agent ID format before using in path construction
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_RE.test(agentId)) {
+      throw new Error(`Invalid agent ID format: ${agentId}`);
+    }
+
+    const agentMemoryDir = join(this.opts.memoryConfig.dbBasePath, "agents", agentId);
     try {
       mkdirSync(agentMemoryDir, { recursive: true });
     } catch {
-      // Already exists
+      // Directory might already exist
     }
 
+    // TODO(phase-24): enforce maxMemoryEntries cap on per-agent memory writes
     const memory = new AgentDBMemory({
       dbPath: join(agentMemoryDir, "memory.db"),
       dimensions: this.opts.memoryConfig.dimensions,
@@ -450,10 +431,7 @@ export class AgentManager {
       embeddingProvider: this.opts.embeddingProvider,
     });
 
-    const liveAgent: LiveAgent = { instance: persisted, orchestrator, memory };
-    this.agents.set(persisted.key, liveAgent);
-
-    return liveAgent;
+    return { memory, orchestrator };
   }
 
   // ===========================================================================
@@ -462,11 +440,14 @@ export class AgentManager {
 
   /** Evict the oldest idle agent to make room for a new one */
   private evictOldestIdle(): void {
+    const now = Date.now();
     let oldestKey: string | undefined;
     let oldestActivity = Infinity;
 
     for (const [key, liveAgent] of this.agents) {
-      if (liveAgent.instance.lastActivity < oldestActivity) {
+      // Only consider agents that are actually idle (past the timeout threshold)
+      if (now - liveAgent.instance.lastActivity > this.config.idleTimeoutMs &&
+          liveAgent.instance.lastActivity < oldestActivity) {
         oldestActivity = liveAgent.instance.lastActivity;
         oldestKey = key;
       }
@@ -476,6 +457,9 @@ export class AgentManager {
       const liveAgent = this.agents.get(oldestKey)!;
       this.evictAgent(oldestKey, liveAgent);
     }
+    // If no truly idle agent exists, do NOT evict an active agent.
+    // The new agent will temporarily exceed maxConcurrent, which is safer
+    // than evicting an agent that is actively processing requests.
   }
 
   /** Evict a specific agent: close memory, remove from map, update registry, emit event */
@@ -492,15 +476,7 @@ export class AgentManager {
     // Update registry status
     this.registry.updateStatus(liveAgent.instance.id, "evicted");
 
-    // Emit eviction event
-    const event: AgentLifecycleEvent = {
-      agentId: liveAgent.instance.id,
-      key: liveAgent.instance.key,
-      channelType: liveAgent.instance.channelType,
-      chatId: liveAgent.instance.chatId,
-      timestamp: Date.now(),
-    };
-    this.eventBus.emit("agent:evicted", event);
+    this.eventBus.emit("agent:evicted", this.buildLifecycleEvent(liveAgent.instance));
   }
 
   // ===========================================================================
@@ -515,5 +491,16 @@ export class AgentManager {
       }
     }
     return undefined;
+  }
+
+  /** Build lifecycle event payload from an agent instance */
+  private buildLifecycleEvent(instance: AgentInstance): AgentLifecycleEvent {
+    return {
+      agentId: instance.id,
+      key: instance.key,
+      channelType: instance.channelType,
+      chatId: instance.chatId,
+      timestamp: Date.now(),
+    };
   }
 }

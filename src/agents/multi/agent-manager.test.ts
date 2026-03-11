@@ -137,6 +137,7 @@ describe("AgentManager", () => {
     daemonStorage = new DaemonStorage(daemonDbPath);
     daemonStorage.initialize();
     budgetTracker = new AgentBudgetTracker(daemonStorage);
+    budgetTracker.initialize();
 
     eventBus = new TypedEventBus<LearningEventMap>();
 
@@ -359,9 +360,13 @@ describe("AgentManager", () => {
 
   describe("max concurrent enforcement", () => {
     it("evicts oldest idle agent when at maxConcurrent limit", async () => {
-      // Create manager with maxConcurrent=2
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      // Create manager with maxConcurrent=2, idleTimeoutMs=10_000
       const limitedManager = new AgentManager({
-        config: makeConfig({ maxConcurrent: 2 }),
+        config: makeConfig({ maxConcurrent: 2, idleTimeoutMs: 10_000 }),
         registry,
         budgetTracker,
         eventBus,
@@ -379,22 +384,31 @@ describe("AgentManager", () => {
 
       // Create 2 agents (at limit)
       await limitedManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      vi.setSystemTime(now + 1000);
       await limitedManager.routeMessage(makeMsg({ chatId: "chat-2" }));
       expect(limitedManager.getActiveCount()).toBe(2);
+
+      // Advance past idle timeout so agents become idle
+      vi.setSystemTime(now + 15_000);
 
       // Third agent should evict the oldest idle
       await limitedManager.routeMessage(makeMsg({ chatId: "chat-3" }));
       expect(limitedManager.getActiveCount()).toBe(2);
 
       await limitedManager.shutdown();
+      vi.useRealTimers();
     });
 
     it("emits agent:evicted when evicting for max concurrent", async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+
       const events: unknown[] = [];
       eventBus.on("agent:evicted", (evt) => events.push(evt));
 
       const limitedManager = new AgentManager({
-        config: makeConfig({ maxConcurrent: 1 }),
+        config: makeConfig({ maxConcurrent: 1, idleTimeoutMs: 10_000 }),
         registry,
         budgetTracker,
         eventBus,
@@ -411,11 +425,58 @@ describe("AgentManager", () => {
       });
 
       await limitedManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+
+      // Advance past idle timeout so agent becomes idle
+      vi.setSystemTime(now + 15_000);
+
       await limitedManager.routeMessage(makeMsg({ chatId: "chat-2" }));
 
       expect(events).toHaveLength(1);
 
       await limitedManager.shutdown();
+      vi.useRealTimers();
+    });
+
+    it("does not evict active agents when all are within idle timeout (C4)", async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      const evictEvents: unknown[] = [];
+      eventBus.on("agent:evicted", (evt) => evictEvents.push(evt));
+
+      const limitedManager = new AgentManager({
+        config: makeConfig({ maxConcurrent: 2, idleTimeoutMs: 60_000 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+
+      // Create 2 agents (at limit) -- both within idle timeout
+      await limitedManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      vi.setSystemTime(now + 1000);
+      await limitedManager.routeMessage(makeMsg({ chatId: "chat-2" }));
+      vi.setSystemTime(now + 2000);
+
+      // Third agent: all existing agents are active (within timeout), none should be evicted
+      await limitedManager.routeMessage(makeMsg({ chatId: "chat-3" }));
+
+      // All 3 agents should be live (temporarily exceeds maxConcurrent)
+      expect(limitedManager.getActiveCount()).toBe(3);
+      expect(evictEvents).toHaveLength(0);
+
+      await limitedManager.shutdown();
+      vi.useRealTimers();
     });
   });
 
@@ -615,6 +676,190 @@ describe("AgentManager", () => {
       expect(agents2[0].lastActivity).toBeGreaterThan(firstActivity);
 
       vi.useRealTimers();
+    });
+  });
+
+  // ===========================================================================
+  // C1: startAgent emits agent:started (not agent:created)
+  // ===========================================================================
+
+  describe("startAgent event (C1)", () => {
+    it("emits agent:started when resuming a stopped agent", async () => {
+      const startedEvents: unknown[] = [];
+      const createdEvents: unknown[] = [];
+      eventBus.on("agent:started", (evt) => startedEvents.push(evt));
+      eventBus.on("agent:created", (evt) => createdEvents.push(evt));
+
+      // Create agent (emits agent:created)
+      await manager.routeMessage(makeMsg());
+      const agents = manager.getAllAgents();
+      expect(createdEvents).toHaveLength(1);
+
+      // Stop and restart
+      await manager.stopAgent(agents[0].id);
+      await manager.startAgent(agents[0].id);
+
+      // Should have emitted agent:started, NOT another agent:created
+      expect(startedEvents).toHaveLength(1);
+      expect(createdEvents).toHaveLength(1); // still 1, no second created event
+    });
+  });
+
+  // ===========================================================================
+  // C2: Concurrent message race prevention
+  // ===========================================================================
+
+  describe("concurrent creation race guard (C2)", () => {
+    it("creates only one agent when two concurrent messages arrive for same new key", async () => {
+      const msg = makeMsg({ chatId: "race-test" });
+
+      // Fire two concurrent routeMessage calls for the same key
+      const [r1, r2] = await Promise.all([
+        manager.routeMessage(msg),
+        manager.routeMessage(msg),
+      ]);
+
+      // Both should succeed
+      expect(r1).toBe("mock response");
+      expect(r2).toBe("mock response");
+
+      // Only 1 agent should have been created
+      expect(manager.getActiveCount()).toBe(1);
+      expect(manager.getAllAgents()).toHaveLength(1);
+    });
+  });
+
+  // ===========================================================================
+  // C3: budget_exceeded agents are evicted when idle
+  // ===========================================================================
+
+  describe("budget_exceeded idle eviction (C3)", () => {
+    it("evicts budget_exceeded agents past idle timeout", async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      const idleManager = new AgentManager({
+        config: makeConfig({ idleTimeoutMs: 10_000 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+
+      // Create agent and exceed its budget
+      await idleManager.routeMessage(makeMsg({ chatId: "budget-chat" }));
+      const agents = idleManager.getAllAgents();
+      budgetTracker.recordCost(agents[0].id, 6.0);
+
+      // Trigger budget exceeded status
+      await idleManager.routeMessage(makeMsg({ chatId: "budget-chat" }));
+      expect(idleManager.getActiveCount()).toBe(1);
+
+      // Advance past idle timeout
+      vi.setSystemTime(now + 15_000);
+      idleManager.evictIdleAgents();
+
+      // Budget_exceeded agent should now be evicted
+      expect(idleManager.getActiveCount()).toBe(0);
+
+      await idleManager.shutdown();
+      vi.useRealTimers();
+    });
+  });
+
+  // ===========================================================================
+  // I1: Evicted agents reloaded with status reset
+  // ===========================================================================
+
+  describe("evicted agent reload status reset (I1)", () => {
+    it("resets evicted agent status to active on reload via routeMessage", async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      const idleManager = new AgentManager({
+        config: makeConfig({ idleTimeoutMs: 10_000 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+
+      // Create agent
+      await idleManager.routeMessage(makeMsg({ chatId: "evict-test" }));
+      const agents = idleManager.getAllAgents();
+      const agentId = agents[0].id;
+      expect(agents[0].status).toBe("active");
+
+      // Evict by advancing past idle timeout
+      vi.setSystemTime(now + 15_000);
+      idleManager.evictIdleAgents();
+      expect(idleManager.getActiveCount()).toBe(0);
+
+      // Registry still has the agent but with evicted status
+      const evicted = registry.getById(agentId);
+      expect(evicted).toBeDefined();
+      expect(evicted!.status).toBe("evicted");
+
+      // Re-route a message for the same key -- should reload and reset to active
+      vi.setSystemTime(now + 20_000);
+      const response = await idleManager.routeMessage(makeMsg({ chatId: "evict-test" }));
+      expect(response).toBe("mock response");
+
+      // Agent should be active again
+      const reloaded = registry.getById(agentId);
+      expect(reloaded!.status).toBe("active");
+      expect(idleManager.getActiveCount()).toBe(1);
+
+      await idleManager.shutdown();
+      vi.useRealTimers();
+    });
+  });
+
+  // ===========================================================================
+  // L2: UUID format guard on agent ID
+  // ===========================================================================
+
+  describe("UUID format guard (L2)", () => {
+    it("rejects invalid agent ID format in buildAgentResources", async () => {
+      // We test this indirectly: if we manually insert a bad ID into registry
+      // and then try to load it, it should throw
+      const badInstance: AgentInstance = {
+        id: "../../../etc/passwd" as AgentId,
+        key: "web:hack-attempt",
+        channelType: "web",
+        chatId: "hack-attempt",
+        status: "active",
+        createdAt: Date.now(),
+        lastActivity: Date.now(),
+        budgetCapUsd: 5.0,
+        memoryEntryCount: 0,
+      };
+      registry.upsert(badInstance);
+
+      // Routing to this key should fail with UUID validation error
+      await expect(
+        manager.routeMessage(makeMsg({ chatId: "hack-attempt" })),
+      ).rejects.toThrow("Invalid agent ID format");
     });
   });
 });
