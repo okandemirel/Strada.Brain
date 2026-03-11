@@ -7,7 +7,14 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CompositeTool } from "./composite-tool.js";
-import type { ChainMetadata, ChainStepMapping } from "./chain-types.js";
+import type {
+  ChainMetadata,
+  ChainMetadataV2,
+  ChainStepMapping,
+  ChainStepNode,
+  ChainResilienceConfig,
+  RollbackReport,
+} from "./chain-types.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
 import type { IEventEmitter, LearningEventMap, ChainExecutionEvent } from "../../core/event-bus.js";
 import type { ToolContext, ToolExecutionResult } from "../../agents/tools/tool.interface.js";
@@ -347,6 +354,240 @@ describe("CompositeTool", () => {
       expect(chainEvent).toBeDefined();
       const payload = chainEvent!.payload as ChainExecutionEvent;
       expect(payload.success).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // V2 CHAIN TESTS (Phase 22 -- DAG Parallel + Saga Rollback)
+  // ===========================================================================
+
+  describe("V2 chain execution", () => {
+    const defaultResilience: ChainResilienceConfig = {
+      rollbackEnabled: true,
+      parallelEnabled: true,
+      maxParallelBranches: 4,
+      compensationTimeoutMs: 5000,
+    };
+
+    function makeV2Metadata(
+      steps: ChainStepNode[],
+      overrides: Partial<ChainMetadataV2> = {},
+    ): ChainMetadataV2 {
+      return {
+        version: 2,
+        toolSequence: steps.map((s) => s.toolName),
+        steps,
+        parameterMappings: [],
+        isFullyReversible: false,
+        successRate: 0.9,
+        occurrences: 5,
+        ...overrides,
+      };
+    }
+
+    it("should execute V2 chain with 2 sequential steps successfully", async () => {
+      const steps: ChainStepNode[] = [
+        { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: false },
+        { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: false },
+      ];
+      const registry = makeToolRegistry({
+        tool_a: { content: '{"result": "a_out"}' },
+        tool_b: { content: '{"result": "b_out"}' },
+      });
+      const tool = new CompositeTool(
+        {
+          name: "v2_chain",
+          description: "V2 sequential chain",
+          inputSchema: {},
+          chainMetadata: makeV2Metadata(steps),
+          resilienceConfig: defaultResilience,
+        },
+        registry,
+        eventBus,
+      );
+
+      const result = await tool.execute({}, context);
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain("tool_a");
+      expect(result.content).toContain("tool_b");
+    });
+
+    it("should trigger rollback on failure when isFullyReversible=true", async () => {
+      const steps: ChainStepNode[] = [
+        {
+          stepId: "step_0",
+          toolName: "tool_a",
+          dependsOn: [],
+          reversible: true,
+          compensatingAction: { toolName: "undo_a", inputMappings: {} },
+        },
+        { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+      ];
+      const registry = {
+        has: vi.fn().mockReturnValue(true),
+        get: vi.fn().mockReturnValue({
+          execute: vi.fn().mockResolvedValue({ content: "undone" }),
+        }),
+        execute: vi
+          .fn()
+          .mockResolvedValueOnce({ content: '{"result": "a_out"}' })
+          .mockResolvedValueOnce({ content: "fail", isError: true }),
+      } as unknown as ToolRegistry;
+
+      const tool = new CompositeTool(
+        {
+          name: "v2_rollback_chain",
+          description: "V2 chain with rollback [rollback-capable]",
+          inputSchema: {},
+          chainMetadata: makeV2Metadata(steps, { isFullyReversible: true }),
+          resilienceConfig: defaultResilience,
+        },
+        registry,
+        eventBus,
+      );
+
+      const result = await tool.execute({}, context);
+
+      expect(result.isError).toBe(true);
+      // Should emit chain:executed with rollbackReport
+      const chainEvent = eventBus.emitCalls.find((c) => c.event === "chain:executed");
+      expect(chainEvent).toBeDefined();
+      const payload = chainEvent!.payload as ChainExecutionEvent;
+      expect(payload.rollbackReport).toBeDefined();
+    });
+
+    it("should emit forwardRecovery when isFullyReversible=false", async () => {
+      const steps: ChainStepNode[] = [
+        { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: false },
+        { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: false },
+      ];
+      const registry = {
+        has: vi.fn().mockReturnValue(true),
+        execute: vi
+          .fn()
+          .mockResolvedValueOnce({ content: '{"result": "a_out"}' })
+          .mockResolvedValueOnce({ content: "fail", isError: true }),
+      } as unknown as ToolRegistry;
+
+      const tool = new CompositeTool(
+        {
+          name: "v2_fwd_chain",
+          description: "V2 chain non-reversible",
+          inputSchema: {},
+          chainMetadata: makeV2Metadata(steps, { isFullyReversible: false }),
+          resilienceConfig: defaultResilience,
+        },
+        registry,
+        eventBus,
+      );
+
+      const result = await tool.execute({}, context);
+
+      expect(result.isError).toBe(true);
+      const chainEvent = eventBus.emitCalls.find((c) => c.event === "chain:executed");
+      expect(chainEvent).toBeDefined();
+      const payload = chainEvent!.payload as ChainExecutionEvent;
+      expect(payload.forwardRecovery).toBe(true);
+      expect(payload.rollbackReport).toBeUndefined();
+    });
+
+    it("should use sequential V1 path when chain has no steps array", async () => {
+      const v1Meta = makeChainMetadata(["tool_a", "tool_b"]);
+      const registry = makeToolRegistry({
+        tool_a: { content: '{"result": "a_out"}' },
+        tool_b: { content: '{"result": "b_out"}' },
+      });
+      const tool = new CompositeTool(
+        {
+          name: "v1_compat_chain",
+          description: "V1 chain backward compat",
+          inputSchema: {},
+          chainMetadata: v1Meta,
+        },
+        registry,
+        eventBus,
+      );
+
+      const result = await tool.execute({}, context);
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain("tool_a");
+      expect(result.content).toContain("tool_b");
+    });
+
+    it("should skip rollback when CHAIN_ROLLBACK_ENABLED=false even if isFullyReversible", async () => {
+      const steps: ChainStepNode[] = [
+        {
+          stepId: "step_0",
+          toolName: "tool_a",
+          dependsOn: [],
+          reversible: true,
+          compensatingAction: { toolName: "undo_a", inputMappings: {} },
+        },
+        { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+      ];
+      const registry = {
+        has: vi.fn().mockReturnValue(true),
+        execute: vi
+          .fn()
+          .mockResolvedValueOnce({ content: '{"result": "a_out"}' })
+          .mockResolvedValueOnce({ content: "fail", isError: true }),
+      } as unknown as ToolRegistry;
+
+      const tool = new CompositeTool(
+        {
+          name: "v2_no_rollback",
+          description: "V2 chain rollback disabled",
+          inputSchema: {},
+          chainMetadata: makeV2Metadata(steps, { isFullyReversible: true }),
+          resilienceConfig: { ...defaultResilience, rollbackEnabled: false },
+        },
+        registry,
+        eventBus,
+      );
+
+      const result = await tool.execute({}, context);
+
+      expect(result.isError).toBe(true);
+      const chainEvent = eventBus.emitCalls.find((c) => c.event === "chain:executed");
+      const payload = chainEvent!.payload as ChainExecutionEvent;
+      expect(payload.forwardRecovery).toBe(true);
+      expect(payload.rollbackReport).toBeUndefined();
+    });
+
+    it("should run V2 steps sequentially when CHAIN_PARALLEL_ENABLED=false", async () => {
+      const steps: ChainStepNode[] = [
+        { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: false },
+        { stepId: "step_1", toolName: "tool_b", dependsOn: [], reversible: false },
+      ];
+      const executionOrder: string[] = [];
+      const registry = {
+        has: vi.fn().mockReturnValue(true),
+        execute: vi.fn(async (name: string) => {
+          executionOrder.push(name);
+          return { content: `{"result": "${name}_out"}` };
+        }),
+      } as unknown as ToolRegistry;
+
+      const tool = new CompositeTool(
+        {
+          name: "v2_seq_chain",
+          description: "V2 chain sequential mode",
+          inputSchema: {},
+          chainMetadata: makeV2Metadata(steps),
+          resilienceConfig: { ...defaultResilience, parallelEnabled: false },
+        },
+        registry,
+        eventBus,
+      );
+
+      const result = await tool.execute({}, context);
+
+      expect(result.isError).toBeFalsy();
+      // Both tools executed
+      expect(executionOrder).toContain("tool_a");
+      expect(executionOrder).toContain("tool_b");
     });
   });
 });
