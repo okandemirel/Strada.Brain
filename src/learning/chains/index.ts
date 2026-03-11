@@ -33,6 +33,9 @@ export {
   type ToolChainConfig,
 } from "./chain-types.js";
 
+export { validateChainDAG, computeChainWaves, type ChainDAGValidationResult } from "./chain-dag.js";
+export { executeRollback } from "./chain-rollback.js";
+
 export { ChainDetector } from "./chain-detector.js";
 export { ChainSynthesizer } from "./chain-synthesizer.js";
 export { CompositeTool, type CompositeToolMetadata } from "./composite-tool.js";
