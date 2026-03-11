@@ -14,7 +14,7 @@ import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
 import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
-import type { ToolChainConfig } from "../learning/chains/index.js";
+import type { ToolChainConfig, ChainResilienceConfig } from "../learning/chains/index.js";
 import type { DaemonConfig } from "../daemon/daemon-types.js";
 import type { NotificationConfig, QuietHoursConfig, DigestConfig } from "../daemon/reporting/notification-types.js";
 
@@ -161,7 +161,13 @@ export type EnvVarName =
   | "MEMORY_DECAY_EXEMPT_DOMAINS"
   | "MEMORY_DECAY_TIMEOUT_MS"
   // Trigger Fire History Pruning (Phase 21)
-  | "TRIGGER_FIRE_RETENTION_DAYS";
+  | "TRIGGER_FIRE_RETENTION_DAYS"
+
+  // Chain Resilience (Phase 22)
+  | "CHAIN_ROLLBACK_ENABLED"
+  | "CHAIN_PARALLEL_ENABLED"
+  | "CHAIN_MAX_PARALLEL_BRANCHES"
+  | "CHAIN_COMPENSATION_TIMEOUT_MS";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -668,6 +674,12 @@ export const configSchema = z
     toolChainMaxChainLength: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(3).max(10)).default("5"),
     toolChainDetectionIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000).max(3600000)).default("300000"),
 
+    // Chain Resilience (Phase 22)
+    chainRollbackEnabled: boolFromString(true),
+    chainParallelEnabled: boolFromString(true),
+    chainMaxParallelBranches: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("4"),
+    chainCompensationTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1000).max(300000)).default("30000"),
+
     // Cross-Session Learning
     crossSessionEnabled: boolFromString(true),
     crossSessionMaxAgeDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(365)).default("90"),
@@ -970,6 +982,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       minChainLength: rawConfig.toolChainMinChainLength,
       maxChainLength: rawConfig.toolChainMaxChainLength,
       detectionIntervalMs: rawConfig.toolChainDetectionIntervalMs,
+      resilience: {
+        rollbackEnabled: rawConfig.chainRollbackEnabled,
+        parallelEnabled: rawConfig.chainParallelEnabled,
+        maxParallelBranches: rawConfig.chainMaxParallelBranches,
+        compensationTimeoutMs: rawConfig.chainCompensationTimeoutMs,
+      },
     },
 
     crossSession: {
@@ -1365,6 +1383,11 @@ interface EnvVars {
   memoryDecayLambdaPersistent: string | undefined;
   memoryDecayExemptDomains: string | undefined;
   memoryDecayTimeoutMs: string | undefined;
+  // Chain Resilience (Phase 22)
+  chainRollbackEnabled: string | undefined;
+  chainParallelEnabled: string | undefined;
+  chainMaxParallelBranches: string | undefined;
+  chainCompensationTimeoutMs: string | undefined;
 }
 
 /**
@@ -1519,6 +1542,11 @@ function loadFromEnv(): EnvVars {
     memoryDecayLambdaPersistent: process.env["MEMORY_DECAY_LAMBDA_PERSISTENT"],
     memoryDecayExemptDomains: process.env["MEMORY_DECAY_EXEMPT_DOMAINS"],
     memoryDecayTimeoutMs: process.env["MEMORY_DECAY_TIMEOUT_MS"],
+    // Chain Resilience (Phase 22)
+    chainRollbackEnabled: process.env["CHAIN_ROLLBACK_ENABLED"],
+    chainParallelEnabled: process.env["CHAIN_PARALLEL_ENABLED"],
+    chainMaxParallelBranches: process.env["CHAIN_MAX_PARALLEL_BRANCHES"],
+    chainCompensationTimeoutMs: process.env["CHAIN_COMPENSATION_TIMEOUT_MS"],
   };
 }
 

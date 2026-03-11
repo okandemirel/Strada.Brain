@@ -77,6 +77,11 @@ describe("loadConfig", () => {
     delete process.env["STRATA_DAEMON_BACKOFF_MAX"];
     delete process.env["STRATA_DAEMON_FAILURE_THRESHOLD"];
     delete process.env["STRATA_DAEMON_IDLE_PAUSE"];
+    // Clear chain resilience env vars
+    delete process.env["CHAIN_ROLLBACK_ENABLED"];
+    delete process.env["CHAIN_PARALLEL_ENABLED"];
+    delete process.env["CHAIN_MAX_PARALLEL_BRANCHES"];
+    delete process.env["CHAIN_COMPENSATION_TIMEOUT_MS"];
   });
 
   it("loads valid configuration", () => {
@@ -467,6 +472,67 @@ describe("loadConfig", () => {
       expect(config.daemon.backoff.maxCooldownMs).toBe(7200000);
       expect(config.daemon.backoff.failureThreshold).toBe(5);
       expect(config.daemon.heartbeat.idlePause).toBe(true);
+    });
+  });
+
+  // =========================================================================
+  // Chain Resilience Config Tests (CHAIN-01..04)
+  // =========================================================================
+
+  describe("chain resilience config", () => {
+    it("validates with sensible defaults", () => {
+      setEnv();
+      const config = loadConfig();
+      expect(config.toolChain.resilience).toEqual({
+        rollbackEnabled: true,
+        parallelEnabled: true,
+        maxParallelBranches: 4,
+        compensationTimeoutMs: 30000,
+      });
+    });
+
+    it("accepts CHAIN_ROLLBACK_ENABLED=false", () => {
+      setEnv({ CHAIN_ROLLBACK_ENABLED: "false" });
+      const config = loadConfig();
+      expect(config.toolChain.resilience.rollbackEnabled).toBe(false);
+    });
+
+    it("accepts CHAIN_PARALLEL_ENABLED=false", () => {
+      setEnv({ CHAIN_PARALLEL_ENABLED: "false" });
+      const config = loadConfig();
+      expect(config.toolChain.resilience.parallelEnabled).toBe(false);
+    });
+
+    it("accepts CHAIN_MAX_PARALLEL_BRANCHES within range", () => {
+      setEnv({ CHAIN_MAX_PARALLEL_BRANCHES: "8" });
+      const config = loadConfig();
+      expect(config.toolChain.resilience.maxParallelBranches).toBe(8);
+    });
+
+    it("rejects CHAIN_MAX_PARALLEL_BRANCHES below 1", () => {
+      setEnv({ CHAIN_MAX_PARALLEL_BRANCHES: "0" });
+      expect(() => loadConfig()).toThrow();
+    });
+
+    it("rejects CHAIN_MAX_PARALLEL_BRANCHES above 10", () => {
+      setEnv({ CHAIN_MAX_PARALLEL_BRANCHES: "11" });
+      expect(() => loadConfig()).toThrow();
+    });
+
+    it("accepts CHAIN_COMPENSATION_TIMEOUT_MS within range", () => {
+      setEnv({ CHAIN_COMPENSATION_TIMEOUT_MS: "60000" });
+      const config = loadConfig();
+      expect(config.toolChain.resilience.compensationTimeoutMs).toBe(60000);
+    });
+
+    it("rejects CHAIN_COMPENSATION_TIMEOUT_MS below 1000", () => {
+      setEnv({ CHAIN_COMPENSATION_TIMEOUT_MS: "500" });
+      expect(() => loadConfig()).toThrow();
+    });
+
+    it("rejects CHAIN_COMPENSATION_TIMEOUT_MS above 300000", () => {
+      setEnv({ CHAIN_COMPENSATION_TIMEOUT_MS: "500000" });
+      expect(() => loadConfig()).toThrow();
     });
   });
 });

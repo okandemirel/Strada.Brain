@@ -39,6 +39,12 @@ function createMockConfig(overrides: Partial<ToolChainConfig> = {}): ToolChainCo
     minChainLength: 2,
     maxChainLength: 5,
     detectionIntervalMs: 60000,
+    resilience: {
+      rollbackEnabled: true,
+      parallelEnabled: true,
+      maxParallelBranches: 4,
+      compensationTimeoutMs: 30000,
+    },
     ...overrides,
   };
 }

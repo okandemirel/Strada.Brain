@@ -62,6 +62,12 @@ function makeConfig(overrides: Partial<ToolChainConfig> = {}): ToolChainConfig {
     minChainLength: 2,
     maxChainLength: 5,
     detectionIntervalMs: 60000,
+    resilience: {
+      rollbackEnabled: true,
+      parallelEnabled: true,
+      maxParallelBranches: 4,
+      compensationTimeoutMs: 30000,
+    },
     ...overrides,
   };
 }

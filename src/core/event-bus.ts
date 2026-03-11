@@ -20,6 +20,7 @@ import type {
   InstinctAgeExpiredEvent,
 } from "../learning/types.js";
 import type { GoalLifecycleEvent } from "../goals/types.js";
+import type { RollbackReport } from "../learning/chains/chain-types.js";
 
 // =============================================================================
 // EVENT PAYLOAD TYPES
@@ -71,12 +72,35 @@ export interface ChainExecutionEvent {
   }>;
   readonly totalDurationMs: number;
   readonly timestamp: number;
+  /** Number of parallel branches in this execution (V2) */
+  readonly parallelBranches?: number;
+  /** Steps cancelled due to sibling failure (V2) */
+  readonly cancelledSteps?: string[];
+  /** Rollback report if rollback was triggered (V2) */
+  readonly rollbackReport?: RollbackReport;
+  /** Whether forward-recovery was used instead of rollback (V2) */
+  readonly forwardRecovery?: boolean;
 }
 
 /** Emitted when a chain is invalidated (low success rate, aged out, etc.) */
 export interface ChainInvalidatedEvent {
   readonly chainName: string;
   readonly reason: string;
+  readonly timestamp: number;
+}
+
+/** Emitted when a chain rollback is executed after failure */
+export interface ChainRollbackEvent {
+  readonly chainName: string;
+  readonly failedStep: string;
+  readonly compensationResults: Array<{
+    readonly stepId: string;
+    readonly tool: string;
+    readonly success: boolean;
+    readonly durationMs: number;
+    readonly state: "rolledBack" | "rollbackFailed";
+  }>;
+  readonly totalDurationMs: number;
   readonly timestamp: number;
 }
 
@@ -151,6 +175,7 @@ export interface LearningEventMap {
   "chain:detected": ChainDetectedEvent;
   "chain:executed": ChainExecutionEvent;
   "chain:invalidated": ChainInvalidatedEvent;
+  "chain:rollback": ChainRollbackEvent;
   "chain:validated": ChainValidatedEvent;
   "instinct:scope_promoted": InstinctScopeEvent;
   "instinct:merged": InstinctMergedEvent;
