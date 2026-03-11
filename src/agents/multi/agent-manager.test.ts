@@ -28,6 +28,8 @@ import { DaemonStorage } from "../../daemon/daemon-storage.js";
 // =============================================================================
 
 // Mock Orchestrator: avoid the real constructor's heavy deps
+// handleMessage returns void in the real Orchestrator (sends response via channel)
+// We mock it to return a string for test verification of correct routing
 vi.mock("../orchestrator.js", () => {
   return {
     Orchestrator: vi.fn().mockImplementation(() => ({
@@ -163,7 +165,7 @@ describe("AgentManager", () => {
     db.close();
     daemonStorage.close();
     rmSync(tmpDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   // ===========================================================================
