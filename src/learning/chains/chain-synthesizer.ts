@@ -261,21 +261,15 @@ export class ChainSynthesizer {
 
     this.learningStorage.createInstinct(instinct);
 
-    // Create CompositeTool with V1-compatible fields for execution;
-    // V2 data is stored in instinct.action for Plan 03 to access
-    const v1Compat: ChainMetadata = {
-      toolSequence: chainMetadata.toolSequence,
-      parameterMappings: chainMetadata.parameterMappings,
-      successRate: chainMetadata.successRate,
-      occurrences: chainMetadata.occurrences,
-    };
-
+    // Pass full chain metadata (V1 or V2) directly to CompositeTool
+    // along with resilience config for V2 DAG/rollback execution paths
     const tool = new CompositeTool(
       {
         name,
         description,
         inputSchema,
-        chainMetadata: v1Compat,
+        chainMetadata,
+        resilienceConfig: this.config.resilience,
       },
       this.toolRegistry,
       this.eventBus,

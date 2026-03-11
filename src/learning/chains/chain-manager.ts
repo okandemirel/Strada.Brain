@@ -114,21 +114,15 @@ export class ChainManager {
           description = `${description} [rollback-capable]`;
         }
 
-        // Create CompositeTool with V1 compat (toolSequence + parameterMappings)
-        // V2 data is stored in instinct.action for Plan 03 to access
-        const v1Compat: ChainMetadata = {
-          toolSequence: v2Metadata.toolSequence,
-          parameterMappings: v2Metadata.parameterMappings,
-          successRate: v2Metadata.successRate,
-          occurrences: v2Metadata.occurrences,
-        };
-
+        // Pass full V2 metadata directly to CompositeTool
+        // along with resilience config for V2 DAG/rollback execution paths
         const tool = new CompositeTool(
           {
             name: instinct.name,
             description,
             inputSchema: {},
-            chainMetadata: v1Compat,
+            chainMetadata: v2Metadata,
+            resilienceConfig: this.config.resilience,
           },
           this.toolRegistry,
           this.eventBus,
