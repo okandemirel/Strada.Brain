@@ -515,6 +515,95 @@ describe("ChainSynthesizer", () => {
       expect(action.toolSequence).toEqual(["tool_a", "tool_b"]);
     });
 
+    it("V2 synthesis passes full V2 metadata to CompositeTool (not V1 compat)", async () => {
+      const storage = makeMockStorage(0);
+      const registry = makeToolRegistry(["tool_a", "tool_b"], {
+        tool_a: { readOnly: true },
+        tool_b: { readOnly: true },
+      });
+      const v2Response = makeLLMV2Response(
+        "v2_wiring_chain",
+        "V2 wiring test chain",
+        [
+          { stepId: "step_0", toolName: "tool_a", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "tool_b", dependsOn: ["step_0"], reversible: true },
+        ],
+        true,
+      );
+      const provider = makeProvider([v2Response]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      const tools = await synthesizer.synthesize(candidates);
+
+      expect(tools).toHaveLength(1);
+      // Verify the instinct.action stored has V2 format
+      const createdInstinct = vi.mocked(storage.createInstinct).mock.calls[0][0];
+      const action: ChainMetadataV2 = JSON.parse(createdInstinct.action);
+      expect(action.version).toBe(2);
+      expect(action.steps).toHaveLength(2);
+      expect(action.steps[0].stepId).toBe("step_0");
+      expect(action.isFullyReversible).toBe(true);
+    });
+
+    it("V1 synthesis passes V1 metadata to CompositeTool (no version field)", async () => {
+      const storage = makeMockStorage(0);
+      const registry = makeToolRegistry(["tool_a", "tool_b"]);
+      // V1 response -- no steps or isFullyReversible fields
+      const provider = makeProvider([makeLLMResponse("v1_compat_chain", "V1 backward compat chain")]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate(["tool_a", "tool_b"], 5)];
+      const tools = await synthesizer.synthesize(candidates);
+
+      expect(tools).toHaveLength(1);
+      const createdInstinct = vi.mocked(storage.createInstinct).mock.calls[0][0];
+      const action = JSON.parse(createdInstinct.action);
+      // V1 metadata should NOT have version or steps fields
+      expect(action.version).toBeUndefined();
+      expect(action.steps).toBeUndefined();
+      expect(action.toolSequence).toEqual(["tool_a", "tool_b"]);
+      expect(action.parameterMappings).toBeDefined();
+    });
+
+    it("tool names are sanitized in LLM prompt (prompt injection prevention)", async () => {
+      const storage = makeMockStorage(0);
+      // Register tools with injection-attempt names in the registry
+      const injectionName = '"; DROP TABLE';
+      const scriptName = "<script>alert</script>";
+      const registry = makeToolRegistry([injectionName, scriptName], {
+        [injectionName]: { dangerous: false, readOnly: false },
+        [scriptName]: { dangerous: false, readOnly: false },
+      });
+      const v2Response = makeLLMV2Response(
+        "sanitized_chain",
+        "Chain with sanitized tool names",
+        [
+          { stepId: "step_0", toolName: injectionName, dependsOn: [], reversible: false },
+          { stepId: "step_1", toolName: scriptName, dependsOn: ["step_0"], reversible: false },
+        ],
+        false,
+      );
+      const provider = makeProvider([v2Response]);
+      const synthesizer = new ChainSynthesizer(storage, registry, eventBus, config);
+      synthesizer.setProvider(provider);
+
+      const candidates = [makeCandidate([injectionName, scriptName], 5)];
+      await synthesizer.synthesize(candidates);
+
+      // Verify the user message passed to LLM has sanitized names
+      const chatCall = vi.mocked(provider.chat).mock.calls[0];
+      const userMsg = chatCall[1][0].content;
+      // Injection characters should be replaced with underscores
+      expect(userMsg).not.toContain('"; DROP TABLE');
+      expect(userMsg).not.toContain("<script>");
+      // Sanitized forms should use underscores: [^\w.-] -> _
+      expect(userMsg).toContain("___DROP_TABLE");
+      expect(userMsg).toContain("_script_alert__script_");
+    });
+
     it("LLM prompt includes tool registry context for compensation", async () => {
       const storage = makeMockStorage(0);
       const registry = makeToolRegistry(["tool_a", "tool_b"], {

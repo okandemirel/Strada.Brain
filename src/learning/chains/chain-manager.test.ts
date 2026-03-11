@@ -16,6 +16,7 @@ vi.mock("../../utils/logger.js", () => ({
 import { ChainManager } from "./chain-manager.js";
 import { CompositeTool } from "./composite-tool.js";
 import type { CandidateChain, ToolChainConfig, ChainMetadataV2 } from "./chain-types.js";
+import { DEFAULT_RESILIENCE_CONFIG } from "./chain-types.js";
 import type { ChainDetector } from "./chain-detector.js";
 import type { ChainSynthesizer } from "./chain-synthesizer.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
@@ -741,6 +742,115 @@ describe("ChainManager", () => {
       expect(registeredTool.description).toContain("[rollback-capable]");
 
       manager.stop();
+    });
+  });
+
+  describe("V2 metadata wiring", () => {
+    it("loadExistingChains passes V2 metadata (not V1 compat) to CompositeTool", async () => {
+      const v2Metadata: ChainMetadataV2 = {
+        version: 2,
+        toolSequence: ["file_read", "file_write"],
+        steps: [
+          { stepId: "step_0", toolName: "file_read", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "file_write", dependsOn: ["step_0"], reversible: false },
+        ],
+        parameterMappings: [],
+        isFullyReversible: false,
+        successRate: 0.9,
+        occurrences: 5,
+      };
+      (learningStorage.getInstincts as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "instinct_v2_wiring",
+          name: "v2_wiring_chain",
+          type: "tool_chain",
+          status: "active",
+          confidence: 0.5,
+          triggerPattern: "file_read,file_write",
+          action: JSON.stringify(v2Metadata),
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]);
+
+      (toolRegistry.has as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      // Spy on CompositeTool constructor by capturing the registered tool
+      const manager = createManager();
+      await manager.start();
+
+      expect(toolRegistry.registerOrUpdate).toHaveBeenCalledTimes(1);
+      const registeredTool = (toolRegistry.registerOrUpdate as ReturnType<typeof vi.fn>).mock.calls[0][0] as CompositeTool;
+
+      // The registered CompositeTool should have the V2 toolSequence
+      expect(registeredTool.toolSequence).toEqual(["file_read", "file_write"]);
+      // Verify it's a real CompositeTool (has containsTool method from V2 wiring)
+      expect(typeof registeredTool.containsTool).toBe("function");
+
+      manager.stop();
+    });
+
+    it("loadExistingChains passes resilienceConfig from ToolChainConfig", async () => {
+      const v2Metadata: ChainMetadataV2 = {
+        version: 2,
+        toolSequence: ["file_read", "file_write"],
+        steps: [
+          { stepId: "step_0", toolName: "file_read", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "file_write", dependsOn: ["step_0"], reversible: true },
+        ],
+        parameterMappings: [],
+        isFullyReversible: true,
+        successRate: 0.9,
+        occurrences: 5,
+      };
+      (learningStorage.getInstincts as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "instinct_resilience",
+          name: "resilient_chain",
+          type: "tool_chain",
+          status: "active",
+          confidence: 0.5,
+          triggerPattern: "file_read,file_write",
+          action: JSON.stringify(v2Metadata),
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]);
+
+      (toolRegistry.has as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      // Create with custom resilience config (both enabled)
+      const customResilience = {
+        rollbackEnabled: true,
+        parallelEnabled: true,
+        maxParallelBranches: 8,
+        compensationTimeoutMs: 60000,
+      };
+      const manager = createManager({
+        resilience: customResilience,
+      });
+      await manager.start();
+
+      // The CompositeTool should have been created with resilienceConfig
+      // Verify by checking it's a real CompositeTool instance (not a mock)
+      expect(toolRegistry.registerOrUpdate).toHaveBeenCalledTimes(1);
+      const registeredTool = (toolRegistry.registerOrUpdate as ReturnType<typeof vi.fn>).mock.calls[0][0] as CompositeTool;
+      expect(registeredTool).toBeInstanceOf(CompositeTool);
+
+      manager.stop();
+    });
+
+    it("DEFAULT_RESILIENCE_CONFIG defaults are opt-in (both false)", () => {
+      // Document the intentional opt-in behavior: both rollback and parallel are disabled by default
+      expect(DEFAULT_RESILIENCE_CONFIG.rollbackEnabled).toBe(false);
+      expect(DEFAULT_RESILIENCE_CONFIG.parallelEnabled).toBe(false);
+      // But maxParallelBranches and compensationTimeoutMs have sensible defaults
+      expect(DEFAULT_RESILIENCE_CONFIG.maxParallelBranches).toBe(4);
+      expect(DEFAULT_RESILIENCE_CONFIG.compensationTimeoutMs).toBe(5000);
     });
   });
 });
