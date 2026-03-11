@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Multi-Agent & Hardening
-status: in_progress
-stopped_at: Completed 22-03 (DAG Parallel Execution + Saga Rollback)
-last_updated: "2026-03-11T15:48:24Z"
-last_activity: 2026-03-11 -- Completed 22-03 (DAG parallel + saga rollback + confidence penalty)
+status: executing
+stopped_at: Completed 23-01-PLAN.md
+last_updated: "2026-03-11T18:09:19.993Z"
+last_activity: 2026-03-11 -- Completed 23-01 (Multi-Agent Foundation Types & Registry)
 progress:
   total_phases: 5
-  completed_phases: 1
-  total_plans: 8
-  completed_plans: 7
-  percent: 50
+  completed_phases: 2
+  total_plans: 12
+  completed_plans: 10
+  percent: 85
 ---
 
 # State: Strada.Brain
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-10)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- runs 24/7 as a proactive daemon.
-**Current focus:** v3.0 Multi-Agent & Hardening -- Phase 22 Plan 03 complete, 1 plan remaining
+**Current focus:** v3.0 Multi-Agent & Hardening -- Phase 23 in progress (Multi-Agent Foundation)
 
 ## Current Position
 
-Phase: 22 of 25 (Tool Chain Resilience)
-Plan: 3 of 4 complete
+Phase: 23 of 25 (Multi-Agent Foundation)
+Plan: 1 of 3 complete
 Status: In Progress
-Last activity: 2026-03-11 -- Completed 22-03 (DAG parallel + saga rollback + confidence penalty)
+Last activity: 2026-03-11 -- Completed 23-01 (Multi-Agent Foundation Types & Registry)
 
-Progress: [█████░░░░░] 50%
+Progress: [█████████░] 85%
 
 ## Performance Metrics
 
@@ -39,8 +39,9 @@ Progress: [█████░░░░░] 50%
 - v2.0: 10 phases, 26 plans, 3 days (2026-03-08 -> 2026-03-10)
 - v2.0 gap closure: 1 phase, 1 plan, 5 min (2026-03-10)
 - v3.0 Phase 21: 1 phase, 4 plans including gap closure (2026-03-10)
-- v3.0 Phase 22: Plan 01 in 7 min, Plan 02 in 7 min, Plan 03 in 6 min (2026-03-11)
-- Total: 22 phases, 56 plans, 6 days
+- v3.0 Phase 22: Plan 01 in 7 min, Plan 02 in 7 min, Plan 03 in 6 min, Plan 04 in 6 min, Plan 05 in 3 min (2026-03-11)
+- v3.0 Phase 23: Plan 01 in 7 min (2026-03-11)
+- Total: 22 phases, 59 plans, 6 days
 
 ## Accumulated Context
 
@@ -75,6 +76,15 @@ Progress: [█████░░░░░] 50%
 - 22-03: AbortController cancellation is best-effort -- running steps complete but results discarded
 - 22-03: DAG sourceKey format 'stepId.field' for cross-step data flow in parallel branches
 - 22-03: Escalating penalty: 1x standard, 2x rollback, 3x failed-rollback -- no penalty for forward-recovery
+- 22-04: chainResilienceConfig passed via registerServices (config source, not daemon-specific)
+- 22-04: learningStorage added to DaemonContext for CLI chain:status access
+- 22-04: Parallel detection via empty dependsOn after step 0; topology via wave-based grouping
+- 22-05: Remove V1-compat extraction and pass chainMetadata union type directly to CompositeTool
+- 22-05: Wire this.config.resilience as resilienceConfig in both ChainSynthesizer and ChainManager
+- 23-01: Type-only import for AgentConfig in config.ts to avoid import side effects
+- 23-01: Upsert ON CONFLICT(key) preserves original agent id while updating mutable fields
+- 23-01: Agent budget migration is idempotent (safe to call multiple times)
+- 23-01: Legacy null agent_id entries contribute to global but not per-agent budget usage
 
 ### Pending Todos
 
@@ -86,10 +96,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-11T15:48:24Z
-Stopped at: Completed 22-03 (DAG Parallel Execution + Saga Rollback)
-Resume file: .planning/phases/22-tool-chain-resilience/22-04-PLAN.md
+Last session: 2026-03-11T18:09:19.989Z
+Stopped at: Completed 23-01-PLAN.md
+Resume file: None
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-11 after Phase 22 Plan 03 (DAG parallel + saga rollback + confidence penalty)*
+*Last updated: 2026-03-11 after Phase 23 Plan 01 (Multi-Agent Foundation Types & Registry)*

@@ -1,0 +1,618 @@
+/**
+ * Tests for AgentManager -- core routing, isolation, budget enforcement, lifecycle
+ *
+ * Uses mocks for Orchestrator, AgentDBMemory, ProviderManager, channel, etc.
+ * Uses real in-memory SQLite for AgentRegistry (via better-sqlite3 :memory:).
+ * Uses real DaemonStorage for AgentBudgetTracker (via temp dir).
+ *
+ * Requirements: AGENT-01, AGENT-02, AGENT-06
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
+import Database from "better-sqlite3";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { AgentManager } from "./agent-manager.js";
+import { AgentRegistry } from "./agent-registry.js";
+import { AgentBudgetTracker } from "./agent-budget-tracker.js";
+import { createAgentId, resolveAgentKey } from "./agent-types.js";
+import type { AgentConfig, AgentId, AgentInstance } from "./agent-types.js";
+import { TypedEventBus } from "../../core/event-bus.js";
+import type { LearningEventMap } from "../../core/event-bus.js";
+import type { IncomingMessage } from "../../channels/channel-messages.interface.js";
+import { DaemonStorage } from "../../daemon/daemon-storage.js";
+
+// =============================================================================
+// MOCKS
+// =============================================================================
+
+// Mock Orchestrator: avoid the real constructor's heavy deps
+vi.mock("../orchestrator.js", () => {
+  return {
+    Orchestrator: vi.fn().mockImplementation(() => ({
+      handleMessage: vi.fn().mockResolvedValue("mock response"),
+      cleanupSessions: vi.fn(),
+      setTaskManager: vi.fn(),
+    })),
+  };
+});
+
+// Mock AgentDBMemory: avoid real SQLite + HNSW
+vi.mock("../../memory/unified/agentdb-memory.js", () => {
+  return {
+    AgentDBMemory: vi.fn().mockImplementation(() => ({
+      initialize: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
+      shutdown: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
+      close: vi.fn().mockResolvedValue(undefined),
+    })),
+  };
+});
+
+// Mock MessageRouter
+vi.mock("../../tasks/message-router.js", () => {
+  return {
+    MessageRouter: vi.fn().mockImplementation(() => ({
+      route: vi.fn().mockResolvedValue(undefined),
+    })),
+  };
+});
+
+// Mock CommandHandler
+vi.mock("../../tasks/command-handler.js", () => {
+  return {
+    CommandHandler: vi.fn().mockImplementation(() => ({})),
+  };
+});
+
+// Mock TaskManager
+vi.mock("../../tasks/task-manager.js", () => {
+  return {
+    TaskManager: vi.fn().mockImplementation(() => ({
+      submit: vi.fn(),
+    })),
+  };
+});
+
+// Mock mkdirSync to avoid filesystem side effects
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal() as Record<string, unknown>;
+  return {
+    ...original,
+    mkdirSync: vi.fn(),
+    existsSync: vi.fn().mockReturnValue(false),
+  };
+});
+
+// =============================================================================
+// HELPERS
+// =============================================================================
+
+function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
+  return {
+    enabled: true,
+    defaultBudgetUsd: 5.0,
+    maxConcurrent: 10,
+    idleTimeoutMs: 60_000,
+    maxMemoryEntries: 1000,
+    ...overrides,
+  };
+}
+
+function makeMsg(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
+  return {
+    channelType: "web",
+    chatId: "chat-1",
+    userId: "user-1",
+    text: "Hello",
+    timestamp: new Date(),
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// TEST SUITE
+// =============================================================================
+
+describe("AgentManager", () => {
+  let db: Database.Database;
+  let registry: AgentRegistry;
+  let budgetTracker: AgentBudgetTracker;
+  let eventBus: TypedEventBus<LearningEventMap>;
+  let manager: AgentManager;
+  let tmpDir: string;
+  let daemonStorage: DaemonStorage;
+
+  beforeEach(() => {
+    // Real in-memory SQLite for registry
+    db = new Database(":memory:");
+    registry = new AgentRegistry(db);
+    registry.initialize();
+
+    // Real DaemonStorage for budget tracker
+    tmpDir = mkdtempSync(join(tmpdir(), "agent-mgr-test-"));
+    const daemonDbPath = join(tmpDir, "daemon.db");
+    daemonStorage = new DaemonStorage(daemonDbPath);
+    daemonStorage.initialize();
+    budgetTracker = new AgentBudgetTracker(daemonStorage);
+
+    eventBus = new TypedEventBus<LearningEventMap>();
+
+    manager = new AgentManager({
+      config: makeConfig(),
+      registry,
+      budgetTracker,
+      eventBus,
+      // Shared resources (mocked)
+      providerManager: {} as never,
+      toolRegistry: { getAllTools: () => [] } as never,
+      channel: { sendMessage: vi.fn() } as never,
+      projectPath: "/fake/project",
+      readOnly: false,
+      requireConfirmation: false,
+      metrics: undefined,
+      streamingEnabled: false,
+      stradaDeps: { installed: false, version: undefined },
+      memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+    });
+  });
+
+  afterEach(async () => {
+    await manager.shutdown();
+    await eventBus.shutdown();
+    db.close();
+    daemonStorage.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  // ===========================================================================
+  // Routing & Isolation
+  // ===========================================================================
+
+  describe("routing & isolation", () => {
+    it("routes first message to a lazily created agent", async () => {
+      const response = await manager.routeMessage(makeMsg());
+      expect(response).toBe("mock response");
+      expect(manager.getActiveCount()).toBe(1);
+    });
+
+    it("routes same channelType:chatId to the same agent", async () => {
+      const msg1 = makeMsg({ text: "Hello 1" });
+      const msg2 = makeMsg({ text: "Hello 2" });
+
+      await manager.routeMessage(msg1);
+      await manager.routeMessage(msg2);
+
+      // Only 1 agent should exist
+      expect(manager.getActiveCount()).toBe(1);
+    });
+
+    it("creates different agents for different channelType:chatId", async () => {
+      const msg1 = makeMsg({ channelType: "web", chatId: "chat-1" });
+      const msg2 = makeMsg({ channelType: "telegram", chatId: "chat-2" });
+
+      await manager.routeMessage(msg1);
+      await manager.routeMessage(msg2);
+
+      expect(manager.getActiveCount()).toBe(2);
+    });
+
+    it("creates different agents for same chatId but different channelType", async () => {
+      const msg1 = makeMsg({ channelType: "web", chatId: "chat-1" });
+      const msg2 = makeMsg({ channelType: "telegram", chatId: "chat-1" });
+
+      await manager.routeMessage(msg1);
+      await manager.routeMessage(msg2);
+
+      expect(manager.getActiveCount()).toBe(2);
+    });
+
+    it("each agent has its own Orchestrator", async () => {
+      const msg1 = makeMsg({ channelType: "web", chatId: "chat-1" });
+      const msg2 = makeMsg({ channelType: "web", chatId: "chat-2" });
+
+      await manager.routeMessage(msg1);
+      await manager.routeMessage(msg2);
+
+      const agents = manager.getAllAgents();
+      expect(agents).toHaveLength(2);
+    });
+
+    it("each agent has isolated memory path under agents/{agentId}/", async () => {
+      await manager.routeMessage(makeMsg());
+
+      const agents = manager.getAllAgents();
+      expect(agents).toHaveLength(1);
+      // Memory path is set during creation -- verified via mock call
+      const { AgentDBMemory } = await import("../../memory/unified/agentdb-memory.js");
+      const mockConstructor = AgentDBMemory as unknown as Mock;
+      expect(mockConstructor).toHaveBeenCalledTimes(1);
+      const callArgs = mockConstructor.mock.calls[0][0];
+      expect(callArgs.dbPath).toContain("agents/");
+    });
+  });
+
+  // ===========================================================================
+  // Budget Enforcement
+  // ===========================================================================
+
+  describe("budget enforcement", () => {
+    it("rejects message when agent budget is exceeded", async () => {
+      // First message creates the agent
+      await manager.routeMessage(makeMsg());
+
+      // Record cost that exceeds the default $5 budget
+      const agents = manager.getAllAgents();
+      budgetTracker.recordCost(agents[0].id, 6.0);
+
+      // Second message should be rejected
+      const response = await manager.routeMessage(makeMsg());
+      expect(response).toContain("budget");
+    });
+
+    it("emits agent:budget_exceeded event when budget hit", async () => {
+      const budgetEvents: unknown[] = [];
+      eventBus.on("agent:budget_exceeded", (evt) => budgetEvents.push(evt));
+
+      // Create agent and exceed budget
+      await manager.routeMessage(makeMsg());
+      const agents = manager.getAllAgents();
+      budgetTracker.recordCost(agents[0].id, 6.0);
+
+      // Trigger budget check
+      await manager.routeMessage(makeMsg());
+
+      expect(budgetEvents).toHaveLength(1);
+    });
+
+    it("other agents are unaffected when one exceeds budget", async () => {
+      const msg1 = makeMsg({ channelType: "web", chatId: "chat-1" });
+      const msg2 = makeMsg({ channelType: "web", chatId: "chat-2" });
+
+      await manager.routeMessage(msg1);
+      await manager.routeMessage(msg2);
+
+      // Exceed budget for agent 1 only
+      const allAgents = manager.getAllAgents();
+      const agent1 = allAgents.find((a) => a.chatId === "chat-1")!;
+      budgetTracker.recordCost(agent1.id, 6.0);
+
+      // Agent 1 should be rejected
+      const resp1 = await manager.routeMessage(msg1);
+      expect(resp1).toContain("budget");
+
+      // Agent 2 should still work
+      const resp2 = await manager.routeMessage(msg2);
+      expect(resp2).toBe("mock response");
+    });
+  });
+
+  // ===========================================================================
+  // Stopped Agent
+  // ===========================================================================
+
+  describe("stopped agent", () => {
+    it("rejects messages for stopped agents", async () => {
+      await manager.routeMessage(makeMsg());
+      const agents = manager.getAllAgents();
+
+      await manager.stopAgent(agents[0].id);
+
+      const response = await manager.routeMessage(makeMsg());
+      expect(response).toContain("stopped");
+    });
+
+    it("emits agent:stopped event", async () => {
+      const events: unknown[] = [];
+      eventBus.on("agent:stopped", (evt) => events.push(evt));
+
+      await manager.routeMessage(makeMsg());
+      const agents = manager.getAllAgents();
+      await manager.stopAgent(agents[0].id);
+
+      expect(events).toHaveLength(1);
+    });
+
+    it("startAgent resumes a stopped agent", async () => {
+      await manager.routeMessage(makeMsg());
+      const agents = manager.getAllAgents();
+
+      await manager.stopAgent(agents[0].id);
+      await manager.startAgent(agents[0].id);
+
+      const response = await manager.routeMessage(makeMsg());
+      expect(response).toBe("mock response");
+    });
+  });
+
+  // ===========================================================================
+  // Lifecycle Events
+  // ===========================================================================
+
+  describe("lifecycle events", () => {
+    it("emits agent:created on first message for a new key", async () => {
+      const events: unknown[] = [];
+      eventBus.on("agent:created", (evt) => events.push(evt));
+
+      await manager.routeMessage(makeMsg());
+
+      expect(events).toHaveLength(1);
+    });
+
+    it("does not emit agent:created on subsequent messages for same key", async () => {
+      const events: unknown[] = [];
+      eventBus.on("agent:created", (evt) => events.push(evt));
+
+      await manager.routeMessage(makeMsg());
+      await manager.routeMessage(makeMsg());
+
+      expect(events).toHaveLength(1);
+    });
+  });
+
+  // ===========================================================================
+  // Max Concurrent Enforcement
+  // ===========================================================================
+
+  describe("max concurrent enforcement", () => {
+    it("evicts oldest idle agent when at maxConcurrent limit", async () => {
+      // Create manager with maxConcurrent=2
+      const limitedManager = new AgentManager({
+        config: makeConfig({ maxConcurrent: 2 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+
+      // Create 2 agents (at limit)
+      await limitedManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      await limitedManager.routeMessage(makeMsg({ chatId: "chat-2" }));
+      expect(limitedManager.getActiveCount()).toBe(2);
+
+      // Third agent should evict the oldest idle
+      await limitedManager.routeMessage(makeMsg({ chatId: "chat-3" }));
+      expect(limitedManager.getActiveCount()).toBe(2);
+
+      await limitedManager.shutdown();
+    });
+
+    it("emits agent:evicted when evicting for max concurrent", async () => {
+      const events: unknown[] = [];
+      eventBus.on("agent:evicted", (evt) => events.push(evt));
+
+      const limitedManager = new AgentManager({
+        config: makeConfig({ maxConcurrent: 1 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+
+      await limitedManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      await limitedManager.routeMessage(makeMsg({ chatId: "chat-2" }));
+
+      expect(events).toHaveLength(1);
+
+      await limitedManager.shutdown();
+    });
+  });
+
+  // ===========================================================================
+  // Idle Eviction
+  // ===========================================================================
+
+  describe("idle eviction", () => {
+    it("evicts agents inactive longer than idleTimeoutMs", async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      const idleManager = new AgentManager({
+        config: makeConfig({ idleTimeoutMs: 10_000 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+
+      await idleManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      expect(idleManager.getActiveCount()).toBe(1);
+
+      // Advance past idle timeout
+      vi.setSystemTime(now + 15_000);
+
+      // Trigger eviction check
+      idleManager.evictIdleAgents();
+
+      expect(idleManager.getActiveCount()).toBe(0);
+
+      await idleManager.shutdown();
+      vi.useRealTimers();
+    });
+
+    it("emits agent:evicted for each evicted idle agent", async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      const events: unknown[] = [];
+      eventBus.on("agent:evicted", (evt) => events.push(evt));
+
+      const idleManager = new AgentManager({
+        config: makeConfig({ idleTimeoutMs: 10_000 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+
+      await idleManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      await idleManager.routeMessage(makeMsg({ chatId: "chat-2" }));
+
+      vi.setSystemTime(now + 15_000);
+      idleManager.evictIdleAgents();
+
+      expect(events).toHaveLength(2);
+
+      await idleManager.shutdown();
+      vi.useRealTimers();
+    });
+
+    it("does not evict agents that are still within timeout", async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      const idleManager = new AgentManager({
+        config: makeConfig({ idleTimeoutMs: 60_000 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+
+      await idleManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+
+      // Only 5s later (well within 60s timeout)
+      vi.setSystemTime(now + 5_000);
+      idleManager.evictIdleAgents();
+
+      expect(idleManager.getActiveCount()).toBe(1);
+
+      await idleManager.shutdown();
+      vi.useRealTimers();
+    });
+  });
+
+  // ===========================================================================
+  // getAgent / getAllAgents
+  // ===========================================================================
+
+  describe("getAgent / getAllAgents", () => {
+    it("getAgent returns agent info by id", async () => {
+      await manager.routeMessage(makeMsg());
+      const all = manager.getAllAgents();
+      expect(all).toHaveLength(1);
+
+      const found = manager.getAgent(all[0].id);
+      expect(found).toBeDefined();
+      expect(found!.key).toBe(resolveAgentKey("web", "chat-1"));
+    });
+
+    it("getAllAgents returns all agent instances", async () => {
+      await manager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      await manager.routeMessage(makeMsg({ chatId: "chat-2" }));
+
+      const all = manager.getAllAgents();
+      expect(all).toHaveLength(2);
+    });
+
+    it("getAgent returns undefined for unknown id", () => {
+      expect(manager.getAgent("unknown" as AgentId)).toBeUndefined();
+    });
+  });
+
+  // ===========================================================================
+  // Shutdown
+  // ===========================================================================
+
+  describe("shutdown", () => {
+    it("closes all agent memory connections", async () => {
+      await manager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      await manager.routeMessage(makeMsg({ chatId: "chat-2" }));
+      expect(manager.getActiveCount()).toBe(2);
+
+      await manager.shutdown();
+
+      // After shutdown, active count should be 0
+      expect(manager.getActiveCount()).toBe(0);
+    });
+  });
+
+  // ===========================================================================
+  // setBudgetCap
+  // ===========================================================================
+
+  describe("setBudgetCap", () => {
+    it("updates budget cap for an agent", async () => {
+      await manager.routeMessage(makeMsg());
+      const agents = manager.getAllAgents();
+
+      manager.setBudgetCap(agents[0].id, 20.0);
+
+      const updated = manager.getAgent(agents[0].id);
+      expect(updated!.budgetCapUsd).toBe(20.0);
+    });
+  });
+
+  // ===========================================================================
+  // lastActivity updates
+  // ===========================================================================
+
+  describe("lastActivity tracking", () => {
+    it("updates lastActivity on each routed message", async () => {
+      vi.useFakeTimers();
+      const t1 = 1000000;
+      vi.setSystemTime(t1);
+
+      await manager.routeMessage(makeMsg());
+      const agents1 = manager.getAllAgents();
+      const firstActivity = agents1[0].lastActivity;
+
+      vi.setSystemTime(t1 + 5000);
+      await manager.routeMessage(makeMsg());
+      const agents2 = manager.getAllAgents();
+
+      expect(agents2[0].lastActivity).toBeGreaterThan(firstActivity);
+
+      vi.useRealTimers();
+    });
+  });
+});
