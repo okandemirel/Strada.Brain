@@ -11,6 +11,7 @@
  *   strata daemon digest  -- Send immediate digest (or --dry-run to preview)
  *   strata daemon notifications -- Show notification history
  *   strata daemon notify  -- Send a test notification
+ *   strata daemon chain:status -- Show tool chain resilience status
  *
  * Uses callback-based DI: getDaemonContext() returns the running daemon's
  * context or undefined if daemon is not running.
@@ -30,6 +31,13 @@ import type { DigestReporter } from "./reporting/digest-reporter.js";
 import type { NotificationRouter } from "./reporting/notification-router.js";
 import type { UrgencyLevel } from "./reporting/notification-types.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
+import type { LearningStorage } from "../learning/storage/learning-storage.js";
+import {
+  ChainMetadataV2Schema,
+  ChainMetadataSchema,
+  migrateV1toV2,
+} from "../learning/chains/chain-types.js";
+import type { ChainResilienceConfig, ChainMetadataV2 } from "../learning/chains/chain-types.js";
 
 /**
  * Context for daemon CLI commands. Provided via callback since daemon
@@ -45,6 +53,8 @@ export interface DaemonContext {
   digestReporter?: DigestReporter;
   notificationRouter?: NotificationRouter;
   memoryManager?: IMemoryManager;
+  learningStorage?: LearningStorage;
+  chainResilienceConfig?: ChainResilienceConfig;
 }
 
 /**
@@ -494,11 +504,197 @@ export function registerDaemonCommands(
         console.log(`Exempt domains: ${stats.exemptDomains.join(", ")} (${stats.totalExempt} entries)`);
       }
     });
+
+  // =========================================================================
+  // daemon chain:status (Plan 22-04)
+  // =========================================================================
+  daemon
+    .command("chain:status")
+    .description("Show tool chain resilience status")
+    .option("--json", "Output as JSON instead of table")
+    .action((opts: { json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running. Start with: strata daemon start");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!ctx.learningStorage) {
+        console.error("Learning storage not available");
+        process.exitCode = 1;
+        return;
+      }
+
+      // Load active tool_chain instincts
+      const instincts = ctx.learningStorage
+        .getInstincts({ type: "tool_chain" })
+        .filter((i) => i.status === "active" || i.status === "permanent");
+
+      if (instincts.length === 0) {
+        console.log("No active tool chains");
+        return;
+      }
+
+      // Parse chain metadata
+      const chains: Array<{
+        name: string;
+        steps: number;
+        topology: string;
+        rollback: boolean;
+        parallel: boolean;
+        successRate: number;
+        occurrences: number;
+        v2Meta: ChainMetadataV2 | null;
+      }> = [];
+
+      for (const instinct of instincts) {
+        try {
+          const parsed = JSON.parse(instinct.action);
+
+          // Try V2 first, then V1 with migration
+          const v2Result = ChainMetadataV2Schema.safeParse(parsed);
+          const v1Result = !v2Result.success ? ChainMetadataSchema.safeParse(parsed) : null;
+
+          let v2Meta: ChainMetadataV2 | null = null;
+
+          if (v2Result.success) {
+            v2Meta = v2Result.data;
+          } else if (v1Result?.success) {
+            v2Meta = migrateV1toV2(v1Result.data);
+          } else {
+            continue;
+          }
+
+          const topology = buildTopologyString(v2Meta);
+          const hasParallel = v2Meta.steps.some(
+            (s, i) => i > 0 && s.dependsOn.length === 0,
+          );
+
+          chains.push({
+            name: instinct.name,
+            steps: v2Meta.steps.length,
+            topology,
+            rollback: v2Meta.isFullyReversible,
+            parallel: hasParallel,
+            successRate: v2Meta.successRate,
+            occurrences: v2Meta.occurrences,
+            v2Meta,
+          });
+        } catch {
+          // Skip unparseable chains
+        }
+      }
+
+      if (chains.length === 0) {
+        console.log("No active tool chains");
+        return;
+      }
+
+      const resilienceConfig = ctx.chainResilienceConfig ?? {
+        rollbackEnabled: false,
+        parallelEnabled: false,
+        maxParallelBranches: 4,
+        compensationTimeoutMs: 5000,
+      };
+
+      if (opts.json) {
+        const jsonOutput = {
+          chains: chains.map((c) => ({
+            name: c.name,
+            steps: c.v2Meta?.steps ?? [],
+            topology: c.topology,
+            rollbackCapable: c.rollback,
+            parallelCapable: c.parallel,
+            successRate: c.successRate,
+            occurrences: c.occurrences,
+          })),
+          config: resilienceConfig,
+        };
+        console.log(JSON.stringify(jsonOutput, null, 2));
+        return;
+      }
+
+      // Table format
+      console.log("Tool Chain Resilience Status:");
+      console.log("");
+      console.log(
+        padRight("Name", 25) +
+        padRight("Steps", 7) +
+        padRight("Topology", 35) +
+        padRight("Rollback", 10) +
+        padRight("Parallel", 10) +
+        padRight("Success", 10) +
+        padRight("Runs", 8),
+      );
+      console.log("-".repeat(105));
+
+      for (const c of chains) {
+        console.log(
+          padRight(c.name.length > 24 ? c.name.slice(0, 22) + ".." : c.name, 25) +
+          padRight(String(c.steps), 7) +
+          padRight(c.topology.length > 34 ? c.topology.slice(0, 32) + ".." : c.topology, 35) +
+          padRight(c.rollback ? "Yes" : "No", 10) +
+          padRight(c.parallel ? "Yes" : "No", 10) +
+          padRight((c.successRate * 100).toFixed(1) + "%", 10) +
+          padRight(String(c.occurrences), 8),
+        );
+      }
+
+      console.log("");
+      console.log(
+        `Rollback: ${resilienceConfig.rollbackEnabled ? "enabled" : "disabled"}` +
+        ` | Parallel: ${resilienceConfig.parallelEnabled ? "enabled" : "disabled"}` +
+        ` | Max Branches: ${resilienceConfig.maxParallelBranches}` +
+        ` | Timeout: ${resilienceConfig.compensationTimeoutMs}ms`,
+      );
+    });
 }
 
 // =============================================================================
 // Helpers
 // =============================================================================
+
+/**
+ * Build a topology string from V2 chain metadata steps.
+ * Groups steps into waves based on dependsOn.
+ * Parallel steps within a wave are shown in brackets: "step_0 -> [step_1, step_2] -> step_3"
+ */
+function buildTopologyString(meta: ChainMetadataV2): string {
+  const steps = meta.steps;
+  if (steps.length === 0) return "";
+
+  // Build waves using simple topological grouping
+  const completed = new Set<string>();
+  const waves: string[][] = [];
+
+  while (completed.size < steps.length) {
+    const wave: string[] = [];
+    for (const step of steps) {
+      if (completed.has(step.stepId)) continue;
+      const depsResolved = step.dependsOn.every((d) => completed.has(d));
+      if (depsResolved) {
+        wave.push(step.toolName);
+      }
+    }
+    if (wave.length === 0) break; // Avoid infinite loop on cyclic DAG
+
+    // Mark wave steps as completed
+    for (const step of steps) {
+      if (completed.has(step.stepId)) continue;
+      const depsResolved = step.dependsOn.every((d) => completed.has(d));
+      if (depsResolved) {
+        completed.add(step.stepId);
+      }
+    }
+
+    waves.push(wave);
+  }
+
+  return waves
+    .map((w) => (w.length > 1 ? `[${w.join(", ")}]` : w[0]))
+    .join(" -> ");
+}
 
 function persistCircuitState(storage: DaemonStorage, name: string, cb: CircuitBreaker): void {
   const snap = cb.serialize();

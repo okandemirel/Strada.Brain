@@ -452,3 +452,173 @@ describe("daemon memory:decay-status", () => {
     expect(stderr).toContain("not available");
   });
 });
+
+// =============================================================================
+// CHAIN:STATUS SUBCOMMAND (Plan 22-04)
+// =============================================================================
+
+describe("daemon chain:status", () => {
+  const V2_CHAIN_ACTION = JSON.stringify({
+    version: 2,
+    toolSequence: ["file_read", "file_write"],
+    steps: [
+      { stepId: "step_0", toolName: "file_read", dependsOn: [], reversible: true },
+      { stepId: "step_1", toolName: "file_write", dependsOn: ["step_0"], reversible: true, compensatingAction: { toolName: "file_delete", inputMappings: { path: "path" } } },
+    ],
+    parameterMappings: [],
+    isFullyReversible: true,
+    successRate: 0.95,
+    occurrences: 10,
+  });
+
+  const V2_PARALLEL_ACTION = JSON.stringify({
+    version: 2,
+    toolSequence: ["fetch", "process_a", "process_b", "merge"],
+    steps: [
+      { stepId: "step_0", toolName: "fetch", dependsOn: [], reversible: false },
+      { stepId: "step_1", toolName: "process_a", dependsOn: ["step_0"], reversible: false },
+      { stepId: "step_2", toolName: "process_b", dependsOn: [], reversible: false },
+      { stepId: "step_3", toolName: "merge", dependsOn: ["step_1", "step_2"], reversible: false },
+    ],
+    parameterMappings: [],
+    isFullyReversible: false,
+    successRate: 0.88,
+    occurrences: 5,
+  });
+
+  const V1_CHAIN_ACTION = JSON.stringify({
+    toolSequence: ["api_call", "transform", "save"],
+    parameterMappings: [],
+    successRate: 0.75,
+    occurrences: 3,
+  });
+
+  function makeMockLearningStorage(instincts: Array<{ name: string; action: string; status?: string }>) {
+    return {
+      getInstincts: vi.fn().mockReturnValue(
+        instincts.map((i, idx) => ({
+          id: `inst-${idx}`,
+          name: i.name,
+          type: "tool_chain",
+          status: i.status ?? "active",
+          action: i.action,
+          updatedAt: 1710000000000,
+        })),
+      ),
+    };
+  }
+
+  it("prints 'No active tool chains' when no chains exist", async () => {
+    const ctx = makeMockContext({
+      learningStorage: makeMockLearningStorage([]) as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["chain:status"]);
+
+    expect(stdout).toContain("No active tool chains");
+  });
+
+  it("displays chain table with correct columns for V2 chain", async () => {
+    const ctx = makeMockContext({
+      learningStorage: makeMockLearningStorage([
+        { name: "read_then_write", action: V2_CHAIN_ACTION },
+      ]) as any,
+      chainResilienceConfig: {
+        rollbackEnabled: true,
+        parallelEnabled: false,
+        maxParallelBranches: 4,
+        compensationTimeoutMs: 30000,
+      },
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["chain:status"]);
+
+    expect(stdout).toContain("Tool Chain Resilience Status");
+    expect(stdout).toContain("read_then_write");
+    expect(stdout).toContain("Yes"); // rollback
+    expect(stdout).toContain("No");  // parallel (sequential chain)
+    expect(stdout).toContain("95.0%");
+    expect(stdout).toContain("10");
+    expect(stdout).toContain("Rollback: enabled");
+    expect(stdout).toContain("Parallel: disabled");
+    expect(stdout).toContain("Max Branches: 4");
+    expect(stdout).toContain("Timeout: 30000ms");
+  });
+
+  it("outputs valid JSON with --json flag", async () => {
+    const ctx = makeMockContext({
+      learningStorage: makeMockLearningStorage([
+        { name: "read_then_write", action: V2_CHAIN_ACTION },
+      ]) as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["chain:status", "--json"]);
+
+    const parsed = JSON.parse(stdout);
+    expect(parsed.chains).toHaveLength(1);
+    expect(parsed.chains[0].name).toBe("read_then_write");
+    expect(parsed.chains[0].rollbackCapable).toBe(true);
+    expect(parsed.chains[0].parallelCapable).toBe(false);
+    expect(parsed.chains[0].steps).toHaveLength(2);
+    expect(parsed.config).toBeDefined();
+  });
+
+  it("correctly represents DAG topology with parallel steps", async () => {
+    const ctx = makeMockContext({
+      learningStorage: makeMockLearningStorage([
+        { name: "parallel_pipeline", action: V2_PARALLEL_ACTION },
+      ]) as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["chain:status"]);
+
+    // Should show parallel steps in brackets
+    expect(stdout).toContain("[");
+    expect(stdout).toContain("]");
+    expect(stdout).toContain("parallel_pipeline");
+  });
+
+  it("handles V1 chains with migration to V2", async () => {
+    const ctx = makeMockContext({
+      learningStorage: makeMockLearningStorage([
+        { name: "legacy_chain", action: V1_CHAIN_ACTION },
+      ]) as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["chain:status"]);
+
+    expect(stdout).toContain("legacy_chain");
+    expect(stdout).toContain("No"); // Not rollback capable
+    expect(stdout).toContain("75.0%");
+  });
+
+  it("errors when daemon is not running", async () => {
+    const { stderr } = await runDaemonCommand(() => undefined, ["chain:status"]);
+
+    expect(stderr).toContain("Daemon is not running");
+  });
+
+  it("errors when learning storage is not available", async () => {
+    const ctx = makeMockContext();
+
+    const { stderr } = await runDaemonCommand(() => ctx, ["chain:status"]);
+
+    expect(stderr).toContain("not available");
+  });
+
+  it("filters out deprecated/proposed instincts", async () => {
+    const ctx = makeMockContext({
+      learningStorage: makeMockLearningStorage([
+        { name: "active_chain", action: V2_CHAIN_ACTION, status: "active" },
+        { name: "deprecated_chain", action: V2_CHAIN_ACTION, status: "deprecated" },
+        { name: "proposed_chain", action: V2_CHAIN_ACTION, status: "proposed" },
+      ]) as any,
+    });
+
+    const { stdout } = await runDaemonCommand(() => ctx, ["chain:status"]);
+
+    expect(stdout).toContain("active_chain");
+    expect(stdout).not.toContain("deprecated_chain");
+    expect(stdout).not.toContain("proposed_chain");
+  });
+});
