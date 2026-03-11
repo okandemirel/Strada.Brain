@@ -648,6 +648,174 @@ export function registerDaemonCommands(
         ` | Timeout: ${resilienceConfig.compensationTimeoutMs}ms`,
       );
     });
+
+  // =========================================================================
+  // Agent management commands (Plan 23-03: AGENT-01, AGENT-02, AGENT-06)
+  // =========================================================================
+  const agent = daemon.command("agent").description("Multi-agent management commands");
+
+  // agent list -- combined view of all agents
+  agent
+    .command("list")
+    .description("List all agent sessions")
+    .option("--json", "Output as JSON")
+    .action((opts: { json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx?.agentManager) {
+        console.error("Multi-agent mode is not enabled.");
+        process.exitCode = 1;
+        return;
+      }
+      const agents = ctx.agentManager.getAllAgents();
+      if (opts.json) {
+        console.log(JSON.stringify(agents, null, 2));
+        return;
+      }
+      if (agents.length === 0) {
+        console.log("No active agents.");
+        return;
+      }
+
+      const usages = ctx.agentBudgetTracker?.getAllAgentUsages();
+      const now = Date.now();
+
+      console.log("Agent Sessions:");
+      console.log(
+        padRight("ID", 14) +
+        padRight("Channel", 16) +
+        padRight("Status", 18) +
+        padRight("Budget", 22) +
+        padRight("Memory", 10) +
+        padRight("Uptime", 12),
+      );
+      console.log("-".repeat(92));
+
+      for (const a of agents) {
+        const used = usages?.get(a.id as import("../agents/multi/agent-types.js").AgentId) ?? 0;
+        const pct = a.budgetCapUsd > 0 ? ((used / a.budgetCapUsd) * 100).toFixed(0) : "0";
+        const budgetStr = `$${used.toFixed(2)} / $${a.budgetCapUsd.toFixed(2)} (${pct}%)`;
+        const uptimeMs = now - a.createdAt;
+        console.log(
+          padRight(a.id.slice(0, 12) + "..", 14) +
+          padRight(`${a.channelType}:${a.chatId.slice(0, 8)}`, 16) +
+          padRight(a.status, 18) +
+          padRight(budgetStr, 22) +
+          padRight(String(a.memoryEntryCount), 10) +
+          padRight(formatDuration(uptimeMs), 12),
+        );
+      }
+    });
+
+  // agent status <id> -- detailed info for specific agent
+  agent
+    .command("status <id>")
+    .description("Show detailed agent status")
+    .option("--json", "Output as JSON")
+    .action((id: string, opts: { json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx?.agentManager) {
+        console.error("Multi-agent mode is not enabled.");
+        process.exitCode = 1;
+        return;
+      }
+      const agentInstance = ctx.agentManager.getAgent(id as import("../agents/multi/agent-types.js").AgentId);
+      if (!agentInstance) {
+        console.error(`Agent '${id}' not found.`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const usage = ctx.agentBudgetTracker?.getAgentUsage(
+        agentInstance.id as import("../agents/multi/agent-types.js").AgentId,
+        agentInstance.budgetCapUsd,
+      );
+
+      const detail = {
+        ...agentInstance,
+        budgetUsed: usage?.usedUsd ?? 0,
+        budgetPct: usage?.pct ?? 0,
+        uptimeMs: Date.now() - agentInstance.createdAt,
+      };
+
+      if (opts.json) {
+        console.log(JSON.stringify(detail, null, 2));
+        return;
+      }
+
+      console.log(`Agent: ${agentInstance.id}`);
+      console.log(`  Key:           ${agentInstance.key}`);
+      console.log(`  Channel:       ${agentInstance.channelType}`);
+      console.log(`  Chat ID:       ${agentInstance.chatId}`);
+      console.log(`  Status:        ${agentInstance.status}`);
+      console.log(`  Budget:        $${(usage?.usedUsd ?? 0).toFixed(2)} / $${agentInstance.budgetCapUsd.toFixed(2)} (${((usage?.pct ?? 0) * 100).toFixed(1)}%)`);
+      console.log(`  Memory:        ${agentInstance.memoryEntryCount} entries`);
+      console.log(`  Created:       ${new Date(agentInstance.createdAt).toISOString()}`);
+      console.log(`  Last Activity: ${new Date(agentInstance.lastActivity).toISOString()}`);
+      console.log(`  Uptime:        ${formatDuration(Date.now() - agentInstance.createdAt)}`);
+    });
+
+  // agent stop <id> -- graceful stop (--force for hard stop)
+  agent
+    .command("stop <id>")
+    .description("Stop an agent session")
+    .option("--force", "Hard stop (close memory immediately)")
+    .action(async (id: string, opts: { force?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx?.agentManager) {
+        console.error("Multi-agent mode is not enabled.");
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        await ctx.agentManager.stopAgent(id as import("../agents/multi/agent-types.js").AgentId, opts.force);
+        console.log(`Agent '${id}' stopped${opts.force ? " (force)" : ""}.`);
+      } catch (err) {
+        console.error(`Failed to stop agent: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
+    });
+
+  // agent start <id> -- resume a stopped agent
+  agent
+    .command("start <id>")
+    .description("Resume a stopped agent")
+    .action(async (id: string) => {
+      const ctx = getDaemonContext();
+      if (!ctx?.agentManager) {
+        console.error("Multi-agent mode is not enabled.");
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        await ctx.agentManager.startAgent(id as import("../agents/multi/agent-types.js").AgentId);
+        console.log(`Agent '${id}' started.`);
+      } catch (err) {
+        console.error(`Failed to start agent: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
+    });
+
+  // agent budget set <id> <amount> -- change per-agent budget cap
+  const agentBudgetCmd = agent.command("budget").description("Agent budget management");
+  agentBudgetCmd
+    .command("set <id> <amount>")
+    .description("Set per-agent budget cap (USD)")
+    .action((id: string, amount: string) => {
+      const ctx = getDaemonContext();
+      if (!ctx?.agentManager) {
+        console.error("Multi-agent mode is not enabled.");
+        process.exitCode = 1;
+        return;
+      }
+      const usd = parseFloat(amount);
+      if (isNaN(usd) || usd <= 0) {
+        console.error("Invalid amount. Must be a positive number.");
+        process.exitCode = 1;
+        return;
+      }
+      ctx.agentManager.setBudgetCap(id as import("../agents/multi/agent-types.js").AgentId, usd);
+      console.log(`Agent '${id}' budget cap set to $${usd.toFixed(2)}.`);
+    });
 }
 
 // =============================================================================
@@ -689,4 +857,15 @@ function padRight(str: string, width: number): string {
 function padLeft(str: string, width: number): string {
   if (str.length >= width) return str;
   return " ".repeat(width - str.length) + str;
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ${h % 24}h`;
+  if (h > 0) return `${h}h ${m % 60}m`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
 }

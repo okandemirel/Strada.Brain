@@ -96,10 +96,8 @@ export class DashboardServer {
   // Chain resilience context (Plan 22-04)
   private chainResilienceConfig?: ChainResilienceConfig;
 
-  // Multi-agent context (Plan 23-03) -- fields read in /api/agents endpoint handler below
-  // @ts-ignore - Reserved for multi-agent endpoint (Plan 23-03 Task 2)
+  // Multi-agent context (Plan 23-03)
   private agentManager?: { getAllAgents(): Array<{ id: string; key: string; channelType: string; chatId: string; status: string; createdAt: number; lastActivity: number; budgetCapUsd: number; memoryEntryCount: number }>; getActiveCount(): number };
-  // @ts-ignore - Reserved for multi-agent endpoint (Plan 23-03 Task 2)
   private agentBudgetTracker?: { getGlobalUsage(cap?: number): { usedUsd: number; limitUsd?: number; pct: number }; getAllAgentUsages(): Map<string, number> };
 
   constructor(
@@ -563,6 +561,14 @@ export class DashboardServer {
         return;
       }
 
+      // GET /api/agents -- Multi-agent data (Plan 23-03)
+      if (url === "/api/agents") {
+        const agentsData = this.getAgentsData();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(agentsData));
+        return;
+      }
+
       if (url === "/api/metrics") {
         const snapshot = this.metrics.getSnapshot(this.getMemoryStats());
         res.writeHead(200, {
@@ -868,6 +874,30 @@ export class DashboardServer {
   }
 
   /**
+   * Build agents data for the /api/agents endpoint (Plan 23-03).
+   * Returns {enabled: false} when multi-agent is disabled.
+   */
+  private getAgentsData(): Record<string, unknown> {
+    if (!this.agentManager) {
+      return { enabled: false };
+    }
+
+    const agents = this.agentManager.getAllAgents();
+    const agentUsages = this.agentBudgetTracker?.getAllAgentUsages();
+    const globalUsage = this.agentBudgetTracker?.getGlobalUsage();
+
+    return {
+      enabled: true,
+      activeCount: this.agentManager.getActiveCount(),
+      agents: agents.map((a) => ({
+        ...a,
+        budgetUsed: agentUsages?.get(a.id) ?? 0,
+      })),
+      globalBudget: globalUsage ?? { usedUsd: 0, pct: 0 },
+    };
+  }
+
+  /**
    * Serialize a GoalTree into JSON-safe format for the /api/goals endpoint.
    */
   private serializeGoalTree(tree: GoalTree): Record<string, unknown> {
@@ -945,11 +975,12 @@ function fmtDuration(ms) {
 
 async function refresh() {
   try {
-    const [metricsRes, daemonRes, maintenanceRes, chainResilienceRes] = await Promise.all([
+    const [metricsRes, daemonRes, maintenanceRes, chainResilienceRes, agentsRes] = await Promise.all([
       fetch('/api/metrics'),
       fetch('/api/daemon').catch(function() { return null; }),
       fetch('/api/maintenance').catch(function() { return null; }),
-      fetch('/api/chain-resilience').catch(function() { return null; })
+      fetch('/api/chain-resilience').catch(function() { return null; }),
+      fetch('/api/agents').catch(function() { return null; })
     ]);
     const data = await metricsRes.json();
 
@@ -1042,6 +1073,12 @@ async function refresh() {
     if (chainResilienceRes) {
       var chainData = await chainResilienceRes.json();
       renderChainResilience(chainData);
+    }
+
+    // Agents panel (Plan 23-03)
+    if (agentsRes) {
+      var agentsData = await agentsRes.json();
+      renderAgents(agentsData);
     }
 
     document.getElementById('last-update').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
@@ -1323,6 +1360,123 @@ function renderChainResilience(data) {
   container.appendChild(cfgP);
 }
 
+function renderAgents(data) {
+  var section = document.getElementById('agents-section');
+  var container = document.getElementById('agents-panel');
+  if (!section || !container) return;
+
+  if (!data || !data.enabled) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  var agents = data.agents || [];
+  container.textContent = '';
+
+  // Global budget bar
+  var globalBudget = data.globalBudget || {};
+  if (globalBudget.usedUsd !== undefined) {
+    var budgetDiv = document.createElement('div');
+    budgetDiv.style.marginBottom = '12px';
+    var budgetLabel = document.createElement('div');
+    budgetLabel.style.fontSize = '0.85rem';
+    budgetLabel.style.color = '#8b949e';
+    budgetLabel.style.marginBottom = '4px';
+    var limitStr = globalBudget.limitUsd ? '$' + globalBudget.limitUsd.toFixed(2) : 'unlimited';
+    budgetLabel.textContent = 'Global Budget: $' + globalBudget.usedUsd.toFixed(2) + ' / ' + limitStr;
+    budgetDiv.appendChild(budgetLabel);
+
+    if (globalBudget.limitUsd) {
+      var barOuter = document.createElement('div');
+      barOuter.className = 'bar-container';
+      var pct = Math.min(globalBudget.pct * 100, 100);
+      var barColor = pct > 90 ? '#da3633' : pct > 70 ? '#f0883e' : '#3fb950';
+      var barInner = document.createElement('div');
+      barInner.style.background = barColor;
+      barInner.style.height = '100%';
+      barInner.style.width = pct.toFixed(0) + '%';
+      barInner.style.borderRadius = '4px';
+      barOuter.appendChild(barInner);
+      budgetDiv.appendChild(barOuter);
+    }
+    container.appendChild(budgetDiv);
+  }
+
+  if (agents.length === 0) {
+    var p = document.createElement('p');
+    p.style.color = '#8b949e';
+    p.textContent = 'No agents active (' + (data.activeCount || 0) + ' in memory)';
+    container.appendChild(p);
+    return;
+  }
+
+  // Agent table
+  var tbl = document.createElement('table');
+  var thead = document.createElement('thead');
+  var headRow = document.createElement('tr');
+  ['ID', 'Channel', 'Status', 'Budget Used/Cap', 'Memory', 'Uptime'].forEach(function(h) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  tbl.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  var now = Date.now();
+  for (var i = 0; i < agents.length; i++) {
+    var a = agents[i];
+    var row = document.createElement('tr');
+
+    var tdId = document.createElement('td');
+    tdId.textContent = a.id.substring(0, 12) + '..';
+    tdId.title = a.id;
+    row.appendChild(tdId);
+
+    var tdChan = document.createElement('td');
+    tdChan.textContent = a.channelType + ':' + a.chatId.substring(0, 8);
+    row.appendChild(tdChan);
+
+    var tdStatus = document.createElement('td');
+    var statusBadge = document.createElement('span');
+    var statusClass = 'badge-info';
+    if (a.status === 'active') statusClass = 'badge-ok';
+    else if (a.status === 'stopped') statusClass = 'badge-warn';
+    else if (a.status === 'budget_exceeded') statusClass = 'badge-err';
+    statusBadge.className = 'badge ' + statusClass;
+    statusBadge.textContent = a.status;
+    tdStatus.appendChild(statusBadge);
+    row.appendChild(tdStatus);
+
+    var tdBudget = document.createElement('td');
+    var used = a.budgetUsed || 0;
+    tdBudget.textContent = '$' + used.toFixed(2) + ' / $' + a.budgetCapUsd.toFixed(2);
+    row.appendChild(tdBudget);
+
+    var tdMem = document.createElement('td');
+    tdMem.style.textAlign = 'right';
+    tdMem.textContent = String(a.memoryEntryCount);
+    row.appendChild(tdMem);
+
+    var tdUptime = document.createElement('td');
+    tdUptime.textContent = fmtDuration(now - a.createdAt);
+    row.appendChild(tdUptime);
+
+    tbody.appendChild(row);
+  }
+  tbl.appendChild(tbody);
+  container.appendChild(tbl);
+
+  // Active count summary
+  var summaryP = document.createElement('p');
+  summaryP.style.color = '#8b949e';
+  summaryP.style.fontSize = '0.8rem';
+  summaryP.style.marginTop = '8px';
+  summaryP.textContent = data.activeCount + ' live agent(s) in memory, ' + agents.length + ' total registered';
+  container.appendChild(summaryP);
+}
+
 function card(label, value, sub) {
   return '<div class="card"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div>'
     + (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div>';
@@ -1422,6 +1576,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="section" id="chain-resilience-section">
   <h2>Chain Resilience</h2>
   <div id="chain-resilience-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="agents-section" style="display:none">
+  <h2>Agents</h2>
+  <div id="agents-panel"><p style="color:#8b949e">Loading...</p></div>
 </div>
 
 <p id="last-update"></p>
