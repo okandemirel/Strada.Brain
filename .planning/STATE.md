@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Multi-Agent & Hardening
 status: in_progress
-stopped_at: Completed 22-01 (Chain Resilience Foundation)
-last_updated: "2026-03-11T15:38:10Z"
-last_activity: 2026-03-11 -- Completed 22-01 (V2 schemas, DAG validator, rollback executor)
+stopped_at: Completed 22-03 (DAG Parallel Execution + Saga Rollback)
+last_updated: "2026-03-11T15:48:24Z"
+last_activity: 2026-03-11 -- Completed 22-03 (DAG parallel + saga rollback + confidence penalty)
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
-  percent: 25
+  total_plans: 8
+  completed_plans: 7
+  percent: 50
 ---
 
 # State: Strada.Brain
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-10)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- runs 24/7 as a proactive daemon.
-**Current focus:** v3.0 Multi-Agent & Hardening -- Phase 22 Plan 01 complete, 3 plans remaining
+**Current focus:** v3.0 Multi-Agent & Hardening -- Phase 22 Plan 03 complete, 1 plan remaining
 
 ## Current Position
 
 Phase: 22 of 25 (Tool Chain Resilience)
-Plan: 1 of 4 complete
+Plan: 3 of 4 complete
 Status: In Progress
-Last activity: 2026-03-11 -- Completed 22-01 (V2 schemas, DAG validator, rollback executor)
+Last activity: 2026-03-11 -- Completed 22-03 (DAG parallel + saga rollback + confidence penalty)
 
-Progress: [███░░░░░░░] 25%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
@@ -39,7 +39,7 @@ Progress: [███░░░░░░░] 25%
 - v2.0: 10 phases, 26 plans, 3 days (2026-03-08 -> 2026-03-10)
 - v2.0 gap closure: 1 phase, 1 plan, 5 min (2026-03-10)
 - v3.0 Phase 21: 1 phase, 4 plans including gap closure (2026-03-10)
-- v3.0 Phase 22: Plan 01 in 7 min (2026-03-11)
+- v3.0 Phase 22: Plan 01 in 7 min, Plan 02 in 7 min, Plan 03 in 6 min (2026-03-11)
 - Total: 22 phases, 56 plans, 6 days
 
 ## Accumulated Context
@@ -66,6 +66,15 @@ Progress: [███░░░░░░░] 25%
 - 22-01: RollbackReport as TypeScript interface (not Zod) -- runtime-only data
 - 22-01: DAG validation reuses Kahn's algorithm pattern from GoalDecomposer
 - 22-01: Rollback uses log-and-continue on compensation failures (continues to next step)
+- 22-02: V2 synthesis in single LLM call with compensation, reversibility, and DAG instructions
+- 22-02: Safety net overrides LLM: readOnly=always reversible, dangerous+no compensation=irreversible
+- 22-02: Cyclic DAG from LLM falls back to sequential dependsOn (preserves step properties)
+- 22-02: V1->V2 migration in-memory only -- original instinct.action unchanged in storage
+- 22-02: CompositeTool uses V1 compat for execution; V2 data in instinct.action for Plan 03
+- 22-03: V2 routing via version===2 + steps array check (isV2Metadata) -- avoids runtime instanceof
+- 22-03: AbortController cancellation is best-effort -- running steps complete but results discarded
+- 22-03: DAG sourceKey format 'stepId.field' for cross-step data flow in parallel branches
+- 22-03: Escalating penalty: 1x standard, 2x rollback, 3x failed-rollback -- no penalty for forward-recovery
 
 ### Pending Todos
 
@@ -77,10 +86,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-11T15:38:10Z
-Stopped at: Completed 22-01 (Chain Resilience Foundation)
-Resume file: .planning/phases/22-tool-chain-resilience/22-02-PLAN.md
+Last session: 2026-03-11T15:48:24Z
+Stopped at: Completed 22-03 (DAG Parallel Execution + Saga Rollback)
+Resume file: .planning/phases/22-tool-chain-resilience/22-04-PLAN.md
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-11 after Phase 22 Plan 01 (V2 schemas, DAG validator, rollback executor)*
+*Last updated: 2026-03-11 after Phase 22 Plan 03 (DAG parallel + saga rollback + confidence penalty)*

@@ -24,6 +24,12 @@ import {
 } from "../daemon/triggers/webhook-trigger.js";
 import type { IdentityStateManager, IdentityState } from "../identity/identity-state.js";
 import type { DaemonStorage } from "../daemon/daemon-storage.js";
+import {
+  ChainMetadataV2Schema,
+  ChainMetadataSchema,
+  migrateV1toV2,
+} from "../learning/chains/chain-types.js";
+import type { ChainResilienceConfig } from "../learning/chains/chain-types.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -87,6 +93,9 @@ export class DashboardServer {
   private historyDepth: number = 10;
   private triggerFireRetentionDays: number = 30;
 
+  // Chain resilience context (Plan 22-04)
+  private chainResilienceConfig?: ChainResilienceConfig;
+
   constructor(
     port: number,
     metrics: MetricsCollector,
@@ -109,6 +118,7 @@ export class DashboardServer {
     metricsStorage?: MetricsStorage;
     learningStorage?: LearningStorage;
     goalStorage?: GoalStorage;
+    chainResilienceConfig?: ChainResilienceConfig;
   }): void {
     this.memoryManager = services.memoryManager;
     this.channel = services.channel;
@@ -120,6 +130,9 @@ export class DashboardServer {
     }
     if (services.goalStorage) {
       this.goalStorage = services.goalStorage;
+    }
+    if (services.chainResilienceConfig) {
+      this.chainResilienceConfig = services.chainResilienceConfig;
     }
   }
 
@@ -520,6 +533,14 @@ export class DashboardServer {
         return;
       }
 
+      // GET /api/chain-resilience -- Chain resilience data (Plan 22-04)
+      if (url === "/api/chain-resilience") {
+        const chainResilience = this.getChainResilienceData();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(chainResilience));
+        return;
+      }
+
       if (url === "/api/metrics") {
         const snapshot = this.metrics.getSnapshot(this.getMemoryStats());
         res.writeHead(200, {
@@ -745,6 +766,93 @@ export class DashboardServer {
   }
 
   /**
+   * Build chain resilience data for the /api/chain-resilience endpoint.
+   * Reads tool_chain instincts, parses V2/V1 metadata, and computes resilience indicators.
+   */
+  private getChainResilienceData(): Record<string, unknown> {
+    const DEFAULT_CONFIG = {
+      rollbackEnabled: false,
+      parallelEnabled: false,
+      maxParallelBranches: 4,
+      compensationTimeoutMs: 5000,
+    };
+
+    const chains: Array<Record<string, unknown>> = [];
+
+    if (this.learningStorage) {
+      try {
+        const instincts = this.learningStorage.getInstincts({ type: "tool_chain" });
+        const activeInstincts = instincts.filter(
+          (i) => i.status === "active" || i.status === "permanent",
+        );
+
+        for (const instinct of activeInstincts) {
+          try {
+            const parsed = JSON.parse(instinct.action);
+
+            // Try V2 first, then V1 with migration
+            const v2Result = ChainMetadataV2Schema.safeParse(parsed);
+            const v1Result = !v2Result.success ? ChainMetadataSchema.safeParse(parsed) : null;
+
+            let isFullyReversible = false;
+            let hasParallelBranches = false;
+            let stepCount = 0;
+            let successRate = 0;
+            let occurrences = 0;
+
+            if (v2Result.success) {
+              const meta = v2Result.data;
+              isFullyReversible = meta.isFullyReversible;
+              stepCount = meta.steps.length;
+              successRate = meta.successRate;
+              occurrences = meta.occurrences;
+              // Detect parallel branches: steps with empty dependsOn (after step 0) or multiple roots
+              const rootSteps = meta.steps.filter(
+                (s, i) => i > 0 && s.dependsOn.length === 0,
+              );
+              hasParallelBranches = rootSteps.length > 0;
+            } else if (v1Result?.success) {
+              const meta = v1Result.data;
+              stepCount = meta.toolSequence.length;
+              successRate = meta.successRate;
+              occurrences = meta.occurrences;
+              // V1 is always sequential, not reversible
+            } else {
+              continue; // Skip unparseable chains
+            }
+
+            chains.push({
+              name: instinct.name,
+              steps: stepCount,
+              rollbackCapable: isFullyReversible,
+              parallelCapable: hasParallelBranches,
+              successRate,
+              occurrences,
+              lastRun: instinct.updatedAt ?? null,
+            });
+          } catch {
+            // Skip individual chain parse errors
+          }
+        }
+      } catch {
+        // Fall through to empty chains
+      }
+    }
+
+    const config = this.chainResilienceConfig ?? DEFAULT_CONFIG;
+
+    return {
+      chains,
+      config: {
+        rollbackEnabled: config.rollbackEnabled,
+        parallelEnabled: config.parallelEnabled,
+        maxParallelBranches: config.maxParallelBranches,
+        compensationTimeoutMs: config.compensationTimeoutMs,
+      },
+    };
+  }
+
+  /**
    * Serialize a GoalTree into JSON-safe format for the /api/goals endpoint.
    */
   private serializeGoalTree(tree: GoalTree): Record<string, unknown> {
@@ -822,10 +930,11 @@ function fmtDuration(ms) {
 
 async function refresh() {
   try {
-    const [metricsRes, daemonRes, maintenanceRes] = await Promise.all([
+    const [metricsRes, daemonRes, maintenanceRes, chainResilienceRes] = await Promise.all([
       fetch('/api/metrics'),
       fetch('/api/daemon').catch(function() { return null; }),
-      fetch('/api/maintenance').catch(function() { return null; })
+      fetch('/api/maintenance').catch(function() { return null; }),
+      fetch('/api/chain-resilience').catch(function() { return null; })
     ]);
     const data = await metricsRes.json();
 
@@ -912,6 +1021,12 @@ async function refresh() {
     if (maintenanceRes) {
       var maint = await maintenanceRes.json();
       renderMaintenance(maint);
+    }
+
+    // Chain Resilience panel (Plan 22-04)
+    if (chainResilienceRes) {
+      var chainData = await chainResilienceRes.json();
+      renderChainResilience(chainData);
     }
 
     document.getElementById('last-update').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
@@ -1094,6 +1209,105 @@ function renderMaintenance(maint) {
   container.appendChild(pruneP);
 }
 
+function renderChainResilience(data) {
+  var container = document.getElementById('chain-resilience-panel');
+  if (!container) return;
+
+  var chains = data.chains || [];
+  var cfg = data.config || {};
+
+  if (chains.length === 0) {
+    container.textContent = '';
+    var p = document.createElement('p');
+    p.style.color = '#8b949e';
+    p.textContent = 'No active chains';
+    container.appendChild(p);
+
+    // Still show config summary
+    var cfgP = document.createElement('p');
+    cfgP.style.color = '#8b949e';
+    cfgP.style.fontSize = '0.8rem';
+    cfgP.style.marginTop = '8px';
+    cfgP.textContent = 'Rollback: ' + (cfg.rollbackEnabled ? 'enabled' : 'disabled')
+      + ' | Parallel: ' + (cfg.parallelEnabled ? 'enabled' : 'disabled')
+      + ' | Max Branches: ' + (cfg.maxParallelBranches || 4)
+      + ' | Timeout: ' + (cfg.compensationTimeoutMs || 5000) + 'ms';
+    container.appendChild(cfgP);
+    return;
+  }
+
+  container.textContent = '';
+
+  var tbl = document.createElement('table');
+  var thead = document.createElement('thead');
+  var headRow = document.createElement('tr');
+  ['Name', 'Steps', 'Rollback', 'Parallel', 'Success Rate', 'Executions', 'Last Run'].forEach(function(h) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  tbl.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  for (var i = 0; i < chains.length; i++) {
+    var c = chains[i];
+    var row = document.createElement('tr');
+
+    var tdName = document.createElement('td');
+    tdName.textContent = c.name;
+    row.appendChild(tdName);
+
+    var tdSteps = document.createElement('td');
+    tdSteps.style.textAlign = 'right';
+    tdSteps.textContent = String(c.steps);
+    row.appendChild(tdSteps);
+
+    var tdRollback = document.createElement('td');
+    var rbBadge = document.createElement('span');
+    rbBadge.className = 'badge ' + (c.rollbackCapable ? 'badge-ok' : 'badge-warn');
+    rbBadge.textContent = c.rollbackCapable ? '<- Rollback-capable' : '-> Forward-recovery';
+    tdRollback.appendChild(rbBadge);
+    row.appendChild(tdRollback);
+
+    var tdParallel = document.createElement('td');
+    var parBadge = document.createElement('span');
+    parBadge.className = 'badge ' + (c.parallelCapable ? 'badge-ok' : 'badge-warn');
+    parBadge.textContent = c.parallelCapable ? 'Parallel' : 'Sequential';
+    tdParallel.appendChild(parBadge);
+    row.appendChild(tdParallel);
+
+    var tdRate = document.createElement('td');
+    tdRate.style.textAlign = 'right';
+    tdRate.textContent = (c.successRate * 100).toFixed(1) + '%';
+    row.appendChild(tdRate);
+
+    var tdOcc = document.createElement('td');
+    tdOcc.style.textAlign = 'right';
+    tdOcc.textContent = String(c.occurrences);
+    row.appendChild(tdOcc);
+
+    var tdLast = document.createElement('td');
+    tdLast.textContent = c.lastRun ? new Date(c.lastRun).toLocaleString() : '-';
+    row.appendChild(tdLast);
+
+    tbody.appendChild(row);
+  }
+  tbl.appendChild(tbody);
+  container.appendChild(tbl);
+
+  // Config summary row
+  var cfgP = document.createElement('p');
+  cfgP.style.color = '#8b949e';
+  cfgP.style.fontSize = '0.8rem';
+  cfgP.style.marginTop = '8px';
+  cfgP.textContent = 'Rollback: ' + (cfg.rollbackEnabled ? 'enabled' : 'disabled')
+    + ' | Parallel: ' + (cfg.parallelEnabled ? 'enabled' : 'disabled')
+    + ' | Max Branches: ' + (cfg.maxParallelBranches || 4)
+    + ' | Timeout: ' + (cfg.compensationTimeoutMs || 5000) + 'ms';
+  container.appendChild(cfgP);
+}
+
 function card(label, value, sub) {
   return '<div class="card"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div>'
     + (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div>';
@@ -1188,6 +1402,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="section" id="maintenance-section">
   <h2>Maintenance</h2>
   <div id="maintenance-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="chain-resilience-section">
+  <h2>Chain Resilience</h2>
+  <div id="chain-resilience-panel"><p style="color:#8b949e">Loading...</p></div>
 </div>
 
 <p id="last-update"></p>

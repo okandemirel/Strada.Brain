@@ -512,4 +512,182 @@ describe("DashboardServer", () => {
       expect(html).toContain("api/maintenance");
     });
   });
+
+  describe("/api/chain-resilience (22-04)", () => {
+    function getPort(srv: DashboardServer): number {
+      const addr = (srv as unknown as { server: { address: () => { port: number } } }).server.address();
+      if (!addr || typeof addr === "string") throw new Error("No address");
+      return addr.port;
+    }
+
+    it("returns empty chains array when no learning storage registered", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/chain-resilience`);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.chains).toEqual([]);
+      expect(data.config).toBeDefined();
+      expect(data.config.rollbackEnabled).toBe(false);
+    });
+
+    it("returns chain list with V2 metadata from learning storage", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const v2Action = JSON.stringify({
+        version: 2,
+        toolSequence: ["file_read", "file_write"],
+        steps: [
+          { stepId: "step_0", toolName: "file_read", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "file_write", dependsOn: ["step_0"], reversible: true, compensatingAction: { toolName: "file_delete", inputMappings: { path: "path" } } },
+        ],
+        parameterMappings: [],
+        isFullyReversible: true,
+        successRate: 0.95,
+        occurrences: 10,
+      });
+
+      const mockLearningStorage = {
+        getInstincts: vi.fn().mockReturnValue([
+          {
+            id: "inst-1",
+            name: "read_then_write",
+            type: "tool_chain",
+            status: "active",
+            action: v2Action,
+            updatedAt: 1710000000000,
+          },
+        ]),
+      };
+
+      server.registerServices({
+        learningStorage: mockLearningStorage as any,
+        chainResilienceConfig: {
+          rollbackEnabled: true,
+          parallelEnabled: true,
+          maxParallelBranches: 4,
+          compensationTimeoutMs: 30000,
+        },
+      });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/chain-resilience`);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.chains).toHaveLength(1);
+      expect(data.chains[0].name).toBe("read_then_write");
+      expect(data.chains[0].steps).toBe(2);
+      expect(data.chains[0].rollbackCapable).toBe(true);
+      expect(data.chains[0].parallelCapable).toBe(false); // sequential chain
+      expect(data.chains[0].successRate).toBe(0.95);
+      expect(data.chains[0].occurrences).toBe(10);
+      expect(data.chains[0].lastRun).toBe(1710000000000);
+      expect(data.config.rollbackEnabled).toBe(true);
+      expect(data.config.parallelEnabled).toBe(true);
+      expect(data.config.compensationTimeoutMs).toBe(30000);
+    });
+
+    it("returns V1 chains as non-reversible and sequential", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const v1Action = JSON.stringify({
+        toolSequence: ["file_read", "file_write"],
+        parameterMappings: [],
+        successRate: 0.80,
+        occurrences: 5,
+      });
+
+      const mockLearningStorage = {
+        getInstincts: vi.fn().mockReturnValue([
+          {
+            id: "inst-2",
+            name: "legacy_chain",
+            type: "tool_chain",
+            status: "permanent",
+            action: v1Action,
+            updatedAt: 1710000000000,
+          },
+        ]),
+      };
+
+      server.registerServices({ learningStorage: mockLearningStorage as any });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/chain-resilience`);
+      const data = await res.json();
+
+      expect(data.chains).toHaveLength(1);
+      expect(data.chains[0].name).toBe("legacy_chain");
+      expect(data.chains[0].rollbackCapable).toBe(false);
+      expect(data.chains[0].parallelCapable).toBe(false);
+      expect(data.chains[0].successRate).toBe(0.80);
+    });
+
+    it("detects parallel-capable chains with DAG branches", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const v2Action = JSON.stringify({
+        version: 2,
+        toolSequence: ["fetch_data", "process_a", "process_b", "merge_results"],
+        steps: [
+          { stepId: "step_0", toolName: "fetch_data", dependsOn: [], reversible: false },
+          { stepId: "step_1", toolName: "process_a", dependsOn: ["step_0"], reversible: false },
+          { stepId: "step_2", toolName: "process_b", dependsOn: [], reversible: false },
+          { stepId: "step_3", toolName: "merge_results", dependsOn: ["step_1", "step_2"], reversible: false },
+        ],
+        parameterMappings: [],
+        isFullyReversible: false,
+        successRate: 0.90,
+        occurrences: 3,
+      });
+
+      const mockLearningStorage = {
+        getInstincts: vi.fn().mockReturnValue([
+          {
+            id: "inst-3",
+            name: "parallel_chain",
+            type: "tool_chain",
+            status: "active",
+            action: v2Action,
+            updatedAt: null,
+          },
+        ]),
+      };
+
+      server.registerServices({ learningStorage: mockLearningStorage as any });
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/chain-resilience`);
+      const data = await res.json();
+
+      expect(data.chains).toHaveLength(1);
+      expect(data.chains[0].parallelCapable).toBe(true);
+      expect(data.chains[0].lastRun).toBeNull();
+    });
+
+    it("dashboard HTML includes chain resilience section", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+      await server.start();
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/`);
+      const html = await res.text();
+
+      expect(html).toContain("chain-resilience-panel");
+      expect(html).toContain("Chain Resilience");
+      expect(html).toContain("api/chain-resilience");
+    });
+  });
 });

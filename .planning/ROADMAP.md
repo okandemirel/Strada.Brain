@@ -76,7 +76,7 @@ Plans:
 Plans:
 - [x] 22-01-PLAN.md -- Foundation: V2 schemas, config, DAG validator, rollback executor (CHAIN-01, CHAIN-02, CHAIN-03, CHAIN-04)
 - [ ] 22-02-PLAN.md -- Synthesis: V2 LLM prompt with compensation + reversibility + DAG, V1->V2 migration (CHAIN-01, CHAIN-02, CHAIN-04)
-- [ ] 22-03-PLAN.md -- Execution: DAG parallel execution + saga rollback in CompositeTool, rollback confidence penalty (CHAIN-01, CHAIN-02, CHAIN-03)
+- [x] 22-03-PLAN.md -- Execution: DAG parallel execution + saga rollback in CompositeTool, rollback confidence penalty (CHAIN-01, CHAIN-02, CHAIN-03)
 - [ ] 22-04-PLAN.md -- Observability: dashboard Chain Resilience section + CLI chain:status + bootstrap wiring (CHAIN-01, CHAIN-02, CHAIN-03, CHAIN-04)
 
 ### Phase 23: Multi-Agent Foundation
@@ -137,11 +137,11 @@ Phases 21 and 22 can execute in parallel (independent subsystems). Phase 23 foll
 | 10-19 | v2.0 | 26/26 | Complete | 2026-03-08..10 |
 | 20 | v2.0 gap closure | 1/1 | Complete | 2026-03-10 |
 | 21. Operational Health & Memory Decay | 4/4 | Complete    | 2026-03-10 | 2026-03-10 |
-| 22. Tool Chain Resilience | v3.0 | 1/4 | In Progress | - |
+| 22. Tool Chain Resilience | 3/4 | In Progress|  | - |
 | 23. Multi-Agent Foundation | v3.0 | 0/TBD | Not started | - |
 | 24. Task Delegation | v3.0 | 0/TBD | Not started | - |
 | 25. Memory Consolidation & Deployment | v3.0 | 0/TBD | Not started | - |
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-11 after Phase 22 Plan 01 complete (V2 schemas, DAG validator, rollback executor)*
+*Last updated: 2026-03-11 after Phase 22 Plan 03 complete (DAG parallel + saga rollback + confidence penalty)*
