@@ -13,8 +13,8 @@ import type { ChainDetector } from "./chain-detector.js";
 import type { ChainSynthesizer } from "./chain-synthesizer.js";
 import type { ChainValidator } from "./chain-validator.js";
 import { CompositeTool } from "./composite-tool.js";
-import { ChainMetadataSchema, computeCompositeMetadata } from "./chain-types.js";
-import type { ToolChainConfig } from "./chain-types.js";
+import { ChainMetadataSchema, ChainMetadataV2Schema, computeCompositeMetadata, migrateV1toV2 } from "./chain-types.js";
+import type { ToolChainConfig, ChainMetadata, ChainMetadataV2 } from "./chain-types.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
 import type { IEventEmitter, LearningEventMap } from "../../core/event-bus.js";
@@ -80,6 +80,8 @@ export class ChainManager {
 
   /**
    * Load active tool_chain instincts from storage, rebuild and register CompositeTools.
+   * Tries V2 schema first, then V1 with in-memory migration via migrateV1toV2.
+   * V1 instincts are migrated in-memory only (original instinct.action JSON unchanged in storage).
    * Skips chains whose component tools no longer exist in the registry.
    */
   private loadExistingChains(): void {
@@ -89,12 +91,14 @@ export class ChainManager {
 
     for (const instinct of chainInstincts) {
       try {
-        const chainMetadata = ChainMetadataSchema.parse(
-          JSON.parse(instinct.action),
-        );
+        const parsed = JSON.parse(instinct.action);
+
+        // Try V2 first, then V1 with migration
+        const v2Metadata = this.parseChainMetadata(parsed, instinct.name);
+        if (!v2Metadata) continue;
 
         // Validate all tools still exist before registering
-        const allToolsExist = chainMetadata.toolSequence.every((t) =>
+        const allToolsExist = v2Metadata.toolSequence.every((t) =>
           this.toolRegistry.has(t),
         );
         if (!allToolsExist) {
@@ -104,19 +108,34 @@ export class ChainManager {
           continue;
         }
 
+        // Build description -- append [rollback-capable] for fully reversible V2 chains
+        let description = instinct.triggerPattern;
+        if (v2Metadata.isFullyReversible && !description.includes("[rollback-capable]")) {
+          description = `${description} [rollback-capable]`;
+        }
+
+        // Create CompositeTool with V1 compat (toolSequence + parameterMappings)
+        // V2 data is stored in instinct.action for Plan 03 to access
+        const v1Compat: ChainMetadata = {
+          toolSequence: v2Metadata.toolSequence,
+          parameterMappings: v2Metadata.parameterMappings,
+          successRate: v2Metadata.successRate,
+          occurrences: v2Metadata.occurrences,
+        };
+
         const tool = new CompositeTool(
           {
             name: instinct.name,
-            description: instinct.triggerPattern,
+            description,
             inputSchema: {},
-            chainMetadata,
+            chainMetadata: v1Compat,
           },
           this.toolRegistry,
           this.eventBus,
         );
 
         const toolMeta = computeCompositeMetadata(
-          chainMetadata.toolSequence.map((name) => this.toolRegistry.getMetadata(name)),
+          v2Metadata.toolSequence.map((name) => this.toolRegistry.getMetadata(name)),
         );
         this.toolRegistry.registerOrUpdate(tool, toolMeta);
         this.orchestrator.addTool(tool);
@@ -131,6 +150,31 @@ export class ChainManager {
         );
       }
     }
+  }
+
+  /**
+   * Parse chain metadata from stored JSON.
+   * Tries V2 schema first, then V1 with in-memory migration.
+   * Returns null if both fail (caller should skip the chain).
+   */
+  private parseChainMetadata(parsed: unknown, instinctName: string): ChainMetadataV2 | null {
+    // Try V2 first
+    const v2Result = ChainMetadataV2Schema.safeParse(parsed);
+    if (v2Result.success) {
+      return v2Result.data;
+    }
+
+    // Try V1, then migrate
+    const v1Result = ChainMetadataSchema.safeParse(parsed);
+    if (v1Result.success) {
+      const migrated = migrateV1toV2(v1Result.data);
+      getLogger().debug(`Migrated V1 chain '${instinctName}' to V2 in-memory`);
+      return migrated;
+    }
+
+    // Both failed
+    getLogger().debug(`Skipping chain '${instinctName}': failed both V2 and V1 schema parse`);
+    return null;
   }
 
   /**
