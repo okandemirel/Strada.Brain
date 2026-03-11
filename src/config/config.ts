@@ -17,6 +17,7 @@ import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
 import type { DaemonConfig } from "../daemon/daemon-types.js";
 import type { NotificationConfig, QuietHoursConfig, DigestConfig } from "../daemon/reporting/notification-types.js";
+import type { AgentConfig } from "../agents/multi/agent-types.js";
 
 dotenv.config();
 
@@ -167,7 +168,14 @@ export type EnvVarName =
   | "CHAIN_ROLLBACK_ENABLED"
   | "CHAIN_PARALLEL_ENABLED"
   | "CHAIN_MAX_PARALLEL_BRANCHES"
-  | "CHAIN_COMPENSATION_TIMEOUT_MS";
+  | "CHAIN_COMPENSATION_TIMEOUT_MS"
+
+  // Multi-Agent (Phase 23)
+  | "MULTI_AGENT_ENABLED"
+  | "AGENT_DEFAULT_BUDGET_USD"
+  | "AGENT_MAX_CONCURRENT"
+  | "AGENT_IDLE_TIMEOUT_MS"
+  | "AGENT_MAX_MEMORY_ENTRIES";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -425,6 +433,9 @@ export interface Config {
 
   // Digest Reporting (Phase 18)
   readonly digest: DigestConfig;
+
+  // Multi-Agent (Phase 23)
+  readonly agent: AgentConfig;
 }
 
 /** Partial config for updates */
@@ -739,6 +750,13 @@ export const configSchema = z
     strataMemoryReRetrievalTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100).max(60000)).default("5000"),
     strataMemoryReRetrievalMemoryLimit: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("3"),
     strataMemoryReRetrievalRagTopK: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("6"),
+
+    // Multi-Agent (Phase 23)
+    multiAgentEnabled: boolFromString(false),
+    agentDefaultBudgetUsd: z.string().transform(parseFloat).pipe(z.number().min(0.01).max(100)).default("5.00"),
+    agentMaxConcurrent: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
+    agentIdleTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000)).default("3600000"),
+    agentMaxMemoryEntries: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100)).default("5000"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -1070,6 +1088,14 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       timezone: rawConfig.daemonTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
       dashboardHistoryDepth: rawConfig.strataDashboardHistoryDepth,
     },
+
+    agent: {
+      enabled: rawConfig.multiAgentEnabled,
+      defaultBudgetUsd: rawConfig.agentDefaultBudgetUsd,
+      maxConcurrent: rawConfig.agentMaxConcurrent,
+      idleTimeoutMs: rawConfig.agentIdleTimeoutMs,
+      maxMemoryEntries: rawConfig.agentMaxMemoryEntries,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -1388,6 +1414,12 @@ interface EnvVars {
   chainParallelEnabled: string | undefined;
   chainMaxParallelBranches: string | undefined;
   chainCompensationTimeoutMs: string | undefined;
+  // Multi-Agent (Phase 23)
+  multiAgentEnabled: string | undefined;
+  agentDefaultBudgetUsd: string | undefined;
+  agentMaxConcurrent: string | undefined;
+  agentIdleTimeoutMs: string | undefined;
+  agentMaxMemoryEntries: string | undefined;
 }
 
 /**
@@ -1547,6 +1579,12 @@ function loadFromEnv(): EnvVars {
     chainParallelEnabled: process.env["CHAIN_PARALLEL_ENABLED"],
     chainMaxParallelBranches: process.env["CHAIN_MAX_PARALLEL_BRANCHES"],
     chainCompensationTimeoutMs: process.env["CHAIN_COMPENSATION_TIMEOUT_MS"],
+    // Multi-Agent (Phase 23)
+    multiAgentEnabled: process.env["MULTI_AGENT_ENABLED"],
+    agentDefaultBudgetUsd: process.env["AGENT_DEFAULT_BUDGET_USD"],
+    agentMaxConcurrent: process.env["AGENT_MAX_CONCURRENT"],
+    agentIdleTimeoutMs: process.env["AGENT_IDLE_TIMEOUT_MS"],
+    agentMaxMemoryEntries: process.env["AGENT_MAX_MEMORY_ENTRIES"],
   };
 }
 

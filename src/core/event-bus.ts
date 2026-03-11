@@ -21,6 +21,7 @@ import type {
 } from "../learning/types.js";
 import type { GoalLifecycleEvent } from "../goals/types.js";
 import type { RollbackReport } from "../learning/chains/chain-types.js";
+import type { AgentLifecycleEvent, AgentBudgetEvent } from "../agents/multi/agent-types.js";
 
 // =============================================================================
 // EVENT PAYLOAD TYPES
@@ -184,6 +185,10 @@ export interface LearningEventMap {
   "goal:retry": GoalRetryEvent;
   "memory:re_retrieved": MemoryReRetrievedEvent;
   "memory:topic_shifted": MemoryTopicShiftedEvent;
+  "agent:created": AgentLifecycleEvent;
+  "agent:stopped": AgentLifecycleEvent;
+  "agent:budget_exceeded": AgentBudgetEvent;
+  "agent:evicted": AgentLifecycleEvent;
 }
 
 // =============================================================================
