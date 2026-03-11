@@ -6,6 +6,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("../../utils/logger.js", () => ({
+  getLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
 import { ChainSynthesizer } from "./chain-synthesizer.js";
 import type { CandidateChain, ToolChainConfig, ChainMetadataV2 } from "./chain-types.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
