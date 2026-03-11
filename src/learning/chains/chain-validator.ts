@@ -119,6 +119,12 @@ export class ChainValidator {
    * Handle a chain:executed event by updating the corresponding instinct's confidence.
    * Skips permanent and deprecated instincts.
    * Triggers deprecation cascade if instinct becomes deprecated after lifecycle update.
+   *
+   * Rollback confidence penalty (Phase 22 -- CHAIN-03):
+   * - Standard failure: 1x penalty
+   * - Failure with rollback (fully_rolled_back): 2x penalty
+   * - Failure with failed/partial rollback: 3x penalty
+   * - Forward-recovery (non-reversible failure): 1x penalty (no extra)
    */
   handleChainExecuted(event: ChainExecutionEvent): void {
     const instincts = this.storage.getInstincts({ type: "tool_chain" });
@@ -129,15 +135,32 @@ export class ChainValidator {
       return;
     }
 
-    const updated = this.confidenceScorer.updateConfidence(
+    // 1. Standard confidence update (1x)
+    let current = this.confidenceScorer.updateConfidence(
       instinct,
       event.success,
     );
-    this.storage.updateInstinct(updated);
-    this.updateInstinctStatus(updated);
+
+    // 2. Rollback penalty: additional penalty for chains that triggered rollback
+    if (event.rollbackReport) {
+      // Double penalty: rollback was needed (2x total)
+      current = this.confidenceScorer.updateConfidence(current, false);
+
+      // Triple penalty: rollback failed or only partially succeeded (3x total)
+      if (
+        event.rollbackReport.finalState === "rollback_failed"
+        || event.rollbackReport.finalState === "partially_rolled_back"
+      ) {
+        current = this.confidenceScorer.updateConfidence(current, false);
+      }
+    }
+    // Note: forwardRecovery=true gets no extra penalty (just the standard 1x)
+
+    this.storage.updateInstinct(current);
+    this.updateInstinctStatus(current);
 
     // Re-read to check if lifecycle update changed status to deprecated
-    const reRead = this.storage.getInstinct(updated.id);
+    const reRead = this.storage.getInstinct(current.id);
     if (reRead?.status === "deprecated") {
       this.onChainDeprecated(event.chainName);
     }

@@ -15,7 +15,7 @@ vi.mock("../../utils/logger.js", () => ({
 
 import { ChainManager } from "./chain-manager.js";
 import { CompositeTool } from "./composite-tool.js";
-import type { CandidateChain, ToolChainConfig } from "./chain-types.js";
+import type { CandidateChain, ToolChainConfig, ChainMetadataV2 } from "./chain-types.js";
 import type { ChainDetector } from "./chain-detector.js";
 import type { ChainSynthesizer } from "./chain-synthesizer.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
@@ -558,6 +558,189 @@ describe("ChainManager", () => {
 
       expect(internal.activeChainNames.has("read_and_write")).toBe(false);
       expect(internal.activeCandidateKeys.has("file_read,file_write")).toBe(false);
+    });
+  });
+
+  describe("V1->V2 migration on load", () => {
+    it("V2 instinct loads directly without migration", async () => {
+      const v2Metadata: ChainMetadataV2 = {
+        version: 2,
+        toolSequence: ["file_read", "file_write"],
+        steps: [
+          { stepId: "step_0", toolName: "file_read", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "file_write", dependsOn: ["step_0"], reversible: false },
+        ],
+        parameterMappings: [],
+        isFullyReversible: false,
+        successRate: 0.9,
+        occurrences: 5,
+      };
+      (learningStorage.getInstincts as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "instinct_v2",
+          name: "read_and_write_v2",
+          type: "tool_chain",
+          status: "active",
+          confidence: 0.5,
+          triggerPattern: "file_read,file_write",
+          action: JSON.stringify(v2Metadata),
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]);
+
+      (toolRegistry.has as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      const manager = createManager();
+      await manager.start();
+
+      expect(toolRegistry.registerOrUpdate).toHaveBeenCalledTimes(1);
+      expect(orchestrator.addTool).toHaveBeenCalledTimes(1);
+      expect(manager.activeCount).toBe(1);
+
+      manager.stop();
+    });
+
+    it("V1 instinct gets migrated in-memory to V2 with sequential steps", async () => {
+      // V1 format -- no version, no steps, no isFullyReversible
+      const v1Metadata = {
+        toolSequence: ["file_read", "file_write"],
+        parameterMappings: [],
+        successRate: 0.9,
+        occurrences: 5,
+      };
+      (learningStorage.getInstincts as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "instinct_v1",
+          name: "read_and_write_v1",
+          type: "tool_chain",
+          status: "active",
+          confidence: 0.5,
+          triggerPattern: "file_read,file_write",
+          action: JSON.stringify(v1Metadata),
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]);
+
+      (toolRegistry.has as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      const manager = createManager();
+      await manager.start();
+
+      // Should still load and register via migration
+      expect(toolRegistry.registerOrUpdate).toHaveBeenCalledTimes(1);
+      expect(orchestrator.addTool).toHaveBeenCalledTimes(1);
+      expect(manager.activeCount).toBe(1);
+
+      manager.stop();
+    });
+
+    it("malformed instinct.action skipped with debug log", async () => {
+      (learningStorage.getInstincts as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "instinct_bad",
+          name: "bad_chain",
+          type: "tool_chain",
+          status: "active",
+          confidence: 0.5,
+          triggerPattern: "unknown",
+          action: "not valid json {{{",
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]);
+
+      const manager = createManager();
+      await manager.start();
+
+      expect(toolRegistry.registerOrUpdate).not.toHaveBeenCalled();
+      expect(orchestrator.addTool).not.toHaveBeenCalled();
+      expect(manager.activeCount).toBe(0);
+
+      manager.stop();
+    });
+
+    it("V1 migrated chain has isFullyReversible=false", async () => {
+      const v1Metadata = {
+        toolSequence: ["file_read", "file_write"],
+        parameterMappings: [],
+        successRate: 0.9,
+        occurrences: 5,
+      };
+      (learningStorage.getInstincts as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "instinct_v1_rev",
+          name: "read_and_write_v1_rev",
+          type: "tool_chain",
+          status: "active",
+          confidence: 0.5,
+          triggerPattern: "file_read,file_write",
+          action: JSON.stringify(v1Metadata),
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]);
+
+      (toolRegistry.has as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      const manager = createManager();
+      await manager.start();
+
+      // The registered tool should NOT have [rollback-capable] in description
+      // (V1 migrated chains are not reversible)
+      const registeredTool = (toolRegistry.registerOrUpdate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(registeredTool.description).not.toContain("[rollback-capable]");
+
+      manager.stop();
+    });
+
+    it("[rollback-capable] appended for V2 chains with isFullyReversible=true", async () => {
+      const v2Metadata: ChainMetadataV2 = {
+        version: 2,
+        toolSequence: ["file_read", "file_write"],
+        steps: [
+          { stepId: "step_0", toolName: "file_read", dependsOn: [], reversible: true },
+          { stepId: "step_1", toolName: "file_write", dependsOn: ["step_0"], reversible: true },
+        ],
+        parameterMappings: [],
+        isFullyReversible: true,
+        successRate: 0.9,
+        occurrences: 5,
+      };
+      (learningStorage.getInstincts as ReturnType<typeof vi.fn>).mockReturnValue([
+        {
+          id: "instinct_v2_rev",
+          name: "reversible_chain",
+          type: "tool_chain",
+          status: "active",
+          confidence: 0.5,
+          triggerPattern: "file_read,file_write",
+          action: JSON.stringify(v2Metadata),
+          contextConditions: [],
+          stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0, averageExecutionMs: 0 },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ]);
+
+      (toolRegistry.has as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      const manager = createManager();
+      await manager.start();
+
+      const registeredTool = (toolRegistry.registerOrUpdate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(registeredTool.description).toContain("[rollback-capable]");
+
+      manager.stop();
     });
   });
 });
