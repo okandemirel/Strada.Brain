@@ -215,7 +215,10 @@ export class DaemonStorage {
   // Prepared statement cache
   private stmts: {
     insertBudget?: Database.Statement;
+    insertBudgetWithAgent?: Database.Statement;
     sumBudget?: Database.Statement;
+    sumBudgetForAgent?: Database.Statement;
+    sumBudgetGroupByAgent?: Database.Statement;
     clearBudget?: Database.Statement;
     recentBudget?: Database.Statement;
     insertApproval?: Database.Statement;
@@ -309,6 +312,72 @@ export class DaemonStorage {
   clearBudgetEntries(): void {
     this.assertOpen();
     this.stmts.clearBudget!.run();
+  }
+
+  /**
+   * Migrate budget_entries table for multi-agent support (Phase 23).
+   * Adds agent_id column and index. Safe to call multiple times.
+   */
+  migrateAgentBudget(): void {
+    this.assertOpen();
+    try {
+      this.db!.exec(`ALTER TABLE budget_entries ADD COLUMN agent_id TEXT DEFAULT NULL`);
+    } catch {
+      // Column already exists -- safe to ignore
+    }
+    this.db!.exec(`CREATE INDEX IF NOT EXISTS idx_budget_agent ON budget_entries(agent_id, timestamp)`);
+    // Prepare the agent-aware statements after migration
+    this.stmts.insertBudgetWithAgent = this.db!.prepare(
+      `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, agent_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmts.sumBudgetForAgent = this.db!.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries WHERE agent_id = ? AND timestamp >= ?`,
+    );
+    this.stmts.sumBudgetGroupByAgent = this.db!.prepare(
+      `SELECT agent_id, COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries WHERE agent_id IS NOT NULL AND timestamp >= ? GROUP BY agent_id`,
+    );
+  }
+
+  /** Insert a budget cost entry with an agent_id (multi-agent support) */
+  insertBudgetEntryWithAgent(entry: Omit<BudgetEntry, "id"> & { agentId: string }): void {
+    this.assertOpen();
+    if (!this.stmts.insertBudgetWithAgent) {
+      throw new Error("Agent budget migration not applied. Call migrateAgentBudget() first.");
+    }
+    this.stmts.insertBudgetWithAgent.run(
+      entry.costUsd,
+      entry.model ?? null,
+      entry.tokensIn ?? null,
+      entry.tokensOut ?? null,
+      entry.triggerName ?? null,
+      entry.timestamp,
+      entry.agentId,
+    );
+  }
+
+  /** Sum budget entries for a specific agent since a timestamp */
+  sumBudgetSinceForAgent(windowStart: number, agentId: string): number {
+    this.assertOpen();
+    if (!this.stmts.sumBudgetForAgent) {
+      throw new Error("Agent budget migration not applied. Call migrateAgentBudget() first.");
+    }
+    const row = this.stmts.sumBudgetForAgent.get(agentId, windowStart) as SumRow;
+    return row.total ?? 0;
+  }
+
+  /** Sum budget entries grouped by agent_id since a timestamp */
+  sumBudgetGroupByAgent(windowStart: number): Map<string, number> {
+    this.assertOpen();
+    if (!this.stmts.sumBudgetGroupByAgent) {
+      throw new Error("Agent budget migration not applied. Call migrateAgentBudget() first.");
+    }
+    const rows = this.stmts.sumBudgetGroupByAgent.all(windowStart) as Array<{ agent_id: string; total: number }>;
+    const map = new Map<string, number>();
+    for (const row of rows) {
+      map.set(row.agent_id, row.total ?? 0);
+    }
+    return map;
   }
 
   /** Get recent budget entries ordered by timestamp desc */
