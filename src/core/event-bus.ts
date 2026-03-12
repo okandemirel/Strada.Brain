@@ -22,6 +22,11 @@ import type {
 import type { GoalLifecycleEvent } from "../goals/types.js";
 import type { RollbackReport } from "../learning/chains/chain-types.js";
 import type { AgentLifecycleEvent, AgentBudgetEvent } from "../agents/multi/agent-types.js";
+import type {
+  DelegationStartedEvent,
+  DelegationCompletedEvent,
+  DelegationFailedEvent,
+} from "../agents/multi/delegation/delegation-types.js";
 
 // =============================================================================
 // EVENT PAYLOAD TYPES
@@ -190,6 +195,9 @@ export interface LearningEventMap {
   "agent:stopped": AgentLifecycleEvent;
   "agent:budget_exceeded": AgentBudgetEvent;
   "agent:evicted": AgentLifecycleEvent;
+  "delegation:started": DelegationStartedEvent;
+  "delegation:completed": DelegationCompletedEvent;
+  "delegation:failed": DelegationFailedEvent;
 }
 
 // =============================================================================

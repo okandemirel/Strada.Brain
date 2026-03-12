@@ -18,6 +18,7 @@ import type { ToolChainConfig } from "../learning/chains/index.js";
 import type { DaemonConfig } from "../daemon/daemon-types.js";
 import type { NotificationConfig, QuietHoursConfig, DigestConfig } from "../daemon/reporting/notification-types.js";
 import type { AgentConfig } from "../agents/multi/agent-types.js";
+import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
 
 dotenv.config();
 
@@ -175,7 +176,19 @@ export type EnvVarName =
   | "AGENT_DEFAULT_BUDGET_USD"
   | "AGENT_MAX_CONCURRENT"
   | "AGENT_IDLE_TIMEOUT_MS"
-  | "AGENT_MAX_MEMORY_ENTRIES";
+  | "AGENT_MAX_MEMORY_ENTRIES"
+
+  // Task Delegation (Phase 24)
+  | "TASK_DELEGATION_ENABLED"
+  | "AGENT_MAX_DELEGATION_DEPTH"
+  | "AGENT_MAX_CONCURRENT_DELEGATIONS"
+  | "DELEGATION_TIER_LOCAL"
+  | "DELEGATION_TIER_CHEAP"
+  | "DELEGATION_TIER_STANDARD"
+  | "DELEGATION_TIER_PREMIUM"
+  | "DELEGATION_VERBOSITY"
+  | "DELEGATION_TYPES"
+  | "DELEGATION_MAX_ITERATIONS_PER_TYPE";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -436,6 +449,9 @@ export interface Config {
 
   // Multi-Agent (Phase 23)
   readonly agent: AgentConfig;
+
+  // Task Delegation (Phase 24)
+  readonly delegation: DelegationConfig;
 }
 
 /** Partial config for updates */
@@ -757,6 +773,18 @@ export const configSchema = z
     agentMaxConcurrent: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
     agentIdleTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000)).default("3600000"),
     agentMaxMemoryEntries: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100)).default("5000"),
+
+    // Task Delegation (Phase 24)
+    taskDelegationEnabled: boolFromString(false),
+    agentMaxDelegationDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(5)).default("2"),
+    agentMaxConcurrentDelegations: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
+    delegationTierLocal: z.string().default("ollama:llama3.3"),
+    delegationTierCheap: z.string().default("deepseek:deepseek-chat"),
+    delegationTierStandard: z.string().default("claude:claude-sonnet-4-20250514"),
+    delegationTierPremium: z.string().default("claude:claude-opus-4-20250514"),
+    delegationVerbosity: z.enum(["quiet", "normal", "verbose"]).default("normal"),
+    delegationTypes: z.string().optional(),
+    delegationMaxIterationsPerType: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("10"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -1095,6 +1123,22 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       maxConcurrent: rawConfig.agentMaxConcurrent,
       idleTimeoutMs: rawConfig.agentIdleTimeoutMs,
       maxMemoryEntries: rawConfig.agentMaxMemoryEntries,
+    },
+
+    delegation: {
+      enabled: rawConfig.taskDelegationEnabled,
+      maxDepth: rawConfig.agentMaxDelegationDepth,
+      maxConcurrentPerParent: rawConfig.agentMaxConcurrentDelegations,
+      tiers: {
+        local: rawConfig.delegationTierLocal,
+        cheap: rawConfig.delegationTierCheap,
+        standard: rawConfig.delegationTierStandard,
+        premium: rawConfig.delegationTierPremium,
+      },
+      types: rawConfig.delegationTypes
+        ? (JSON.parse(rawConfig.delegationTypes) as DelegationConfig["types"])
+        : ([] as unknown as DelegationConfig["types"]), // DEFAULT_DELEGATION_TYPES applied at runtime
+      verbosity: rawConfig.delegationVerbosity,
     },
   };
 
