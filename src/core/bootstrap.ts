@@ -78,6 +78,9 @@ import type { ScopeContext } from "../learning/matching/pattern-matcher.js";
 import type { AgentManager as AgentManagerType } from "../agents/multi/agent-manager.js";
 import type { AgentBudgetTracker as AgentBudgetTrackerType } from "../agents/multi/agent-budget-tracker.js";
 
+// Delegation type-only imports (Plan 24-03: AGENT-03, AGENT-04, AGENT-05)
+import type { DelegationManager as DelegationManagerType } from "../agents/multi/delegation/delegation-manager.js";
+
 // Daemon imports
 import { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
 import { TriggerRegistry } from "../daemon/trigger-registry.js";
@@ -268,6 +271,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let daemonContext: import("../daemon/daemon-cli.js").DaemonContext | undefined;
   let agentManager: AgentManagerType | undefined;
   let agentBudgetTrackerOuter: AgentBudgetTrackerType | undefined;
+  let delegationManager: DelegationManagerType | undefined;
   await toolRegistry.initialize(config, {
     memoryManager,
     ragPipeline,
@@ -680,6 +684,67 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         defaultBudget: config.agent.defaultBudgetUsd,
         idleTimeoutMs: config.agent.idleTimeoutMs,
       });
+
+      // Task Delegation (Phase 24: AGENT-03, AGENT-04, AGENT-05) -- nested inside multi-agent guard
+      if (config.delegation.enabled) {
+        const { TierRouter } = await import("../agents/multi/delegation/tier-router.js");
+        const { DelegationLog } = await import("../agents/multi/delegation/delegation-log.js");
+        const { DelegationManager } = await import("../agents/multi/delegation/delegation-manager.js");
+        const { createDelegationTools, DEFAULT_DELEGATION_TYPES } = await import("../agents/multi/delegation/index.js");
+
+        const delegationLog = new DelegationLog(daemonStorage.getDatabase());
+
+        const tierRouter = new TierRouter(
+          config.delegation.tiers,
+          daemonStorage.getDatabase(),
+        );
+
+        // Use configured delegation types or defaults
+        const delegationTypes = config.delegation.types.length > 0
+          ? config.delegation.types
+          : DEFAULT_DELEGATION_TYPES;
+
+        delegationManager = new DelegationManager({
+          config: {
+            enabled: true,
+            maxDepth: config.delegation.maxDepth,
+            maxConcurrentPerParent: config.delegation.maxConcurrentPerParent,
+            tiers: config.delegation.tiers,
+            types: delegationTypes,
+            verbosity: config.delegation.verbosity,
+          },
+          tierRouter,
+          delegationLog,
+          eventBus: learningResult.eventBus as IEventBus<LearningEventMap>,
+          budgetTracker: agentBudgetTrackerInstance,
+          channel,
+          projectPath: config.unityProjectPath,
+          readOnly: config.security.readOnlyMode,
+          stradaDeps,
+          parentTools: toolRegistry.getAllTools(),
+          apiKeys: collectApiKeys(config),
+        });
+
+        // Inject delegation tool factory into AgentManager
+        agentManager.setDelegationFactory((parentAgentId, depth) =>
+          createDelegationTools(delegationTypes, delegationManager!, parentAgentId, depth, config.delegation.maxDepth),
+        );
+
+        // Store in DaemonContext for CLI/dashboard access
+        daemonContext!.delegationManager = delegationManager;
+        daemonContext!.delegationLog = delegationLog;
+        daemonContext!.tierRouter = tierRouter;
+
+        // Register delegation services on dashboard (Plan 24-03)
+        if (dashboard) {
+          dashboard.registerDelegationServices(delegationLog, delegationManager);
+        }
+
+        logger.info("Task delegation enabled", {
+          types: delegationTypes.length,
+          maxDepth: config.delegation.maxDepth,
+        });
+      }
     }
 
     // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
@@ -767,6 +832,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       digestReporter: digestReporterInstance,
       notificationRouter: notificationRouterInstance,
       agentManager,
+      delegationManager,
     }),
   };
 }
@@ -1395,6 +1461,7 @@ interface ShutdownOptions {
   digestReporter?: DigestReporter;
   notificationRouter?: NotificationRouter;
   agentManager?: AgentManagerType;
+  delegationManager?: DelegationManagerType;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -1413,6 +1480,11 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
     }
     if (options.notificationRouter) {
       options.notificationRouter.stop();
+    }
+
+    // Shut down delegation manager before multi-agent system
+    if (options.delegationManager) {
+      await options.delegationManager.shutdown();
     }
 
     // Shut down multi-agent system before heartbeat loop

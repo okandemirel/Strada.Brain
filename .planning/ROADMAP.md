@@ -108,7 +108,7 @@ Plans:
 
 Plans:
 - [x] 24-01-PLAN.md -- Delegation types, config schema, tier router, and audit log (AGENT-03, AGENT-04, AGENT-05)
-- [ ] 24-02-PLAN.md -- DelegationTool (ITool) and DelegationManager with sub-agent orchestration (AGENT-03, AGENT-04, AGENT-05)
+- [x] 24-02-PLAN.md -- DelegationTool (ITool) and DelegationManager with sub-agent orchestration (AGENT-03, AGENT-04, AGENT-05)
 - [ ] 24-03-PLAN.md -- Bootstrap wiring, CLI delegation commands, Dashboard Delegations panel (AGENT-03, AGENT-04, AGENT-05)
 
 ### Phase 25: Memory Consolidation & Deployment
@@ -141,9 +141,9 @@ Phases 21 and 22 can execute in parallel (independent subsystems). Phase 23 foll
 | 21. Operational Health & Memory Decay | 4/4 | Complete    | 2026-03-10 | 2026-03-10 |
 | 22. Tool Chain Resilience | 5/5 | Complete    | 2026-03-11 | 2026-03-11 |
 | 23. Multi-Agent Foundation | 3/3 | Complete    | 2026-03-11 | 2026-03-11 |
-| 24. Task Delegation | v3.0 | 1/3 | In progress | - |
+| 24. Task Delegation | v3.0 | 2/3 | In progress | - |
 | 25. Memory Consolidation & Deployment | v3.0 | 0/TBD | Not started | - |
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-12 after Phase 24 planning complete (3 plans in 3 waves)*
+*Last updated: 2026-03-12 after Phase 24 Plan 02 (Delegation Engine)*

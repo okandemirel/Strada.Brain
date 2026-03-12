@@ -60,6 +60,9 @@ export interface DaemonContext {
   chainResilienceConfig?: ChainResilienceConfig;
   agentManager?: import("../agents/multi/agent-manager.js").AgentManager;
   agentBudgetTracker?: import("../agents/multi/agent-budget-tracker.js").AgentBudgetTracker;
+  delegationManager?: import("../agents/multi/delegation/delegation-manager.js").DelegationManager;
+  delegationLog?: import("../agents/multi/delegation/delegation-log.js").DelegationLog;
+  tierRouter?: import("../agents/multi/delegation/tier-router.js").TierRouter;
 }
 
 /**
@@ -820,6 +823,178 @@ export function registerDaemonCommands(
       }
       ctx.agentManager.setBudgetCap(id as AgentId, usd);
       console.log(`Agent '${id}' budget cap set to $${usd.toFixed(2)}.`);
+    });
+
+  // =========================================================================
+  // Delegation management commands (Plan 24-03: AGENT-03, AGENT-04, AGENT-05)
+  // =========================================================================
+
+  // delegation:history -- show delegation audit log
+  daemon
+    .command("delegation:history")
+    .description("Show delegation audit log entries")
+    .option("--limit <n>", "Number of entries to show", "20")
+    .option("--type <type>", "Filter by delegation type")
+    .option("--json", "Output as JSON")
+    .action((opts: { limit: string; type?: string; json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx?.delegationLog) {
+        console.log("Task delegation is not enabled");
+        return;
+      }
+
+      const limit = parseInt(opts.limit, 10) || 20;
+      const history = ctx.delegationLog.getHistory(limit);
+      const filtered = opts.type
+        ? history.filter((e) => e.type === opts.type)
+        : history;
+
+      if (opts.json) {
+        console.log(JSON.stringify(filtered, null, 2));
+        return;
+      }
+
+      if (filtered.length === 0) {
+        console.log("No delegation history found.");
+        return;
+      }
+
+      console.log("Delegation History:");
+      console.log(
+        padRight("ID", 6) +
+        padRight("Parent", 14) +
+        padRight("Type", 18) +
+        padRight("Tier", 10) +
+        padRight("Model", 28) +
+        padRight("Duration", 12) +
+        padRight("Cost", 10) +
+        padRight("Status", 12),
+      );
+      console.log("-".repeat(110));
+
+      for (const e of filtered) {
+        const durationStr = e.durationMs != null ? `${e.durationMs}ms` : "-";
+        const costStr = e.costUsd != null ? `$${e.costUsd.toFixed(4)}` : "-";
+        console.log(
+          padRight(String(e.id), 6) +
+          padRight(e.parentAgentId.slice(0, 12) + "..", 14) +
+          padRight(e.type, 18) +
+          padRight(e.tier, 10) +
+          padRight(e.model.length > 26 ? e.model.slice(0, 24) + ".." : e.model, 28) +
+          padRight(durationStr, 12) +
+          padRight(costStr, 10) +
+          padRight(e.status, 12),
+        );
+      }
+    });
+
+  // delegation:stats -- show aggregate stats per delegation type
+  daemon
+    .command("delegation:stats")
+    .description("Show aggregate delegation statistics")
+    .option("--json", "Output as JSON")
+    .action((opts: { json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx?.delegationLog) {
+        console.log("Task delegation is not enabled");
+        return;
+      }
+
+      const stats = ctx.delegationLog.getStats();
+
+      if (opts.json) {
+        console.log(JSON.stringify(stats, null, 2));
+        return;
+      }
+
+      if (stats.length === 0) {
+        console.log("No delegation statistics available.");
+        return;
+      }
+
+      console.log("Delegation Statistics:");
+      console.log(
+        padRight("Type", 20) +
+        padRight("Count", 8) +
+        padRight("Avg Duration", 15) +
+        padRight("Avg Cost", 12) +
+        padRight("Success Rate", 14) +
+        padRight("Tier Breakdown", 30),
+      );
+      console.log("-".repeat(99));
+
+      for (const s of stats) {
+        const tierStr = Object.entries(s.tierBreakdown)
+          .map(([tier, count]) => `${tier}:${count}`)
+          .join(", ");
+        console.log(
+          padRight(s.type, 20) +
+          padRight(String(s.count), 8) +
+          padRight(`${Math.round(s.avgDurationMs)}ms`, 15) +
+          padRight(`$${s.avgCostUsd.toFixed(4)}`, 12) +
+          padRight(`${(s.successRate * 100).toFixed(1)}%`, 14) +
+          padRight(tierStr, 30),
+        );
+      }
+    });
+
+  // delegation:watch -- show currently active delegations
+  daemon
+    .command("delegation:watch")
+    .description("Show currently active delegations")
+    .action(() => {
+      const ctx = getDaemonContext();
+      if (!ctx?.delegationManager) {
+        console.log("Task delegation is not enabled");
+        return;
+      }
+
+      const active = ctx.delegationManager.getActiveDelegations();
+
+      if (active.length === 0) {
+        console.log("No active delegations");
+        return;
+      }
+
+      const now = Date.now();
+      console.log("Active Delegations:");
+      console.log(
+        padRight("Sub-Agent ID", 38) +
+        padRight("Type", 20) +
+        padRight("Duration", 12),
+      );
+      console.log("-".repeat(70));
+
+      for (const d of active) {
+        const elapsed = formatDuration(now - d.startedAt);
+        console.log(
+          padRight(d.subAgentId, 38) +
+          padRight(d.type, 20) +
+          padRight(elapsed, 12),
+        );
+      }
+    });
+
+  // delegation:tier -- set runtime tier override
+  daemon
+    .command("delegation:tier <type> <tier>")
+    .description("Set runtime tier override for a delegation type")
+    .action((type: string, tier: string) => {
+      const ctx = getDaemonContext();
+      if (!ctx?.tierRouter) {
+        console.log("Task delegation is not enabled");
+        return;
+      }
+
+      const validTiers = ["local", "cheap", "standard", "premium"];
+      if (!validTiers.includes(tier)) {
+        console.error(`Invalid tier: ${tier}. Must be one of: ${validTiers.join(", ")}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      ctx.tierRouter.setOverride(type, tier as "local" | "cheap" | "standard" | "premium");
+      console.log(`Tier override set: ${type} -> ${tier} (immediate effect, no restart needed)`);
     });
 }
 

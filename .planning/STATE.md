@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Multi-Agent & Hardening
 status: in_progress
-stopped_at: Completed 24-01 (Delegation Foundation)
-last_updated: "2026-03-12T07:33:00.000Z"
-last_activity: 2026-03-12 -- Completed 24-01 (Delegation Foundation)
+stopped_at: Completed 24-02 (Delegation Engine)
+last_updated: "2026-03-12T07:46:23Z"
+last_activity: 2026-03-12 -- Completed 24-02 (Delegation Engine)
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 15
-  completed_plans: 13
-  percent: 93
+  completed_plans: 14
+  percent: 95
 ---
 
 # State: Strada.Brain
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 ## Current Position
 
 Phase: 24 of 25 (Task Delegation)
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 Status: In Progress
-Last activity: 2026-03-12 -- Completed 24-01 (Delegation Foundation)
+Last activity: 2026-03-12 -- Completed 24-02 (Delegation Engine)
 
-Progress: [█████████░] 93%
+Progress: [█████████░] 95%
 
 ## Performance Metrics
 
@@ -41,8 +41,8 @@ Progress: [█████████░] 93%
 - v3.0 Phase 21: 1 phase, 4 plans including gap closure (2026-03-10)
 - v3.0 Phase 22: Plan 01 in 7 min, Plan 02 in 7 min, Plan 03 in 6 min, Plan 04 in 6 min, Plan 05 in 3 min (2026-03-11)
 - v3.0 Phase 23: Plan 01 in 7 min, Plan 02 in 7 min, Plan 03 in 12 min (2026-03-11)
-- v3.0 Phase 24: Plan 01 in 8 min (2026-03-12)
-- Total: 22 phases, 62 plans, 7 days
+- v3.0 Phase 24: Plan 01 in 8 min, Plan 02 in 9 min (2026-03-12)
+- Total: 22 phases, 63 plans, 7 days
 
 ## Accumulated Context
 
@@ -98,6 +98,10 @@ Progress: [█████████░] 93%
 - 24-01: DelegationLog creates own table in constructor for test isolation; DaemonStorage also creates via migration
 - 24-01: TierRouter override key format: delegation_tier_override:{type} in daemon_state table
 - 24-01: No FOREIGN KEY on delegation_log.parent_agent_id (agents table may not exist when multi-agent disabled)
+- 24-02: CaptureChannel adapter captures sub-agent output without real channel (minimal IChannelAdapter)
+- 24-02: Depth enforcement via tool exclusion at depth+1 >= maxDepth (sub-agents near limit don't see delegation tools)
+- 24-02: Abort/timeout errors bypass escalation chain -- only model failures trigger tier escalation
+- 24-02: delegateAsync uses same executeSingleDelegation internally (same lifecycle events for both modes)
 
 ### Pending Todos
 
@@ -109,10 +113,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T07:33:00.000Z
-Stopped at: Completed 24-01 (Delegation Foundation)
-Resume file: .planning/phases/24-task-delegation/24-02-PLAN.md
+Last session: 2026-03-12T07:46:23Z
+Stopped at: Completed 24-02 (Delegation Engine)
+Resume file: .planning/phases/24-task-delegation/24-03-PLAN.md
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-12 after Phase 24 Plan 01 (Delegation Foundation)*
+*Last updated: 2026-03-12 after Phase 24 Plan 02 (Delegation Engine)*

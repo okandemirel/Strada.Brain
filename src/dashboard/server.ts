@@ -65,6 +65,25 @@ interface DashboardAgentBudgetTracker {
   getAllAgentUsages(): Map<string, number>;
 }
 
+/** Structural interface for DelegationLog methods used by dashboard (Plan 24-03) */
+interface DashboardDelegationLog {
+  getHistory(limit?: number): Array<{
+    id: number; parentAgentId: string; subAgentId: string; type: string;
+    model: string; tier: string; depth: number; durationMs: number | undefined;
+    costUsd: number | undefined; status: string; resultSummary: string | undefined;
+    escalatedFrom: string | undefined; startedAt: number; completedAt: number | undefined;
+  }>;
+  getStats(): Array<{
+    type: string; count: number; avgDurationMs: number; avgCostUsd: number;
+    successRate: number; tierBreakdown: Record<string, number>;
+  }>;
+}
+
+/** Structural interface for DelegationManager methods used by dashboard (Plan 24-03) */
+interface DashboardDelegationManager {
+  getActiveDelegations(parentAgentId?: string): Array<{ subAgentId: string; type: string; startedAt: number }>;
+}
+
 /**
  * Lightweight HTTP dashboard server.
  * No external dependencies — uses Node.js built-in http module.
@@ -115,6 +134,10 @@ export class DashboardServer {
   // Multi-agent context (Plan 23-03)
   private agentManager?: DashboardAgentManager;
   private agentBudgetTracker?: DashboardAgentBudgetTracker;
+
+  // Delegation context (Plan 24-03)
+  private delegationLog?: DashboardDelegationLog;
+  private delegationManager?: DashboardDelegationManager;
 
   constructor(
     port: number,
@@ -170,6 +193,15 @@ export class DashboardServer {
     if (services.agentBudgetTracker) {
       this.agentBudgetTracker = services.agentBudgetTracker;
     }
+  }
+
+  /**
+   * Register delegation services for /api/delegations endpoint and dashboard Delegations panel.
+   * Call after DelegationManager is initialized (Plan 24-03).
+   */
+  registerDelegationServices(delegationLog: DashboardDelegationLog, delegationManager: DashboardDelegationManager): void {
+    this.delegationLog = delegationLog;
+    this.delegationManager = delegationManager;
   }
 
   /**

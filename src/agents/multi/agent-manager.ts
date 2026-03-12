@@ -112,6 +112,9 @@ export class AgentManager {
   /** Idle check interval handle */
   private idleCheckInterval: ReturnType<typeof setInterval> | undefined;
 
+  /** Optional factory for injecting delegation tools per-agent (Phase 24) */
+  private delegationToolFactory?: (parentAgentId: AgentId, depth: number) => ITool[];
+
   constructor(opts: AgentManagerOptions) {
     this.config = opts.config;
     this.registry = opts.registry;
@@ -130,6 +133,18 @@ export class AgentManager {
         (this.idleCheckInterval as NodeJS.Timeout).unref();
       }
     }
+  }
+
+  // ===========================================================================
+  // Public API -- Delegation Factory (Phase 24)
+  // ===========================================================================
+
+  /**
+   * Set a factory function that creates delegation tools for each agent.
+   * Called by bootstrap when task delegation is enabled (AGENT-03, AGENT-04, AGENT-05).
+   */
+  setDelegationFactory(factory: (parentAgentId: AgentId, depth: number) => ITool[]): void {
+    this.delegationToolFactory = factory;
   }
 
   // ===========================================================================
@@ -430,6 +445,14 @@ export class AgentManager {
       reRetrievalConfig: this.opts.reRetrievalConfig,
       embeddingProvider: this.opts.embeddingProvider,
     });
+
+    // Inject delegation tools if factory is available (Phase 24)
+    if (this.delegationToolFactory) {
+      const delegationTools = this.delegationToolFactory(agentId, 0);
+      for (const tool of delegationTools) {
+        orchestrator.addTool(tool);
+      }
+    }
 
     return { memory, orchestrator };
   }
