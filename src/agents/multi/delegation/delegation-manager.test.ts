@@ -25,26 +25,22 @@ import type { IEventBus } from "../../../core/event-bus.js";
 // MOCKS
 // =============================================================================
 
-// Mock the Orchestrator module
+// Store the mock constructor so tests can override handleMessage per-test
+let orchestratorHandleMessage: ReturnType<typeof vi.fn>;
+let orchestratorOpts: Record<string, unknown>;
+
 vi.mock("../../orchestrator.js", () => {
   return {
     Orchestrator: vi.fn().mockImplementation(function (this: Record<string, unknown>, opts: Record<string, unknown>) {
+      orchestratorOpts = opts;
       this._opts = opts;
-      this.handleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
-        // Simulate: the orchestrator sends a response through the channel
-        const channel = opts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
-        await channel.sendText(
-          msg.chatId as string,
-          "Sub-agent completed the task successfully.",
-        );
-      });
+      this.handleMessage = orchestratorHandleMessage;
       this.addTool = vi.fn();
       this.removeTool = vi.fn();
     }),
   };
 });
 
-// Mock the provider-registry module
 vi.mock("../../providers/provider-registry.js", () => {
   return {
     createProvider: vi.fn().mockReturnValue({
@@ -55,7 +51,6 @@ vi.mock("../../providers/provider-registry.js", () => {
   };
 });
 
-// Mock the ProviderManager
 vi.mock("../../providers/provider-manager.js", () => {
   return {
     ProviderManager: vi.fn().mockImplementation(function (this: Record<string, unknown>, provider: unknown) {
@@ -136,6 +131,42 @@ function createMockBudgetTracker() {
   };
 }
 
+function buildManagerOpts(overrides?: Partial<DelegationManagerOptions>): DelegationManagerOptions {
+  return {
+    config: TEST_CONFIG,
+    tierRouter: new TierRouter(TEST_TIER_MAP),
+    delegationLog: overrides?.delegationLog ?? new DelegationLog(new Database(":memory:")),
+    eventBus: createMockEventBus() as unknown as IEventBus<LearningEventMap>,
+    budgetTracker: createMockBudgetTracker() as never,
+    channel: {
+      name: "test",
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      isHealthy: vi.fn().mockReturnValue(true),
+      onMessage: vi.fn(),
+      sendText: vi.fn(),
+      sendMarkdown: vi.fn(),
+    } as never,
+    projectPath: "/test/project",
+    readOnly: false,
+    stradaDeps: {
+      coreInstalled: false,
+      corePath: null,
+      modulesInstalled: false,
+      modulesPath: null,
+      warnings: [],
+    },
+    parentTools: [
+      createMockTool("read_file"),
+      createMockTool("search_code"),
+      createMockTool("delegate_code_review"),
+      createMockTool("delegate_analysis"),
+    ],
+    apiKeys: { deepseek: "test-key", claude: "test-key" },
+    ...overrides,
+  };
+}
+
 // =============================================================================
 // TESTS
 // =============================================================================
@@ -143,53 +174,23 @@ function createMockBudgetTracker() {
 describe("DelegationManager", () => {
   let db: Database.Database;
   let delegationLog: DelegationLog;
-  let tierRouter: TierRouter;
-  let eventBus: ReturnType<typeof createMockEventBus>;
-  let budgetTracker: ReturnType<typeof createMockBudgetTracker>;
-  let parentTools: ITool[];
+  let opts: DelegationManagerOptions;
   let manager: DelegationManager;
 
   beforeEach(() => {
+    // Reset the orchestrator mock handler for each test
+    orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+      // Default: immediately send response through the capture channel
+      const channel = orchestratorOpts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
+      await channel.sendText(
+        msg.chatId as string,
+        "Sub-agent completed the task successfully.",
+      );
+    });
+
     db = new Database(":memory:");
     delegationLog = new DelegationLog(db);
-    tierRouter = new TierRouter(TEST_TIER_MAP);
-    eventBus = createMockEventBus();
-    budgetTracker = createMockBudgetTracker();
-    parentTools = [
-      createMockTool("read_file"),
-      createMockTool("search_code"),
-      createMockTool("delegate_code_review"),
-      createMockTool("delegate_analysis"),
-    ];
-
-    const opts: DelegationManagerOptions = {
-      config: TEST_CONFIG,
-      tierRouter,
-      delegationLog,
-      eventBus: eventBus as unknown as IEventBus<LearningEventMap>,
-      budgetTracker: budgetTracker as never,
-      channel: {
-        name: "test",
-        connect: vi.fn(),
-        disconnect: vi.fn(),
-        isHealthy: vi.fn().mockReturnValue(true),
-        onMessage: vi.fn(),
-        sendText: vi.fn(),
-        sendMarkdown: vi.fn(),
-      } as never,
-      projectPath: "/test/project",
-      readOnly: false,
-      stradaDeps: {
-        coreInstalled: false,
-        corePath: null,
-        modulesInstalled: false,
-        modulesPath: null,
-        warnings: [],
-      },
-      parentTools,
-      apiKeys: { deepseek: "test-key", claude: "test-key" },
-    };
-
+    opts = buildManagerOpts({ delegationLog });
     manager = new DelegationManager(opts);
   });
 
@@ -246,7 +247,7 @@ describe("DelegationManager", () => {
 
       await manager.delegate(request);
 
-      const emitCalls = eventBus.emit.mock.calls;
+      const emitCalls = (opts.eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
       const startedCall = emitCalls.find(
         (c: unknown[]) => c[0] === "delegation:started",
       );
@@ -270,6 +271,7 @@ describe("DelegationManager", () => {
 
       await manager.delegate(request);
 
+      const budgetTracker = opts.budgetTracker as unknown as ReturnType<typeof createMockBudgetTracker>;
       expect(budgetTracker.recordCost).toHaveBeenCalledOnce();
       const [agentId] = budgetTracker.recordCost.mock.calls[0]!;
       expect(agentId).toBe(PARENT_AGENT_ID);
@@ -287,10 +289,8 @@ describe("DelegationManager", () => {
         toolContext: TEST_TOOL_CONTEXT,
       }));
 
-      // Start 3 delegations concurrently (max is 3)
+      // Run 3 then 1 -- all should succeed since the default mock resolves immediately
       const promises = requests.slice(0, 3).map((r) => manager.delegate(r));
-
-      // Wait for first to complete to free a slot
       await Promise.all(promises);
 
       // 4th should work after slots freed
@@ -301,61 +301,30 @@ describe("DelegationManager", () => {
 
   describe("timeout", () => {
     it("times out via AbortController and cleans up sub-agent", async () => {
-      // Use a type with very short timeout
+      // Use a local_task (local tier -- no escalation) with very short timeout
       const shortConfig: DelegationConfig = {
         ...TEST_CONFIG,
         types: [
-          { name: "fast_task", tier: "cheap", timeoutMs: 1, maxIterations: 1 },
+          { name: "local_fast", tier: "local", timeoutMs: 10, maxIterations: 1 },
         ],
       };
 
-      const shortManager = new DelegationManager({
-        config: shortConfig,
-        tierRouter,
-        delegationLog,
-        eventBus: eventBus as unknown as IEventBus<LearningEventMap>,
-        budgetTracker: budgetTracker as never,
-        channel: {
-          name: "test",
-          connect: vi.fn(),
-          disconnect: vi.fn(),
-          isHealthy: vi.fn().mockReturnValue(true),
-          onMessage: vi.fn(),
-          sendText: vi.fn(),
-          sendMarkdown: vi.fn(),
-        } as never,
-        projectPath: "/test/project",
-        readOnly: false,
-        stradaDeps: {
-          coreInstalled: false,
-          corePath: null,
-          modulesInstalled: false,
-          modulesPath: null,
-          warnings: [],
-        },
-        parentTools,
-        apiKeys: { deepseek: "test-key", claude: "test-key" },
-      });
+      // Mock orchestrator to hang
+      orchestratorHandleMessage = vi.fn().mockImplementation(
+        () => new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 30000);
+          if (typeof timer === "object" && "unref" in timer) {
+            (timer as NodeJS.Timeout).unref();
+          }
+        }),
+      );
 
-      // Mock orchestrator to take a long time
-      const { Orchestrator } = await import("../../orchestrator.js");
-      (Orchestrator as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
-        function (this: Record<string, unknown>, opts: Record<string, unknown>) {
-          this._opts = opts;
-          this.handleMessage = vi.fn().mockImplementation(
-            () =>
-              new Promise((resolve) => {
-                // This will hang until aborted
-                setTimeout(resolve, 10000);
-              }),
-          );
-          this.addTool = vi.fn();
-          this.removeTool = vi.fn();
-        },
+      const shortManager = new DelegationManager(
+        buildManagerOpts({ config: shortConfig, delegationLog }),
       );
 
       const request: DelegationRequest = {
-        type: "fast_task",
+        type: "local_fast",
         task: "Quick task",
         parentAgentId: PARENT_AGENT_ID,
         depth: 0,
@@ -363,31 +332,23 @@ describe("DelegationManager", () => {
         toolContext: TEST_TOOL_CONTEXT,
       };
 
-      // Should throw/fail due to timeout
+      // Should throw due to timeout (local tier = no escalation)
       await expect(shortManager.delegate(request)).rejects.toThrow();
-    });
+    }, 15000);
   });
 
   describe("escalation", () => {
     it("escalates on failure: cheap->standard (max 1 retry)", async () => {
-      // Mock first call to fail, second to succeed
-      const { Orchestrator } = await import("../../orchestrator.js");
+      // First call fails, second (escalated) succeeds
       let callCount = 0;
-      (Orchestrator as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-        function (this: Record<string, unknown>, opts: Record<string, unknown>) {
-          this._opts = opts;
-          const currentCall = callCount++;
-          this.handleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
-            if (currentCall === 0) {
-              throw new Error("Model failed");
-            }
-            const channel = opts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
-            await channel.sendText(msg.chatId as string, "Escalated result");
-          });
-          this.addTool = vi.fn();
-          this.removeTool = vi.fn();
-        },
-      );
+      orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+        const currentCall = callCount++;
+        if (currentCall === 0) {
+          throw new Error("Model failed");
+        }
+        const channel = orchestratorOpts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
+        await channel.sendText(msg.chatId as string, "Escalated result");
+      });
 
       const request: DelegationRequest = {
         type: "code_review",
@@ -406,14 +367,7 @@ describe("DelegationManager", () => {
     });
 
     it("does NOT escalate local tier failures", async () => {
-      const { Orchestrator } = await import("../../orchestrator.js");
-      (Orchestrator as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-        function (this: Record<string, unknown>) {
-          this.handleMessage = vi.fn().mockRejectedValue(new Error("Local model failed"));
-          this.addTool = vi.fn();
-          this.removeTool = vi.fn();
-        },
-      );
+      orchestratorHandleMessage = vi.fn().mockRejectedValue(new Error("Local model failed"));
 
       const request: DelegationRequest = {
         type: "local_task",
@@ -428,14 +382,7 @@ describe("DelegationManager", () => {
     });
 
     it("does NOT escalate premium tier (no higher tier)", async () => {
-      const { Orchestrator } = await import("../../orchestrator.js");
-      (Orchestrator as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-        function (this: Record<string, unknown>) {
-          this.handleMessage = vi.fn().mockRejectedValue(new Error("Premium failed"));
-          this.addTool = vi.fn();
-          this.removeTool = vi.fn();
-        },
-      );
+      orchestratorHandleMessage = vi.fn().mockRejectedValue(new Error("Premium failed"));
 
       const request: DelegationRequest = {
         type: "premium_task",
@@ -463,10 +410,10 @@ describe("DelegationManager", () => {
 
       await manager.delegateAsync(request);
 
-      // Wait a tick for the background promise to resolve
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      // Wait for the background promise to settle
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
 
-      const emitCalls = eventBus.emit.mock.calls;
+      const emitCalls = (opts.eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
       const completedCall = emitCalls.find(
         (c: unknown[]) => c[0] === "delegation:completed",
       );
@@ -478,12 +425,12 @@ describe("DelegationManager", () => {
     it("at maxDepth, delegate_ tools excluded from sub-agent", async () => {
       const { Orchestrator } = await import("../../orchestrator.js");
       let capturedTools: ITool[] = [];
-      (Orchestrator as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-        function (this: Record<string, unknown>, opts: { tools: ITool[]; channel: { sendText: (chatId: string, text: string) => Promise<void> } }) {
-          capturedTools = opts.tools;
-          this._opts = opts;
+      (Orchestrator as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        function (this: Record<string, unknown>, innerOpts: { tools: ITool[]; channel: { sendText: (chatId: string, text: string) => Promise<void> } }) {
+          capturedTools = innerOpts.tools;
+          this._opts = innerOpts;
           this.handleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
-            await opts.channel.sendText(msg.chatId as string, "Result");
+            await innerOpts.channel.sendText(msg.chatId as string, "Result");
           });
           this.addTool = vi.fn();
           this.removeTool = vi.fn();
@@ -494,7 +441,7 @@ describe("DelegationManager", () => {
         type: "code_review",
         task: "Review at max depth",
         parentAgentId: PARENT_AGENT_ID,
-        depth: 1, // depth 1, maxDepth 2 -> sub-agent depth is 1, which equals maxDepth
+        depth: 1, // depth 1 + 1 = 2 = maxDepth -> sub-agent should NOT get delegation tools
         mode: "sync",
         toolContext: TEST_TOOL_CONTEXT,
       };
@@ -511,21 +458,15 @@ describe("DelegationManager", () => {
   });
 
   describe("cancelDelegation", () => {
-    it("aborts a running delegation", async () => {
-      const { Orchestrator } = await import("../../orchestrator.js");
-      let resolveFn: (() => void) | null = null;
-      (Orchestrator as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-        function (this: Record<string, unknown>, opts: Record<string, unknown>) {
-          this._opts = opts;
-          this.handleMessage = vi.fn().mockImplementation(
-            () =>
-              new Promise<void>((resolve) => {
-                resolveFn = resolve;
-              }),
-          );
-          this.addTool = vi.fn();
-          this.removeTool = vi.fn();
-        },
+    it("aborts a running delegation and cleans up", async () => {
+      // Make the orchestrator hang so we can cancel it
+      orchestratorHandleMessage = vi.fn().mockImplementation(
+        () => new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 30000);
+          if (typeof timer === "object" && "unref" in timer) {
+            (timer as NodeJS.Timeout).unref();
+          }
+        }),
       );
 
       const request: DelegationRequest = {
@@ -537,32 +478,30 @@ describe("DelegationManager", () => {
         toolContext: TEST_TOOL_CONTEXT,
       };
 
-      // Start delegation in background
+      // Start delegation -- will hang until cancelled
       const delegatePromise = manager.delegate(request).catch(() => {
-        // Expected to fail due to cancellation
+        // Expected to fail via cancellation/abort
       });
 
-      // Wait for delegation to start
+      // Wait for the delegation to register
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
 
       const activeBefore = manager.getActiveDelegations(PARENT_AGENT_ID);
       expect(activeBefore.length).toBe(1);
 
-      // Cancel it
+      // Cancel the delegation
       manager.cancelDelegation(activeBefore[0]!.subAgentId);
 
-      // Allow the cancel to propagate
-      if (resolveFn) resolveFn();
+      // The abort causes Promise.race to reject, settling the delegate promise
       await delegatePromise;
 
       const activeAfter = manager.getActiveDelegations(PARENT_AGENT_ID);
       expect(activeAfter.length).toBe(0);
-    });
+    }, 5000);
   });
 
   describe("getActiveDelegations", () => {
     it("returns currently running delegations for a parent", async () => {
-      // Initially empty
       expect(manager.getActiveDelegations(PARENT_AGENT_ID)).toHaveLength(0);
     });
   });
@@ -570,8 +509,6 @@ describe("DelegationManager", () => {
   describe("shutdown", () => {
     it("cancels all active delegations", async () => {
       await manager.shutdown();
-
-      // Should not throw and active delegations should be cleared
       expect(manager.getActiveDelegations(PARENT_AGENT_ID)).toHaveLength(0);
     });
   });
