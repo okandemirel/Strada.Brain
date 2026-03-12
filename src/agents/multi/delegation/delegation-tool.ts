@@ -74,17 +74,15 @@ export class DelegationTool implements ITool {
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
     try {
-      const task = input.task as string;
-      const taskContext = input.context as string | undefined;
-      const mode = (input.mode as string) ?? "sync";
+      const mode = (input.mode as string | undefined) === "async" ? "async" : "sync";
 
       const request: DelegationRequest = {
         type: this.typeConfig.name,
-        task,
-        context: taskContext,
+        task: input.task as string,
+        context: input.context as string | undefined,
         parentAgentId: this.parentAgentId,
         depth: this.currentDepth,
-        mode: mode as "sync" | "async",
+        mode,
         toolContext: context,
       };
 
@@ -96,7 +94,6 @@ export class DelegationTool implements ITool {
         };
       }
 
-      // Sync mode
       const result = await this.delegationManager.delegate(request);
       return {
         content: result.content,

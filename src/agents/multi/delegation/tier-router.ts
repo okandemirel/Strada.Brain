@@ -9,8 +9,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { ESCALATION_CHAIN } from "./delegation-types.js";
-import type { ModelTier } from "./delegation-types.js";
+import { ESCALATION_CHAIN, type ModelTier } from "./delegation-types.js";
 
 // =============================================================================
 // CONSTANTS

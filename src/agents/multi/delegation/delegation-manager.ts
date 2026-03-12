@@ -105,16 +105,7 @@ class CaptureChannel implements IChannelAdapter {
 // =============================================================================
 
 export class DelegationManager {
-  private readonly config: DelegationConfig;
-  private readonly tierRouter: TierRouter;
-  private readonly delegationLog: DelegationLog;
-  private readonly eventBus: IEventBus<LearningEventMap>;
-  private readonly budgetTracker: AgentBudgetTracker;
-  private readonly projectPath: string;
-  private readonly readOnly: boolean;
-  private readonly stradaDeps: StradaDepsStatus;
-  private readonly parentTools: ITool[];
-  private readonly apiKeys: Record<string, string | undefined>;
+  private readonly opts: DelegationManagerOptions;
 
   /** Active delegations keyed by subAgentId */
   private readonly activeDelegations = new Map<string, ActiveDelegation>();
@@ -123,16 +114,7 @@ export class DelegationManager {
   private readonly parentConcurrency = new Map<string, number>();
 
   constructor(opts: DelegationManagerOptions) {
-    this.config = opts.config;
-    this.tierRouter = opts.tierRouter;
-    this.delegationLog = opts.delegationLog;
-    this.eventBus = opts.eventBus;
-    this.budgetTracker = opts.budgetTracker;
-    this.projectPath = opts.projectPath;
-    this.readOnly = opts.readOnly;
-    this.stradaDeps = opts.stradaDeps;
-    this.parentTools = opts.parentTools;
-    this.apiKeys = opts.apiKeys;
+    this.opts = opts;
   }
 
   // ===========================================================================
@@ -143,14 +125,7 @@ export class DelegationManager {
    * Synchronous delegation: spawn a sub-agent, wait for result, return it.
    */
   async delegate(request: DelegationRequest): Promise<DelegationResult> {
-    const typeConfig = this.resolveTypeConfig(request.type);
-    this.checkConcurrency(request.parentAgentId);
-
-    const effectiveTier = this.tierRouter.getTypeEffectiveTier(
-      request.type,
-      typeConfig.tier,
-    );
-
+    const { typeConfig, effectiveTier } = this.prepareRequest(request);
     return this.executeWithEscalation(request, typeConfig, effectiveTier);
   }
 
@@ -158,18 +133,12 @@ export class DelegationManager {
    * Asynchronous delegation: fire-and-forget, emits events when done.
    */
   async delegateAsync(request: DelegationRequest): Promise<void> {
-    const typeConfig = this.resolveTypeConfig(request.type);
-    this.checkConcurrency(request.parentAgentId);
+    const { typeConfig, effectiveTier } = this.prepareRequest(request);
+    const { eventBus } = this.opts;
 
-    const effectiveTier = this.tierRouter.getTypeEffectiveTier(
-      request.type,
-      typeConfig.tier,
-    );
-
-    // Fire and forget
     this.executeWithEscalation(request, typeConfig, effectiveTier)
       .then((result) => {
-        this.eventBus.emit("delegation:completed", {
+        eventBus.emit("delegation:completed", {
           parentAgentId: request.parentAgentId,
           subAgentId: "async-" + request.type,
           type: request.type,
@@ -183,7 +152,7 @@ export class DelegationManager {
         });
       })
       .catch((err) => {
-        this.eventBus.emit("delegation:failed", {
+        eventBus.emit("delegation:failed", {
           parentAgentId: request.parentAgentId,
           subAgentId: "async-" + request.type,
           type: request.type,
@@ -201,7 +170,7 @@ export class DelegationManager {
     if (!delegation) return;
 
     delegation.abortController.abort();
-    this.delegationLog.cancel(delegation.logId);
+    this.opts.delegationLog.cancel(delegation.logId);
     this.cleanup(subAgentId, delegation.parentAgentId);
   }
 
@@ -236,6 +205,29 @@ export class DelegationManager {
   }
 
   // ===========================================================================
+  // PRIVATE: REQUEST PREPARATION
+  // ===========================================================================
+
+  /**
+   * Shared setup for delegate() and delegateAsync(): resolve type config,
+   * check concurrency, and determine effective tier.
+   */
+  private prepareRequest(request: DelegationRequest): {
+    typeConfig: DelegationTypeConfig;
+    effectiveTier: ModelTier;
+  } {
+    const typeConfig = this.resolveTypeConfig(request.type);
+    this.checkConcurrency(request.parentAgentId);
+
+    const effectiveTier = this.opts.tierRouter.getTypeEffectiveTier(
+      request.type,
+      typeConfig.tier,
+    );
+
+    return { typeConfig, effectiveTier };
+  }
+
+  // ===========================================================================
   // PRIVATE: ESCALATION
   // ===========================================================================
 
@@ -255,18 +247,13 @@ export class DelegationManager {
         throw error;
       }
 
-      const nextTier = this.tierRouter.getEscalationTier(tier);
+      const nextTier = this.opts.tierRouter.getEscalationTier(tier);
       if (!nextTier) {
-        throw error; // No escalation possible (local or premium)
+        throw error;
       }
 
       // Escalate: retry with next tier
-      return this.executeSingleDelegation(
-        request,
-        typeConfig,
-        nextTier,
-        tier, // escalatedFrom
-      );
+      return this.executeSingleDelegation(request, typeConfig, nextTier, tier);
     }
   }
 
@@ -280,36 +267,31 @@ export class DelegationManager {
     tier: ModelTier,
     escalatedFrom?: ModelTier,
   ): Promise<DelegationResult> {
+    const { delegationLog, eventBus, budgetTracker } = this.opts;
     const subAgentId = randomUUID();
     const startTime = Date.now();
 
     // Resolve provider for this tier
-    const providerConfig = this.tierRouter.resolveProviderConfig(tier);
+    const providerConfig = this.opts.tierRouter.resolveProviderConfig(tier);
     const provider = createProvider({
       name: providerConfig.name,
-      apiKey: this.apiKeys[providerConfig.name],
+      apiKey: this.opts.apiKeys[providerConfig.name],
       model: providerConfig.model,
     });
 
-    // Create ProviderManager wrapping the tier-specific provider
-    const providerManager = new ProviderManager(provider, this.apiKeys);
-
-    // Build sub-agent tools: filter delegation tools at max depth
+    const providerManager = new ProviderManager(provider, this.opts.apiKeys);
     const subAgentTools = this.buildSubAgentTools(request.depth);
 
-    // Build system prompt
     const systemPrompt =
       typeConfig.systemPrompt ??
       `You are a specialized sub-agent for ${typeConfig.name.replace(/_/g, " ")} tasks. Complete the assigned task concisely and return the result. Do not delegate further.`;
 
-    // Set up timeout
+    // Set up timeout with abort controller
     const abortController = new AbortController();
-    const timeoutId = setTimeout(() => {
-      abortController.abort();
-    }, typeConfig.timeoutMs);
+    const timeoutId = setTimeout(() => abortController.abort(), typeConfig.timeoutMs);
 
     // Log start
-    const logId = this.delegationLog.start({
+    const logId = delegationLog.start({
       parentAgentId: request.parentAgentId,
       subAgentId,
       type: request.type,
@@ -328,8 +310,7 @@ export class DelegationManager {
     });
     this.incrementConcurrency(request.parentAgentId);
 
-    // Emit started event
-    this.eventBus.emit("delegation:started", {
+    eventBus.emit("delegation:started", {
       parentAgentId: request.parentAgentId,
       subAgentId,
       type: request.type,
@@ -340,23 +321,20 @@ export class DelegationManager {
       timestamp: startTime,
     });
 
-    // Create capture channel to collect sub-agent output
     const captureChannel = new CaptureChannel();
 
     try {
-      // Create sub-agent Orchestrator
       const orchestrator = new Orchestrator({
         providerManager,
         tools: subAgentTools,
         channel: captureChannel,
-        projectPath: this.projectPath,
-        readOnly: this.readOnly,
+        projectPath: this.opts.projectPath,
+        readOnly: this.opts.readOnly,
         requireConfirmation: false,
         streamingEnabled: false,
-        stradaDeps: this.stradaDeps,
+        stradaDeps: this.opts.stradaDeps,
       });
 
-      // Build the incoming message
       const message: IncomingMessage = {
         channelType: "cli",
         chatId: `delegation-${subAgentId}`,
@@ -373,10 +351,10 @@ export class DelegationManager {
         this.waitForAbort(abortController.signal),
       ]);
 
-      // Check if aborted
+      // Check if aborted (timeout fired)
       if (abortController.signal.aborted) {
-        this.delegationLog.timeout(logId);
-        this.eventBus.emit("delegation:failed", {
+        delegationLog.timeout(logId);
+        eventBus.emit("delegation:failed", {
           parentAgentId: request.parentAgentId,
           subAgentId,
           type: request.type,
@@ -386,27 +364,23 @@ export class DelegationManager {
         throw new Error(`Delegation ${request.type} timed out after ${typeConfig.timeoutMs}ms`);
       }
 
-      // Compute duration and cost
       const durationMs = Date.now() - startTime;
       const costUsd = 0; // Cost tracking would come from provider usage stats
 
-      // Record cost on parent budget
-      this.budgetTracker.recordCost(request.parentAgentId as AgentId, costUsd, {
+      budgetTracker.recordCost(request.parentAgentId as AgentId, costUsd, {
         model: providerConfig.model,
         tokensIn: 0,
         tokensOut: 0,
       });
 
-      // Log completion
-      this.delegationLog.complete(logId, {
+      delegationLog.complete(logId, {
         durationMs,
         costUsd,
         resultSummary: captureChannel.getLastResponse().substring(0, 200),
-        escalatedFrom: escalatedFrom ?? undefined,
+        escalatedFrom,
       });
 
-      // Emit completed event
-      this.eventBus.emit("delegation:completed", {
+      eventBus.emit("delegation:completed", {
         parentAgentId: request.parentAgentId,
         subAgentId,
         type: request.type,
@@ -419,7 +393,7 @@ export class DelegationManager {
         timestamp: Date.now(),
       });
 
-      const result: DelegationResult = {
+      return {
         content: captureChannel.getLastResponse(),
         metadata: {
           model: providerConfig.model,
@@ -431,22 +405,17 @@ export class DelegationManager {
           escalatedFrom,
         },
       };
-
-      return result;
     } catch (error) {
       // Only log failure if not already handled (timeout)
       if (!abortController.signal.aborted) {
-        this.delegationLog.fail(
-          logId,
-          error instanceof Error ? error.message : String(error),
-          escalatedFrom ?? undefined,
-        );
+        const reason = error instanceof Error ? error.message : String(error);
+        delegationLog.fail(logId, reason, escalatedFrom);
 
-        this.eventBus.emit("delegation:failed", {
+        eventBus.emit("delegation:failed", {
           parentAgentId: request.parentAgentId,
           subAgentId,
           type: request.type,
-          reason: error instanceof Error ? error.message : String(error),
+          reason,
           escalatedFrom,
           timestamp: Date.now(),
         });
@@ -464,7 +433,7 @@ export class DelegationManager {
   // ===========================================================================
 
   private resolveTypeConfig(type: string): DelegationTypeConfig {
-    const typeConfig = this.config.types.find((t) => t.name === type);
+    const typeConfig = this.opts.config.types.find((t) => t.name === type);
     if (!typeConfig) {
       throw new Error(`Unknown delegation type: "${type}"`);
     }
@@ -473,9 +442,9 @@ export class DelegationManager {
 
   private checkConcurrency(parentAgentId: string): void {
     const current = this.parentConcurrency.get(parentAgentId) ?? 0;
-    if (current >= this.config.maxConcurrentPerParent) {
+    if (current >= this.opts.config.maxConcurrentPerParent) {
       throw new Error(
-        `Max concurrent delegations (${this.config.maxConcurrentPerParent}) exceeded for parent ${parentAgentId}`,
+        `Max concurrent delegations (${this.opts.config.maxConcurrentPerParent}) exceeded for parent ${parentAgentId}`,
       );
     }
   }
@@ -496,17 +465,16 @@ export class DelegationManager {
   }
 
   private buildSubAgentTools(currentDepth: number): ITool[] {
-    // The sub-agent's effective depth is currentDepth + 1.
-    // If that reaches maxDepth, exclude delegation tools so the sub-agent
-    // cannot delegate further (depth enforcement via tool exclusion).
-    if (currentDepth + 1 >= this.config.maxDepth) {
-      return this.parentTools.filter((t) => !t.name.startsWith("delegate_"));
+    // If next depth reaches maxDepth, exclude delegation tools (depth enforcement via tool exclusion)
+    if (currentDepth + 1 >= this.opts.config.maxDepth) {
+      return this.opts.parentTools.filter((t) => !t.name.startsWith("delegate_"));
     }
-    return [...this.parentTools];
+    return [...this.opts.parentTools];
   }
 
   /**
    * Returns a promise that rejects when the AbortSignal fires.
+   * Uses { once: true } to avoid listener leaks on normal completion.
    */
   private waitForAbort(signal: AbortSignal): Promise<never> {
     return new Promise((_resolve, reject) => {
@@ -516,7 +484,7 @@ export class DelegationManager {
       }
       signal.addEventListener("abort", () => {
         reject(new Error("Delegation aborted"));
-      });
+      }, { once: true });
     });
   }
 }

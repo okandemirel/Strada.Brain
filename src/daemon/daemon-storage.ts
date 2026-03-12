@@ -275,7 +275,6 @@ export class DaemonStorage {
     this.db = new Database(this.dbPath);
     configureSqlitePragmas(this.db, "daemon");
     this.db.exec(DAEMON_SCHEMA_SQL);
-    this.migrateDelegationLog();
     this.prepareStatements();
   }
 
@@ -349,35 +348,6 @@ export class DaemonStorage {
     this.stmts.sumBudgetGroupByAgent = this.db!.prepare(
       `SELECT agent_id, COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries WHERE agent_id IS NOT NULL AND timestamp >= ? GROUP BY agent_id`,
     );
-  }
-
-  /**
-   * Migrate daemon.db for delegation log support (Phase 24).
-   * Creates delegation_log table with indexes. Safe to call multiple times.
-   */
-  private migrateDelegationLog(): void {
-    this.assertOpen();
-    this.db!.exec(`
-      CREATE TABLE IF NOT EXISTS delegation_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        parent_agent_id TEXT NOT NULL,
-        sub_agent_id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        model TEXT NOT NULL,
-        tier TEXT NOT NULL,
-        depth INTEGER NOT NULL DEFAULT 0,
-        duration_ms INTEGER,
-        cost_usd REAL,
-        status TEXT NOT NULL DEFAULT 'running',
-        result_summary TEXT,
-        escalated_from TEXT,
-        started_at INTEGER NOT NULL,
-        completed_at INTEGER
-      );
-      CREATE INDEX IF NOT EXISTS idx_delegation_parent ON delegation_log(parent_agent_id);
-      CREATE INDEX IF NOT EXISTS idx_delegation_type ON delegation_log(type);
-      CREATE INDEX IF NOT EXISTS idx_delegation_status ON delegation_log(status);
-    `);
   }
 
   /** Insert a budget cost entry with an agent_id (multi-agent support) */

@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS delegation_log (
   started_at INTEGER NOT NULL,
   completed_at INTEGER
 );
-
 CREATE INDEX IF NOT EXISTS idx_delegation_parent ON delegation_log(parent_agent_id);
 CREATE INDEX IF NOT EXISTS idx_delegation_type ON delegation_log(type);
 CREATE INDEX IF NOT EXISTS idx_delegation_status ON delegation_log(status);
@@ -107,10 +106,8 @@ export class DelegationLog {
   };
 
   constructor(private readonly db: Database.Database) {
-    // Create table and indexes (idempotent)
     this.db.exec(DELEGATION_LOG_SCHEMA);
 
-    // Prepare statements
     this.stmts = {
       insert: this.db.prepare(
         `INSERT INTO delegation_log (parent_agent_id, sub_agent_id, type, model, tier, depth, status, started_at)
@@ -236,79 +233,52 @@ export class DelegationLog {
 
   /**
    * Get aggregate statistics grouped by delegation type.
+   * Uses two queries: one for per-type aggregates, one for tier breakdowns.
    */
   getStats(): DelegationStats[] {
-    const rows = this.db.prepare(
+    // Per-type aggregates
+    const typeRows = this.db.prepare(
       `SELECT
          type,
          COUNT(*) AS count,
-         AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms ELSE NULL END) AS avg_duration_ms,
-         AVG(CASE WHEN cost_usd IS NOT NULL THEN cost_usd ELSE NULL END) AS avg_cost_usd,
-         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS success_count,
-         tier
+         AVG(duration_ms) AS avg_duration_ms,
+         AVG(cost_usd) AS avg_cost_usd,
+         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS success_count
        FROM delegation_log
-       GROUP BY type, tier`,
+       GROUP BY type`,
     ).all() as Array<{
       type: string;
       count: number;
       avg_duration_ms: number | null;
       avg_cost_usd: number | null;
       success_count: number;
-      tier: string;
     }>;
 
-    // Aggregate across tiers per type
-    const typeMap = new Map<string, {
-      count: number;
-      totalDuration: number;
-      durationCount: number;
-      totalCost: number;
-      costCount: number;
-      successCount: number;
-      tierBreakdown: Record<string, number>;
-    }>();
+    if (typeRows.length === 0) return [];
 
-    for (const row of rows) {
-      let entry = typeMap.get(row.type);
-      if (!entry) {
-        entry = {
-          count: 0,
-          totalDuration: 0,
-          durationCount: 0,
-          totalCost: 0,
-          costCount: 0,
-          successCount: 0,
-          tierBreakdown: {},
-        };
-        typeMap.set(row.type, entry);
-      }
+    // Tier breakdowns
+    const tierRows = this.db.prepare(
+      `SELECT type, tier, COUNT(*) AS count FROM delegation_log GROUP BY type, tier`,
+    ).all() as Array<{ type: string; tier: string; count: number }>;
 
-      entry.count += row.count;
-      if (row.avg_duration_ms !== null) {
-        entry.totalDuration += row.avg_duration_ms * row.count;
-        entry.durationCount += row.count;
+    const tierMap = new Map<string, Record<string, number>>();
+    for (const row of tierRows) {
+      let breakdown = tierMap.get(row.type);
+      if (!breakdown) {
+        breakdown = {};
+        tierMap.set(row.type, breakdown);
       }
-      if (row.avg_cost_usd !== null) {
-        entry.totalCost += row.avg_cost_usd * row.count;
-        entry.costCount += row.count;
-      }
-      entry.successCount += row.success_count;
-      entry.tierBreakdown[row.tier] = (entry.tierBreakdown[row.tier] ?? 0) + row.count;
+      breakdown[row.tier] = row.count;
     }
 
-    const stats: DelegationStats[] = [];
-    for (const [type, entry] of typeMap) {
-      stats.push({
-        type,
-        count: entry.count,
-        avgDurationMs: entry.durationCount > 0 ? entry.totalDuration / entry.durationCount : 0,
-        avgCostUsd: entry.costCount > 0 ? entry.totalCost / entry.costCount : 0,
-        successRate: entry.count > 0 ? entry.successCount / entry.count : 0,
-        tierBreakdown: entry.tierBreakdown,
-      });
-    }
-
-    return stats;
+    return typeRows.map((row) => ({
+      type: row.type,
+      count: row.count,
+      avgDurationMs: row.avg_duration_ms ?? 0,
+      avgCostUsd: row.avg_cost_usd ?? 0,
+      successRate: row.count > 0 ? row.success_count / row.count : 0,
+      tierBreakdown: tierMap.get(row.type) ?? {},
+    }));
   }
 
   // ===========================================================================
