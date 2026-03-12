@@ -617,6 +617,14 @@ export class DashboardServer {
         return;
       }
 
+      // GET /api/delegations -- Delegation data (Plan 24-03)
+      if (url === "/api/delegations") {
+        const delegationsData = this.getDelegationsData();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(delegationsData));
+        return;
+      }
+
       if (url === "/api/metrics") {
         const snapshot = this.metrics.getSnapshot(this.getMemoryStats());
         res.writeHead(200, {
@@ -946,6 +954,30 @@ export class DashboardServer {
   }
 
   /**
+   * Build delegations data for the /api/delegations endpoint (Plan 24-03).
+   * Returns {enabled: false} when delegation is not configured.
+   */
+  private getDelegationsData(): Record<string, unknown> {
+    if (!this.delegationLog) {
+      return { enabled: false };
+    }
+
+    const now = Date.now();
+    const active = this.delegationManager?.getActiveDelegations() ?? [];
+    const activeWithElapsed = active.map((d) => ({
+      ...d,
+      elapsedMs: now - d.startedAt,
+    }));
+
+    return {
+      enabled: true,
+      active: activeWithElapsed,
+      history: this.delegationLog.getHistory(20),
+      stats: this.delegationLog.getStats(),
+    };
+  }
+
+  /**
    * Serialize a GoalTree into JSON-safe format for the /api/goals endpoint.
    */
   private serializeGoalTree(tree: GoalTree): Record<string, unknown> {
@@ -1023,12 +1055,13 @@ function fmtDuration(ms) {
 
 async function refresh() {
   try {
-    const [metricsRes, daemonRes, maintenanceRes, chainResilienceRes, agentsRes] = await Promise.all([
+    const [metricsRes, daemonRes, maintenanceRes, chainResilienceRes, agentsRes, delegationsRes] = await Promise.all([
       fetch('/api/metrics'),
       fetch('/api/daemon').catch(function() { return null; }),
       fetch('/api/maintenance').catch(function() { return null; }),
       fetch('/api/chain-resilience').catch(function() { return null; }),
-      fetch('/api/agents').catch(function() { return null; })
+      fetch('/api/agents').catch(function() { return null; }),
+      fetch('/api/delegations').catch(function() { return null; })
     ]);
     const data = await metricsRes.json();
 
@@ -1127,6 +1160,12 @@ async function refresh() {
     if (agentsRes) {
       var agentsData = await agentsRes.json();
       renderAgents(agentsData);
+    }
+
+    // Delegations panel (Plan 24-03)
+    if (delegationsRes) {
+      var delegationsData = await delegationsRes.json();
+      renderDelegations(delegationsData);
     }
 
     document.getElementById('last-update').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
@@ -1525,6 +1564,197 @@ function renderAgents(data) {
   container.appendChild(summaryP);
 }
 
+function renderDelegations(data) {
+  var section = document.getElementById('delegations-section');
+  var container = document.getElementById('delegations-panel');
+  if (!section || !container) return;
+
+  if (!data || !data.enabled) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  container.textContent = '';
+
+  var active = data.active || [];
+  var stats = data.stats || [];
+  var history = data.history || [];
+
+  // Active delegations table
+  if (active.length > 0) {
+    var activeH = document.createElement('h3');
+    activeH.textContent = 'Active Delegations';
+    activeH.style.color = '#c9d1d9';
+    activeH.style.fontSize = '0.95rem';
+    activeH.style.marginBottom = '8px';
+    container.appendChild(activeH);
+
+    var tbl = document.createElement('table');
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    ['Sub-Agent', 'Type', 'Elapsed'].forEach(function(h) {
+      var th = document.createElement('th');
+      th.textContent = h;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    tbl.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    for (var i = 0; i < active.length; i++) {
+      var d = active[i];
+      var row = document.createElement('tr');
+
+      var tdId = document.createElement('td');
+      tdId.textContent = d.subAgentId.substring(0, 12) + '..';
+      tdId.title = d.subAgentId;
+      row.appendChild(tdId);
+
+      var tdType = document.createElement('td');
+      tdType.textContent = d.type;
+      row.appendChild(tdType);
+
+      var tdElapsed = document.createElement('td');
+      tdElapsed.textContent = fmtDuration(d.elapsedMs || 0);
+      row.appendChild(tdElapsed);
+
+      tbody.appendChild(row);
+    }
+    tbl.appendChild(tbody);
+    container.appendChild(tbl);
+  } else {
+    var noActive = document.createElement('p');
+    noActive.style.color = '#8b949e';
+    noActive.style.fontSize = '0.85rem';
+    noActive.style.marginBottom = '12px';
+    noActive.textContent = 'No active delegations';
+    container.appendChild(noActive);
+  }
+
+  // Stats summary table
+  if (stats.length > 0) {
+    var statsH = document.createElement('h3');
+    statsH.textContent = 'Delegation Statistics';
+    statsH.style.color = '#c9d1d9';
+    statsH.style.fontSize = '0.95rem';
+    statsH.style.margin = '16px 0 8px 0';
+    container.appendChild(statsH);
+
+    var sTbl = document.createElement('table');
+    var sThead = document.createElement('thead');
+    var sHeadRow = document.createElement('tr');
+    ['Type', 'Total', 'Success Rate', 'Avg Duration', 'Avg Cost'].forEach(function(h) {
+      var th = document.createElement('th');
+      th.textContent = h;
+      sHeadRow.appendChild(th);
+    });
+    sThead.appendChild(sHeadRow);
+    sTbl.appendChild(sThead);
+
+    var sTbody = document.createElement('tbody');
+    for (var j = 0; j < stats.length; j++) {
+      var s = stats[j];
+      var sRow = document.createElement('tr');
+
+      var tdSType = document.createElement('td');
+      tdSType.textContent = s.type;
+      sRow.appendChild(tdSType);
+
+      var tdCount = document.createElement('td');
+      tdCount.style.textAlign = 'right';
+      tdCount.textContent = String(s.count);
+      sRow.appendChild(tdCount);
+
+      var tdRate = document.createElement('td');
+      var rateBadge = document.createElement('span');
+      var rateVal = s.successRate * 100;
+      rateBadge.className = 'badge ' + (rateVal >= 90 ? 'badge-ok' : rateVal >= 50 ? 'badge-warn' : 'badge-err');
+      rateBadge.textContent = rateVal.toFixed(1) + '%';
+      tdRate.appendChild(rateBadge);
+      sRow.appendChild(tdRate);
+
+      var tdDur = document.createElement('td');
+      tdDur.style.textAlign = 'right';
+      tdDur.textContent = Math.round(s.avgDurationMs) + 'ms';
+      sRow.appendChild(tdDur);
+
+      var tdCost = document.createElement('td');
+      tdCost.style.textAlign = 'right';
+      tdCost.textContent = '$' + s.avgCostUsd.toFixed(4);
+      sRow.appendChild(tdCost);
+
+      sTbody.appendChild(sRow);
+    }
+    sTbl.appendChild(sTbody);
+    container.appendChild(sTbl);
+  }
+
+  // Recent history table (last 10)
+  if (history.length > 0) {
+    var histH = document.createElement('h3');
+    histH.textContent = 'Recent History';
+    histH.style.color = '#c9d1d9';
+    histH.style.fontSize = '0.95rem';
+    histH.style.margin = '16px 0 8px 0';
+    container.appendChild(histH);
+
+    var hTbl = document.createElement('table');
+    var hThead = document.createElement('thead');
+    var hHeadRow = document.createElement('tr');
+    ['Type', 'Model', 'Duration', 'Cost', 'Status'].forEach(function(h) {
+      var th = document.createElement('th');
+      th.textContent = h;
+      hHeadRow.appendChild(th);
+    });
+    hThead.appendChild(hHeadRow);
+    hTbl.appendChild(hThead);
+
+    var hTbody = document.createElement('tbody');
+    var showCount = Math.min(history.length, 10);
+    for (var k = 0; k < showCount; k++) {
+      var e = history[k];
+      var hRow = document.createElement('tr');
+
+      var tdHType = document.createElement('td');
+      tdHType.textContent = e.type;
+      hRow.appendChild(tdHType);
+
+      var tdModel = document.createElement('td');
+      var modelStr = e.model || '-';
+      tdModel.textContent = modelStr.length > 28 ? modelStr.substring(0, 26) + '..' : modelStr;
+      tdModel.title = modelStr;
+      hRow.appendChild(tdModel);
+
+      var tdHDur = document.createElement('td');
+      tdHDur.style.textAlign = 'right';
+      tdHDur.textContent = e.durationMs != null ? e.durationMs + 'ms' : '-';
+      hRow.appendChild(tdHDur);
+
+      var tdHCost = document.createElement('td');
+      tdHCost.style.textAlign = 'right';
+      tdHCost.textContent = e.costUsd != null ? '$' + e.costUsd.toFixed(4) : '-';
+      hRow.appendChild(tdHCost);
+
+      var tdStatus = document.createElement('td');
+      var statusBadge = document.createElement('span');
+      var statusClass = 'badge-info';
+      if (e.status === 'completed') statusClass = 'badge-ok';
+      else if (e.status === 'failed') statusClass = 'badge-err';
+      else if (e.status === 'timeout') statusClass = 'badge-warn';
+      else if (e.status === 'running') statusClass = 'badge-info';
+      statusBadge.className = 'badge ' + statusClass;
+      statusBadge.textContent = e.status;
+      tdStatus.appendChild(statusBadge);
+      hRow.appendChild(tdStatus);
+
+      hTbody.appendChild(hRow);
+    }
+    hTbl.appendChild(hTbody);
+    container.appendChild(hTbl);
+  }
+}
+
 function card(label, value, sub) {
   return '<div class="card"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div>'
     + (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div>';
@@ -1629,6 +1859,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="section" id="agents-section" style="display:none">
   <h2>Agents</h2>
   <div id="agents-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="delegations-section" style="display:none">
+  <h2>Delegations</h2>
+  <div id="delegations-panel"><p style="color:#8b949e">Loading...</p></div>
 </div>
 
 <p id="last-update"></p>
