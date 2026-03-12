@@ -132,7 +132,9 @@ export class TierRouter {
       `SELECT key, value FROM daemon_state WHERE key LIKE ?`,
     ).all(`${OVERRIDE_KEY_PREFIX}%`) as Array<{ key: string; value: string }>;
 
+    const validTiers = new Set<string>(["local", "cheap", "standard", "premium"]);
     for (const row of rows) {
+      if (!validTiers.has(row.value)) continue; // Skip invalid/tampered values
       const type = row.key.substring(OVERRIDE_KEY_PREFIX.length);
       this.overrides.set(type, row.value as ModelTier);
     }

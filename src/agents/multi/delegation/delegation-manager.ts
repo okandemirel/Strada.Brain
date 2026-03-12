@@ -89,10 +89,10 @@ class CaptureChannel implements IChannelAdapter {
     /* no-op */
   }
   async sendText(_chatId: string, text: string): Promise<void> {
-    this.captured = text;
+    this.captured += (this.captured ? "\n" : "") + text;
   }
   async sendMarkdown(_chatId: string, markdown: string): Promise<void> {
-    this.captured = markdown;
+    this.captured += (this.captured ? "\n" : "") + markdown;
   }
 
   getLastResponse(): string {
@@ -126,7 +126,16 @@ export class DelegationManager {
    */
   async delegate(request: DelegationRequest): Promise<DelegationResult> {
     const { typeConfig, effectiveTier } = this.prepareRequest(request);
-    return this.executeWithEscalation(request, typeConfig, effectiveTier);
+    try {
+      return await this.executeWithEscalation(request, typeConfig, effectiveTier);
+    } catch (error) {
+      // Release concurrency slot if executeWithEscalation fails before
+      // executeSingleDelegation's finally block handles cleanup
+      if (!this.hasActiveForParent(request.parentAgentId)) {
+        this.decrementConcurrency(request.parentAgentId);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -134,32 +143,12 @@ export class DelegationManager {
    */
   async delegateAsync(request: DelegationRequest): Promise<void> {
     const { typeConfig, effectiveTier } = this.prepareRequest(request);
-    const { eventBus } = this.opts;
 
-    this.executeWithEscalation(request, typeConfig, effectiveTier)
-      .then((result) => {
-        eventBus.emit("delegation:completed", {
-          parentAgentId: request.parentAgentId,
-          subAgentId: "async-" + request.type,
-          type: request.type,
-          tier: result.metadata.tier,
-          model: result.metadata.model,
-          success: true,
-          durationMs: result.metadata.durationMs,
-          costUsd: result.metadata.costUsd,
-          escalated: result.metadata.escalated,
-          timestamp: Date.now(),
-        });
-      })
-      .catch((err) => {
-        eventBus.emit("delegation:failed", {
-          parentAgentId: request.parentAgentId,
-          subAgentId: "async-" + request.type,
-          type: request.type,
-          reason: err instanceof Error ? err.message : String(err),
-          timestamp: Date.now(),
-        });
-      });
+    // Events are already emitted inside executeSingleDelegation with correct subAgentId.
+    // Only swallow rejection to prevent unhandled promise rejection.
+    this.executeWithEscalation(request, typeConfig, effectiveTier).catch(() => {
+      // Already logged and emitted inside executeSingleDelegation
+    });
   }
 
   /**
@@ -218,6 +207,8 @@ export class DelegationManager {
   } {
     const typeConfig = this.resolveTypeConfig(request.type);
     this.checkConcurrency(request.parentAgentId);
+    // Reserve concurrency slot atomically after check to prevent TOCTOU race
+    this.incrementConcurrency(request.parentAgentId);
 
     const effectiveTier = this.opts.tierRouter.getTypeEffectiveTier(
       request.type,
@@ -300,7 +291,7 @@ export class DelegationManager {
       depth: request.depth,
     });
 
-    // Track active delegation
+    // Track active delegation (concurrency already reserved in prepareRequest)
     this.activeDelegations.set(subAgentId, {
       abortController,
       logId,
@@ -308,7 +299,6 @@ export class DelegationManager {
       type: request.type,
       startedAt: startTime,
     });
-    this.incrementConcurrency(request.parentAgentId);
 
     eventBus.emit("delegation:started", {
       parentAgentId: request.parentAgentId,
@@ -365,7 +355,9 @@ export class DelegationManager {
       }
 
       const durationMs = Date.now() - startTime;
-      const costUsd = 0; // Cost tracking would come from provider usage stats
+      // Estimate cost from tier as a conservative approximation until
+      // real provider token usage tracking is available
+      const costUsd = this.estimateDelegationCost(tier, durationMs);
 
       budgetTracker.recordCost(request.parentAgentId as AgentId, costUsd, {
         model: providerConfig.model,
@@ -416,7 +408,7 @@ export class DelegationManager {
           subAgentId,
           type: request.type,
           reason,
-          escalatedFrom,
+          originalTier: escalatedFrom,
           timestamp: Date.now(),
         });
       }
@@ -465,11 +457,36 @@ export class DelegationManager {
   }
 
   private buildSubAgentTools(currentDepth: number): ITool[] {
-    // If next depth reaches maxDepth, exclude delegation tools (depth enforcement via tool exclusion)
-    if (currentDepth + 1 >= this.opts.config.maxDepth) {
-      return this.opts.parentTools.filter((t) => !t.name.startsWith("delegate_"));
+    // Always filter out parent's bound delegation tools — they carry the wrong
+    // parentAgentId and depth. Fresh delegation tools for the sub-agent are
+    // created by the delegation factory in AgentManager if depth allows.
+    return this.opts.parentTools.filter((t) => !t.name.startsWith("delegate_"));
+  }
+
+  /**
+   * Check if any active delegation exists for the given parent.
+   * Used to avoid double-decrement when prepareRequest reserved a slot
+   * but executeSingleDelegation's cleanup already released it.
+   */
+  private hasActiveForParent(parentAgentId: string): boolean {
+    for (const d of this.activeDelegations.values()) {
+      if (d.parentAgentId === parentAgentId) return true;
     }
-    return [...this.opts.parentTools];
+    return false;
+  }
+
+  /**
+   * Estimate delegation cost by tier as a conservative approximation.
+   * Per-second rates assume typical LLM API pricing.
+   */
+  private estimateDelegationCost(tier: ModelTier, durationMs: number): number {
+    const costPerSecond: Record<ModelTier, number> = {
+      local: 0,
+      cheap: 0.0001,     // ~$0.36/hr
+      standard: 0.0005,  // ~$1.80/hr
+      premium: 0.002,    // ~$7.20/hr
+    };
+    return (durationMs / 1000) * (costPerSecond[tier] ?? 0);
   }
 
   /**

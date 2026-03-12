@@ -1136,13 +1136,37 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         premium: rawConfig.delegationTierPremium,
       },
       types: rawConfig.delegationTypes
-        ? (JSON.parse(rawConfig.delegationTypes) as DelegationConfig["types"])
+        ? parseDelegationTypes(rawConfig.delegationTypes)
         : ([] as unknown as DelegationConfig["types"]), // DEFAULT_DELEGATION_TYPES applied at runtime
       verbosity: rawConfig.delegationVerbosity,
     },
   };
 
   return { kind: "valid", value: config };
+}
+
+/** Zod schema for DELEGATION_TYPES env var validation */
+const DelegationTypeConfigSchema = z.array(z.object({
+  name: z.string().regex(/^[a-z][a-z0-9_]*$/),
+  tier: z.enum(["local", "cheap", "standard", "premium"]),
+  timeoutMs: z.number().int().min(5000).max(300000),
+  maxIterations: z.number().int().min(1).max(50),
+  systemPrompt: z.string().optional(),
+}));
+
+/** Parse and validate DELEGATION_TYPES JSON env var */
+function parseDelegationTypes(raw: string): DelegationConfig["types"] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`DELEGATION_TYPES is not valid JSON: ${raw.substring(0, 100)}`);
+  }
+  const result = DelegationTypeConfigSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`DELEGATION_TYPES validation failed: ${result.error.message}`);
+  }
+  return result.data as DelegationConfig["types"];
 }
 
 /** Known valid notification channel names */

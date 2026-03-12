@@ -111,7 +111,8 @@ export interface DelegationFailedEvent {
   readonly subAgentId: string;
   readonly type: string;
   readonly reason: string;
-  readonly escalatedFrom?: ModelTier;
+  /** The original tier that triggered escalation, if this failure occurred during an escalation attempt */
+  readonly originalTier?: ModelTier;
   readonly timestamp: number;
 }
 

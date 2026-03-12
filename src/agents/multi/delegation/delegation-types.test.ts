@@ -275,16 +275,16 @@ describe("delegation-types", () => {
       expect(event.reason).toBe("Model timeout");
     });
 
-    it("DelegationFailedEvent supports optional escalatedFrom", () => {
+    it("DelegationFailedEvent supports optional originalTier", () => {
       const event: DelegationFailedEvent = {
         parentAgentId: createAgentId(),
         subAgentId: "sub-1",
         type: "analysis",
         reason: "Budget exceeded",
-        escalatedFrom: "cheap",
+        originalTier: "cheap",
         timestamp: Date.now(),
       };
-      expect(event.escalatedFrom).toBe("cheap");
+      expect(event.originalTier).toBe("cheap");
     });
   });
 });
