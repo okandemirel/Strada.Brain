@@ -38,7 +38,7 @@
 
 - [x] **Phase 21: Operational Health & Memory Decay** - Fix trigger history pruning and add time-based memory decay with per-tier rates
 - [x] **Phase 22: Tool Chain Resilience** - Add saga-pattern rollback for reversible chains and parallel branch execution via DAG topology
-- [ ] **Phase 23: Multi-Agent Foundation** - Establish per-agent session isolation, channel routing, budget tracking, and backward-compatible activation
+- [x] **Phase 23: Multi-Agent Foundation** - Establish per-agent session isolation, channel routing, budget tracking, and backward-compatible activation
 - [ ] **Phase 24: Task Delegation** - Enable sub-agent spawning with depth limits and difficulty-aware model routing
 - [ ] **Phase 25: Memory Consolidation & Deployment** - Add idle-time memory consolidation and approval-gated autonomous deployment
 
@@ -94,7 +94,7 @@ Plans:
 Plans:
 - [x] 23-01-PLAN.md -- Agent types, config, registry, budget tracker, and event bus extensions (AGENT-01, AGENT-02, AGENT-07)
 - [x] 23-02-PLAN.md -- AgentManager: routing, isolation, budget enforcement, lifecycle management (AGENT-01, AGENT-02, AGENT-06)
-- [ ] 23-03-PLAN.md -- Bootstrap wiring, CLI agent commands, Dashboard Agents section, backward compat verification (AGENT-01, AGENT-02, AGENT-06, AGENT-07)
+- [x] 23-03-PLAN.md -- Bootstrap wiring, CLI agent commands, Dashboard Agents section, backward compat verification (AGENT-01, AGENT-02, AGENT-06, AGENT-07)
 
 ### Phase 24: Task Delegation
 **Goal**: Agent delegates bounded subtasks to sub-agents with enforced depth limits and cost-aware model selection
@@ -104,11 +104,12 @@ Plans:
   1. The agent delegates bounded subtasks to sub-agents that appear as registered tools in the tool registry
   2. Delegation depth is hard-capped at 2 -- sub-agents cannot delegate further, preventing unbounded spawning
   3. Delegated tasks are routed to appropriate model tiers based on task difficulty, using cheaper models for simpler sub-tasks
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 24-01: TBD
-- [ ] 24-02: TBD
+- [x] 24-01-PLAN.md -- Delegation types, config schema, tier router, and audit log (AGENT-03, AGENT-04, AGENT-05)
+- [ ] 24-02-PLAN.md -- DelegationTool (ITool) and DelegationManager with sub-agent orchestration (AGENT-03, AGENT-04, AGENT-05)
+- [ ] 24-03-PLAN.md -- Bootstrap wiring, CLI delegation commands, Dashboard Delegations panel (AGENT-03, AGENT-04, AGENT-05)
 
 ### Phase 25: Memory Consolidation & Deployment
 **Goal**: Agent consolidates similar memories during idle periods and can execute approval-gated deployments when readiness is detected
@@ -139,10 +140,10 @@ Phases 21 and 22 can execute in parallel (independent subsystems). Phase 23 foll
 | 20 | v2.0 gap closure | 1/1 | Complete | 2026-03-10 |
 | 21. Operational Health & Memory Decay | 4/4 | Complete    | 2026-03-10 | 2026-03-10 |
 | 22. Tool Chain Resilience | 5/5 | Complete    | 2026-03-11 | 2026-03-11 |
-| 23. Multi-Agent Foundation | 2/3 | In Progress|  | - |
-| 24. Task Delegation | v3.0 | 0/TBD | Not started | - |
+| 23. Multi-Agent Foundation | 3/3 | Complete    | 2026-03-11 | 2026-03-11 |
+| 24. Task Delegation | v3.0 | 1/3 | In progress | - |
 | 25. Memory Consolidation & Deployment | v3.0 | 0/TBD | Not started | - |
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-11 after Phase 23 Plan 02 complete (AgentManager Routing, Isolation & Lifecycle)*
+*Last updated: 2026-03-12 after Phase 24 planning complete (3 plans in 3 waves)*
