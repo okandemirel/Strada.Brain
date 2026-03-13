@@ -309,6 +309,15 @@ describe("loadConfig", () => {
           exemptDomains: ["instinct", "analysis-cache"],
           timeoutMs: 30000,
         },
+        consolidation: {
+          enabled: true,
+          idleMinutes: 5,
+          threshold: 0.85,
+          batchSize: 50,
+          minClusterSize: 2,
+          maxDepth: 3,
+          modelTier: "cheap",
+        },
       });
     });
   });

@@ -19,6 +19,7 @@ import type { DaemonConfig } from "../daemon/daemon-types.js";
 import type { NotificationConfig, QuietHoursConfig, DigestConfig } from "../daemon/reporting/notification-types.js";
 import type { AgentConfig } from "../agents/multi/agent-types.js";
 import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
+import type { DeploymentConfig } from "../daemon/deployment/deployment-types.js";
 
 dotenv.config();
 
@@ -188,7 +189,28 @@ export type EnvVarName =
   | "DELEGATION_TIER_PREMIUM"
   | "DELEGATION_VERBOSITY"
   | "DELEGATION_TYPES"
-  | "DELEGATION_MAX_ITERATIONS_PER_TYPE";
+  | "DELEGATION_MAX_ITERATIONS_PER_TYPE"
+
+  // Memory Consolidation (Phase 25)
+  | "MEMORY_CONSOLIDATION_ENABLED"
+  | "MEMORY_CONSOLIDATION_IDLE_MINUTES"
+  | "MEMORY_CONSOLIDATION_THRESHOLD"
+  | "MEMORY_CONSOLIDATION_BATCH_SIZE"
+  | "MEMORY_CONSOLIDATION_MIN_CLUSTER_SIZE"
+  | "MEMORY_CONSOLIDATION_MAX_DEPTH"
+  | "MEMORY_CONSOLIDATION_MODEL_TIER"
+
+  // Deployment (Phase 25)
+  | "DEPLOY_ENABLED"
+  | "DEPLOY_SCRIPT_PATH"
+  | "DEPLOY_TEST_COMMAND"
+  | "DEPLOY_TARGET_BRANCH"
+  | "DEPLOY_REQUIRE_CLEAN_GIT"
+  | "DEPLOY_TEST_TIMEOUT_MS"
+  | "DEPLOY_EXECUTION_TIMEOUT_MS"
+  | "DEPLOY_COOLDOWN_MINUTES"
+  | "DEPLOY_NOTIFICATION_URGENCY"
+  | "DEPLOY_POST_SCRIPT_PATH";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -286,6 +308,15 @@ export interface MemoryConfig {
     };
     readonly exemptDomains: string[];
     readonly timeoutMs: number;
+  };
+  readonly consolidation: {
+    readonly enabled: boolean;
+    readonly idleMinutes: number;
+    readonly threshold: number;
+    readonly batchSize: number;
+    readonly minClusterSize: number;
+    readonly maxDepth: number;
+    readonly modelTier: string;
   };
 }
 
@@ -452,6 +483,9 @@ export interface Config {
 
   // Task Delegation (Phase 24)
   readonly delegation: DelegationConfig;
+
+  // Deployment (Phase 25)
+  readonly deployment: DeploymentConfig;
 }
 
 /** Partial config for updates */
@@ -608,6 +642,15 @@ export const configSchema = z
     memoryDecayLambdaPersistent: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.001).max(1.0)).default("0.01"),
     memoryDecayExemptDomains: z.string().default("instinct,analysis-cache"),
     memoryDecayTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1000).max(300000)).default("30000"),
+
+    // Memory Consolidation (Phase 25)
+    memoryConsolidationEnabled: boolFromString(true),
+    memoryConsolidationIdleMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1440)).default("5"),
+    memoryConsolidationThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(0.99)).default("0.85"),
+    memoryConsolidationBatchSize: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(5).max(200)).default("50"),
+    memoryConsolidationMinClusterSize: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(20)).default("2"),
+    memoryConsolidationMaxDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
+    memoryConsolidationModelTier: z.enum(["local", "cheap", "standard", "premium"]).default("cheap"),
 
     // RAG
     ragEnabled: boolFromString(true),
@@ -785,6 +828,18 @@ export const configSchema = z
     delegationVerbosity: z.enum(["quiet", "normal", "verbose"]).default("normal"),
     delegationTypes: z.string().optional(),
     delegationMaxIterationsPerType: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("10"),
+
+    // Deployment (Phase 25)
+    deployEnabled: boolFromString(false),
+    deployScriptPath: z.string().optional(),
+    deployTestCommand: z.string().default("npm test"),
+    deployTargetBranch: z.string().default("main"),
+    deployRequireCleanGit: boolFromString(true),
+    deployTestTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10000).max(600000)).default("300000"),
+    deployExecutionTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(30000).max(1800000)).default("600000"),
+    deployCooldownMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1440)).default("30"),
+    deployNotificationUrgency: z.enum(["low", "medium", "high", "critical"]).default("high"),
+    deployPostScriptPath: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -959,6 +1014,15 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         },
         exemptDomains: rawConfig.memoryDecayExemptDomains.split(",").map((s: string) => s.trim()).filter(Boolean),
         timeoutMs: rawConfig.memoryDecayTimeoutMs,
+      },
+      consolidation: {
+        enabled: rawConfig.memoryConsolidationEnabled,
+        idleMinutes: rawConfig.memoryConsolidationIdleMinutes,
+        threshold: rawConfig.memoryConsolidationThreshold,
+        batchSize: rawConfig.memoryConsolidationBatchSize,
+        minClusterSize: rawConfig.memoryConsolidationMinClusterSize,
+        maxDepth: rawConfig.memoryConsolidationMaxDepth,
+        modelTier: rawConfig.memoryConsolidationModelTier,
       },
     },
 
@@ -1139,6 +1203,19 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
         ? parseDelegationTypes(rawConfig.delegationTypes)
         : ([] as unknown as DelegationConfig["types"]), // DEFAULT_DELEGATION_TYPES applied at runtime
       verbosity: rawConfig.delegationVerbosity,
+    },
+
+    deployment: {
+      enabled: rawConfig.deployEnabled,
+      scriptPath: rawConfig.deployScriptPath,
+      testCommand: rawConfig.deployTestCommand,
+      targetBranch: rawConfig.deployTargetBranch,
+      requireCleanGit: rawConfig.deployRequireCleanGit,
+      testTimeoutMs: rawConfig.deployTestTimeoutMs,
+      executionTimeoutMs: rawConfig.deployExecutionTimeoutMs,
+      cooldownMinutes: rawConfig.deployCooldownMinutes,
+      notificationUrgency: rawConfig.deployNotificationUrgency,
+      postScriptPath: rawConfig.deployPostScriptPath,
     },
   };
 
@@ -1477,6 +1554,14 @@ interface EnvVars {
   memoryDecayLambdaPersistent: string | undefined;
   memoryDecayExemptDomains: string | undefined;
   memoryDecayTimeoutMs: string | undefined;
+  // Memory Consolidation (Phase 25)
+  memoryConsolidationEnabled: string | undefined;
+  memoryConsolidationIdleMinutes: string | undefined;
+  memoryConsolidationThreshold: string | undefined;
+  memoryConsolidationBatchSize: string | undefined;
+  memoryConsolidationMinClusterSize: string | undefined;
+  memoryConsolidationMaxDepth: string | undefined;
+  memoryConsolidationModelTier: string | undefined;
   // Chain Resilience (Phase 22)
   chainRollbackEnabled: string | undefined;
   chainParallelEnabled: string | undefined;
@@ -1642,6 +1727,14 @@ function loadFromEnv(): EnvVars {
     memoryDecayLambdaPersistent: process.env["MEMORY_DECAY_LAMBDA_PERSISTENT"],
     memoryDecayExemptDomains: process.env["MEMORY_DECAY_EXEMPT_DOMAINS"],
     memoryDecayTimeoutMs: process.env["MEMORY_DECAY_TIMEOUT_MS"],
+    // Memory Consolidation (Phase 25)
+    memoryConsolidationEnabled: process.env["MEMORY_CONSOLIDATION_ENABLED"],
+    memoryConsolidationIdleMinutes: process.env["MEMORY_CONSOLIDATION_IDLE_MINUTES"],
+    memoryConsolidationThreshold: process.env["MEMORY_CONSOLIDATION_THRESHOLD"],
+    memoryConsolidationBatchSize: process.env["MEMORY_CONSOLIDATION_BATCH_SIZE"],
+    memoryConsolidationMinClusterSize: process.env["MEMORY_CONSOLIDATION_MIN_CLUSTER_SIZE"],
+    memoryConsolidationMaxDepth: process.env["MEMORY_CONSOLIDATION_MAX_DEPTH"],
+    memoryConsolidationModelTier: process.env["MEMORY_CONSOLIDATION_MODEL_TIER"],
     // Chain Resilience (Phase 22)
     chainRollbackEnabled: process.env["CHAIN_ROLLBACK_ENABLED"],
     chainParallelEnabled: process.env["CHAIN_PARALLEL_ENABLED"],
