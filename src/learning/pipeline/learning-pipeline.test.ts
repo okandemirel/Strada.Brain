@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { LearningPipeline } from "./learning-pipeline.ts";
 import { LearningStorage } from "../storage/learning-storage.ts";
 import type { Instinct, Trajectory, TrajectoryStep, TrajectoryOutcome } from "../types.ts";
-import type { ToolResultEvent } from "../../core/event-bus.ts";
+import { TypedEventBus, type ToolResultEvent } from "../../core/event-bus.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -583,7 +583,7 @@ describe("LearningPipeline", () => {
     });
 
     it("should emit instinct:cooling-started event when cooling begins", () => {
-      const { TypedEventBus } = require("../../core/event-bus.ts");
+      // TypedEventBus imported at top of file
       const eventBus = new TypedEventBus();
       const emittedEvents: any[] = [];
       eventBus.on("instinct:cooling-started", (event: any) => {
@@ -612,7 +612,7 @@ describe("LearningPipeline", () => {
     });
 
     it("should emit instinct:deprecated event when deprecation happens", () => {
-      const { TypedEventBus } = require("../../core/event-bus.ts");
+      // TypedEventBus imported at top of file
       const eventBus = new TypedEventBus();
       const emittedEvents: any[] = [];
       eventBus.on("instinct:deprecated", (event: any) => {
@@ -642,7 +642,7 @@ describe("LearningPipeline", () => {
     });
 
     it("should emit instinct:promoted event when promotion happens", () => {
-      const { TypedEventBus } = require("../../core/event-bus.ts");
+      // TypedEventBus imported at top of file
       const eventBus = new TypedEventBus();
       const emittedEvents: any[] = [];
       eventBus.on("instinct:promoted", (event: any) => {
