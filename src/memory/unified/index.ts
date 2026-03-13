@@ -1,7 +1,7 @@
 /**
  * Unified Memory Module Exports
  * 
- * AgentDB + HNSW Vector Search Integration for Strata.Brain
+ * AgentDB + HNSW Vector Search Integration for Strada.Brain
  */
 
 // Core interfaces

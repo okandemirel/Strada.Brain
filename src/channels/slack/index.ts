@@ -1,5 +1,5 @@
 /**
- * Slack Channel exports for Strata Brain.
+ * Slack Channel exports for Strada Brain.
  */
 
 export { SlackChannel, createSlackChannelFromEnv } from "./app.js";

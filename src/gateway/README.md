@@ -1,12 +1,12 @@
 # src/gateway/
 
-Process supervisor that keeps Strata Brain running as an always-on service via a forked child process.
+Process supervisor that keeps Strada Brain running as an always-on service via a forked child process.
 
 ## Daemon (`daemon.ts`)
 
 The `Daemon` class spawns the application entry point as a `node:child_process.fork()` child and restarts it on crash.
 
-- Forks `src/index.js` (default) with `["start"]` args; sets `STRATA_DAEMON=1` env var on the child
+- Forks `src/index.js` (default) with `["start"]` args; sets `STRADA_DAEMON=1` env var on the child
 - Auto-restarts on exit with exponential backoff: `baseDelay * 2^restartCount`, clamped to `maxDelay`
 - Defaults: `maxRestarts = 10`, `baseDelay = 1000ms`, `maxDelay = 60000ms`
 - Stops retrying once `restartCount >= maxRestarts`

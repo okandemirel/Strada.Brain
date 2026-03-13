@@ -10,7 +10,7 @@ import type {
   MemoryImportance,
   MemoryMetadata,
 } from "./memory.interface.js";
-import type { StrataProjectAnalysis } from "../intelligence/strata-analyzer.js";
+import type { StradaProjectAnalysis } from "../intelligence/strada-analyzer.js";
 import {
   extractTerms,
   cosineSimilarity,
@@ -257,7 +257,7 @@ interface PersistedMemory {
 /** Persisted analysis cache */
 interface PersistedAnalysis {
   projectPath: string;
-  analysis: StrataProjectAnalysis & { analyzedAt: string };
+  analysis: StradaProjectAnalysis & { analyzedAt: string };
 }
 
 /** Get current timestamp as TimestampMs */
@@ -278,7 +278,7 @@ export class FileMemoryManager implements IMemoryManager {
   private readonly maxEntries: number;
   private entries: MemoryEntry[] = [];
   private index = new OptimizedTextIndex();
-  private cachedAnalysis: { projectPath: string; analysis: StrataProjectAnalysis } | null = null;
+  private cachedAnalysis: { projectPath: string; analysis: StradaProjectAnalysis } | null = null;
   
   // Debounced flush with max wait time
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -428,7 +428,7 @@ export class FileMemoryManager implements IMemoryManager {
   // --- Project Analysis Cache ---
 
   async cacheAnalysis(
-    analysis: StrataProjectAnalysis,
+    analysis: StradaProjectAnalysis,
     projectPath: string,
     _options?: { ttl?: DurationMs }
   ): Promise<Result<void, Error>> {
@@ -440,7 +440,7 @@ export class FileMemoryManager implements IMemoryManager {
         analysis: {
           ...analysis,
           analyzedAt: analysis.analyzedAt.toISOString(),
-        } as unknown as StrataProjectAnalysis & { analyzedAt: string },
+        } as unknown as StradaProjectAnalysis & { analyzedAt: string },
       };
 
       await writeFile(
@@ -458,7 +458,7 @@ export class FileMemoryManager implements IMemoryManager {
   async getCachedAnalysis(
     projectPath: string,
     maxAgeMs: number = DEFAULT_ANALYSIS_MAX_AGE_MS
-  ): Promise<Result<Option<StrataProjectAnalysis>, Error>> {
+  ): Promise<Result<Option<StradaProjectAnalysis>, Error>> {
     try {
       if (!this.cachedAnalysis) return ok(none());
       if (this.cachedAnalysis.projectPath !== projectPath) return ok(none());

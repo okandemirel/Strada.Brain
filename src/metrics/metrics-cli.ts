@@ -1,7 +1,7 @@
 /**
  * Metrics CLI
  *
- * CLI command logic for `strata-brain metrics`.
+ * CLI command logic for `strada-brain metrics`.
  * Provides formatted table and JSON output for agent performance metrics.
  * Creates a standalone MetricsStorage instance for read-only queries.
  */

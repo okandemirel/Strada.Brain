@@ -15,14 +15,14 @@ import { isOk, isSome } from "../types/index.js";
 import type { ChatId } from "../types/index.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
 import {
-  STRATA_SYSTEM_PROMPT,
+  STRADA_SYSTEM_PROMPT,
   buildProjectContext,
   buildAnalysisSummary,
   buildDepsContext,
   buildCapabilityManifest,
   buildIdentitySection,
   buildCrashNotificationSection,
-} from "./context/strata-knowledge.js";
+} from "./context/strada-knowledge.js";
 import type { IdentityState } from "../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
@@ -63,7 +63,7 @@ interface Session {
 }
 
 /**
- * The AI Agent Orchestrator - the "brain" of Strata Brain.
+ * The AI Agent Orchestrator - the "brain" of Strada Brain.
  *
  * Implements the core agent loop:
  *   User message → LLM → Tool calls → LLM → ... → Final response
@@ -165,7 +165,7 @@ export class Orchestrator {
     this.stradaDeps = opts.stradaDeps;
     this.depsSetupComplete = !opts.stradaDeps || opts.stradaDeps.coreInstalled;
     this.systemPrompt =
-      STRATA_SYSTEM_PROMPT +
+      STRADA_SYSTEM_PROMPT +
       buildProjectContext(this.projectPath) +
       buildDepsContext(opts.stradaDeps) +
       buildCapabilityManifest() +
@@ -526,7 +526,7 @@ export class Orchestrator {
         if (result.kind === "ok") {
           this.stradaDeps = checkStradaDeps(this.projectPath);
           this.systemPrompt =
-            STRATA_SYSTEM_PROMPT +
+            STRADA_SYSTEM_PROMPT +
             buildCapabilityManifest() +
             buildProjectContext(this.projectPath) +
             buildDepsContext(this.stradaDeps);
@@ -580,7 +580,7 @@ export class Orchestrator {
       if (result.kind === "ok") {
         this.stradaDeps = checkStradaDeps(this.projectPath);
         this.systemPrompt =
-          STRATA_SYSTEM_PROMPT +
+          STRADA_SYSTEM_PROMPT +
           buildCapabilityManifest() +
           buildProjectContext(this.projectPath) +
           buildDepsContext(this.stradaDeps);

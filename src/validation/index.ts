@@ -1,5 +1,5 @@
 /**
- * Input Validation Module for Strata.Brain
+ * Input Validation Module for Strada.Brain
  * 
  * Centralized input validation with Zod schemas and sanitization.
  */

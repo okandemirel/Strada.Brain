@@ -11,7 +11,7 @@ vi.mock("../utils/logger.js", () => ({
   }),
 }));
 
-vi.mock("./context/strata-knowledge.js", () => ({
+vi.mock("./context/strada-knowledge.js", () => ({
   STRATA_SYSTEM_PROMPT: "Test system prompt.",
   buildProjectContext: () => "",
   buildAnalysisSummary: () => "",

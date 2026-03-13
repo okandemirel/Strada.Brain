@@ -8,7 +8,7 @@ Manages scheduled backup jobs using a built-in cron expression parser and child 
 
 - `Map<string, BackupJob>` stores jobs keyed by 8-character MD5-derived ID
 - Persists state to `{backupDir}/scheduler-state.json` as JSON; reloads on construction
-- Default backup directory: `/backups/strata-brain`
+- Default backup directory: `/backups/strada-brain`
 - Default retention: 30 days; backups verified and compressed by default
 - Optional remote sync config supports `s3`, `rclone`, or `none`
 - `start()` runs a `setInterval` check loop (default 60,000ms); immediate first check on start

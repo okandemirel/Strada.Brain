@@ -8,7 +8,7 @@ Centralized numeric limits, thresholds, and default values grouped by domain.
 
 - `FILE_LIMITS` — max read size 512 KB, max write size 1 MB, max lines 2,000
 - `SESSION_CONFIG` — max 100 concurrent sessions, 1-hour timeout, 40 messages before trimming, 30-minute cleanup interval
-- `MEMORY_CONFIG` — default DB path `.strata-memory`, max 10 retrieval results, min similarity 0.15, 24-hour analysis cache
+- `MEMORY_CONFIG` — default DB path `.strada-memory`, max 10 retrieval results, min similarity 0.15, 24-hour analysis cache
 - `TOOL_LIMITS` — max 50 iterations per request, 8 KB result length, 5-minute execution timeout
 - `DEFAULT_RATE_LIMITS` — messages/minute, messages/hour, tokens/day, daily/monthly budget (all default 0 = unlimited)
 - `RAG_DEFAULTS` — 4,000 context tokens, top-K 6, min score 0.2, 1,000-char chunks with 200-char overlap, OpenAI `text-embedding-3-small` or Ollama `nomic-embed-text`

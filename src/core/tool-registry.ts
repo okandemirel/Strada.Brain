@@ -24,7 +24,7 @@ export const ToolCategories = {
   FILE: "file",
   CODE: "code",
   SEARCH: "search",
-  STRATA: "strata",
+  STRADA: "strada",
   SHELL: "shell",
   GIT: "git",
   DOTNET: "dotnet",
@@ -69,12 +69,12 @@ import {
   ListDirectoryTool,
 } from "../agents/tools/search.js";
 
-// Strata-specific tools
-import { AnalyzeProjectTool } from "../agents/tools/strata/analyze-project.js";
-import { ModuleCreateTool } from "../agents/tools/strata/module-create.js";
-import { ComponentCreateTool } from "../agents/tools/strata/component-create.js";
-import { MediatorCreateTool } from "../agents/tools/strata/mediator-create.js";
-import { SystemCreateTool } from "../agents/tools/strata/system-create.js";
+// Strada-specific tools
+import { AnalyzeProjectTool } from "../agents/tools/strada/analyze-project.js";
+import { ModuleCreateTool } from "../agents/tools/strada/module-create.js";
+import { ComponentCreateTool } from "../agents/tools/strada/component-create.js";
+import { MediatorCreateTool } from "../agents/tools/strada/mediator-create.js";
+import { SystemCreateTool } from "../agents/tools/strada/system-create.js";
 
 // Code quality and search
 import { CodeQualityTool } from "../agents/tools/code-quality.js";
@@ -415,36 +415,36 @@ export class ToolRegistry {
       readOnly: true,
     });
 
-    // Strata-specific
+    // Strada-specific
     this.register(new AnalyzeProjectTool(memoryManager), {
-      category: ToolCategories.STRATA,
+      category: ToolCategories.STRADA,
       dangerous: false,
       readOnly: true,
     });
 
     this.register(new ModuleCreateTool(), {
-      category: ToolCategories.STRATA,
+      category: ToolCategories.STRADA,
       dangerous: true,
       requiresConfirmation: true,
       readOnly: false,
     });
 
     this.register(new ComponentCreateTool(), {
-      category: ToolCategories.STRATA,
+      category: ToolCategories.STRADA,
       dangerous: true,
       requiresConfirmation: true,
       readOnly: false,
     });
 
     this.register(new MediatorCreateTool(), {
-      category: ToolCategories.STRATA,
+      category: ToolCategories.STRADA,
       dangerous: true,
       requiresConfirmation: true,
       readOnly: false,
     });
 
     this.register(new SystemCreateTool(), {
-      category: ToolCategories.STRATA,
+      category: ToolCategories.STRADA,
       dangerous: true,
       requiresConfirmation: true,
       readOnly: false,
@@ -605,12 +605,12 @@ export const SearchTools = {
   MEMORY_SEARCH: "memory_search",
 } as const;
 
-export const StrataTools = {
-  ANALYZE_PROJECT: "analyze_project",
-  CREATE_MODULE: "create_module",
-  CREATE_COMPONENT: "create_component",
-  CREATE_MEDIATOR: "create_mediator",
-  CREATE_SYSTEM: "create_system",
+export const StradaTools = {
+  ANALYZE_PROJECT: "strada_analyze_project",
+  CREATE_MODULE: "strada_create_module",
+  CREATE_COMPONENT: "strada_create_component",
+  CREATE_MEDIATOR: "strada_create_mediator",
+  CREATE_SYSTEM: "strada_create_system",
 } as const;
 
 export const GitTools = {

@@ -1,5 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import os from 'node:os';
 import { SystemMonitor, resetSystemMonitor } from './system-monitor.js';
+
+vi.spyOn(os, 'uptime').mockReturnValue(123456);
+
+vi.mock('child_process', () => ({
+  exec: (cmd: string, cb: (err: Error | null, stdout: string) => void) => {
+    // Mock df output: filesystem 1K-blocks used available use% mounted
+    cb(null, '/dev/disk1 500000000 250000000 250000000 50% /\n');
+  },
+}));
 
 describe('SystemMonitor', () => {
     let monitor: SystemMonitor;

@@ -6,13 +6,13 @@
 version: "3.8"
 
 services:
-  strata-brain:
+  strada-brain:
     build:
       context: ..
       dockerfile: docker/Dockerfile.hardened
       target: production
-    image: strata-brain:hardened
-    container_name: strata-brain-secure
+    image: strada-brain:hardened
+    container_name: strada-brain-secure
     
     # Security options
     read_only: true
@@ -59,10 +59,10 @@ services:
     # Read-write volumes (for persistent data)
     volumes:
       - type: volume
-        source: strata-data
+        source: strada-data
         target: /app/data
       - type: volume
-        source: strata-logs
+        source: strada-logs
         target: /app/logs
     
     # Health check
@@ -83,40 +83,40 @@ services:
     
     # Networks
     networks:
-      - strata-network
+      - strada-network
 
   # Security scanner (optional)
   security-scanner:
     image: aquasec/trivy:latest
-    container_name: strata-security-scanner
+    container_name: strada-security-scanner
     command: [
       "image",
       "--exit-code", "0",
       "--severity", "HIGH,CRITICAL",
-      "strata-brain:hardened"
+      "strada-brain:hardened"
     ]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - strata-network
+      - strada-network
     depends_on:
-      - strata-brain
+      - strada-brain
     profiles:
       - scan
 
 volumes:
-  strata-data:
+  strada-data:
     driver: local
-  strata-logs:
+  strada-logs:
     driver: local
 
 networks:
-  strata-network:
+  strada-network:
     driver: bridge
     ipam:
       config:
         - subnet: 172.28.0.0/16
     driver_opts:
-      com.docker.network.bridge.name: strata-net
+      com.docker.network.bridge.name: strada-net
       com.docker.network.bridge.enable_ip_masquerade: "true"
       com.docker.network.bridge.enable_icc: "false"

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { StrataAnalyzer } from "./strata-analyzer.js";
-import type { StrataProjectAnalysis } from "./strata-analyzer.js";
+import { StradaAnalyzer } from "./strada-analyzer.js";
+import type { StradaProjectAnalysis } from "./strada-analyzer.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
@@ -22,11 +22,11 @@ vi.mock("node:fs/promises", () => ({
 import { glob } from "glob";
 import { readFile } from "node:fs/promises";
 
-describe("StrataAnalyzer", () => {
-  let analyzer: StrataAnalyzer;
+describe("StradaAnalyzer", () => {
+  let analyzer: StradaAnalyzer;
 
   beforeEach(() => {
-    analyzer = new StrataAnalyzer("/test/project");
+    analyzer = new StradaAnalyzer("/test/project");
   });
 
   it("finds modules from ModuleConfig base class", async () => {
@@ -171,9 +171,9 @@ public class EventUser : SystemBase
   });
 });
 
-describe("StrataAnalyzer.formatAnalysis", () => {
+describe("StradaAnalyzer.formatAnalysis", () => {
   it("formats analysis with all sections", () => {
-    const analysis: StrataProjectAnalysis = {
+    const analysis: StradaProjectAnalysis = {
       modules: [{ name: "Combat", className: "CombatModuleConfig", filePath: "Combat.cs", namespace: "Game", systems: [], services: [], dependencies: [], lineNumber: 1 }],
       systems: [{ name: "CombatSystem", filePath: "CombatSystem.cs", namespace: "Game", baseClass: "SystemBase", lineNumber: 5 }],
       components: [{ name: "Health", filePath: "Health.cs", namespace: "Game", isReadonly: false, lineNumber: 1 }],
@@ -188,7 +188,7 @@ describe("StrataAnalyzer.formatAnalysis", () => {
       analyzedAt: new Date("2026-01-15T10:00:00Z"),
     };
 
-    const output = StrataAnalyzer.formatAnalysis(analysis);
+    const output = StradaAnalyzer.formatAnalysis(analysis);
     expect(output).toContain("Strada Project Analysis");
     expect(output).toContain("Modules (1)");
     expect(output).toContain("ECS Systems (1)");
@@ -201,13 +201,13 @@ describe("StrataAnalyzer.formatAnalysis", () => {
   });
 
   it("handles empty analysis", () => {
-    const analysis: StrataProjectAnalysis = {
+    const analysis: StradaProjectAnalysis = {
       modules: [], systems: [], components: [], services: [],
       mediators: [], controllers: [], events: [],
       csFileCount: 0, analyzedAt: new Date(),
     };
 
-    const output = StrataAnalyzer.formatAnalysis(analysis);
+    const output = StradaAnalyzer.formatAnalysis(analysis);
     expect(output).toContain("Strada Project Analysis");
     expect(output).toContain("C# Files: 0");
   });

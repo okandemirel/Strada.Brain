@@ -14,16 +14,16 @@ const mockAnalysis = {
   analyzedAt: new Date("2026-01-01"),
 };
 
-vi.mock("../../../intelligence/strata-analyzer.js", () => {
+vi.mock("../../../intelligence/strada-analyzer.js", () => {
   const MockClass = vi.fn().mockImplementation(() => ({
     analyze: vi.fn().mockResolvedValue(mockAnalysis),
   }));
   // Static method on the class
   (MockClass as any).formatAnalysis = vi.fn().mockReturnValue("Strada Project Analysis\nMocked output");
-  return { StrataAnalyzer: MockClass };
+  return { StradaAnalyzer: MockClass };
 });
 
-import { StrataAnalyzer } from "../../../intelligence/strata-analyzer.js";
+import { StradaAnalyzer } from "../../../intelligence/strada-analyzer.js";
 
 describe("AnalyzeProjectTool", () => {
   let tool: AnalyzeProjectTool;
@@ -37,11 +37,11 @@ describe("AnalyzeProjectTool", () => {
     const result = await tool.execute({}, ctx);
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("Strada Project Analysis");
-    expect(StrataAnalyzer).toHaveBeenCalledWith(ctx.projectPath);
+    expect(StradaAnalyzer).toHaveBeenCalledWith(ctx.projectPath);
   });
 
   it("returns error when analysis fails", async () => {
-    vi.mocked(StrataAnalyzer).mockImplementationOnce(() => ({
+    vi.mocked(StradaAnalyzer).mockImplementationOnce(() => ({
       analyze: vi.fn().mockRejectedValue(new Error("fail")),
     }) as any);
 

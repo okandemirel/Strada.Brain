@@ -1,5 +1,5 @@
 /**
- * Type-safe Memory Manager Interface for Strata.Brain
+ * Type-safe Memory Manager Interface for Strada.Brain
  * 
  * Provides:
  * - Type-safe memory entry types
@@ -8,8 +8,8 @@
  */
 
 import type { 
-  StrataProjectAnalysis 
-} from "../intelligence/strata-analyzer.js";
+  StradaProjectAnalysis 
+} from "../intelligence/strada-analyzer.js";
 import type { 
   Result,
   Option,
@@ -374,7 +374,7 @@ export interface MemoryDecayConfig {
  * The Memory Manager interface — persistent project knowledge and conversation memory.
  *
  * Provides three capabilities:
- *  1. **Project Cache**: Cached StrataProjectAnalysis with timestamp-based invalidation
+ *  1. **Project Cache**: Cached StradaProjectAnalysis with timestamp-based invalidation
  *  2. **Conversation Memory**: Stores conversation summaries from trimmed sessions
  *  3. **Semantic Retrieval**: Vector-based and TF-IDF text search across all stored memories
  */
@@ -389,7 +389,7 @@ export interface IMemoryManager {
 
   /** Cache a project analysis result */
   cacheAnalysis(
-    analysis: StrataProjectAnalysis, 
+    analysis: StradaProjectAnalysis, 
     projectPath: string,
     options?: { ttl?: DurationMs }
   ): Promise<Result<void, Error>>;
@@ -398,7 +398,7 @@ export interface IMemoryManager {
   getCachedAnalysis(
     projectPath: string, 
     maxAgeMs?: DurationMs
-  ): Promise<Result<Option<StrataProjectAnalysis>, Error>>;
+  ): Promise<Result<Option<StradaProjectAnalysis>, Error>>;
 
   /** Invalidate cached analysis */
   invalidateAnalysis(projectPath: string): Promise<Result<void, Error>>;
@@ -556,7 +556,7 @@ export interface MemoryConfig {
 
 /** Default memory configuration */
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
-  dbPath: ".strata-memory",
+  dbPath: ".strada-memory",
   maxEntries: 10000,
   defaultTtl: 0 as DurationMs,
   enableEmbeddings: true,

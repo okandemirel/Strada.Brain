@@ -370,7 +370,7 @@ const WEBSOCKET_DASHBOARD_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Strata Brain WebSocket Dashboard</title>
+<title>Strada Brain WebSocket Dashboard</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e1e4e8; padding: 20px; }
@@ -405,7 +405,7 @@ const WEBSOCKET_DASHBOARD_HTML = `<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1><span id="ws-status" class="status-indicator"></span> Strata Brain WebSocket Dashboard</h1>
+<h1><span id="ws-status" class="status-indicator"></span> Strada Brain WebSocket Dashboard</h1>
 
 <div id="auth-section" class="auth-form hidden">
   <h3>Authentication Required</h3>

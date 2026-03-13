@@ -150,7 +150,7 @@ describe("AgentStatusTool", () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain("Identity");
-    expect(result.content).toContain("Strata Brain");
+    expect(result.content).toContain("Strada Brain");
     expect(result.content).toContain("5"); // boot count
     expect(result.content).toContain("42"); // messages
     expect(result.content).toContain("10"); // tasks
@@ -192,7 +192,7 @@ describe("AgentStatusTool", () => {
     expect(result.content).toContain("Tools");
     expect(result.content).toContain("Memory");
     expect(result.content).toContain("Identity");
-    expect(result.content).toContain("Strata Brain");
+    expect(result.content).toContain("Strada Brain");
   });
 
   it('execute({section: "daemon"}) returns daemon status when callback provided', async () => {

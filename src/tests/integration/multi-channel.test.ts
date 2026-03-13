@@ -41,7 +41,7 @@ describe("Multi-Channel Flow Integration", () => {
 
   beforeEach(async () => {
     // Create temp project
-    tempDir = await mkdtemp(join(tmpdir(), "strata-multi-channel-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "strada-multi-channel-test-"));
 
     // Create channels
     telegramChannel = createMockTelegramChannel();

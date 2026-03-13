@@ -607,7 +607,7 @@ export class DiscordChannel implements IChannelAdapter {
       const userId = message.author.id;
       if (!this.auth.isDiscordUserAllowed(userId)) {
         await message.reply(
-          "You are not authorized to use Strata Brain. Contact the administrator."
+          "You are not authorized to use Strada Brain. Contact the administrator."
         );
         return;
       }
@@ -655,7 +655,7 @@ export class DiscordChannel implements IChannelAdapter {
   ): Promise<void> {
     if (!this.auth.isDiscordUserAllowed(interaction.user.id)) {
       await interaction.reply({
-        content: "You are not authorized to use Strata Brain.",
+        content: "You are not authorized to use Strada Brain.",
         ephemeral: true,
       });
       return;
@@ -722,7 +722,7 @@ export class DiscordChannel implements IChannelAdapter {
 
       case "status": {
         const embed = new EmbedBuilder()
-          .setTitle("Strata Brain Status")
+          .setTitle("Strada Brain Status")
           .setDescription("System is operational")
           .setColor(0x00ff00)
           .addFields(
@@ -739,12 +739,12 @@ export class DiscordChannel implements IChannelAdapter {
 
       case "help": {
         const embed = new EmbedBuilder()
-          .setTitle("Strata Brain Help")
+          .setTitle("Strada Brain Help")
           .setDescription("Your AI-powered Unity development assistant")
           .setColor(0x0099ff)
           .addFields(
-            { name: "/ask <question>", value: "Ask Strata Brain a question about your project" },
-            { name: "/analyze", value: "Analyze your Unity/Strata.Core project structure" },
+            { name: "/ask <question>", value: "Ask Strada Brain a question about your project" },
+            { name: "/analyze", value: "Analyze your Unity/Strada.Core project structure" },
             { name: "/generate <type> <name> [description]", value: "Generate a module, system, component, or mediator" },
             { name: "/status", value: "Show system status and health" },
             { name: "/help", value: "Show this help message" }

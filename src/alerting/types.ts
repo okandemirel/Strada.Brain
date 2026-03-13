@@ -1,5 +1,5 @@
 /**
- * Alerting Types for Strata.Brain
+ * Alerting Types for Strada.Brain
  */
 
 export type AlertLevel = 'info' | 'warning' | 'critical';

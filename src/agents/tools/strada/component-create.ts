@@ -4,7 +4,7 @@ import { validatePath, isValidCSharpIdentifier, isValidCSharpType } from "../../
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 
 export class ComponentCreateTool implements ITool {
-  readonly name = "strata_create_component";
+  readonly name = "strada_create_component";
   readonly description =
     "Create a new ECS component (unmanaged struct implementing IComponent) for Strada.Core. " +
     "Components are data-only structs that can be attached to entities.";
@@ -60,7 +60,8 @@ export class ComponentCreateTool implements ITool {
       };
     }
 
-    const name = String(input["name"] ?? "");
+    const rawName = String(input["name"] ?? "");
+    const name = rawName.endsWith("Component") ? rawName : rawName + "Component";
     const relPath = String(input["path"] ?? "");
     const namespace = String(input["namespace"] ?? "");
     const fields = (input["fields"] as Array<{

@@ -60,28 +60,28 @@ export class PrometheusMetrics {
 
     // Custom counters
     this.messagesTotal = new Counter({
-      name: "strata_messages_total",
+      name: "strada_messages_total",
       help: "Total number of messages processed",
       labelNames: ["status"],
       registers: [this.register]
     });
 
     this.toolCallsTotal = new Counter({
-      name: "strata_tool_calls_total",
+      name: "strada_tool_calls_total",
       help: "Total number of tool calls",
       labelNames: ["tool", "status"],
       registers: [this.register]
     });
 
     this.toolErrorsTotal = new Counter({
-      name: "strata_tool_errors_total",
+      name: "strada_tool_errors_total",
       help: "Total number of tool call errors",
       labelNames: ["tool"],
       registers: [this.register]
     });
 
     this.tokensTotal = new Counter({
-      name: "strata_tokens_total",
+      name: "strada_tokens_total",
       help: "Total number of tokens used",
       labelNames: ["type"],
       registers: [this.register]
@@ -89,27 +89,27 @@ export class PrometheusMetrics {
 
     // Custom gauges
     this.activeSessions = new Gauge({
-      name: "strata_active_sessions",
+      name: "strada_active_sessions",
       help: "Number of active sessions",
       registers: [this.register]
     });
 
     this.memoryUsageBytes = new Gauge({
-      name: "strata_memory_usage_bytes",
+      name: "strada_memory_usage_bytes",
       help: "Memory usage in bytes",
       labelNames: ["type"],
       registers: [this.register]
     });
 
     this.pluginsLoaded = new Gauge({
-      name: "strata_plugins_loaded",
+      name: "strada_plugins_loaded",
       help: "Number of loaded plugins",
       registers: [this.register]
     });
 
     // Custom histograms
     this.requestDurationSeconds = new Histogram({
-      name: "strata_request_duration_seconds",
+      name: "strada_request_duration_seconds",
       help: "Request processing duration in seconds",
       labelNames: ["method"],
       buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
@@ -117,7 +117,7 @@ export class PrometheusMetrics {
     });
 
     this.toolDurationSeconds = new Histogram({
-      name: "strata_tool_duration_seconds",
+      name: "strada_tool_duration_seconds",
       help: "Tool execution duration in seconds",
       labelNames: ["tool"],
       buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60],
@@ -125,7 +125,7 @@ export class PrometheusMetrics {
     });
 
     this.llmLatencySeconds = new Histogram({
-      name: "strata_llm_latency_seconds",
+      name: "strada_llm_latency_seconds",
       help: "LLM API latency in seconds",
       labelNames: ["provider", "model"],
       buckets: [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120],
@@ -133,7 +133,7 @@ export class PrometheusMetrics {
     });
 
     this.messageDurationSeconds = new Histogram({
-      name: "strata_message_duration_seconds",
+      name: "strada_message_duration_seconds",
       help: "Full message processing duration in seconds",
       labelNames: ["status"],
       buckets: [0.5, 1, 2.5, 5, 10, 30, 60, 120, 300],
@@ -290,7 +290,7 @@ const PROMETHEUS_INFO_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Strata Brain Prometheus Metrics</title>
+<title>Strada Brain Prometheus Metrics</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -325,7 +325,7 @@ const PROMETHEUS_INFO_HTML = `<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1>📊 Strata Brain Prometheus Metrics</h1>
+<h1>📊 Strada Brain Prometheus Metrics</h1>
 
 <div class="card">
   <p>Prometheus metrics endpoint is available at:</p>
@@ -341,25 +341,25 @@ const PROMETHEUS_INFO_HTML = `<!DOCTYPE html>
   <h3 style="color: #c9d1d9; margin-bottom: 15px;">Counters</h3>
   
   <div class="metric">
-    <span class="metric-name">strata_messages_total</span>
+    <span class="metric-name">strada_messages_total</span>
     <span class="metric-type">Counter</span>
     <div class="metric-help">Total number of messages processed (labels: status)</div>
   </div>
   
   <div class="metric">
-    <span class="metric-name">strata_tool_calls_total</span>
+    <span class="metric-name">strada_tool_calls_total</span>
     <span class="metric-type">Counter</span>
     <div class="metric-help">Total number of tool calls (labels: tool, status)</div>
   </div>
   
   <div class="metric">
-    <span class="metric-name">strata_tool_errors_total</span>
+    <span class="metric-name">strada_tool_errors_total</span>
     <span class="metric-type">Counter</span>
     <div class="metric-help">Total number of tool call errors (labels: tool)</div>
   </div>
   
   <div class="metric">
-    <span class="metric-name">strata_tokens_total</span>
+    <span class="metric-name">strada_tokens_total</span>
     <span class="metric-type">Counter</span>
     <div class="metric-help">Total number of tokens used (labels: type=input|output|total)</div>
   </div>
@@ -369,19 +369,19 @@ const PROMETHEUS_INFO_HTML = `<!DOCTYPE html>
   <h3 style="color: #c9d1d9; margin-bottom: 15px;">Gauges</h3>
   
   <div class="metric">
-    <span class="metric-name">strata_active_sessions</span>
+    <span class="metric-name">strada_active_sessions</span>
     <span class="metric-type">Gauge</span>
     <div class="metric-help">Number of active sessions</div>
   </div>
   
   <div class="metric">
-    <span class="metric-name">strata_memory_usage_bytes</span>
+    <span class="metric-name">strada_memory_usage_bytes</span>
     <span class="metric-type">Gauge</span>
     <div class="metric-help">Memory usage in bytes (labels: type=rss|heap_total|heap_used|external)</div>
   </div>
   
   <div class="metric">
-    <span class="metric-name">strata_plugins_loaded</span>
+    <span class="metric-name">strada_plugins_loaded</span>
     <span class="metric-type">Gauge</span>
     <div class="metric-help">Number of loaded plugins</div>
   </div>
@@ -391,25 +391,25 @@ const PROMETHEUS_INFO_HTML = `<!DOCTYPE html>
   <h3 style="color: #c9d1d9; margin-bottom: 15px;">Histograms</h3>
   
   <div class="metric">
-    <span class="metric-name">strata_request_duration_seconds</span>
+    <span class="metric-name">strada_request_duration_seconds</span>
     <span class="metric-type">Histogram</span>
     <div class="metric-help">Request processing duration (labels: method)</div>
   </div>
   
   <div class="metric">
-    <span class="metric-name">strata_tool_duration_seconds</span>
+    <span class="metric-name">strada_tool_duration_seconds</span>
     <span class="metric-type">Histogram</span>
     <div class="metric-help">Tool execution duration (labels: tool)</div>
   </div>
   
   <div class="metric">
-    <span class="metric-name">strata_llm_latency_seconds</span>
+    <span class="metric-name">strada_llm_latency_seconds</span>
     <span class="metric-type">Histogram</span>
     <div class="metric-help">LLM API latency (labels: provider, model)</div>
   </div>
   
   <div class="metric">
-    <span class="metric-name">strata_message_duration_seconds</span>
+    <span class="metric-name">strada_message_duration_seconds</span>
     <span class="metric-type">Histogram</span>
     <div class="metric-help">Full message processing duration (labels: status)</div>
   </div>

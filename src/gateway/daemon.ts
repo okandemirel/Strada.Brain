@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { getLogger } from "../utils/logger.js";
 
 /**
- * Gateway daemon — keeps Strata Brain running as an always-on service.
+ * Gateway daemon — keeps Strada Brain running as an always-on service.
  *
  * Features:
  *   - Auto-restart on crash with exponential backoff
@@ -106,7 +106,7 @@ export class Daemon {
 
     this.child = fork(this.entryPoint, this.args, {
       stdio: "inherit",
-      env: { ...process.env, STRATA_DAEMON: "1" },
+      env: { ...process.env, STRADA_DAEMON: "1" },
     });
 
     logger.info("Child process spawned", { pid: this.child.pid });

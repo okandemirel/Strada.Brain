@@ -9,7 +9,7 @@
  * API surfaces covered: ModuleConfig, DI ([Inject], RegisterService), ECS (SystemBase,
  * ForEach query pattern, EntityManager), MVCS, Sync Layer, EventBus, Bootstrap.
  */
-export const STRATA_SYSTEM_PROMPT = `You are Strata Brain, an expert AI assistant for Unity game development using the Strada.Core framework.
+export const STRADA_SYSTEM_PROMPT = `You are Strada Brain, an expert AI assistant for Unity game development using the Strada.Core framework.
 
 ## Strada.Core Framework Knowledge
 
@@ -41,6 +41,7 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
    - Systems: inherit \`SystemBase\` (managed), \`JobSystemBase\` (Burst-compatible), or \`BurstSystemBase\` (SIMD)
    - System lifecycle: \`OnInitialize()\` → \`OnUpdate(float deltaTime)\` → \`OnDispose()\`
    - System ordering: \`[SystemOrder(int)]\` attribute (lower = earlier)
+   - Additional attributes: \`[UpdatePhase(UpdatePhase.X)]\`, \`[RunBefore(typeof(T))]\`, \`[RunAfter(typeof(T))]\`, \`[RequiresSystem(typeof(T))]\`
    - \`SystemRunner\`: Executes systems in order, manages lifecycle
    - Query pattern: \`ForEach<T1, T2>((int entity, ref T1 c1, ref T2 c2) => { })\` (delegate-based)
    - Generic variants: \`SystemBase<T1>\` through \`SystemBase<T1,...,T8>\` with \`OnUpdateEntity()\`
@@ -75,6 +76,7 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 - One class per file, file name matches class name
 - Interfaces prefixed with 'I' (IInventoryService)
 - Components are unmanaged structs with \`IComponent\` and \`[StructLayout(LayoutKind.Sequential)]\`
+- Components end with 'Component' suffix (HealthComponent, VelocityComponent)
 - Systems end with 'System' suffix (DamageSystem, SpawnSystem)
 - ModuleConfigs end with 'ModuleConfig' or 'Module' suffix
 - Controllers end with 'Controller' suffix
@@ -87,28 +89,30 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 \`\`\`
 Assets/
 ├── Modules/
-│   ├── Core/
-│   │   ├── CoreModuleConfig.cs       (ModuleConfig SO)
+│   ├── CoreModule/
 │   │   ├── Core.asmdef
-│   │   ├── Systems/
-│   │   │   └── GameStateSystem.cs
-│   │   └── Services/
-│   │       ├── IGameService.cs
-│   │       └── GameService.cs
-│   └── Combat/
-│       ├── CombatModuleConfig.cs
+│   │   └── Scripts/
+│   │       ├── CoreModuleConfig.cs       (ModuleConfig SO)
+│   │       ├── Systems/
+│   │       │   └── GameStateSystem.cs
+│   │       └── Services/
+│   │           ├── IGameService.cs
+│   │           └── GameService.cs
+│   └── CombatModule/
 │       ├── Combat.asmdef
-│       ├── Components/
-│       │   ├── Health.cs             (IComponent)
-│       │   └── DamageDealer.cs       (IComponent)
-│       ├── Systems/
-│       │   ├── DamageSystem.cs       (SystemBase)
-│       │   └── HealthSystem.cs
-│       ├── Services/
-│       │   ├── ICombatService.cs
-│       │   └── CombatService.cs
-│       └── Mediators/
-│           └── CombatEntityMediator.cs
+│       └── Scripts/
+│           ├── CombatModuleConfig.cs
+│           ├── Components/
+│           │   ├── HealthComponent.cs     (IComponent)
+│           │   └── DamageDealerComponent.cs
+│           ├── Systems/
+│           │   ├── DamageSystem.cs       (SystemBase)
+│           │   └── HealthSystem.cs
+│           ├── Services/
+│           │   ├── ICombatService.cs
+│           │   └── CombatService.cs
+│           └── Mediators/
+│               └── CombatEntityMediator.cs
 \`\`\`
 
 ## Your Capabilities
@@ -180,7 +184,7 @@ limits apply, and secrets are sanitized from all outputs.
 import type { IdentityState } from "../../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { formatDowntime } from "../../identity/crash-recovery.js";
-import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
+import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
 
@@ -263,7 +267,7 @@ export function buildProjectContext(projectPath: string): string {
 /**
  * Build a summary of cached project analysis for system prompt injection.
  */
-export function buildAnalysisSummary(analysis: StrataProjectAnalysis): string {
+export function buildAnalysisSummary(analysis: StradaProjectAnalysis): string {
   const lines: string[] = ["\n## Cached Project Analysis"];
 
   if (analysis.modules.length > 0) {

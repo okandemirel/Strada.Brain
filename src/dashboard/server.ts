@@ -2137,7 +2137,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Strata Brain Dashboard</title>
+<title>Strada Brain Dashboard</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -2185,7 +2185,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </head>
 <body>
 <div id="readonly-banner" class="readonly-banner">\u{1F512} READ-ONLY MODE ACTIVE - Write operations are disabled</div>
-<h1><span id="status-dot" class="status-dot"></span>Strata Brain Dashboard</h1>
+<h1><span id="status-dot" class="status-dot"></span>Strada Brain Dashboard</h1>
 <div class="grid" id="cards"></div>
 
 <div class="section">

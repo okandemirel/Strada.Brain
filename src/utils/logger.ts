@@ -12,7 +12,7 @@ export function createLogger(level: string, logFile: string): winston.Logger {
       winston.format.errors({ stack: true }),
       winston.format.json()
     ),
-    defaultMeta: { service: "strata-brain" },
+    defaultMeta: { service: "strada-brain" },
     transports: [
       new winston.transports.Console({
         format: winston.format.combine(

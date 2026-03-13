@@ -9,7 +9,7 @@ Singleton winston logger with console + file transports.
 - `createLogger(level, logFile)` initializes the singleton; subsequent calls return the cached instance
 - Console transport uses colorized `timestamp [level] message` format
 - File transport rotates at 10 MB with 3 max files
-- `defaultMeta` tags all entries with `service: "strata-brain"`
+- `defaultMeta` tags all entries with `service: "strada-brain"`
 - `getLogger()` throws if called before `createLogger()`
 
 ## Process Runner (`process-runner.ts`)

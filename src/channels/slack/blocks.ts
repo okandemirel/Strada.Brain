@@ -11,7 +11,7 @@ const MAX_BLOCKS_PER_MESSAGE = 50;
 /**
  * Create help blocks showing available commands.
  */
-export function createHelpBlocks(botName = "Strata Brain"): KnownBlock[] {
+export function createHelpBlocks(botName = "Strada Brain"): KnownBlock[] {
   return [
     {
       type: "header",
@@ -25,7 +25,7 @@ export function createHelpBlocks(botName = "Strata Brain"): KnownBlock[] {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "I'm your AI-powered assistant for Strata.Core Unity projects. Here's what I can do:",
+        text: "I'm your AI-powered assistant for Strada.Core Unity projects. Here's what I can do:",
       },
     } as SectionBlock,
     {
@@ -42,7 +42,7 @@ export function createHelpBlocks(botName = "Strata Brain"): KnownBlock[] {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "*🏗️ Strata.Core Generation*\n• Create modules, components, mediators\n• Generate systems and service locators\n• Analyze project structure",
+        text: "*🏗️ Strada.Core Generation*\n• Create modules, components, mediators\n• Generate systems and service locators\n• Analyze project structure",
       },
     } as SectionBlock,
     {

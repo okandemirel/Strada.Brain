@@ -8,7 +8,7 @@ interface AuthOptions {
 }
 
 /**
- * Authentication and authorization for Strata Brain.
+ * Authentication and authorization for Strada Brain.
  * Controls who can access the bot and what they can do.
  *
  * Path security is handled by `path-guard.ts` — not this class.

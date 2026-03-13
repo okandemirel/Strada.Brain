@@ -1,6 +1,6 @@
 /**
- * Slack slash command handlers for Strata Brain.
- * Provides /strata-* commands for quick access to common operations.
+ * Slack slash command handlers for Strada Brain.
+ * Provides /strada-* commands for quick access to common operations.
  */
 
 import type { App, AckFn, RespondFn } from "@slack/bolt";
@@ -27,8 +27,8 @@ type CommandHandler = (ctx: CommandContext) => Promise<void>;
  * Register all slash commands with the Slack app.
  */
 export function registerSlashCommands(app: App): void {
-  // /strata-help - Show help information
-  app.command("/strata-help", async ({ ack, respond, client, body }) => {
+  // /strada-help - Show help information
+  app.command("/strada-help", async ({ ack, respond, client, body }) => {
     await handleCommand({
       ack,
       respond,
@@ -41,8 +41,8 @@ export function registerSlashCommands(app: App): void {
     }, handleHelpCommand);
   });
 
-  // /strata-ask - Ask a question to the AI
-  app.command("/strata-ask", async ({ ack, respond, client, body }) => {
+  // /strada-ask - Ask a question to the AI
+  app.command("/strada-ask", async ({ ack, respond, client, body }) => {
     await handleCommand({
       ack,
       respond,
@@ -55,8 +55,8 @@ export function registerSlashCommands(app: App): void {
     }, handleAskCommand);
   });
 
-  // /strata-analyze - Analyze code or project
-  app.command("/strata-analyze", async ({ ack, respond, client, body }) => {
+  // /strada-analyze - Analyze code or project
+  app.command("/strada-analyze", async ({ ack, respond, client, body }) => {
     await handleCommand({
       ack,
       respond,
@@ -69,8 +69,8 @@ export function registerSlashCommands(app: App): void {
     }, handleAnalyzeCommand);
   });
 
-  // /strata-generate - Generate code (component, system, etc.)
-  app.command("/strata-generate", async ({ ack, respond, client, body }) => {
+  // /strada-generate - Generate code (component, system, etc.)
+  app.command("/strada-generate", async ({ ack, respond, client, body }) => {
     await handleCommand({
       ack,
       respond,
@@ -114,18 +114,18 @@ async function handleCommand(
 }
 
 /**
- * Handle /strata-help command.
+ * Handle /strada-help command.
  */
 async function handleHelpCommand(ctx: CommandContext): Promise<void> {
   await ctx.ack();
 
   const helpText = `
-*🧠 Strata Brain - Available Commands*
+*🧠 Strada Brain - Available Commands*
 
-*/strata-help* - Show this help message
-*/strata-ask <question>* - Ask the AI a question
-*/strata-analyze <file|project>* - Analyze code or project structure
-*/strata-generate <type> <name>* - Generate Strata.Core code
+*/strada-help* - Show this help message
+*/strada-ask <question>* - Ask the AI a question
+*/strada-analyze <file|project>* - Analyze code or project structure
+*/strada-generate <type> <name>* - Generate Strada.Core code
 
 *Generation Types:*
 • \`component <Name>\` - Create a Component class
@@ -134,9 +134,9 @@ async function handleHelpCommand(ctx: CommandContext): Promise<void> {
 • \`module <Name>\` - Create a Module structure
 
 *Examples:*
-\`/strata-ask How do I create a new enemy system?\`
-\`/strata-analyze Assets/Scripts/PlayerController.cs\`
-\`/strata-generate component PlayerHealth\`
+\`/strada-ask How do I create a new enemy system?\`
+\`/strada-analyze Assets/Scripts/PlayerController.cs\`
+\`/strada-generate component PlayerHealth\`
 `;
 
   await ctx.respond({
@@ -147,14 +147,14 @@ async function handleHelpCommand(ctx: CommandContext): Promise<void> {
 }
 
 /**
- * Handle /strata-ask command.
+ * Handle /strada-ask command.
  */
 async function handleAskCommand(ctx: CommandContext): Promise<void> {
   const question = ctx.text.trim();
 
   if (!question) {
     await ctx.ack({
-      text: "Please provide a question. Example: `/strata-ask How do I create a new component?`",
+      text: "Please provide a question. Example: `/strada-ask How do I create a new component?`",
       response_type: "ephemeral",
     });
     return;
@@ -174,14 +174,14 @@ async function handleAskCommand(ctx: CommandContext): Promise<void> {
 }
 
 /**
- * Handle /strata-analyze command.
+ * Handle /strada-analyze command.
  */
 async function handleAnalyzeCommand(ctx: CommandContext): Promise<void> {
   const target = ctx.text.trim();
 
   if (!target) {
     await ctx.ack({
-      text: "Please specify what to analyze. Examples:\n• `/strata-analyze project` - Analyze entire project\n• `/strata-analyze Assets/Scripts/Player.cs` - Analyze specific file",
+      text: "Please specify what to analyze. Examples:\n• `/strada-analyze project` - Analyze entire project\n• `/strada-analyze Assets/Scripts/Player.cs` - Analyze specific file",
       response_type: "ephemeral",
     });
     return;
@@ -199,14 +199,14 @@ async function handleAnalyzeCommand(ctx: CommandContext): Promise<void> {
 }
 
 /**
- * Handle /strata-generate command.
+ * Handle /strada-generate command.
  */
 async function handleGenerateCommand(ctx: CommandContext): Promise<void> {
   const args = ctx.text.trim().split(/\s+/);
 
   if (args.length < 2) {
     await ctx.ack({
-      text: `Usage: \`/strata-generate <type> <name>\`
+      text: `Usage: \`/strada-generate <type> <name>\`
 
 Available types:
 • \`component <Name>\` - Create a Component
@@ -214,7 +214,7 @@ Available types:
 • \`system <Name>\` - Create a System
 • \`module <Name>\` - Create a Module
 
-Example: \`/strata-generate component PlayerHealth\``,
+Example: \`/strada-generate component PlayerHealth\``,
       response_type: "ephemeral",
     });
     return;

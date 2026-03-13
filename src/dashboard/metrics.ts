@@ -1,5 +1,5 @@
 /**
- * Metrics collector for Strata Brain monitoring.
+ * Metrics collector for Strada Brain monitoring.
  * Aggregates token usage, tool calls, session stats, and provider health.
  */
 

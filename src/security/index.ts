@@ -1,5 +1,5 @@
 /**
- * Security Module for Strata.Brain
+ * Security Module for Strada.Brain
  *
  * Centralized security exports for all security features.
  */

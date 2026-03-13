@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCapabilityManifest, buildIdentitySection, buildCrashNotificationSection } from "./strata-knowledge.js";
+import { buildCapabilityManifest, buildIdentitySection, buildCrashNotificationSection } from "./strada-knowledge.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { makeIdentityState, makeGoalTree } from "../../test-helpers.js";
 
@@ -57,7 +57,7 @@ describe("buildIdentitySection", () => {
     const result = buildIdentitySection(state);
 
     expect(result).toContain("## Agent Identity");
-    expect(result).toContain("**Name:** Strata Brain");
+    expect(result).toContain("**Name:** Strada Brain");
     expect(result).toContain("**Boot #:** 5");
     expect(result).toContain("**Uptime (total):**");
     expect(result).toContain("**Created:** 2024-03-08");

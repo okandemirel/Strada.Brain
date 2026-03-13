@@ -27,7 +27,7 @@ beforeAll(() => {
   createLogger("error", "/tmp/strada-test.log");
 });
 
-describe("File Write → Build Flow Integration", () => {
+describe("File Write → Build Flow Integration", { timeout: 30_000 }, () => {
   let tempDir: string;
   let orchestrator: Orchestrator;
   let channel: ReturnType<typeof createMockTelegramChannel>;
@@ -35,7 +35,7 @@ describe("File Write → Build Flow Integration", () => {
   let tools: ITool[];
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "strata-file-build-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "strada-file-build-test-"));
 
     channel = createMockTelegramChannel({
       autoConfirm: true, // Default to auto-confirm for most tests

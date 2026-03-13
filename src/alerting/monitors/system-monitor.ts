@@ -1,5 +1,5 @@
 /**
- * System Monitor for Strata.Brain
+ * System Monitor for Strada.Brain
  * Monitors CPU, memory, disk usage and triggers alerts
  */
 

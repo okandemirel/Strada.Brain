@@ -1,5 +1,5 @@
 /**
- * Alerting System for Strata.Brain
+ * Alerting System for Strada.Brain
  * Export all alerting components and utilities
  */
 

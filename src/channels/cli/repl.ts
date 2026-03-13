@@ -9,7 +9,7 @@ type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
 /**
  * CLI REPL channel for local development and testing.
- * Allows interacting with Strata Brain directly from the terminal.
+ * Allows interacting with Strada Brain directly from the terminal.
  */
 export class CLIChannel implements IChannelAdapter {
   readonly name = "cli";
@@ -31,7 +31,7 @@ export class CLIChannel implements IChannelAdapter {
 
     this.healthy = true;
 
-    console.log("\n=== Strata Brain CLI ===");
+    console.log("\n=== Strada Brain CLI ===");
     console.log("Type your messages below. Type 'exit' or 'quit' to stop.\n");
 
     this.promptNext();
@@ -41,7 +41,7 @@ export class CLIChannel implements IChannelAdapter {
     this.healthy = false;
     this.rl?.close();
     this.rl = null;
-    console.log("\nStrata Brain CLI disconnected.");
+    console.log("\nStrada Brain CLI disconnected.");
   }
 
   async sendText(_chatId: string, text: string): Promise<void> {

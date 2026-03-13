@@ -2,12 +2,17 @@ import { readFile } from "node:fs/promises";
 import { relative } from "node:path";
 import { glob } from "glob";
 import {
-  parseCSharpFile,
-  inheritsFrom,
-  implementsInterface,
+  parseDeep,
+  getClasses,
+  getStructs,
+  getDependencies,
+  getInjectedDependencies,
+  deepInheritsFrom,
+  deepImplements,
   stripGenericArgs,
-  type CSharpFileInfo,
-} from "./csharp-parser.js";
+  type CSharpAST,
+  type TypeDecl,
+} from "./csharp-deep-parser.js";
 import { getLogger } from "../utils/logger.js";
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB per file
@@ -77,7 +82,7 @@ export interface DependencyEdge {
   type: "inherits" | "implements" | "injects" | "uses_event";
 }
 
-export interface StrataProjectAnalysis {
+export interface StradaProjectAnalysis {
   modules: ModuleInfo[];
   systems: SystemInfo[];
   components: ComponentInfo[];
@@ -94,7 +99,7 @@ export interface StrataProjectAnalysis {
  * Analyzes a Unity project using Strada.Core framework.
  * Scans C# files and extracts framework-specific information.
  */
-export class StrataAnalyzer {
+export class StradaAnalyzer {
   private readonly projectPath: string;
 
   constructor(projectPath: string) {
@@ -102,20 +107,34 @@ export class StrataAnalyzer {
   }
 
   /**
+   * Resolve namespace for a type by walking the AST's namespace declarations.
+   */
+  private static resolveNamespace(ast: CSharpAST, type: TypeDecl): string {
+    for (const ns of ast.namespaces) {
+      if (ns.members.some((m) => m === type)) return ns.name;
+      // Check nested types
+      for (const m of ns.members) {
+        if ((m.kind === "class" || m.kind === "struct") && m.nestedTypes.some((n) => n === type)) {
+          return ns.name;
+        }
+      }
+    }
+    return "";
+  }
+
+  /**
    * Run a full project analysis.
    */
-  async analyze(): Promise<StrataProjectAnalysis> {
+  async analyze(): Promise<StradaProjectAnalysis> {
     const logger = getLogger();
-    logger.info("Starting Strata project analysis", {
+    logger.info("Starting Strada project analysis", {
       projectPath: this.projectPath,
     });
 
-    // Find all C# files
     const csFiles = await this.findCSharpFiles();
     logger.info(`Found ${csFiles.length} C# files`);
 
-    // Parse all files and scan events inline (single pass, no buffering)
-    const parsed: CSharpFileInfo[] = [];
+    const parsed: CSharpAST[] = [];
     const events: EventUsage[] = [];
     for (const filePath of csFiles) {
       try {
@@ -123,28 +142,27 @@ export class StrataAnalyzer {
         if (content.length > MAX_FILE_SIZE) continue;
 
         const relPath = relative(this.projectPath, filePath);
-        const fileInfo = parseCSharpFile(content, relPath);
-        parsed.push(fileInfo);
+        const ast = parseDeep(content, relPath);
+        parsed.push(ast);
 
-        // Scan for event usage inline while content is in scope
-        this.scanEventUsage(content, fileInfo, events);
+        // Scan for event usage inline (regex on raw content — method bodies not in AST)
+        const classes = getClasses(ast);
+        const className = classes[0]?.name ?? "unknown";
+        this.scanEventUsageFromContent(content, relPath, className, events);
       } catch {
         logger.debug(`Failed to parse: ${filePath}`);
       }
     }
 
-    // Extract Strada-specific information
     const modules = this.findModules(parsed);
     const systems = this.findSystems(parsed);
     const components = this.findComponents(parsed);
     const services = this.findServices(parsed);
     const mediators = this.findMediators(parsed);
     const controllers = this.findControllers(parsed);
-
-    // Build dependency graph
     const dependencies = this.buildDependencyGraph(parsed, events);
 
-    const result: StrataProjectAnalysis = {
+    const result: StradaProjectAnalysis = {
       modules,
       systems,
       components,
@@ -169,23 +187,20 @@ export class StrataAnalyzer {
     return result;
   }
 
-  private findModules(parsed: CSharpFileInfo[]): ModuleInfo[] {
+  private findModules(parsed: CSharpAST[]): ModuleInfo[] {
     const modules: ModuleInfo[] = [];
-    for (const file of parsed) {
-      for (const cls of file.classes) {
-        if (
-          inheritsFrom(cls, "ModuleConfig") ||
-          cls.baseClass?.includes("ModuleConfig")
-        ) {
+    for (const ast of parsed) {
+      for (const cls of getClasses(ast)) {
+        if (deepInheritsFrom(cls, "ModuleConfig")) {
           modules.push({
             name: cls.name.replace(/ModuleConfig$|Module$/, ""),
             className: cls.name,
-            filePath: file.filePath,
-            namespace: cls.namespace,
+            filePath: ast.filePath,
+            namespace: StradaAnalyzer.resolveNamespace(ast, cls),
             systems: [],
             services: [],
             dependencies: [],
-            lineNumber: cls.lineNumber,
+            lineNumber: cls.line,
           });
         }
       }
@@ -193,21 +208,24 @@ export class StrataAnalyzer {
     return modules;
   }
 
-  private findSystems(parsed: CSharpFileInfo[]): SystemInfo[] {
+  private findSystems(parsed: CSharpAST[]): SystemInfo[] {
     const systems: SystemInfo[] = [];
     const systemBases = ["SystemBase", "JobSystemBase", "BurstSystemBase"];
-
-    for (const file of parsed) {
-      for (const cls of file.classes) {
-        if (!cls.isAbstract) {
+    for (const ast of parsed) {
+      for (const cls of getClasses(ast)) {
+        if (!cls.modifiers.includes("abstract")) {
           for (const base of systemBases) {
-            if (inheritsFrom(cls, base) || cls.baseClass?.includes(base)) {
+            if (deepInheritsFrom(cls, base)) {
+              const baseType = cls.baseTypes.find((bt) => {
+                const clean = bt.replace(/<[^>]+>/g, "");
+                return systemBases.includes(clean);
+              }) ?? base;
               systems.push({
                 name: cls.name,
-                filePath: file.filePath,
-                namespace: cls.namespace,
-                baseClass: cls.baseClass ?? base,
-                lineNumber: cls.lineNumber,
+                filePath: ast.filePath,
+                namespace: StradaAnalyzer.resolveNamespace(ast, cls),
+                baseClass: baseType,
+                lineNumber: cls.line,
               });
               break;
             }
@@ -218,17 +236,17 @@ export class StrataAnalyzer {
     return systems;
   }
 
-  private findComponents(parsed: CSharpFileInfo[]): ComponentInfo[] {
+  private findComponents(parsed: CSharpAST[]): ComponentInfo[] {
     const components: ComponentInfo[] = [];
-    for (const file of parsed) {
-      for (const struct of file.structs) {
-        if (implementsInterface(struct, "IComponent")) {
+    for (const ast of parsed) {
+      for (const struct of getStructs(ast)) {
+        if (deepImplements(struct, "IComponent")) {
           components.push({
             name: struct.name,
-            filePath: file.filePath,
-            namespace: struct.namespace,
-            isReadonly: struct.isReadonly,
-            lineNumber: struct.lineNumber,
+            filePath: ast.filePath,
+            namespace: StradaAnalyzer.resolveNamespace(ast, struct),
+            isReadonly: struct.modifiers.includes("readonly"),
+            lineNumber: struct.line,
           });
         }
       }
@@ -236,49 +254,42 @@ export class StrataAnalyzer {
     return components;
   }
 
-  private findServices(parsed: CSharpFileInfo[]): ServiceInfo[] {
+  private findServices(parsed: CSharpAST[]): ServiceInfo[] {
     const services: ServiceInfo[] = [];
-
-    // Find classes that implement I-prefixed interfaces
-    for (const file of parsed) {
-      for (const cls of file.classes) {
-        // Look for classes that implement an I-prefixed interface
-        for (const iface of cls.interfaces) {
-          const cleanIface = stripGenericArgs(iface);
-          if (cleanIface.startsWith("I") && cleanIface.length > 1) {
+    for (const ast of parsed) {
+      for (const cls of getClasses(ast)) {
+        for (const bt of cls.baseTypes) {
+          const clean = stripGenericArgs(bt);
+          if (clean.startsWith("I") && clean.length > 1 && clean[1] === clean[1]!.toUpperCase()) {
             services.push({
-              interfaceName: cleanIface,
+              interfaceName: clean,
               implementationName: cls.name,
-              interfaceFile: "", // Would need more sophisticated search
-              implementationFile: file.filePath,
-              namespace: cls.namespace,
+              interfaceFile: "",
+              implementationFile: ast.filePath,
+              namespace: StradaAnalyzer.resolveNamespace(ast, cls),
             });
           }
         }
       }
     }
-
     return services;
   }
 
-  private findMediators(parsed: CSharpFileInfo[]): MediatorInfo[] {
+  private findMediators(parsed: CSharpAST[]): MediatorInfo[] {
     const mediators: MediatorInfo[] = [];
-    for (const file of parsed) {
-      for (const cls of file.classes) {
-        if (
-          cls.baseClass?.includes("EntityMediator") ||
-          inheritsFrom(cls, "EntityMediator")
-        ) {
-          // Extract view type from generic argument
-          const genericMatch = cls.baseClass?.match(/EntityMediator<(\w+)>/);
+    for (const ast of parsed) {
+      for (const cls of getClasses(ast)) {
+        if (deepInheritsFrom(cls, "EntityMediator")) {
+          const genericMatch = cls.baseTypes
+            .find((bt) => bt.replace(/<[^>]+>/g, "") === "EntityMediator")
+            ?.match(/EntityMediator<(\w+)>/);
           const viewType = genericMatch ? genericMatch[1]! : "unknown";
-
           mediators.push({
             name: cls.name,
             viewType,
-            filePath: file.filePath,
-            namespace: cls.namespace,
-            lineNumber: cls.lineNumber,
+            filePath: ast.filePath,
+            namespace: StradaAnalyzer.resolveNamespace(ast, cls),
+            lineNumber: cls.line,
           });
         }
       }
@@ -286,23 +297,21 @@ export class StrataAnalyzer {
     return mediators;
   }
 
-  private findControllers(parsed: CSharpFileInfo[]): ControllerInfo[] {
+  private findControllers(parsed: CSharpAST[]): ControllerInfo[] {
     const controllers: ControllerInfo[] = [];
-    for (const file of parsed) {
-      for (const cls of file.classes) {
-        if (
-          cls.baseClass?.includes("Controller") ||
-          inheritsFrom(cls, "Controller")
-        ) {
-          const genericMatch = cls.baseClass?.match(/Controller<(\w+)>/);
+    for (const ast of parsed) {
+      for (const cls of getClasses(ast)) {
+        if (deepInheritsFrom(cls, "Controller")) {
+          const genericMatch = cls.baseTypes
+            .find((bt) => bt.replace(/<[^>]+>/g, "") === "Controller")
+            ?.match(/Controller<(\w+)>/);
           const modelType = genericMatch ? genericMatch[1]! : "unknown";
-
           controllers.push({
             name: cls.name,
             modelType,
-            filePath: file.filePath,
-            namespace: cls.namespace,
-            lineNumber: cls.lineNumber,
+            filePath: ast.filePath,
+            namespace: StradaAnalyzer.resolveNamespace(ast, cls),
+            lineNumber: cls.line,
           });
         }
       }
@@ -310,53 +319,30 @@ export class StrataAnalyzer {
     return controllers;
   }
 
-  private scanEventUsage(
+  private scanEventUsageFromContent(
     content: string,
-    fileInfo: CSharpFileInfo,
+    filePath: string,
+    className: string,
     events: EventUsage[]
   ): void {
     const publishRegex = /\.Publish<(\w+)>/g;
     const subscribeRegex = /\.Subscribe<(\w+)>/g;
     const sendRegex = /\.Send<(\w+)>/g;
-
     const lines = content.split("\n");
-    const className = fileInfo.classes[0]?.name ?? "unknown";
-
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!;
       let match;
-
       publishRegex.lastIndex = 0;
       while ((match = publishRegex.exec(line)) !== null) {
-        events.push({
-          eventType: match[1]!,
-          action: "publish",
-          filePath: fileInfo.filePath,
-          lineNumber: i + 1,
-          className,
-        });
+        events.push({ eventType: match[1]!, action: "publish", filePath, lineNumber: i + 1, className });
       }
-
       subscribeRegex.lastIndex = 0;
       while ((match = subscribeRegex.exec(line)) !== null) {
-        events.push({
-          eventType: match[1]!,
-          action: "subscribe",
-          filePath: fileInfo.filePath,
-          lineNumber: i + 1,
-          className,
-        });
+        events.push({ eventType: match[1]!, action: "subscribe", filePath, lineNumber: i + 1, className });
       }
-
       sendRegex.lastIndex = 0;
       while ((match = sendRegex.exec(line)) !== null) {
-        events.push({
-          eventType: match[1]!,
-          action: "publish",
-          filePath: fileInfo.filePath,
-          lineNumber: i + 1,
-          className,
-        });
+        events.push({ eventType: match[1]!, action: "publish", filePath, lineNumber: i + 1, className });
       }
     }
   }
@@ -366,12 +352,11 @@ export class StrataAnalyzer {
    * Captures inheritance, interface implementation, DI injection, and event coupling.
    */
   private buildDependencyGraph(
-    parsed: CSharpFileInfo[],
+    parsed: CSharpAST[],
     events: EventUsage[]
   ): DependencyEdge[] {
     const edges: DependencyEdge[] = [];
     const seen = new Set<string>();
-
     const addEdge = (from: string, to: string, type: DependencyEdge["type"]) => {
       const key = `${from}→${to}:${type}`;
       if (seen.has(key)) return;
@@ -379,36 +364,40 @@ export class StrataAnalyzer {
       edges.push({ from, to, type });
     };
 
-    for (const file of parsed) {
-      // Class inheritance and interface edges
-      for (const cls of file.classes) {
-        if (cls.baseClass) {
-          addEdge(cls.name, stripGenericArgs(cls.baseClass), "inherits");
+    for (const ast of parsed) {
+      for (const cls of getClasses(ast)) {
+        // Inheritance edges
+        for (const bt of cls.baseTypes) {
+          const clean = stripGenericArgs(bt);
+          // Check if it's likely a base class vs interface
+          if (!clean.startsWith("I") || clean.length <= 1 || clean[1] !== clean[1]!.toUpperCase()) {
+            addEdge(cls.name, clean, "inherits");
+          } else {
+            addEdge(cls.name, clean, "implements");
+          }
         }
-        for (const iface of cls.interfaces) {
-          addEdge(cls.name, stripGenericArgs(iface), "implements");
+
+        // Constructor DI dependencies
+        for (const dep of getDependencies(cls)) {
+          addEdge(cls.name, stripGenericArgs(dep), "injects");
+        }
+
+        // [Inject] field injection dependencies
+        for (const dep of getInjectedDependencies(cls)) {
+          addEdge(cls.name, dep, "injects");
         }
       }
 
-      // Struct interface edges
-      for (const struct of file.structs) {
-        for (const iface of struct.interfaces) {
-          addEdge(struct.name, stripGenericArgs(iface), "implements");
-        }
-      }
-
-      // Constructor DI dependencies
-      for (const ctor of file.constructors) {
-        for (const dep of ctor.dependencies) {
-          addEdge(ctor.className, dep, "injects");
+      for (const struct of getStructs(ast)) {
+        for (const bt of struct.baseTypes) {
+          addEdge(struct.name, stripGenericArgs(bt), "implements");
         }
       }
     }
 
-    // Event coupling: publishers → subscribers via shared event type
+    // Event coupling
     const publishers = new Map<string, string[]>();
     const subscribers = new Map<string, string[]>();
-
     for (const ev of events) {
       if (ev.action === "publish") {
         const list = publishers.get(ev.eventType) ?? [];
@@ -420,7 +409,6 @@ export class StrataAnalyzer {
         subscribers.set(ev.eventType, list);
       }
     }
-
     for (const [eventType, pubs] of publishers) {
       const subs = subscribers.get(eventType) ?? [];
       for (const pub of pubs) {
@@ -446,7 +434,7 @@ export class StrataAnalyzer {
   /**
    * Format the analysis result as a readable string for messaging.
    */
-  static formatAnalysis(analysis: StrataProjectAnalysis): string {
+  static formatAnalysis(analysis: StradaProjectAnalysis): string {
     const lines: string[] = [];
 
     lines.push("Strada Project Analysis");

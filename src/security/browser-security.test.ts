@@ -9,7 +9,7 @@ import {
 import { createLogger } from "../utils/logger.js";
 
 // Initialize logger for tests
-createLogger("error", "/tmp/strata-test.log");
+createLogger("error", "/tmp/strada-test.log");
 
 describe("BrowserSecurity", () => {
   describe("DEFAULT_SECURITY_CONFIG", () => {

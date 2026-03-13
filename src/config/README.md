@@ -38,7 +38,7 @@ The `Config` type groups settings into nested sub-configs:
 | `dashboard` | `DashboardConfig` | `DASHBOARD_ENABLED`, `DASHBOARD_PORT` (default 3100) |
 | `websocketDashboard` | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100) |
 | `prometheus` | `PrometheusConfig` | `ENABLE_PROMETHEUS`, `PROMETHEUS_PORT` (default 9090) |
-| `memory` | `MemoryConfig` | `MEMORY_ENABLED` (default true), `MEMORY_DB_PATH` (default `.strata-memory`) |
+| `memory` | `MemoryConfig` | `MEMORY_ENABLED` (default true), `MEMORY_DB_PATH` (default `.strada-memory`) |
 | `rag` | `RAGConfig` | `RAG_ENABLED` (default true), `EMBEDDING_PROVIDER` (default `openai`), `RAG_CONTEXT_MAX_TOKENS` (default 4000, range 500..16000) |
 | `rateLimit` | `RateLimitConfig` | `RATE_LIMIT_ENABLED`, `RATE_LIMIT_MESSAGES_PER_MINUTE`, `RATE_LIMIT_DAILY_BUDGET_USD`, etc. |
 | `web` | Web config | `WEB_CHANNEL_PORT` (default 3000) |
@@ -46,7 +46,7 @@ The `Config` type groups settings into nested sub-configs:
 - `PROVIDER_CHAIN` - comma-separated provider names for fallback ordering
 - `PLUGIN_DIRS` - comma-separated directory paths for plugin loading
 - `LOG_LEVEL` - one of `error`, `warn`, `info`, `debug` (default `info`)
-- `LOG_FILE` - default `strata-brain.log`
+- `LOG_FILE` - default `strada-brain.log`
 
 ### Validation Helpers
 

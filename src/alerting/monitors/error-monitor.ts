@@ -1,5 +1,5 @@
 /**
- * Error Monitor for Strata.Brain
+ * Error Monitor for Strada.Brain
  * Tracks error rates and triggers alerts when thresholds are exceeded
  */
 

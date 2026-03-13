@@ -1,5 +1,5 @@
 /**
- * Hardened Authentication Module for Strata.Brain
+ * Hardened Authentication Module for Strada.Brain
  *
  * Provides:
  * - Multi-factor authentication (MFA)
@@ -147,8 +147,8 @@ const DEFAULT_CONFIG: AuthConfig = {
   sessionTimeout: 30 * 60 * 1000, // 30 minutes
   maxLoginAttempts: 5,
   lockoutDuration: 30 * 60 * 1000, // 30 minutes
-  issuer: "strata-brain",
-  audience: "strata-brain-api",
+  issuer: "strada-brain",
+  audience: "strada-brain-api",
   requireMfa: process.env["REQUIRE_MFA"] === "true",
   passwordMinLength: 12,
 };

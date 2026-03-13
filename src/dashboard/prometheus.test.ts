@@ -62,15 +62,15 @@ describe("PrometheusMetrics", () => {
     const metricsText = await response.text();
     
     // Check for custom metrics
-    expect(metricsText).toContain("strata_messages_total");
-    expect(metricsText).toContain("strata_tool_calls_total");
-    expect(metricsText).toContain("strata_tokens_total");
-    expect(metricsText).toContain("strata_active_sessions");
-    expect(metricsText).toContain("strata_memory_usage_bytes");
-    expect(metricsText).toContain("strata_plugins_loaded");
-    expect(metricsText).toContain("strata_request_duration_seconds");
-    expect(metricsText).toContain("strata_tool_duration_seconds");
-    expect(metricsText).toContain("strata_llm_latency_seconds");
+    expect(metricsText).toContain("strada_messages_total");
+    expect(metricsText).toContain("strada_tool_calls_total");
+    expect(metricsText).toContain("strada_tokens_total");
+    expect(metricsText).toContain("strada_active_sessions");
+    expect(metricsText).toContain("strada_memory_usage_bytes");
+    expect(metricsText).toContain("strada_plugins_loaded");
+    expect(metricsText).toContain("strada_request_duration_seconds");
+    expect(metricsText).toContain("strada_tool_duration_seconds");
+    expect(metricsText).toContain("strada_llm_latency_seconds");
     
     // Check for default Node.js metrics
     expect(metricsText).toContain("process_cpu_seconds_total");
@@ -86,8 +86,8 @@ describe("PrometheusMetrics", () => {
 
     const metricsText = await prometheus.getMetrics();
     
-    expect(metricsText).toContain('strata_messages_total{status="success"} 2');
-    expect(metricsText).toContain('strata_messages_total{status="error"} 1');
+    expect(metricsText).toContain('strada_messages_total{status="success"} 2');
+    expect(metricsText).toContain('strada_messages_total{status="error"} 1');
   });
 
   it("should record tool call metrics", async () => {
@@ -99,9 +99,9 @@ describe("PrometheusMetrics", () => {
 
     const metricsText = await prometheus.getMetrics();
     
-    expect(metricsText).toContain('strata_tool_calls_total{tool="file_read",status="success"} 2');
-    expect(metricsText).toContain('strata_tool_calls_total{tool="file_write",status="error"} 1');
-    expect(metricsText).toContain('strata_tool_errors_total{tool="file_write"} 1');
+    expect(metricsText).toContain('strada_tool_calls_total{tool="file_read",status="success"} 2');
+    expect(metricsText).toContain('strada_tool_calls_total{tool="file_write",status="error"} 1');
+    expect(metricsText).toContain('strada_tool_errors_total{tool="file_write"} 1');
   });
 
   it("should record token usage", async () => {
@@ -112,9 +112,9 @@ describe("PrometheusMetrics", () => {
 
     const metricsText = await prometheus.getMetrics();
     
-    expect(metricsText).toContain('strata_tokens_total{type="input"} 300');
-    expect(metricsText).toContain('strata_tokens_total{type="output"} 150');
-    expect(metricsText).toContain('strata_tokens_total{type="total"} 450');
+    expect(metricsText).toContain('strada_tokens_total{type="input"} 300');
+    expect(metricsText).toContain('strada_tokens_total{type="output"} 150');
+    expect(metricsText).toContain('strada_tokens_total{type="total"} 450');
   });
 
   it("should record LLM latency", async () => {
@@ -126,10 +126,10 @@ describe("PrometheusMetrics", () => {
 
     const metricsText = await prometheus.getMetrics();
     
-    expect(metricsText).toContain('strata_llm_latency_seconds_bucket');
+    expect(metricsText).toContain('strada_llm_latency_seconds_bucket');
     expect(metricsText).toContain('provider="claude",model="claude-3-opus"');
     expect(metricsText).toContain('provider="openai",model="gpt-4"');
-    expect(metricsText).toContain('strata_llm_latency_seconds_count');
+    expect(metricsText).toContain('strada_llm_latency_seconds_count');
   });
 
   it("should record message duration", async () => {
@@ -141,10 +141,10 @@ describe("PrometheusMetrics", () => {
 
     const metricsText = await prometheus.getMetrics();
     
-    expect(metricsText).toContain('strata_message_duration_seconds_bucket');
+    expect(metricsText).toContain('strada_message_duration_seconds_bucket');
     expect(metricsText).toContain('status="success"');
     expect(metricsText).toContain('status="error"');
-    expect(metricsText).toContain('strata_message_duration_seconds_count');
+    expect(metricsText).toContain('strada_message_duration_seconds_count');
   });
 
   it("should record request duration", async () => {
@@ -155,7 +155,7 @@ describe("PrometheusMetrics", () => {
 
     const metricsText = await prometheus.getMetrics();
     
-    expect(metricsText).toContain('strata_request_duration_seconds_bucket');
+    expect(metricsText).toContain('strada_request_duration_seconds_bucket');
     expect(metricsText).toContain('method="GET"');
     expect(metricsText).toContain('method="POST"');
   });
@@ -165,9 +165,9 @@ describe("PrometheusMetrics", () => {
 
     const metricsText = await prometheus.getMetrics();
     
-    expect(metricsText).toContain("strata_active_sessions");
-    expect(metricsText).toContain("strata_plugins_loaded 5");
-    expect(metricsText).toContain('strata_memory_usage_bytes{type="rss"}');
+    expect(metricsText).toContain("strada_active_sessions");
+    expect(metricsText).toContain("strada_plugins_loaded 5");
+    expect(metricsText).toContain('strada_memory_usage_bytes{type="rss"}');
   });
 
   it("should serve HTML info page on root endpoint", async () => {
@@ -179,9 +179,9 @@ describe("PrometheusMetrics", () => {
     expect(response.headers.get("content-type")).toContain("text/html");
     
     const html = await response.text();
-    expect(html).toContain("Strata Brain Prometheus Metrics");
+    expect(html).toContain("Strada Brain Prometheus Metrics");
     expect(html).toContain("/metrics");
-    expect(html).toContain("strata_messages_total");
+    expect(html).toContain("strada_messages_total");
   });
 
   it("should return 404 for unknown endpoints", async () => {
@@ -198,11 +198,11 @@ describe("PrometheusMetrics", () => {
     prometheus.recordMessage("success");
     
     let metricsText = await prometheus.getMetrics();
-    expect(metricsText).toContain('strata_messages_total{status="success"} 1');
+    expect(metricsText).toContain('strada_messages_total{status="success"} 1');
 
     prometheus.resetMetrics();
     
     metricsText = await prometheus.getMetrics();
-    expect(metricsText).not.toContain('strata_messages_total{status="success"} 1');
+    expect(metricsText).not.toContain('strada_messages_total{status="success"} 1');
   });
 });

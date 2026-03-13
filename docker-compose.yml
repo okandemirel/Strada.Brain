@@ -1,11 +1,11 @@
 # =============================================================================
-# Strata.Brain - Production Docker Compose Configuration
+# Strada.Brain - Production Docker Compose Configuration
 # =============================================================================
 # Usage:
 #   docker compose up -d                    # Start all services
 #   docker compose -f docker-compose.yml up -d  # Production mode
 #   docker compose down                     # Stop all services
-#   docker compose logs -f strata-brain     # View logs
+#   docker compose logs -f strada-brain     # View logs
 #
 # Environment Variables (create .env file):
 #   ANTHROPIC_API_KEY=sk-ant-...
@@ -18,16 +18,16 @@ version: "3.8"
 
 services:
   # ===========================================================================
-  # Main Application - Strata.Brain
+  # Main Application - Strada.Brain
   # ===========================================================================
-  strata-brain:
+  strada-brain:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         - NODE_ENV=production
-    container_name: strata-brain
-    hostname: strata-brain
+    container_name: strada-brain
+    hostname: strada-brain
     environment:
       # Core
       - NODE_ENV=production
@@ -66,11 +66,11 @@ services:
       
       # Memory
       - MEMORY_ENABLED=${MEMORY_ENABLED:-true}
-      - MEMORY_DB_PATH=/app/.strata-memory
+      - MEMORY_DB_PATH=/app/.strada-memory
       
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - LOG_FILE=/app/logs/strata-brain.log
+      - LOG_FILE=/app/logs/strada-brain.log
       
       # Redis (optional - for distributed rate limiting)
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -87,12 +87,12 @@ services:
       
       # Persistent memory storage
       - type: volume
-        source: strata-memory
-        target: /app/.strata-memory
+        source: strada-memory
+        target: /app/.strada-memory
       
       # Log files
       - type: volume
-        source: strata-logs
+        source: strada-logs
         target: /app/logs
       
       # Optional: Custom plugins
@@ -146,7 +146,7 @@ services:
     
     # Networking
     networks:
-      - strata-network
+      - strada-network
     
     # Dependencies
     depends_on:
@@ -162,7 +162,7 @@ services:
   # ===========================================================================
   redis:
     image: redis:7.4-alpine
-    container_name: strata-redis
+    container_name: strada-redis
     hostname: redis
     restart: unless-stopped
     
@@ -212,7 +212,7 @@ services:
       - SETUID
     
     networks:
-      - strata-network
+      - strada-network
     
     # No external exposure
     expose:
@@ -223,7 +223,7 @@ services:
   # ===========================================================================
   nginx:
     image: nginx:1.27-alpine
-    container_name: strata-nginx
+    container_name: strada-nginx
     hostname: nginx
     restart: unless-stopped
     
@@ -292,10 +292,10 @@ services:
       - SETUID
     
     networks:
-      - strata-network
+      - strada-network
     
     depends_on:
-      strata-brain:
+      strada-brain:
         condition: service_healthy
 
   # ===========================================================================
@@ -303,7 +303,7 @@ services:
   # ===========================================================================
   prometheus:
     image: prom/prometheus:v3.0.0
-    container_name: strata-prometheus
+    container_name: strada-prometheus
     hostname: prometheus
     restart: unless-stopped
     profiles:
@@ -331,17 +331,17 @@ services:
       - "${PROMETHEUS_PORT:-9091}:9090"
     
     networks:
-      - strata-network
+      - strada-network
     
     depends_on:
-      - strata-brain
+      - strada-brain
 
   # ===========================================================================
   # Grafana - Visualization (Optional)
   # ===========================================================================
   grafana:
     image: grafana/grafana:11.3.0
-    container_name: strata-grafana
+    container_name: strada-grafana
     hostname: grafana
     restart: unless-stopped
     profiles:
@@ -359,7 +359,7 @@ services:
         target: /var/lib/grafana
       - type: bind
         source: ./grafana-dashboard.json
-        target: /etc/grafana/provisioning/dashboards/strata-dashboard.json
+        target: /etc/grafana/provisioning/dashboards/strada-dashboard.json
         read_only: true
       - type: bind
         source: ./monitoring/grafana-datasource.yml
@@ -370,7 +370,7 @@ services:
       - "${GRAFANA_PORT:-3000}:3000"
     
     networks:
-      - strata-network
+      - strada-network
     
     depends_on:
       - prometheus
@@ -379,9 +379,9 @@ services:
 # Volumes
 # =============================================================================
 volumes:
-  strata-memory:
+  strada-memory:
     driver: local
-  strata-logs:
+  strada-logs:
     driver: local
   redis-data:
     driver: local
@@ -398,7 +398,7 @@ volumes:
 # Networks
 # =============================================================================
 networks:
-  strata-network:
+  strada-network:
     driver: bridge
     ipam:
       config:

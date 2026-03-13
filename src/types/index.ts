@@ -1,5 +1,5 @@
 /**
- * Core Type Definitions for Strata.Brain
+ * Core Type Definitions for Strada.Brain
  * 
  * Provides type-safe foundations:
  * - Brand types for type-safe IDs

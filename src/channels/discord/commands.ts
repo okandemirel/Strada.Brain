@@ -1,7 +1,7 @@
 /**
  * Discord Slash Command Definitions
  * 
- * This module defines all slash commands for the Strata Brain Discord bot
+ * This module defines all slash commands for the Strada Brain Discord bot
  * and provides a registration helper.
  */
 
@@ -23,12 +23,12 @@ export interface SlashCommand {
 }
 
 /**
- * /ask command - Ask Strata Brain a question
+ * /ask command - Ask Strada Brain a question
  */
 export const askCommand: SlashCommand = {
   data: new SlashCommandBuilder()
     .setName("ask")
-    .setDescription("Ask Strata Brain a question about your Unity project")
+    .setDescription("Ask Strada Brain a question about your Unity project")
     .addStringOption((option) =>
       option
         .setName("question")
@@ -54,7 +54,7 @@ export const askCommand: SlashCommand = {
 export const analyzeCommand: SlashCommand = {
   data: new SlashCommandBuilder()
     .setName("analyze")
-    .setDescription("Analyze your Unity/Strata.Core project structure")
+    .setDescription("Analyze your Unity/Strada.Core project structure")
     .addStringOption((option) =>
       option
         .setName("scope")
@@ -75,7 +75,7 @@ export const analyzeCommand: SlashCommand = {
 };
 
 /**
- * /generate command - Generate Strata code
+ * /generate command - Generate Strada code
  */
 export const generateCommand: SlashCommand = {
   data: new SlashCommandBuilder()
@@ -126,7 +126,7 @@ export const generateCommand: SlashCommand = {
 export const statusCommand: SlashCommand = {
   data: new SlashCommandBuilder()
     .setName("status")
-    .setDescription("Show Strata Brain system status and health"),
+    .setDescription("Show Strada Brain system status and health"),
   execute: async (_interaction) => {
     // Handled in DiscordChannel
     throw new Error("status command should be handled by DiscordChannel");
@@ -139,7 +139,7 @@ export const statusCommand: SlashCommand = {
 export const helpCommand: SlashCommand = {
   data: new SlashCommandBuilder()
     .setName("help")
-    .setDescription("Show help information about Strata Brain"),
+    .setDescription("Show help information about Strada Brain"),
   execute: async (_interaction) => {
     // Handled in DiscordChannel
     throw new Error("help command should be handled by DiscordChannel");
@@ -212,7 +212,7 @@ export const threadCommand: SlashCommand = {
 export const reloadCommand: SlashCommand = {
   data: new SlashCommandBuilder()
     .setName("reload")
-    .setDescription("Reload Strata Brain configuration (Admin only)")
+    .setDescription("Reload Strada Brain configuration (Admin only)")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   execute: async (_interaction) => {
     // Handled in DiscordChannel

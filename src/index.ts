@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Strata Brain - AI-powered Unity development assistant
+ * Strada Brain - AI-powered Unity development assistant
  *
  * Entry point for the application.
  * All initialization logic has been moved to bootstrap.ts
@@ -22,7 +22,7 @@ import { registerDaemonCommands } from "./daemon/daemon-cli.js";
 // Setup global error handlers
 setupGlobalErrorHandlers(
   (error) => {
-    const logger = createLogger("error", "strata-brain-error.log");
+    const logger = createLogger("error", "strada-brain-error.log");
     logger.error("Fatal error", { error: error.message, stack: error.stack });
   },
   () => {
@@ -34,13 +34,13 @@ setupGlobalErrorHandlers(
 const program = new Command();
 
 program
-  .name("strata-brain")
+  .name("strada-brain")
   .description("AI-powered Unity development assistant for Strada.Core projects")
   .version("0.1.0");
 
 program
   .command("start")
-  .description("Start Strata Brain")
+  .description("Start Strada Brain")
   .option(
     "--channel <type>",
     `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
@@ -53,14 +53,14 @@ program
 
 program
   .command("cli")
-  .description("Start Strata Brain in CLI mode (for local testing)")
+  .description("Start Strada Brain in CLI mode (for local testing)")
   .action(async () => {
     await startApp("cli");
   });
 
 program
   .command("supervise")
-  .description("Run Strata Brain as an always-on supervisor with auto-restart")
+  .description("Run Strada Brain as an always-on supervisor with auto-restart")
   .option(
     "--channel <type>",
     `Channel to use: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
@@ -69,7 +69,7 @@ program
   .action(async (opts: { channel: string }) => {
     const config = loadConfig();
     const logger = createLogger(config.logLevel, config.logFile);
-    logger.info("Starting Strata Brain in supervisor mode");
+    logger.info("Starting Strada Brain in supervisor mode");
 
     const daemon = new Daemon({
       args: ["start", "--channel", opts.channel],

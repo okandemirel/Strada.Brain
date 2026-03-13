@@ -242,7 +242,7 @@ export class NotificationRouter {
         level: "medium",
         title: `Trigger failed: ${e.triggerName}`,
         message: `Trigger '${e.triggerName}' failed: ${e.error}`,
-        actionHint: `Run: strata daemon reset ${e.triggerName}`,
+        actionHint: `Run: strada daemon reset ${e.triggerName}`,
         sourceEvent: "daemon:trigger_failed",
         timestamp: e.timestamp,
       });
@@ -253,7 +253,7 @@ export class NotificationRouter {
         level: "medium",
         title: `Budget at ${Math.round(e.pct * 100)}%`,
         message: `Budget usage: $${e.usedUsd.toFixed(2)} / $${e.limitUsd.toFixed(2)}`,
-        actionHint: "Run: strata daemon budget reset",
+        actionHint: "Run: strada daemon budget reset",
         sourceEvent: "daemon:budget_warning",
         timestamp: e.timestamp,
       });
@@ -264,7 +264,7 @@ export class NotificationRouter {
         level: "high",
         title: "Budget exceeded",
         message: `Budget exhausted: $${e.usedUsd.toFixed(2)} / $${e.limitUsd.toFixed(2)}`,
-        actionHint: "Run: strata daemon budget reset",
+        actionHint: "Run: strada daemon budget reset",
         sourceEvent: "daemon:budget_exceeded",
         timestamp: e.timestamp,
       });
@@ -275,7 +275,7 @@ export class NotificationRouter {
         level: "medium",
         title: `Approval needed: ${e.toolName}`,
         message: `Write operation '${e.toolName}' requires approval (ID: ${e.approvalId})`,
-        actionHint: `Run: strata daemon approve ${e.approvalId}`,
+        actionHint: `Run: strada daemon approve ${e.approvalId}`,
         sourceEvent: "daemon:approval_requested",
         timestamp: e.timestamp,
       });

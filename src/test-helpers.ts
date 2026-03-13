@@ -95,7 +95,7 @@ export function createToolContext(overrides?: Partial<ToolContext>): ToolContext
  * Run a test function with a temporary directory, cleaning up after.
  */
 export async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "strata-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "strada-test-"));
   try {
     await fn(dir);
   } finally {
@@ -109,7 +109,7 @@ export async function withTempDir(fn: (dir: string) => Promise<void>): Promise<v
 export function makeIdentityState(overrides?: Partial<IdentityState>): IdentityState {
   return {
     agentUuid: "550e8400-e29b-41d4-a716-446655440000",
-    agentName: "Strata Brain",
+    agentName: "Strada Brain",
     firstBootTs: 1709856000000,
     bootCount: 5,
     cumulativeUptimeMs: 5580000,

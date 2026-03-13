@@ -1,5 +1,5 @@
 /**
- * Dependency Security for Strata.Brain
+ * Dependency Security for Strada.Brain
  * 
  * Provides:
  * - npm audit integration

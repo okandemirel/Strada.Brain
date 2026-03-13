@@ -5,7 +5,7 @@ import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.
 import { STRADA_API } from "../../context/strada-api-reference.js";
 
 export class ModuleCreateTool implements ITool {
-  readonly name = "strata_create_module";
+  readonly name = "strada_create_module";
   readonly description =
     "Create a new Strada.Core module with all necessary files following Strada conventions. " +
     "Generates: ModuleConfig, asmdef, folder structure (Systems/, Services/, Components/, Mediators/).";
@@ -20,7 +20,7 @@ export class ModuleCreateTool implements ITool {
       path: {
         type: "string",
         description:
-          "Relative path for the module folder. Default: 'Assets/Modules/<name>'",
+          "Relative path for the module folder. Default: 'Assets/Modules/<name>Module'",
       },
       namespace: {
         type: "string",
@@ -34,6 +34,22 @@ export class ModuleCreateTool implements ITool {
       include_service: {
         type: "boolean",
         description: "Include a starter service interface + implementation. Default: true",
+      },
+      include_controller: {
+        type: "boolean",
+        description: "Include a starter controller. Default: false",
+      },
+      include_events: {
+        type: "boolean",
+        description: "Include an Events/ folder. Default: false",
+      },
+      include_signals: {
+        type: "boolean",
+        description: "Include a Signals/ folder. Default: false",
+      },
+      include_tests: {
+        type: "boolean",
+        description: "Include a Tests/ folder. Default: false",
       },
     },
     required: ["name"],
@@ -51,7 +67,7 @@ export class ModuleCreateTool implements ITool {
     }
 
     const name = String(input["name"] ?? "");
-    const modulePath = String(input["path"] ?? `Assets/Modules/${name}`);
+    const modulePath = String(input["path"] ?? `Assets/Modules/${name}Module`);
     const namespace = String(input["namespace"] ?? `Game.Modules.${name}`);
     const includeSystem = input["include_system"] !== false;
     const includeService = input["include_service"] !== false;
@@ -82,11 +98,24 @@ export class ModuleCreateTool implements ITool {
       // Create directory structure
       const dirs = [
         fullBase,
-        join(fullBase, "Systems"),
-        join(fullBase, "Services"),
-        join(fullBase, "Components"),
-        join(fullBase, "Mediators"),
+        join(fullBase, "Scripts"),
+        join(fullBase, "Scripts", "Systems"),
+        join(fullBase, "Scripts", "Services"),
+        join(fullBase, "Scripts", "Components"),
+        join(fullBase, "Scripts", "Mediators"),
       ];
+
+      // Conditional directories
+      const includeController = input["include_controller"] === true;
+      const includeEvents = input["include_events"] === true;
+      const includeSignals = input["include_signals"] === true;
+      const includeTests = input["include_tests"] === true;
+
+      if (includeController) dirs.push(join(fullBase, "Scripts", "Controllers"));
+      if (includeEvents) dirs.push(join(fullBase, "Scripts", "Events"));
+      if (includeSignals) dirs.push(join(fullBase, "Scripts", "Signals"));
+      if (includeTests) dirs.push(join(fullBase, "Tests"));
+
       for (const dir of dirs) {
         await mkdir(dir, { recursive: true });
       }
@@ -100,7 +129,7 @@ export class ModuleCreateTool implements ITool {
             name: `Game.Modules.${name}`,
             rootNamespace: namespace,
             references: [
-              "com.strada.core",
+              "Strada.Core",
               "Unity.Entities",
               "Unity.Mathematics",
               "Unity.Collections",
@@ -119,27 +148,27 @@ export class ModuleCreateTool implements ITool {
       createdFiles.push(`${modulePath}/${name}.asmdef`);
 
       // 2. ModuleConfig
-      const moduleConfigPath = join(fullBase, `${name}ModuleConfig.cs`);
+      const moduleConfigPath = join(fullBase, "Scripts", `${name}ModuleConfig.cs`);
       await writeFile(moduleConfigPath, generateModuleConfig(name, namespace, includeService), "utf-8");
-      createdFiles.push(`${modulePath}/${name}ModuleConfig.cs`);
+      createdFiles.push(`${modulePath}/Scripts/${name}ModuleConfig.cs`);
 
       // 3. Optional System
       if (includeSystem) {
-        const systemPath = join(fullBase, "Systems", `${name}System.cs`);
+        const systemPath = join(fullBase, "Scripts", "Systems", `${name}System.cs`);
         await writeFile(systemPath, generateSystem(name, namespace), "utf-8");
-        createdFiles.push(`${modulePath}/Systems/${name}System.cs`);
+        createdFiles.push(`${modulePath}/Scripts/Systems/${name}System.cs`);
       }
 
       // 4. Optional Service
       if (includeService) {
-        const interfacePath = join(fullBase, "Services", `I${name}Service.cs`);
-        const implPath = join(fullBase, "Services", `${name}Service.cs`);
+        const interfacePath = join(fullBase, "Scripts", "Services", `I${name}Service.cs`);
+        const implPath = join(fullBase, "Scripts", "Services", `${name}Service.cs`);
 
         await writeFile(interfacePath, generateServiceInterface(name, namespace), "utf-8");
         await writeFile(implPath, generateServiceImpl(name, namespace), "utf-8");
 
-        createdFiles.push(`${modulePath}/Services/I${name}Service.cs`);
-        createdFiles.push(`${modulePath}/Services/${name}Service.cs`);
+        createdFiles.push(`${modulePath}/Scripts/Services/I${name}Service.cs`);
+        createdFiles.push(`${modulePath}/Scripts/Services/${name}Service.cs`);
       }
 
       const result = [
@@ -151,23 +180,24 @@ export class ModuleCreateTool implements ITool {
         "Folder structure:",
         `  ${modulePath}/`,
         `  ├── ${name}.asmdef`,
-        `  ├── ${name}ModuleConfig.cs`,
-        `  ├── Systems/`,
-        includeSystem ? `  │   └── ${name}System.cs` : `  │   └── (empty)`,
-        `  ├── Services/`,
+        `  └── Scripts/`,
+        `      ├── ${name}ModuleConfig.cs`,
+        `      ├── Systems/`,
+        includeSystem ? `      │   └── ${name}System.cs` : `      │   └── (empty)`,
+        `      ├── Services/`,
         includeService
-          ? `  │   ├── I${name}Service.cs\n  │   └── ${name}Service.cs`
-          : `  │   └── (empty)`,
-        `  ├── Components/`,
-        `  │   └── (empty)`,
-        `  └── Mediators/`,
-        `      └── (empty)`,
+          ? `      │   ├── I${name}Service.cs\n      │   └── ${name}Service.cs`
+          : `      │   └── (empty)`,
+        `      ├── Components/`,
+        `      │   └── (empty)`,
+        `      └── Mediators/`,
+        `          └── (empty)`,
         "",
         `Next steps:`,
         `  1. Create a ${name}ModuleConfig ScriptableObject asset in Unity`,
         `  2. Add it to GameBootstrapper's module list`,
-        `  3. Add components in Components/ folder`,
-        `  4. Implement system logic in ${name}System.cs`,
+        `  3. Add components in Scripts/Components/ folder`,
+        `  4. Implement system logic in Scripts/Systems/${name}System.cs`,
       ].join("\n");
 
       return { content: result, metadata: { createdFiles } };

@@ -5,7 +5,7 @@ import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.
 import { STRADA_API } from "../../context/strada-api-reference.js";
 
 export class SystemCreateTool implements ITool {
-  readonly name = "strata_create_system";
+  readonly name = "strada_create_system";
   readonly description =
     "Create a new ECS System for Strada.Core. Systems process entities with specific component queries. " +
     "Supports SystemBase (standard), JobSystemBase (Burst-compiled), and BurstSystemBase (SIMD-accelerated).";
@@ -38,11 +38,31 @@ export class SystemCreateTool implements ITool {
       inject_services: {
         type: "array",
         items: { type: "string" },
-        description: "Services to inject via [Inject] attribute (e.g., ['ICombatService', 'IConfigService'])",
+        description: "Services to inject via [Inject] attribute. Note: field injection in systems is non-standard; prefer constructor injection in services.",
       },
       system_order: {
         type: "number",
         description: "Execution order via [SystemOrder] attribute. Default: 0",
+      },
+      update_phase: {
+        type: "string",
+        enum: ["Initialization", "Update", "LateUpdate", "FixedUpdate"],
+        description: "Update phase for the system. Default: Update",
+      },
+      run_before: {
+        type: "array",
+        items: { type: "string" },
+        description: "Systems that should run after this one (e.g., ['RenderSystem'])",
+      },
+      run_after: {
+        type: "array",
+        items: { type: "string" },
+        description: "Systems that should run before this one (e.g., ['PhysicsSystem'])",
+      },
+      requires_system: {
+        type: "array",
+        items: { type: "string" },
+        description: "Systems this one depends on (e.g., ['InputSystem'])",
       },
     },
     required: ["name", "path", "namespace"],
@@ -59,13 +79,18 @@ export class SystemCreateTool implements ITool {
       };
     }
 
-    const name = String(input["name"] ?? "");
+    const rawName = String(input["name"] ?? "");
+    const name = rawName.endsWith("System") ? rawName : rawName + "System";
     const relPath = String(input["path"] ?? "");
     const namespace = String(input["namespace"] ?? "");
     const baseClass = String(input["base_class"] ?? "SystemBase");
     const queryComponents = (input["query_components"] as string[]) ?? [];
     const injectServices = (input["inject_services"] as string[]) ?? [];
     const systemOrder = typeof input["system_order"] === "number" ? input["system_order"] : 0;
+    const updatePhase = String(input["update_phase"] ?? "");
+    const runBefore = (input["run_before"] as string[]) ?? [];
+    const runAfter = (input["run_after"] as string[]) ?? [];
+    const requiresSystem = (input["requires_system"] as string[]) ?? [];
 
     if (!name || !relPath || !namespace) {
       return {
@@ -107,7 +132,7 @@ export class SystemCreateTool implements ITool {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
 
-    const code = generateSystemCode(name, namespace, baseClass, queryComponents, injectServices, systemOrder);
+    const code = generateSystemCode(name, namespace, baseClass, queryComponents, injectServices, systemOrder, updatePhase, runBefore, runAfter, requiresSystem);
 
     try {
       await mkdir(dirname(pathCheck.fullPath), { recursive: true });
@@ -141,7 +166,11 @@ function generateSystemCode(
   baseClass: string,
   queryComponents: string[],
   injectServices: string[],
-  systemOrder: number
+  systemOrder: number,
+  updatePhase: string,
+  runBefore: string[],
+  runAfter: string[],
+  requiresSystem: string[]
 ): string {
   const usings = [
     `using ${STRADA_API.namespaces.ecs};`,
@@ -185,11 +214,26 @@ function generateSystemCode(
             // });`;
   }
 
+  const attributes: string[] = [];
+  attributes.push(`[SystemOrder(${systemOrder})]`);
+  if (updatePhase) {
+    attributes.push(`[UpdatePhase(UpdatePhase.${updatePhase})]`);
+  }
+  for (const sys of runBefore) {
+    attributes.push(`[RunBefore(typeof(${sys}))]`);
+  }
+  for (const sys of runAfter) {
+    attributes.push(`[RunAfter(typeof(${sys}))]`);
+  }
+  for (const sys of requiresSystem) {
+    attributes.push(`[RequiresSystem(typeof(${sys}))]`);
+  }
+
   return `${usings.join("\n")}
 
 namespace ${namespace}
 {
-    [SystemOrder(${systemOrder})]
+${attributes.map(a => `    ${a}`).join("\n")}
     public class ${name} : ${baseClass}
     {
 ${fields ? fields + "\n" : ""}

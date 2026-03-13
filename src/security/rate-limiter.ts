@@ -1,5 +1,5 @@
 /**
- * Rate limiter and quota manager for Strata Brain.
+ * Rate limiter and quota manager for Strada Brain.
  *
  * Provides:
  * - Per-user message rate limiting (token bucket)

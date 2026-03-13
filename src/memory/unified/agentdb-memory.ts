@@ -21,7 +21,7 @@ import type {
 } from "./unified-memory.interface.js";
 import { MemoryTier, DEFAULT_MEMORY_CONFIG } from "./unified-memory.interface.js";
 import type { RetrievalOptions, RetrievalResult } from "../memory.interface.js";
-import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
+import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 import { getLogger } from "../../utils/logger.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import type { VectorEntry } from "../../rag/rag.interface.js";
@@ -132,7 +132,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   private hnswStore?: HNSWVectorStore;
   private readonly writeMutex = new HnswWriteMutex();
   private textIndex = new TextIndex();
-  private cachedAnalysis: { projectPath: string; analysis: StrataProjectAnalysis } | null = null;
+  private cachedAnalysis: { projectPath: string; analysis: StradaProjectAnalysis } | null = null;
   private migrationStatus: MigrationStatus;
   private isInitialized = false;
   private searchTimes: number[] = [];
@@ -390,7 +390,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   // ---------------------------------------------------------------------------
 
   async cacheAnalysis(
-    analysis: StrataProjectAnalysis,
+    analysis: StradaProjectAnalysis,
     projectPath: string,
   ): Promise<Result<void, Error>> {
     try {
@@ -427,7 +427,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   async getCachedAnalysis(
     projectPath: string,
     maxAgeMs: DurationMs = createBrand(24 * 60 * 60 * 1000, "DurationMs" as const),
-  ): Promise<StrataProjectAnalysis | null> {
+  ): Promise<StradaProjectAnalysis | null> {
     if (!this.cachedAnalysis) return null;
     if (this.cachedAnalysis.projectPath !== projectPath) return null;
 

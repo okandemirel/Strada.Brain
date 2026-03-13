@@ -1,5 +1,5 @@
 /**
- * File System Security for Strata.Brain
+ * File System Security for Strada.Brain
  * 
  * Provides:
  * - Chroot jail for shell execution

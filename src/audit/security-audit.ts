@@ -1,5 +1,5 @@
 /**
- * Security Audit & Monitoring for Strata.Brain
+ * Security Audit & Monitoring for Strada.Brain
  * 
  * Provides:
  * - Security event logging

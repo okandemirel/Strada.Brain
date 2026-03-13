@@ -1,5 +1,5 @@
 /**
- * Slack Channel Adapter for Strata Brain.
+ * Slack Channel Adapter for Strada Brain.
  * Implements IChannelAdapter using Slack Bolt framework.
  * Features: Message queue, rate limiting, retry logic, batch operations
  */
@@ -697,7 +697,7 @@ export class SlackChannel implements IChannelAdapter {
 
     if (this.config.allowedWorkspaces?.length && !this.config.allowedWorkspaces.includes(teamId)) {
       this.logger.warn("Unauthorized workspace", { teamId, userId });
-      await say("❌ This workspace is not authorized to use Strata Brain.");
+      await say("❌ This workspace is not authorized to use Strada Brain.");
       return;
     }
 
@@ -706,7 +706,7 @@ export class SlackChannel implements IChannelAdapter {
       (!userId || !this.config.allowedUserIds.includes(userId))
     ) {
       this.logger.warn("Unauthorized user", { userId, teamId });
-      await say("❌ You are not authorized to use Strata Brain.");
+      await say("❌ You are not authorized to use Strada Brain.");
       return;
     }
 

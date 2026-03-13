@@ -1,5 +1,5 @@
 /**
- * Backup Scheduler for Strata.Brain
+ * Backup Scheduler for Strada.Brain
  * Native Node.js backup scheduling with cron-like functionality
  */
 
@@ -160,7 +160,7 @@ export class BackupScheduler {
     
     constructor(config: Partial<BackupConfig> = {}) {
         this.config = {
-            backupDir: config.backupDir || '/backups/strata-brain',
+            backupDir: config.backupDir || '/backups/strada-brain',
             retentionDays: config.retentionDays || 30,
             verifyBackups: config.verifyBackups !== false,
             compressBackups: config.compressBackups !== false,

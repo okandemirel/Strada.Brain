@@ -4,7 +4,7 @@ import { validatePath, isValidCSharpIdentifier, isValidCSharpType } from "../../
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 
 export class MediatorCreateTool implements ITool {
-  readonly name = "strata_create_mediator";
+  readonly name = "strada_create_mediator";
   readonly description =
     "Create a new EntityMediator that bridges ECS components to Unity Views. " +
     "Mediators sync ECS data to MonoBehaviour views using ComponentBindings.";
@@ -57,7 +57,8 @@ export class MediatorCreateTool implements ITool {
       };
     }
 
-    const name = String(input["name"] ?? "");
+    const rawName = String(input["name"] ?? "");
+    const name = rawName.endsWith("Mediator") ? rawName : rawName + "Mediator";
     const viewType = String(input["view_type"] ?? "");
     const relPath = String(input["path"] ?? "");
     const namespace = String(input["namespace"] ?? "");
@@ -122,7 +123,7 @@ namespace ${namespace}
     {
         protected override void OnBind()
         {
-${bindingLines || "            // TODO: Add component bindings\n            // Example:\n            // Bind<Health, float>(c => c.Current, value => View.UpdateHealthBar(value));"}
+${bindingLines || "            // Add component bindings here"}
         }
 
         protected override void OnUnbind()
@@ -130,10 +131,6 @@ ${bindingLines || "            // TODO: Add component bindings\n            // E
             // Cleanup if needed
         }
 
-        protected override void OnUpdate(float deltaTime)
-        {
-            // Optional per-frame logic
-        }
     }
 }
 `;

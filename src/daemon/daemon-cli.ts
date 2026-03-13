@@ -2,16 +2,16 @@
  * Daemon CLI Commands
  *
  * Commander subcommands for daemon management:
- *   strata daemon status  -- Show heartbeat state, triggers, budget, pending approvals
- *   strata daemon trigger -- Manually fire a named trigger
- *   strata daemon reset   -- Reset circuit breaker for a trigger to CLOSED
- *   strata daemon audit   -- Show recent approval/denial decisions
- *   strata daemon config  -- Show all daemon settings
- *   strata daemon budget  -- Budget management (reset)
- *   strata daemon digest  -- Send immediate digest (or --dry-run to preview)
- *   strata daemon notifications -- Show notification history
- *   strata daemon notify  -- Send a test notification
- *   strata daemon chain:status -- Show tool chain resilience status
+ *   strada daemon status  -- Show heartbeat state, triggers, budget, pending approvals
+ *   strada daemon trigger -- Manually fire a named trigger
+ *   strada daemon reset   -- Reset circuit breaker for a trigger to CLOSED
+ *   strada daemon audit   -- Show recent approval/denial decisions
+ *   strada daemon config  -- Show all daemon settings
+ *   strada daemon budget  -- Budget management (reset)
+ *   strada daemon digest  -- Send immediate digest (or --dry-run to preview)
+ *   strada daemon notifications -- Show notification history
+ *   strada daemon notify  -- Send a test notification
+ *   strada daemon chain:status -- Show tool chain resilience status
  *
  * Uses callback-based DI: getDaemonContext() returns the running daemon's
  * context or undefined if daemon is not running.
@@ -300,17 +300,17 @@ export function registerDaemonCommands(
       console.log("-".repeat(95));
 
       const rows: Array<[string, string, string]> = [
-        ["heartbeat.intervalMs", String(c.heartbeat.intervalMs), "STRATA_DAEMON_INTERVAL_MS"],
-        ["heartbeat.heartbeatFile", c.heartbeat.heartbeatFile, "STRATA_DAEMON_HEARTBEAT_FILE"],
-        ["heartbeat.idlePause", String(c.heartbeat.idlePause), "STRATA_DAEMON_IDLE_PAUSE"],
-        ["security.approvalTimeoutMin", String(c.security.approvalTimeoutMin), "STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
-        ["security.autoApproveTools", c.security.autoApproveTools.join(", ") || "(none)", "STRATA_DAEMON_AUTO_APPROVE_TOOLS"],
-        ["budget.dailyBudgetUsd", c.budget.dailyBudgetUsd !== undefined ? String(c.budget.dailyBudgetUsd) : "unlimited", "STRATA_DAEMON_DAILY_BUDGET"],
-        ["budget.warnPct", String(c.budget.warnPct), "STRATA_DAEMON_BUDGET_WARN_PCT"],
-        ["backoff.baseCooldownMs", String(c.backoff.baseCooldownMs), "STRATA_DAEMON_BACKOFF_BASE"],
-        ["backoff.maxCooldownMs", String(c.backoff.maxCooldownMs), "STRATA_DAEMON_BACKOFF_MAX"],
-        ["backoff.failureThreshold", String(c.backoff.failureThreshold), "STRATA_DAEMON_FAILURE_THRESHOLD"],
-        ["timezone", c.timezone, "STRATA_DAEMON_TIMEZONE"],
+        ["heartbeat.intervalMs", String(c.heartbeat.intervalMs), "STRADA_DAEMON_INTERVAL_MS"],
+        ["heartbeat.heartbeatFile", c.heartbeat.heartbeatFile, "STRADA_DAEMON_HEARTBEAT_FILE"],
+        ["heartbeat.idlePause", String(c.heartbeat.idlePause), "STRADA_DAEMON_IDLE_PAUSE"],
+        ["security.approvalTimeoutMin", String(c.security.approvalTimeoutMin), "STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
+        ["security.autoApproveTools", c.security.autoApproveTools.join(", ") || "(none)", "STRADA_DAEMON_AUTO_APPROVE_TOOLS"],
+        ["budget.dailyBudgetUsd", c.budget.dailyBudgetUsd !== undefined ? String(c.budget.dailyBudgetUsd) : "unlimited", "STRADA_DAEMON_DAILY_BUDGET"],
+        ["budget.warnPct", String(c.budget.warnPct), "STRADA_DAEMON_BUDGET_WARN_PCT"],
+        ["backoff.baseCooldownMs", String(c.backoff.baseCooldownMs), "STRADA_DAEMON_BACKOFF_BASE"],
+        ["backoff.maxCooldownMs", String(c.backoff.maxCooldownMs), "STRADA_DAEMON_BACKOFF_MAX"],
+        ["backoff.failureThreshold", String(c.backoff.failureThreshold), "STRADA_DAEMON_FAILURE_THRESHOLD"],
+        ["timezone", c.timezone, "STRADA_DAEMON_TIMEZONE"],
       ];
 
       for (const [setting, value, envVar] of rows) {
@@ -475,7 +475,7 @@ export function registerDaemonCommands(
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strata daemon start");
+        console.error("Daemon is not running. Start with: strada daemon start");
         process.exitCode = 1;
         return;
       }
@@ -540,7 +540,7 @@ export function registerDaemonCommands(
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strata daemon start");
+        console.error("Daemon is not running. Start with: strada daemon start");
         process.exitCode = 1;
         return;
       }
@@ -1024,7 +1024,7 @@ export function registerDaemonCommands(
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strata daemon start");
+        console.error("Daemon is not running. Start with: strada daemon start");
         process.exitCode = 1;
         return;
       }
@@ -1075,7 +1075,7 @@ export function registerDaemonCommands(
     .action(async (opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strata daemon start");
+        console.error("Daemon is not running. Start with: strada daemon start");
         process.exitCode = 1;
         return;
       }
@@ -1128,7 +1128,7 @@ export function registerDaemonCommands(
     .action(async (opts: { force?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strata daemon start");
+        console.error("Daemon is not running. Start with: strada daemon start");
         process.exitCode = 1;
         return;
       }
@@ -1160,7 +1160,7 @@ export function registerDaemonCommands(
     .action((logId: string) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strata daemon start");
+        console.error("Daemon is not running. Start with: strada daemon start");
         process.exitCode = 1;
         return;
       }
@@ -1189,7 +1189,7 @@ export function registerDaemonCommands(
     .action((opts: { json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strata daemon start");
+        console.error("Daemon is not running. Start with: strada daemon start");
         process.exitCode = 1;
         return;
       }
@@ -1225,7 +1225,7 @@ export function registerDaemonCommands(
     .action((opts: { limit: string; json?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strata daemon start");
+        console.error("Daemon is not running. Start with: strada daemon start");
         process.exitCode = 1;
         return;
       }
@@ -1277,7 +1277,7 @@ export function registerDaemonCommands(
     .action(async (opts: { execute?: boolean; force?: boolean }) => {
       const ctx = getDaemonContext();
       if (!ctx) {
-        console.error("Daemon is not running. Start with: strata daemon start");
+        console.error("Daemon is not running. Start with: strada daemon start");
         process.exitCode = 1;
         return;
       }

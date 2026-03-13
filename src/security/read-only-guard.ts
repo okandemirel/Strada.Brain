@@ -26,10 +26,10 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "git_rebase",
   // Shell & Code generation
   "shell_exec",
-  "strata_create_module",
-  "strata_create_component",
-  "strata_create_mediator",
-  "strata_create_system",
+  "strada_create_module",
+  "strada_create_component",
+  "strada_create_mediator",
+  "strada_create_system",
   // .NET operations
   "dotnet_add_package",
   "dotnet_remove_package",
@@ -54,7 +54,7 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_list_packages",
   "analyze_project",
   "analyze_code_quality",
-  "strata_analyze_project",
+  "strada_analyze_project",
   "memory_search",
   "memory_recall",
   "rag_search",
@@ -71,13 +71,13 @@ const SUGGESTIONS: Record<string, string> = {
   git_branch: "Use 'git_status' to see current branch information.",
   git_stash: "Stashing is not available in read-only mode.",
   shell_exec: "Shell commands are disabled in read-only mode. Use built-in read tools instead.",
-  strata_create_module:
+  strada_create_module:
     "Code generation is disabled in read-only mode. Use analysis tools to explore existing modules.",
-  strata_create_component:
+  strada_create_component:
     "Code generation is disabled in read-only mode. Use analysis tools to explore existing components.",
-  strata_create_mediator:
+  strada_create_mediator:
     "Code generation is disabled in read-only mode. Use analysis tools to explore existing mediators.",
-  strata_create_system:
+  strada_create_system:
     "Code generation is disabled in read-only mode. Use analysis tools to explore existing systems.",
 };
 

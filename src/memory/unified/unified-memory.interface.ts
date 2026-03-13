@@ -15,7 +15,7 @@ import type {
   MemoryEntry,
 } from "../memory.interface.js";
 import type { MemoryId } from "../../types/index.js";
-import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
+import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 import type {
   Result,
   Option,
@@ -377,13 +377,13 @@ export interface IUnifiedMemory {
   // --- Project Analysis Cache ---
 
   /** Cache a project analysis result */
-  cacheAnalysis(analysis: StrataProjectAnalysis, projectPath: string): Promise<Result<void, Error>>;
+  cacheAnalysis(analysis: StradaProjectAnalysis, projectPath: string): Promise<Result<void, Error>>;
 
   /** Get cached analysis if still valid (not older than maxAgeMs) */
   getCachedAnalysis(
     projectPath: string,
     maxAgeMs?: DurationMs,
-  ): Promise<StrataProjectAnalysis | null>;
+  ): Promise<StradaProjectAnalysis | null>;
 
   // --- Conversation Memory ---
 

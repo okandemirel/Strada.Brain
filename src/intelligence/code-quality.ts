@@ -1,8 +1,8 @@
 /**
- * Code quality analyzer for C# / Strata.Core projects.
+ * Code quality analyzer for C# / Strada.Core projects.
  *
  * Detects anti-patterns, computes quality scores, and generates
- * refactoring suggestions — both for general C# and Strata-specific patterns.
+ * refactoring suggestions — both for general C# and Strada-specific patterns.
  */
 
 import { readFile } from "node:fs/promises";
@@ -32,7 +32,7 @@ export type IssueSeverity = "error" | "warning" | "info";
 
 export type IssueCategory =
   | "anti-pattern"
-  | "strata-specific"
+  | "strada-specific"
   | "complexity"
   | "naming"
   | "architecture";
@@ -146,7 +146,7 @@ export function analyzeFile(
   checkEmptyCatchBlocks(content, filePath, issues);
   checkMagicNumbers(content, filePath, issues);
   checkNamingConventions(ast, filePath, issues);
-  checkStrataAntiPatterns(ast, content, filePath, issues);
+  checkStradaAntiPatterns(ast, content, filePath, issues);
   checkArchitecturalIssues(ast, filePath, issues);
 
   // Compute metrics
@@ -482,7 +482,7 @@ function checkNamingConventions(
   }
 }
 
-function checkStrataAntiPatterns(
+function checkStradaAntiPatterns(
   ast: CSharpAST,
   content: string,
   filePath: string,
@@ -500,7 +500,7 @@ function checkStrataAntiPatterns(
           if (field.type.startsWith(rt)) {
             issues.push({
               severity: "error",
-              category: "strata-specific",
+              category: "strada-specific",
               rule: "component-reference-type",
               message: `ECS Component '${s.name}' has reference type field '${field.name}' (${field.type})`,
               filePath,
@@ -527,7 +527,7 @@ function checkStrataAntiPatterns(
       if (!hasQuery) {
         issues.push({
           severity: "info",
-          category: "strata-specific",
+          category: "strada-specific",
           rule: "system-no-query",
           message: `System '${cls.name}' has no EntityQuery — may not process any entities`,
           filePath,
@@ -550,7 +550,7 @@ function checkStrataAntiPatterns(
       if (systemCount > THRESHOLDS.moduleSystemLimit) {
         issues.push({
           severity: "warning",
-          category: "strata-specific",
+          category: "strada-specific",
           rule: "module-too-many-systems",
           message: `Module '${cls.name}' registers ${systemCount} systems (threshold: ${THRESHOLDS.moduleSystemLimit})`,
           filePath,
@@ -573,7 +573,7 @@ function checkStrataAntiPatterns(
     ) {
       issues.push({
         severity: "info",
-        category: "strata-specific",
+        category: "strada-specific",
         rule: "service-no-interface",
         message: `Service '${cls.name}' has no interface — cannot be mocked or substituted in DI`,
         filePath,

@@ -18,17 +18,17 @@ vi.mock("../../../utils/logger.js", () => ({
 describe("Slack Commands", () => {
   describe("parseCommand", () => {
     it("should parse command with arguments", () => {
-      const result = parseCommand("/strata-ask How do I create a component?");
+      const result = parseCommand("/strada-ask How do I create a component?");
       expect(result).toEqual({
-        type: "strata-ask",
+        type: "strada-ask",
         args: ["How", "do", "I", "create", "a", "component?"],
       });
     });
 
     it("should parse command without arguments", () => {
-      const result = parseCommand("/strata-help");
+      const result = parseCommand("/strada-help");
       expect(result).toEqual({
-        type: "strata-help",
+        type: "strada-help",
         args: [],
       });
     });

@@ -1,7 +1,7 @@
 /**
  * Code quality analysis tool.
  * Allows the AI to proactively check code quality, detect anti-patterns,
- * and suggest refactoring for C# / Strata.Core projects.
+ * and suggest refactoring for C# / Strada.Core projects.
  */
 
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
@@ -13,7 +13,7 @@ import { validatePath } from "../../security/path-guard.js";
 export class CodeQualityTool implements ITool {
   readonly name = "code_quality";
   readonly description =
-    "Analyze C# code quality: detect anti-patterns, Strata-specific issues, " +
+    "Analyze C# code quality: detect anti-patterns, Strada-specific issues, " +
     "compute quality scores, and suggest refactoring. " +
     "Use mode='file' for a single file or mode='project' for full project scan.";
   readonly inputSchema = {

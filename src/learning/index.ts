@@ -1,7 +1,7 @@
 /**
  * Learning Module
  * 
- * Experience Replay & Pattern Learning system for Strata.Brain.
+ * Experience Replay & Pattern Learning system for Strada.Brain.
  * 
  * This module provides:
  * - Instinct-based learning from errors and corrections

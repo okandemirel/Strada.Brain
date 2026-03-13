@@ -54,7 +54,7 @@ const K = {
 
 const DEFAULT_KEYS: Record<string, string> = {
   [K.uuid]: "",
-  [K.name]: "Strata Brain",
+  [K.name]: "Strada Brain",
   [K.firstBoot]: "0",
   [K.bootCount]: "0",
   [K.uptime]: "0",
@@ -86,7 +86,7 @@ export class IdentityStateManager {
     private readonly dbPath: string,
     agentName?: string,
   ) {
-    this.agentName = agentName ?? "Strata Brain";
+    this.agentName = agentName ?? "Strada Brain";
   }
 
   /**
@@ -219,7 +219,7 @@ export class IdentityStateManager {
   getState(): IdentityState {
     return {
       agentUuid: this.getCached(K.uuid) ?? "",
-      agentName: this.getCached(K.name) ?? "Strata Brain",
+      agentName: this.getCached(K.name) ?? "Strada Brain",
       firstBootTs: parseInt(this.getCached(K.firstBoot) ?? "0", 10),
       bootCount: parseInt(this.getCached(K.bootCount) ?? "0", 10),
       cumulativeUptimeMs: parseInt(this.getCached(K.uptime) ?? "0", 10),

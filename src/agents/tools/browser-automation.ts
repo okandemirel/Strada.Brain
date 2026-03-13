@@ -531,7 +531,7 @@ export class BrowserAutomationTool implements ITool {
     try {
       const response = await fetch(url, {
         method: "GET",
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; StrataBot/1.0)" },
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; StradaBot/1.0)" },
       });
 
       if (!response.ok) {

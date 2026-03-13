@@ -1,5 +1,5 @@
 /**
- * Data Protection Module for Strata.Brain
+ * Data Protection Module for Strada.Brain
  * 
  * Provides:
  * - Encryption at rest (AES-256-GCM)

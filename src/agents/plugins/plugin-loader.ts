@@ -24,7 +24,7 @@ export interface LoadedPlugin {
 }
 
 /**
- * Dynamic plugin loader for Strata Brain.
+ * Dynamic plugin loader for Strada Brain.
  * Loads tools from external directories following a convention:
  *
  *   plugins/

@@ -19,7 +19,7 @@ describe("SystemCreateTool", () => {
 
   beforeEach(() => {
     tool = new SystemCreateTool();
-    tempDir = mkdtempSync(join(tmpdir(), "strata-system-test-"));
+    tempDir = mkdtempSync(join(tmpdir(), "strada-system-test-"));
     mkdirSync(join(tempDir, "Assets", "Systems"), { recursive: true });
     ctx = { projectPath: tempDir, workingDirectory: tempDir, readOnly: false };
 

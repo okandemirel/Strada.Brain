@@ -148,19 +148,19 @@ export interface DaemonBackoffConfig {
 
 /** Phase 15 trigger-specific configuration */
 export interface DaemonTriggersConfig {
-  /** Webhook authentication secret (STRATA_WEBHOOK_SECRET) */
+  /** Webhook authentication secret (STRADA_WEBHOOK_SECRET) */
   readonly webhookSecret?: string;
-  /** Webhook rate limit string e.g. '10/min' (STRATA_WEBHOOK_RATE_LIMIT) */
+  /** Webhook rate limit string e.g. '10/min' (STRADA_WEBHOOK_RATE_LIMIT) */
   readonly webhookRateLimit: string;
-  /** Global cross-trigger dedup window in ms (STRATA_DAEMON_DEDUP_WINDOW_MS) */
+  /** Global cross-trigger dedup window in ms (STRADA_DAEMON_DEDUP_WINDOW_MS) */
   readonly dedupWindowMs: number;
-  /** Default file watch debounce in ms (STRATA_DAEMON_DEFAULT_DEBOUNCE_MS) */
+  /** Default file watch debounce in ms (STRADA_DAEMON_DEFAULT_DEBOUNCE_MS) */
   readonly defaultDebounceMs: number;
-  /** Hour for 'every morning' checklist items (STRATA_CHECKLIST_MORNING_HOUR) */
+  /** Hour for 'every morning' checklist items (STRADA_CHECKLIST_MORNING_HOUR) */
   readonly checklistMorningHour: number;
-  /** Hour for 'every afternoon' checklist items (STRATA_CHECKLIST_AFTERNOON_HOUR) */
+  /** Hour for 'every afternoon' checklist items (STRADA_CHECKLIST_AFTERNOON_HOUR) */
   readonly checklistAfternoonHour: number;
-  /** Hour for 'every evening' checklist items (STRATA_CHECKLIST_EVENING_HOUR) */
+  /** Hour for 'every evening' checklist items (STRADA_CHECKLIST_EVENING_HOUR) */
   readonly checklistEveningHour: number;
 }
 

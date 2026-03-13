@@ -161,7 +161,7 @@ export class HttpClientTool implements ITool {
     }
 
     if (!finalHeaders["User-Agent"] && !finalHeaders["user-agent"]) {
-      finalHeaders["User-Agent"] = "Mozilla/5.0 (compatible; StrataBot/1.0)";
+      finalHeaders["User-Agent"] = "Mozilla/5.0 (compatible; StradaBot/1.0)";
     }
 
     return { requestBody, finalHeaders };

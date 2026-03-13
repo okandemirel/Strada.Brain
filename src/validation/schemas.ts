@@ -1,5 +1,5 @@
 /**
- * Input Validation Schemas for Strata.Brain
+ * Input Validation Schemas for Strada.Brain
  * 
  * Provides Zod schemas for all inputs with strict type checking,
  * sanitization, and security-focused validation.
@@ -266,7 +266,7 @@ export const jwtTokenSchema = z.string()
   });
 
 // =============================================================================
-// STRATA-SPECIFIC SCHEMAS
+// STRADA-SPECIFIC SCHEMAS
 // =============================================================================
 
 export const csharpIdentifierSchema = z.string()

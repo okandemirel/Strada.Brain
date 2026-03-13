@@ -1,5 +1,5 @@
 /**
- * Type-safe Configuration for Strata.Brain
+ * Type-safe Configuration for Strada.Brain
  *
  * Provides:
  * - Deep partial types
@@ -103,58 +103,58 @@ export type EnvVarName =
   | "GOAL_MAX_FAILURES"
   | "GOAL_PARALLEL_EXECUTION"
   | "GOAL_MAX_PARALLEL"
-  | "STRATA_AGENT_NAME"
-  | "STRATA_CROSS_SESSION_ENABLED"
-  | "STRATA_INSTINCT_MAX_AGE_DAYS"
-  | "STRATA_INSTINCT_SCOPE_FILTER"
-  | "STRATA_INSTINCT_RECENCY_BOOST"
-  | "STRATA_INSTINCT_SCOPE_BOOST"
-  | "STRATA_INSTINCT_PROMOTION_THRESHOLD"
-  | "STRATA_DAEMON_INTERVAL_MS"
-  | "STRATA_DAEMON_TIMEZONE"
-  | "STRATA_DAEMON_HEARTBEAT_FILE"
-  | "STRATA_DAEMON_DAILY_BUDGET"
-  | "STRATA_DAEMON_BUDGET_WARN_PCT"
-  | "STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES"
-  | "STRATA_DAEMON_AUTO_APPROVE_TOOLS"
-  | "STRATA_DAEMON_BACKOFF_BASE"
-  | "STRATA_DAEMON_BACKOFF_MAX"
-  | "STRATA_DAEMON_FAILURE_THRESHOLD"
-  | "STRATA_DAEMON_IDLE_PAUSE"
-  | "STRATA_WEBHOOK_SECRET"
-  | "STRATA_WEBHOOK_RATE_LIMIT"
-  | "STRATA_DAEMON_DEDUP_WINDOW_MS"
-  | "STRATA_DAEMON_DEFAULT_DEBOUNCE_MS"
-  | "STRATA_CHECKLIST_MORNING_HOUR"
-  | "STRATA_CHECKLIST_AFTERNOON_HOUR"
-  | "STRATA_CHECKLIST_EVENING_HOUR"
+  | "STRADA_AGENT_NAME"
+  | "STRADA_CROSS_SESSION_ENABLED"
+  | "STRADA_INSTINCT_MAX_AGE_DAYS"
+  | "STRADA_INSTINCT_SCOPE_FILTER"
+  | "STRADA_INSTINCT_RECENCY_BOOST"
+  | "STRADA_INSTINCT_SCOPE_BOOST"
+  | "STRADA_INSTINCT_PROMOTION_THRESHOLD"
+  | "STRADA_DAEMON_INTERVAL_MS"
+  | "STRADA_DAEMON_TIMEZONE"
+  | "STRADA_DAEMON_HEARTBEAT_FILE"
+  | "STRADA_DAEMON_DAILY_BUDGET"
+  | "STRADA_DAEMON_BUDGET_WARN_PCT"
+  | "STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES"
+  | "STRADA_DAEMON_AUTO_APPROVE_TOOLS"
+  | "STRADA_DAEMON_BACKOFF_BASE"
+  | "STRADA_DAEMON_BACKOFF_MAX"
+  | "STRADA_DAEMON_FAILURE_THRESHOLD"
+  | "STRADA_DAEMON_IDLE_PAUSE"
+  | "STRADA_WEBHOOK_SECRET"
+  | "STRADA_WEBHOOK_RATE_LIMIT"
+  | "STRADA_DAEMON_DEDUP_WINDOW_MS"
+  | "STRADA_DAEMON_DEFAULT_DEBOUNCE_MS"
+  | "STRADA_CHECKLIST_MORNING_HOUR"
+  | "STRADA_CHECKLIST_AFTERNOON_HOUR"
+  | "STRADA_CHECKLIST_EVENING_HOUR"
 
-  | "STRATA_GOAL_ESCALATION_TIMEOUT_MINUTES"
-  | "STRATA_GOAL_MAX_REDECOMPOSITIONS"
+  | "STRADA_GOAL_ESCALATION_TIMEOUT_MINUTES"
+  | "STRADA_GOAL_MAX_REDECOMPOSITIONS"
 
   // Notification, Quiet Hours, Digest (Phase 18)
-  | "STRATA_DIGEST_ENABLED"
-  | "STRATA_DIGEST_SCHEDULE"
-  | "STRATA_NOTIFY_MIN_LEVEL"
-  | "STRATA_NOTIFY_SILENT"
-  | "STRATA_NOTIFY_LOW"
-  | "STRATA_NOTIFY_MEDIUM"
-  | "STRATA_NOTIFY_HIGH"
-  | "STRATA_NOTIFY_CRITICAL"
-  | "STRATA_QUIET_START"
-  | "STRATA_QUIET_END"
-  | "STRATA_QUIET_BUFFER_MAX"
-  | "STRATA_DASHBOARD_HISTORY_DEPTH"
+  | "STRADA_DIGEST_ENABLED"
+  | "STRADA_DIGEST_SCHEDULE"
+  | "STRADA_NOTIFY_MIN_LEVEL"
+  | "STRADA_NOTIFY_SILENT"
+  | "STRADA_NOTIFY_LOW"
+  | "STRADA_NOTIFY_MEDIUM"
+  | "STRADA_NOTIFY_HIGH"
+  | "STRADA_NOTIFY_CRITICAL"
+  | "STRADA_QUIET_START"
+  | "STRADA_QUIET_END"
+  | "STRADA_QUIET_BUFFER_MAX"
+  | "STRADA_DASHBOARD_HISTORY_DEPTH"
 
   // Memory Re-Retrieval (Phase 17)
-  | "STRATA_MEMORY_RERETRIEVAL_ENABLED"
-  | "STRATA_MEMORY_RERETRIEVAL_INTERVAL"
-  | "STRATA_MEMORY_TOPIC_SHIFT_ENABLED"
-  | "STRATA_MEMORY_TOPIC_SHIFT_THRESHOLD"
-  | "STRATA_MEMORY_MAX_RERETRIEVALS"
-  | "STRATA_MEMORY_RERETRIEVAL_TIMEOUT_MS"
-  | "STRATA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"
-  | "STRATA_MEMORY_RERETRIEVAL_RAG_TOPK"
+  | "STRADA_MEMORY_RERETRIEVAL_ENABLED"
+  | "STRADA_MEMORY_RERETRIEVAL_INTERVAL"
+  | "STRADA_MEMORY_TOPIC_SHIFT_ENABLED"
+  | "STRADA_MEMORY_TOPIC_SHIFT_THRESHOLD"
+  | "STRADA_MEMORY_MAX_RERETRIEVALS"
+  | "STRADA_MEMORY_RERETRIEVAL_TIMEOUT_MS"
+  | "STRADA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"
+  | "STRADA_MEMORY_RERETRIEVAL_RAG_TOPK"
 
   // Memory Decay (Phase 21)
   | "MEMORY_DECAY_ENABLED"
@@ -591,7 +591,7 @@ export const configSchema = z
 
     // Memory
     memoryEnabled: boolFromString(true),
-    memoryDbPath: z.string().refine((p) => !p.includes(".."), { message: "Path must not contain '..' (path traversal)" }).default(".strata-memory"),
+    memoryDbPath: z.string().refine((p) => !p.includes(".."), { message: "Path must not contain '..' (path traversal)" }).default(".strada-memory"),
     memoryBackend: z.enum(["agentdb", "file"]).default("agentdb"),
     memoryDimensions: z
       .string()
@@ -697,7 +697,7 @@ export const configSchema = z
 
     // Logging
     logLevel: logLevelSchema.default("info"),
-    logFile: z.string().default("strata-brain.log"),
+    logFile: z.string().default("strada-brain.log"),
 
     // Web Channel
     webChannelPort: portSchema.default("3000"),
@@ -730,8 +730,8 @@ export const configSchema = z
     goalMaxParallel: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
 
     // Goal Interactive Execution (Phase 16)
-    strataGoalEscalationTimeoutMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(120)).default("10"),
-    strataGoalMaxRedecompositions: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(10)).default("2"),
+    stradaGoalEscalationTimeoutMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(120)).default("10"),
+    stradaGoalMaxRedecompositions: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(10)).default("2"),
 
     // Tool Chain Synthesis
     toolChainEnabled: boolFromString(true),
@@ -759,7 +759,7 @@ export const configSchema = z
     crossSessionPromotionThreshold: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(10)).default("3"),
 
     // Identity
-    agentName: z.string().default("Strata Brain"),
+    agentName: z.string().default("Strada Brain"),
 
     // Daemon
     daemonIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10000).max(300000)).default("60000"),
@@ -787,28 +787,28 @@ export const configSchema = z
     triggerFireRetentionDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(365)).default("30"),
 
     // Notification, Quiet Hours, Digest (Phase 18)
-    strataDigestEnabled: boolFromString(true),
-    strataDigestSchedule: z.string().default("0 9 * * *"),
-    strataNotifyMinLevel: z.enum(["silent", "low", "medium", "high", "critical"]).default("low"),
-    strataNotifySilent: z.string().default("dashboard"),
-    strataNotifyLow: z.string().default("dashboard"),
-    strataNotifyMedium: z.string().default("chat,dashboard"),
-    strataNotifyHigh: z.string().default("chat,dashboard"),
-    strataNotifyCritical: z.string().default("chat,dashboard"),
-    strataQuietStart: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).optional(),
-    strataQuietEnd: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("8"),
-    strataQuietBufferMax: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10).max(10000)).default("100"),
-    strataDashboardHistoryDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1000)).default("10"),
+    stradaDigestEnabled: boolFromString(true),
+    stradaDigestSchedule: z.string().default("0 9 * * *"),
+    stradaNotifyMinLevel: z.enum(["silent", "low", "medium", "high", "critical"]).default("low"),
+    stradaNotifySilent: z.string().default("dashboard"),
+    stradaNotifyLow: z.string().default("dashboard"),
+    stradaNotifyMedium: z.string().default("chat,dashboard"),
+    stradaNotifyHigh: z.string().default("chat,dashboard"),
+    stradaNotifyCritical: z.string().default("chat,dashboard"),
+    stradaQuietStart: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).optional(),
+    stradaQuietEnd: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("8"),
+    stradaQuietBufferMax: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10).max(10000)).default("100"),
+    stradaDashboardHistoryDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1000)).default("10"),
 
     // Memory Re-Retrieval (Phase 17)
-    strataMemoryReRetrievalEnabled: boolFromString(true),
-    strataMemoryReRetrievalInterval: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(100)).default("5"),
-    strataMemoryTopicShiftEnabled: boolFromString(true),
-    strataMemoryTopicShiftThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.1).max(1.0)).default("0.4"),
-    strataMemoryMaxReRetrievals: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(100)).default("10"),
-    strataMemoryReRetrievalTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100).max(60000)).default("5000"),
-    strataMemoryReRetrievalMemoryLimit: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("3"),
-    strataMemoryReRetrievalRagTopK: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("6"),
+    stradaMemoryReRetrievalEnabled: boolFromString(true),
+    stradaMemoryReRetrievalInterval: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(100)).default("5"),
+    stradaMemoryTopicShiftEnabled: boolFromString(true),
+    stradaMemoryTopicShiftThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.1).max(1.0)).default("0.4"),
+    stradaMemoryMaxReRetrievals: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(100)).default("10"),
+    stradaMemoryReRetrievalTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100).max(60000)).default("5000"),
+    stradaMemoryReRetrievalMemoryLimit: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("3"),
+    stradaMemoryReRetrievalRagTopK: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("6"),
 
     // Multi-Agent (Phase 23)
     multiAgentEnabled: boolFromString(false),
@@ -1078,8 +1078,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
 
     goal: {
       maxFailures: rawConfig.goalMaxFailures,
-      escalationTimeoutMinutes: rawConfig.strataGoalEscalationTimeoutMinutes,
-      maxRedecompositions: rawConfig.strataGoalMaxRedecompositions,
+      escalationTimeoutMinutes: rawConfig.stradaGoalEscalationTimeoutMinutes,
+      maxRedecompositions: rawConfig.stradaGoalMaxRedecompositions,
     },
 
     toolChain: {
@@ -1144,41 +1144,41 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     reRetrieval: {
-      enabled: rawConfig.strataMemoryReRetrievalEnabled,
-      interval: rawConfig.strataMemoryReRetrievalInterval,
-      topicShiftEnabled: rawConfig.strataMemoryTopicShiftEnabled,
-      topicShiftThreshold: rawConfig.strataMemoryTopicShiftThreshold,
-      maxReRetrievals: rawConfig.strataMemoryMaxReRetrievals,
-      timeoutMs: rawConfig.strataMemoryReRetrievalTimeoutMs,
-      memoryLimit: rawConfig.strataMemoryReRetrievalMemoryLimit,
-      ragTopK: rawConfig.strataMemoryReRetrievalRagTopK,
+      enabled: rawConfig.stradaMemoryReRetrievalEnabled,
+      interval: rawConfig.stradaMemoryReRetrievalInterval,
+      topicShiftEnabled: rawConfig.stradaMemoryTopicShiftEnabled,
+      topicShiftThreshold: rawConfig.stradaMemoryTopicShiftThreshold,
+      maxReRetrievals: rawConfig.stradaMemoryMaxReRetrievals,
+      timeoutMs: rawConfig.stradaMemoryReRetrievalTimeoutMs,
+      memoryLimit: rawConfig.stradaMemoryReRetrievalMemoryLimit,
+      ragTopK: rawConfig.stradaMemoryReRetrievalRagTopK,
     },
 
     notification: {
-      minLevel: rawConfig.strataNotifyMinLevel,
+      minLevel: rawConfig.stradaNotifyMinLevel,
       routing: {
-        silent: splitCsv(rawConfig.strataNotifySilent),
-        low: splitCsv(rawConfig.strataNotifyLow),
-        medium: splitCsv(rawConfig.strataNotifyMedium),
-        high: splitCsv(rawConfig.strataNotifyHigh),
-        critical: splitCsv(rawConfig.strataNotifyCritical),
+        silent: splitCsv(rawConfig.stradaNotifySilent),
+        low: splitCsv(rawConfig.stradaNotifyLow),
+        medium: splitCsv(rawConfig.stradaNotifyMedium),
+        high: splitCsv(rawConfig.stradaNotifyHigh),
+        critical: splitCsv(rawConfig.stradaNotifyCritical),
       },
       groupingWindowMs: 30000,
     },
 
     quietHours: {
-      enabled: rawConfig.strataQuietStart !== undefined,
-      startHour: rawConfig.strataQuietStart ?? 22,
-      endHour: rawConfig.strataQuietEnd,
+      enabled: rawConfig.stradaQuietStart !== undefined,
+      startHour: rawConfig.stradaQuietStart ?? 22,
+      endHour: rawConfig.stradaQuietEnd,
       timezone: rawConfig.daemonTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-      bufferMax: rawConfig.strataQuietBufferMax,
+      bufferMax: rawConfig.stradaQuietBufferMax,
     },
 
     digest: {
-      enabled: rawConfig.strataDigestEnabled,
-      schedule: rawConfig.strataDigestSchedule,
+      enabled: rawConfig.stradaDigestEnabled,
+      schedule: rawConfig.stradaDigestSchedule,
       timezone: rawConfig.daemonTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-      dashboardHistoryDepth: rawConfig.strataDashboardHistoryDepth,
+      dashboardHistoryDepth: rawConfig.stradaDashboardHistoryDepth,
     },
 
     agent: {
@@ -1487,8 +1487,8 @@ interface EnvVars {
   goalMaxFailures: string | undefined;
   goalParallelExecution: string | undefined;
   goalMaxParallel: string | undefined;
-  strataGoalEscalationTimeoutMinutes: string | undefined;
-  strataGoalMaxRedecompositions: string | undefined;
+  stradaGoalEscalationTimeoutMinutes: string | undefined;
+  stradaGoalMaxRedecompositions: string | undefined;
   toolChainEnabled: string | undefined;
   toolChainMinOccurrences: string | undefined;
   toolChainSuccessRateThreshold: string | undefined;
@@ -1526,27 +1526,27 @@ interface EnvVars {
   // Trigger Fire History Pruning (Phase 21)
   triggerFireRetentionDays: string | undefined;
   // Notification, Quiet Hours, Digest (Phase 18)
-  strataDigestEnabled: string | undefined;
-  strataDigestSchedule: string | undefined;
-  strataNotifyMinLevel: string | undefined;
-  strataNotifySilent: string | undefined;
-  strataNotifyLow: string | undefined;
-  strataNotifyMedium: string | undefined;
-  strataNotifyHigh: string | undefined;
-  strataNotifyCritical: string | undefined;
-  strataQuietStart: string | undefined;
-  strataQuietEnd: string | undefined;
-  strataQuietBufferMax: string | undefined;
-  strataDashboardHistoryDepth: string | undefined;
+  stradaDigestEnabled: string | undefined;
+  stradaDigestSchedule: string | undefined;
+  stradaNotifyMinLevel: string | undefined;
+  stradaNotifySilent: string | undefined;
+  stradaNotifyLow: string | undefined;
+  stradaNotifyMedium: string | undefined;
+  stradaNotifyHigh: string | undefined;
+  stradaNotifyCritical: string | undefined;
+  stradaQuietStart: string | undefined;
+  stradaQuietEnd: string | undefined;
+  stradaQuietBufferMax: string | undefined;
+  stradaDashboardHistoryDepth: string | undefined;
   // Memory Re-Retrieval (Phase 17)
-  strataMemoryReRetrievalEnabled: string | undefined;
-  strataMemoryReRetrievalInterval: string | undefined;
-  strataMemoryTopicShiftEnabled: string | undefined;
-  strataMemoryTopicShiftThreshold: string | undefined;
-  strataMemoryMaxReRetrievals: string | undefined;
-  strataMemoryReRetrievalTimeoutMs: string | undefined;
-  strataMemoryReRetrievalMemoryLimit: string | undefined;
-  strataMemoryReRetrievalRagTopK: string | undefined;
+  stradaMemoryReRetrievalEnabled: string | undefined;
+  stradaMemoryReRetrievalInterval: string | undefined;
+  stradaMemoryTopicShiftEnabled: string | undefined;
+  stradaMemoryTopicShiftThreshold: string | undefined;
+  stradaMemoryMaxReRetrievals: string | undefined;
+  stradaMemoryReRetrievalTimeoutMs: string | undefined;
+  stradaMemoryReRetrievalMemoryLimit: string | undefined;
+  stradaMemoryReRetrievalRagTopK: string | undefined;
   // Memory Decay (Phase 21)
   memoryDecayEnabled: string | undefined;
   memoryDecayLambdaWorking: string | undefined;
@@ -1660,8 +1660,8 @@ function loadFromEnv(): EnvVars {
     goalMaxFailures: process.env["GOAL_MAX_FAILURES"],
     goalParallelExecution: process.env["GOAL_PARALLEL_EXECUTION"],
     goalMaxParallel: process.env["GOAL_MAX_PARALLEL"],
-    strataGoalEscalationTimeoutMinutes: process.env["STRATA_GOAL_ESCALATION_TIMEOUT_MINUTES"],
-    strataGoalMaxRedecompositions: process.env["STRATA_GOAL_MAX_REDECOMPOSITIONS"],
+    stradaGoalEscalationTimeoutMinutes: process.env["STRADA_GOAL_ESCALATION_TIMEOUT_MINUTES"],
+    stradaGoalMaxRedecompositions: process.env["STRADA_GOAL_MAX_REDECOMPOSITIONS"],
     toolChainEnabled: process.env["TOOL_CHAIN_ENABLED"],
     toolChainMinOccurrences: process.env["TOOL_CHAIN_MIN_OCCURRENCES"],
     toolChainSuccessRateThreshold: process.env["TOOL_CHAIN_SUCCESS_RATE_THRESHOLD"],
@@ -1671,55 +1671,55 @@ function loadFromEnv(): EnvVars {
     toolChainMinChainLength: process.env["TOOL_CHAIN_MIN_CHAIN_LENGTH"],
     toolChainMaxChainLength: process.env["TOOL_CHAIN_MAX_CHAIN_LENGTH"],
     toolChainDetectionIntervalMs: process.env["TOOL_CHAIN_DETECTION_INTERVAL_MS"],
-    crossSessionEnabled: process.env["STRATA_CROSS_SESSION_ENABLED"],
-    crossSessionMaxAgeDays: process.env["STRATA_INSTINCT_MAX_AGE_DAYS"],
-    crossSessionScopeFilter: process.env["STRATA_INSTINCT_SCOPE_FILTER"],
-    crossSessionRecencyBoost: process.env["STRATA_INSTINCT_RECENCY_BOOST"],
-    crossSessionScopeBoost: process.env["STRATA_INSTINCT_SCOPE_BOOST"],
-    crossSessionPromotionThreshold: process.env["STRATA_INSTINCT_PROMOTION_THRESHOLD"],
-    agentName: process.env["STRATA_AGENT_NAME"],
-    daemonIntervalMs: process.env["STRATA_DAEMON_INTERVAL_MS"],
-    daemonTimezone: process.env["STRATA_DAEMON_TIMEZONE"],
-    daemonHeartbeatFile: process.env["STRATA_DAEMON_HEARTBEAT_FILE"],
-    daemonDailyBudget: process.env["STRATA_DAEMON_DAILY_BUDGET"],
-    daemonBudgetWarnPct: process.env["STRATA_DAEMON_BUDGET_WARN_PCT"],
-    daemonApprovalTimeoutMin: process.env["STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
-    daemonAutoApproveTools: process.env["STRATA_DAEMON_AUTO_APPROVE_TOOLS"],
-    daemonBackoffBase: process.env["STRATA_DAEMON_BACKOFF_BASE"],
-    daemonBackoffMax: process.env["STRATA_DAEMON_BACKOFF_MAX"],
-    daemonFailureThreshold: process.env["STRATA_DAEMON_FAILURE_THRESHOLD"],
-    daemonIdlePause: process.env["STRATA_DAEMON_IDLE_PAUSE"],
-    webhookSecret: process.env["STRATA_WEBHOOK_SECRET"],
-    webhookRateLimit: process.env["STRATA_WEBHOOK_RATE_LIMIT"],
-    daemonDedupWindowMs: process.env["STRATA_DAEMON_DEDUP_WINDOW_MS"],
-    daemonDefaultDebounceMs: process.env["STRATA_DAEMON_DEFAULT_DEBOUNCE_MS"],
-    checklistMorningHour: process.env["STRATA_CHECKLIST_MORNING_HOUR"],
-    checklistAfternoonHour: process.env["STRATA_CHECKLIST_AFTERNOON_HOUR"],
-    checklistEveningHour: process.env["STRATA_CHECKLIST_EVENING_HOUR"],
+    crossSessionEnabled: process.env["STRADA_CROSS_SESSION_ENABLED"],
+    crossSessionMaxAgeDays: process.env["STRADA_INSTINCT_MAX_AGE_DAYS"],
+    crossSessionScopeFilter: process.env["STRADA_INSTINCT_SCOPE_FILTER"],
+    crossSessionRecencyBoost: process.env["STRADA_INSTINCT_RECENCY_BOOST"],
+    crossSessionScopeBoost: process.env["STRADA_INSTINCT_SCOPE_BOOST"],
+    crossSessionPromotionThreshold: process.env["STRADA_INSTINCT_PROMOTION_THRESHOLD"],
+    agentName: process.env["STRADA_AGENT_NAME"],
+    daemonIntervalMs: process.env["STRADA_DAEMON_INTERVAL_MS"],
+    daemonTimezone: process.env["STRADA_DAEMON_TIMEZONE"],
+    daemonHeartbeatFile: process.env["STRADA_DAEMON_HEARTBEAT_FILE"],
+    daemonDailyBudget: process.env["STRADA_DAEMON_DAILY_BUDGET"],
+    daemonBudgetWarnPct: process.env["STRADA_DAEMON_BUDGET_WARN_PCT"],
+    daemonApprovalTimeoutMin: process.env["STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
+    daemonAutoApproveTools: process.env["STRADA_DAEMON_AUTO_APPROVE_TOOLS"],
+    daemonBackoffBase: process.env["STRADA_DAEMON_BACKOFF_BASE"],
+    daemonBackoffMax: process.env["STRADA_DAEMON_BACKOFF_MAX"],
+    daemonFailureThreshold: process.env["STRADA_DAEMON_FAILURE_THRESHOLD"],
+    daemonIdlePause: process.env["STRADA_DAEMON_IDLE_PAUSE"],
+    webhookSecret: process.env["STRADA_WEBHOOK_SECRET"],
+    webhookRateLimit: process.env["STRADA_WEBHOOK_RATE_LIMIT"],
+    daemonDedupWindowMs: process.env["STRADA_DAEMON_DEDUP_WINDOW_MS"],
+    daemonDefaultDebounceMs: process.env["STRADA_DAEMON_DEFAULT_DEBOUNCE_MS"],
+    checklistMorningHour: process.env["STRADA_CHECKLIST_MORNING_HOUR"],
+    checklistAfternoonHour: process.env["STRADA_CHECKLIST_AFTERNOON_HOUR"],
+    checklistEveningHour: process.env["STRADA_CHECKLIST_EVENING_HOUR"],
     // Trigger Fire History Pruning (Phase 21)
     triggerFireRetentionDays: process.env["TRIGGER_FIRE_RETENTION_DAYS"],
     // Notification, Quiet Hours, Digest (Phase 18)
-    strataDigestEnabled: process.env["STRATA_DIGEST_ENABLED"],
-    strataDigestSchedule: process.env["STRATA_DIGEST_SCHEDULE"],
-    strataNotifyMinLevel: process.env["STRATA_NOTIFY_MIN_LEVEL"],
-    strataNotifySilent: process.env["STRATA_NOTIFY_SILENT"],
-    strataNotifyLow: process.env["STRATA_NOTIFY_LOW"],
-    strataNotifyMedium: process.env["STRATA_NOTIFY_MEDIUM"],
-    strataNotifyHigh: process.env["STRATA_NOTIFY_HIGH"],
-    strataNotifyCritical: process.env["STRATA_NOTIFY_CRITICAL"],
-    strataQuietStart: process.env["STRATA_QUIET_START"],
-    strataQuietEnd: process.env["STRATA_QUIET_END"],
-    strataQuietBufferMax: process.env["STRATA_QUIET_BUFFER_MAX"],
-    strataDashboardHistoryDepth: process.env["STRATA_DASHBOARD_HISTORY_DEPTH"],
+    stradaDigestEnabled: process.env["STRADA_DIGEST_ENABLED"],
+    stradaDigestSchedule: process.env["STRADA_DIGEST_SCHEDULE"],
+    stradaNotifyMinLevel: process.env["STRADA_NOTIFY_MIN_LEVEL"],
+    stradaNotifySilent: process.env["STRADA_NOTIFY_SILENT"],
+    stradaNotifyLow: process.env["STRADA_NOTIFY_LOW"],
+    stradaNotifyMedium: process.env["STRADA_NOTIFY_MEDIUM"],
+    stradaNotifyHigh: process.env["STRADA_NOTIFY_HIGH"],
+    stradaNotifyCritical: process.env["STRADA_NOTIFY_CRITICAL"],
+    stradaQuietStart: process.env["STRADA_QUIET_START"],
+    stradaQuietEnd: process.env["STRADA_QUIET_END"],
+    stradaQuietBufferMax: process.env["STRADA_QUIET_BUFFER_MAX"],
+    stradaDashboardHistoryDepth: process.env["STRADA_DASHBOARD_HISTORY_DEPTH"],
     // Memory Re-Retrieval (Phase 17)
-    strataMemoryReRetrievalEnabled: process.env["STRATA_MEMORY_RERETRIEVAL_ENABLED"],
-    strataMemoryReRetrievalInterval: process.env["STRATA_MEMORY_RERETRIEVAL_INTERVAL"],
-    strataMemoryTopicShiftEnabled: process.env["STRATA_MEMORY_TOPIC_SHIFT_ENABLED"],
-    strataMemoryTopicShiftThreshold: process.env["STRATA_MEMORY_TOPIC_SHIFT_THRESHOLD"],
-    strataMemoryMaxReRetrievals: process.env["STRATA_MEMORY_MAX_RERETRIEVALS"],
-    strataMemoryReRetrievalTimeoutMs: process.env["STRATA_MEMORY_RERETRIEVAL_TIMEOUT_MS"],
-    strataMemoryReRetrievalMemoryLimit: process.env["STRATA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"],
-    strataMemoryReRetrievalRagTopK: process.env["STRATA_MEMORY_RERETRIEVAL_RAG_TOPK"],
+    stradaMemoryReRetrievalEnabled: process.env["STRADA_MEMORY_RERETRIEVAL_ENABLED"],
+    stradaMemoryReRetrievalInterval: process.env["STRADA_MEMORY_RERETRIEVAL_INTERVAL"],
+    stradaMemoryTopicShiftEnabled: process.env["STRADA_MEMORY_TOPIC_SHIFT_ENABLED"],
+    stradaMemoryTopicShiftThreshold: process.env["STRADA_MEMORY_TOPIC_SHIFT_THRESHOLD"],
+    stradaMemoryMaxReRetrievals: process.env["STRADA_MEMORY_MAX_RERETRIEVALS"],
+    stradaMemoryReRetrievalTimeoutMs: process.env["STRADA_MEMORY_RERETRIEVAL_TIMEOUT_MS"],
+    stradaMemoryReRetrievalMemoryLimit: process.env["STRADA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"],
+    stradaMemoryReRetrievalRagTopK: process.env["STRADA_MEMORY_RERETRIEVAL_RAG_TOPK"],
     // Memory Decay (Phase 21)
     memoryDecayEnabled: process.env["MEMORY_DECAY_ENABLED"],
     memoryDecayLambdaWorking: process.env["MEMORY_DECAY_LAMBDA_WORKING"],

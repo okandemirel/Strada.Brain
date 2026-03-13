@@ -4,7 +4,7 @@ import type { ToolContext } from "./tool.interface.js";
 import { createLogger } from "../../utils/logger.js";
 
 // Initialize logger for tests
-createLogger("error", "/tmp/strata-test.log");
+createLogger("error", "/tmp/strada-test.log");
 
 const TEST_PORT = 8765;
 

@@ -1,5 +1,5 @@
 /**
- * Role-Based Access Control (RBAC) for Strata.Brain
+ * Role-Based Access Control (RBAC) for Strada.Brain
  * 
  * Provides:
  * - Role hierarchy

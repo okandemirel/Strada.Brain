@@ -23,7 +23,7 @@ import type {
   SemanticRetrievalOptions,
   ChatRetrievalOptions,
 } from "../memory.interface.js";
-import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
+import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 import type {
   Result,
   Option,
@@ -98,7 +98,7 @@ export class AgentDBAdapter implements IMemoryManager {
   async getCachedAnalysis(
     projectPath: string,
     maxAgeMs?: DurationMs,
-  ): Promise<Result<Option<StrataProjectAnalysis>, Error>> {
+  ): Promise<Result<Option<StradaProjectAnalysis>, Error>> {
     try {
       const analysis = await this.agentdb.getCachedAnalysis(projectPath, maxAgeMs);
       return ok(analysis ? some(analysis) : none());
@@ -108,7 +108,7 @@ export class AgentDBAdapter implements IMemoryManager {
   }
 
   async cacheAnalysis(
-    analysis: StrataProjectAnalysis,
+    analysis: StradaProjectAnalysis,
     projectPath: string,
     _options?: { ttl?: DurationMs },
   ): Promise<Result<void, Error>> {

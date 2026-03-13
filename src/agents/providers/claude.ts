@@ -13,7 +13,7 @@ import { getLogger } from "../../utils/logger.js";
 
 /**
  * Claude AI provider using the Anthropic SDK.
- * Primary provider for Strata Brain.
+ * Primary provider for Strada Brain.
  */
 export class ClaudeProvider implements IAIProvider {
   readonly name = "claude";

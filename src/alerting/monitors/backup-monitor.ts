@@ -1,5 +1,5 @@
 /**
- * Backup Monitor for Strata.Brain
+ * Backup Monitor for Strada.Brain
  * Monitors backup status, verifies integrity, and alerts on failures
  */
 
@@ -60,7 +60,7 @@ export class BackupMonitor {
   private backupDir: string;
 
   constructor(
-    backupDir: string = "/backups/strata-brain",
+    backupDir: string = "/backups/strada-brain",
     thresholds: Partial<BackupThresholds> = {},
     checkIntervalMs: number = 300000, // 5 minutes
     config: Partial<MonitorConfig> = {},

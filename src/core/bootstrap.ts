@@ -5,7 +5,7 @@
  * Replaces the monolithic startBrain() function from index.ts.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import type { Config } from "../config/config.js";
@@ -67,7 +67,7 @@ import type { GoalTree } from "../goals/types.js";
 import { ChainDetector, ChainSynthesizer, ChainManager, ChainValidator } from "../learning/chains/index.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
 import { IdentityStateManager } from "../identity/identity-state.js";
-import { buildCapabilityManifest } from "../agents/context/strata-knowledge.js";
+import { buildCapabilityManifest } from "../agents/context/strada-knowledge.js";
 import { buildCrashRecoveryContext } from "../identity/crash-recovery.js";
 import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
 import { MigrationRunner } from "../learning/storage/migrations/index.js";
@@ -139,8 +139,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const { channelType, config, container: customContainer } = options;
   const container = customContainer!; // We ensure container exists below
 
+  // Auto-migrate .strata-memory → .strada-memory
+  if (existsSync('.strata-memory') && !existsSync('.strada-memory')) {
+    renameSync('.strata-memory', '.strada-memory');
+    console.info('Migrated .strata-memory -> .strada-memory');
+  }
+
   const logger = createLogger(config.logLevel, config.logFile);
-  logger.info("Bootstrapping Strata Brain", {
+  logger.info("Bootstrapping Strada Brain", {
     channel: channelType,
     projectPath: config.unityProjectPath,
     readOnly: config.security.readOnlyMode,
@@ -178,7 +184,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const learningResult = await initializeLearning(config, logger, cachedEmbeddingProvider);
 
   // Initialize tools (registry created here, initialized after metricsStorage below)
-  const toolRegistry = new ToolRegistry();
+  const toolRegistry = new ToolRegistry(config.pluginDirs);
 
   // Initialize channel
   const channel = await initializeChannel(channelType, config, auth, logger);
@@ -187,6 +193,29 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const metrics = new MetricsCollector();
 
   const dashboard = await initializeDashboard(config, metrics, memoryManager, logger);
+
+  if (config.websocketDashboard.enabled) {
+    const { WebSocketDashboardServer } = await import("../dashboard/websocket-server.js");
+    const wsDashboard = new WebSocketDashboardServer({
+      port: config.websocketDashboard.port,
+      authToken: config.websocketDashboard.authToken,
+      metrics,
+      getMemoryStats: () => memoryManager?.getStats(),
+    });
+    await wsDashboard.start();
+    logger.info("WebSocket dashboard started", { port: config.websocketDashboard.port });
+  }
+
+  if (config.prometheus.enabled) {
+    const { PrometheusMetrics } = await import("../dashboard/prometheus.js");
+    const prometheus = new PrometheusMetrics(
+      config.prometheus.port,
+      metrics,
+      () => memoryManager?.getStats(),
+    );
+    await prometheus.start();
+    logger.info("Prometheus metrics started", { port: config.prometheus.port });
+  }
 
   // Initialize rate limiter
   const rateLimiter = initializeRateLimiter(config, logger);
@@ -467,7 +496,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
     // Validate budget is configured (required for daemon mode)
     if (!daemonConfig.budget.dailyBudgetUsd) {
-      throw new MissingConfigError("STRATA_DAEMON_DAILY_BUDGET");
+      throw new MissingConfigError("STRADA_DAEMON_DAILY_BUDGET");
     }
 
     // daemonEventBus is guaranteed defined when daemonMode is true
@@ -950,7 +979,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Start channel
   await channel.connect();
-  logger.info("Strata Brain is running!");
+  logger.info("Strada Brain is running!");
 
   // Register AgentManager with dashboard (Plan 23-03)
   if (dashboard && agentManager) {
@@ -1636,7 +1665,7 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
   const logger = getLogger();
 
   return async (): Promise<void> => {
-    logger.info("Shutting down Strata Brain...");
+    logger.info("Shutting down Strada Brain...");
 
     clearInterval(cleanupInterval);
 
@@ -1719,7 +1748,7 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
     }
 
     await channel.disconnect();
-    logger.info("Strata Brain stopped.");
+    logger.info("Strada Brain stopped.");
   };
 }
 

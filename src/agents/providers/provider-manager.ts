@@ -30,7 +30,7 @@ export class ProviderManager {
     private readonly modelOverrides?: Record<string, string>,
     preferencesDbPath?: string,
   ) {
-    const dbPath = preferencesDbPath ?? join(process.cwd(), ".strata-memory");
+    const dbPath = preferencesDbPath ?? join(process.cwd(), ".strada-memory");
     this.preferences = new ProviderPreferenceStore(
       join(dbPath, "provider-preferences.db"),
     );

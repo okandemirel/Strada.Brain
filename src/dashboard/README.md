@@ -31,9 +31,9 @@ Pure Node.js `http` module — no Express. Binds to `127.0.0.1` only (localhost)
 Separate HTTP server on port 9090 using `prom-client`.
 
 **Metrics exposed:**
-- Counters: `strata_messages_total`, `strata_tool_calls_total`, `strata_tool_errors_total`, `strata_tokens_total`
-- Gauges: `strata_active_sessions`, `strata_memory_usage_bytes`, `strata_plugins_loaded`
-- Histograms: `strata_request_duration_seconds`, `strata_tool_duration_seconds`, `strata_llm_latency_seconds`, `strata_message_duration_seconds`
+- Counters: `strada_messages_total`, `strada_tool_calls_total`, `strada_tool_errors_total`, `strada_tokens_total`
+- Gauges: `strada_active_sessions`, `strada_memory_usage_bytes`, `strada_plugins_loaded`
+- Histograms: `strada_request_duration_seconds`, `strada_tool_duration_seconds`, `strada_llm_latency_seconds`, `strada_message_duration_seconds`
 - Default Node.js metrics (CPU, heap, GC, event loop lag)
 
 ## WebSocket Dashboard (`ENABLE_WEBSOCKET_DASHBOARD=true`)

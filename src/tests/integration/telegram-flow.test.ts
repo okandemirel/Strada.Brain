@@ -35,7 +35,7 @@ describe("Telegram Flow Integration", () => {
 
   beforeEach(async () => {
     // Create temp project directory
-    tempDir = await mkdtemp(join(tmpdir(), "strata-telegram-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "strada-telegram-test-"));
 
     // Create mock channel
     telegramChannel = createMockTelegramChannel();

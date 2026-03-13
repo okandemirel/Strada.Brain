@@ -1,6 +1,6 @@
 # src/types/
 
-Core type definitions providing branded IDs, functional programming primitives, and utility types used across Strata.Brain.
+Core type definitions providing branded IDs, functional programming primitives, and utility types used across Strada.Brain.
 
 ## Brand Types
 

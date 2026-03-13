@@ -1,5 +1,5 @@
 /**
- * Security Monitor for Strata.Brain
+ * Security Monitor for Strada.Brain
  * Monitors security events: auth failures, suspicious requests, rate limiting
  */
 

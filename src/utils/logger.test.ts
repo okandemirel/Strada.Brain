@@ -14,7 +14,7 @@ describe("logger", () => {
 
   it("createLogger returns a logger", async () => {
     const { createLogger } = await import("./logger.js");
-    const logger = createLogger("info", "/tmp/test-strata.log");
+    const logger = createLogger("info", "/tmp/test-strada.log");
     expect(logger).toBeDefined();
     expect(logger.info).toBeDefined();
     expect(logger.warn).toBeDefined();
@@ -23,15 +23,15 @@ describe("logger", () => {
 
   it("getLogger returns logger after createLogger", async () => {
     const { createLogger, getLogger } = await import("./logger.js");
-    createLogger("debug", "/tmp/test-strata.log");
+    createLogger("debug", "/tmp/test-strada.log");
     const logger = getLogger();
     expect(logger).toBeDefined();
   });
 
   it("createLogger returns same instance on second call", async () => {
     const { createLogger } = await import("./logger.js");
-    const logger1 = createLogger("info", "/tmp/test-strata.log");
-    const logger2 = createLogger("debug", "/tmp/test-strata-2.log");
+    const logger1 = createLogger("info", "/tmp/test-strada.log");
+    const logger2 = createLogger("debug", "/tmp/test-strada-2.log");
     expect(logger1).toBe(logger2);
   });
 });

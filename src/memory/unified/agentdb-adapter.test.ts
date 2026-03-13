@@ -4,7 +4,7 @@ import type { MemoryEntry, RetrievalResult } from "../memory.interface.js";
 import type { UnifiedMemoryStats, HnswHealth } from "./unified-memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { MemoryId, ChatId, NormalizedScore, DurationMs } from "../../types/index.js";
-import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
+import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 
 // Mock the logger to suppress output during tests
 vi.mock("../../utils/logger.js", () => ({
@@ -330,7 +330,7 @@ describe("AgentDBAdapter", () => {
     const mockAnalysis = {
       projectName: "test",
       analyzedAt: new Date(),
-    } as unknown as StrataProjectAnalysis;
+    } as unknown as StradaProjectAnalysis;
 
     it("returns ok(some(analysis)) when agentdb returns analysis", async () => {
       (mockDb.getCachedAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue(mockAnalysis);
@@ -415,7 +415,7 @@ describe("AgentDBAdapter", () => {
     it("delegates to agentdb.cacheAnalysis and wraps in ok()", async () => {
       (mockDb.cacheAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "ok", value: undefined });
 
-      const analysis = { projectName: "test" } as unknown as StrataProjectAnalysis;
+      const analysis = { projectName: "test" } as unknown as StradaProjectAnalysis;
       const result = await adapter.cacheAnalysis(analysis, "/test/path");
 
       expect(result).toEqual({ kind: "ok", value: undefined });
@@ -425,7 +425,7 @@ describe("AgentDBAdapter", () => {
     it("ignores options.ttl parameter", async () => {
       (mockDb.cacheAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "ok", value: undefined });
 
-      const analysis = { projectName: "test" } as unknown as StrataProjectAnalysis;
+      const analysis = { projectName: "test" } as unknown as StradaProjectAnalysis;
       const result = await adapter.cacheAnalysis(analysis, "/test/path", { ttl: 60000 as DurationMs });
 
       expect(result).toEqual({ kind: "ok", value: undefined });

@@ -1,8 +1,8 @@
 {
   "dashboard": {
     "id": null,
-    "title": "Strata Brain Metrics",
-    "tags": ["strata", "brain", "ai", "unity"],
+    "title": "Strada Brain Metrics",
+    "tags": ["strada", "brain", "ai", "unity"],
     "timezone": "browser",
     "schemaVersion": 36,
     "refresh": "5s",
@@ -25,7 +25,7 @@
           "iconColor": "rgba(255, 96, 96, 1)",
           "lineColor": "rgba(255, 96, 96, 0.6)",
           "enable": true,
-          "query": "strata_messages_total"
+          "query": "strada_messages_total"
         }
       ]
     },
@@ -41,7 +41,7 @@
         },
         "targets": [
           {
-            "expr": "rate(strata_messages_total[5m])",
+            "expr": "rate(strada_messages_total[5m])",
             "legendFormat": "{{status}}",
             "refId": "A"
           }
@@ -94,7 +94,7 @@
         },
         "targets": [
           {
-            "expr": "strata_active_sessions",
+            "expr": "strada_active_sessions",
             "refId": "A"
           }
         ],
@@ -132,7 +132,7 @@
         },
         "targets": [
           {
-            "expr": "strata_plugins_loaded",
+            "expr": "strada_plugins_loaded",
             "refId": "A"
           }
         ],
@@ -167,12 +167,12 @@
         },
         "targets": [
           {
-            "expr": "rate(strata_tokens_total{type=\"input\"}[5m])",
+            "expr": "rate(strada_tokens_total{type=\"input\"}[5m])",
             "legendFormat": "Input Tokens/s",
             "refId": "A"
           },
           {
-            "expr": "rate(strata_tokens_total{type=\"output\"}[5m])",
+            "expr": "rate(strada_tokens_total{type=\"output\"}[5m])",
             "legendFormat": "Output Tokens/s",
             "refId": "B"
           }
@@ -219,7 +219,7 @@
         },
         "targets": [
           {
-            "expr": "sum(increase(strata_tokens_total{type=\"total\"}[1h]))",
+            "expr": "sum(increase(strada_tokens_total{type=\"total\"}[1h]))",
             "refId": "A"
           }
         ],
@@ -255,17 +255,17 @@
         },
         "targets": [
           {
-            "expr": "strata_memory_usage_bytes{type=\"rss\"}",
+            "expr": "strada_memory_usage_bytes{type=\"rss\"}",
             "legendFormat": "RSS",
             "refId": "A"
           },
           {
-            "expr": "strata_memory_usage_bytes{type=\"heap_used\"}",
+            "expr": "strada_memory_usage_bytes{type=\"heap_used\"}",
             "legendFormat": "Heap Used",
             "refId": "B"
           },
           {
-            "expr": "strata_memory_usage_bytes{type=\"heap_total\"}",
+            "expr": "strada_memory_usage_bytes{type=\"heap_total\"}",
             "legendFormat": "Heap Total",
             "refId": "C"
           }
@@ -298,7 +298,7 @@
         },
         "targets": [
           {
-            "expr": "rate(strata_tool_duration_seconds_bucket[5m])",
+            "expr": "rate(strada_tool_duration_seconds_bucket[5m])",
             "format": "heatmap",
             "legendFormat": "{{le}}",
             "refId": "A"
@@ -338,7 +338,7 @@
         },
         "targets": [
           {
-            "expr": "rate(strata_tool_calls_total[5m])",
+            "expr": "rate(strada_tool_calls_total[5m])",
             "legendFormat": "{{tool}} - {{status}}",
             "refId": "A"
           }
@@ -373,17 +373,17 @@
         },
         "targets": [
           {
-            "expr": "histogram_quantile(0.50, sum(rate(strata_llm_latency_seconds_bucket[5m])) by (le, provider))",
+            "expr": "histogram_quantile(0.50, sum(rate(strada_llm_latency_seconds_bucket[5m])) by (le, provider))",
             "legendFormat": "p50 - {{provider}}",
             "refId": "A"
           },
           {
-            "expr": "histogram_quantile(0.95, sum(rate(strata_llm_latency_seconds_bucket[5m])) by (le, provider))",
+            "expr": "histogram_quantile(0.95, sum(rate(strada_llm_latency_seconds_bucket[5m])) by (le, provider))",
             "legendFormat": "p95 - {{provider}}",
             "refId": "B"
           },
           {
-            "expr": "histogram_quantile(0.99, sum(rate(strata_llm_latency_seconds_bucket[5m])) by (le, provider))",
+            "expr": "histogram_quantile(0.99, sum(rate(strada_llm_latency_seconds_bucket[5m])) by (le, provider))",
             "legendFormat": "p99 - {{provider}}",
             "refId": "C"
           }
@@ -416,7 +416,7 @@
         },
         "targets": [
           {
-            "expr": "rate(strata_message_duration_seconds_bucket[5m])",
+            "expr": "rate(strada_message_duration_seconds_bucket[5m])",
             "format": "heatmap",
             "legendFormat": "{{le}}",
             "refId": "A"
@@ -452,7 +452,7 @@
         },
         "targets": [
           {
-            "expr": "rate(strata_tool_errors_total[5m])",
+            "expr": "rate(strada_tool_errors_total[5m])",
             "legendFormat": "{{tool}}",
             "refId": "A"
           }
@@ -514,5 +514,5 @@
   },
   "overwrite": true,
   "folderUid": null,
-  "message": "Strata Brain Metrics Dashboard"
+  "message": "Strada Brain Metrics Dashboard"
 }

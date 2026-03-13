@@ -1,6 +1,6 @@
 version: '3.8'
 
-# Backup Service for Strata.Brain
+# Backup Service for Strada.Brain
 # Handles automated backups with S3/MinIO integration
 
 services:
@@ -9,7 +9,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backup
-    container_name: strata-brain-backup
+    container_name: strada-brain-backup
     restart: unless-stopped
     environment:
       # Backup Configuration
@@ -31,7 +31,7 @@ services:
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
-      - MINIO_BUCKET=${MINIO_BUCKET:-strata-backups}
+      - MINIO_BUCKET=${MINIO_BUCKET:-strada-backups}
       - MINIO_USE_SSL=${MINIO_USE_SSL:-true}
       
       # Notification Webhooks
@@ -48,10 +48,10 @@ services:
       # Backup storage
       - backup-data:/backups
       
-      # Mount strata-memory for backup
+      # Mount strada-memory for backup
       - type: bind
-        source: ./.strata-memory
-        target: /app/.strata-memory
+        source: ./.strada-memory
+        target: /app/.strada-memory
         read_only: true
       
       # Mount config files
@@ -96,7 +96,7 @@ services:
   # MinIO for local S3-compatible storage (optional)
   minio:
     image: minio/minio:latest
-    container_name: strata-brain-minio
+    container_name: strada-brain-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     ports:
@@ -120,15 +120,15 @@ services:
   # Create MinIO bucket on startup
   minio-init:
     image: minio/mc:latest
-    container_name: strata-brain-minio-init
+    container_name: strada-brain-minio-init
     depends_on:
       - minio
     entrypoint: >
       /bin/sh -c "
         sleep 10 &&
         mc config host add local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} &&
-        mc mb local/strata-backups --ignore-existing &&
-        mc version enable local/strata-backups
+        mc mb local/strada-backups --ignore-existing &&
+        mc version enable local/strada-backups
       "
     networks:
       - backup-network
@@ -140,7 +140,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backup
-    container_name: strata-brain-backup-verifier
+    container_name: strada-brain-backup-verifier
     restart: unless-stopped
     environment:
       - BACKUP_DIR=/backups
@@ -163,7 +163,7 @@ services:
   # Prometheus metrics exporter for backups
   backup-metrics:
     image: prom/node-exporter:latest
-    container_name: strata-brain-backup-metrics
+    container_name: strada-brain-backup-metrics
     restart: unless-stopped
     command:
       - '--path.rootfs=/host'

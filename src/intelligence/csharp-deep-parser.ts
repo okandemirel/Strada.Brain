@@ -1445,3 +1445,20 @@ export function deepImplements(type: ClassDecl | StructDecl | InterfaceDecl, ifa
     return clean === ifaceName;
   });
 }
+
+/** Get field types with [Inject] attribute from a class or struct. */
+export function getInjectedDependencies(type: ClassDecl | StructDecl): string[] {
+  const deps: string[] = [];
+  for (const field of getFields(type)) {
+    if (field.attributes.some((a) => a.name === "Inject")) {
+      const baseName = field.type.replace(/<[^>]+>/g, "").replace("?", "");
+      deps.push(baseName);
+    }
+  }
+  return deps;
+}
+
+/** Strip generic type arguments from a type name. */
+export function stripGenericArgs(typeName: string): string {
+  return typeName.replace(/<[^>]+>/g, "");
+}

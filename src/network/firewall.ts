@@ -1,5 +1,5 @@
 /**
- * Network Security / Firewall for Strata.Brain
+ * Network Security / Firewall for Strada.Brain
  * 
  * Provides:
  * - IP whitelisting/blacklisting

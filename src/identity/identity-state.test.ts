@@ -142,11 +142,11 @@ describe("IdentityStateManager", () => {
     manager2.close();
   });
 
-  it("agent name defaults to 'Strata Brain', respects constructor agentName param", () => {
+  it("agent name defaults to 'Strada Brain', respects constructor agentName param", () => {
     const defaultManager = new IdentityStateManager(dbPath);
     defaultManager.initialize();
     defaultManager.recordBoot();
-    expect(defaultManager.getState().agentName).toBe("Strata Brain");
+    expect(defaultManager.getState().agentName).toBe("Strada Brain");
     defaultManager.close();
 
     // New DB with custom name

@@ -93,7 +93,7 @@ export type ToolCategory =
   | "file"
   | "code"
   | "search"
-  | "strata"
+  | "strada"
   | "shell"
   | "git"
   | "dotnet"

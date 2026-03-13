@@ -4,8 +4,8 @@
  * Single source of truth for Strada.Core API surface, verified against
  * real source at /Users/okanunico/Documents/Strada/Strada.Core/.
  *
- * Consumed by: strata-knowledge.ts, system-create.ts, module-create.ts,
- * component-create.ts, strata-analyzer.ts.
+ * Consumed by: strada-knowledge.ts, system-create.ts, module-create.ts,
+ * component-create.ts, strada-analyzer.ts.
  *
  * Any Strada.Core API changes require manual updates here.
  */
@@ -24,6 +24,15 @@ export const STRADA_API = {
   baseClasses: {
     systems: ["SystemBase", "JobSystemBase", "BurstSystemBase"] as string[],
   },
+  systemAttributes: {
+    stradaSystem: "[StradaSystem]",
+    updatePhase: '[UpdatePhase(UpdatePhase.Update)]',
+    executionOrder: "[ExecutionOrder(0)]",
+    runBefore: "[RunBefore(typeof(OtherSystem))]",
+    runAfter: "[RunAfter(typeof(OtherSystem))]",
+    requiresSystem: "[RequiresSystem(typeof(OtherSystem))]",
+  },
+  updatePhases: ["Initialization", "Update", "LateUpdate", "FixedUpdate"] as string[],
   systemApi: {
     abstractMethod: "OnUpdate(float deltaTime)",
     lifecycleMethods: ["OnInitialize()", "OnDispose()"],
@@ -45,5 +54,8 @@ export const STRADA_API = {
     interface: "IComponent",
     structLayout: "[StructLayout(LayoutKind.Sequential)]",
     constraint: "unmanaged",
+  },
+  assemblyReferences: {
+    core: "Strada.Core",
   },
 } as const;

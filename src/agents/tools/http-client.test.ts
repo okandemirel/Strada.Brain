@@ -4,7 +4,7 @@ import type { ToolContext } from "./tool.interface.js";
 import { createLogger } from "../../utils/logger.js";
 
 // Initialize logger for tests
-createLogger("error", "/tmp/strata-test.log");
+createLogger("error", "/tmp/strada-test.log");
 
 const TEST_PORT = 8766;
 
@@ -408,7 +408,7 @@ describe("HttpClientTool with server", () => {
   });
 });
 
-describe("HttpClientTool external requests", () => {
+describe.skipIf(!process.env["EXTERNAL_TESTS"])("HttpClientTool external requests", () => {
   let tool: HttpClientTool;
   let context: ToolContext;
 

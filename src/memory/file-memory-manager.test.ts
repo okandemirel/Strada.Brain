@@ -3,7 +3,7 @@ import { FileMemoryManager } from "./file-memory-manager.js";
 import { withTempDir } from "../test-helpers.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { StrataProjectAnalysis } from "../intelligence/strata-analyzer.js";
+import type { StradaProjectAnalysis } from "../intelligence/strada-analyzer.js";
 import { unwrap, isOk, isSome, isNone, unwrapOption } from "../types/index.js";
 
 vi.mock("../utils/logger.js", () => ({
@@ -15,7 +15,7 @@ vi.mock("../utils/logger.js", () => ({
   }),
 }));
 
-function createMockAnalysis(): StrataProjectAnalysis {
+function createMockAnalysis(): StradaProjectAnalysis {
   return {
     modules: [
       {

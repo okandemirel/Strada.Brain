@@ -39,7 +39,7 @@ When no embedding provider is configured, `generateEmbedding()` uses a character
 
 `FileMemoryManager` is used only if AgentDB initialization fails.
 
-**Storage:** JSON files in `MEMORY_DB_PATH` directory (default: `.strata-memory/`):
+**Storage:** JSON files in `MEMORY_DB_PATH` directory (default: `.strada-memory/`):
 - `memory.json` — all memory entries + TF-IDF index state
 - `analysis.json` — cached project analysis
 

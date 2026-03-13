@@ -71,7 +71,7 @@ export class TelegramChannel implements IChannelAdapter {
 
     // Set bot commands for the menu
     await this.bot.api.setMyCommands([
-      { command: "start", description: "Start Strata Brain" },
+      { command: "start", description: "Start Strada Brain" },
       { command: "status", description: "Show project status" },
       { command: "analyze", description: "Analyze project structure" },
       { command: "help", description: "Show help" },
@@ -368,7 +368,7 @@ export class TelegramChannel implements IChannelAdapter {
 
       if (!this.auth.isTelegramUserAllowed(userId)) {
         await ctx.reply(
-          "You are not authorized to use Strata Brain. Contact the administrator."
+          "You are not authorized to use Strada Brain. Contact the administrator."
         );
         return;
       }
@@ -419,8 +419,8 @@ export class TelegramChannel implements IChannelAdapter {
     // Handle /start command
     this.bot.command("start", async (ctx) => {
       await ctx.reply(
-        "Welcome to *Strata Brain* - Your AI-powered Unity development assistant.\n\n" +
-          "Send me any message to start working with your Strata.Core project.\n\n" +
+        "Welcome to *Strada Brain* - Your AI-powered Unity development assistant.\n\n" +
+          "Send me any message to start working with your Strada.Core project.\n\n" +
           "Commands:\n" +
           "/status - Show project status\n" +
           "/analyze - Analyze project structure\n" +
@@ -432,13 +432,13 @@ export class TelegramChannel implements IChannelAdapter {
     // Handle /help command
     this.bot.command("help", async (ctx) => {
       await ctx.reply(
-        "*Strata Brain Help*\n\n" +
-          "I can help you with your Unity/Strata.Core project:\n\n" +
+        "*Strada Brain Help*\n\n" +
+          "I can help you with your Unity/Strada.Core project:\n\n" +
           "- Analyze project architecture\n" +
           "- Create modules, systems, components\n" +
           "- Show DI dependency graphs\n" +
           "- Trace EventBus message flow\n" +
-          "- Generate Strata-convention code\n" +
+          "- Generate Strada-convention code\n" +
           "- Read and modify source files\n\n" +
           "Just describe what you need in natural language!",
         { parse_mode: "Markdown" }

@@ -1,5 +1,5 @@
 /**
- * Communication Security for Strata.Brain
+ * Communication Security for Strada.Brain
  * 
  * Provides:
  * - TLS/SSL enforcement

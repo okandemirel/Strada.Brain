@@ -37,7 +37,7 @@ export const SESSION_CONFIG = {
 
 export const MEMORY_CONFIG = {
   /** Default memory database path */
-  DEFAULT_DB_PATH: ".strata-memory",
+  DEFAULT_DB_PATH: ".strada-memory",
   /** Maximum memory entries to retrieve */
   MAX_RETRIEVAL_RESULTS: 10,
   /** Default minimum similarity score for memory retrieval */
@@ -194,10 +194,10 @@ export const WRITE_OPERATIONS = new Set([
   "shell_exec",
   "git_commit",
   "git_push",
-  "create_module",
-  "create_component",
-  "create_mediator",
-  "create_system",
+  "strada_create_module",
+  "strada_create_component",
+  "strada_create_mediator",
+  "strada_create_system",
 ]);
 
 // ============================================================================
@@ -221,7 +221,7 @@ export const LOGGING_CONFIG = {
   /** Default log level */
   DEFAULT_LEVEL: "info" as const,
   /** Default log file */
-  DEFAULT_FILE: "strata-brain.log",
+  DEFAULT_FILE: "strada-brain.log",
   /** Maximum log file size (10 MB) */
   MAX_FILE_SIZE: 10 * 1024 * 1024,
   /** Maximum number of log files to keep */
