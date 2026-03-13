@@ -26,7 +26,7 @@ export type TriggerState = "active" | "paused" | "backed_off" | "disabled";
 export type CircuitState = "CLOSED" | "OPEN" | "HALF_OPEN";
 
 /** Supported trigger types */
-export type TriggerType = "cron" | "file-watch" | "checklist" | "webhook";
+export type TriggerType = "cron" | "file-watch" | "checklist" | "webhook" | "deploy";
 
 /** Metadata describing a registered trigger */
 export interface TriggerMetadata {
