@@ -198,8 +198,8 @@ Le backend de m&eacute;moire actif est `AgentDBMemory` -- SQLite avec indexation
 **Fonctionnement :**
 - Lorsque l'historique de session d&eacute;passe 40 messages, les anciens messages sont r&eacute;sum&eacute;s et stock&eacute;s comme entr&eacute;es de conversation
 - La r&eacute;cup&eacute;ration hybride combine 70% de similarit&eacute; s&eacute;mantique (vecteurs HNSW) avec 30% de correspondance par mots-cl&eacute;s TF-IDF
-- L'outil `strata_analyze_project` met en cache l'analyse de la structure du projet pour une injection de contexte instantan&eacute;e
-- La m&eacute;moire persiste entre les red&eacute;marrages dans le r&eacute;pertoire `MEMORY_DB_PATH` (d&eacute;faut : `.strata-memory/`)
+- L'outil `strada_analyze_project` met en cache l'analyse de la structure du projet pour une injection de contexte instantan&eacute;e
+- La m&eacute;moire persiste entre les red&eacute;marrages dans le r&eacute;pertoire `MEMORY_DB_PATH` (d&eacute;faut : `.strada-memory/`)
 - La migration automatique depuis l'ancien FileMemoryManager s'ex&eacute;cute au premier d&eacute;marrage
 
 **Repli :** Si l'initialisation d'AgentDB &eacute;choue, le syst&egrave;me bascule automatiquement vers `FileMemoryManager` (JSON + TF-IDF).
@@ -492,9 +492,10 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | Variable | D&eacute;faut | Description |
 |----------|--------|-------------|
 | `RAG_ENABLED` | `true` | Active la recherche s&eacute;mantique de code sur votre projet C# |
-| `EMBEDDING_PROVIDER` | `openai` | Fournisseur d'embeddings : `openai` ou `ollama` |
+| `EMBEDDING_PROVIDER` | `auto` | Fournisseur d'embeddings : `auto`, `openai`, `gemini`, `mistral`, `together`, `fireworks`, `qwen`, `ollama` |
+| `EMBEDDING_DIMENSIONS` | `256` | Dimensions des vecteurs d'embeddings (support Matryoshka pour tailles r&eacute;duites) |
 | `MEMORY_ENABLED` | `true` | Active la m&eacute;moire persistante des conversations |
-| `MEMORY_DB_PATH` | `.strata-memory` | R&eacute;pertoire des fichiers de la base de donn&eacute;es m&eacute;moire |
+| `MEMORY_DB_PATH` | `.strada-memory` | R&eacute;pertoire des fichiers de la base de donn&eacute;es m&eacute;moire |
 | `WEB_CHANNEL_PORT` | `3000` | Port du tableau de bord web |
 | `DASHBOARD_ENABLED` | `false` | Active le tableau de bord de surveillance HTTP |
 | `DASHBOARD_PORT` | `3001` | Port du serveur du tableau de bord |
@@ -554,11 +555,11 @@ L'agent dispose de plus de 30 outils int&eacute;gr&eacute;s organis&eacute;s par
 ### G&eacute;n&eacute;ration de Code Strada
 | Outil | Description |
 |-------|-------------|
-| `strata_analyze_project` | Scan complet du projet C# -- modules, syst&egrave;mes, composants, services |
-| `strata_create_module` | G&eacute;n&egrave;re un &eacute;chafaudage de module complet (`.asmdef`, config, r&eacute;pertoires) |
-| `strata_create_component` | G&eacute;n&egrave;re des structs de composants ECS avec d&eacute;finitions de champs |
-| `strata_create_mediator` | G&eacute;n&egrave;re un `EntityMediator<TView>` avec liaisons de composants |
-| `strata_create_system` | G&eacute;n&egrave;re `SystemBase`/`JobSystemBase`/`SystemGroup` |
+| `strada_analyze_project` | Scan complet du projet C# -- modules, syst&egrave;mes, composants, services |
+| `strada_create_module` | G&eacute;n&egrave;re un &eacute;chafaudage de module complet (`.asmdef`, config, r&eacute;pertoires) |
+| `strada_create_component` | G&eacute;n&egrave;re des structs de composants ECS avec d&eacute;finitions de champs |
+| `strada_create_mediator` | G&eacute;n&egrave;re un `EntityMediator<TView>` avec liaisons de composants |
+| `strada_create_system` | G&eacute;n&egrave;re `SystemBase`/`JobSystemBase`/`SystemGroup` |
 
 ### Git
 | Outil | Description |
@@ -593,7 +594,7 @@ Le pipeline RAG (Retrieval-Augmented Generation) indexe votre code source C# pou
 **Flux d'indexation :**
 1. Scanne les fichiers `**/*.cs` dans votre projet Unity
 2. D&eacute;coupe le code de mani&egrave;re structurelle -- en-t&ecirc;tes de fichiers, classes, m&eacute;thodes, constructeurs
-3. G&eacute;n&egrave;re les embeddings via OpenAI (`text-embedding-3-small`) ou Ollama (`nomic-embed-text`)
+3. G&eacute;n&egrave;re les embeddings via Gemini Embedding 2.0 (d&eacute;faut), OpenAI, Mistral, Together, Fireworks, Qwen ou Ollama -- avec support Matryoshka pour dimensions r&eacute;duites
 4. Stocke les vecteurs dans un index HNSW pour une recherche rapide par plus proches voisins approximatifs
 5. S'ex&eacute;cute automatiquement au d&eacute;marrage (en arri&egrave;re-plan, non bloquant)
 

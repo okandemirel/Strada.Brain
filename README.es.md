@@ -199,8 +199,8 @@ El backend de memoria activo es `AgentDBMemory` -- SQLite con indexacion vectori
 **Como funciona:**
 - Cuando el historial de sesion supera los 40 mensajes, los mensajes antiguos se resumen y almacenan como entradas de conversacion
 - La recuperacion hibrida combina 70% de similitud semantica (vectores HNSW) con 30% de coincidencia de palabras clave TF-IDF
-- La herramienta `strata_analyze_project` almacena en cache el analisis de estructura del proyecto para inyeccion instantanea de contexto
-- La memoria persiste entre reinicios en el directorio `MEMORY_DB_PATH` (por defecto: `.strata-memory/`)
+- La herramienta `strada_analyze_project` almacena en cache el analisis de estructura del proyecto para inyeccion instantanea de contexto
+- La memoria persiste entre reinicios en el directorio `MEMORY_DB_PATH` (por defecto: `.strada-memory/`)
 - La migracion automatica desde el legado FileMemoryManager se ejecuta en el primer inicio
 
 **Respaldo:** Si la inicializacion de AgentDB falla, el sistema recurre automaticamente a `FileMemoryManager` (JSON + TF-IDF).
@@ -493,9 +493,10 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | Variable | Por Defecto | Descripcion |
 |----------|-------------|-------------|
 | `RAG_ENABLED` | `true` | Habilitar busqueda semantica de codigo sobre tu proyecto C# |
-| `EMBEDDING_PROVIDER` | `openai` | Proveedor de embeddings: `openai` u `ollama` |
+| `EMBEDDING_PROVIDER` | `auto` | Proveedor de embeddings: `auto`, `openai`, `gemini`, `mistral`, `together`, `fireworks`, `qwen`, `ollama` |
+| `EMBEDDING_DIMENSIONS` | `256` | Dimensiones del vector de embedding (soporta dimensiones Matryoshka) |
 | `MEMORY_ENABLED` | `true` | Habilitar memoria persistente de conversaciones |
-| `MEMORY_DB_PATH` | `.strata-memory` | Directorio para archivos de base de datos de memoria |
+| `MEMORY_DB_PATH` | `.strada-memory` | Directorio para archivos de base de datos de memoria |
 | `WEB_CHANNEL_PORT` | `3000` | Puerto del dashboard web |
 | `DASHBOARD_ENABLED` | `false` | Habilitar dashboard HTTP de monitoreo |
 | `DASHBOARD_PORT` | `3001` | Puerto del servidor del dashboard |
@@ -555,11 +556,11 @@ El agente tiene mas de 30 herramientas integradas organizadas por categoria:
 ### Generacion de Codigo Strada
 | Herramienta | Descripcion |
 |-------------|-------------|
-| `strata_analyze_project` | Escaneo completo del proyecto C# -- modulos, sistemas, componentes, servicios |
-| `strata_create_module` | Generar scaffold completo de modulo (`.asmdef`, configuracion, directorios) |
-| `strata_create_component` | Generar structs de componentes ECS con definiciones de campos |
-| `strata_create_mediator` | Generar `EntityMediator<TView>` con bindings de componentes |
-| `strata_create_system` | Generar `SystemBase`/`JobSystemBase`/`SystemGroup` |
+| `strada_analyze_project` | Escaneo completo del proyecto C# -- modulos, sistemas, componentes, servicios |
+| `strada_create_module` | Generar scaffold completo de modulo (`.asmdef`, configuracion, directorios) |
+| `strada_create_component` | Generar structs de componentes ECS con definiciones de campos |
+| `strada_create_mediator` | Generar `EntityMediator<TView>` con bindings de componentes |
+| `strada_create_system` | Generar `SystemBase`/`JobSystemBase`/`SystemGroup` |
 
 ### Git
 | Herramienta | Descripcion |
@@ -594,7 +595,7 @@ El pipeline RAG (Retrieval-Augmented Generation) indexa tu codigo fuente C# para
 **Flujo de indexacion:**
 1. Escanea archivos `**/*.cs` en tu proyecto Unity
 2. Divide el codigo estructuralmente -- encabezados de archivo, clases, metodos, constructores
-3. Genera embeddings via OpenAI (`text-embedding-3-small`) u Ollama (`nomic-embed-text`)
+3. Genera embeddings via Gemini Embedding 2.0 (por defecto), OpenAI (`text-embedding-3-small`), Ollama (`nomic-embed-text`) u otros proveedores -- soporta dimensiones Matryoshka para control flexible de tamano vectorial
 4. Almacena vectores en el indice HNSW para busqueda rapida de vecinos mas cercanos aproximados
 5. Se ejecuta automaticamente al inicio (en segundo plano, no bloqueante)
 

@@ -200,8 +200,8 @@ Das aktive Speicher-Backend ist `AgentDBMemory` -- SQLite mit HNSW-Vektorindizie
 **Funktionsweise:**
 - Wenn der Sitzungsverlauf 40 Nachrichten ueberschreitet, werden alte Nachrichten zusammengefasst und als Konversationseintraege gespeichert
 - Hybridabruf kombiniert 70% semantische Aehnlichkeit (HNSW-Vektoren) mit 30% TF-IDF-Schluesselwort-Abgleich
-- Das Tool `strata_analyze_project` speichert die Projektstrukturanalyse im Cache fuer sofortige Kontexteinspeisung
-- Der Speicher bleibt ueber Neustarts hinweg im Verzeichnis `MEMORY_DB_PATH` erhalten (Standard: `.strata-memory/`)
+- Das Tool `strada_analyze_project` speichert die Projektstrukturanalyse im Cache fuer sofortige Kontexteinspeisung
+- Der Speicher bleibt ueber Neustarts hinweg im Verzeichnis `MEMORY_DB_PATH` erhalten (Standard: `.strada-memory/`)
 - Automatische Migration vom alten FileMemoryManager erfolgt beim ersten Start
 
 **Fallback:** Falls die AgentDB-Initialisierung fehlschlaegt, wechselt das System automatisch zum `FileMemoryManager` (JSON + TF-IDF).
@@ -464,9 +464,10 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | Variable | Standard | Beschreibung |
 |----------|----------|-------------|
 | `RAG_ENABLED` | `true` | Semantische Code-Suche ueber Ihr C#-Projekt aktivieren |
-| `EMBEDDING_PROVIDER` | `openai` | Embedding-Anbieter: `openai` oder `ollama` |
+| `EMBEDDING_PROVIDER` | `auto` | Embedding-Anbieter: `auto`, `openai`, `gemini`, `mistral`, `together`, `fireworks`, `qwen`, `ollama` |
+| `EMBEDDING_DIMENSIONS` | `256` | Embedding-Vektordimensionen (Matryoshka: 256, 512, 768, 1024) |
 | `MEMORY_ENABLED` | `true` | Persistenten Konversationsspeicher aktivieren |
-| `MEMORY_DB_PATH` | `.strata-memory` | Verzeichnis fuer Speicher-Datenbankdateien |
+| `MEMORY_DB_PATH` | `.strada-memory` | Verzeichnis fuer Speicher-Datenbankdateien |
 | `WEB_CHANNEL_PORT` | `3000` | Port fuer Web-Dashboard |
 | `DASHBOARD_ENABLED` | `false` | HTTP-Monitoring-Dashboard aktivieren |
 | `DASHBOARD_PORT` | `3001` | Dashboard-Server-Port |
@@ -526,11 +527,11 @@ Der Agent verfuegt ueber mehr als 30 integrierte Tools, organisiert nach Kategor
 ### Strada Code-Generierung
 | Tool | Beschreibung |
 |------|-------------|
-| `strata_analyze_project` | Vollstaendiger C#-Projekt-Scan -- Module, Systeme, Komponenten, Services |
-| `strata_create_module` | Vollstaendiges Modul-Geruest generieren (`.asmdef`, Konfiguration, Verzeichnisse) |
-| `strata_create_component` | ECS-Komponentenstrukturen mit Felddefinitionen generieren |
-| `strata_create_mediator` | `EntityMediator<TView>` mit Komponentenbindungen generieren |
-| `strata_create_system` | `SystemBase`/`JobSystemBase`/`SystemGroup` generieren |
+| `strada_analyze_project` | Vollstaendiger C#-Projekt-Scan -- Module, Systeme, Komponenten, Services |
+| `strada_create_module` | Vollstaendiges Modul-Geruest generieren (`.asmdef`, Konfiguration, Verzeichnisse) |
+| `strada_create_component` | ECS-Komponentenstrukturen mit Felddefinitionen generieren |
+| `strada_create_mediator` | `EntityMediator<TView>` mit Komponentenbindungen generieren |
+| `strada_create_system` | `SystemBase`/`JobSystemBase`/`SystemGroup` generieren |
 
 ### Git
 | Tool | Beschreibung |
@@ -565,7 +566,7 @@ Die RAG-Pipeline (Retrieval-Augmented Generation) indiziert Ihren C#-Quellcode f
 **Indizierungsablauf:**
 1. Scannt `**/*.cs`-Dateien in Ihrem Unity-Projekt
 2. Zerlegt Code strukturell -- Datei-Header, Klassen, Methoden, Konstruktoren
-3. Generiert Embeddings ueber OpenAI (`text-embedding-3-small`) oder Ollama (`nomic-embed-text`)
+3. Generiert Embeddings ueber Gemini Embedding 2.0 (Standard), OpenAI, Mistral, Together, Fireworks, Qwen oder Ollama mit Matryoshka-Dimensionsunterstuetzung (256/512/768/1024)
 4. Speichert Vektoren im HNSW-Index fuer schnelle approximative Naechste-Nachbar-Suche
 5. Laeuft automatisch beim Start (im Hintergrund, nicht-blockierend)
 

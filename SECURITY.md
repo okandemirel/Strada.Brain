@@ -69,7 +69,7 @@ Implementation: `src/security/secret-sanitizer.ts`, `src/agents/orchestrator.ts`
 
 When `READ_ONLY_MODE=true`, all write tools are removed from the agent's tool set entirely -- not just blocked at execution time, but filtered out before the LLM sees them. The system prompt is augmented to inform the agent that write operations are unavailable.
 
-Blocked tools include: `file_write`, `file_edit`, `file_delete`, `file_rename`, `git_commit`, `git_push`, `git_branch`, `git_reset`, `git_merge`, `git_rebase`, `shell_exec`, `strata_create_module`, `strata_create_component`, `dotnet_add_package`, and others.
+Blocked tools include: `file_write`, `file_edit`, `file_delete`, `file_rename`, `git_commit`, `git_push`, `git_branch`, `git_reset`, `git_merge`, `git_rebase`, `shell_exec`, `strada_create_module`, `strada_create_component`, `dotnet_add_package`, and others.
 
 Allowed tools: `file_read`, `file_search`, `file_list`, `git_status`, `git_log`, `git_diff`, `code_search`, `memory_search`, `analyze_project`, and others.
 

@@ -198,8 +198,8 @@ Aktif hafiza arka ucu `AgentDBMemory`'dir -- HNSW vektor indeksleme ve uc katman
 **Nasil calisir:**
 - Oturum gecmisi 40 mesaji astiginda, eski mesajlar ozetlenir ve konusma kayitlari olarak saklanir
 - Hibrit getirme, %70 anlamsal benzerlik (HNSW vektorler) ile %30 TF-IDF anahtar kelime eslemesini birlestirir
-- `strata_analyze_project` araci, anlik baglam enjeksiyonu icin proje yapisi analizini onbellege alir
-- Hafiza, `MEMORY_DB_PATH` dizininde (varsayilan: `.strata-memory/`) yeniden baslatmalar arasinda kalicidir
+- `strada_analyze_project` araci, anlik baglam enjeksiyonu icin proje yapisi analizini onbellege alir
+- Hafiza, `MEMORY_DB_PATH` dizininde (varsayilan: `.strada-memory/`) yeniden baslatmalar arasinda kalicidir
 - Eski FileMemoryManager'dan otomatik goc, ilk baslatmada calisir
 
 **Yedek:** AgentDB baslatma islemi basarisiz olursa, sistem otomatik olarak `FileMemoryManager`'a (JSON + TF-IDF) geri doner.
@@ -451,9 +451,10 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | Degisken | Varsayilan | Aciklama |
 |----------|------------|----------|
 | `RAG_ENABLED` | `true` | C# projeniz uzerinde anlamsal kod aramasini etkinlestir |
-| `EMBEDDING_PROVIDER` | `openai` | Gomme saglayici: `openai` veya `ollama` |
+| `EMBEDDING_PROVIDER` | `auto` | Gomme saglayici: `auto`, `openai`, `gemini`, `mistral`, `together`, `fireworks`, `qwen`, `ollama` |
+| `EMBEDDING_DIMENSIONS` | (provider varsayilan) | Cikti vektor boyutu (Matryoshka: Gemini/OpenAI icin 128-3072) |
 | `MEMORY_ENABLED` | `true` | Kalici konusma hafizasini etkinlestir |
-| `MEMORY_DB_PATH` | `.strata-memory` | Hafiza veritabani dosyalari icin dizin |
+| `MEMORY_DB_PATH` | `.strada-memory` | Hafiza veritabani dosyalari icin dizin |
 | `WEB_CHANNEL_PORT` | `3000` | Web paneli portu |
 | `DASHBOARD_ENABLED` | `false` | HTTP izleme panelini etkinlestir |
 | `DASHBOARD_PORT` | `3001` | Panel sunucu portu |
@@ -513,11 +514,11 @@ Ajan, kategorilere gore duzenlenmis 30'dan fazla yerlesik araca sahiptir:
 ### Strada Kod Uretimi
 | Arac | Aciklama |
 |------|----------|
-| `strata_analyze_project` | Tam C# proje taramasi -- moduller, sistemler, bilesenler, servisler |
-| `strata_create_module` | Tam modul iskelesi olusturma (`.asmdef`, yapilandirma, dizinler) |
-| `strata_create_component` | Alan tanimlari ile ECS bilesen struct'lari olusturma |
-| `strata_create_mediator` | Bilesen baglantilari ile `EntityMediator<TView>` olusturma |
-| `strata_create_system` | `SystemBase`/`JobSystemBase`/`SystemGroup` olusturma |
+| `strada_analyze_project` | Tam C# proje taramasi -- moduller, sistemler, bilesenler, servisler |
+| `strada_create_module` | Tam modul iskelesi olusturma (`.asmdef`, yapilandirma, dizinler) |
+| `strada_create_component` | Alan tanimlari ile ECS bilesen struct'lari olusturma |
+| `strada_create_mediator` | Bilesen baglantilari ile `EntityMediator<TView>` olusturma |
+| `strada_create_system` | `SystemBase`/`JobSystemBase`/`SystemGroup` olusturma |
 
 ### Git
 | Arac | Aciklama |
@@ -552,7 +553,7 @@ RAG (Retrieval-Augmented Generation) boru hatti, anlamsal arama icin C# kaynak k
 **Indeksleme akisi:**
 1. Unity projenizde `**/*.cs` dosyalarini tarar
 2. Kodu yapisal olarak parcalar -- dosya baslikari, siniflar, metodlar, yapilandiricilar
-3. OpenAI (`text-embedding-3-small`) veya Ollama (`nomic-embed-text`) ile gomme vektorleri olusturur
+3. Gemini Embedding 2.0 (varsayilan), OpenAI (`text-embedding-3-small`), veya Ollama (`nomic-embed-text`) ile gomme vektorleri olusturur -- Matryoshka boyutlari desteklenir (`EMBEDDING_DIMENSIONS` ile yapilandirilabilir)
 4. Hizli yaklasik en yakin komsu aramasi icin vektorleri HNSW indeksinde saklar
 5. Baslatmada otomatik olarak calisir (arka planda, engellemesiz)
 
