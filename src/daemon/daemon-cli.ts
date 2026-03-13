@@ -63,6 +63,23 @@ export interface DaemonContext {
   delegationManager?: import("../agents/multi/delegation/delegation-manager.js").DelegationManager;
   delegationLog?: import("../agents/multi/delegation/delegation-log.js").DelegationLog;
   tierRouter?: import("../agents/multi/delegation/tier-router.js").TierRouter;
+  consolidationEngine?: {
+    getStats(): { perTier: Record<string, { clustered: number; pending: number; total: number }>; lifetimeSavings: number; totalRuns: number; totalCostUsd: number };
+    preview(): Promise<{ clusters: Array<{ seedId: string; memberIds: string[]; avgSimilarity: number; tier: string }>; estimatedCostPerCluster: number; totalEstimatedCost: number }>;
+    runCycle(signal: AbortSignal): Promise<{ status: string; processed: number; remaining: number; clustersFound: number; costUsd: number }>;
+    undo(logId: string): void;
+  };
+  deploymentExecutor?: {
+    getHistory(limit?: number): Array<{ id: string; proposedAt: number; approvedAt?: number; approvedBy?: string; agentId?: string; status: string; scriptOutput?: string; duration?: number; error?: string }>;
+    getStats(): { totalDeployments: number; successful: number; failed: number; lastDeployment?: unknown; circuitBreakerState: string };
+  };
+  readinessChecker?: {
+    checkReadiness(force?: boolean): Promise<{ ready: boolean; reason?: string; testPassed: boolean; gitClean: boolean; branchMatch: boolean; timestamp: number; cached: boolean }>;
+  };
+  deployTrigger?: {
+    triggerReadinessCheck(): Promise<{ ready: boolean; reason?: string; testPassed: boolean; gitClean: boolean; branchMatch: boolean; timestamp: number; cached: boolean }>;
+    onApprovalDecided(decision: string, proposalId: string, decidedBy?: string): void;
+  };
 }
 
 /**
@@ -995,6 +1012,301 @@ export function registerDaemonCommands(
 
       ctx.tierRouter.setOverride(type, tier as "local" | "cheap" | "standard" | "premium");
       console.log(`Tier override set: ${type} -> ${tier} (immediate effect, no restart needed)`);
+    });
+
+  // =========================================================================
+  // Memory Consolidation commands (Plan 25-03: MEM-12, MEM-13)
+  // =========================================================================
+  daemon
+    .command("memory:consolidation-status")
+    .description("Show memory consolidation status per tier")
+    .option("--json", "Output as JSON instead of table")
+    .action((opts: { json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running. Start with: strata daemon start");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!ctx.consolidationEngine) {
+        console.log("Memory consolidation is disabled (MEMORY_CONSOLIDATION_ENABLED=false)");
+        return;
+      }
+
+      const stats = ctx.consolidationEngine.getStats();
+
+      if (opts.json) {
+        console.log(JSON.stringify(stats, null, 2));
+        return;
+      }
+
+      console.log("Memory Consolidation Status:");
+      console.log("");
+      console.log(
+        padRight("Tier", 14) +
+        padLeft("Total", 10) +
+        padLeft("Clustered", 12) +
+        padLeft("Pending", 10),
+      );
+      console.log("-".repeat(46));
+
+      const tierNames = ["working", "ephemeral", "persistent"];
+      for (const name of tierNames) {
+        const t = stats.perTier[name];
+        if (!t) continue;
+        const displayName = name.charAt(0).toUpperCase() + name.slice(1);
+        console.log(
+          padRight(displayName, 14) +
+          padLeft(String(t.total), 10) +
+          padLeft(String(t.clustered), 12) +
+          padLeft(String(t.pending), 10),
+        );
+      }
+
+      console.log("");
+      console.log(`Lifetime: ${stats.totalRuns} runs, ${stats.lifetimeSavings} entries saved, $${stats.totalCostUsd.toFixed(4)} total cost`);
+    });
+
+  daemon
+    .command("memory:consolidation-preview")
+    .description("Dry-run showing clusters, similarity scores, estimated cost")
+    .option("--json", "Output as JSON instead of table")
+    .action(async (opts: { json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running. Start with: strata daemon start");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!ctx.consolidationEngine) {
+        console.log("Memory consolidation is disabled (MEMORY_CONSOLIDATION_ENABLED=false)");
+        return;
+      }
+
+      const preview = await ctx.consolidationEngine.preview();
+
+      if (opts.json) {
+        console.log(JSON.stringify(preview, null, 2));
+        return;
+      }
+
+      if (preview.clusters.length === 0) {
+        console.log("No clusters found for consolidation.");
+        return;
+      }
+
+      console.log("Consolidation Preview:");
+      console.log("");
+      console.log(
+        padRight("Cluster Seed", 38) +
+        padRight("Members", 10) +
+        padRight("Tier", 14) +
+        padRight("Similarity", 14),
+      );
+      console.log("-".repeat(76));
+
+      for (const c of preview.clusters) {
+        console.log(
+          padRight(c.seedId.slice(0, 36), 38) +
+          padRight(String(c.memberIds.length), 10) +
+          padRight(c.tier, 14) +
+          padRight(c.avgSimilarity.toFixed(3), 14),
+        );
+      }
+
+      console.log("");
+      console.log(`Total clusters: ${preview.clusters.length}`);
+      console.log(`Estimated cost: $${preview.totalEstimatedCost.toFixed(4)} ($${preview.estimatedCostPerCluster.toFixed(4)}/cluster)`);
+    });
+
+  daemon
+    .command("memory:consolidate")
+    .description("Manually trigger memory consolidation")
+    .option("--force", "Bypass idle check")
+    .action(async (opts: { force?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running. Start with: strata daemon start");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!ctx.consolidationEngine) {
+        console.log("Memory consolidation is disabled (MEMORY_CONSOLIDATION_ENABLED=false)");
+        return;
+      }
+
+      if (!opts.force) {
+        console.log("Running consolidation (use --force to bypass idle check)...");
+      } else {
+        console.log("Running consolidation (forced)...");
+      }
+
+      const controller = new AbortController();
+      const result = await ctx.consolidationEngine.runCycle(controller.signal);
+
+      console.log(`Status: ${result.status}`);
+      console.log(`Processed: ${result.processed} clusters`);
+      console.log(`Remaining: ${result.remaining}`);
+      console.log(`Clusters found: ${result.clustersFound}`);
+      console.log(`Cost: $${result.costUsd.toFixed(4)}`);
+    });
+
+  daemon
+    .command("memory:consolidation-undo <logId>")
+    .description("Undo a consolidation by restoring originals and removing summary")
+    .action((logId: string) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running. Start with: strata daemon start");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!ctx.consolidationEngine) {
+        console.log("Memory consolidation is disabled (MEMORY_CONSOLIDATION_ENABLED=false)");
+        return;
+      }
+
+      try {
+        ctx.consolidationEngine.undo(logId);
+        console.log(`Consolidation '${logId}' undone successfully.`);
+      } catch (err) {
+        console.error(`Failed to undo: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
+    });
+
+  // =========================================================================
+  // Deployment commands (Plan 25-03: DEPLOY-01, DEPLOY-02, DEPLOY-03)
+  // =========================================================================
+  daemon
+    .command("deploy:status")
+    .description("Show current deployment state, circuit breaker, last readiness check")
+    .option("--json", "Output as JSON instead of table")
+    .action((opts: { json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running. Start with: strata daemon start");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!ctx.deploymentExecutor) {
+        console.log("Deployment is disabled (DEPLOY_ENABLED=false)");
+        return;
+      }
+
+      const stats = ctx.deploymentExecutor.getStats();
+
+      if (opts.json) {
+        console.log(JSON.stringify(stats, null, 2));
+        return;
+      }
+
+      console.log("Deployment Status:");
+      console.log(`  Total deployments: ${stats.totalDeployments}`);
+      console.log(`  Successful: ${stats.successful}`);
+      console.log(`  Failed: ${stats.failed}`);
+      console.log(`  Circuit breaker: ${stats.circuitBreakerState}`);
+      if (stats.lastDeployment) {
+        const last = stats.lastDeployment as Record<string, unknown>;
+        console.log(`  Last deployment: ${new Date(last["proposedAt"] as number).toISOString()} (${last["status"]})`);
+      }
+    });
+
+  daemon
+    .command("deploy:history")
+    .description("Show recent deployment history")
+    .option("--limit <n>", "Number of entries to show", "10")
+    .option("--json", "Output as JSON instead of table")
+    .action((opts: { limit: string; json?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running. Start with: strata daemon start");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!ctx.deploymentExecutor) {
+        console.log("Deployment is disabled (DEPLOY_ENABLED=false)");
+        return;
+      }
+
+      const limit = parseInt(opts.limit, 10) || 10;
+      const history = ctx.deploymentExecutor.getHistory(limit);
+
+      if (opts.json) {
+        console.log(JSON.stringify(history, null, 2));
+        return;
+      }
+
+      if (history.length === 0) {
+        console.log("No deployment history.");
+        return;
+      }
+
+      console.log("Deployment History:");
+      console.log(
+        padRight("Timestamp", 25) +
+        padRight("Status", 20) +
+        padRight("Duration", 12) +
+        padRight("Approved By", 15),
+      );
+      console.log("-".repeat(72));
+
+      for (const e of history) {
+        const ts = new Date(e.proposedAt).toISOString();
+        const durationStr = e.duration != null ? `${e.duration}ms` : "-";
+        console.log(
+          padRight(ts, 25) +
+          padRight(e.status, 20) +
+          padRight(durationStr, 12) +
+          padRight(e.approvedBy ?? "-", 15),
+        );
+      }
+    });
+
+  daemon
+    .command("deploy:check")
+    .description("Run deployment readiness check")
+    .option("--execute", "If ready, propose deployment")
+    .option("--force", "Skip interactive confirmation (for scripted use)")
+    .action(async (opts: { execute?: boolean; force?: boolean }) => {
+      const ctx = getDaemonContext();
+      if (!ctx) {
+        console.error("Daemon is not running. Start with: strata daemon start");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!ctx.readinessChecker) {
+        console.log("Deployment is disabled (DEPLOY_ENABLED=false)");
+        return;
+      }
+
+      console.log("Running readiness check...");
+      const result = await ctx.readinessChecker.checkReadiness(true);
+
+      console.log(`Ready: ${result.ready ? "YES" : "NO"}`);
+      console.log(`  Tests: ${result.testPassed ? "PASS" : "FAIL"}`);
+      console.log(`  Git clean: ${result.gitClean ? "YES" : "NO"}`);
+      console.log(`  Branch match: ${result.branchMatch ? "YES" : "NO"}`);
+      if (result.reason) {
+        console.log(`  Reason: ${result.reason}`);
+      }
+
+      if (opts.execute && result.ready && ctx.deployTrigger) {
+        if (opts.force) {
+          console.log("Proposing deployment...");
+          await ctx.deployTrigger.triggerReadinessCheck();
+          console.log("Deployment proposed via approval queue.");
+        } else {
+          console.log("Use --force to propose deployment without interactive confirmation.");
+        }
+      }
     });
 }
 

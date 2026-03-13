@@ -168,6 +168,33 @@ export interface GoalRetryEvent {
 }
 
 // =============================================================================
+// CONSOLIDATION EVENT TYPES (Phase 25)
+// =============================================================================
+
+/** Emitted when a memory consolidation cycle starts */
+export interface ConsolidationStartedEvent {
+  readonly timestamp: number;
+  readonly agentId?: string;
+}
+
+/** Emitted when a memory consolidation cycle completes */
+export interface ConsolidationCompletedEvent {
+  readonly processed: number;
+  readonly clustersFound: number;
+  readonly costUsd: number;
+  readonly timestamp: number;
+  readonly agentId?: string;
+}
+
+/** Emitted when a memory consolidation cycle is interrupted by user activity */
+export interface ConsolidationInterruptedEvent {
+  readonly processed: number;
+  readonly remaining: number;
+  readonly timestamp: number;
+  readonly agentId?: string;
+}
+
+// =============================================================================
 // EVENT MAP
 // =============================================================================
 
@@ -198,6 +225,9 @@ export interface LearningEventMap {
   "delegation:started": DelegationStartedEvent;
   "delegation:completed": DelegationCompletedEvent;
   "delegation:failed": DelegationFailedEvent;
+  "consolidation:started": ConsolidationStartedEvent;
+  "consolidation:completed": ConsolidationCompletedEvent;
+  "consolidation:interrupted": ConsolidationInterruptedEvent;
 }
 
 // =============================================================================

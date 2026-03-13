@@ -39,6 +39,16 @@ interface IdentityActivity {
   recordActivity(): void;
 }
 
+/** Consolidation engine interface -- only the subset HeartbeatLoop uses */
+interface ConsolidationEngineContract {
+  runCycle(signal: AbortSignal): Promise<{ status: string; processed: number; remaining: number; clustersFound: number; costUsd: number }>;
+}
+
+/** Deploy trigger interface -- only the subset HeartbeatLoop uses */
+interface DeployTriggerContract {
+  triggerReadinessCheck(): Promise<unknown>;
+}
+
 export class HeartbeatLoop {
   private intervalId: ReturnType<typeof setInterval> | undefined;
   private running = false;
@@ -49,6 +59,16 @@ export class HeartbeatLoop {
   /** Track budget exceeded/warning state to emit events only once per state change */
   private budgetExceededEmitted = false;
   private budgetWarningEmitted = false;
+
+  /** Consolidation state (Phase 25) */
+  private consolidationEngine?: ConsolidationEngineContract;
+  private consolidationConfig?: { idleMinutes: number };
+  private consolidationAbort?: AbortController;
+  private consolidationRunning = false;
+  private lastUserActivity = Date.now();
+
+  /** Deploy trigger (Phase 25) */
+  private deployTrigger?: DeployTriggerContract;
 
   constructor(
     private readonly registry: TriggerRegistry,
@@ -167,6 +187,41 @@ export class HeartbeatLoop {
       this.logger.warn("Failed to prune trigger fire history", {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+
+    // Idle-driven memory consolidation (Phase 25, MEM-12, MEM-13)
+    if (this.consolidationEngine && this.consolidationConfig && !this.consolidationRunning) {
+      const idleMs = now.getTime() - this.lastUserActivity;
+      const idleThresholdMs = this.consolidationConfig.idleMinutes * 60000;
+      if (idleMs >= idleThresholdMs) {
+        this.consolidationRunning = true;
+        this.consolidationAbort = new AbortController();
+        const signal = this.consolidationAbort.signal;
+        const engine = this.consolidationEngine;
+        // Fire-and-forget -- async consolidation runs in background
+        void engine.runCycle(signal).then((result) => {
+          if (result.status === "completed" || result.status === "interrupted") {
+            this.eventBus.emit("daemon:maintenance", {
+              type: "consolidation_" + result.status,
+              count: result.processed,
+              timestamp: Date.now(),
+            });
+            this.logger.info("Consolidation cycle finished", {
+              status: result.status,
+              processed: result.processed,
+              clusters: result.clustersFound,
+              cost: result.costUsd,
+            });
+          }
+        }).catch((err: unknown) => {
+          this.logger.warn("Consolidation cycle failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }).finally(() => {
+          this.consolidationRunning = false;
+          this.consolidationAbort = undefined;
+        });
+      }
     }
 
     // Get active triggers
@@ -343,6 +398,15 @@ export class HeartbeatLoop {
       }
     }
 
+    // Deployment readiness check after trigger evaluation (Phase 25, DEPLOY-01)
+    if (this.deployTrigger) {
+      void this.deployTrigger.triggerReadinessCheck().catch((err: unknown) => {
+        this.logger.debug("Deployment readiness check failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     // Update lastTick
     this.lastTick = now;
   }
@@ -386,6 +450,33 @@ export class HeartbeatLoop {
    */
   getDeduplicator(): TriggerDeduplicator | undefined {
     return this.deduplicator;
+  }
+
+  /**
+   * Set the consolidation engine for idle-driven memory consolidation (Phase 25).
+   */
+  setConsolidationEngine(engine: ConsolidationEngineContract, config: { idleMinutes: number }): void {
+    this.consolidationEngine = engine;
+    this.consolidationConfig = config;
+  }
+
+  /**
+   * Set the deploy trigger for readiness checks after task/goal completion (Phase 25).
+   */
+  setDeployTrigger(trigger: DeployTriggerContract): void {
+    this.deployTrigger = trigger;
+  }
+
+  /**
+   * Record user activity timestamp and abort any in-progress consolidation (MEM-13).
+   * Called from message handler when user sends a message.
+   */
+  onUserActivity(): void {
+    this.lastUserActivity = Date.now();
+    if (this.consolidationRunning && this.consolidationAbort) {
+      this.consolidationAbort.abort();
+      this.logger.info("Consolidation interrupted by user activity");
+    }
   }
 
   // ===========================================================================

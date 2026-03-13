@@ -1182,6 +1182,22 @@ export class AgentDBMemory implements IUnifiedMemory {
     }
   }
 
+  /**
+   * Expose internals for the memory consolidation engine (Phase 25).
+   * Returns SQLite DB, entries map, and HNSW store references.
+   */
+  getConsolidationInternals(): {
+    sqliteDb: import("better-sqlite3").Database | null;
+    entries: Map<string, UnifiedMemoryEntry>;
+    hnswStore: HNSWVectorStore | undefined;
+  } {
+    return {
+      sqliteDb: this.sqliteDb,
+      entries: this.entries,
+      hnswStore: this.hnswStore,
+    };
+  }
+
   getIndexHealth(): HnswHealth {
     const issues: string[] = [];
     const hnswStats = this.hnswStore?.getHNSWStats();

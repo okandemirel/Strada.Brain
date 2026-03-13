@@ -177,6 +177,45 @@ export interface DaemonMaintenanceEvent {
 }
 
 // =============================================================================
+// DEPLOYMENT EVENT TYPES (Phase 25)
+// =============================================================================
+
+/** Emitted when a deployment is proposed via ApprovalQueue */
+export interface DeployProposedEvent {
+  readonly proposalId: string;
+  readonly agentId?: string;
+  readonly timestamp: number;
+}
+
+/** Emitted when a deployment proposal is approved */
+export interface DeployApprovedEvent {
+  readonly proposalId: string;
+  readonly approvedBy?: string;
+  readonly timestamp: number;
+}
+
+/** Emitted when deployment script execution starts */
+export interface DeployStartedEvent {
+  readonly proposalId: string;
+  readonly scriptPath: string;
+  readonly timestamp: number;
+}
+
+/** Emitted when a deployment completes successfully */
+export interface DeployCompletedEvent {
+  readonly proposalId: string;
+  readonly durationMs: number;
+  readonly timestamp: number;
+}
+
+/** Emitted when a deployment fails */
+export interface DeployFailedEvent {
+  readonly proposalId: string;
+  readonly error: string;
+  readonly timestamp: number;
+}
+
+// =============================================================================
 // EVENT MAP
 // =============================================================================
 
@@ -201,4 +240,9 @@ export interface DaemonEventMap {
   "daemon:digest_sent": DigestSentEvent;
   "daemon:notification_routed": NotificationRoutedEvent;
   "daemon:maintenance": DaemonMaintenanceEvent;
+  "deploy:proposed": DeployProposedEvent;
+  "deploy:approved": DeployApprovedEvent;
+  "deploy:started": DeployStartedEvent;
+  "deploy:completed": DeployCompletedEvent;
+  "deploy:failed": DeployFailedEvent;
 }

@@ -48,6 +48,11 @@ function getLoggerSafe() {
 export class AgentDBAdapter implements IMemoryManager {
   constructor(private readonly agentdb: AgentDBMemory) {}
 
+  /** Get the underlying AgentDBMemory instance (for consolidation engine access, Phase 25) */
+  getAgentDBMemory(): AgentDBMemory {
+    return this.agentdb;
+  }
+
   // =========================================================================
   // Lifecycle — pass-through
   // =========================================================================

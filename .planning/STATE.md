@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Multi-Agent & Hardening
-status: in_progress
-stopped_at: Completed 24-02 (Delegation Engine)
-last_updated: "2026-03-12T07:46:23Z"
-last_activity: 2026-03-12 -- Completed 24-02 (Delegation Engine)
+status: in-progress
+stopped_at: Completed 25-02-PLAN.md
+last_updated: "2026-03-13T09:29:49Z"
+last_activity: 2026-03-13 -- Completed Phase 25 Plan 02 (Deployment Subsystem)
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 15
-  completed_plans: 14
-  percent: 95
+  completed_plans: 16
+  percent: 99
 ---
 
 # State: Strada.Brain
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-10)
 
 **Core value:** The agent must reason, learn, and adapt autonomously -- runs 24/7 as a proactive daemon.
-**Current focus:** v3.0 Multi-Agent & Hardening -- Phase 24 in progress (Task Delegation)
+**Current focus:** v3.0 Multi-Agent & Hardening -- Phase 25 Plan 02 complete, Plan 03 next (Deployment Wiring)
 
 ## Current Position
 
-Phase: 24 of 25 (Task Delegation)
+Phase: 25 of 25 (Memory Consolidation & Deployment)
 Plan: 2 of 3 complete
-Status: In Progress
-Last activity: 2026-03-12 -- Completed 24-02 (Delegation Engine)
+Status: Plan 25-02 complete, Plan 25-03 next
+Last activity: 2026-03-13 -- Completed Phase 25 Plan 02 (Deployment Subsystem)
 
-Progress: [█████████░] 95%
+Progress: [██████████] 99%
 
 ## Performance Metrics
 
@@ -41,8 +41,9 @@ Progress: [█████████░] 95%
 - v3.0 Phase 21: 1 phase, 4 plans including gap closure (2026-03-10)
 - v3.0 Phase 22: Plan 01 in 7 min, Plan 02 in 7 min, Plan 03 in 6 min, Plan 04 in 6 min, Plan 05 in 3 min (2026-03-11)
 - v3.0 Phase 23: Plan 01 in 7 min, Plan 02 in 7 min, Plan 03 in 12 min (2026-03-11)
-- v3.0 Phase 24: Plan 01 in 8 min, Plan 02 in 9 min (2026-03-12)
-- Total: 22 phases, 63 plans, 7 days
+- v3.0 Phase 24: Plan 01 in 8 min, Plan 02 in 9 min, Plan 03 in 12 min (2026-03-12)
+- v3.0 Phase 25: Plan 02 in 14 min (2026-03-13)
+- Total: 22 phases, 66 plans, 8 days
 
 ## Accumulated Context
 
@@ -102,6 +103,15 @@ Progress: [█████████░] 95%
 - 24-02: Depth enforcement via tool exclusion at depth+1 >= maxDepth (sub-agents near limit don't see delegation tools)
 - 24-02: Abort/timeout errors bypass escalation chain -- only model failures trigger tier escalation
 - 24-02: delegateAsync uses same executeSingleDelegation internally (same lifecycle events for both modes)
+- 24-03: Nested config guard for delegation wiring inside existing multi-agent block (config.agent.enabled && config.taskDelegationEnabled)
+- 24-03: AgentManager delegation factory via setter (not constructor param) to preserve Phase 23 constructor signature
+- 24-03: Structural typing for dashboard delegation interfaces (DashboardDelegationLog, DashboardDelegationManager) avoids concrete imports
+- 24-03: Dashboard Delegations panel starts hidden, shows only when /api/delegations returns enabled:true
+- 25-02: Script execution via spawn() with array args (not exec) for shell injection prevention
+- 25-02: Output capped at 10KB per stream to prevent memory exhaustion
+- 25-02: Readiness results cached to avoid re-running test command within same heartbeat cycle
+- 25-02: DeployTrigger is event-driven (getNextRun returns null) -- fires on readiness, not schedule
+- 25-02: Post-verify failure results in distinct "post_verify_failed" status
 
 ### Pending Todos
 
@@ -113,10 +123,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T07:46:23Z
-Stopped at: Completed 24-02 (Delegation Engine)
-Resume file: .planning/phases/24-task-delegation/24-03-PLAN.md
+Last session: 2026-03-13T09:29:49Z
+Stopped at: Completed 25-02-PLAN.md
+Resume file: .planning/phases/25-memory-consolidation-deployment/25-03-PLAN.md
 
 ---
 *State initialized: 2026-03-06*
-*Last updated: 2026-03-12 after Phase 24 Plan 02 (Delegation Engine)*
+*Last updated: 2026-03-13 after Phase 25 Plan 02 (Deployment Subsystem)*

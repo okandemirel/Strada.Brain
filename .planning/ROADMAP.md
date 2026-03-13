@@ -39,7 +39,7 @@
 - [x] **Phase 21: Operational Health & Memory Decay** - Fix trigger history pruning and add time-based memory decay with per-tier rates
 - [x] **Phase 22: Tool Chain Resilience** - Add saga-pattern rollback for reversible chains and parallel branch execution via DAG topology
 - [x] **Phase 23: Multi-Agent Foundation** - Establish per-agent session isolation, channel routing, budget tracking, and backward-compatible activation
-- [ ] **Phase 24: Task Delegation** - Enable sub-agent spawning with depth limits and difficulty-aware model routing
+- [x] **Phase 24: Task Delegation** - Enable sub-agent spawning with depth limits and difficulty-aware model routing
 - [ ] **Phase 25: Memory Consolidation & Deployment** - Add idle-time memory consolidation and approval-gated autonomous deployment
 
 ## Phase Details
@@ -109,7 +109,7 @@ Plans:
 Plans:
 - [x] 24-01-PLAN.md -- Delegation types, config schema, tier router, and audit log (AGENT-03, AGENT-04, AGENT-05)
 - [x] 24-02-PLAN.md -- DelegationTool (ITool) and DelegationManager with sub-agent orchestration (AGENT-03, AGENT-04, AGENT-05)
-- [ ] 24-03-PLAN.md -- Bootstrap wiring, CLI delegation commands, Dashboard Delegations panel (AGENT-03, AGENT-04, AGENT-05)
+- [x] 24-03-PLAN.md -- Bootstrap wiring, CLI delegation commands, Dashboard Delegations panel (AGENT-03, AGENT-04, AGENT-05)
 
 ### Phase 25: Memory Consolidation & Deployment
 **Goal**: Agent consolidates similar memories during idle periods and can execute approval-gated deployments when readiness is detected
@@ -121,12 +121,12 @@ Plans:
   3. The agent detects deployment readiness and proposes deployment through the existing approval queue
   4. Deployment executes only after explicit human approval via any connected channel, never autonomously
   5. Deployment capability is disabled by default and requires explicit opt-in configuration
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 25-01: TBD
-- [ ] 25-02: TBD
-- [ ] 25-03: TBD
+- [ ] 25-01-PLAN.md -- Consolidation engine: types, config, HNSW clustering, LLM summarization, soft-delete, interruption, undo (MEM-12, MEM-13)
+- [ ] 25-02-PLAN.md -- Deployment subsystem: readiness checker, executor, deploy trigger with approval gate and circuit breaker (DEPLOY-01, DEPLOY-02, DEPLOY-03)
+- [ ] 25-03-PLAN.md -- Bootstrap wiring, CLI commands, Dashboard sections, event types, heartbeat integration (MEM-12, MEM-13, DEPLOY-01, DEPLOY-02, DEPLOY-03)
 
 ## Progress
 
@@ -141,9 +141,9 @@ Phases 21 and 22 can execute in parallel (independent subsystems). Phase 23 foll
 | 21. Operational Health & Memory Decay | 4/4 | Complete    | 2026-03-10 | 2026-03-10 |
 | 22. Tool Chain Resilience | 5/5 | Complete    | 2026-03-11 | 2026-03-11 |
 | 23. Multi-Agent Foundation | 3/3 | Complete    | 2026-03-11 | 2026-03-11 |
-| 24. Task Delegation | v3.0 | 2/3 | In progress | - |
-| 25. Memory Consolidation & Deployment | v3.0 | 0/TBD | Not started | - |
+| 24. Task Delegation | v3.0 | Complete    | 2026-03-12 | 2026-03-12 |
+| 25. Memory Consolidation & Deployment | 1/3 | In Progress|  | - |
 
 ---
 *Roadmap created: 2026-03-06*
-*Last updated: 2026-03-12 after Phase 24 Plan 02 (Delegation Engine)*
+*Last updated: 2026-03-13 after Phase 25 planning (Memory Consolidation & Deployment)*

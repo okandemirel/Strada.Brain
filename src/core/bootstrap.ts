@@ -747,6 +747,158 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       }
     }
 
+    // Memory Consolidation (Phase 25: MEM-12, MEM-13)
+    if (config.memory.consolidation.enabled && memoryManager) {
+      try {
+        const { MemoryConsolidationEngine } = await import("../memory/unified/consolidation-engine.js");
+        const { AgentDBAdapter: AdapterCheck } = await import("../memory/unified/agentdb-adapter.js");
+
+        // Access AgentDBMemory internals through adapter
+        if (memoryManager instanceof AdapterCheck) {
+          const agentdbInstance = memoryManager.getAgentDBMemory();
+          const internals = agentdbInstance.getConsolidationInternals();
+
+          if (internals.sqliteDb && internals.hnswStore) {
+            // Build generateEmbedding function from the same embedding provider AgentDBMemory uses
+            const generateEmbeddingFn = async (text: string): Promise<number[]> => {
+              if (cachedEmbeddingProvider) {
+                const batch = await cachedEmbeddingProvider.embed([text]);
+                return batch.embeddings[0] as number[];
+              }
+              // Fallback: use hash-based embedding (same as AgentDBMemory without embedding provider)
+              const { createHash: hashFn } = await import("node:crypto");
+              const hash = hashFn("sha256").update(text).digest();
+              const dims = config.memory.unified.dimensions;
+              const vec = new Array<number>(dims);
+              for (let i = 0; i < dims; i++) {
+                vec[i] = (hash[i % hash.length]! / 128) - 1;
+              }
+              return vec;
+            };
+
+            // Build summarizeWithLLM function using ProviderManager
+            const summarizeFn = async (texts: string[]): Promise<{ summary: string; cost: number; model: string }> => {
+              const provider = providerManager.getProvider("");
+              const prompt = `Summarize the following related memory entries into a single concise entry that preserves key information:\n\n${texts.map((t, i) => `[${i + 1}] ${t}`).join("\n\n")}`;
+              const response = await provider.chat(
+                "You are a memory consolidation engine. Produce a concise summary preserving key facts.",
+                [{ role: "user", content: prompt }],
+                [],
+              );
+              return {
+                summary: response.text,
+                cost: 0, // Cost tracked at provider level
+                model: provider.name,
+              };
+            };
+
+            const consolidationEngine = new MemoryConsolidationEngine({
+              sqliteDb: internals.sqliteDb,
+              entries: internals.entries,
+              hnswStore: internals.hnswStore,
+              config: { ...config.memory.consolidation, minAgeMs: 3600000 },
+              generateEmbedding: generateEmbeddingFn,
+              summarizeWithLLM: summarizeFn,
+              eventEmitter: learningResult.eventBus ?? { emit: () => {} },
+              logger,
+              exemptDomains: config.memory.decay.exemptDomains,
+            });
+
+            // Wire into heartbeat for idle-driven consolidation
+            heartbeatLoop.setConsolidationEngine(consolidationEngine, {
+              idleMinutes: config.memory.consolidation.idleMinutes,
+            });
+
+            // Add to daemon context for CLI access
+            daemonContext!.consolidationEngine = consolidationEngine;
+
+            logger.info("Memory consolidation engine initialized", {
+              idleMinutes: config.memory.consolidation.idleMinutes,
+              threshold: config.memory.consolidation.threshold,
+            });
+          } else {
+            logger.warn("Memory consolidation skipped: SQLite DB or HNSW store not available");
+          }
+        } else {
+          logger.debug("Memory consolidation skipped: memory manager is not AgentDBAdapter");
+        }
+      } catch (error) {
+        logger.warn("Memory consolidation initialization failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Deployment (Phase 25: DEPLOY-01, DEPLOY-02, DEPLOY-03)
+    if (config.deployment.enabled) {
+      try {
+        const { DeployTrigger } = await import("../daemon/triggers/deploy-trigger.js");
+        const { ReadinessChecker } = await import("../daemon/deployment/readiness-checker.js");
+        const { DeploymentExecutor } = await import("../daemon/deployment/deployment-executor.js");
+        const { CircuitBreaker: DeployCircuitBreaker } = await import("../daemon/resilience/circuit-breaker.js");
+
+        const readinessCheckerInstance = new ReadinessChecker(
+          config.deployment,
+          config.unityProjectPath,
+          logger,
+        );
+
+        const deploymentExecutorInstance = new DeploymentExecutor(
+          config.deployment,
+          config.unityProjectPath,
+          logger,
+          daemonStorage.getDatabase(),
+        );
+
+        const deployCircuitBreaker = new DeployCircuitBreaker(
+          daemonConfig.backoff.failureThreshold,
+          daemonConfig.backoff.baseCooldownMs,
+          daemonConfig.backoff.maxCooldownMs,
+        );
+
+        const deployTriggerInstance = new DeployTrigger(
+          readinessCheckerInstance,
+          approvalQueueInstance,
+          deployCircuitBreaker,
+          deploymentExecutorInstance,
+          config.deployment,
+          logger,
+        );
+
+        // Register deploy trigger in trigger registry
+        triggerRegistry.register(deployTriggerInstance);
+
+        // Wire into heartbeat for readiness checks
+        heartbeatLoop.setDeployTrigger(deployTriggerInstance);
+
+        // Store in DaemonContext for CLI/dashboard access
+        daemonContext!.deploymentExecutor = deploymentExecutorInstance;
+        daemonContext!.readinessChecker = readinessCheckerInstance;
+        daemonContext!.deployTrigger = deployTriggerInstance;
+
+        // Validate script path at startup (warning only)
+        if (config.deployment.scriptPath) {
+          try {
+            readinessCheckerInstance.validateScriptPath(config.deployment.scriptPath);
+          } catch {
+            logger.warn("Deployment script path validation failed at startup (will be re-validated at execution time)", {
+              scriptPath: config.deployment.scriptPath,
+            });
+          }
+        }
+
+        logger.info("Deployment subsystem initialized", {
+          testCommand: config.deployment.testCommand,
+          targetBranch: config.deployment.targetBranch,
+          scriptPath: config.deployment.scriptPath ?? "(not set)",
+        });
+      } catch (error) {
+        logger.warn("Deployment initialization failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
     if (dashboard) {
       dashboard.setDaemonContext({
@@ -770,6 +922,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   if (agentManager) {
     // Multi-agent mode: route through AgentManager (AGENT-06)
     channel.onMessage(async (msg) => {
+      // Interrupt consolidation on user activity (MEM-13)
+      heartbeatLoop?.onUserActivity();
       if (identityManager) {
         identityManager.recordActivity();
         identityManager.incrementMessages();
@@ -788,7 +942,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
   } else {
     // v2.0 single-agent mode: unchanged path (AGENT-07)
-    wireMessageHandler(channel, messageRouter, orchestrator, learningResult.taskPlanner, learningResult.pipeline, identityManager);
+    wireMessageHandler(channel, messageRouter, orchestrator, learningResult.taskPlanner, learningResult.pipeline, identityManager, heartbeatLoop);
   }
 
   // Setup cleanup
@@ -1404,8 +1558,11 @@ function wireMessageHandler(
   taskPlanner: TaskPlanner,
   learningPipeline: LearningPipeline | undefined,
   identityManager?: IdentityStateManager,
+  heartbeatLoopRef?: HeartbeatLoop,
 ): void {
   channel.onMessage(async (msg) => {
+    // Interrupt consolidation on user activity (MEM-13)
+    heartbeatLoopRef?.onUserActivity();
     // Track activity and messages for identity persistence
     if (identityManager) {
       identityManager.recordActivity();
