@@ -6,78 +6,21 @@ import { createLogger } from "../../utils/logger.js";
 // Initialize logger for tests
 createLogger("error", "/tmp/strada-test.log");
 
-const TEST_PORT = 8765;
-
-// Simple HTML server for testing
-async function startTestServer(): Promise<{ stop: () => void; url: string }> {
-  const http = await import("node:http");
-  
-  const server = http.createServer((req, res) => {
-    const url = req.url ?? "/";
-    
-    if (url === "/") {
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(`
-        <!DOCTYPE html>
-        <html>
-          <head><title>Test Page</title></head>
-          <body>
-            <h1>Hello World</h1>
-            <input type="text" id="search" />
-            <button id="submit">Submit</button>
-            <select id="select">
-              <option value="a">Option A</option>
-              <option value="b">Option B</option>
-            </select>
-            <div id="result"></div>
-            <script>
-              document.getElementById('submit').addEventListener('click', () => {
-                document.getElementById('result').textContent = 'Clicked!';
-              });
-            </script>
-          </body>
-        </html>
-      `);
-    } else if (url === "/api/data") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ message: "Hello from API", status: "ok" }));
-    } else {
-      res.writeHead(404);
-      res.end("Not Found");
-    }
-  });
-
-  return new Promise((resolve) => {
-    server.listen(TEST_PORT, () => {
-      resolve({
-        stop: () => server.close(),
-        url: `http://localhost:${TEST_PORT}`,
-      });
-    });
-  });
-}
-
 describe("BrowserAutomationTool", () => {
   let tool: BrowserAutomationTool;
-  let server: { stop: () => void; url: string };
   let context: ToolContext;
 
-  beforeAll(async () => {
-    server = await startTestServer();
+  beforeEach(() => {
+    tool = new BrowserAutomationTool();
     context = {
       projectPath: "/tmp/test",
       workingDirectory: "/tmp/test",
       readOnly: false,
     };
-  }, 30000);
+  });
 
   afterAll(async () => {
-    server.stop();
     await tool?.dispose();
-  }, 30000);
-
-  beforeEach(() => {
-    tool = new BrowserAutomationTool();
   });
 
   describe("schema", () => {
@@ -193,37 +136,24 @@ describe("BrowserAutomationTool", () => {
   });
 });
 
-describe("BrowserAutomationTool with server", () => {
+describe.skipIf(!process.env["EXTERNAL_TESTS"])("BrowserAutomationTool external", () => {
   let tool: BrowserAutomationTool;
-  let server: { stop: () => void; url: string } | null = null;
   let context: ToolContext;
-
-  // Skip these tests if we can't start the server
-  const itIfServer = server ? it : it.skip;
-
-  beforeAll(async () => {
-    try {
-      server = await startTestServer();
-      context = {
-        projectPath: "/tmp/test",
-        workingDirectory: "/tmp/test",
-        readOnly: false,
-      };
-    } catch {
-      console.log("Could not start test server, skipping integration tests");
-    }
-  }, 30000);
-
-  afterAll(async () => {
-    server?.stop();
-    await tool?.dispose();
-  }, 30000);
 
   beforeEach(() => {
     tool = new BrowserAutomationTool();
+    context = {
+      projectPath: "/tmp/test",
+      workingDirectory: "/tmp/test",
+      readOnly: false,
+    };
   });
 
-  itIfServer("should navigate to external URLs", async () => {
+  afterAll(async () => {
+    await tool?.dispose();
+  });
+
+  it("should navigate to external URLs", async () => {
     // Test with example.com (reliable test site)
     const result = await tool.execute(
       { action: "navigate", url: "https://example.com" },
@@ -233,7 +163,7 @@ describe("BrowserAutomationTool with server", () => {
     expect(result.content).toContain("example.com");
   }, 30000);
 
-  itIfServer("should get page content", async () => {
+  it("should get page content", async () => {
     await tool.execute(
       { action: "navigate", url: "https://example.com" },
       context
@@ -247,7 +177,7 @@ describe("BrowserAutomationTool with server", () => {
     expect(result.content).toContain("Example Domain");
   }, 30000);
 
-  itIfServer("should evaluate JavaScript", async () => {
+  it("should evaluate JavaScript", async () => {
     await tool.execute(
       { action: "navigate", url: "https://example.com" },
       context
@@ -261,7 +191,7 @@ describe("BrowserAutomationTool with server", () => {
     expect(result.content).toContain("Example Domain");
   }, 30000);
 
-  itIfServer("should block dangerous JavaScript", async () => {
+  it("should block dangerous JavaScript", async () => {
     await tool.execute(
       { action: "navigate", url: "https://example.com" },
       context
@@ -275,7 +205,7 @@ describe("BrowserAutomationTool with server", () => {
     expect(result.content).toContain("blocked patterns");
   }, 30000);
 
-  itIfServer("should take screenshots", async () => {
+  it("should take screenshots", async () => {
     await tool.execute(
       { action: "navigate", url: "https://example.com" },
       context

@@ -1,17 +1,32 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import os from 'node:os';
-import { SystemMonitor, resetSystemMonitor } from './system-monitor.js';
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { SystemMonitor, resetSystemMonitor } from "./system-monitor.js";
 
-vi.spyOn(os, 'uptime').mockReturnValue(123456);
+vi.mock("node:os", () => ({
+  cpus: vi.fn(() => [
+    {
+      times: {
+        user: 100,
+        nice: 0,
+        sys: 50,
+        idle: 850,
+        irq: 0,
+      },
+    },
+  ]),
+  totalmem: vi.fn(() => 16 * 1024 * 1024 * 1024),
+  freemem: vi.fn(() => 8 * 1024 * 1024 * 1024),
+  loadavg: vi.fn(() => [1, 0.5, 0.25]),
+  uptime: vi.fn(() => 123456),
+}));
 
-vi.mock('child_process', () => ({
+vi.mock("node:child_process", () => ({
   exec: (cmd: string, cb: (err: Error | null, stdout: string) => void) => {
     // Mock df output: filesystem 1K-blocks used available use% mounted
-    cb(null, '/dev/disk1 500000000 250000000 250000000 50% /\n');
+    cb(null, "/dev/disk1 500000000 250000000 250000000 50% /\n");
   },
 }));
 
-describe('SystemMonitor', () => {
+describe("SystemMonitor", () => {
     let monitor: SystemMonitor;
 
     beforeEach(() => {
@@ -23,8 +38,8 @@ describe('SystemMonitor', () => {
         );
     });
 
-    describe('start/stop', () => {
-        it('should start and stop monitoring', () => {
+    describe("start/stop", () => {
+        it("should start and stop monitoring", () => {
             expect(monitor.isRunning()).toBe(false);
             
             monitor.start();
@@ -34,15 +49,15 @@ describe('SystemMonitor', () => {
             expect(monitor.isRunning()).toBe(false);
         });
 
-        it('should not start multiple times', () => {
+        it("should not start multiple times", () => {
             monitor.start();
             monitor.start(); // Should not throw
             expect(monitor.isRunning()).toBe(true);
         });
     });
 
-    describe('thresholds', () => {
-        it('should get and update thresholds', () => {
+    describe("thresholds", () => {
+        it("should get and update thresholds", () => {
             const thresholds = monitor.getThresholds();
             expect(thresholds.cpuPercent).toBe(80);
             expect(thresholds.memoryPercent).toBe(85);
@@ -54,8 +69,8 @@ describe('SystemMonitor', () => {
         });
     });
 
-    describe('metrics collection', () => {
-        it('should collect system metrics', async () => {
+    describe("metrics collection", () => {
+        it("should collect system metrics", async () => {
             await monitor.check();
             
             const metrics = monitor.getCurrentMetrics();
@@ -66,7 +81,7 @@ describe('SystemMonitor', () => {
             expect(metrics?.memoryPercent).toBeLessThanOrEqual(100);
         });
 
-        it('should store metrics history', async () => {
+        it("should store metrics history", async () => {
             await monitor.check();
             await monitor.check();
             
@@ -74,7 +89,7 @@ describe('SystemMonitor', () => {
             expect(history.length).toBeGreaterThanOrEqual(2);
         });
 
-        it('should filter metrics by time window', async () => {
+        it("should filter metrics by time window", async () => {
             await monitor.check();
             
             const history = monitor.getMetricsHistory(1);
@@ -82,8 +97,8 @@ describe('SystemMonitor', () => {
         });
     });
 
-    describe('getStatus', () => {
-        it('should return monitor status', () => {
+    describe("getStatus", () => {
+        it("should return monitor status", () => {
             const status = monitor.getStatus();
             expect(status.running).toBe(false);
             expect(status.enabled).toBe(true);
@@ -92,8 +107,8 @@ describe('SystemMonitor', () => {
         });
     });
 
-    describe('average metrics', () => {
-        it('should calculate average metrics', async () => {
+    describe("average metrics", () => {
+        it("should calculate average metrics", async () => {
             // Collect some metrics
             for (let i = 0; i < 3; i++) {
                 await monitor.check();
@@ -105,7 +120,7 @@ describe('SystemMonitor', () => {
             expect(avg?.memoryPercent).toBeDefined();
         });
 
-        it('should return null when no metrics', () => {
+        it("should return null when no metrics", () => {
             const avg = monitor.getAverageMetrics(5);
             expect(avg).toBeNull();
         });

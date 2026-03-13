@@ -5,7 +5,7 @@
  * Replaces the monolithic startBrain() function from index.ts.
  */
 
-import { existsSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import type { Config } from "../config/config.js";
@@ -138,15 +138,6 @@ export interface BootstrapResult {
 export async function bootstrap(options: BootstrapOptions): Promise<BootstrapResult> {
   const { channelType, config, container: customContainer } = options;
   const container = customContainer!; // We ensure container exists below
-
-  // Auto-migrate .strata-memory → .strada-memory
-  try {
-    renameSync('.strata-memory', '.strada-memory');
-    console.info('Migrated .strata-memory -> .strada-memory');
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') throw e;
-  }
 
   const logger = createLogger(config.logLevel, config.logFile);
   logger.info("Bootstrapping Strada Brain", {

@@ -11,4 +11,4 @@ dist/
 coverage/
 .worktrees/
 .planning/
-.strata-memory/
+.strada-memory/

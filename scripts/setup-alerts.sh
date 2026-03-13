@@ -1,5 +1,5 @@
 #!/bin/bash
-# Alerting Setup Script for Strata.Brain
+# Alerting Setup Script for Strada.Brain
 # Configures and tests alerting system
 
 set -e
@@ -29,7 +29,7 @@ error() { log "${RED}❌ $1${NC}"; }
 print_header() {
     echo -e "${BLUE}"
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║           Strata.Brain Alerting Setup                        ║"
+    echo "║           Strada.Brain Alerting Setup                        ║"
     echo "║                                                              ║"
     echo "║   Configure Discord, Slack, Email, Telegram alerts          ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
@@ -218,8 +218,8 @@ test_discord() {
         -H "Content-Type: application/json" \
         -d '{
             "embeds": [{
-                "title": "🔔 Strata.Brain Alert Test",
-                "description": "This is a test alert from Strata.Brain alerting system.",
+                "title": "🔔 Strada.Brain Alert Test",
+                "description": "This is a test alert from Strada.Brain alerting system.",
                 "color": 3447003,
                 "fields": [
                     {"name": "Status", "value": "✅ Configuration successful", "inline": true},
@@ -248,7 +248,7 @@ test_slack() {
     local response=$(curl -s -w "\n%{http_code}" -X POST "$webhook_url" \
         -H "Content-Type: application/json" \
         -d '{
-            "text": "🔔 Strata.Brain Alert Test",
+            "text": "🔔 Strada.Brain Alert Test",
             "attachments": [{
                 "color": "good",
                 "fields": [
@@ -279,7 +279,7 @@ test_telegram() {
     local response=$(curl -s -w "\n%{http_code}" \
         "https://api.telegram.org/bot${bot_token}/sendMessage" \
         -d "chat_id=${chat_id}" \
-        -d "text=🔔 Strata.Brain Alert Test%0A%0A✅ Configuration successful%0ATime: $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        -d "text=🔔 Strada.Brain Alert Test%0A%0A✅ Configuration successful%0ATime: $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         2>/dev/null)
     
     local http_code=$(echo "$response" | tail -n1)

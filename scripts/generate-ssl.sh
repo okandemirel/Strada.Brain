@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Strata.Brain - SSL Certificate Generator
+# Strada.Brain - SSL Certificate Generator
 # =============================================================================
 # Generates self-signed SSL certificates for development/testing
 #
@@ -78,7 +78,7 @@ openssl req -new -x509 \
     -key "$SSL_DIR/key.pem" \
     -out "$SSL_DIR/cert.pem" \
     -days $DAYS \
-    -subj "/C=US/ST=State/L=City/O=StrataBrain/OU=Development/CN=$DOMAIN" \
+    -subj "/C=US/ST=State/L=City/O=StradaBrain/OU=Development/CN=$DOMAIN" \
     -addext "subjectAltName=DNS:$DOMAIN,DNS:*.$DOMAIN,IP:127.0.0.1,IP:::1"
 
 # Set proper permissions

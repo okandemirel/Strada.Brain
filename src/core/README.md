@@ -69,7 +69,7 @@ Built-in tools registered in `registerBuiltinTools()`:
 | `dotnet` | DotnetBuildTool, DotnetTestTool |
 | `memory` | MemorySearchTool (if memoryManager provided) |
 
-Static const objects (`FileTools`, `SearchTools`, `StrataTools`, `GitTools`, `DotnetTools`, `ShellTools`) export tool name strings for type-safe references elsewhere.
+Static const objects (`FileTools`, `SearchTools`, `StradaTools`, `GitTools`, `DotnetTools`, `ShellTools`) export tool name strings for type-safe references elsewhere.
 
 ## Setup Wizard (`setup-wizard.ts`)
 

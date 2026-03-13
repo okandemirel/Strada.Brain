@@ -4,7 +4,7 @@ Static analysis tooling for C# codebases, specifically targeting Unity projects 
 
 ## Regex-Based C# Parser (`csharp-parser.ts`)
 
-A lightweight, regex-based structural extractor for C# files. Used by `strata-analyzer.ts`.
+A lightweight, regex-based structural extractor for C# files. Used by `strada-analyzer.ts`.
 
 - Rejects files over 1MB to prevent ReDoS
 - Extracts namespaces (block and file-scoped), usings, classes, structs, methods, fields, properties, attributes, and constructors via independent regex passes
@@ -31,11 +31,11 @@ A tokenizer + recursive-descent parser that replaces the regex approach with a p
 - Inheritance/interface checks: `deepInheritsFrom()`, `deepImplements()` (generic-aware via stripping `<...>`)
 - 1MB file size cap
 
-## Strata Project Analyzer (`strata-analyzer.ts`)
+## Strada Project Analyzer (`strada-analyzer.ts`)
 
 Scans an entire Unity/Strada.Core project directory and extracts framework-specific architecture information. Uses the regex parser.
 
-- `StrataAnalyzer` class takes a project path, globs for `**/*.cs` (excluding `node_modules`, `Library`, `Temp`), and parses each file
+- `StradaAnalyzer` class takes a project path, globs for `**/*.cs` (excluding `node_modules`, `Library`, `Temp`), and parses each file
 - Identifies Strada framework constructs:
   - **Modules**: classes inheriting from `ModuleConfig`
   - **Systems**: non-abstract classes inheriting from `SystemBase`, `JobSystemBase`, or `SystemGroup`
@@ -71,10 +71,10 @@ Detects anti-patterns, computes per-file quality scores (0-100), and generates r
 | `magic-number` | info | anti-pattern | Numeric literals outside allowed set (0, 1, 2, -1, 100, float equivalents); capped at 3 reports per file |
 | `class-naming` | warning | naming | Class name not PascalCase |
 | `private-field-prefix` | info | naming | Private non-const non-static field missing `_` prefix |
-| `component-reference-type` | error | strata-specific | `IComponent` struct with reference-type fields (`string`, `List`, `Dictionary`, `Array`, `Action`, `Func`, `object`) |
-| `system-no-query` | info | strata-specific | `SystemBase`/`JobSystemBase` subclass with no `EntityQuery`/`CreateQuery`/`World.Get` usage |
-| `module-too-many-systems` | warning | strata-specific | `ModuleConfig` with >10 `AddSystem`/`RegisterSystem` calls |
-| `service-no-interface` | info | strata-specific | `*Service` class with no `I`-prefixed interface |
+| `component-reference-type` | error | strada-specific | `IComponent` struct with reference-type fields (`string`, `List`, `Dictionary`, `Array`, `Action`, `Func`, `object`) |
+| `system-no-query` | info | strada-specific | `SystemBase`/`JobSystemBase` subclass with no `EntityQuery`/`CreateQuery`/`World.Get` usage |
+| `module-too-many-systems` | warning | strada-specific | `ModuleConfig` with >10 `AddSystem`/`RegisterSystem` calls |
+| `service-no-interface` | info | strada-specific | `*Service` class with no `I`-prefixed interface |
 | `multiple-classes-per-file` | info | architecture | More than one top-level class per file |
 | `fat-interface` | info | architecture | Interface with >10 members |
 
@@ -86,5 +86,5 @@ Detects anti-patterns, computes per-file quality scores (0-100), and generates r
 |------|---------|
 | `csharp-parser.ts` | Regex-based C# structural extractor (classes, structs, methods, fields, constructors, DI dependencies) |
 | `csharp-deep-parser.ts` | Tokenizer + recursive-descent C# parser producing a typed AST with nested type/generic support |
-| `strata-analyzer.ts` | Project-wide Strada.Core framework analysis (modules, systems, components, services, mediators, controllers, events, dependency graph) |
-| `code-quality.ts` | Quality scoring engine with 16 rules across 5 categories (anti-pattern, complexity, naming, strata-specific, architecture) |
+| `strada-analyzer.ts` | Project-wide Strada.Core framework analysis (modules, systems, components, services, mediators, controllers, events, dependency graph) |
+| `code-quality.ts` | Quality scoring engine with 16 rules across 5 categories (anti-pattern, complexity, naming, strada-specific, architecture) |

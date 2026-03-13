@@ -129,7 +129,7 @@ npm run dev -- start --channel whatsapp
 | OpenAI, Kimi | | Git 작업   | | (SQLite +  | | 베이지안 Beta    |
 | DeepSeek,Qwen| | 셸 실행    | |  HNSW)     | | 본능 라이프       |
 | MiniMax, Groq| | .NET 빌드  | | RAG 벡터   | |  사이클           |
-| Ollama +기타 | | Strata 생성| | 아이덴티티 | | 도구 체인         |
+| Ollama +기타 | | Strada 생성| | 아이덴티티 | | 도구 체인         |
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
@@ -721,13 +721,22 @@ node dist/index.js daemon --channel telegram
 ## 테스트
 
 ```bash
-npm test                         # 전체 3100+개 테스트 실행
+npm test                         # 기본 전체 스위트 (안정성을 위한 배치 실행)
 npm run test:watch               # 워치 모드
 npm test -- --coverage           # 커버리지 포함
-npm test -- src/agents/tools/file-read.test.ts  # 단일 파일
+npm test -- src/agents/tools/file-read.test.ts  # 단일 파일 / 대상 실행
+npm test -- src/dashboard/prometheus.test.ts    # 기본 러너로 대상 스위트 실행
+LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run test:file-build-flow     # opt-in 로컬 .NET 통합 플로우
+npm run test:hnsw-perf           # opt-in HNSW 벤치마크 / 재현율 스위트
 npm run typecheck                # TypeScript 타입 체크
 npm run lint                     # ESLint
 ```
+
+메모:
+- `npm test` 는 이전 전체 스위트 OOM 경로를 피하기 위해 배치형 Vitest 러너와 `fork` 워커를 사용합니다.
+- 실제 소켓 바인딩이 필요한 dashboard 테스트는 기본적으로 skip 됩니다. 실제 로컬 검증에는 `LOCAL_SERVER_TESTS=1` 을 사용하세요.
+- `test:file-build-flow` 와 `test:hnsw-perf` 는 로컬 빌드 도구나 무거운 벤치마크 부하가 필요하므로 의도적으로 opt-in 입니다.
 
 ---
 

@@ -395,7 +395,7 @@ public class A {
 });
 
 describe("complete file parsing", () => {
-  it("parses a full Strata.Core system file", () => {
+  it("parses a full Strada.Core system file", () => {
     const code = `
 using Strada.Core.ECS;
 using Strada.Core.Events;
@@ -465,7 +465,7 @@ namespace Game.Combat
     expect(deps).toContain("IEventBus");
   });
 
-  it("parses a Strata component struct", () => {
+  it("parses a Strada component struct", () => {
     const code = `
 namespace Game.Combat
 {

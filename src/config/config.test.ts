@@ -26,6 +26,10 @@ function setEnv(overrides: Record<string, string | undefined> = {}) {
   }
 }
 
+function toLegacyEnvKey(currentKey: string): string {
+  return currentKey.replace("STRADA", "STRATA");
+}
+
 describe("loadConfig", () => {
   beforeEach(() => {
     resetConfigCache();
@@ -66,17 +70,17 @@ describe("loadConfig", () => {
     delete process.env["BAYESIAN_VERDICT_RETRY_SUCCESS"];
     delete process.env["BAYESIAN_VERDICT_FAILURE"];
     // Clear daemon env vars
-    delete process.env["STRATA_DAEMON_INTERVAL_MS"];
-    delete process.env["STRATA_DAEMON_TIMEZONE"];
-    delete process.env["STRATA_DAEMON_HEARTBEAT_FILE"];
-    delete process.env["STRATA_DAEMON_DAILY_BUDGET"];
-    delete process.env["STRATA_DAEMON_BUDGET_WARN_PCT"];
-    delete process.env["STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES"];
-    delete process.env["STRATA_DAEMON_AUTO_APPROVE_TOOLS"];
-    delete process.env["STRATA_DAEMON_BACKOFF_BASE"];
-    delete process.env["STRATA_DAEMON_BACKOFF_MAX"];
-    delete process.env["STRATA_DAEMON_FAILURE_THRESHOLD"];
-    delete process.env["STRATA_DAEMON_IDLE_PAUSE"];
+    delete process.env["STRADA_DAEMON_INTERVAL_MS"];
+    delete process.env["STRADA_DAEMON_TIMEZONE"];
+    delete process.env["STRADA_DAEMON_HEARTBEAT_FILE"];
+    delete process.env["STRADA_DAEMON_DAILY_BUDGET"];
+    delete process.env["STRADA_DAEMON_BUDGET_WARN_PCT"];
+    delete process.env["STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES"];
+    delete process.env["STRADA_DAEMON_AUTO_APPROVE_TOOLS"];
+    delete process.env["STRADA_DAEMON_BACKOFF_BASE"];
+    delete process.env["STRADA_DAEMON_BACKOFF_MAX"];
+    delete process.env["STRADA_DAEMON_FAILURE_THRESHOLD"];
+    delete process.env["STRADA_DAEMON_IDLE_PAUSE"];
     // Clear chain resilience env vars
     delete process.env["CHAIN_ROLLBACK_ENABLED"];
     delete process.env["CHAIN_PARALLEL_ENABLED"];
@@ -127,7 +131,7 @@ describe("loadConfig", () => {
     expect(config.security.requireEditConfirmation).toBe(true);
     expect(config.security.readOnlyMode).toBe(false);
     expect(config.logLevel).toBe("info");
-    expect(config.logFile).toBe("strata-brain.log");
+    expect(config.logFile).toBe("strada-brain.log");
   });
 
   it("parses boolean strings correctly", () => {
@@ -284,7 +288,7 @@ describe("loadConfig", () => {
       const config = loadConfig();
       expect(config.memory).toEqual({
         enabled: true,
-        dbPath: ".strata-memory",
+        dbPath: ".strada-memory",
         backend: "agentdb",
         unified: {
           dimensions: 1536,
@@ -395,22 +399,22 @@ describe("loadConfig", () => {
     });
 
     it("rejects intervalMs < 10000", () => {
-      setEnv({ STRATA_DAEMON_INTERVAL_MS: "5000" });
+      setEnv({ STRADA_DAEMON_INTERVAL_MS: "5000" });
       expect(() => loadConfig()).toThrow();
     });
 
     it("rejects intervalMs > 300000", () => {
-      setEnv({ STRATA_DAEMON_INTERVAL_MS: "500000" });
+      setEnv({ STRADA_DAEMON_INTERVAL_MS: "500000" });
       expect(() => loadConfig()).toThrow();
     });
 
     it("rejects dailyBudget <= 0 when provided", () => {
-      setEnv({ STRATA_DAEMON_DAILY_BUDGET: "0" });
+      setEnv({ STRADA_DAEMON_DAILY_BUDGET: "0" });
       expect(() => loadConfig()).toThrow();
     });
 
-    it("accepts comma-separated STRATA_DAEMON_AUTO_APPROVE_TOOLS", () => {
-      setEnv({ STRATA_DAEMON_AUTO_APPROVE_TOOLS: "file_read,git_status,search" });
+    it("accepts comma-separated STRADA_DAEMON_AUTO_APPROVE_TOOLS", () => {
+      setEnv({ STRADA_DAEMON_AUTO_APPROVE_TOOLS: "file_read,git_status,search" });
       const config = loadConfig();
       expect(config.daemon.security.autoApproveTools).toEqual(["file_read", "git_status", "search"]);
     });
@@ -451,7 +455,7 @@ describe("loadConfig", () => {
       });
     });
 
-    it("defaults STRATA_DAEMON_TIMEZONE to empty string", () => {
+    it("defaults STRADA_DAEMON_TIMEZONE to empty string", () => {
       setEnv();
       const config = loadConfig();
       expect(config.daemon.timezone).toBe("");
@@ -459,16 +463,16 @@ describe("loadConfig", () => {
 
     it("accepts custom daemon values", () => {
       setEnv({
-        STRATA_DAEMON_INTERVAL_MS: "30000",
-        STRATA_DAEMON_TIMEZONE: "America/New_York",
-        STRATA_DAEMON_HEARTBEAT_FILE: "./custom.md",
-        STRATA_DAEMON_DAILY_BUDGET: "10.50",
-        STRATA_DAEMON_BUDGET_WARN_PCT: "0.9",
-        STRATA_DAEMON_APPROVAL_TIMEOUT_MINUTES: "60",
-        STRATA_DAEMON_BACKOFF_BASE: "30000",
-        STRATA_DAEMON_BACKOFF_MAX: "7200000",
-        STRATA_DAEMON_FAILURE_THRESHOLD: "5",
-        STRATA_DAEMON_IDLE_PAUSE: "true",
+        STRADA_DAEMON_INTERVAL_MS: "30000",
+        STRADA_DAEMON_TIMEZONE: "America/New_York",
+        STRADA_DAEMON_HEARTBEAT_FILE: "./custom.md",
+        STRADA_DAEMON_DAILY_BUDGET: "10.50",
+        STRADA_DAEMON_BUDGET_WARN_PCT: "0.9",
+        STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES: "60",
+        STRADA_DAEMON_BACKOFF_BASE: "30000",
+        STRADA_DAEMON_BACKOFF_MAX: "7200000",
+        STRADA_DAEMON_FAILURE_THRESHOLD: "5",
+        STRADA_DAEMON_IDLE_PAUSE: "true",
       });
       const config = loadConfig();
       expect(config.daemon.heartbeat.intervalMs).toBe(30000);
@@ -481,6 +485,40 @@ describe("loadConfig", () => {
       expect(config.daemon.backoff.maxCooldownMs).toBe(7200000);
       expect(config.daemon.backoff.failureThreshold).toBe(5);
       expect(config.daemon.heartbeat.idlePause).toBe(true);
+    });
+
+    it("ignores legacy daemon env aliases", () => {
+      setEnv();
+      const legacyIntervalKey = toLegacyEnvKey("STRADA_DAEMON_INTERVAL_MS");
+      const legacyTimezoneKey = toLegacyEnvKey("STRADA_DAEMON_TIMEZONE");
+      process.env[legacyIntervalKey] = "30000";
+      process.env[legacyTimezoneKey] = "America/New_York";
+
+      const config = loadConfig();
+
+      expect(config.daemon.heartbeat.intervalMs).toBe(60000);
+      expect(config.daemon.timezone).toBe("");
+
+      delete process.env[legacyIntervalKey];
+      delete process.env[legacyTimezoneKey];
+    });
+  });
+
+  describe("memory re-retrieval config", () => {
+    it("ignores legacy memory env aliases", () => {
+      setEnv();
+      const legacyIntervalKey = toLegacyEnvKey("STRADA_MEMORY_RERETRIEVAL_INTERVAL");
+      const legacyThresholdKey = toLegacyEnvKey("STRADA_MEMORY_TOPIC_SHIFT_THRESHOLD");
+      process.env[legacyIntervalKey] = "3";
+      process.env[legacyThresholdKey] = "0.6";
+
+      const config = loadConfig();
+
+      expect(config.reRetrieval.interval).toBe(5);
+      expect(config.reRetrieval.topicShiftThreshold).toBe(0.4);
+
+      delete process.env[legacyIntervalKey];
+      delete process.env[legacyThresholdKey];
     });
   });
 

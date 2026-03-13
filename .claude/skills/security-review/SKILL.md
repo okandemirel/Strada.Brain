@@ -6,7 +6,7 @@ origin: Everything Claude Code (ECC)
 
 # Security Review Skill
 
-Comprehensive security checklist and patterns for Strata.Brain development.
+Comprehensive security checklist and patterns for Strada.Brain development.
 
 ## When to Activate
 
@@ -199,7 +199,7 @@ const limiter = new RateLimiter({
 app.use('/api/', limiter.middleware);
 ```
 
-#### Budget Tracking (Strata.Brain Specific)
+#### Budget Tracking (Strada.Brain Specific)
 ```typescript
 // Track tool usage budget
 const budget = session.getBudget();
@@ -286,7 +286,7 @@ npm outdated
  });
 ```
 
-## Strata.Brain Specific Security
+## Strada.Brain Specific Security
 
 ### Secret Sanitization
 ```typescript
@@ -349,7 +349,7 @@ Before ANY production deployment:
 
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 - [Node.js Security Best Practices](https://nodejs.org/en/docs/guides/security/)
-- [Strata.Brain Security Docs](docs/security/security-overview.md)
+- [Strada.Brain Security Docs](docs/security/security-overview.md)
 
 ---
 

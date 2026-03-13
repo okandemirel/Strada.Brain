@@ -129,7 +129,7 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 | OpenAI, Kimi | | Git islem  | | (SQLite +  | | Bayesian Beta    |
 | DeepSeek,Qwen| | Kabuk cali | |  HNSW)     | | Icgudu yasam     |
 | MiniMax, Groq| | .NET derle | | RAG vektor | |  dongusu          |
-| Ollama +daha | | Strata ure | | Kimlik     | | Arac zincirleri  |
+| Ollama +daha | | Strada ure | | Kimlik     | | Arac zincirleri  |
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
@@ -680,13 +680,22 @@ node dist/index.js daemon --channel telegram
 ## Test
 
 ```bash
-npm test                         # Tum 3100+ testi calistir
+npm test                         # Varsayilan tam suite (stabilite icin batch'li)
 npm run test:watch               # Izleme modu
 npm test -- --coverage           # Kapsam ile
-npm test -- src/agents/tools/file-read.test.ts  # Tekli dosya
+npm test -- src/agents/tools/file-read.test.ts  # Tekli dosya / hedefli gecis
+npm test -- src/dashboard/prometheus.test.ts    # Varsayilan runner ile hedefli suite
+LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run test:file-build-flow     # Opt-in local .NET entegrasyon akisi
+npm run test:hnsw-perf           # Opt-in HNSW benchmark / recall suiti
 npm run typecheck                # TypeScript tip kontrolu
 npm run lint                     # ESLint
 ```
+
+Notlar:
+- `npm test`, onceki full-suite OOM yolunu onlemek icin batch'li Vitest runner ve fork worker'lar kullanir.
+- Socket bind bagimli dashboard testleri varsayilan olarak skip edilir; gercek local dogrulama icin `LOCAL_SERVER_TESTS=1` kullanin.
+- `test:file-build-flow` ve `test:hnsw-perf`, local build araci veya agir benchmark yukleri gerektirdigi icin bilincli olarak opt-in tutulur.
 
 ---
 

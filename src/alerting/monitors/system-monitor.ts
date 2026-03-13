@@ -3,6 +3,8 @@
  * Monitors CPU, memory, disk usage and triggers alerts
  */
 
+import * as os from "node:os";
+import { exec } from "node:child_process";
 import { getAlertManager } from "../alert-manager.js";
 import { AlertLevel, MonitorConfig, SystemThresholds } from "../types.js";
 import { getLogger } from "../../utils/logger.js";
@@ -137,8 +139,6 @@ export class SystemMonitor {
    * Collect system metrics
    */
   private async collectMetrics(): Promise<SystemMetrics> {
-    const os = await import("os");
-
     // CPU usage calculation
     const cpuUsage = this.calculateCPUUsage();
 
@@ -173,7 +173,6 @@ export class SystemMonitor {
    * Calculate CPU usage percentage
    */
   private calculateCPUUsage(): number {
-    const os = require("os");
     const cpus = os.cpus();
 
     let totalIdle = 0;
@@ -194,8 +193,6 @@ export class SystemMonitor {
    */
   private async getDiskUsage(): Promise<{ used: number; total: number; percent: number }> {
     return new Promise((resolve, reject) => {
-      const { exec } = require("child_process");
-
       // Try df command first
       exec("df -k . | tail -1", (error: Error | null, stdout: string) => {
         if (error) {

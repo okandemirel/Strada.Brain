@@ -10,7 +10,9 @@
     "start": "node dist/index.js",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "NODE_OPTIONS=--max-old-space-size=8192 node scripts/run-vitest-batches.mjs",
+    "test:file-build-flow": "LOCAL_DOTNET_TESTS=1 NODE_OPTIONS=--max-old-space-size=8192 vitest run src/tests/integration/file-build-flow.test.ts",
+    "test:hnsw-perf": "HNSW_PERF_TESTS=1 NODE_OPTIONS=--max-old-space-size=8192 vitest run src/rag/hnsw/hnsw-performance.test.ts",
     "test:watch": "vitest",
     "security:audit": "npm audit --audit-level=high",
     "security:full": "./pentest/scripts/run-all-tests.sh",
@@ -24,12 +26,12 @@
     "unity",
     "ai",
     "telegram",
-    "strata",
+    "strada",
     "game-development",
     "ecs",
     "mvcs"
   ],
-  "author": "Strata Brain Team",
+  "author": "Strada.Brain Team",
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"

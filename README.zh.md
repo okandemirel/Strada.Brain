@@ -129,7 +129,7 @@ npm run dev -- start --channel whatsapp
 | OpenAI, Kimi | | Git 操作   | | （SQLite + | | 贝叶斯 Beta      |
 | DeepSeek,Qwen| | Shell 执行 | |  HNSW）    | | 本能生命周期     |
 | MiniMax, Groq| | .NET 构建  | | RAG 向量   | | 工具链           |
-| Ollama 等    | | Strata 生成| | 身份       | |                  |
+| Ollama 等    | | Strada 生成| | 身份       | |                  |
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
@@ -721,13 +721,22 @@ node dist/index.js daemon --channel telegram
 ## 测试
 
 ```bash
-npm test                         # 运行全部 3100+ 个测试
+npm test                         # 默认完整套件（为稳定性分批执行）
 npm run test:watch               # 监视模式
 npm test -- --coverage           # 带覆盖率
-npm test -- src/agents/tools/file-read.test.ts  # 单个文件
+npm test -- src/agents/tools/file-read.test.ts  # 单个文件 / 定向执行
+npm test -- src/dashboard/prometheus.test.ts    # 通过默认 runner 执行定向套件
+LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run test:file-build-flow     # opt-in 本地 .NET 集成流程
+npm run test:hnsw-perf           # opt-in HNSW 基准 / recall 套件
 npm run typecheck                # TypeScript 类型检查
 npm run lint                     # ESLint
 ```
+
+说明:
+- `npm test` 使用分批的 Vitest runner 和 `fork` worker，以避免之前完整套件的 OOM 路径。
+- 依赖真实 socket bind 的 dashboard 测试默认会被跳过；如需真实本地验证，请使用 `LOCAL_SERVER_TESTS=1`。
+- `test:file-build-flow` 和 `test:hnsw-perf` 有意保持为 opt-in，因为它们依赖本地构建工具或较重的基准负载。
 
 ---
 

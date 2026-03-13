@@ -27,7 +27,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     dashboard: { enabled: false, port: 3100 },
     websocketDashboard: { enabled: false, port: 3101 },
     prometheus: { enabled: false, port: 9090 },
-    memory: { enabled: true, dbPath: ".strata-memory" },
+    memory: { enabled: true, dbPath: ".strada-memory" },
     rag: { enabled: true, provider: "auto", contextMaxTokens: 4000 },
     streamingEnabled: true,
     shellEnabled: true,

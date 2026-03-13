@@ -129,7 +129,7 @@ Une fois lanc&eacute;, envoyez un message via votre canal configur&eacute; :
 | OpenAI, Kimi | | Git ops    | | (SQLite +  | | Bayesian Beta    |
 | DeepSeek,Qwen| | Shell exec | |  HNSW)     | | Instinct life-   |
 | MiniMax, Groq| | .NET build | | RAG vectors| |  cycle           |
-| Ollama +more | | Strata gen | | Identity   | | Tool chains      |
+| Ollama +more | | Strada gen | | Identity   | | Tool chains      |
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
@@ -721,13 +721,22 @@ node dist/index.js daemon --channel telegram
 ## Tests
 
 ```bash
-npm test                         # Lancer les 3100+ tests
+npm test                         # Suite complete par defaut (batch pour la stabilite)
 npm run test:watch               # Mode watch
 npm test -- --coverage           # Avec couverture
-npm test -- src/agents/tools/file-read.test.ts  # Fichier unique
+npm test -- src/agents/tools/file-read.test.ts  # Fichier unique / passage cible
+npm test -- src/dashboard/prometheus.test.ts    # Suite ciblee via le runner par defaut
+LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run test:file-build-flow     # Flux local d'integration .NET en opt-in
+npm run test:hnsw-perf           # Suite opt-in de benchmark / recall HNSW
 npm run typecheck                # V&eacute;rification de types TypeScript
 npm run lint                     # ESLint
 ```
+
+Notes :
+- `npm test` utilise un runner Vitest par lots avec des workers `fork` pour eviter l'ancien chemin OOM de la suite complete.
+- Les tests dashboard qui dependent du bind socket sont ignores par defaut ; utilisez `LOCAL_SERVER_TESTS=1` pour une verification locale reelle.
+- `test:file-build-flow` et `test:hnsw-perf` restent volontairement opt-in car ils demandent des outils de build locaux ou des charges de benchmark lourdes.
 
 ---
 

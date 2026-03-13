@@ -129,7 +129,7 @@ Once running, send a message through your configured channel:
 | OpenAI, Kimi | | Git ops    | | (SQLite +  | | Bayesian Beta    |
 | DeepSeek,Qwen| | Shell exec | |  HNSW)     | | Instinct life-   |
 | MiniMax, Groq| | .NET build | | RAG vectors| |  cycle           |
-| Ollama +more | | Strata gen | | Identity   | | Tool chains      |
+| Ollama +more | | Strada gen | | Identity   | | Tool chains      |
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
@@ -721,13 +721,22 @@ node dist/index.js daemon --channel telegram
 ## Testing
 
 ```bash
-npm test                         # Run all 3100+ tests
+npm test                         # Default full suite (batched for stability)
 npm run test:watch               # Watch mode
 npm test -- --coverage           # With coverage
-npm test -- src/agents/tools/file-read.test.ts  # Single file
+npm test -- src/agents/tools/file-read.test.ts  # Single file / targeted passthrough
+npm test -- src/dashboard/prometheus.test.ts    # Targeted suite under the default runner
+LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run test:file-build-flow     # Opt-in local .NET integration flow
+npm run test:hnsw-perf           # Opt-in HNSW benchmark / recall suite
 npm run typecheck                # TypeScript type checking
 npm run lint                     # ESLint
 ```
+
+Notes:
+- `npm test` uses a batched Vitest runner plus forked workers to avoid the previous full-suite OOM path.
+- Bind-dependent dashboard tests are skipped by default unless `LOCAL_SERVER_TESTS=1`.
+- `test:file-build-flow` and `test:hnsw-perf` are intentionally opt-in because they depend on local build tooling or benchmark-heavy workloads.
 
 ---
 

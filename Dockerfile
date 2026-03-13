@@ -1,19 +1,19 @@
 # =============================================================================
-# Strata.Brain - Production Dockerfile
+# Strada.Brain - Production Dockerfile
 # =============================================================================
 # Multi-stage build with security hardening:
 #   - Stage 1: Builder (compile TypeScript)
 #   - Stage 2: Production (runtime only)
 #
 # Build:
-#   docker build -t strata-brain:latest .
+#   docker build -t strada-brain:latest .
 #
 # Run:
-#   docker run -d --name strata-brain \
+#   docker run -d --name strada-brain \
 #     -p 3100:3100 -p 9090:9090 \
 #     -v $(pwd)/project:/app/project:ro \
-#     -v strata-memory:/app/.strata-memory \
-#     strata-brain:latest
+#     -v strada-memory:/app/.strada-memory \
+#     strada-brain:latest
 # =============================================================================
 
 # =============================================================================
@@ -61,11 +61,11 @@ RUN npm prune --production && \
 FROM node:22.12-alpine AS production
 
 # Labels
-LABEL org.opencontainers.image.title="Strata.Brain" \
+LABEL org.opencontainers.image.title="Strada.Brain" \
       org.opencontainers.image.description="AI-powered Unity development assistant" \
       org.opencontainers.image.version="0.1.0" \
-      org.opencontainers.image.vendor="Strata" \
-      org.opencontainers.image.source="https://github.com/strata/brain"
+      org.opencontainers.image.vendor="Strada" \
+      org.opencontainers.image.source="https://github.com/okandemirel/Strada.Brain"
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -83,7 +83,7 @@ WORKDIR /app
 
 # Create required directories with proper permissions
 RUN mkdir -p \
-    /app/.strata-memory \
+    /app/.strada-memory \
     /app/logs \
     /app/plugins \
     /app/project \

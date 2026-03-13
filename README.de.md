@@ -131,7 +131,7 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 | OpenAI, Kimi | | Git-Ops    | | (SQLite +  | | Bayessche Beta-  |
 | DeepSeek,Qwen| | Shell-Ausf.| |  HNSW)     | |  Bewertung       |
 | MiniMax, Groq| | .NET Build | | RAG-Vekt.  | | Instinkt-Lebens- |
-| Ollama +mehr | | Strata-Gen | | Identitaet | |  zyklus          |
+| Ollama +mehr | | Strada-Gen | | Identitaet | |  zyklus          |
 +--------------+ +------+-----+ +---+--------+ | Tool-Ketten      |
                         |           |           +--+---------------+
                 +-------v-----------v--------------v------+
@@ -693,13 +693,22 @@ node dist/index.js daemon --channel telegram
 ## Testen
 
 ```bash
-npm test                         # Alle 3100+ Tests ausfuehren
+npm test                         # Standard-Komplettsuite (fuer Stabilitaet in Batches)
 npm run test:watch               # Watch-Modus
 npm test -- --coverage           # Mit Coverage
-npm test -- src/agents/tools/file-read.test.ts  # Einzelne Datei
+npm test -- src/agents/tools/file-read.test.ts  # Einzelne Datei / gezielter Durchlauf
+npm test -- src/dashboard/prometheus.test.ts    # Gezielte Suite ueber den Standard-Runner
+LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run test:file-build-flow     # Opt-in lokaler .NET-Integrationsfluss
+npm run test:hnsw-perf           # Opt-in HNSW-Benchmark / Recall-Suite
 npm run typecheck                # TypeScript-Typpruefung
 npm run lint                     # ESLint
 ```
+
+Hinweise:
+- `npm test` verwendet einen batch-basierten Vitest-Runner mit Fork-Workern, um den frueheren Full-Suite-OOM-Pfad zu vermeiden.
+- Dashboard-Tests mit echtem Socket-Binding werden standardmaessig uebersprungen; fuer lokale Verifikation `LOCAL_SERVER_TESTS=1` setzen.
+- `test:file-build-flow` und `test:hnsw-perf` sind bewusst opt-in, weil sie lokale Build-Tools bzw. benchmarklastige Lasten brauchen.
 
 ---
 

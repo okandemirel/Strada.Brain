@@ -6,6 +6,8 @@ export default defineConfig({
     globals: true,
     environment: "node",
     clearMocks: true,
+    // Native addons and long-running integration suites are more stable in forked workers.
+    pool: "forks",
     include: ["src/**/*.test.ts"],
     coverage: {
       provider: "v8",

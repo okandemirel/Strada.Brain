@@ -24,9 +24,9 @@ const CORE_NAMES = ["strada.core", "com.strada.core", "Strada.Core"] as const;
 const MODULES_NAMES = ["strada.modules", "com.strada.modules", "Strada.Modules"] as const;
 
 const REPO_URLS = {
-  core: process.env["STRADA_CORE_REPO_URL"] || "https://github.com/okandemirel/Strata.Core.git",
+  core: process.env["STRADA_CORE_REPO_URL"] || "https://github.com/okandemirel/Strada.Core.git",
   modules:
-    process.env["STRADA_MODULES_REPO_URL"] || "https://github.com/okandemirel/Strata.Modules.git",
+    process.env["STRADA_MODULES_REPO_URL"] || "https://github.com/okandemirel/Strada.Modules.git",
 } as const;
 
 const TARGET_PATHS = {

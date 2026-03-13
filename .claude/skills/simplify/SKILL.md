@@ -34,7 +34,7 @@ Never change what the code does - only how it does it. All original features, ou
 ### 2. Apply Project Standards
 Follow established coding standards:
 
-**TypeScript/Strata.Brain Standards:**
+**TypeScript/Strada.Brain Standards:**
 - Use ES modules with proper import sorting
 - Prefer explicit types over inference for public APIs
 - Use proper error handling patterns
@@ -152,7 +152,7 @@ async function processMessage(msg: Message): Promise<Result> {
 
 Only refine code that has been recently modified or touched in the current session, unless explicitly instructed to review a broader scope.
 
-## Integration with Strata.Brain
+## Integration with Strada.Brain
 
 This skill works seamlessly with:
 - **Orchestrator**: Simplifies agent loop logic

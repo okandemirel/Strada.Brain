@@ -12,7 +12,10 @@ import { tmpdir } from "node:os";
 import { createHNSWVectorStore } from "./hnsw-vector-store.js";
 import type { VectorEntry, CodeChunk } from "../rag.interface.js";
 
-describe("HNSWVectorStore Performance", () => {
+// This file is a benchmark-style suite and is too memory-intensive for the default test run.
+const runHnswPerfTests = !!process.env["HNSW_PERF_TESTS"];
+
+describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
   const dimensions = 384; // MiniLM dimensions
 
   async function runBenchmark(
@@ -136,7 +139,7 @@ describe("HNSWVectorStore Performance", () => {
   }, 600000);
 });
 
-describe("HNSWVectorStore Recall Accuracy", () => {
+describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Recall Accuracy", () => {
   const dimensions = 384;
 
   it("should have high recall compared to brute force", async () => {

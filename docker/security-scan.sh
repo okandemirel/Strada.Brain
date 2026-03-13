@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# Security Scan Script for Strata.Brain Docker Image
+# Security Scan Script for Strada.Brain Docker Image
 #
 # Usage: ./security-scan.sh [IMAGE_TAG]
 
 set -euo pipefail
 
 # Configuration
-IMAGE_TAG="${1:-strata-brain:hardened}"
+IMAGE_TAG="${1:-strada-brain:hardened}"
 OUTPUT_DIR="security-reports"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
@@ -18,7 +18,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo "=================================================="
-echo "Strata.Brain Security Scan"
+echo "Strada.Brain Security Scan"
 echo "Image: $IMAGE_TAG"
 echo "Timestamp: $TIMESTAMP"
 echo "=================================================="
@@ -208,7 +208,7 @@ cat > "$OUTPUT_DIR/summary-$TIMESTAMP.md" << EOF
 
 **Image:** $IMAGE_TAG  
 **Scan Date:** $(date -u +%Y-%m-%d\ %H:%M:%S\ UTC)  
-**Scanner:** Strata.Brain Security Suite
+**Scanner:** Strada.Brain Security Suite
 
 ## Vulnerabilities
 

@@ -94,7 +94,7 @@ public struct BadComponent : IComponent {
     const issue = report.issues.find((i) => i.rule === "component-reference-type");
     expect(issue).toBeDefined();
     expect(issue!.severity).toBe("error");
-    expect(issue!.category).toBe("strata-specific");
+    expect(issue!.category).toBe("strada-specific");
   });
 
   it("detects system without EntityQuery", () => {
@@ -200,13 +200,13 @@ describe("formatQualityReport", () => {
         errorCount: 1,
         warningCount: 2,
         infoCount: 2,
-        categoryBreakdown: { "anti-pattern": 3, "strata-specific": 2 },
+        categoryBreakdown: { "anti-pattern": 3, "strada-specific": 2 },
         worstFiles: [{ filePath: "Bad.cs", score: 50 }],
       },
       topIssues: [
         {
           severity: "error",
-          category: "strata-specific",
+          category: "strada-specific",
           rule: "component-reference-type",
           message: "Component has ref field",
           filePath: "Bad.cs",

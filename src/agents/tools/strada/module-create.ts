@@ -223,7 +223,7 @@ using UnityEngine;
 
 namespace ${namespace}
 {
-    [CreateAssetMenu(fileName = "${name}ModuleConfig", menuName = "Strata/Modules/${name}")]
+    [CreateAssetMenu(fileName = "${name}ModuleConfig", menuName = "Strada/Modules/${name}")]
     public class ${name}ModuleConfig : ModuleConfig
     {
         protected override void Configure(IModuleBuilder builder)

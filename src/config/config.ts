@@ -1460,6 +1460,7 @@ interface EnvVars {
   embeddingProvider: string | undefined;
   embeddingModel: string | undefined;
   embeddingBaseUrl: string | undefined;
+  embeddingDimensions: string | undefined;
   ragContextMaxTokens: string | undefined;
   streamingEnabled: string | undefined;
   shellEnabled: string | undefined;

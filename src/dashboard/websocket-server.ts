@@ -89,6 +89,8 @@ export class WebSocketDashboardServer {
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
+    if (this.httpServer || this.wsServer) return;
+
     this.httpServer = createServer(this.handleHttpRequest.bind(this));
     this.wsServer = new WebSocketServer({
       server: this.httpServer,
@@ -98,27 +100,59 @@ export class WebSocketDashboardServer {
     });
     this.wsServer.on("connection", this.handleWsConnection.bind(this));
 
-    return new Promise((resolve) => {
-      this.httpServer!.listen(this.port, "127.0.0.1", () => {
+    return new Promise((resolve, reject) => {
+      const httpServer = this.httpServer!;
+
+      const onError = (error: NodeJS.ErrnoException): void => {
+        httpServer.off("listening", onListening);
+        this.wsServer?.close();
+        this.wsServer = null;
+        this.httpServer = null;
+        reject(error);
+      };
+
+      const onListening = (): void => {
+        httpServer.off("error", onError);
         this.logger.info(`WebSocket Dashboard running at http://localhost:${this.port}`);
         this.logger.info(`WebSocket endpoint: ws://localhost:${this.port}/ws`);
         this.startMetricsPush();
         this.startHeartbeat();
         resolve();
-      });
+      };
+
+      httpServer.once("error", onError);
+      httpServer.once("listening", onListening);
+      try {
+        httpServer.listen(this.port, "127.0.0.1");
+      } catch (error) {
+        onError(error as NodeJS.ErrnoException);
+      }
     });
   }
 
   async stop(): Promise<void> {
     this.clearIntervals();
-    this.clients.forEach(client => client.close());
-    this.clients.clear();
-    this.wsServer?.close();
-    this.wsServer = null;
+    const wsServer = this.wsServer;
+    const httpServer = this.httpServer;
 
-    if (this.httpServer) {
-      return new Promise((resolve) => this.httpServer!.close(() => resolve()));
-    }
+    this.clients.forEach(client => client.terminate());
+    this.clients.clear();
+    this.wsServer = null;
+    this.httpServer = null;
+
+    const closeWs = wsServer
+      ? new Promise<void>((resolve) => wsServer.close(() => resolve()))
+      : Promise.resolve();
+
+    const closeHttp = httpServer
+      ? new Promise<void>((resolve) => {
+        httpServer.close(() => resolve());
+        httpServer.closeIdleConnections?.();
+        httpServer.closeAllConnections?.();
+      })
+      : Promise.resolve();
+
+    await Promise.all([closeWs, closeHttp]);
   }
 
   // ─── Command Handlers ────────────────────────────────────────────────────────

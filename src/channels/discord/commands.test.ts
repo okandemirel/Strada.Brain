@@ -16,7 +16,7 @@ import {
 describe("askCommand", () => {
   it("should have correct name and description", () => {
     expect(askCommand.data.name).toBe("ask");
-    expect(askCommand.data.description).toContain("Ask Strata Brain");
+    expect(askCommand.data.description).toContain("Ask Strada Brain");
   });
 
   it("should have required question option", () => {

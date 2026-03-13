@@ -129,7 +129,7 @@ npm run dev -- start --channel whatsapp
 | OpenAI, Kimi | | Git 操作   | | (SQLite +  | | ベイズ Beta      |
 | DeepSeek,Qwen| | シェル実行 | |  HNSW)     | | 直感ライフ       |
 | MiniMax, Groq| | .NETビルド | | RAGベクトル | |  サイクル         |
-| Ollama +他   | | Strata生成 | | アイデンティティ| | ツールチェーン  |
+| Ollama +他   | | Strada生成 | | アイデンティティ| | ツールチェーン  |
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
@@ -721,13 +721,22 @@ node dist/index.js daemon --channel telegram
 ## テスト
 
 ```bash
-npm test                         # 全 3100+ テストを実行
+npm test                         # 既定のフルスイート（安定性のためバッチ実行）
 npm run test:watch               # ウォッチモード
 npm test -- --coverage           # カバレッジ付き
-npm test -- src/agents/tools/file-read.test.ts  # 単一ファイル
+npm test -- src/agents/tools/file-read.test.ts  # 単一ファイル / 対象実行
+npm test -- src/dashboard/prometheus.test.ts    # 既定ランナーでの対象スイート
+LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run test:file-build-flow     # opt-in のローカル .NET 統合フロー
+npm run test:hnsw-perf           # opt-in の HNSW ベンチマーク / 再現率スイート
 npm run typecheck                # TypeScript 型チェック
 npm run lint                     # ESLint
 ```
+
+メモ:
+- `npm test` は、以前のフルスイート OOM 経路を避けるために、バッチ化した Vitest ランナーと `fork` ワーカーを使います。
+- 実ソケット bind に依存する dashboard テストは既定で skip されます。実ローカル検証には `LOCAL_SERVER_TESTS=1` を使ってください。
+- `test:file-build-flow` と `test:hnsw-perf` は、ローカル build ツールや重い benchmark 負荷が必要なため、意図的に opt-in です。
 
 ---
 

@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Redundant regex call eliminated in service field name generation
 - Directory creation parallelized with `Promise.all` in module-create tool
 - Memory directory migration optimized with try-catch error handling for ENOTEMPTY/EEXIST
-- Brand rename completed: all remaining `STRATA_SYSTEM_PROMPT` references updated to `STRADA`
+- Brand rename completed: remaining legacy system prompt references updated to `STRADA`
 - STRADA analyzer performance optimized with reduced redundant processing
 - OpenAI embeddings provider now sends `dimensions` parameter to API (was configured but not transmitted)
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Strata.Brain - Production Deployment Script
+# Strada.Brain - Production Deployment Script
 # =============================================================================
 # This script automates the deployment process with zero-downtime updates
 #
@@ -182,10 +182,12 @@ create_backup() {
     local backup_path="$BACKUP_DIR/$backup_name"
     
     # Backup memory data
-    if docker volume inspect strata-memory &> /dev/null; then
-        log INFO "Backing up strata-memory volume..."
+    local memory_volume="strada-memory"
+
+    if docker volume inspect "$memory_volume" &> /dev/null; then
+        log INFO "Backing up ${memory_volume} volume..."
         docker run --rm \
-            -v strata-memory:/data:ro \
+            -v "${memory_volume}:/data:ro" \
             -v "$backup_path:/backup" \
             alpine:latest \
             tar czf /backup/memory.tar.gz -C /data .
@@ -244,8 +246,8 @@ deploy() {
     while [[ $elapsed -lt $timeout ]]; do
         local healthy=true
         
-        # Check strata-brain health
-        if ! docker inspect --format='{{.State.Health.Status}}' strata-brain 2>/dev/null | grep -q "healthy"; then
+        # Check strada-brain health
+        if ! docker inspect --format='{{.State.Health.Status}}' strada-brain 2>/dev/null | grep -q "healthy"; then
             healthy=false
         fi
         
@@ -294,10 +296,10 @@ show_status() {
     log INFO "Nginx: http://localhost (redirects to HTTPS)"
     echo ""
     log INFO "Useful commands:"
-    echo "  View logs:        docker compose logs -f strata-brain"
-    echo "  Restart:          docker compose restart strata-brain"
-    echo "  Shell access:     docker exec -it strata-brain sh"
-    echo "  Scale:            docker compose up -d --scale strata-brain=2"
+    echo "  View logs:        docker compose logs -f strada-brain"
+    echo "  Restart:          docker compose restart strada-brain"
+    echo "  Shell access:     docker exec -it strada-brain sh"
+    echo "  Scale:            docker compose up -d --scale strada-brain=2"
 }
 
 show_logs() {
@@ -323,8 +325,9 @@ rollback() {
     
     # Restore memory volume
     if [[ -f "$BACKUP_DIR/$latest_backup/memory.tar.gz" ]]; then
+        local memory_volume="strada-memory"
         docker run --rm \
-            -v strata-memory:/data \
+            -v "${memory_volume}:/data" \
             -v "$BACKUP_DIR/$latest_backup:/backup:ro" \
             alpine:latest \
             tar xzf /backup/memory.tar.gz -C /data
@@ -394,7 +397,7 @@ main() {
                                                           
 EOF
     echo -e "${NC}"
-    log INFO "Strata.Brain Deployment Script v1.0"
+    log INFO "Strada.Brain Deployment Script v1.0"
     log INFO "Project root: $PROJECT_ROOT"
     log INFO "Environment file: $ENV_FILE"
     echo ""

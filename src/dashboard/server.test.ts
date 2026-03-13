@@ -86,7 +86,7 @@ describe("DashboardServer", () => {
     expect(res.status).toBe(200);
 
     const html = await res.text();
-    expect(html).toContain("Strata Brain Dashboard");
+    expect(html).toContain("Strada Brain Dashboard");
     expect(html).toContain("api/metrics");
   });
 

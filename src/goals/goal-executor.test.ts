@@ -601,7 +601,7 @@ describe("GoalExecutor", () => {
     );
   });
 
-  it("replaces internal tree and continues when onNodeFailed returns a new tree", async () => {
+  it("runs recovery children before retrying a failed node", async () => {
     const executor = new GoalExecutor({ ...defaultConfig, maxRetries: 0 });
     const rootId = generateGoalNodeId();
     const aId = generateGoalNodeId();
@@ -613,8 +613,14 @@ describe("GoalExecutor", () => {
     const b = makeNode({ id: bId, parentId: rootId, depth: 1, task: "B-depends-on-A", dependsOn: [aId] });
     const tree = makeTree([root, a, b], rootId);
 
-    // onNodeFailed returns a new tree with a recovery node that replaces A's subtree
-    const onNodeFailed = vi.fn().mockImplementation(async () => {
+    const recoveryExecutor: NodeExecutor = async (node) => {
+      if (node.id === aId && !node.dependsOn.includes(recoveryId)) {
+        throw new Error("Initial failure");
+      }
+      return `Done: ${node.task}`;
+    };
+
+    const onNodeFailed = vi.fn().mockImplementation(async (currentTree: GoalTree, failedNode: GoalNode) => {
       const recoveryNode = makeNode({
         id: recoveryId,
         parentId: aId,
@@ -622,21 +628,71 @@ describe("GoalExecutor", () => {
         task: "Recovery-for-A",
         dependsOn: [],
       });
-      const newNodes = new Map(tree.nodes);
+      const newNodes = new Map(currentTree.nodes);
+      newNodes.set(failedNode.id, {
+        ...failedNode,
+        redecompositionCount: (failedNode.redecompositionCount ?? 0) + 1,
+      });
       newNodes.set(recoveryId, recoveryNode);
-      return { ...tree, nodes: newNodes };
+      return { ...currentTree, nodes: newNodes };
     });
 
-    const result = await executor.executeTree(tree, mockExecutor, new AbortController().signal, {
+    const result = await executor.executeTree(tree, recoveryExecutor, new AbortController().signal, {
       onNodeFailed,
     });
 
-    // Recovery node should have been added and executed
     expect(result.tree.nodes.has(recoveryId)).toBe(true);
     expect(result.tree.nodes.get(recoveryId)?.status).toBe("completed");
-    // The failed node should be reset to pending (parent of recovery)
-    expect(result.tree.nodes.get(aId)?.status).toBe("pending");
-    // B which depended on A is no longer blocked
+    expect(result.tree.nodes.get(aId)?.status).toBe("completed");
+    expect(result.tree.nodes.get(aId)?.dependsOn).toContain(recoveryId);
+    expect(result.tree.nodes.get(aId)?.redecompositionCount).toBe(1);
+    expect(result.tree.nodes.get(bId)?.status).toBe("completed");
+    expect(onNodeFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores no-op recovery trees after a recovery attempt", async () => {
+    const executor = new GoalExecutor({ ...defaultConfig, maxRetries: 0 });
+    const rootId = generateGoalNodeId();
+    const aId = generateGoalNodeId();
+    const recoveryId = generateGoalNodeId();
+
+    const root = makeNode({ id: rootId, task: "Root", status: "completed" });
+    const a = makeNode({ id: aId, parentId: rootId, depth: 1, task: "FAIL-A", dependsOn: [] });
+    const tree = makeTree([root, a], rootId);
+
+    const alwaysFailExecutor: NodeExecutor = async (node) => {
+      if (node.id === aId) throw new Error("Still failing");
+      return `Done: ${node.task}`;
+    };
+
+    const onNodeFailed = vi
+      .fn()
+      .mockImplementationOnce(async (currentTree: GoalTree, failedNode: GoalNode) => {
+        const recoveryNode = makeNode({
+          id: recoveryId,
+          parentId: aId,
+          depth: 2,
+          task: "Recovery-for-A",
+          dependsOn: [],
+        });
+        const newNodes = new Map(currentTree.nodes);
+        newNodes.set(failedNode.id, {
+          ...failedNode,
+          redecompositionCount: (failedNode.redecompositionCount ?? 0) + 1,
+        });
+        newNodes.set(recoveryId, recoveryNode);
+        return { ...currentTree, nodes: newNodes };
+      })
+      .mockImplementationOnce(async (currentTree: GoalTree) => currentTree);
+
+    const result = await executor.executeTree(tree, alwaysFailExecutor, new AbortController().signal, {
+      onNodeFailed,
+    });
+
+    expect(onNodeFailed).toHaveBeenCalledTimes(2);
+    expect(result.failureCount).toBe(1);
+    expect(result.tree.nodes.get(recoveryId)?.status).toBe("completed");
+    expect(result.tree.nodes.get(aId)?.status).toBe("failed");
   });
 
   it("proceeds normally when onNodeFailed returns null", async () => {

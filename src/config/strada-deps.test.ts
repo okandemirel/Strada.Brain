@@ -73,7 +73,7 @@ describe("checkStradaDeps", () => {
       join(testDir, "Packages", "manifest.json"),
       JSON.stringify({
         dependencies: {
-          "com.strada.core": "https://github.com/okandemirel/Strata.Core.git",
+          "com.strada.core": "https://github.com/okandemirel/Strada.Core.git",
         },
       }),
     );

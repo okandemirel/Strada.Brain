@@ -1,12 +1,12 @@
 # Docker Compose Deployment Guide
 
-Production-ready Docker Compose setup for Strata.Brain with SSL, monitoring, and automated deployment.
+Production-ready Docker Compose setup for Strada.Brain with SSL, monitoring, and automated deployment.
 
 ## Quick Start
 
 ```bash
 # 1. Clone and enter directory
-cd /path/to/strata-brain
+cd /path/to/strada-brain
 
 # 2. Create environment file
 cp .env.example .env
@@ -44,7 +44,7 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         └──────────────┴──────────────┘
                        │
               ┌────────▼─────────┐
-              │  Strata.Brain    │  ← Main Application
+              │  Strada.Brain    │  ← Main Application
               │  (Node.js 22)    │
               └────────┬─────────┘
                        │
@@ -181,7 +181,7 @@ cp your-key.pem nginx/ssl/key.pem
 docker compose up -d
 
 # Without monitoring
-docker compose up -d strata-brain redis nginx
+docker compose up -d strada-brain redis nginx
 
 # With monitoring
 docker compose --profile monitoring up -d
@@ -194,17 +194,17 @@ docker compose --profile monitoring up -d
 docker compose logs -f
 
 # Specific service
-docker compose logs -f strata-brain
+docker compose logs -f strada-brain
 
 # Last 100 lines
-docker compose logs --tail=100 strata-brain
+docker compose logs --tail=100 strada-brain
 ```
 
 ### Scale
 
 ```bash
 # Scale application instances
-docker compose up -d --scale strata-brain=2
+docker compose up -d --scale strada-brain=2
 ```
 
 ### Stop
@@ -248,13 +248,13 @@ Includes panels for:
 
 ```bash
 # Check logs
-docker compose logs strata-brain
+docker compose logs strada-brain
 
 # Check exit code
 docker compose ps
 
 # Inspect container
-docker inspect strata-brain
+docker inspect strada-brain
 ```
 
 ### Health Check Failing
@@ -285,7 +285,7 @@ openssl s_client -connect localhost:443
 ```bash
 # Fix log directory permissions
 sudo chown -R 1000:1000 logs/
-sudo chown -R 1000:1000 .strata-memory/
+sudo chown -R 1000:1000 .strada-memory/
 ```
 
 ### Memory Issues
@@ -337,7 +337,7 @@ Backups are created in `./backups/` with timestamp:
 ```bash
 # Backup memory volume
 docker run --rm \
-  -v strata-memory:/data:ro \
+  -v strada-memory:/data:ro \
   -v $(pwd)/backups:/backup \
   alpine tar czf /backup/memory-$(date +%Y%m%d).tar.gz -C /data .
 
@@ -397,10 +397,10 @@ redis:
 docker compose down -v --rmi all
 
 # Remove volumes
-docker volume rm strata-memory strata-logs redis-data nginx-cache letsencrypt-data prometheus-data grafana-data
+docker volume rm strada-memory strada-logs redis-data nginx-cache letsencrypt-data prometheus-data grafana-data
 
 # Clean up
-rm -rf logs/ backups/ .strata-memory/
+rm -rf logs/ backups/ .strada-memory/
 ```
 
 ## Support

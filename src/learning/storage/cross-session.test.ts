@@ -41,7 +41,7 @@ describe("CrossSessionConfig", () => {
     expect(config.crossSession.promotionThreshold).toBe(3);
   });
 
-  it("should accept STRATA_INSTINCT_MAX_AGE_DAYS env var override", () => {
+  it("should accept STRADA_INSTINCT_MAX_AGE_DAYS env var override", () => {
     const result = validateConfig({
       anthropicApiKey: "sk-test-key-000000000000000000000000000000000000000000000000",
       unityProjectPath: process.cwd(),
@@ -54,7 +54,7 @@ describe("CrossSessionConfig", () => {
     expect(result.value.crossSession.maxAgeDays).toBe(60);
   });
 
-  it("should accept STRATA_INSTINCT_SCOPE_FILTER values", () => {
+  it("should accept STRADA_INSTINCT_SCOPE_FILTER values", () => {
     for (const filter of ["project-only", "project+universal", "all"] as const) {
       resetConfigCache();
       const result = validateConfig({

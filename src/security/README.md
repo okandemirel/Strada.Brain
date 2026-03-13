@@ -116,7 +116,7 @@ When `READ_ONLY_MODE=true`, 23 write tools are blocked:
 - File: `write`, `edit`, `delete`, `rename`, `delete_directory`
 - Git: `commit`, `push`, `branch`, `stash`, `reset`, `checkout`, `merge`, `rebase`
 - Shell: `exec`
-- Strata: `create_module`, `create_component`, `create_mediator`, `create_system`
+- Strada: `create_module`, `create_component`, `create_mediator`, `create_system`
 - .NET: `add_package`, `remove_package`, `new`
 
 `filterToolsForReadOnly()` removes these from the tool array before the LLM receives them — the agent cannot even attempt to call them.

@@ -130,6 +130,7 @@ export class GoalExecutor {
     },
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
+    let treeState = tree;
 
     // Mutable copy of nodes
     const mutableNodes = new Map<GoalNodeId, GoalNode>();
@@ -160,9 +161,48 @@ export class GoalExecutor {
 
     // Helper: build current tree state for callbacks
     const buildTree = (): GoalTree => ({
-      ...tree,
+      ...treeState,
       nodes: new Map(mutableNodes),
     });
+
+    const sameDependencies = (
+      left: readonly GoalNodeId[],
+      right: readonly GoalNodeId[],
+    ): boolean => {
+      if (left.length !== right.length) return false;
+      return left.every((depId, index) => depId === right[index]);
+    };
+
+    const hasMeaningfulRecovery = (
+      nodeId: GoalNodeId,
+      recoveredTree: GoalTree,
+    ): boolean => {
+      for (const recoveredId of recoveredTree.nodes.keys()) {
+        if (!mutableNodes.has(recoveredId)) return true;
+      }
+
+      const currentNode = mutableNodes.get(nodeId);
+      const recoveredNode = recoveredTree.nodes.get(nodeId);
+      if (!currentNode || !recoveredNode) return false;
+
+      return (
+        recoveredNode.status !== currentNode.status ||
+        recoveredNode.parentId !== currentNode.parentId ||
+        !sameDependencies(recoveredNode.dependsOn, currentNode.dependsOn) ||
+        recoveredNode.redecompositionCount !== currentNode.redecompositionCount
+      );
+    };
+
+    const mergeRecoveredTree = (recoveredTree: GoalTree): void => {
+      treeState = recoveredTree;
+
+      for (const [id, recoveredNode] of recoveredTree.nodes) {
+        const currentNode = mutableNodes.get(id);
+        if (!currentNode || recoveredNode.updatedAt >= currentNode.updatedAt) {
+          mutableNodes.set(id, { ...recoveredNode });
+        }
+      }
+    };
 
     // Helper: update a node in mutableNodes and fire callback
     const updateNode = (
@@ -183,7 +223,7 @@ export class GoalExecutor {
     // Helper: check if a node has dependents (other nodes that depend on it)
     const hasDependents = (nodeId: GoalNodeId): boolean => {
       for (const [id, node] of mutableNodes) {
-        if (id === tree.rootId) continue;
+        if (id === treeState.rootId) continue;
         if (node.dependsOn.includes(nodeId)) return true;
       }
       return false;
@@ -192,7 +232,7 @@ export class GoalExecutor {
     // Helper: mark all pending nodes as skipped
     const skipAllPending = (): void => {
       for (const [id, node] of mutableNodes) {
-        if (id === tree.rootId) continue;
+        if (id === treeState.rootId) continue;
         if (node.status === "pending") {
           updateNode(id, { status: "skipped" as const });
           skippedIds.add(id);
@@ -207,7 +247,7 @@ export class GoalExecutor {
         const parent = mutableNodes.get(node.parentId);
         if (parent) return parent.task;
       }
-      return tree.taskDescription;
+      return treeState.taskDescription;
     };
 
     // Helper: execute a single node with retries
@@ -258,15 +298,34 @@ export class GoalExecutor {
           if (opts?.onNodeFailed) {
             const failedNode = mutableNodes.get(nodeId)!;
             const recoveredTree = await opts.onNodeFailed(buildTree(), failedNode);
-            if (recoveredTree) {
-              // Merge new nodes into mutableNodes
-              for (const [id, n] of recoveredTree.nodes) {
-                if (!mutableNodes.has(id)) {
-                  mutableNodes.set(id, { ...n });
-                }
+            if (recoveredTree && hasMeaningfulRecovery(nodeId, recoveredTree)) {
+              mergeRecoveredTree(recoveredTree);
+
+              const directRecoveryChildIds = Array.from(mutableNodes.values())
+                .filter((candidate) => candidate.parentId === nodeId)
+                .map((candidate) => candidate.id);
+              const recoveredNode = mutableNodes.get(nodeId)!;
+              const redecompositionCount = Math.max(
+                recoveredNode.redecompositionCount ?? 0,
+                (failedNode.redecompositionCount ?? 0) + 1,
+              );
+
+              if (recoveredNode.status === "failed") {
+                updateNode(nodeId, {
+                  status: "pending" as const,
+                  error: undefined,
+                  startedAt: undefined,
+                  completedAt: undefined,
+                  retryCount: 0,
+                  redecompositionCount,
+                  dependsOn: Array.from(new Set([
+                    ...recoveredNode.dependsOn,
+                    ...directRecoveryChildIds,
+                  ])),
+                });
+              } else if (recoveredNode.redecompositionCount !== redecompositionCount) {
+                updateNode(nodeId, { redecompositionCount });
               }
-              // Reset the failed node to pending (now a parent of new children)
-              updateNode(nodeId, { status: "pending" as const, error: undefined });
               return; // New children picked up in next wave
             }
           }
@@ -308,21 +367,21 @@ export class GoalExecutor {
       let hasPending = false;
 
       for (const [id, node] of mutableNodes) {
-        if (id === tree.rootId) continue;
+        if (id === treeState.rootId) continue;
         if (node.status !== "pending") continue;
         hasPending = true;
 
         const allDepsSatisfied = node.dependsOn.every(
           (depId) =>
             completedIds.has(depId) ||
-            depId === tree.rootId ||
+            depId === treeState.rootId ||
             nonCriticalFailedIds.has(depId),
         );
 
         // Also check that deps are not in failedIds (critical) or skippedIds
         const anyDepBlocked = node.dependsOn.some(
           (depId) =>
-            depId !== tree.rootId &&
+            depId !== treeState.rootId &&
             !completedIds.has(depId) &&
             !nonCriticalFailedIds.has(depId) &&
             (failedIds.has(depId) || skippedIds.has(depId)),

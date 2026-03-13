@@ -163,14 +163,14 @@ describe("config", () => {
       resetConfigCache();
       // Clear re-retrieval env vars
       for (const key of [
-        "STRATA_MEMORY_RERETRIEVAL_ENABLED",
-        "STRATA_MEMORY_RERETRIEVAL_INTERVAL",
-        "STRATA_MEMORY_TOPIC_SHIFT_ENABLED",
-        "STRATA_MEMORY_TOPIC_SHIFT_THRESHOLD",
-        "STRATA_MEMORY_MAX_RERETRIEVALS",
-        "STRATA_MEMORY_RERETRIEVAL_TIMEOUT_MS",
-        "STRATA_MEMORY_RERETRIEVAL_MEMORY_LIMIT",
-        "STRATA_MEMORY_RERETRIEVAL_RAG_TOPK",
+        "STRADA_MEMORY_RERETRIEVAL_ENABLED",
+        "STRADA_MEMORY_RERETRIEVAL_INTERVAL",
+        "STRADA_MEMORY_TOPIC_SHIFT_ENABLED",
+        "STRADA_MEMORY_TOPIC_SHIFT_THRESHOLD",
+        "STRADA_MEMORY_MAX_RERETRIEVALS",
+        "STRADA_MEMORY_RERETRIEVAL_TIMEOUT_MS",
+        "STRADA_MEMORY_RERETRIEVAL_MEMORY_LIMIT",
+        "STRADA_MEMORY_RERETRIEVAL_RAG_TOPK",
       ]) {
         delete process.env[key];
       }
@@ -201,18 +201,18 @@ describe("config", () => {
       resetConfigCache();
       process.env["ANTHROPIC_API_KEY"] = "sk-test-key-123";
       process.env["UNITY_PROJECT_PATH"] = "/test/project";
-      process.env["STRATA_MEMORY_RERETRIEVAL_INTERVAL"] = "3";
-      process.env["STRATA_MEMORY_TOPIC_SHIFT_THRESHOLD"] = "0.6";
-      process.env["STRATA_MEMORY_MAX_RERETRIEVALS"] = "20";
+      process.env["STRADA_MEMORY_RERETRIEVAL_INTERVAL"] = "3";
+      process.env["STRADA_MEMORY_TOPIC_SHIFT_THRESHOLD"] = "0.6";
+      process.env["STRADA_MEMORY_MAX_RERETRIEVALS"] = "20";
 
       const config = loadConfig();
       expect(config.reRetrieval.interval).toBe(3);
       expect(config.reRetrieval.topicShiftThreshold).toBe(0.6);
       expect(config.reRetrieval.maxReRetrievals).toBe(20);
 
-      delete process.env["STRATA_MEMORY_RERETRIEVAL_INTERVAL"];
-      delete process.env["STRATA_MEMORY_TOPIC_SHIFT_THRESHOLD"];
-      delete process.env["STRATA_MEMORY_MAX_RERETRIEVALS"];
+      delete process.env["STRADA_MEMORY_RERETRIEVAL_INTERVAL"];
+      delete process.env["STRADA_MEMORY_TOPIC_SHIFT_THRESHOLD"];
+      delete process.env["STRADA_MEMORY_MAX_RERETRIEVALS"];
       resetConfigCache();
     });
 
@@ -221,7 +221,7 @@ describe("config", () => {
       const result = validateConfig({
         anthropicApiKey: "sk-test-key-123",
         unityProjectPath: "/test/project",
-        strataMemoryReRetrievalInterval: "0",
+        stradaMemoryReRetrievalInterval: "0",
       });
       expect(result.kind).toBe("invalid");
     });
@@ -231,7 +231,7 @@ describe("config", () => {
       const result = validateConfig({
         anthropicApiKey: "sk-test-key-123",
         unityProjectPath: "/test/project",
-        strataMemoryTopicShiftThreshold: "2.0",
+        stradaMemoryTopicShiftThreshold: "2.0",
       });
       expect(result.kind).toBe("invalid");
     });
@@ -241,7 +241,7 @@ describe("config", () => {
       const result = validateConfig({
         anthropicApiKey: "sk-test-key-123",
         unityProjectPath: "/test/project",
-        strataMemoryReRetrievalTimeoutMs: "-100",
+        stradaMemoryReRetrievalTimeoutMs: "-100",
       });
       expect(result.kind).toBe("invalid");
     });

@@ -345,10 +345,10 @@ describe("WRITE_TOOLS set", () => {
     expect(WRITE_TOOLS.has("git_commit")).toBe(true);
     expect(WRITE_TOOLS.has("git_push")).toBe(true);
     expect(WRITE_TOOLS.has("shell_exec")).toBe(true);
-    expect(WRITE_TOOLS.has("strata_create_module")).toBe(true);
-    expect(WRITE_TOOLS.has("strata_create_component")).toBe(true);
-    expect(WRITE_TOOLS.has("strata_create_mediator")).toBe(true);
-    expect(WRITE_TOOLS.has("strata_create_system")).toBe(true);
+    expect(WRITE_TOOLS.has("strada_create_module")).toBe(true);
+    expect(WRITE_TOOLS.has("strada_create_component")).toBe(true);
+    expect(WRITE_TOOLS.has("strada_create_mediator")).toBe(true);
+    expect(WRITE_TOOLS.has("strada_create_system")).toBe(true);
   });
 
   it("should not contain read tools", () => {

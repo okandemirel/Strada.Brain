@@ -145,6 +145,8 @@ export class PrometheusMetrics {
    * Start the Prometheus metrics server
    */
   async start(): Promise<void> {
+    if (this.server) return;
+
     this.server = createServer(async (req, res) => {
       const url = req.url ?? "/";
 
@@ -177,11 +179,28 @@ export class PrometheusMetrics {
       res.end("Not Found");
     });
 
-    return new Promise((resolve) => {
-      this.server!.listen(this.port, "127.0.0.1", () => {
+    return new Promise((resolve, reject) => {
+      const server = this.server!;
+
+      const onError = (error: NodeJS.ErrnoException): void => {
+        server.off("listening", onListening);
+        this.server = null;
+        reject(error);
+      };
+
+      const onListening = (): void => {
+        server.off("error", onError);
         this.logger.info(`Prometheus metrics server running at http://localhost:${this.port}/metrics`);
         resolve();
-      });
+      };
+
+      server.once("error", onError);
+      server.once("listening", onListening);
+      try {
+        server.listen(this.port, "127.0.0.1");
+      } catch (error) {
+        onError(error as NodeJS.ErrnoException);
+      }
     });
   }
 
@@ -190,8 +209,12 @@ export class PrometheusMetrics {
    */
   async stop(): Promise<void> {
     if (!this.server) return;
+    const server = this.server;
+    this.server = null;
     return new Promise((resolve) => {
-      this.server!.close(() => resolve());
+      server.close(() => resolve());
+      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
     });
   }
 

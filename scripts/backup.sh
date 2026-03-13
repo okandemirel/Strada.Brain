@@ -1,11 +1,12 @@
 #!/bin/bash
-# Backup script for Strata.Brain
+# Backup script for Strada.Brain
 # Performs comprehensive backup of all critical data
 
 set -euo pipefail
 
 # Configuration
-BACKUP_DIR="${BACKUP_DIR:-/backups/strata-brain}"
+DEFAULT_BACKUP_DIR="/backups/strada-brain"
+BACKUP_DIR="${BACKUP_DIR:-$DEFAULT_BACKUP_DIR}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_NAME="backup_${TIMESTAMP}"
 BACKUP_TEMP_DIR="${BACKUP_DIR}/${BACKUP_NAME}"
@@ -31,6 +32,10 @@ warn() { log "WARN" "${YELLOW}$1${NC}"; }
 error() { log "ERROR" "${RED}$1${NC}"; }
 success() { log "SUCCESS" "${GREEN}$1${NC}"; }
 
+get_memory_root() {
+    echo ".strada-memory"
+}
+
 # Create backup directory
 setup() {
     mkdir -p "$BACKUP_TEMP_DIR"
@@ -55,7 +60,9 @@ calculate_checksum() {
 backup_learning_db() {
     info "Backing up SQLite Learning Database..."
     
-    local source=".strata-memory/learning.db"
+    local memory_root
+    memory_root="$(get_memory_root)"
+    local source="${memory_root}/learning.db"
     local dest="${BACKUP_TEMP_DIR}/learning_${TIMESTAMP}.db"
     
     if [[ -f "$source" ]]; then
@@ -72,9 +79,11 @@ backup_learning_db() {
 backup_vector_store() {
     info "Backing up RAG Vector Store..."
     
-    local vectors_source=".strata-memory/vectors.bin"
-    local chunks_source=".strata-memory/chunks.json"
-    local metadata_source=".strata-memory/vector-metadata.json"
+    local memory_root
+    memory_root="$(get_memory_root)"
+    local vectors_source="${memory_root}/vectors.bin"
+    local chunks_source="${memory_root}/chunks.json"
+    local metadata_source="${memory_root}/vector-metadata.json"
     
     if [[ -f "$vectors_source" ]]; then
         local dest="${BACKUP_TEMP_DIR}/vectors_${TIMESTAMP}.bin"
@@ -107,8 +116,10 @@ backup_vector_store() {
 backup_hnsw_index() {
     info "Backing up HNSW Index..."
     
-    local hnsw_index=".strata-memory/hnsw.index"
-    local hnsw_meta=".strata-memory/hnsw.meta.json"
+    local memory_root
+    memory_root="$(get_memory_root)"
+    local hnsw_index="${memory_root}/hnsw.index"
+    local hnsw_meta="${memory_root}/hnsw.meta.json"
     
     if [[ -f "$hnsw_index" ]]; then
         local dest="${BACKUP_TEMP_DIR}/hnsw_${TIMESTAMP}.index"
@@ -164,22 +175,25 @@ backup_memory() {
     local memory_dir="${BACKUP_TEMP_DIR}/memory"
     mkdir -p "$memory_dir"
     
-    if [[ -d ".strata-memory" ]]; then
+    local memory_root
+    memory_root="$(get_memory_root)"
+
+    if [[ -d "$memory_root" ]]; then
         # Backup session memory
-        if [[ -d ".strata-memory/sessions" ]]; then
-            tar -czf "${memory_dir}/sessions_${TIMESTAMP}.tar.gz" -C ".strata-memory" sessions 2>/dev/null || true
+        if [[ -d "${memory_root}/sessions" ]]; then
+            tar -czf "${memory_dir}/sessions_${TIMESTAMP}.tar.gz" -C "$memory_root" sessions 2>/dev/null || true
             success "Session memory backed up"
         fi
         
         # Backup text index
-        if [[ -f ".strata-memory/text-index.json" ]]; then
-            cp ".strata-memory/text-index.json" "${memory_dir}/text-index_${TIMESTAMP}.json"
+        if [[ -f "${memory_root}/text-index.json" ]]; then
+            cp "${memory_root}/text-index.json" "${memory_dir}/text-index_${TIMESTAMP}.json"
             success "Text index backed up"
         fi
         
         # Backup reasoning bank if exists
-        if [[ -d ".strata-memory/reasoning" ]]; then
-            tar -czf "${memory_dir}/reasoning_${TIMESTAMP}.tar.gz" -C ".strata-memory" reasoning 2>/dev/null || true
+        if [[ -d "${memory_root}/reasoning" ]]; then
+            tar -czf "${memory_dir}/reasoning_${TIMESTAMP}.tar.gz" -C "$memory_root" reasoning 2>/dev/null || true
             success "Reasoning bank backed up"
         fi
     fi
@@ -343,7 +357,7 @@ main() {
     local start_time=$(date +%s)
     
     info "================================"
-    info "Strata.Brain Backup Starting"
+    info "Strada.Brain Backup Starting"
     info "================================"
     
     setup

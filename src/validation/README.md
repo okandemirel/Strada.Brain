@@ -30,7 +30,7 @@ Zod schemas organized by domain, each with strict constraints and security-focus
 
 **API schemas:** `apiKeySchema` (16-512 chars alphanumeric), `webhookUrlSchema` (HTTPS, blocks localhost/private IPs), `jwtTokenSchema` (3-part dot-separated)
 
-**Strata-specific schemas:** `csharpIdentifierSchema`, `csharpNamespaceSchema`, `csharpTypeSchema`, `unityComponentSchema` (up to 50 fields, 50 methods), `moduleCreateSchema`, `systemCreateSchema` (Update/FixedUpdate/LateUpdate)
+**Strada-specific schemas:** `csharpIdentifierSchema`, `csharpNamespaceSchema`, `csharpTypeSchema`, `unityComponentSchema` (up to 50 fields, 50 methods), `moduleCreateSchema`, `systemCreateSchema` (Update/FixedUpdate/LateUpdate)
 
 **Channel message schemas:** `telegramMessageSchema` (4,096 char limit), `discordMessageSchema` (2,000 char, snowflake IDs), `slackMessageSchema` (40,000 char)
 

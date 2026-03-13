@@ -129,7 +129,7 @@ Una vez en ejecucion, envia un mensaje a traves de tu canal configurado:
 | Claude (pri.)| | Ops. Git   | | (SQLite +  | | TypedEventBus    |
 | OpenAI, Kimi | | Ejec. Shell| |  HNSW)     | | Beta Bayesiano   |
 | DeepSeek,Qwen| | .NET Build | | Vectores   | | Ciclo de vida    |
-| MiniMax, Groq| | Strata Gen | | RAG        | |  de instintos    |
+| MiniMax, Groq| | Strada Gen | | RAG        | |  de instintos    |
 | Ollama + mas | |            | | Identidad  | | Cadenas herram.  |
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
@@ -722,13 +722,22 @@ node dist/index.js daemon --channel telegram
 ## Pruebas
 
 ```bash
-npm test                         # Ejecutar las 3100+ pruebas
+npm test                         # Suite completa predeterminada (por lotes para estabilidad)
 npm run test:watch               # Modo observacion
 npm test -- --coverage           # Con cobertura
-npm test -- src/agents/tools/file-read.test.ts  # Archivo individual
+npm test -- src/agents/tools/file-read.test.ts  # Archivo individual / paso dirigido
+npm test -- src/dashboard/prometheus.test.ts    # Suite dirigida con el runner predeterminado
+LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run test:file-build-flow     # Flujo local de integracion .NET opt-in
+npm run test:hnsw-perf           # Suite opt-in de benchmark / recall HNSW
 npm run typecheck                # Verificacion de tipos TypeScript
 npm run lint                     # ESLint
 ```
+
+Notas:
+- `npm test` usa un runner por lotes de Vitest con workers `fork` para evitar la ruta anterior de OOM en la suite completa.
+- Las pruebas del dashboard que dependen de `socket bind` se omiten por defecto; usa `LOCAL_SERVER_TESTS=1` para validacion local real.
+- `test:file-build-flow` y `test:hnsw-perf` son opt-in a proposito porque requieren herramientas locales de compilacion o cargas pesadas de benchmark.
 
 ---
 

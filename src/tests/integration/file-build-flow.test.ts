@@ -8,7 +8,7 @@
  * 4. Build sonucu doğrulanır
  */
 
-import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from "vitest";
 import { createLogger } from "../../utils/logger.js";
 import { Orchestrator } from "../../agents/orchestrator.js";
 import { FileWriteTool } from "../../agents/tools/file-write.js";
@@ -17,29 +17,40 @@ import { DotnetBuildTool } from "../../agents/tools/dotnet-tools.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
 import { createMockTelegramChannel } from "../helpers/mock-channel.js";
 import { createMockProvider, createMockToolCall } from "../helpers/mock-provider.js";
-import { mkdtemp, writeFile, mkdir, readFile } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IChannelInteractive } from "../../channels/channel-core.interface.js";
+import type { MockChannelAdapter } from "../helpers/mock-channel.js";
 
 // Initialize logger before all tests
 beforeAll(() => {
   createLogger("error", "/tmp/strada-test.log");
 });
 
-describe("File Write → Build Flow Integration", { timeout: 30_000 }, () => {
+// Real dotnet build execution is preserved as an opt-in local integration suite.
+const runLocalDotnetTests = !!process.env["LOCAL_DOTNET_TESTS"];
+
+describe.skipIf(!runLocalDotnetTests)("File Write → Build Flow Integration", { timeout: 30_000 }, () => {
   let tempDir: string;
   let orchestrator: Orchestrator;
   let channel: ReturnType<typeof createMockTelegramChannel>;
   let mockProvider: ReturnType<typeof createMockProvider>;
   let tools: ITool[];
+  let cleanupChannels: MockChannelAdapter[];
+
+  function trackChannel<T extends MockChannelAdapter>(testChannel: T): T {
+    cleanupChannels.push(testChannel);
+    return testChannel;
+  }
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "strada-file-build-test-"));
+    cleanupChannels = [];
 
-    channel = createMockTelegramChannel({
+    channel = trackChannel(createMockTelegramChannel({
       autoConfirm: true, // Default to auto-confirm for most tests
-    });
+    }));
 
     mockProvider = createMockProvider();
 
@@ -57,6 +68,17 @@ describe("File Write → Build Flow Integration", { timeout: 30_000 }, () => {
 
     await channel.connect();
     channel.onMessage((msg) => orchestrator.handleMessage(msg));
+  });
+
+  afterEach(async () => {
+    mockProvider?.clear();
+    for (const testChannel of cleanupChannels) {
+      testChannel.clear();
+      await testChannel.disconnect();
+    }
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   describe("Basic File Write → Build Flow", () => {
@@ -174,7 +196,7 @@ public class PlayerController : MonoBehaviour
   describe("DM Policy Confirmation", () => {
     it("should request confirmation before write operations", async () => {
       // Disable auto-confirm to test manual confirmation
-      const manualChannel = createMockTelegramChannel({ autoConfirm: false });
+      const manualChannel = trackChannel(createMockTelegramChannel({ autoConfirm: false }));
       const manualOrchestrator = new Orchestrator({
         providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools,
@@ -216,7 +238,7 @@ public class PlayerController : MonoBehaviour
     });
 
     it("should cancel operation when user declines confirmation", async () => {
-      const declineChannel = createMockTelegramChannel({ autoConfirm: false });
+      const declineChannel = trackChannel(createMockTelegramChannel({ autoConfirm: false }));
       const declineOrchestrator = new Orchestrator({
         providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools,
@@ -266,7 +288,7 @@ public class PlayerController : MonoBehaviour
     });
 
     it("should require confirmation for different write operations", async () => {
-      const testChannel = createMockTelegramChannel({ autoConfirm: false });
+      const testChannel = trackChannel(createMockTelegramChannel({ autoConfirm: false }));
       const testOrchestrator = new Orchestrator({
         providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
         tools,
@@ -517,7 +539,7 @@ public class PlayerController : MonoBehaviour
       });
 
       // Create new channel for read-only test
-      const roChannel = createMockTelegramChannel();
+      const roChannel = trackChannel(createMockTelegramChannel());
       await roChannel.connect();
       roChannel.onMessage((msg) => readOnlyOrchestrator.handleMessage(msg));
 

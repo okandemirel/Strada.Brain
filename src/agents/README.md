@@ -43,7 +43,7 @@ All providers implement `IAIProvider`. Streaming providers additionally implemen
 
 - **File I/O:** `file_read`, `file_write`, `file_edit`, `file_delete`, `file_rename`, `file_delete_directory`
 - **Search:** `glob_search`, `grep_search`, `list_directory`, `code_search` (RAG), `memory_search`
-- **Strata codegen:** `strata_analyze_project`, `strata_create_module`, `strata_create_component`, `strata_create_mediator`, `strata_create_system`
+- **Strada codegen:** `strada_analyze_project`, `strada_create_module`, `strada_create_component`, `strada_create_mediator`, `strada_create_system`
 - **Git:** `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_branch`, `git_stash`
 - **.NET:** `dotnet_build`, `dotnet_test`
 - **Shell:** `shell_exec`
@@ -74,9 +74,9 @@ plugins/my-plugin/
 
 Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All tools get `isPlugin: true`.
 
-## Context (`context/strata-knowledge.ts`)
+## Context (`context/strada-knowledge.ts`)
 
-`STRATA_SYSTEM_PROMPT` — hardcoded system prompt establishing agent identity and deep Strada.Core framework knowledge (architecture pillars, code conventions, file structure, behavioral guidelines). Augmented at runtime with project context, memory, RAG results, and cached analysis.
+`STRADA_SYSTEM_PROMPT` — hardcoded system prompt establishing agent identity and deep Strada.Core framework knowledge (architecture pillars, code conventions, file structure, behavioral guidelines). Augmented at runtime with project context, memory, RAG results, and cached analysis.
 
 ## Key Files
 
@@ -87,7 +87,7 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 | `autonomy/task-planner.ts` | Stall detection, budget warnings, learning trajectory |
 | `autonomy/self-verification.ts` | Build verification gate |
 | `autonomy/constants.ts` | MUTATION_TOOLS, VERIFY_TOOLS, COMPILABLE_EXT |
-| `context/strata-knowledge.ts` | System prompt, project context builder |
+| `context/strada-knowledge.ts` | System prompt, project context builder |
 | `plugins/plugin-loader.ts` | External plugin discovery and loading |
 | `providers/claude.ts` | Primary provider (Anthropic SDK) |
 | `providers/fallback-chain.ts` | Multi-provider failover |
