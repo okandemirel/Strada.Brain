@@ -248,15 +248,9 @@ export class DashboardServer {
     deploymentExecutor?: DashboardDeploymentExecutor;
     readinessChecker?: DashboardReadinessChecker;
   }): void {
-    if (services.consolidationEngine) {
-      this.consolidationEngine = services.consolidationEngine;
-    }
-    if (services.deploymentExecutor) {
-      this.deploymentExecutor = services.deploymentExecutor;
-    }
-    if (services.readinessChecker) {
-      this.readinessChecker = services.readinessChecker;
-    }
+    this.consolidationEngine = services.consolidationEngine ?? this.consolidationEngine;
+    this.deploymentExecutor = services.deploymentExecutor ?? this.deploymentExecutor;
+    this.readinessChecker = services.readinessChecker ?? this.readinessChecker;
   }
 
   /**
@@ -697,7 +691,17 @@ export class DashboardServer {
       }
 
       // POST /api/deployment/check -- Trigger readiness check (Plan 25-03)
+      // SECURITY: Requires dashboard token auth (runs test commands via spawn)
       if (url === "/api/deployment/check" && req.method === "POST") {
+        if (this.dashboardToken) {
+          const authHeader = req.headers["authorization"] as string | undefined;
+          const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
+          if (!token || token !== this.dashboardToken) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Authentication required" }));
+            return;
+          }
+        }
         if (!this.readinessChecker) {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ enabled: false }));

@@ -12,7 +12,6 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { accessSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
@@ -23,6 +22,7 @@ import type {
   DeploymentStatus,
 } from "./deployment-types.js";
 import type { CircuitState } from "../daemon-types.js";
+import { validateScriptPath } from "./validate-script-path.js";
 
 /** Maximum captured output size per stream (10KB) */
 const MAX_OUTPUT_BYTES = 10 * 1024;
@@ -98,7 +98,7 @@ export class DeploymentExecutor {
     }
 
     // Validate and resolve script path
-    const resolvedScript = this.validateScriptPath(scriptPath);
+    const resolvedScript = this.validateScript(scriptPath);
 
     this.deploymentInProgress = true;
     this.activeProposalId = proposal.id;
@@ -216,20 +216,8 @@ export class DeploymentExecutor {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_deployment_log_proposed ON deployment_log(proposed_at DESC)");
   }
 
-  private validateScriptPath(scriptPath: string): string {
-    const resolved = path.resolve(this.projectRoot, scriptPath);
-
-    if (!resolved.startsWith(this.projectRoot + path.sep) && resolved !== this.projectRoot) {
-      throw new Error(`Script path traversal detected: "${scriptPath}" resolves outside project root`);
-    }
-
-    try {
-      accessSync(resolved, fsConstants.X_OK);
-    } catch {
-      throw new Error(`Script not found or not executable: "${resolved}"`);
-    }
-
-    return resolved;
+  private validateScript(scriptPath: string): string {
+    return validateScriptPath(scriptPath, this.projectRoot);
   }
 
   /**
@@ -241,13 +229,22 @@ export class DeploymentExecutor {
     proposal: { id: string; approvedBy?: string },
   ): Promise<Omit<DeployResult, "durationMs">> {
     return new Promise((resolve) => {
+      // SECURITY: Only pass a minimal allowlist of environment variables.
+      // Never spread process.env — it contains API keys, tokens, and secrets.
+      const safeEnv: Record<string, string> = {
+        PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+        HOME: process.env.HOME ?? "",
+        SHELL: process.env.SHELL ?? "/bin/sh",
+        LANG: process.env.LANG ?? "en_US.UTF-8",
+        TERM: process.env.TERM ?? "xterm-256color",
+        NODE_ENV: process.env.NODE_ENV ?? "production",
+        DEPLOY_TRIGGER: "auto",
+        DEPLOY_PROPOSAL_ID: proposal.id,
+        DEPLOY_APPROVED_BY: proposal.approvedBy ?? "",
+      };
+
       const child = spawn(resolvedScript, [], {
-        env: {
-          ...process.env,
-          DEPLOY_TRIGGER: "auto",
-          DEPLOY_PROPOSAL_ID: proposal.id,
-          DEPLOY_APPROVED_BY: proposal.approvedBy ?? "",
-        },
+        env: safeEnv,
         cwd: this.projectRoot,
         timeout: this.config.executionTimeoutMs,
         killSignal: "SIGTERM",
@@ -299,13 +296,13 @@ export class DeploymentExecutor {
     const postPath = this.config.postScriptPath;
     if (!postPath) return { success: true, stderr: "" };
 
-    const resolved = this.validateScriptPath(postPath);
+    const resolved = this.validateScript(postPath);
     const result = await this.runScript(resolved, proposal);
     return { success: result.success, stderr: result.stderr };
   }
 
   private updateLogStatus(id: string, status: DeploymentStatus): void {
-    if (status === "approved" || status === "executing") {
+    if (status === "approved") {
       this.db
         .prepare("UPDATE deployment_log SET status = ?, approved_at = ? WHERE id = ?")
         .run(status, Date.now(), id);

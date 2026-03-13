@@ -120,21 +120,6 @@ CREATE TABLE IF NOT EXISTS notification_history (
 );
 CREATE INDEX IF NOT EXISTS idx_notif_history_time ON notification_history(created_at DESC);
 
-CREATE TABLE IF NOT EXISTS consolidation_log (
-  id TEXT PRIMARY KEY,
-  summary_entry_id TEXT NOT NULL,
-  source_entry_ids TEXT NOT NULL,
-  similarity_score REAL NOT NULL,
-  model_used TEXT NOT NULL,
-  cost REAL NOT NULL DEFAULT 0,
-  timestamp INTEGER NOT NULL,
-  depth INTEGER NOT NULL DEFAULT 1,
-  status TEXT NOT NULL DEFAULT 'completed',
-  agent_id TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_consolidation_log_ts ON consolidation_log(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_consolidation_log_agent ON consolidation_log(agent_id, timestamp DESC);
-
 CREATE TABLE IF NOT EXISTS deployment_log (
   id TEXT PRIMARY KEY,
   proposed_at INTEGER NOT NULL,

@@ -451,11 +451,14 @@ describe("MemoryConsolidationEngine", () => {
 
       await engine.processCluster(cluster);
 
-      // Check soft-delete flags on originals
+      // Check soft-delete flags on originals (both SQL column and JSON blob)
       const row1 = db.prepare("SELECT * FROM memories WHERE id = ?").get("e1") as Record<string, unknown>;
       const val1 = JSON.parse(row1.value as string) as Record<string, unknown>;
       expect(val1.consolidated_into).toBeDefined();
       expect(val1.consolidated_at).toBeDefined();
+      // SQL column must also be set (used by isConsolidated bulk query)
+      expect(row1.consolidated_into).toBeDefined();
+      expect(row1.consolidated_into).not.toBeNull();
 
       // Check consolidation log entry exists
       const logRows = db.prepare("SELECT * FROM consolidation_log").all();

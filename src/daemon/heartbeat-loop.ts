@@ -398,15 +398,6 @@ export class HeartbeatLoop {
       }
     }
 
-    // Deployment readiness check after trigger evaluation (Phase 25, DEPLOY-01)
-    if (this.deployTrigger) {
-      void this.deployTrigger.triggerReadinessCheck().catch((err: unknown) => {
-        this.logger.debug("Deployment readiness check failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
-
     // Update lastTick
     this.lastTick = now;
   }

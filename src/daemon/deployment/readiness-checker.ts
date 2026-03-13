@@ -12,9 +12,9 @@
  */
 
 import { spawn } from "node:child_process";
-import { accessSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
 import type { DeploymentConfig, ReadinessResult } from "./deployment-types.js";
+import { validateScriptPath as validatePath } from "./validate-script-path.js";
 
 export interface ReadinessCheckerLogger {
   debug(msg: string, ...args: unknown[]): void;
@@ -99,19 +99,7 @@ export class ReadinessChecker {
    * Checks file exists and is executable.
    */
   validateScriptPath(scriptPath: string): string {
-    const resolved = path.resolve(this.projectRoot, scriptPath);
-
-    if (!resolved.startsWith(this.projectRoot + path.sep) && resolved !== this.projectRoot) {
-      throw new Error(`Script path traversal detected: "${scriptPath}" resolves outside project root`);
-    }
-
-    try {
-      accessSync(resolved, fsConstants.X_OK);
-    } catch {
-      throw new Error(`Script not found or not executable: "${resolved}"`);
-    }
-
-    return resolved;
+    return validatePath(scriptPath, this.projectRoot);
   }
 
   // ===========================================================================
@@ -166,9 +154,13 @@ export class ReadinessChecker {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
+      // Cap output to prevent unbounded memory growth on large dirty repos
+      const MAX_GIT_OUTPUT = 64 * 1024; // 64KB is plenty for dirty-check
       let stdout = "";
       child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
+        if (stdout.length < MAX_GIT_OUTPUT) {
+          stdout += chunk.toString().slice(0, MAX_GIT_OUTPUT - stdout.length);
+        }
       });
 
       child.on("error", (err) => {
@@ -196,7 +188,9 @@ export class ReadinessChecker {
 
       let stdout = "";
       child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
+        if (stdout.length < 1024) {
+          stdout += chunk.toString().slice(0, 1024 - stdout.length);
+        }
       });
 
       child.on("error", (err) => {

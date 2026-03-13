@@ -167,14 +167,20 @@ export class MemoryConsolidationEngine {
     const visited = new Set<string>();
     const clusters: MemoryCluster[] = [];
 
+    // Bulk-read all consolidated IDs to avoid N² per-entry SQLite queries
+    const consolidatedIds = new Set<string>(
+      (this.db.prepare("SELECT id FROM memories WHERE consolidated_into IS NOT NULL").all() as Array<{ id: string }>)
+        .map((r) => r.id),
+    );
+
     // Collect eligible entries for this tier
     const eligible: MemoryEntryLike[] = [];
     for (const entry of this.entries.values()) {
       if (entry.tier !== tier) continue;
       if (this.isExempt(entry)) continue;
       if (this.getDepth(entry) >= this.config.maxDepth) continue;
-      if (now - (entry.createdAt as number) < this.config.minAgeMs) continue;
-      if (this.isConsolidated(entry)) continue;
+      if (now - entry.createdAt < this.config.minAgeMs) continue;
+      if (consolidatedIds.has(entry.id)) continue;
       eligible.push(entry);
     }
 
@@ -183,7 +189,7 @@ export class MemoryConsolidationEngine {
       if (!entry.embedding || entry.embedding.length === 0) continue;
 
       const neighbors = await this.hnsw.search(
-        entry.embedding as number[],
+        entry.embedding,
         this.config.batchSize,
       );
 
@@ -202,8 +208,8 @@ export class MemoryConsolidationEngine {
         if (neighborEntry.tier !== tier) continue;
         if (this.isExempt(neighborEntry)) continue;
         if (this.getDepth(neighborEntry) >= this.config.maxDepth) continue;
-        if (now - (neighborEntry.createdAt as number) < this.config.minAgeMs) continue;
-        if (this.isConsolidated(neighborEntry)) continue;
+        if (now - neighborEntry.createdAt < this.config.minAgeMs) continue;
+        if (consolidatedIds.has(neighborEntry.id)) continue;
 
         clusterMembers.push(neighbor.id);
         totalSimilarity += neighbor.score;
@@ -281,8 +287,8 @@ export class MemoryConsolidationEngine {
       importance: "medium",
       importanceScore: maxImportanceScore,
       embedding: summaryEmbedding,
-      createdAt: now as unknown as number,
-      lastAccessedAt: now as unknown as number,
+      createdAt: now,
+      lastAccessedAt: now,
       accessCount: 0,
       metadata: summaryMetadata,
       tags: [],
@@ -292,7 +298,7 @@ export class MemoryConsolidationEngine {
 
     // Atomic SQLite transaction: soft-delete originals + insert summary + insert log
     const softDeleteStmt = this.db.prepare(
-      "UPDATE memories SET value = json_set(value, '$.consolidated_into', ?, '$.consolidated_at', ?), updated_at = ? WHERE id = ?",
+      "UPDATE memories SET consolidated_into = ?, consolidated_at = ?, value = json_set(value, '$.consolidated_into', ?, '$.consolidated_at', ?), updated_at = ? WHERE id = ?",
     );
 
     const insertStmt = this.db.prepare(
@@ -320,9 +326,9 @@ export class MemoryConsolidationEngine {
     const summaryEmbBuf = Buffer.from(new Float32Array(summaryEmbedding).buffer);
 
     this.db.transaction(() => {
-      // Soft-delete originals
+      // Soft-delete originals (SQL columns + JSON blob for audit trail)
       for (const id of cluster.memberIds) {
-        softDeleteStmt.run(summaryId, now, now, id);
+        softDeleteStmt.run(summaryId, now, summaryId, now, now, id);
       }
 
       // Insert summary entry
@@ -351,13 +357,8 @@ export class MemoryConsolidationEngine {
       );
     })();
 
-    // Update in-memory entries: remove originals from map, add summary
-    for (const id of cluster.memberIds) {
-      this.entries.delete(id);
-    }
-    this.entries.set(summaryId, summaryEntry);
-
-    // HNSW cleanup: remove original vectors, add summary vector
+    // HNSW cleanup first: remove original vectors, add summary vector
+    // (Must complete before in-memory mutation to avoid inconsistent state on HNSW failure)
     await this.hnsw.remove(cluster.memberIds);
     await this.hnsw.upsert([{
       id: summaryId,
@@ -366,6 +367,12 @@ export class MemoryConsolidationEngine {
       addedAt: now,
       accessCount: 0,
     }]);
+
+    // Update in-memory entries only after both SQLite and HNSW succeed
+    for (const id of cluster.memberIds) {
+      this.entries.delete(id);
+    }
+    this.entries.set(summaryId, summaryEntry);
 
     this.logger.debug("[Consolidation] Processed cluster", {
       clusterId: cluster.seedId,
@@ -388,14 +395,7 @@ export class MemoryConsolidationEngine {
   async runCycle(signal: AbortSignal): Promise<ConsolidationResult> {
     this.emitter.emit("consolidation:started", { timestamp: Date.now() });
 
-    // Gather all clusters across tiers
-    const allClusters: MemoryCluster[] = [];
-    const tiers = [MemoryTier.Working, MemoryTier.Ephemeral, MemoryTier.Persistent];
-
-    for (const tier of tiers) {
-      const tierClusters = await this.findClusters(tier);
-      allClusters.push(...tierClusters);
-    }
+    const allClusters = await this.findAllClusters();
 
     if (allClusters.length === 0) {
       this.emitter.emit("consolidation:completed", { processed: 0, timestamp: Date.now() });
@@ -407,9 +407,6 @@ export class MemoryConsolidationEngine {
         costUsd: 0,
       };
     }
-
-    // Sort all clusters by avgSimilarity descending
-    allClusters.sort((a, b) => b.avgSimilarity - a.avgSimilarity);
 
     let processed = 0;
     let totalCost = 0;
@@ -443,23 +440,6 @@ export class MemoryConsolidationEngine {
           error: String(error),
         });
       }
-
-      // Check for interruption AFTER processing (abort may have happened during processCluster)
-      if (signal.aborted) {
-        const remaining = allClusters.length - i - 1;
-        this.emitter.emit("consolidation:interrupted", {
-          processed,
-          remaining,
-          timestamp: Date.now(),
-        });
-        return {
-          status: "interrupted",
-          processed,
-          remaining,
-          clustersFound: allClusters.length,
-          costUsd: totalCost,
-        };
-      }
     }
 
     this.emitter.emit("consolidation:completed", {
@@ -485,13 +465,7 @@ export class MemoryConsolidationEngine {
    * Return clusters and estimated cost without modifying anything.
    */
   async preview(): Promise<ConsolidationPreview> {
-    const allClusters: MemoryCluster[] = [];
-    const tiers = [MemoryTier.Working, MemoryTier.Ephemeral, MemoryTier.Persistent];
-
-    for (const tier of tiers) {
-      const tierClusters = await this.findClusters(tier);
-      allClusters.push(...tierClusters);
-    }
+    const allClusters = await this.findAllClusters();
 
     // Estimate cost per cluster based on average content length
     // Rough estimate: ~$0.001 per 1000 tokens, ~4 chars per token
@@ -537,7 +511,7 @@ export class MemoryConsolidationEngine {
 
     // Unflag originals (remove consolidated_into and consolidated_at from value JSON)
     const unflagStmt = this.db.prepare(
-      "UPDATE memories SET value = json_remove(value, '$.consolidated_into', '$.consolidated_at'), updated_at = ? WHERE id = ?",
+      "UPDATE memories SET consolidated_into = NULL, consolidated_at = NULL, value = json_remove(value, '$.consolidated_into', '$.consolidated_at'), updated_at = ? WHERE id = ?",
     );
 
     const deleteSummaryStmt = this.db.prepare("DELETE FROM memories WHERE id = ?");
@@ -592,7 +566,7 @@ export class MemoryConsolidationEngine {
           domain: parsed.domain as string | undefined,
           importance: parsed.importance as string ?? "medium",
           importanceScore: (parsed.importanceScore as number) ?? 0.5,
-          embedding: embedding as number[],
+          embedding,
           createdAt: row.created_at as number,
           lastAccessedAt: (parsed.lastAccessedAt as number) ?? (row.created_at as number),
           accessCount: (parsed.accessCount as number) ?? 0,
@@ -606,7 +580,10 @@ export class MemoryConsolidationEngine {
     }
 
     // HNSW updates: remove summary vector, re-add original vectors
-    void this.hnsw.remove([summaryEntryId]);
+    // Use .catch() to log errors (undo is sync but HNSW ops are async)
+    void this.hnsw.remove([summaryEntryId]).catch((err) => {
+      this.logger.warn("[Consolidation] HNSW remove failed during undo", { summaryEntryId, error: String(err) });
+    });
     if (originalEmbeddings.length > 0) {
       void this.hnsw.upsert(
         originalEmbeddings.map((oe) => ({
@@ -616,7 +593,9 @@ export class MemoryConsolidationEngine {
           addedAt: now,
           accessCount: 0,
         })),
-      );
+      ).catch((err) => {
+        this.logger.warn("[Consolidation] HNSW upsert failed during undo", { error: String(err) });
+      });
     }
 
     this.logger.info("[Consolidation] Undo completed", { logId, summaryEntryId, restoredCount: sourceEntryIds.length });
@@ -630,11 +609,9 @@ export class MemoryConsolidationEngine {
    * Get consolidation statistics: per-tier breakdown and lifetime totals.
    */
   getStats(): ConsolidationStats {
-    // Per-tier breakdown
-    const tiers = [MemoryTier.Working, MemoryTier.Ephemeral, MemoryTier.Persistent];
     const perTier: Record<string, ConsolidationTierStats> = {};
 
-    for (const tier of tiers) {
+    for (const tier of MemoryConsolidationEngine.ALL_TIERS) {
       const total = Array.from(this.entries.values()).filter((e) => e.tier === tier).length;
       // Count clustered = entries with consolidated_into set in this tier
       const clusteredRow = this.db.prepare(
@@ -666,10 +643,23 @@ export class MemoryConsolidationEngine {
   // HELPERS
   // ---------------------------------------------------------------------------
 
+  /** All memory tiers in processing order */
+  private static readonly ALL_TIERS = [MemoryTier.Working, MemoryTier.Ephemeral, MemoryTier.Persistent] as const;
+
+  /** Find clusters across all tiers, sorted by highest similarity first */
+  private async findAllClusters(): Promise<MemoryCluster[]> {
+    const clusters: MemoryCluster[] = [];
+    for (const tier of MemoryConsolidationEngine.ALL_TIERS) {
+      const tierClusters = await this.findClusters(tier);
+      clusters.push(...tierClusters);
+    }
+    clusters.sort((a, b) => b.avgSimilarity - a.avgSimilarity);
+    return clusters;
+  }
+
   /** Check if an entry is exempt from consolidation */
   private isExempt(entry: MemoryEntryLike): boolean {
-    if (entry.domain && this.exemptDomains.has(entry.domain)) return true;
-    return false;
+    return entry.domain !== undefined && this.exemptDomains.has(entry.domain);
   }
 
   /** Get the consolidation depth of an entry (0 if never consolidated) */
@@ -678,12 +668,5 @@ export class MemoryConsolidationEngine {
     return (meta?.depth as number) ?? 0;
   }
 
-  /** Check if an entry has already been consolidated (soft-deleted) */
-  private isConsolidated(entry: MemoryEntryLike): boolean {
-    // Check DB: consolidated_into field set
-    const row = this.db.prepare(
-      "SELECT consolidated_into FROM memories WHERE id = ?",
-    ).get(entry.id) as { consolidated_into: string | null } | undefined;
-    return row?.consolidated_into !== null && row?.consolidated_into !== undefined;
-  }
+  // isConsolidated removed — replaced by bulk Set<string> lookup in findClusters
 }

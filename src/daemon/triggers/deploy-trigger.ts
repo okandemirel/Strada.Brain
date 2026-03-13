@@ -48,6 +48,11 @@ export class DeployTrigger implements ITrigger {
   private lastRejectionTime = 0;
   private cachedReadiness: ReadinessResult | null = null;
 
+  /** Cooldown duration in ms, derived from config */
+  private get cooldownMs(): number {
+    return this.config.cooldownMinutes * 60_000;
+  }
+
   constructor(
     readinessChecker: ReadinessChecker,
     approvalQueue: ApprovalQueue,
@@ -91,8 +96,7 @@ export class DeployTrigger implements ITrigger {
     }
 
     // Cooldown after rejection
-    const cooldownMs = this.config.cooldownMinutes * 60 * 1000;
-    if (this.lastRejectionTime > 0 && now.getTime() < this.lastRejectionTime + cooldownMs) {
+    if (this.lastRejectionTime > 0 && now.getTime() < this.lastRejectionTime + this.cooldownMs) {
       return false;
     }
 
@@ -136,8 +140,7 @@ export class DeployTrigger implements ITrigger {
     if (this.circuitBreaker.isOpen()) {
       return "disabled";
     }
-    const cooldownMs = this.config.cooldownMinutes * 60 * 1000;
-    if (this.lastRejectionTime > 0 && Date.now() < this.lastRejectionTime + cooldownMs) {
+    if (this.lastRejectionTime > 0 && Date.now() < this.lastRejectionTime + this.cooldownMs) {
       return "paused";
     }
     return "active";
