@@ -286,7 +286,7 @@ export class JwtManager {
       }
 
       return { valid: true, payload };
-    } catch (error) {
+    } catch (_error) {
       return { valid: false, error: "Token verification failed" };
     }
   }

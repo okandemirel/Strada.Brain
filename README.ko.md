@@ -559,7 +559,7 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 | `strada_create_module` | 완전한 모듈 스캐폴드 생성 (`.asmdef`, 구성, 디렉터리) |
 | `strada_create_component` | 필드 정의가 포함된 ECS 컴포넌트 구조체 생성 |
 | `strada_create_mediator` | 컴포넌트 바인딩이 포함된 `EntityMediator<TView>` 생성 |
-| `strada_create_system` | `SystemBase`/`JobSystemBase`/`SystemGroup` 생성 |
+| `strada_create_system` | `SystemBase`/`JobSystemBase`/`BurstSystem` 스캐폴드 생성 |
 
 ### Git
 | 도구 | 설명 |
@@ -727,7 +727,9 @@ npm test -- --coverage           # 커버리지 포함
 npm test -- src/agents/tools/file-read.test.ts  # 단일 파일 / 대상 실행
 npm test -- src/dashboard/prometheus.test.ts    # 기본 러너로 대상 스위트 실행
 LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run sync:check -- --core-path /path/to/Strada.Core  # Strada.Core API 드리프트 검증
 npm run test:file-build-flow     # opt-in 로컬 .NET 통합 플로우
+npm run test:unity-fixture       # opt-in 로컬 Unity fixture 컴파일/테스트 플로우
 npm run test:hnsw-perf           # opt-in HNSW 벤치마크 / 재현율 스위트
 npm run typecheck                # TypeScript 타입 체크
 npm run lint                     # ESLint
@@ -736,7 +738,9 @@ npm run lint                     # ESLint
 메모:
 - `npm test` 는 이전 전체 스위트 OOM 경로를 피하기 위해 배치형 Vitest 러너와 `fork` 워커를 사용합니다.
 - 실제 소켓 바인딩이 필요한 dashboard 테스트는 기본적으로 skip 됩니다. 실제 로컬 검증에는 `LOCAL_SERVER_TESTS=1` 을 사용하세요.
-- `test:file-build-flow` 와 `test:hnsw-perf` 는 로컬 빌드 도구나 무거운 벤치마크 부하가 필요하므로 의도적으로 opt-in 입니다.
+- `sync:check` 는 Strada.Brain 의 Strada.Core 지식을 실제 checkout 과 대조하며, CI 는 `--max-drift-score 0` 으로 이를 강제합니다.
+- `test:file-build-flow`, `test:unity-fixture`, `test:hnsw-perf` 는 로컬 빌드 도구, 라이선스가 있는 Unity 에디터, 또는 무거운 벤치마크 부하가 필요하므로 의도적으로 opt-in 입니다.
+- `test:unity-fixture` 는 생성된 코드가 맞아도 로컬 Unity batchmode / 라이선스 환경이 불안정하면 실패할 수 있습니다.
 
 ---
 

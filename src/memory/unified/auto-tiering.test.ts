@@ -268,7 +268,6 @@ describe("AgentDBMemory Auto-Tiering", () => {
 
       getEntries(memory).set("enforce-1", entry);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const enforceSpy = vi.spyOn(memory as any, "enforceTierLimits");
 
       await runSweep(memory, 5, 7);

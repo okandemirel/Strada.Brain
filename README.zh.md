@@ -559,7 +559,7 @@ npm run dev -- daemon --channel web
 | `strada_create_module` | 生成完整模块脚手架（`.asmdef`、配置、目录） |
 | `strada_create_component` | 生成带字段定义的 ECS 组件结构体 |
 | `strada_create_mediator` | 生成带组件绑定的 `EntityMediator<TView>` |
-| `strada_create_system` | 生成 `SystemBase`/`JobSystemBase`/`SystemGroup` |
+| `strada_create_system` | 生成 `SystemBase`/`JobSystemBase`/`BurstSystem` 脚手架 |
 
 ### Git
 | 工具 | 说明 |
@@ -727,7 +727,9 @@ npm test -- --coverage           # 带覆盖率
 npm test -- src/agents/tools/file-read.test.ts  # 单个文件 / 定向执行
 npm test -- src/dashboard/prometheus.test.ts    # 通过默认 runner 执行定向套件
 LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run sync:check -- --core-path /path/to/Strada.Core  # 校验 Strada.Core API drift
 npm run test:file-build-flow     # opt-in 本地 .NET 集成流程
+npm run test:unity-fixture       # opt-in 本地 Unity fixture 编译/测试流程
 npm run test:hnsw-perf           # opt-in HNSW 基准 / recall 套件
 npm run typecheck                # TypeScript 类型检查
 npm run lint                     # ESLint
@@ -736,7 +738,9 @@ npm run lint                     # ESLint
 说明:
 - `npm test` 使用分批的 Vitest runner 和 `fork` worker，以避免之前完整套件的 OOM 路径。
 - 依赖真实 socket bind 的 dashboard 测试默认会被跳过；如需真实本地验证，请使用 `LOCAL_SERVER_TESTS=1`。
-- `test:file-build-flow` 和 `test:hnsw-perf` 有意保持为 opt-in，因为它们依赖本地构建工具或较重的基准负载。
+- `sync:check` 会把 Strada.Brain 的 Strada.Core 知识与真实 checkout 做比对；CI 会以 `--max-drift-score 0` 强制执行。
+- `test:file-build-flow`、`test:unity-fixture` 和 `test:hnsw-perf` 有意保持为 opt-in，因为它们依赖本地构建工具、带许可证的 Unity 编辑器或较重的基准负载。
+- `test:unity-fixture` 即使生成代码本身正确，也可能因为本地 Unity batchmode / 许可证环境异常而失败。
 
 ---
 

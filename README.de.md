@@ -531,7 +531,7 @@ Der Agent verfuegt ueber mehr als 30 integrierte Tools, organisiert nach Kategor
 | `strada_create_module` | Vollstaendiges Modul-Geruest generieren (`.asmdef`, Konfiguration, Verzeichnisse) |
 | `strada_create_component` | ECS-Komponentenstrukturen mit Felddefinitionen generieren |
 | `strada_create_mediator` | `EntityMediator<TView>` mit Komponentenbindungen generieren |
-| `strada_create_system` | `SystemBase`/`JobSystemBase`/`SystemGroup` generieren |
+| `strada_create_system` | `SystemBase`/`JobSystemBase`/`BurstSystem` generieren |
 
 ### Git
 | Tool | Beschreibung |
@@ -699,7 +699,9 @@ npm test -- --coverage           # Mit Coverage
 npm test -- src/agents/tools/file-read.test.ts  # Einzelne Datei / gezielter Durchlauf
 npm test -- src/dashboard/prometheus.test.ts    # Gezielte Suite ueber den Standard-Runner
 LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run sync:check -- --core-path /path/to/Strada.Core  # Strada.Core-API-Drift validieren
 npm run test:file-build-flow     # Opt-in lokaler .NET-Integrationsfluss
+npm run test:unity-fixture       # Opt-in lokaler Unity-Compile/Test-Fixture-Flow
 npm run test:hnsw-perf           # Opt-in HNSW-Benchmark / Recall-Suite
 npm run typecheck                # TypeScript-Typpruefung
 npm run lint                     # ESLint
@@ -708,7 +710,9 @@ npm run lint                     # ESLint
 Hinweise:
 - `npm test` verwendet einen batch-basierten Vitest-Runner mit Fork-Workern, um den frueheren Full-Suite-OOM-Pfad zu vermeiden.
 - Dashboard-Tests mit echtem Socket-Binding werden standardmaessig uebersprungen; fuer lokale Verifikation `LOCAL_SERVER_TESTS=1` setzen.
-- `test:file-build-flow` und `test:hnsw-perf` sind bewusst opt-in, weil sie lokale Build-Tools bzw. benchmarklastige Lasten brauchen.
+- `sync:check` validiert das Strada.Core-Wissen von Strada.Brain gegen einen echten Checkout; CI erzwingt dies mit `--max-drift-score 0`.
+- `test:file-build-flow`, `test:unity-fixture` und `test:hnsw-perf` sind bewusst opt-in, weil sie lokale Build-Tools, einen lizenzierten Unity-Editor oder benchmarklastige Lasten brauchen.
+- `test:unity-fixture` kann trotz korrektem generiertem Code fehlschlagen, wenn die lokale Unity-Batchmode-/Lizenzumgebung instabil ist.
 
 ---
 

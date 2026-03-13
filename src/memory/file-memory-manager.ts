@@ -753,8 +753,6 @@ export class FileMemoryManager implements IMemoryManager {
     options: RetrievalOptions
   ): Promise<Result<RetrievalResult[], Error>> {
     try {
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      void options; // options is part of interface but not used in this implementation
       const limit = options.limit ?? DEFAULT_LIMIT;
       const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
 

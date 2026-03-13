@@ -25,7 +25,6 @@ vi.mock("../../utils/logger.js", () => ({
   }),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { __mockCreate: mockCreate } = await import("@anthropic-ai/sdk") as any;
 
 describe("ClaudeProvider", () => {

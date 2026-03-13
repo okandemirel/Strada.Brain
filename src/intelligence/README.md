@@ -4,7 +4,7 @@ Static analysis tooling for C# codebases, specifically targeting Unity projects 
 
 ## Regex-Based C# Parser (`csharp-parser.ts`)
 
-A lightweight, regex-based structural extractor for C# files. Used by `strada-analyzer.ts`.
+A lightweight, regex-based structural extractor for C# files. Used by `rag/chunker.ts` and other narrow structural extraction paths.
 
 - Rejects files over 1MB to prevent ReDoS
 - Extracts namespaces (block and file-scoped), usings, classes, structs, methods, fields, properties, attributes, and constructors via independent regex passes
@@ -17,7 +17,7 @@ A lightweight, regex-based structural extractor for C# files. Used by `strada-an
 
 ## Deep C# Parser (`csharp-deep-parser.ts`)
 
-A tokenizer + recursive-descent parser that replaces the regex approach with a proper lexer/parser pipeline. Used by `code-quality.ts`.
+A tokenizer + recursive-descent parser that replaces the regex approach with a proper lexer/parser pipeline. Used by `strada-analyzer.ts` and `code-quality.ts`.
 
 - Two-phase architecture: `tokenize()` produces a `Token[]` with 20 token kinds, then `Parser` class consumes them via recursive descent
 - Tokenizer handles single-line comments, multi-line comments, verbatim strings (`@""`), character literals, and preprocessor directives (all skipped/consumed correctly)
@@ -33,12 +33,12 @@ A tokenizer + recursive-descent parser that replaces the regex approach with a p
 
 ## Strada Project Analyzer (`strada-analyzer.ts`)
 
-Scans an entire Unity/Strada.Core project directory and extracts framework-specific architecture information. Uses the regex parser.
+Scans an entire Unity/Strada.Core project directory and extracts framework-specific architecture information. Uses the deep parser plus cached AST metadata.
 
 - `StradaAnalyzer` class takes a project path, globs for `**/*.cs` (excluding `node_modules`, `Library`, `Temp`), and parses each file
 - Identifies Strada framework constructs:
   - **Modules**: classes inheriting from `ModuleConfig`
-  - **Systems**: non-abstract classes inheriting from `SystemBase`, `JobSystemBase`, or `SystemGroup`
+  - **Systems**: non-abstract classes inheriting from `SystemBase`, `JobSystemBase`, or generic `BurstSystem<...>`
   - **Components**: structs implementing `IComponent`
   - **Services**: classes implementing `I`-prefixed interfaces (DI registrations)
   - **Mediators**: classes inheriting from `EntityMediator<T>`, extracting the view type from the generic argument
@@ -47,6 +47,15 @@ Scans an entire Unity/Strada.Core project directory and extracts framework-speci
 - Builds a `DependencyEdge[]` graph with four edge types: `inherits`, `implements`, `injects`, `uses_event`
 - Deduplicates edges via a `Set<string>` keyed by `from->to:type`
 - `formatAnalysis()` static method renders the full analysis as a plain-text report
+
+## Strada API Sync & Drift Validation
+
+This package also owns the source-of-truth validation pipeline for Strada.Core knowledge.
+
+- `strada-core-extractor.ts` scans a Strada.Core checkout into a structured API snapshot and can run standalone in CLI / CI contexts
+- `strada-drift-validator.ts` compares the extracted snapshot against `STRADA_API`, scores drift, and understands generic `BurstSystem<...>` variants
+- `strada-api-sync.ts` powers the `src/index.ts sync` command with `--dry-run`, `--json`, `--max-drift-score`, `--fail-on-warnings`, and `--apply`
+- CI runs `npm run sync:check -- --core-path ... --max-drift-score 0` to keep Strada.Brain aligned with real Strada.Core
 
 ## Code Quality Analyzer (`code-quality.ts`)
 
@@ -88,3 +97,6 @@ Detects anti-patterns, computes per-file quality scores (0-100), and generates r
 | `csharp-deep-parser.ts` | Tokenizer + recursive-descent C# parser producing a typed AST with nested type/generic support |
 | `strada-analyzer.ts` | Project-wide Strada.Core framework analysis (modules, systems, components, services, mediators, controllers, events, dependency graph) |
 | `code-quality.ts` | Quality scoring engine with 16 rules across 5 categories (anti-pattern, complexity, naming, strada-specific, architecture) |
+| `strada-core-extractor.ts` | Extracts a Strada.Core source snapshot for drift validation and sync workflows |
+| `strada-drift-validator.ts` | Compares extracted Strada.Core API surface to `STRADA_API` and reports scored drift |
+| `strada-api-sync.ts` | CLI-facing sync orchestration with dry-run, JSON output, and failure thresholds |

@@ -102,9 +102,27 @@ program
   .requiredOption("--core-path <path>", "Path to Strada.Core source directory")
   .option("--dry-run", "Show drift report without applying changes", false)
   .option("--apply", "Apply auto-generated API updates", false)
-  .action(async (opts: { corePath: string; dryRun: boolean; apply: boolean }) => {
+  .option("--json", "Output the drift report as JSON", false)
+  .option("--max-drift-score <score>", "Fail if drift score exceeds this integer threshold")
+  .option("--fail-on-warnings", "Fail if any drift warnings are detected", false)
+  .action(async (opts: {
+    corePath: string;
+    dryRun: boolean;
+    apply: boolean;
+    json?: boolean;
+    maxDriftScore?: string;
+    failOnWarnings?: boolean;
+  }) => {
     const { runSyncCommand } = await import("./intelligence/strada-api-sync.js");
-    await runSyncCommand(opts);
+    await runSyncCommand({
+      corePath: opts.corePath,
+      dryRun: opts.dryRun,
+      apply: opts.apply,
+      json: opts.json,
+      maxDriftScore:
+        opts.maxDriftScore !== undefined ? Number.parseInt(opts.maxDriftScore, 10) : undefined,
+      failOnWarnings: opts.failOnWarnings,
+    });
   });
 
 // Register daemon management commands (status, trigger, reset, audit, config, budget)

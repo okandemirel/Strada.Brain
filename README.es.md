@@ -560,7 +560,7 @@ El agente tiene mas de 30 herramientas integradas organizadas por categoria:
 | `strada_create_module` | Generar scaffold completo de modulo (`.asmdef`, configuracion, directorios) |
 | `strada_create_component` | Generar structs de componentes ECS con definiciones de campos |
 | `strada_create_mediator` | Generar `EntityMediator<TView>` con bindings de componentes |
-| `strada_create_system` | Generar `SystemBase`/`JobSystemBase`/`SystemGroup` |
+| `strada_create_system` | Generar esqueletos `SystemBase`/`JobSystemBase`/`BurstSystem` |
 
 ### Git
 | Herramienta | Descripcion |
@@ -728,7 +728,9 @@ npm test -- --coverage           # Con cobertura
 npm test -- src/agents/tools/file-read.test.ts  # Archivo individual / paso dirigido
 npm test -- src/dashboard/prometheus.test.ts    # Suite dirigida con el runner predeterminado
 LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run sync:check -- --core-path /path/to/Strada.Core  # Validar drift de la API de Strada.Core
 npm run test:file-build-flow     # Flujo local de integracion .NET opt-in
+npm run test:unity-fixture       # Flujo local opt-in de fixture Unity compile/test
 npm run test:hnsw-perf           # Suite opt-in de benchmark / recall HNSW
 npm run typecheck                # Verificacion de tipos TypeScript
 npm run lint                     # ESLint
@@ -737,7 +739,9 @@ npm run lint                     # ESLint
 Notas:
 - `npm test` usa un runner por lotes de Vitest con workers `fork` para evitar la ruta anterior de OOM en la suite completa.
 - Las pruebas del dashboard que dependen de `socket bind` se omiten por defecto; usa `LOCAL_SERVER_TESTS=1` para validacion local real.
-- `test:file-build-flow` y `test:hnsw-perf` son opt-in a proposito porque requieren herramientas locales de compilacion o cargas pesadas de benchmark.
+- `sync:check` valida el conocimiento de Strada.Core en Strada.Brain contra un checkout real; CI lo obliga con `--max-drift-score 0`.
+- `test:file-build-flow`, `test:unity-fixture` y `test:hnsw-perf` son opt-in a proposito porque requieren herramientas locales de compilacion, un editor Unity con licencia o cargas pesadas de benchmark.
+- `test:unity-fixture` puede fallar aunque el codigo generado sea correcto si el entorno local de Unity batchmode / licencias no esta sano.
 
 ---
 

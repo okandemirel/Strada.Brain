@@ -46,7 +46,13 @@ describe("ModuleCreateTool", () => {
     );
     expect(asmdefCall).toBeTruthy();
     const asmdefContent = JSON.parse(asmdefCall![1] as string);
-    expect(asmdefContent.references).toContain("Strada.Core");
+    expect(asmdefContent.references).toEqual([
+      "Strada.Core",
+      "Unity.Burst",
+      "Unity.Collections",
+      "Unity.Mathematics",
+      "Unity.Entities",
+    ]);
 
     // Verify ModuleConfig uses RegisterService pattern
     const configCall = vi.mocked(writeFile).mock.calls.find(
@@ -66,11 +72,20 @@ describe("ModuleCreateTool", () => {
     expect(systemCall).toBeTruthy();
     const systemCode = systemCall![1] as string;
     expect(systemCode).toContain("using Strada.Core.ECS.Systems;");
+    expect(systemCode).toContain("using Strada.Core.Modules;");
     expect(systemCode).toContain("[StradaSystem]");
     expect(systemCode).toContain("[ExecutionOrder(0)]");
     expect(systemCode).toContain("protected override void OnInitialize()");
     expect(systemCode).toContain("protected override void OnDispose()");
     expect(systemCode).not.toContain("World.Query");
+
+    const serviceCall = vi.mocked(writeFile).mock.calls.find(
+      (c) => String(c[0]).endsWith("/CombatService.cs")
+    );
+    expect(serviceCall).toBeTruthy();
+    const serviceCode = serviceCall![1] as string;
+    expect(serviceCode).toContain("using Strada.Core.Patterns;");
+    expect(serviceCode).toContain("class CombatService : Service, ICombatService");
   });
 
   it("creates module without system and service", async () => {

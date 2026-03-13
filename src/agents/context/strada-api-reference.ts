@@ -17,25 +17,53 @@
 export const STRADA_API = {
   // ── Namespaces ──────────────────────────────────────────────────────
   namespaces: {
+    core: "Strada.Core.Core",
     ecs: "Strada.Core.ECS",
+    ecsArchetypes: "Strada.Core.ECS.Archetypes",
+    ecsCore: "Strada.Core.ECS.Core",
     systems: "Strada.Core.ECS.Systems",
     query: "Strada.Core.ECS.Query",
     jobs: "Strada.Core.ECS.Jobs",
     storage: "Strada.Core.ECS.Storage",
-    reactive: "Strada.Core.Reactive",
+    reactive: "Strada.Core.ECS.Reactive",
     world: "Strada.Core.ECS.World",
     di: "Strada.Core.DI",
     diAttributes: "Strada.Core.DI.Attributes",
+    diAutoBinding: "Strada.Core.DI.AutoBinding",
     modules: "Strada.Core.Modules",
     sync: "Strada.Core.Sync",
     communication: "Strada.Core.Communication",
     patterns: "Strada.Core.Patterns",
+    patternsInterfaces: "Strada.Core.Patterns.Interfaces",
     data: "Strada.Core.Data",
     pooling: "Strada.Core.Pooling",
     stateMachine: "Strada.Core.StateMachine",
     logging: "Strada.Core.Logging",
+    services: "Strada.Core.Services",
+    utilities: "Strada.Core.Utilities",
+    sourceGen: "Strada.Core.SourceGen",
     commands: "Strada.Core.Commands",
     bootstrap: "Strada.Core.Bootstrap",
+    editor: "Strada.Core.Editor",
+    editorBenchmarking: "Strada.Core.Editor.Benchmarking",
+    editorCodeGen: "Strada.Core.Editor.CodeGen",
+    editorDataProviders: "Strada.Core.Editor.DataProviders",
+    editorDataProvidersModels: "Strada.Core.Editor.DataProviders.Models",
+    editorGraph: "Strada.Core.Editor.Graph",
+    editorHotReload: "Strada.Core.Editor.HotReload",
+    editorInspectors: "Strada.Core.Editor.Inspectors",
+    editorModuleGenerator: "Strada.Core.Editor.ModuleGenerator",
+    editorModuleGeneratorConfig: "Strada.Core.Editor.ModuleGenerator.Config",
+    editorModuleGeneratorModels: "Strada.Core.Editor.ModuleGenerator.Models",
+    editorModuleGeneratorPipeline: "Strada.Core.Editor.ModuleGenerator.Pipeline",
+    editorModuleGeneratorPipelineSteps: "Strada.Core.Editor.ModuleGenerator.Pipeline.Steps",
+    editorProfiling: "Strada.Core.Editor.Profiling",
+    editorPropertyDrawers: "Strada.Core.Editor.PropertyDrawers",
+    editorSettings: "Strada.Core.Editor.Settings",
+    editorTemplates: "Strada.Core.Editor.Templates",
+    editorUtilities: "Strada.Core.Editor.Utilities",
+    editorValidation: "Strada.Core.Editor.Validation",
+    editorWindows: "Strada.Core.Editor.Windows",
   },
 
   // ── Base Classes ────────────────────────────────────────────────────
@@ -59,6 +87,9 @@ export const STRADA_API = {
       "FixedTickableController",
       "FullTickController",
       "Service",
+      "TickableService",
+      "FixedTickableService",
+      "OrderedService",
       "View",
       "Model",
       "Base",
@@ -133,9 +164,9 @@ export const STRADA_API = {
   syncLayer: {
     mediator: "EntityMediator<TView>",
     bindings: {
-      component: "ComponentBinding<TComponent, TView>",
-      autoSync: "AutoSyncBinding<TComponent, TView>",
-      validated: "ValidatedBinding<TComponent, TView>",
+      component: "ComponentBinding<TComponent, TProperty>",
+      autoSync: "AutoSyncBinding<TComponent>",
+      validated: "ValidatedBinding<T>",
     },
     reactiveOps: [
       "Select",
@@ -145,7 +176,6 @@ export const STRADA_API = {
       "BindTwoWay",
       "Throttle",
       "DistinctUntilChanged",
-      "Track",
     ],
     properties: {
       mapped: "MappedProperty<TSource, TResult>",
@@ -159,7 +189,7 @@ export const STRADA_API = {
   pooling: {
     pool: "ObjectPool<T>",
     registry: "PoolRegistry",
-    interface: "IPoolable / IPoolable<T>",
+    interface: "IPoolable",
     methods: [
       "Spawn()",
       "Despawn(T)",
@@ -191,9 +221,8 @@ export const STRADA_API = {
   // ── Data Layer ──────────────────────────────────────────────────────
   dataLayer: {
     configDb: "ConfigDatabase",
-    assetDb: "AssetDatabase",
+    assetDb: "RuntimeAssetDatabase",
     assetRegistry: "AssetRegistry",
-    guidLookup: "GuidLookup",
   },
 
   // ── DI API ──────────────────────────────────────────────────────────
@@ -214,20 +243,20 @@ export const STRADA_API = {
 
   // ── DI Advanced ─────────────────────────────────────────────────────
   diAdvanced: {
-    lockFreeSingleton: "LockFreeSingleton<T>",
     directFactory: "DirectFactory<T>",
-    sourceGen: "SourceGeneratedContainer",
+    sourceGen: "Strada.Core.SourceGen / Strada.SourceGeneration",
     asyncContainer: "IAsyncContainer",
     containerScope: "ContainerScope",
     autoRegister: "[AutoRegister]",
-    serviceAttribute: "[Service]",
+    autoRegisterSingleton: "[AutoRegisterSingleton]",
+    autoRegisterTransient: "[AutoRegisterTransient]",
+    autoRegisterScoped: "[AutoRegisterScoped]",
   },
 
   // ── Player Loop ─────────────────────────────────────────────────────
   playerLoop: {
     runner: "ILoopRunner",
-    wrapper: "PlayerLoopWrapper",
-    ecsAdapter: "EcsPlayerLoopAdapter",
+    apiClass: "PlayerLoop",
   },
 
   // ── Component API ───────────────────────────────────────────────────
@@ -240,5 +269,9 @@ export const STRADA_API = {
   // ── Assembly References ─────────────────────────────────────────────
   assemblyReferences: {
     core: "Strada.Core",
+    burst: "Unity.Burst",
+    collections: "Unity.Collections",
+    mathematics: "Unity.Mathematics",
+    entities: "Unity.Entities",
   },
 } as const;

@@ -335,7 +335,6 @@ export class AlertManager {
     }
 
     // Dynamic import for nodemailer (optional dependency)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let nodemailer: {
       createTransport: (config: unknown) => {
         sendMail: (options: Record<string, unknown>) => Promise<unknown>;

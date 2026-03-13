@@ -30,6 +30,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Clone Strada.Core reference
+        run: git clone --depth 1 https://github.com/okandemirel/Strada.Core.git /tmp/Strada.Core-ci
+
+      - name: Validate Strada.Core drift
+        run: npm run sync:check -- --core-path /tmp/Strada.Core-ci --max-drift-score 0
+
       - name: Typecheck
         run: npm run typecheck
 

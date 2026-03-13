@@ -43,7 +43,7 @@ All providers implement `IAIProvider`. Streaming providers additionally implemen
 
 - **File I/O:** `file_read`, `file_write`, `file_edit`, `file_delete`, `file_rename`, `file_delete_directory`
 - **Search:** `glob_search`, `grep_search`, `list_directory`, `code_search` (RAG), `memory_search`
-- **Strada codegen:** `strada_analyze_project`, `strada_create_module`, `strada_create_component`, `strada_create_mediator`, `strada_create_system`
+- **Strada codegen:** `strada_analyze_project`, `strada_create_module`, `strada_create_component`, `strada_create_mediator`, `strada_create_system` (`SystemBase` / `JobSystemBase` / `BurstSystem`)
 - **Git:** `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_branch`, `git_stash`
 - **.NET:** `dotnet_build`, `dotnet_test`
 - **Shell:** `shell_exec`

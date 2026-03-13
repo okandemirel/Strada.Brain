@@ -482,7 +482,7 @@ export class DiscordChannel implements IChannelAdapter {
       const truncated = truncateForDiscord(text, 2000);
       await state.message.edit(truncated);
       state.lastUpdate = Date.now();
-    } catch (error) {
+    } catch (_error) {
       // Ignore update errors
     }
   }
@@ -500,7 +500,7 @@ export class DiscordChannel implements IChannelAdapter {
       const formatted = formatToDiscordMarkdown(finalText);
       const truncated = truncateForDiscord(formatted, 2000);
       await state.message.edit(truncated);
-    } catch (error) {
+    } catch (_error) {
       try {
         await this.sendMarkdown(_chatId, finalText);
       } catch {

@@ -28,7 +28,7 @@ import type { DaemonConfig, DaemonStatusSnapshot, TriggerType } from "./daemon-t
 import type { DaemonEventMap } from "./daemon-events.js";
 import type { IEventBus } from "../core/event-bus.js";
 import type { TaskId } from "../tasks/types.js";
-import { ACTIVE_STATUSES } from "../tasks/types.js";
+import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import { MS_PER_DAY } from "../learning/types.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import type { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
@@ -276,7 +276,7 @@ export class HeartbeatLoop {
       const existingTaskId = this.activeTriggerTasks.get(name);
       if (existingTaskId) {
         const taskStatus = this.taskManager.getStatus(existingTaskId);
-        if (taskStatus && ACTIVE_STATUSES.has(taskStatus.status as any)) {
+        if (taskStatus && ACTIVE_STATUSES.has(taskStatus.status as TaskStatus)) {
           this.logger.debug("Trigger skipped (task still active)", {
             trigger: name,
             taskId: existingTaskId,

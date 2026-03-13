@@ -61,6 +61,23 @@ namespace Game.Combat
     expect(result.systems[0]!.name).toBe("CombatSystem");
   });
 
+  it("finds systems inheriting generic BurstSystem", async () => {
+    vi.mocked(glob).mockResolvedValue(["/test/project/MovementBurstSystem.cs"] as any);
+    vi.mocked(readFile).mockResolvedValue(`
+namespace Game.Combat
+{
+    public class MovementBurstSystem : BurstSystem<MovementBurstSystemJob, PositionComponent, VelocityComponent>
+    {
+        protected override MovementBurstSystemJob CreateJob(float deltaTime) => default;
+    }
+}
+`);
+    const result = await analyzer.analyze();
+    expect(result.systems).toHaveLength(1);
+    expect(result.systems[0]!.name).toBe("MovementBurstSystem");
+    expect(result.systems[0]!.baseClass).toContain("BurstSystem<MovementBurstSystemJob");
+  });
+
   it("skips abstract systems", async () => {
     vi.mocked(glob).mockResolvedValue(["/test/project/Base.cs"] as any);
     vi.mocked(readFile).mockResolvedValue(`

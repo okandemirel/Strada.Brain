@@ -50,6 +50,10 @@ npm run dev -- cli
    npm run lint
    npm test
    ```
+   If you changed Strada-specific prompts, analyzers, or code generation, also run:
+   ```bash
+   npm run sync:check -- --core-path /path/to/Strada.Core
+   ```
 4. Commit with a clear message describing the change.
 5. Push and open a pull request against `main`.
 6. A maintainer will review your PR. Address any feedback, then it will be merged.
@@ -61,7 +65,8 @@ npm run dev -- cli
 - Mock external dependencies (AI providers, file system, network) in unit tests.
 - Test edge cases: empty inputs, large inputs, error conditions.
 - Integration tests go in `src/` (co-located as `integration.test.ts`).
-- Current test suite: 3070+ tests across 179 test files.
+- For Unity/Strada codegen changes, prefer `npm run test:unity-fixture` when a licensed local Unity editor is available.
+- Current test suite: 3120+ tests across 180+ test files.
 
 ## Adding a New Tool
 

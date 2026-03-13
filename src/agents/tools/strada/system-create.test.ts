@@ -55,6 +55,7 @@ describe("SystemCreateTool", () => {
     expect(code).toContain("namespace Game.Systems");
     expect(code).toContain("using Strada.Core.ECS;");
     expect(code).toContain("using Strada.Core.ECS.Systems;");
+    expect(code).toContain("using Strada.Core.Modules;");
     expect(code).toContain("protected override void OnUpdate(float deltaTime)");
     expect(code).toContain("protected override void OnInitialize()");
     expect(code).toContain("protected override void OnDispose()");
@@ -62,7 +63,7 @@ describe("SystemCreateTool", () => {
     expect(code).toContain("[ExecutionOrder(0)]");
   });
 
-  it("creates a valid JobSystemBase system with Burst and Jobs usings", async () => {
+  it("creates a compile-safe JobSystemBase system scaffold", async () => {
     const result = await tool.execute(
       {
         name: "PhysicsJob",
@@ -79,8 +80,34 @@ describe("SystemCreateTool", () => {
     const filePath = join(tempDir, "Assets/Systems/PhysicsJob.cs");
     const code = readFileSync(filePath, "utf-8");
     expect(code).toContain("public class PhysicsJobSystem : JobSystemBase");
+    expect(code).toContain("protected override JobHandle OnSchedule(float deltaTime, JobHandle dependency)");
+    expect(code).toContain("protected override void OnCreate()");
+    expect(code).toContain("protected override void OnDestroy()");
     expect(code).toContain("using Unity.Burst;");
     expect(code).toContain("using Unity.Jobs;");
+    expect(code).toContain("using Strada.Core.ECS.Jobs;");
+    expect(code).not.toContain("protected override void OnUpdate(float deltaTime)");
+  });
+
+  it("creates a scheduled JobSystemBase scaffold when query components are provided", async () => {
+    const result = await tool.execute(
+      {
+        name: "PhysicsJob",
+        path: "Assets/Systems/PhysicsJob.cs",
+        namespace: "Game.Physics",
+        base_class: "JobSystemBase",
+        query_components: ["Position", "Velocity"],
+      },
+      ctx
+    );
+
+    expect(result.isError).toBeUndefined();
+
+    const filePath = join(tempDir, "Assets/Systems/PhysicsJob.cs");
+    const code = readFileSync(filePath, "utf-8");
+    expect(code).toContain("public struct PhysicsJobSystemJob : IJobComponent<Position, Velocity>");
+    expect(code).toContain("ScheduleParallel<PhysicsJobSystemJob, Position, Velocity>");
+    expect(code).toContain("public void Execute(int entity, ref Position position, ref Velocity velocity)");
   });
 
   it("creates a BurstSystem with generic variants", async () => {
@@ -99,8 +126,12 @@ describe("SystemCreateTool", () => {
 
     const filePath = join(tempDir, "Assets/Systems/ParticleSystem.cs");
     const code = readFileSync(filePath, "utf-8");
-    expect(code).toContain("BurstSystem");
+    expect(code).toContain("public class ParticleSystem : BurstSystem<ParticleSystemJob, Position, Velocity>");
     expect(code).toContain("[BurstCompile]");
+    expect(code).toContain("public struct ParticleSystemJob : IJobComponent<Position, Velocity>");
+    expect(code).toContain("protected override ParticleSystemJob CreateJob(float deltaTime)");
+    expect(code).not.toContain("IJobParallelFor");
+    expect(code).not.toContain("NativeArray");
   });
 
   it("generates query with ForEach delegate pattern", async () => {

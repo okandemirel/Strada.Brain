@@ -59,9 +59,15 @@ function resolveNamespace(ast: CSharpAST, typeName: string): string {
   return "";
 }
 
-// ─── Extractor ─────────────────────────────────────────────────────────────
+function getOptionalLogger() {
+  try {
+    return getLogger();
+  } catch {
+    return null;
+  }
+}
 
-const log = getLogger();
+// ─── Extractor ─────────────────────────────────────────────────────────────
 
 export class StradaCoreExtractor {
   private readonly corePath: string;
@@ -74,6 +80,7 @@ export class StradaCoreExtractor {
    * Extract a full API snapshot from Strada.Core source.
    */
   async extract(): Promise<CoreAPISnapshot> {
+    const logger = getOptionalLogger();
     // Resolve to real path to prevent symlink escapes
     const resolvedPath = await realpath(resolve(this.corePath));
 
@@ -99,7 +106,7 @@ export class StradaCoreExtractor {
         const content = await readFile(filePath, "utf-8");
         ast = parseDeep(content, relative(resolvedPath, filePath));
       } catch (err) {
-        log.debug(`Skipping ${relative(resolvedPath, filePath)}: ${(err as Error).message}`);
+        logger?.debug(`Skipping ${relative(resolvedPath, filePath)}: ${(err as Error).message}`);
         continue;
       }
       parsed++;

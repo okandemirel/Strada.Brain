@@ -518,7 +518,7 @@ Ajan, kategorilere gore duzenlenmis 30'dan fazla yerlesik araca sahiptir:
 | `strada_create_module` | Tam modul iskelesi olusturma (`.asmdef`, yapilandirma, dizinler) |
 | `strada_create_component` | Alan tanimlari ile ECS bilesen struct'lari olusturma |
 | `strada_create_mediator` | Bilesen baglantilari ile `EntityMediator<TView>` olusturma |
-| `strada_create_system` | `SystemBase`/`JobSystemBase`/`SystemGroup` olusturma |
+| `strada_create_system` | `SystemBase`/`JobSystemBase`/`BurstSystem` iskeleleri olusturma |
 
 ### Git
 | Arac | Aciklama |
@@ -686,7 +686,9 @@ npm test -- --coverage           # Kapsam ile
 npm test -- src/agents/tools/file-read.test.ts  # Tekli dosya / hedefli gecis
 npm test -- src/dashboard/prometheus.test.ts    # Varsayilan runner ile hedefli suite
 LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run sync:check -- --core-path /path/to/Strada.Core  # Strada.Core API drift dogrulamasi
 npm run test:file-build-flow     # Opt-in local .NET entegrasyon akisi
+npm run test:unity-fixture       # Opt-in local Unity fixture derleme/test akisi
 npm run test:hnsw-perf           # Opt-in HNSW benchmark / recall suiti
 npm run typecheck                # TypeScript tip kontrolu
 npm run lint                     # ESLint
@@ -695,7 +697,9 @@ npm run lint                     # ESLint
 Notlar:
 - `npm test`, onceki full-suite OOM yolunu onlemek icin batch'li Vitest runner ve fork worker'lar kullanir.
 - Socket bind bagimli dashboard testleri varsayilan olarak skip edilir; gercek local dogrulama icin `LOCAL_SERVER_TESTS=1` kullanin.
-- `test:file-build-flow` ve `test:hnsw-perf`, local build araci veya agir benchmark yukleri gerektirdigi icin bilincli olarak opt-in tutulur.
+- `sync:check`, Strada.Brain'in Strada.Core bilgisini gercek bir checkout'a karsi dogrular; CI bunu `--max-drift-score 0` ile zorlar.
+- `test:file-build-flow`, `test:unity-fixture` ve `test:hnsw-perf`, local build araci, lisansli Unity editoru veya agir benchmark yukleri gerektirdigi icin bilincli olarak opt-in tutulur.
+- `test:unity-fixture`, uretilen kod dogru olsa bile local Unity batchmode / lisans ortami sagliksizsa fail edebilir.
 
 ---
 

@@ -5,8 +5,9 @@
  * validates it against Brain's STRADA_API, and reports drift.
  */
 
-import { resolve } from "node:path";
+import { resolve, basename } from "node:path";
 import { stat } from "node:fs/promises";
+import { createLogger } from "../utils/logger.js";
 import { StradaCoreExtractor } from "./strada-core-extractor.js";
 import { validateDrift, formatDriftReport } from "./strada-drift-validator.js";
 
@@ -14,6 +15,9 @@ interface SyncOptions {
   corePath: string;
   dryRun: boolean;
   apply: boolean;
+  json?: boolean;
+  maxDriftScore?: number;
+  failOnWarnings?: boolean;
 }
 
 /**
@@ -21,6 +25,9 @@ interface SyncOptions {
  * Extracts Core API, validates against Brain's knowledge, and reports drift.
  */
 export async function runSyncCommand(opts: SyncOptions): Promise<void> {
+  // Initialize logger for standalone CLI usage
+  createLogger(process.env["LOG_LEVEL"] ?? "info", "strada-brain-sync.log");
+
   const corePath = resolve(opts.corePath);
 
   // Validate core path exists
@@ -37,7 +44,7 @@ export async function runSyncCommand(opts: SyncOptions): Promise<void> {
     return;
   }
 
-  console.log(`Extracting API from: ${corePath}`);
+  console.log(`Extracting API from: ${basename(corePath)}`);
   console.log("");
 
   const extractor = new StradaCoreExtractor(corePath);
@@ -49,7 +56,11 @@ export async function runSyncCommand(opts: SyncOptions): Promise<void> {
 
   // Validate
   const report = validateDrift(snapshot);
-  console.log(formatDriftReport(report));
+  if (opts.json) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(formatDriftReport(report));
+  }
 
   if (opts.apply && !opts.dryRun) {
     console.log("");
@@ -58,7 +69,11 @@ export async function runSyncCommand(opts: SyncOptions): Promise<void> {
   }
 
   // Exit with error code if critical drift found
-  if (report.errors.length > 0) {
+  if (
+    report.errors.length > 0 ||
+    (typeof opts.maxDriftScore === "number" && report.driftScore > opts.maxDriftScore) ||
+    (opts.failOnWarnings === true && report.warnings.length > 0)
+  ) {
     process.exitCode = 1;
   }
 }

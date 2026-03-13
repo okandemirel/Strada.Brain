@@ -72,6 +72,16 @@ const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 const SCRIPT_EVAL_TIMEOUT_MS = 5000;
 
+function looksLikeExpression(script: string): boolean {
+  const trimmed = script.trim();
+  if (!trimmed) return false;
+
+  return (
+    !/[;{}]/.test(trimmed) &&
+    !/\b(return|const|let|var|if|for|while|switch|try|throw|function|class)\b/.test(trimmed)
+  );
+}
+
 // ─── Configuration ───────────────────────────────────────────────────────────
 
 function loadConfig(): BrowserSecurityConfig {
@@ -407,11 +417,43 @@ export class BrowserAutomationTool implements ITool {
     let result: unknown;
     try {
       result = await Promise.race([
-        session.page.evaluate((c: string) => {
-          "use strict";
-          const fn = new Function('"use strict";' + c);
-          return fn();
-        }, code),
+        session.page.evaluate(({ source, asExpression }: { source: string; asExpression: boolean }) => {
+          const target = document.head ?? document.documentElement;
+          if (!target) {
+            throw new Error("Document is not ready for script execution");
+          }
+
+          const stradaWindow = window as typeof window & {
+            __stradaEvalResult?: unknown;
+            __stradaEvalError?: string;
+          };
+
+          delete stradaWindow.__stradaEvalResult;
+          delete stradaWindow.__stradaEvalError;
+
+          const wrappedSource = asExpression
+            ? `window.__stradaEvalResult = (() => (${source}))();`
+            : `window.__stradaEvalResult = (() => {\n${source}\n})();`;
+          const script = document.createElement("script");
+          script.textContent = `
+            try {
+              ${wrappedSource}
+            } catch (error) {
+              window.__stradaEvalError = error instanceof Error ? error.message : String(error);
+            }
+          `;
+          target.appendChild(script);
+          script.remove();
+
+          if (stradaWindow.__stradaEvalError) {
+            throw new Error(stradaWindow.__stradaEvalError);
+          }
+
+          return stradaWindow.__stradaEvalResult;
+        }, {
+          source: code,
+          asExpression: looksLikeExpression(code),
+        }),
         timeoutPromise,
       ]);
     } catch (error) {

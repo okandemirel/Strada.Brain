@@ -34,7 +34,7 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 - Lock-free singletons: thread-safe lazy initialization without locks
 - \`DirectFactory<T>\`: lightweight factory binding for transient creation
 - Source-generated bindings: compile-time DI wiring via source generators
-- Auto-binding attributes: \`[AutoRegister]\` auto-registers the type, \`[Service]\` marks service implementations for auto-discovery
+- Auto-binding attributes: \`[AutoRegister]\`, \`[AutoRegisterSingleton]\`, \`[AutoRegisterTransient]\`, and \`[AutoRegisterScoped]\` enable runtime auto-discovery
 
 ### 3. ECS (Custom SparseSet-based)
 - \`EntityManager\`: NativeArray-based with versioned entity IDs and index recycling
@@ -76,7 +76,7 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
   - **Events**: \`Publish<T>()\` / \`Subscribe<T>()\` — fire-and-forget broadcast
   - **Signals**: \`Send<T>()\` / \`Register<T>()\` — direct ECS system-to-system communication
   - **Queries**: \`Query<TReq, TRes>()\` / \`Register<TReq, TRes>()\` — request/response pattern
-- Async support: \`PublishAsync<T>()\`, \`SubscribeAsync<T>()\`
+- Async support: \`SendAsync<T>()\`, \`QueryAsync<TReq, TRes>()\`, \`RegisterAsyncSignalHandler<T>()\`, \`RegisterAsyncQueryHandler<TReq, TRes>()\`
 - \`SignalSequence\`: Ordered signal chains for deterministic multi-step workflows
 - \`ComponentChanged<T>\`: Automatic events when components change
 
@@ -89,7 +89,7 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 
 ### 8. StradaLog (Logging)
 - Module-aware structured logging system
-- \`StradaLog.Info(LogModule.ECS, "msg")\`, \`.Warn()\`, \`.Error()\`
+- \`StradaLog.Log("msg", LogModule.ECS)\`, \`.LogWarning()\`, \`.LogError()\`
 - \`LogModule\` enum: Core, ECS, DI, Modules, Sync, Events, Pooling, Editor, etc.
 - Per-module log level filtering at runtime
 - Circular buffer for recent log history (configurable size)

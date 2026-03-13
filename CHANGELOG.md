@@ -4,6 +4,16 @@ All notable changes to Strada.Brain are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- `sync:check` documentation across root READMEs and contributor guidance
+- Local Unity fixture documentation for real Strada/Unity generator validation
+
+### Changed
+- README tool descriptions now reflect `BurstSystem` scaffolding instead of the old `SystemGroup` wording
+- Intelligence documentation now describes the deep-parser-based analyzer and the Strada API drift pipeline
+
 ## [4.1.0] - 2026-03-13 — Deep Audit & Embedding Upgrade
 
 ### Added

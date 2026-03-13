@@ -110,9 +110,8 @@ export class RAGPipeline implements IRAGPipeline {
   private getStorePath(): string | null {
     // Try to extract path from FileVectorStore
     // This is a bit hacky but necessary for migration
-    const store = this.vectorStore as FileVectorStore;
-    // Access private field through type assertion
-    return (store as any).storePath ?? null;
+    const store = this.vectorStore as unknown as { storePath?: string };
+    return store.storePath ?? null;
   }
 
   private async initializeHNSW(storePath: string): Promise<void> {
@@ -274,7 +273,6 @@ export class RAGPipeline implements IRAGPipeline {
       fileCount: files.length,
     });
 
-    let totalChunks = 0;
     let changedFiles = 0;
     const errors: Array<{ filePath: string; error: string }> = [];
 
@@ -283,7 +281,6 @@ export class RAGPipeline implements IRAGPipeline {
         const content = await readFile(filePath, "utf8");
         const indexed = await this.indexFile(filePath, content);
         if (indexed > 0) {
-          totalChunks += indexed;
           changedFiles++;
         }
       } catch (err) {

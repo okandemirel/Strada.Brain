@@ -269,7 +269,10 @@ export class StradaAnalyzer {
 
   private findSystems(cached: ParsedFileCache[]): SystemInfo[] {
     const systems: SystemInfo[] = [];
-    const systemBases = STRADA_API.baseClasses.systems;
+    const systemBases = [
+      ...STRADA_API.baseClasses.systems,
+      ...new Set(STRADA_API.baseClasses.burstSystemVariants.map((base) => stripGenericArgs(base))),
+    ];
     for (const { ast, classes, nsLookup } of cached) {
       for (const cls of classes) {
         if (!cls.modifiers.includes("abstract")) {

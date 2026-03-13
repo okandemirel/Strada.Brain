@@ -500,7 +500,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
     // Get all current entries
     const entries: VectorEntry[] = [];
-    for (const [index, _chunk] of this.chunks) {
+    for (const [index] of this.chunks) {
       const id = this.indexToId.get(index);
       if (!id) continue;
 

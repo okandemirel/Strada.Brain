@@ -559,7 +559,7 @@ L'agent dispose de plus de 30 outils int&eacute;gr&eacute;s organis&eacute;s par
 | `strada_create_module` | G&eacute;n&egrave;re un &eacute;chafaudage de module complet (`.asmdef`, config, r&eacute;pertoires) |
 | `strada_create_component` | G&eacute;n&egrave;re des structs de composants ECS avec d&eacute;finitions de champs |
 | `strada_create_mediator` | G&eacute;n&egrave;re un `EntityMediator<TView>` avec liaisons de composants |
-| `strada_create_system` | G&eacute;n&egrave;re `SystemBase`/`JobSystemBase`/`SystemGroup` |
+| `strada_create_system` | G&eacute;n&egrave;re des squelettes `SystemBase`/`JobSystemBase`/`BurstSystem` |
 
 ### Git
 | Outil | Description |
@@ -727,7 +727,9 @@ npm test -- --coverage           # Avec couverture
 npm test -- src/agents/tools/file-read.test.ts  # Fichier unique / passage cible
 npm test -- src/dashboard/prometheus.test.ts    # Suite ciblee via le runner par defaut
 LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run sync:check -- --core-path /path/to/Strada.Core  # Valider la derive de l'API Strada.Core
 npm run test:file-build-flow     # Flux local d'integration .NET en opt-in
+npm run test:unity-fixture       # Flux local Unity compile/test en opt-in
 npm run test:hnsw-perf           # Suite opt-in de benchmark / recall HNSW
 npm run typecheck                # V&eacute;rification de types TypeScript
 npm run lint                     # ESLint
@@ -736,7 +738,9 @@ npm run lint                     # ESLint
 Notes :
 - `npm test` utilise un runner Vitest par lots avec des workers `fork` pour eviter l'ancien chemin OOM de la suite complete.
 - Les tests dashboard qui dependent du bind socket sont ignores par defaut ; utilisez `LOCAL_SERVER_TESTS=1` pour une verification locale reelle.
-- `test:file-build-flow` et `test:hnsw-perf` restent volontairement opt-in car ils demandent des outils de build locaux ou des charges de benchmark lourdes.
+- `sync:check` valide la connaissance Strada.Core de Strada.Brain face a un checkout reel ; la CI l'impose avec `--max-drift-score 0`.
+- `test:file-build-flow`, `test:unity-fixture` et `test:hnsw-perf` restent volontairement opt-in car ils demandent des outils de build locaux, un editeur Unity licencie ou des charges de benchmark lourdes.
+- `test:unity-fixture` peut encore echouer si l'environnement local Unity batchmode / licence est instable, meme lorsque le code genere est correct.
 
 ---
 

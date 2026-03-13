@@ -559,7 +559,7 @@ The agent has 30+ built-in tools organized by category:
 | `strada_create_module` | Generate complete module scaffold (`.asmdef`, config, directories) |
 | `strada_create_component` | Generate ECS component structs with field definitions |
 | `strada_create_mediator` | Generate `EntityMediator<TView>` with component bindings |
-| `strada_create_system` | Generate `SystemBase`/`JobSystemBase`/`SystemGroup` |
+| `strada_create_system` | Generate `SystemBase`/`JobSystemBase`/`BurstSystem` scaffolds |
 
 ### Git
 | Tool | Description |
@@ -727,7 +727,9 @@ npm test -- --coverage           # With coverage
 npm test -- src/agents/tools/file-read.test.ts  # Single file / targeted passthrough
 npm test -- src/dashboard/prometheus.test.ts    # Targeted suite under the default runner
 LOCAL_SERVER_TESTS=1 npm test -- src/dashboard/prometheus.test.ts src/dashboard/websocket-server.test.ts
+npm run sync:check -- --core-path /path/to/Strada.Core  # Validate Strada.Core API drift
 npm run test:file-build-flow     # Opt-in local .NET integration flow
+npm run test:unity-fixture       # Opt-in local Unity fixture compile/test flow
 npm run test:hnsw-perf           # Opt-in HNSW benchmark / recall suite
 npm run typecheck                # TypeScript type checking
 npm run lint                     # ESLint
@@ -736,7 +738,9 @@ npm run lint                     # ESLint
 Notes:
 - `npm test` uses a batched Vitest runner plus forked workers to avoid the previous full-suite OOM path.
 - Bind-dependent dashboard tests are skipped by default unless `LOCAL_SERVER_TESTS=1`.
-- `test:file-build-flow` and `test:hnsw-perf` are intentionally opt-in because they depend on local build tooling or benchmark-heavy workloads.
+- `sync:check` validates Strada.Brain's Strada.Core knowledge against a real checkout; CI enforces it with `--max-drift-score 0`.
+- `test:file-build-flow`, `test:unity-fixture`, and `test:hnsw-perf` are intentionally opt-in because they depend on local build tooling, a licensed Unity editor, or benchmark-heavy workloads.
+- `test:unity-fixture` may still fail if the local Unity batchmode / licensing environment is unhealthy, even when the generated code is correct.
 
 ---
 

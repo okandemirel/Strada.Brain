@@ -100,10 +100,15 @@ function validateNamespaces(snapshot: CoreAPISnapshot, issues: DriftIssue[]): vo
 }
 
 function validateBaseClasses(snapshot: CoreAPISnapshot, issues: DriftIssue[]): void {
-  const brainSystems = new Set(STRADA_API.baseClasses.systems);
+  const brainBurstVariants = new Set(STRADA_API.baseClasses.burstSystemVariants);
+  const brainSystems = new Set([
+    ...STRADA_API.baseClasses.systems,
+    ...STRADA_API.baseClasses.burstSystemVariants,
+    ...STRADA_API.baseClasses.burstSystemVariants.map((name) => name.replace(/<.*>/, "")),
+  ]);
 
   // Check each Brain base class exists in Core
-  for (const baseName of brainSystems) {
+  for (const baseName of STRADA_API.baseClasses.systems) {
     const found = snapshot.classes.some(
       (cls) => cls.name === baseName && cls.isAbstract,
     );
@@ -116,6 +121,17 @@ function validateBaseClasses(snapshot: CoreAPISnapshot, issues: DriftIssue[]): v
       });
     }
   }
+  for (const variantName of brainBurstVariants) {
+    const found = snapshot.classes.some((cls) => cls.name === variantName && cls.isAbstract);
+    if (!found) {
+      issues.push({
+        severity: "error",
+        category: "base_class",
+        message: `Brain references BurstSystem variant "${variantName}" not found in Core`,
+        brainValue: variantName,
+      });
+    }
+  }
 
   // Check for Core abstract classes Brain doesn't know about
   const coreAbstractSystemBases = snapshot.classes.filter(
@@ -124,7 +140,8 @@ function validateBaseClasses(snapshot: CoreAPISnapshot, issues: DriftIssue[]): v
       (cls.name.endsWith("SystemBase") || cls.name.startsWith("BurstSystem") || cls.name === "SystemBase"),
   );
   for (const cls of coreAbstractSystemBases) {
-    if (!brainSystems.has(cls.name)) {
+    const strippedName = cls.name.replace(/<.*>/, "");
+    if (!brainSystems.has(cls.name) && !brainSystems.has(strippedName)) {
       issues.push({
         severity: "warning",
         category: "base_class",
@@ -135,20 +152,17 @@ function validateBaseClasses(snapshot: CoreAPISnapshot, issues: DriftIssue[]): v
   }
 
   // Check pattern base classes
-  {
-    const brainPatterns = new Set<string>(STRADA_API.baseClasses.patterns);
-    for (const patternName of brainPatterns) {
-      // Strip generic args for lookup
-      const cleanName = patternName.replace(/<.*>/, "");
-      const found = snapshot.classes.some((cls) => cls.name === cleanName);
-      if (!found) {
-        issues.push({
-          severity: "warning",
-          category: "pattern_class",
-          message: `Brain references pattern class "${patternName}" not found in Core`,
-          brainValue: patternName,
-        });
-      }
+  const brainPatterns = new Set<string>(STRADA_API.baseClasses.patterns);
+  for (const patternName of brainPatterns) {
+    const cleanName = patternName.replace(/<.*>/, "");
+    const found = snapshot.classes.some((cls) => cls.name === cleanName);
+    if (!found) {
+      issues.push({
+        severity: "warning",
+        category: "pattern_class",
+        message: `Brain references pattern class "${patternName}" not found in Core`,
+        brainValue: patternName,
+      });
     }
   }
 }

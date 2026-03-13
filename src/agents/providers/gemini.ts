@@ -41,7 +41,7 @@ export class GeminiProvider extends OpenAIProvider {
       }
 
       // Capture extra_content (contains google.thought_signature) as providerMetadata
-      const { id, type, function: _fn, ...rest } = tc;
+      const { id: _toolCallId, type: _toolCallType, function: _toolCallFunction, ...rest } = tc;
       const providerMetadata = Object.keys(rest).length > 0 ? rest : undefined;
 
       return providerMetadata

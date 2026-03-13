@@ -51,7 +51,7 @@ export class SystemCreateTool implements ITool {
       update_phase: {
         type: "string",
         enum: STRADA_API.updatePhases,
-        description: "Update phase for the system. Default: Update",
+        description: "Optional update phase override. If omitted, Strada.Core defaults to Update.",
       },
       run_before: {
         type: "array",
@@ -133,6 +133,12 @@ export class SystemCreateTool implements ITool {
           isError: true,
         };
       }
+    }
+    if (baseClass === "JobSystemBase" && queryComponents.length > 4) {
+      return {
+        content: "Error: JobSystemBase scaffolding supports up to 4 query_components",
+        isError: true,
+      };
     }
 
     for (const comp of queryComponents) {
@@ -217,27 +223,43 @@ interface SystemCodeOptions {
 }
 
 function generateSystemCode(opts: SystemCodeOptions): string {
-  const { name, namespace, baseClass, queryComponents, injectServices, burstComponentCount, systemOrder, updatePhase, runBefore, runAfter, requiresSystem } = opts;
+  const {
+    name,
+    namespace,
+    baseClass,
+    queryComponents,
+    injectServices,
+    burstComponentCount,
+    systemOrder,
+    updatePhase,
+    runBefore,
+    runAfter,
+    requiresSystem,
+  } = opts;
   const isBurstSystem = burstComponentCount !== undefined && burstComponentCount >= 1 && burstComponentCount <= 4;
+  const isJobSystem = baseClass === "JobSystemBase";
 
-  const usings = [
+  const usingSet = new Set([
     `using ${STRADA_API.namespaces.ecs};`,
     `using ${STRADA_API.namespaces.systems};`,
-  ];
+    `using ${STRADA_API.namespaces.modules};`,
+  ]);
 
-  if (baseClass === "JobSystemBase" || isBurstSystem) {
-    usings.push("using Unity.Burst;");
-    usings.push("using Unity.Jobs;");
+  if (isJobSystem || isBurstSystem) {
+    usingSet.add(`using ${STRADA_API.namespaces.jobs};`);
+    usingSet.add("using Unity.Burst;");
+    usingSet.add("using Unity.Jobs;");
   }
-  if (isBurstSystem) {
-    usings.push("using Unity.Collections;");
+  if (updatePhase) {
+    usingSet.add(`using ${STRADA_API.namespaces.world};`);
   }
 
   // [Inject] field injection
   const hasInjection = injectServices.length > 0;
   if (hasInjection) {
-    usings.push(`using ${STRADA_API.namespaces.diAttributes};`);
+    usingSet.add(`using ${STRADA_API.namespaces.diAttributes};`);
   }
+  const usings = [...usingSet];
 
   const fields = injectServices
     .map((svc) => {
@@ -265,7 +287,23 @@ function generateSystemCode(opts: SystemCodeOptions): string {
 
   if (isBurstSystem) {
     return generateBurstSystemCode({
-      name, namespace, usings, attributes, fields, queryComponents, burstComponentCount: burstComponentCount!,
+      name,
+      namespace,
+      usings,
+      attributes,
+      fields,
+      queryComponents,
+    });
+  }
+
+  if (isJobSystem) {
+    return generateJobSystemCode({
+      name,
+      namespace,
+      usings,
+      attributes,
+      fields,
+      queryComponents,
     });
   }
 
@@ -316,7 +354,6 @@ interface BurstSystemCodeOptions {
   attributes: string[];
   fields: string;
   queryComponents: string[];
-  burstComponentCount: number;
 }
 
 function generateBurstSystemCode(opts: BurstSystemCodeOptions): string {
@@ -324,34 +361,20 @@ function generateBurstSystemCode(opts: BurstSystemCodeOptions): string {
   const jobName = `${name}Job`;
   const typeArgs = queryComponents.join(", ");
   const baseType = `BurstSystem<${jobName}, ${typeArgs}>`;
-
-  // Generate job struct fields and Execute parameters
-  const jobFields = queryComponents
-    .map((c) => {
-      const fieldName = c.charAt(0).toLowerCase() + c.slice(1);
-      return `            public NativeArray<${c}> ${fieldName}Array;`;
-    })
-    .join("\n");
-
-  const executeParams = queryComponents
-    .map((c) => {
-      const fieldName = c.charAt(0).toLowerCase() + c.slice(1);
-      return `                var ${fieldName} = ${fieldName}Array[index];`;
-    })
-    .join("\n");
+  const jobInterface = `IJobComponent<${typeArgs}>`;
+  const executeSignature = buildJobExecuteSignature(queryComponents);
 
   return `${usings.join("\n")}
 
 namespace ${namespace}
 {
     [BurstCompile]
-    public struct ${jobName} : IJobParallelFor
+    public struct ${jobName} : ${jobInterface}
     {
-${jobFields}
+        public float DeltaTime;
 
-        public void Execute(int index)
+        public void Execute(${executeSignature})
         {
-${executeParams}
             // TODO: Process components
         }
     }
@@ -360,18 +383,83 @@ ${attributes.map(a => `    ${a}`).join("\n")}
     public class ${name} : ${baseType}
     {
 ${fields ? fields + "\n" : ""}
-        protected override ${jobName} CreateJob()
+        protected override ${jobName} CreateJob(float deltaTime)
         {
             return new ${jobName}
             {
-                // TODO: Assign NativeArrays from component data
+                DeltaTime = deltaTime,
             };
         }
-
-        protected override void OnInitialize() { }
-
-        protected override void OnDispose() { }
     }
 }
 `;
+}
+
+interface JobSystemCodeOptions {
+  name: string;
+  namespace: string;
+  usings: string[];
+  attributes: string[];
+  fields: string;
+  queryComponents: string[];
+}
+
+function generateJobSystemCode(opts: JobSystemCodeOptions): string {
+  const { name, namespace, usings, attributes, fields, queryComponents } = opts;
+  const hasGeneratedJob = queryComponents.length > 0;
+  const jobName = `${name}Job`;
+  const typeArgs = queryComponents.join(", ");
+  const jobStruct = hasGeneratedJob
+    ? `
+    [BurstCompile]
+    public struct ${jobName} : IJobComponent<${typeArgs}>
+    {
+        public float DeltaTime;
+
+        public void Execute(${buildJobExecuteSignature(queryComponents)})
+        {
+            // TODO: Process components
+        }
+    }
+`
+    : "";
+
+  const scheduleCall = hasGeneratedJob
+    ? `            return ScheduleParallel<${jobName}, ${typeArgs}>(
+                new ${jobName}
+                {
+                    DeltaTime = deltaTime,
+                },
+                dependency: dependency);`
+    : `            // TODO: Schedule one or more jobs.
+            return dependency;`;
+
+  return `${usings.join("\n")}
+
+namespace ${namespace}
+{
+${jobStruct}${attributes.map((a) => `    ${a}`).join("\n")}
+    public class ${name} : JobSystemBase
+    {
+${fields ? fields + "\n" : ""}
+        protected override void OnCreate() { }
+
+        protected override JobHandle OnSchedule(float deltaTime, JobHandle dependency)
+        {
+${scheduleCall}
+        }
+
+        protected override void OnDestroy() { }
+    }
+}
+`;
+}
+
+function buildJobExecuteSignature(queryComponents: string[]): string {
+  return [
+    "int entity",
+    ...queryComponents.map(
+      (component) => `ref ${component} ${component.charAt(0).toLowerCase() + component.slice(1)}`,
+    ),
+  ].join(", ");
 }

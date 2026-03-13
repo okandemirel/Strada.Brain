@@ -238,8 +238,8 @@ export class PatternMatcher {
         matches.push({
           id: instinct.id,
           type: exactMatch ? "exact" : (fuzzySim > 0.8 ? "fuzzy" : "contextual"),
-          confidence: confidence as any,
-          relevance: similarity as any,
+          confidence,
+          relevance: similarity,
           instinct,
           matchReason: exactMatch
             ? "Exact pattern match"

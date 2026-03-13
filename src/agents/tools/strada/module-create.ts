@@ -146,14 +146,14 @@ export class ModuleCreateTool implements ITool {
             rootNamespace: namespace,
             references: [
               STRADA_API.assemblyReferences.core,
-              "Unity.Entities",
-              "Unity.Mathematics",
-              "Unity.Collections",
-              "Unity.Burst",
+              STRADA_API.assemblyReferences.burst,
+              STRADA_API.assemblyReferences.collections,
+              STRADA_API.assemblyReferences.mathematics,
+              STRADA_API.assemblyReferences.entities,
             ],
             includePlatforms: [],
             excludePlatforms: [],
-            allowUnsafeCode: true,
+            allowUnsafeCode: false,
             overrideReferences: false,
           },
           null,
@@ -266,6 +266,7 @@ ${configLines.join("\n")}
 function generateSystem(name: string, namespace: string): string {
   return `using ${STRADA_API.namespaces.ecs};
 using ${STRADA_API.namespaces.systems};
+using ${STRADA_API.namespaces.modules};
 
 namespace ${namespace}
 {
@@ -302,9 +303,11 @@ function generateServiceInterface(name: string, namespace: string): string {
 }
 
 function generateServiceImpl(name: string, namespace: string): string {
-  return `namespace ${namespace}
+  return `using ${STRADA_API.namespaces.patterns};
+
+namespace ${namespace}
 {
-    public class ${name}Service : I${name}Service
+    public class ${name}Service : Service, I${name}Service
     {
         // TODO: Implement service
     }
