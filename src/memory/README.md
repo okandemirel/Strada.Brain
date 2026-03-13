@@ -1,30 +1,10 @@
 # src/memory/
 
-Persistent conversation memory with text search. The memory system stores past conversations, project analyses, and notes, making them available to the agent as context for future interactions.
+Persistent conversation memory with text search and vector retrieval. The memory system stores past conversations, project analyses, and notes, making them available to the agent as context for future interactions.
 
-## Active Backend: FileMemoryManager
+## Active Backend: AgentDBMemory
 
-`FileMemoryManager` is the production backend, wired in `src/core/bootstrap.ts`.
-
-**Storage:** JSON files in `MEMORY_DB_PATH` directory (default: `.strata-memory/`):
-- `memory.json` — all memory entries + TF-IDF index state (`{ df, docCount }`)
-- `analysis.json` — cached project analysis
-
-**Search:** TF-IDF text indexing via `TextIndex`. Term extraction with stop-word filtering. Cosine similarity scoring for retrieval.
-
-**Write behavior:** Debounced flush — 5-second delay after last write, hard 30-second deadline. This batches multiple writes into a single disk I/O.
-
-**Entry types:** conversation, analysis, note, error, learning, context, system.
-
-**How the agent uses memory:**
-1. At the start of each message, the orchestrator calls `retrieve({ mode: "text", query, limit: 3, minScore: 0.15 })` and injects results into the system prompt
-2. When session history exceeds 40 messages, trimmed content is summarized and stored via `storeConversation(chatId, summary)`
-3. `strata_analyze_project` caches project structure via `cacheAnalysis()`
-4. The agent can explicitly call `memory_search` tool during conversations
-
-## Advanced Backend: AgentDBMemory (Not Yet Wired)
-
-`AgentDBMemory` in `unified/agentdb-memory.ts` is fully implemented but **not connected to bootstrap**. It provides:
+`AgentDBMemory` (`unified/agentdb-memory.ts`) is the production backend since v2.0, wired in `src/core/bootstrap.ts`. It uses SQLite + HNSW vector indexing for 150x-12,500x performance over the legacy file backend.
 
 ### Three-Tier Memory
 
@@ -38,12 +18,7 @@ Tier enforcement is automatic — when a tier exceeds capacity, entries with the
 
 ### SQLite Persistence
 
-```sql
-CREATE TABLE memories (id, key, value, metadata, embedding, created_at, updated_at);
-CREATE TABLE patterns (id, pattern_key, data, confidence, created_at);
-```
-
-WAL mode, 16MB page cache, temp tables in memory. Every write immediately persists. Bulk save wraps in a transaction.
+WAL mode, 16MB page cache, temp tables in memory. Every write immediately persists. Bulk save wraps in a transaction. Memory decay with exponential lambda (instincts exempt).
 
 ### HNSW Vector Search
 
@@ -52,9 +27,23 @@ Vectors stored alongside entries. Dual-path retrieval:
 - `retrieve()` — TF-IDF text search (backward compatible)
 - `retrieveHybrid()` — 70% semantic + 30% text scores combined
 
+### Idle Consolidation (v3.0)
+
+When daemon detects idle time, `ConsolidationEngine` clusters similar memories using HNSW proximity and merges them via LLM summarization, reducing memory footprint while preserving knowledge.
+
 ### Embedding Fallback
 
 When no embedding provider is configured, `generateEmbedding()` uses a character-position hash. This produces vectors that occupy HNSW space but have no semantic meaning — semantic search silently degrades.
+
+## Legacy Backend: FileMemoryManager (Fallback Only)
+
+`FileMemoryManager` is used only if AgentDB initialization fails.
+
+**Storage:** JSON files in `MEMORY_DB_PATH` directory (default: `.strata-memory/`):
+- `memory.json` — all memory entries + TF-IDF index state
+- `analysis.json` — cached project analysis
+
+**Search:** TF-IDF text indexing via `TextIndex`. Cosine similarity scoring.
 
 ## Migration Path
 
@@ -73,8 +62,9 @@ When no embedding provider is configured, `generateEmbedding()` uses a character
 | File | Purpose |
 |------|---------|
 | `memory.interface.ts` | `IMemoryManager`, entry types, retrieval options |
-| `file-memory-manager.ts` | Active production backend (JSON + TF-IDF) |
-| `text-index.ts` | TF-IDF engine: term extraction, cosine similarity |
+| `unified/agentdb-memory.ts` | Active production backend (SQLite + HNSW) |
 | `unified/unified-memory.interface.ts` | `IUnifiedMemory`, tier enum, HNSW types |
-| `unified/agentdb-memory.ts` | SQLite + HNSW backend (not yet wired) |
+| `unified/consolidation-engine.ts` | Idle-driven memory consolidation (v3.0) |
+| `file-memory-manager.ts` | Legacy fallback backend (JSON + TF-IDF) |
+| `text-index.ts` | TF-IDF engine: term extraction, cosine similarity |
 | `unified/migration.ts` | Legacy-to-AgentDB migration, backward-compatible wrapper |

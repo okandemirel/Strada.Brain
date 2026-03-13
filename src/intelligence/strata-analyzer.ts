@@ -195,7 +195,7 @@ export class StrataAnalyzer {
 
   private findSystems(parsed: CSharpFileInfo[]): SystemInfo[] {
     const systems: SystemInfo[] = [];
-    const systemBases = ["SystemBase", "JobSystemBase", "SystemGroup"];
+    const systemBases = ["SystemBase", "JobSystemBase", "BurstSystemBase"];
 
     for (const file of parsed) {
       for (const cls of file.classes) {

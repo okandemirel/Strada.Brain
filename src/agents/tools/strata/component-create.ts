@@ -120,6 +120,7 @@ export class ComponentCreateTool implements ITool {
       .join("\n");
 
     const usings = [
+      "using System.Runtime.InteropServices;",
       "using Strada.Core.ECS;",
     ];
     if (needsMath) {
@@ -130,6 +131,7 @@ export class ComponentCreateTool implements ITool {
 
 namespace ${namespace}
 {
+    [StructLayout(LayoutKind.Sequential)]
     public struct ${name} : IComponent
     {
 ${fieldLines}

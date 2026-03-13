@@ -456,7 +456,7 @@ export class DelegationManager {
     this.decrementConcurrency(parentAgentId);
   }
 
-  private buildSubAgentTools(currentDepth: number): ITool[] {
+  private buildSubAgentTools(_currentDepth: number): ITool[] {
     // Always filter out parent's bound delegation tools — they carry the wrong
     // parentAgentId and depth. Fresh delegation tools for the sub-agent are
     // created by the delegation factory in AgentManager if depth allows.

@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3100%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
@@ -720,7 +720,7 @@ node dist/index.js daemon --channel telegram
 ## Testing
 
 ```bash
-npm test                         # Run all 3070 tests
+npm test                         # Run all 3100+ tests
 npm run test:watch               # Watch mode
 npm test -- --coverage           # With coverage
 npm test -- src/agents/tools/file-read.test.ts  # Single file

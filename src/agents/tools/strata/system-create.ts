@@ -2,12 +2,13 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
+import { STRADA_API } from "../../context/strada-api-reference.js";
 
 export class SystemCreateTool implements ITool {
   readonly name = "strata_create_system";
   readonly description =
     "Create a new ECS System for Strada.Core. Systems process entities with specific component queries. " +
-    "Supports SystemBase (standard), JobSystemBase (Burst-compiled), and SystemGroup (ordering).";
+    "Supports SystemBase (standard), JobSystemBase (Burst-compiled), and BurstSystemBase (SIMD-accelerated).";
 
   readonly inputSchema = {
     type: "object",
@@ -26,7 +27,7 @@ export class SystemCreateTool implements ITool {
       },
       base_class: {
         type: "string",
-        enum: ["SystemBase", "JobSystemBase", "SystemGroup"],
+        enum: STRADA_API.baseClasses.systems,
         description: "Base class to inherit from. Default: SystemBase",
       },
       query_components: {
@@ -37,7 +38,11 @@ export class SystemCreateTool implements ITool {
       inject_services: {
         type: "array",
         items: { type: "string" },
-        description: "Services to inject via constructor DI (e.g., ['ICombatService', 'IConfigService'])",
+        description: "Services to inject via [Inject] attribute (e.g., ['ICombatService', 'IConfigService'])",
+      },
+      system_order: {
+        type: "number",
+        description: "Execution order via [SystemOrder] attribute. Default: 0",
       },
     },
     required: ["name", "path", "namespace"],
@@ -60,6 +65,7 @@ export class SystemCreateTool implements ITool {
     const baseClass = String(input["base_class"] ?? "SystemBase");
     const queryComponents = (input["query_components"] as string[]) ?? [];
     const injectServices = (input["inject_services"] as string[]) ?? [];
+    const systemOrder = typeof input["system_order"] === "number" ? input["system_order"] : 0;
 
     if (!name || !relPath || !namespace) {
       return {
@@ -76,7 +82,7 @@ export class SystemCreateTool implements ITool {
       return { content: "Error: invalid namespace", isError: true };
     }
 
-    const validBases = ["SystemBase", "JobSystemBase", "SystemGroup"];
+    const validBases = STRADA_API.baseClasses.systems;
     if (!validBases.includes(baseClass)) {
       return {
         content: `Error: base_class must be one of: ${validBases.join(", ")}`,
@@ -101,7 +107,7 @@ export class SystemCreateTool implements ITool {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
 
-    const code = generateSystemCode(name, namespace, baseClass, queryComponents, injectServices);
+    const code = generateSystemCode(name, namespace, baseClass, queryComponents, injectServices, systemOrder);
 
     try {
       await mkdir(dirname(pathCheck.fullPath), { recursive: true });
@@ -119,7 +125,7 @@ export class SystemCreateTool implements ITool {
       }
       lines.push(
         "",
-        `Next: Register in your ModuleConfig or add to a SystemGroup.`
+        `Next: Register in your ModuleConfig.`
       );
 
       return { content: lines.join("\n") };
@@ -134,11 +140,12 @@ function generateSystemCode(
   namespace: string,
   baseClass: string,
   queryComponents: string[],
-  injectServices: string[]
+  injectServices: string[],
+  systemOrder: number
 ): string {
   const usings = [
-    "using Strada.Core.ECS;",
-    "using Strada.Core.ECS.Core;",
+    `using ${STRADA_API.namespaces.ecs};`,
+    `using ${STRADA_API.namespaces.systems};`,
   ];
 
   if (baseClass === "JobSystemBase") {
@@ -146,76 +153,54 @@ function generateSystemCode(
     usings.push("using Unity.Jobs;");
   }
 
-  // Constructor DI
+  // [Inject] field injection
   const hasInjection = injectServices.length > 0;
+  if (hasInjection) {
+    usings.push(`using ${STRADA_API.namespaces.diAttributes};`);
+  }
+
   const fields = injectServices
-    .map((svc) => `        private readonly ${svc} _${svc.replace(/^I/, "").charAt(0).toLowerCase() + svc.replace(/^I/, "").slice(1)};`)
-    .join("\n");
-
-  const ctorParams = injectServices
-    .map((svc) => `${svc} ${svc.replace(/^I/, "").charAt(0).toLowerCase() + svc.replace(/^I/, "").slice(1)}`)
-    .join(", ");
-
-  const ctorAssigns = injectServices
     .map((svc) => {
       const fieldName = svc.replace(/^I/, "").charAt(0).toLowerCase() + svc.replace(/^I/, "").slice(1);
-      return `            _${fieldName} = ${fieldName};`;
+      return `        [Inject] private readonly ${svc} _${fieldName};`;
     })
     .join("\n");
 
-  // Query body
+  // Query body using ForEach pattern
   let queryBody: string;
-  if (baseClass === "SystemGroup") {
-    queryBody = `        // Systems in this group execute in order.
-        // Add systems via [UpdateInGroup(typeof(${name}))] attribute.`;
-  } else if (queryComponents.length > 0) {
+  if (queryComponents.length > 0) {
     const typeArgs = queryComponents.join(", ");
-    queryBody = `            var query = World.Query<${typeArgs}>();
-            foreach (var entity in query)
+    const lambdaParams = queryComponents
+      .map((c) => `ref ${c} ${c.charAt(0).toLowerCase() + c.slice(1)}`)
+      .join(", ");
+    queryBody = `            ForEach<${typeArgs}>((int entity, ${lambdaParams}) =>
             {
-${queryComponents.map((c) => `                ref var ${c.charAt(0).toLowerCase() + c.slice(1)} = ref World.GetComponentRef<${c}>(entity);`).join("\n")}
                 // TODO: Process entity
-            }`;
+            });`;
   } else {
     queryBody = `            // TODO: Implement system logic
-            // var query = World.Query<ComponentA, ComponentB>();
-            // foreach (var entity in query) { ... }`;
+            // ForEach<ComponentA, ComponentB>((int entity, ref ComponentA a, ref ComponentB b) =>
+            // {
+            //     // Process entity
+            // });`;
   }
-
-  // Build class
-  if (baseClass === "SystemGroup") {
-    return `${usings.join("\n")}
-
-namespace ${namespace}
-{
-    public class ${name} : SystemGroup
-    {
-${queryBody}
-    }
-}
-`;
-  }
-
-  const ctorBlock = hasInjection
-    ? `
-        public ${name}(${ctorParams})
-        {
-${ctorAssigns}
-        }
-`
-    : "";
 
   return `${usings.join("\n")}
 
 namespace ${namespace}
 {
+    [SystemOrder(${systemOrder})]
     public class ${name} : ${baseClass}
     {
-${fields ? fields + "\n" : ""}${ctorBlock}
-        public override void OnUpdate(float deltaTime)
+${fields ? fields + "\n" : ""}
+        protected override void OnInitialize() { }
+
+        protected override void OnUpdate(float deltaTime)
         {
 ${queryBody}
         }
+
+        protected override void OnDispose() { }
     }
 }
 `;

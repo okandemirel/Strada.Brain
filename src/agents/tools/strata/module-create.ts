@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
+import { STRADA_API } from "../../context/strada-api-reference.js";
 
 export class ModuleCreateTool implements ITool {
   readonly name = "strata_create_module";
@@ -184,11 +185,12 @@ function generateModuleConfig(
   const configLines = [];
   if (includeService) {
     configLines.push(
-      `        builder.Register<I${name}Service, ${name}Service>(Strada.Core.DI.Lifetime.Singleton);`
+      `        builder.RegisterService<I${name}Service, ${name}Service>();`
     );
   }
 
-  return `using Strada.Core.Modules;
+  return `using ${STRADA_API.namespaces.modules};
+using ${STRADA_API.namespaces.di};
 using UnityEngine;
 
 namespace ${namespace}
@@ -216,24 +218,26 @@ ${configLines.join("\n")}
 }
 
 function generateSystem(name: string, namespace: string): string {
-  return `using Strada.Core.ECS;
-using Strada.Core.ECS.Core;
+  return `using ${STRADA_API.namespaces.ecs};
+using ${STRADA_API.namespaces.systems};
 
 namespace ${namespace}
 {
+    [SystemOrder(0)]
     public class ${name}System : SystemBase
     {
-        public override void OnUpdate(float deltaTime)
+        protected override void OnInitialize() { }
+
+        protected override void OnUpdate(float deltaTime)
         {
             // TODO: Implement system logic
-            // Example:
-            // var query = World.Query<Health, Position>();
-            // foreach (var entity in query)
+            // ForEach<ComponentA, ComponentB>((int entity, ref ComponentA a, ref ComponentB b) =>
             // {
-            //     ref var health = ref World.GetComponentRef<Health>(entity);
-            //     // Process entity...
-            // }
+            //     // Process entity
+            // });
         }
+
+        protected override void OnDispose() { }
     }
 }
 `;

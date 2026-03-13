@@ -93,7 +93,7 @@ export class WebSocketDashboardServer {
       server: this.httpServer,
       path: "/ws",
       maxPayload: 1 * 1024 * 1024,
-      verifyClient: ({ req }) => isAllowedOrigin(req.headers.origin, this.allowedOrigins),
+      verifyClient: ({ req }: { req: import("http").IncomingMessage }) => isAllowedOrigin(req.headers.origin, this.allowedOrigins),
     });
     this.wsServer.on("connection", this.handleWsConnection.bind(this));
 

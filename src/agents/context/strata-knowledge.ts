@@ -1,6 +1,13 @@
 /**
  * Hard-coded knowledge about the Strada.Core framework.
  * This forms the system prompt foundation so the LLM deeply understands Strada patterns.
+ *
+ * SYNC WARNING: This file is the sole source of Strada.Core knowledge for the LLM.
+ * It is NOT auto-synced with real Strada.Core source. Any API changes in Strada.Core
+ * require manual updates here. Verified against Strada.Core source 2026-03-13.
+ *
+ * API surfaces covered: ModuleConfig, DI ([Inject], RegisterService), ECS (SystemBase,
+ * ForEach query pattern, EntityManager), MVCS, Sync Layer, EventBus, Bootstrap.
  */
 export const STRATA_SYSTEM_PROMPT = `You are Strata Brain, an expert AI assistant for Unity game development using the Strada.Core framework.
 
@@ -17,21 +24,27 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
    - Initialize(IServiceLocator) runs after DI container is built
    - Shutdown() runs in reverse initialization order
    - Priority field controls initialization order (lower = first)
+   - Requires \`using Strada.Core.Modules;\` and \`using Strada.Core.DI;\`
 
 2. **DI Container (Expression-compiled)**
    - \`ContainerBuilder\` builds an immutable \`Container\`
    - Lifetimes: Singleton, Transient, Scoped
    - Resolve<T>() uses TypeId<T> for O(1) lookup
-   - Supports constructor injection (selects constructor with most parameters)
+   - Field injection via \`[Inject]\` attribute (\`using Strada.Core.DI.Attributes;\`)
    - \`IModuleBuilder\` wraps ContainerBuilder for module-scoped registration
+   - Registration: \`builder.RegisterService<TInterface, TImpl>()\`, \`builder.RegisterController<T>()\`
 
 3. **ECS (Custom SparseSet-based)**
    - \`EntityManager\`: NativeArray-based with versioned entity IDs and index recycling
    - \`ComponentStore\`: SparseSet storage per component type (\`IComponentStorage<T>\`)
-   - Components: unmanaged structs implementing \`IComponent\`
-   - Systems: inherit \`SystemBase\` (managed) or \`JobSystemBase\` (Burst-compatible)
+   - Components: unmanaged structs implementing \`IComponent\` with \`[StructLayout(LayoutKind.Sequential)]\`
+   - Systems: inherit \`SystemBase\` (managed), \`JobSystemBase\` (Burst-compatible), or \`BurstSystemBase\` (SIMD)
+   - System lifecycle: \`OnInitialize()\` → \`OnUpdate(float deltaTime)\` → \`OnDispose()\`
+   - System ordering: \`[SystemOrder(int)]\` attribute (lower = earlier)
    - \`SystemRunner\`: Executes systems in order, manages lifecycle
-   - \`EntityQuery\`: Filters entities by component presence/absence
+   - Query pattern: \`ForEach<T1, T2>((int entity, ref T1 c1, ref T2 c2) => { })\` (delegate-based)
+   - Generic variants: \`SystemBase<T1>\` through \`SystemBase<T1,...,T8>\` with \`OnUpdateEntity()\`
+   - Requires \`using Strada.Core.ECS;\` and \`using Strada.Core.ECS.Systems;\`
 
 4. **MVCS Pattern**
    - Model: Data containers (can be reactive with \`ReactiveProperty<T>\`)
@@ -61,12 +74,13 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 - Namespace: \`Strada.Core.*\` for framework, \`YourGame.*\` for game code
 - One class per file, file name matches class name
 - Interfaces prefixed with 'I' (IInventoryService)
-- Components are unmanaged structs with \`IComponent\`
+- Components are unmanaged structs with \`IComponent\` and \`[StructLayout(LayoutKind.Sequential)]\`
 - Systems end with 'System' suffix (DamageSystem, SpawnSystem)
 - ModuleConfigs end with 'ModuleConfig' or 'Module' suffix
 - Controllers end with 'Controller' suffix
 - Mediators end with 'Mediator' suffix
 - Assembly definitions (.asmdef) per module folder
+- Service injection uses \`[Inject]\` attribute, not constructor parameters
 
 ### File Structure Convention
 

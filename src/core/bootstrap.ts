@@ -699,10 +699,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           daemonStorage.getDatabase(),
         );
 
-        // Use configured delegation types or defaults
+        // Use configured delegation types or defaults (spread to convert readonly to mutable)
         const delegationTypes = config.delegation.types.length > 0
-          ? config.delegation.types
-          : DEFAULT_DELEGATION_TYPES;
+          ? [...config.delegation.types]
+          : [...DEFAULT_DELEGATION_TYPES];
 
         delegationManager = new DelegationManager({
           config: {

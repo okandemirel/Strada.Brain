@@ -200,6 +200,7 @@ export interface ConsolidationInterruptedEvent {
 
 /** Map of event names to their payload types */
 export interface LearningEventMap {
+  [key: string]: unknown;
   "tool:result": ToolResultEvent;
   "instinct:cooling-started": InstinctLifecycleEvent;
   "instinct:deprecated": InstinctLifecycleEvent;

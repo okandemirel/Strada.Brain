@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="테스트">
+  <img src="https://img.shields.io/badge/tests-3100%2B-brightgreen?style=flat-square" alt="테스트">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="라이선스">
 </p>
 
@@ -720,7 +720,7 @@ node dist/index.js daemon --channel telegram
 ## 테스트
 
 ```bash
-npm test                         # 전체 3070개 테스트 실행
+npm test                         # 전체 3100+개 테스트 실행
 npm run test:watch               # 워치 모드
 npm test -- --coverage           # 커버리지 포함
 npm test -- src/agents/tools/file-read.test.ts  # 단일 파일

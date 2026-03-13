@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="Testler">
+  <img src="https://img.shields.io/badge/tests-3100%2B-brightgreen?style=flat-square" alt="Testler">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lisans">
 </p>
 
@@ -679,7 +679,7 @@ node dist/index.js daemon --channel telegram
 ## Test
 
 ```bash
-npm test                         # Tum 3070 testi calistir
+npm test                         # Tum 3100+ testi calistir
 npm run test:watch               # Izleme modu
 npm test -- --coverage           # Kapsam ile
 npm test -- src/agents/tools/file-read.test.ts  # Tekli dosya

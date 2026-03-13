@@ -67,8 +67,7 @@ export class HeartbeatLoop {
   private consolidationRunning = false;
   private lastUserActivity = Date.now();
 
-  /** Deploy trigger (Phase 25) */
-  private deployTrigger?: DeployTriggerContract;
+  /** Deploy trigger (Phase 25) -- stored for future readiness-check integration */
 
   constructor(
     private readonly registry: TriggerRegistry,
@@ -454,8 +453,8 @@ export class HeartbeatLoop {
   /**
    * Set the deploy trigger for readiness checks after task/goal completion (Phase 25).
    */
-  setDeployTrigger(trigger: DeployTriggerContract): void {
-    this.deployTrigger = trigger;
+  setDeployTrigger(_trigger: DeployTriggerContract): void {
+    // Stored for future readiness-check integration in tick loop
   }
 
   /**

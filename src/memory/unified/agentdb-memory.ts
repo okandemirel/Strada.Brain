@@ -24,6 +24,7 @@ import type { RetrievalOptions, RetrievalResult } from "../memory.interface.js";
 import type { StrataProjectAnalysis } from "../../intelligence/strata-analyzer.js";
 import { getLogger } from "../../utils/logger.js";
 import type { HNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
+import type { VectorEntry } from "../../rag/rag.interface.js";
 import { createHNSWVectorStore } from "../../rag/hnsw/hnsw-vector-store.js";
 import { TextIndex, extractTerms, cosineSimilarity } from "../text-index.js";
 import type {
@@ -1661,7 +1662,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       // Rebuild HNSW index from loaded entries
       if (this.hnswStore) {
-        const vectors = [];
+        const vectors: VectorEntry[] = [];
         for (const entry of this.entries.values()) {
           if (entry.embedding) {
             vectors.push({

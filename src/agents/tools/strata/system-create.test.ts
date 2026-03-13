@@ -22,12 +22,12 @@ describe("SystemCreateTool", () => {
     tempDir = mkdtempSync(join(tmpdir(), "strata-system-test-"));
     mkdirSync(join(tempDir, "Assets", "Systems"), { recursive: true });
     ctx = { projectPath: tempDir, workingDirectory: tempDir, readOnly: false };
-    
+
     // Default mock: return valid path based on the input path
     vi.mocked(validatePath).mockImplementation(async (_projectRoot: string, relPath: string) => {
       return { valid: true, fullPath: join(tempDir, relPath) };
     });
-    
+
     // Default: all identifiers valid
     vi.mocked(isValidCSharpIdentifier).mockReturnValue(true);
   });
@@ -36,7 +36,7 @@ describe("SystemCreateTool", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("creates a valid SystemBase system", async () => {
+  it("creates a valid SystemBase system with correct namespaces and lifecycle methods", async () => {
     const result = await tool.execute(
       {
         name: "MovementSystem",
@@ -54,8 +54,11 @@ describe("SystemCreateTool", () => {
     expect(code).toContain("public class MovementSystem : SystemBase");
     expect(code).toContain("namespace Game.Systems");
     expect(code).toContain("using Strada.Core.ECS;");
-    expect(code).toContain("using Strada.Core.ECS.Core;");
-    expect(code).toContain("public override void OnUpdate(float deltaTime)");
+    expect(code).toContain("using Strada.Core.ECS.Systems;");
+    expect(code).toContain("protected override void OnUpdate(float deltaTime)");
+    expect(code).toContain("protected override void OnInitialize()");
+    expect(code).toContain("protected override void OnDispose()");
+    expect(code).toContain("[SystemOrder(0)]");
   });
 
   it("creates a valid JobSystemBase system with Burst and Jobs usings", async () => {
@@ -79,27 +82,25 @@ describe("SystemCreateTool", () => {
     expect(code).toContain("using Unity.Jobs;");
   });
 
-  it("creates a valid SystemGroup without OnUpdate", async () => {
+  it("creates a valid BurstSystemBase system", async () => {
     const result = await tool.execute(
       {
-        name: "CombatGroup",
-        path: "Assets/Systems/CombatGroup.cs",
-        namespace: "Game.Combat",
-        base_class: "SystemGroup",
+        name: "ParticleSystem",
+        path: "Assets/Systems/ParticleSystem.cs",
+        namespace: "Game.Particles",
+        base_class: "BurstSystemBase",
       },
       ctx
     );
 
     expect(result.isError).toBeUndefined();
 
-    const filePath = join(tempDir, "Assets/Systems/CombatGroup.cs");
+    const filePath = join(tempDir, "Assets/Systems/ParticleSystem.cs");
     const code = readFileSync(filePath, "utf-8");
-    expect(code).toContain("public class CombatGroup : SystemGroup");
-    expect(code).not.toContain("OnUpdate");
-    expect(code).toContain("Systems in this group execute in order");
+    expect(code).toContain("public class ParticleSystem : BurstSystemBase");
   });
 
-  it("generates query with World.Query and GetComponentRef calls", async () => {
+  it("generates query with ForEach delegate pattern", async () => {
     const result = await tool.execute(
       {
         name: "DamageSystem",
@@ -115,12 +116,13 @@ describe("SystemCreateTool", () => {
 
     const filePath = join(tempDir, "Assets/Systems/DamageSystem.cs");
     const code = readFileSync(filePath, "utf-8");
-    expect(code).toContain("World.Query<Health, Armor>()");
-    expect(code).toContain("World.GetComponentRef<Health>(entity)");
-    expect(code).toContain("World.GetComponentRef<Armor>(entity)");
+    expect(code).toContain("ForEach<Health, Armor>((int entity, ref Health health, ref Armor armor)");
+    expect(code).not.toContain("World.Query");
+    expect(code).not.toContain("World.GetComponentRef");
+    expect(code).not.toContain("foreach");
   });
 
-  it("generates constructor with DI fields and assignments for injected services", async () => {
+  it("generates [Inject] attribute fields for injected services", async () => {
     const result = await tool.execute(
       {
         name: "SpawnSystem",
@@ -136,11 +138,28 @@ describe("SystemCreateTool", () => {
 
     const filePath = join(tempDir, "Assets/Systems/SpawnSystem.cs");
     const code = readFileSync(filePath, "utf-8");
-    expect(code).toContain("private readonly ICombatService _combatService;");
-    expect(code).toContain("private readonly IConfigService _configService;");
-    expect(code).toContain("public SpawnSystem(ICombatService combatService, IConfigService configService)");
-    expect(code).toContain("_combatService = combatService;");
-    expect(code).toContain("_configService = configService;");
+    expect(code).toContain("[Inject] private readonly ICombatService _combatService;");
+    expect(code).toContain("[Inject] private readonly IConfigService _configService;");
+    expect(code).toContain("using Strada.Core.DI.Attributes;");
+    // Should NOT have constructor DI
+    expect(code).not.toContain("public SpawnSystem(");
+  });
+
+  it("supports custom system_order", async () => {
+    const result = await tool.execute(
+      {
+        name: "LateSystem",
+        path: "Assets/Systems/LateSystem.cs",
+        namespace: "Game",
+        system_order: 100,
+      },
+      ctx
+    );
+
+    expect(result.isError).toBeUndefined();
+    const filePath = join(tempDir, "Assets/Systems/LateSystem.cs");
+    const code = readFileSync(filePath, "utf-8");
+    expect(code).toContain("[SystemOrder(100)]");
   });
 
   it("returns error for invalid system name", async () => {
@@ -189,7 +208,7 @@ describe("SystemCreateTool", () => {
     expect(result.content).toContain("base_class must be one of");
     expect(result.content).toContain("SystemBase");
     expect(result.content).toContain("JobSystemBase");
-    expect(result.content).toContain("SystemGroup");
+    expect(result.content).toContain("BurstSystemBase");
   });
 
   it("returns error for invalid component name in query_components", async () => {

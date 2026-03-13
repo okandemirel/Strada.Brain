@@ -14,7 +14,7 @@ import type { ChainSynthesizer } from "./chain-synthesizer.js";
 import type { ChainValidator } from "./chain-validator.js";
 import { CompositeTool } from "./composite-tool.js";
 import { ChainMetadataSchema, ChainMetadataV2Schema, computeCompositeMetadata, migrateV1toV2 } from "./chain-types.js";
-import type { ToolChainConfig, ChainMetadata, ChainMetadataV2 } from "./chain-types.js";
+import type { ToolChainConfig, ChainMetadataV2 } from "./chain-types.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
 import type { IEventEmitter, LearningEventMap } from "../../core/event-bus.js";

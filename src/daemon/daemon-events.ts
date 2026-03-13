@@ -221,6 +221,7 @@ export interface DeployFailedEvent {
 
 /** Map of daemon event names to their payload types */
 export interface DaemonEventMap {
+  [key: string]: unknown;
   "daemon:tick": DaemonTickEvent;
   "daemon:trigger_fired": TriggerFiredEvent;
   "daemon:trigger_failed": TriggerFailedEvent;
