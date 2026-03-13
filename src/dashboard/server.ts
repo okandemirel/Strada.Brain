@@ -84,6 +84,36 @@ interface DashboardDelegationManager {
   getActiveDelegations(parentAgentId?: string): Array<{ subAgentId: string; type: string; startedAt: number }>;
 }
 
+/** Structural interface for MemoryConsolidationEngine methods used by dashboard (Plan 25-03) */
+interface DashboardConsolidationEngine {
+  getStats(): {
+    perTier: Record<string, { clustered: number; pending: number; total: number }>;
+    lifetimeSavings: number;
+    totalRuns: number;
+    totalCostUsd: number;
+  };
+}
+
+/** Structural interface for DeploymentExecutor methods used by dashboard (Plan 25-03) */
+interface DashboardDeploymentExecutor {
+  getHistory(limit?: number): Array<{
+    id: string; proposedAt: number; approvedAt?: number; approvedBy?: string;
+    agentId?: string; status: string; scriptOutput?: string; duration?: number; error?: string;
+  }>;
+  getStats(): {
+    totalDeployments: number; successful: number; failed: number;
+    lastDeployment?: unknown; circuitBreakerState: string;
+  };
+}
+
+/** Structural interface for ReadinessChecker used by dashboard (Plan 25-03) */
+interface DashboardReadinessChecker {
+  checkReadiness(force?: boolean): Promise<{
+    ready: boolean; reason?: string; testPassed: boolean;
+    gitClean: boolean; branchMatch: boolean; timestamp: number; cached: boolean;
+  }>;
+}
+
 /**
  * Lightweight HTTP dashboard server.
  * No external dependencies — uses Node.js built-in http module.
@@ -138,6 +168,11 @@ export class DashboardServer {
   // Delegation context (Plan 24-03)
   private delegationLog?: DashboardDelegationLog;
   private delegationManager?: DashboardDelegationManager;
+
+  // Consolidation & Deployment context (Plan 25-03)
+  private consolidationEngine?: DashboardConsolidationEngine;
+  private deploymentExecutor?: DashboardDeploymentExecutor;
+  private readinessChecker?: DashboardReadinessChecker;
 
   constructor(
     port: number,
@@ -202,6 +237,26 @@ export class DashboardServer {
   registerDelegationServices(delegationLog: DashboardDelegationLog, delegationManager: DashboardDelegationManager): void {
     this.delegationLog = delegationLog;
     this.delegationManager = delegationManager;
+  }
+
+  /**
+   * Register consolidation and deployment services for dashboard (Plan 25-03).
+   * Call after consolidation engine and deployment executor are initialized.
+   */
+  registerConsolidationDeploymentServices(services: {
+    consolidationEngine?: DashboardConsolidationEngine;
+    deploymentExecutor?: DashboardDeploymentExecutor;
+    readinessChecker?: DashboardReadinessChecker;
+  }): void {
+    if (services.consolidationEngine) {
+      this.consolidationEngine = services.consolidationEngine;
+    }
+    if (services.deploymentExecutor) {
+      this.deploymentExecutor = services.deploymentExecutor;
+    }
+    if (services.readinessChecker) {
+      this.readinessChecker = services.readinessChecker;
+    }
   }
 
   /**
@@ -625,6 +680,40 @@ export class DashboardServer {
         return;
       }
 
+      // GET /api/consolidation -- Consolidation stats (Plan 25-03)
+      if (url === "/api/consolidation") {
+        const consolidationData = this.getConsolidationData();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(consolidationData));
+        return;
+      }
+
+      // GET /api/deployment -- Deployment stats and history (Plan 25-03)
+      if (url === "/api/deployment" && req.method === "GET") {
+        const deploymentData = this.getDeploymentData();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(deploymentData));
+        return;
+      }
+
+      // POST /api/deployment/check -- Trigger readiness check (Plan 25-03)
+      if (url === "/api/deployment/check" && req.method === "POST") {
+        if (!this.readinessChecker) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ enabled: false }));
+          return;
+        }
+        const checker = this.readinessChecker;
+        void checker.checkReadiness(true).then((result) => {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        }).catch((err) => {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+        return;
+      }
+
       if (url === "/api/metrics") {
         const snapshot = this.metrics.getSnapshot(this.getMemoryStats());
         res.writeHead(200, {
@@ -978,6 +1067,48 @@ export class DashboardServer {
   }
 
   /**
+   * Build consolidation data for the /api/consolidation endpoint (Plan 25-03).
+   * Returns {enabled: false} when consolidation is not configured.
+   */
+  private getConsolidationData(): Record<string, unknown> {
+    if (!this.consolidationEngine) {
+      return { enabled: false };
+    }
+
+    try {
+      const stats = this.consolidationEngine.getStats();
+      return {
+        enabled: true,
+        ...stats,
+      };
+    } catch {
+      return { enabled: true, perTier: {}, lifetimeSavings: 0, totalRuns: 0, totalCostUsd: 0 };
+    }
+  }
+
+  /**
+   * Build deployment data for the /api/deployment endpoint (Plan 25-03).
+   * Returns {enabled: false} when deployment is not configured.
+   */
+  private getDeploymentData(): Record<string, unknown> {
+    if (!this.deploymentExecutor) {
+      return { enabled: false };
+    }
+
+    try {
+      const stats = this.deploymentExecutor.getStats();
+      const history = this.deploymentExecutor.getHistory(10);
+      return {
+        enabled: true,
+        stats,
+        history,
+      };
+    } catch {
+      return { enabled: true, stats: {}, history: [] };
+    }
+  }
+
+  /**
    * Serialize a GoalTree into JSON-safe format for the /api/goals endpoint.
    */
   private serializeGoalTree(tree: GoalTree): Record<string, unknown> {
@@ -1055,13 +1186,15 @@ function fmtDuration(ms) {
 
 async function refresh() {
   try {
-    const [metricsRes, daemonRes, maintenanceRes, chainResilienceRes, agentsRes, delegationsRes] = await Promise.all([
+    const [metricsRes, daemonRes, maintenanceRes, chainResilienceRes, agentsRes, delegationsRes, consolidationRes, deploymentRes] = await Promise.all([
       fetch('/api/metrics'),
       fetch('/api/daemon').catch(function() { return null; }),
       fetch('/api/maintenance').catch(function() { return null; }),
       fetch('/api/chain-resilience').catch(function() { return null; }),
       fetch('/api/agents').catch(function() { return null; }),
-      fetch('/api/delegations').catch(function() { return null; })
+      fetch('/api/delegations').catch(function() { return null; }),
+      fetch('/api/consolidation').catch(function() { return null; }),
+      fetch('/api/deployment').catch(function() { return null; })
     ]);
     const data = await metricsRes.json();
 
@@ -1166,6 +1299,18 @@ async function refresh() {
     if (delegationsRes) {
       var delegationsData = await delegationsRes.json();
       renderDelegations(delegationsData);
+    }
+
+    // Consolidation subsection in Maintenance (Plan 25-03)
+    if (consolidationRes) {
+      var consolidationData = await consolidationRes.json();
+      renderConsolidation(consolidationData);
+    }
+
+    // Deployment panel (Plan 25-03)
+    if (deploymentRes) {
+      var deploymentData = await deploymentRes.json();
+      renderDeployment(deploymentData);
     }
 
     document.getElementById('last-update').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
@@ -1755,6 +1900,222 @@ function renderDelegations(data) {
   }
 }
 
+function renderConsolidation(data) {
+  var container = document.getElementById('consolidation-panel');
+  if (!container) return;
+
+  if (!data || !data.enabled) {
+    container.textContent = '';
+    var p = document.createElement('p');
+    p.style.color = '#8b949e';
+    p.textContent = 'Memory consolidation is disabled';
+    container.appendChild(p);
+    return;
+  }
+
+  container.textContent = '';
+
+  // Per-tier breakdown table
+  var perTier = data.perTier || {};
+  var tierNames = ['working', 'ephemeral', 'persistent'];
+  var hasTierData = false;
+
+  var tbl = document.createElement('table');
+  var thead = document.createElement('thead');
+  var headRow = document.createElement('tr');
+  ['Tier', 'Total', 'Clustered', 'Pending'].forEach(function(h) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  tbl.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  for (var i = 0; i < tierNames.length; i++) {
+    var name = tierNames[i];
+    var t = perTier[name];
+    if (!t) continue;
+    hasTierData = true;
+
+    var row = document.createElement('tr');
+
+    var tdName = document.createElement('td');
+    tdName.style.textTransform = 'capitalize';
+    tdName.textContent = name;
+    row.appendChild(tdName);
+
+    var tdTotal = document.createElement('td');
+    tdTotal.style.textAlign = 'right';
+    tdTotal.textContent = String(t.total);
+    row.appendChild(tdTotal);
+
+    var tdClustered = document.createElement('td');
+    tdClustered.style.textAlign = 'right';
+    tdClustered.textContent = String(t.clustered);
+    row.appendChild(tdClustered);
+
+    var tdPending = document.createElement('td');
+    tdPending.style.textAlign = 'right';
+    tdPending.textContent = String(t.pending);
+    row.appendChild(tdPending);
+
+    tbody.appendChild(row);
+  }
+  tbl.appendChild(tbody);
+
+  if (hasTierData) {
+    container.appendChild(tbl);
+  }
+
+  // Lifetime stats summary
+  var summary = document.createElement('p');
+  summary.style.color = '#8b949e';
+  summary.style.fontSize = '0.8rem';
+  summary.style.marginTop = '8px';
+  summary.textContent = data.totalRuns + ' run(s), ' + data.lifetimeSavings + ' entries saved, $' + (data.totalCostUsd || 0).toFixed(4) + ' total cost';
+  container.appendChild(summary);
+}
+
+function renderDeployment(data) {
+  var section = document.getElementById('deployment-section');
+  var container = document.getElementById('deployment-panel');
+  if (!section || !container) return;
+
+  if (!data || !data.enabled) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  container.textContent = '';
+
+  var stats = data.stats || {};
+
+  // Status indicators
+  var statusDiv = document.createElement('div');
+  statusDiv.style.marginBottom = '12px';
+
+  var cbState = stats.circuitBreakerState || 'CLOSED';
+  var cbColor = cbState === 'CLOSED' ? '#3fb950' : cbState === 'HALF_OPEN' ? '#f0883e' : '#da3633';
+
+  var statusP = document.createElement('p');
+  statusP.style.margin = '4px 0';
+  var cbDot = document.createElement('span');
+  cbDot.style.display = 'inline-block';
+  cbDot.style.width = '8px';
+  cbDot.style.height = '8px';
+  cbDot.style.borderRadius = '50%';
+  cbDot.style.backgroundColor = cbColor;
+  cbDot.style.marginRight = '6px';
+  statusP.appendChild(cbDot);
+  statusP.appendChild(document.createTextNode('Circuit breaker: ' + cbState));
+  statusDiv.appendChild(statusP);
+
+  var statsP = document.createElement('p');
+  statsP.style.color = '#8b949e';
+  statsP.style.fontSize = '0.8rem';
+  statsP.style.margin = '4px 0';
+  statsP.textContent = 'Total: ' + (stats.totalDeployments || 0) + ' | Success: ' + (stats.successful || 0) + ' | Failed: ' + (stats.failed || 0);
+  statusDiv.appendChild(statsP);
+
+  container.appendChild(statusDiv);
+
+  // Check button
+  var checkBtn = document.createElement('button');
+  checkBtn.textContent = 'Run Readiness Check';
+  checkBtn.style.padding = '6px 12px';
+  checkBtn.style.background = '#238636';
+  checkBtn.style.color = '#fff';
+  checkBtn.style.border = 'none';
+  checkBtn.style.borderRadius = '4px';
+  checkBtn.style.cursor = 'pointer';
+  checkBtn.style.marginBottom = '12px';
+  checkBtn.style.fontSize = '0.85rem';
+  checkBtn.onclick = function() {
+    checkBtn.disabled = true;
+    checkBtn.textContent = 'Checking...';
+    fetch('/api/deployment/check', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(result) {
+        checkBtn.textContent = result.ready ? 'Ready' : 'Not Ready';
+        checkBtn.style.background = result.ready ? '#238636' : '#6e7681';
+        setTimeout(function() {
+          checkBtn.disabled = false;
+          checkBtn.textContent = 'Run Readiness Check';
+          checkBtn.style.background = '#238636';
+        }, 3000);
+      })
+      .catch(function() {
+        checkBtn.disabled = false;
+        checkBtn.textContent = 'Run Readiness Check';
+      });
+  };
+  container.appendChild(checkBtn);
+
+  // Deployment history table
+  var history = data.history || [];
+  if (history.length > 0) {
+    var histH = document.createElement('h3');
+    histH.textContent = 'Recent Deployments';
+    histH.style.color = '#c9d1d9';
+    histH.style.fontSize = '0.95rem';
+    histH.style.margin = '8px 0';
+    container.appendChild(histH);
+
+    var hTbl = document.createElement('table');
+    var hThead = document.createElement('thead');
+    var hHeadRow = document.createElement('tr');
+    ['Timestamp', 'Status', 'Duration', 'Approved By'].forEach(function(h) {
+      var th = document.createElement('th');
+      th.textContent = h;
+      hHeadRow.appendChild(th);
+    });
+    hThead.appendChild(hHeadRow);
+    hTbl.appendChild(hThead);
+
+    var hTbody = document.createElement('tbody');
+    for (var i = 0; i < history.length; i++) {
+      var e = history[i];
+      var hRow = document.createElement('tr');
+
+      var tdTime = document.createElement('td');
+      tdTime.textContent = new Date(e.proposedAt).toLocaleString();
+      tdTime.style.fontSize = '0.8rem';
+      hRow.appendChild(tdTime);
+
+      var tdStatus = document.createElement('td');
+      var statusBadge = document.createElement('span');
+      var statusClass = 'badge-ok';
+      if (e.status === 'failed' || e.status === 'post_verify_failed') statusClass = 'badge-err';
+      else if (e.status === 'proposed' || e.status === 'executing') statusClass = 'badge-info';
+      else if (e.status === 'cancelled') statusClass = 'badge-warn';
+      statusBadge.className = 'badge ' + statusClass;
+      statusBadge.textContent = e.status;
+      tdStatus.appendChild(statusBadge);
+      hRow.appendChild(tdStatus);
+
+      var tdDuration = document.createElement('td');
+      tdDuration.style.textAlign = 'right';
+      tdDuration.textContent = e.duration != null ? e.duration + 'ms' : '-';
+      hRow.appendChild(tdDuration);
+
+      var tdApproved = document.createElement('td');
+      tdApproved.textContent = e.approvedBy || '-';
+      hRow.appendChild(tdApproved);
+
+      hTbody.appendChild(hRow);
+    }
+    hTbl.appendChild(hTbody);
+    container.appendChild(hTbl);
+  } else {
+    var noHist = document.createElement('p');
+    noHist.style.color = '#8b949e';
+    noHist.style.fontSize = '0.85rem';
+    noHist.textContent = 'No deployment history';
+    container.appendChild(noHist);
+  }
+}
+
 function card(label, value, sub) {
   return '<div class="card"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div>'
     + (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div>';
@@ -1849,6 +2210,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="section" id="maintenance-section">
   <h2>Maintenance</h2>
   <div id="maintenance-panel"><p style="color:#8b949e">Loading...</p></div>
+  <h3 style="color:#c9d1d9;font-size:0.95rem;margin:16px 0 8px 0">Memory Consolidation</h3>
+  <div id="consolidation-panel"><p style="color:#8b949e">Loading...</p></div>
 </div>
 
 <div class="section" id="chain-resilience-section">
@@ -1864,6 +2227,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="section" id="delegations-section" style="display:none">
   <h2>Delegations</h2>
   <div id="delegations-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="deployment-section" style="display:none">
+  <h2>Deployment</h2>
+  <div id="deployment-panel"><p style="color:#8b949e">Loading...</p></div>
 </div>
 
 <p id="last-update"></p>

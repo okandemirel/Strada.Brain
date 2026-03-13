@@ -957,6 +957,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     dashboard.registerAgentServices({ agentManager, agentBudgetTracker: agentBudgetTrackerOuter });
   }
 
+  // Register consolidation & deployment services with dashboard (Plan 25-03)
+  if (dashboard && daemonContext) {
+    dashboard.registerConsolidationDeploymentServices({
+      consolidationEngine: daemonContext.consolidationEngine,
+      deploymentExecutor: daemonContext.deploymentExecutor,
+      readinessChecker: daemonContext.readinessChecker,
+    });
+  }
+
   // Return result with shutdown function
   return {
     orchestrator,
