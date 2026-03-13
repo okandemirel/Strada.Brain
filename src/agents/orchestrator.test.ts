@@ -12,7 +12,7 @@ vi.mock("../utils/logger.js", () => ({
 }));
 
 vi.mock("./context/strada-knowledge.js", () => ({
-  STRATA_SYSTEM_PROMPT: "Test system prompt.",
+  STRADA_SYSTEM_PROMPT: "Test system prompt.",
   buildProjectContext: () => "",
   buildAnalysisSummary: () => "",
   buildDepsContext: () => "",
@@ -428,8 +428,8 @@ describe("Orchestrator", () => {
       expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
     });
 
-    it("treats create_system as a write operation", async () => {
-      const systemTool = createMockTool("create_system", true);
+    it("treats strada_create_system as a write operation", async () => {
+      const systemTool = createMockTool("strada_create_system", true);
       const orchWithSystemTool = new Orchestrator({
         providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
         tools: [systemTool],
@@ -441,7 +441,7 @@ describe("Orchestrator", () => {
 
       const toolResponse: ProviderResponse = {
         text: "",
-        toolCalls: [{ id: "tc1", name: "create_system", input: { name: "TestSystem" } }],
+        toolCalls: [{ id: "tc1", name: "strada_create_system", input: { name: "TestSystem" } }],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 10 },
       };

@@ -41,6 +41,7 @@
     "better-sqlite3": "^12.6.2",
     "chokidar": "^5.0.0",
     "commander": "^12.1.0",
+    "croner": "^10.0.1",
     "diff": "^8.0.3",
     "discord.js": "^14.25.1",
     "dotenv": "^16.4.0",

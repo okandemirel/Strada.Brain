@@ -77,7 +77,7 @@ describe("SystemCreateTool", () => {
 
     const filePath = join(tempDir, "Assets/Systems/PhysicsJob.cs");
     const code = readFileSync(filePath, "utf-8");
-    expect(code).toContain("public class PhysicsJob : JobSystemBase");
+    expect(code).toContain("public class PhysicsJobSystem : JobSystemBase");
     expect(code).toContain("using Unity.Burst;");
     expect(code).toContain("using Unity.Jobs;");
   });

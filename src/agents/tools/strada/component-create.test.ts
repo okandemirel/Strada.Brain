@@ -36,14 +36,14 @@ describe("ComponentCreateTool", () => {
     }, ctx);
 
     expect(result.isError).toBeUndefined();
-    expect(result.content).toContain("Component 'Health' created");
+    expect(result.content).toContain("Component 'HealthComponent' created");
     expect(writeFile).toHaveBeenCalled();
 
     const writtenCode = vi.mocked(writeFile).mock.calls[0]![1] as string;
     expect(writtenCode).toContain("using System.Runtime.InteropServices;");
     expect(writtenCode).toContain("using Strada.Core.ECS;");
     expect(writtenCode).toContain("[StructLayout(LayoutKind.Sequential)]");
-    expect(writtenCode).toContain("public struct Health : IComponent");
+    expect(writtenCode).toContain("public struct HealthComponent : IComponent");
     expect(writtenCode).toContain("public float Current;");
     expect(writtenCode).toContain("public float Max;");
   });

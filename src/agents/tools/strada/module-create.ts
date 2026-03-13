@@ -116,9 +116,7 @@ export class ModuleCreateTool implements ITool {
       if (includeSignals) dirs.push(join(fullBase, "Scripts", "Signals"));
       if (includeTests) dirs.push(join(fullBase, "Tests"));
 
-      for (const dir of dirs) {
-        await mkdir(dir, { recursive: true });
-      }
+      await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
 
       // 1. Assembly Definition
       const asmdefPath = join(fullBase, `${name}.asmdef`);
@@ -129,7 +127,7 @@ export class ModuleCreateTool implements ITool {
             name: `Game.Modules.${name}`,
             rootNamespace: namespace,
             references: [
-              "Strada.Core",
+              STRADA_API.assemblyReferences.core,
               "Unity.Entities",
               "Unity.Mathematics",
               "Unity.Collections",

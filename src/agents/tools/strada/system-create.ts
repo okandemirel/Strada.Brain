@@ -46,7 +46,7 @@ export class SystemCreateTool implements ITool {
       },
       update_phase: {
         type: "string",
-        enum: ["Initialization", "Update", "LateUpdate", "FixedUpdate"],
+        enum: STRADA_API.updatePhases,
         description: "Update phase for the system. Default: Update",
       },
       run_before: {
@@ -126,13 +126,32 @@ export class SystemCreateTool implements ITool {
       }
     }
 
+    for (const sys of runBefore) {
+      if (!isValidCSharpIdentifier(sys)) {
+        return { content: `Error: invalid system name in run_before '${sys}'`, isError: true };
+      }
+    }
+    for (const sys of runAfter) {
+      if (!isValidCSharpIdentifier(sys)) {
+        return { content: `Error: invalid system name in run_after '${sys}'`, isError: true };
+      }
+    }
+    for (const sys of requiresSystem) {
+      if (!isValidCSharpIdentifier(sys)) {
+        return { content: `Error: invalid system name in requires_system '${sys}'`, isError: true };
+      }
+    }
+
     // Validate path
     const pathCheck = await validatePath(context.projectPath, relPath);
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
 
-    const code = generateSystemCode(name, namespace, baseClass, queryComponents, injectServices, systemOrder, updatePhase, runBefore, runAfter, requiresSystem);
+    const code = generateSystemCode({
+      name, namespace, baseClass, queryComponents, injectServices,
+      systemOrder, updatePhase, runBefore, runAfter, requiresSystem,
+    });
 
     try {
       await mkdir(dirname(pathCheck.fullPath), { recursive: true });
@@ -160,18 +179,21 @@ export class SystemCreateTool implements ITool {
   }
 }
 
-function generateSystemCode(
-  name: string,
-  namespace: string,
-  baseClass: string,
-  queryComponents: string[],
-  injectServices: string[],
-  systemOrder: number,
-  updatePhase: string,
-  runBefore: string[],
-  runAfter: string[],
-  requiresSystem: string[]
-): string {
+interface SystemCodeOptions {
+  name: string;
+  namespace: string;
+  baseClass: string;
+  queryComponents: string[];
+  injectServices: string[];
+  systemOrder: number;
+  updatePhase: string;
+  runBefore: string[];
+  runAfter: string[];
+  requiresSystem: string[];
+}
+
+function generateSystemCode(opts: SystemCodeOptions): string {
+  const { name, namespace, baseClass, queryComponents, injectServices, systemOrder, updatePhase, runBefore, runAfter, requiresSystem } = opts;
   const usings = [
     `using ${STRADA_API.namespaces.ecs};`,
     `using ${STRADA_API.namespaces.systems};`,
@@ -190,7 +212,8 @@ function generateSystemCode(
 
   const fields = injectServices
     .map((svc) => {
-      const fieldName = svc.replace(/^I/, "").charAt(0).toLowerCase() + svc.replace(/^I/, "").slice(1);
+      const stripped = svc.replace(/^I/, "");
+      const fieldName = stripped.charAt(0).toLowerCase() + stripped.slice(1);
       return `        [Inject] private readonly ${svc} _${fieldName};`;
     })
     .join("\n");

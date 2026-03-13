@@ -12,10 +12,29 @@ import {
   stripGenericArgs,
   type CSharpAST,
   type TypeDecl,
+  type ClassDecl,
+  type StructDecl,
 } from "./csharp-deep-parser.js";
+import { STRADA_API } from "../agents/context/strada-api-reference.js";
 import { getLogger } from "../utils/logger.js";
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB per file
+
+/** Known base class names that start with 'I' but are NOT interfaces */
+const KNOWN_BASE_CLASSES = new Set([
+  ...STRADA_API.baseClasses.systems,
+  "EntityMediator",
+  "Controller",
+  "ModuleConfig",
+]);
+
+/** Pre-computed cache per parsed file to avoid re-traversing AST */
+interface ParsedFileCache {
+  ast: CSharpAST;
+  classes: ClassDecl[];
+  structs: StructDecl[];
+  nsLookup: Map<TypeDecl, string>;
+}
 
 export interface ModuleInfo {
   name: string;
@@ -107,19 +126,21 @@ export class StradaAnalyzer {
   }
 
   /**
-   * Resolve namespace for a type by walking the AST's namespace declarations.
+   * Build a namespace lookup map for O(1) type-to-namespace resolution.
    */
-  private static resolveNamespace(ast: CSharpAST, type: TypeDecl): string {
+  private static buildNamespaceLookup(ast: CSharpAST): Map<TypeDecl, string> {
+    const lookup = new Map<TypeDecl, string>();
     for (const ns of ast.namespaces) {
-      if (ns.members.some((m) => m === type)) return ns.name;
-      // Check nested types
       for (const m of ns.members) {
-        if ((m.kind === "class" || m.kind === "struct") && m.nestedTypes.some((n) => n === type)) {
-          return ns.name;
+        lookup.set(m, ns.name);
+        if ((m.kind === "class" || m.kind === "struct") && m.nestedTypes) {
+          for (const n of m.nestedTypes) {
+            lookup.set(n, ns.name);
+          }
         }
       }
     }
-    return "";
+    return lookup;
   }
 
   /**
@@ -134,7 +155,8 @@ export class StradaAnalyzer {
     const csFiles = await this.findCSharpFiles();
     logger.info(`Found ${csFiles.length} C# files`);
 
-    const parsed: CSharpAST[] = [];
+    // Pre-compute classes, structs, and namespace lookups once per file
+    const cached: ParsedFileCache[] = [];
     const events: EventUsage[] = [];
     for (const filePath of csFiles) {
       try {
@@ -143,10 +165,13 @@ export class StradaAnalyzer {
 
         const relPath = relative(this.projectPath, filePath);
         const ast = parseDeep(content, relPath);
-        parsed.push(ast);
-
-        // Scan for event usage inline (regex on raw content — method bodies not in AST)
         const classes = getClasses(ast);
+        const structs = getStructs(ast);
+        const nsLookup = StradaAnalyzer.buildNamespaceLookup(ast);
+
+        cached.push({ ast, classes, structs, nsLookup });
+
+        // Scan for event usage (regex on raw content -- method bodies not in AST)
         const className = classes[0]?.name ?? "unknown";
         this.scanEventUsageFromContent(content, relPath, className, events);
       } catch {
@@ -154,13 +179,13 @@ export class StradaAnalyzer {
       }
     }
 
-    const modules = this.findModules(parsed);
-    const systems = this.findSystems(parsed);
-    const components = this.findComponents(parsed);
-    const services = this.findServices(parsed);
-    const mediators = this.findMediators(parsed);
-    const controllers = this.findControllers(parsed);
-    const dependencies = this.buildDependencyGraph(parsed, events);
+    const modules = this.findModules(cached);
+    const systems = this.findSystems(cached);
+    const components = this.findComponents(cached);
+    const services = this.findServices(cached);
+    const mediators = this.findMediators(cached);
+    const controllers = this.findControllers(cached);
+    const dependencies = this.buildDependencyGraph(cached, events);
 
     const result: StradaProjectAnalysis = {
       modules,
@@ -187,16 +212,16 @@ export class StradaAnalyzer {
     return result;
   }
 
-  private findModules(parsed: CSharpAST[]): ModuleInfo[] {
+  private findModules(cached: ParsedFileCache[]): ModuleInfo[] {
     const modules: ModuleInfo[] = [];
-    for (const ast of parsed) {
-      for (const cls of getClasses(ast)) {
+    for (const { ast, classes, nsLookup } of cached) {
+      for (const cls of classes) {
         if (deepInheritsFrom(cls, "ModuleConfig")) {
           modules.push({
             name: cls.name.replace(/ModuleConfig$|Module$/, ""),
             className: cls.name,
             filePath: ast.filePath,
-            namespace: StradaAnalyzer.resolveNamespace(ast, cls),
+            namespace: nsLookup.get(cls) ?? "",
             systems: [],
             services: [],
             dependencies: [],
@@ -208,22 +233,21 @@ export class StradaAnalyzer {
     return modules;
   }
 
-  private findSystems(parsed: CSharpAST[]): SystemInfo[] {
+  private findSystems(cached: ParsedFileCache[]): SystemInfo[] {
     const systems: SystemInfo[] = [];
-    const systemBases = ["SystemBase", "JobSystemBase", "BurstSystemBase"];
-    for (const ast of parsed) {
-      for (const cls of getClasses(ast)) {
+    const systemBases = STRADA_API.baseClasses.systems;
+    for (const { ast, classes, nsLookup } of cached) {
+      for (const cls of classes) {
         if (!cls.modifiers.includes("abstract")) {
           for (const base of systemBases) {
             if (deepInheritsFrom(cls, base)) {
-              const baseType = cls.baseTypes.find((bt) => {
-                const clean = bt.replace(/<[^>]+>/g, "");
-                return systemBases.includes(clean);
-              }) ?? base;
+              const baseType = cls.baseTypes.find((bt) =>
+                systemBases.includes(stripGenericArgs(bt))
+              ) ?? base;
               systems.push({
                 name: cls.name,
                 filePath: ast.filePath,
-                namespace: StradaAnalyzer.resolveNamespace(ast, cls),
+                namespace: nsLookup.get(cls) ?? "",
                 baseClass: baseType,
                 lineNumber: cls.line,
               });
@@ -236,15 +260,15 @@ export class StradaAnalyzer {
     return systems;
   }
 
-  private findComponents(parsed: CSharpAST[]): ComponentInfo[] {
+  private findComponents(cached: ParsedFileCache[]): ComponentInfo[] {
     const components: ComponentInfo[] = [];
-    for (const ast of parsed) {
-      for (const struct of getStructs(ast)) {
+    for (const { ast, structs, nsLookup } of cached) {
+      for (const struct of structs) {
         if (deepImplements(struct, "IComponent")) {
           components.push({
             name: struct.name,
             filePath: ast.filePath,
-            namespace: StradaAnalyzer.resolveNamespace(ast, struct),
+            namespace: nsLookup.get(struct) ?? "",
             isReadonly: struct.modifiers.includes("readonly"),
             lineNumber: struct.line,
           });
@@ -254,19 +278,26 @@ export class StradaAnalyzer {
     return components;
   }
 
-  private findServices(parsed: CSharpAST[]): ServiceInfo[] {
+  private findServices(cached: ParsedFileCache[]): ServiceInfo[] {
     const services: ServiceInfo[] = [];
-    for (const ast of parsed) {
-      for (const cls of getClasses(ast)) {
+    for (const { ast, classes, nsLookup } of cached) {
+      for (const cls of classes) {
         for (const bt of cls.baseTypes) {
           const clean = stripGenericArgs(bt);
-          if (clean.startsWith("I") && clean.length > 1 && clean[1] === clean[1]!.toUpperCase()) {
+          // Only treat as service interface if it starts with I + uppercase
+          // AND is not a known base class (e.g. ImmutableDataStore, IndexedNode)
+          if (
+            clean.startsWith("I") &&
+            clean.length > 1 &&
+            clean[1] === clean[1]!.toUpperCase() &&
+            !KNOWN_BASE_CLASSES.has(clean)
+          ) {
             services.push({
               interfaceName: clean,
               implementationName: cls.name,
               interfaceFile: "",
               implementationFile: ast.filePath,
-              namespace: StradaAnalyzer.resolveNamespace(ast, cls),
+              namespace: nsLookup.get(cls) ?? "",
             });
           }
         }
@@ -275,20 +306,20 @@ export class StradaAnalyzer {
     return services;
   }
 
-  private findMediators(parsed: CSharpAST[]): MediatorInfo[] {
+  private findMediators(cached: ParsedFileCache[]): MediatorInfo[] {
     const mediators: MediatorInfo[] = [];
-    for (const ast of parsed) {
-      for (const cls of getClasses(ast)) {
+    for (const { ast, classes, nsLookup } of cached) {
+      for (const cls of classes) {
         if (deepInheritsFrom(cls, "EntityMediator")) {
           const genericMatch = cls.baseTypes
-            .find((bt) => bt.replace(/<[^>]+>/g, "") === "EntityMediator")
+            .find((bt) => stripGenericArgs(bt) === "EntityMediator")
             ?.match(/EntityMediator<(\w+)>/);
           const viewType = genericMatch ? genericMatch[1]! : "unknown";
           mediators.push({
             name: cls.name,
             viewType,
             filePath: ast.filePath,
-            namespace: StradaAnalyzer.resolveNamespace(ast, cls),
+            namespace: nsLookup.get(cls) ?? "",
             lineNumber: cls.line,
           });
         }
@@ -297,20 +328,20 @@ export class StradaAnalyzer {
     return mediators;
   }
 
-  private findControllers(parsed: CSharpAST[]): ControllerInfo[] {
+  private findControllers(cached: ParsedFileCache[]): ControllerInfo[] {
     const controllers: ControllerInfo[] = [];
-    for (const ast of parsed) {
-      for (const cls of getClasses(ast)) {
+    for (const { ast, classes, nsLookup } of cached) {
+      for (const cls of classes) {
         if (deepInheritsFrom(cls, "Controller")) {
           const genericMatch = cls.baseTypes
-            .find((bt) => bt.replace(/<[^>]+>/g, "") === "Controller")
+            .find((bt) => stripGenericArgs(bt) === "Controller")
             ?.match(/Controller<(\w+)>/);
           const modelType = genericMatch ? genericMatch[1]! : "unknown";
           controllers.push({
             name: cls.name,
             modelType,
             filePath: ast.filePath,
-            namespace: StradaAnalyzer.resolveNamespace(ast, cls),
+            namespace: nsLookup.get(cls) ?? "",
             lineNumber: cls.line,
           });
         }
@@ -325,24 +356,15 @@ export class StradaAnalyzer {
     className: string,
     events: EventUsage[]
   ): void {
-    const publishRegex = /\.Publish<(\w+)>/g;
-    const subscribeRegex = /\.Subscribe<(\w+)>/g;
-    const sendRegex = /\.Send<(\w+)>/g;
+    const eventPattern = /\.(Publish|Subscribe|Send)<(\w+)>/g;
     const lines = content.split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!;
+      eventPattern.lastIndex = 0;
       let match;
-      publishRegex.lastIndex = 0;
-      while ((match = publishRegex.exec(line)) !== null) {
-        events.push({ eventType: match[1]!, action: "publish", filePath, lineNumber: i + 1, className });
-      }
-      subscribeRegex.lastIndex = 0;
-      while ((match = subscribeRegex.exec(line)) !== null) {
-        events.push({ eventType: match[1]!, action: "subscribe", filePath, lineNumber: i + 1, className });
-      }
-      sendRegex.lastIndex = 0;
-      while ((match = sendRegex.exec(line)) !== null) {
-        events.push({ eventType: match[1]!, action: "publish", filePath, lineNumber: i + 1, className });
+      while ((match = eventPattern.exec(line)) !== null) {
+        const action: "publish" | "subscribe" = match[1] === "Subscribe" ? "subscribe" : "publish";
+        events.push({ eventType: match[2]!, action, filePath, lineNumber: i + 1, className });
       }
     }
   }
@@ -352,20 +374,20 @@ export class StradaAnalyzer {
    * Captures inheritance, interface implementation, DI injection, and event coupling.
    */
   private buildDependencyGraph(
-    parsed: CSharpAST[],
+    cached: ParsedFileCache[],
     events: EventUsage[]
   ): DependencyEdge[] {
     const edges: DependencyEdge[] = [];
     const seen = new Set<string>();
     const addEdge = (from: string, to: string, type: DependencyEdge["type"]) => {
-      const key = `${from}→${to}:${type}`;
+      const key = `${from}\u2192${to}:${type}`;
       if (seen.has(key)) return;
       seen.add(key);
       edges.push({ from, to, type });
     };
 
-    for (const ast of parsed) {
-      for (const cls of getClasses(ast)) {
+    for (const { classes, structs } of cached) {
+      for (const cls of classes) {
         // Inheritance edges
         for (const bt of cls.baseTypes) {
           const clean = stripGenericArgs(bt);
@@ -388,7 +410,7 @@ export class StradaAnalyzer {
         }
       }
 
-      for (const struct of getStructs(ast)) {
+      for (const struct of structs) {
         for (const bt of struct.baseTypes) {
           addEdge(struct.name, stripGenericArgs(bt), "implements");
         }
@@ -438,7 +460,7 @@ export class StradaAnalyzer {
     const lines: string[] = [];
 
     lines.push("Strada Project Analysis");
-    lines.push("━".repeat(40));
+    lines.push("\u2501".repeat(40));
 
     // Modules
     if (analysis.modules.length > 0) {
@@ -531,7 +553,7 @@ export class StradaAnalyzer {
       for (const [type, edges] of byType) {
         lines.push(`  ${type} (${edges.length}):`);
         for (const edge of edges.slice(0, 20)) {
-          lines.push(`    ${edge.from} → ${edge.to}`);
+          lines.push(`    ${edge.from} \u2192 ${edge.to}`);
         }
         if (edges.length > 20) {
           lines.push(`    ... and ${edges.length - 20} more`);
@@ -540,7 +562,7 @@ export class StradaAnalyzer {
     }
 
     // Summary
-    lines.push(`\n${"━".repeat(40)}`);
+    lines.push(`\n${"\u2501".repeat(40)}`);
     lines.push(`C# Files: ${analysis.csFileCount}`);
     lines.push(
       `Analyzed: ${analysis.analyzedAt.toISOString().replace("T", " ").split(".")[0]}`

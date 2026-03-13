@@ -34,8 +34,8 @@ describe("ModuleCreateTool", () => {
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("Module 'Combat' created");
 
-    // Should create 5 directories (root + 4 subdirs)
-    expect(mkdir).toHaveBeenCalledTimes(5);
+    // Should create 6 directories (root + Scripts + 4 subdirs under Scripts)
+    expect(mkdir).toHaveBeenCalledTimes(6);
 
     // Should write asmdef + ModuleConfig + System + Interface + Impl = 5 files
     expect(writeFile).toHaveBeenCalledTimes(5);
@@ -46,7 +46,7 @@ describe("ModuleCreateTool", () => {
     );
     expect(asmdefCall).toBeTruthy();
     const asmdefContent = JSON.parse(asmdefCall![1] as string);
-    expect(asmdefContent.references).toContain("com.strada.core");
+    expect(asmdefContent.references).toContain("Strada.Core");
 
     // Verify ModuleConfig uses RegisterService pattern
     const configCall = vi.mocked(writeFile).mock.calls.find(

@@ -2,6 +2,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { validatePath, isValidCSharpIdentifier, isValidCSharpType } from "../../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
+import { STRADA_API } from "../../context/strada-api-reference.js";
 
 export class ComponentCreateTool implements ITool {
   readonly name = "strada_create_component";
@@ -122,7 +123,7 @@ export class ComponentCreateTool implements ITool {
 
     const usings = [
       "using System.Runtime.InteropServices;",
-      "using Strada.Core.ECS;",
+      `using ${STRADA_API.namespaces.ecs};`,
     ];
     if (needsMath) {
       usings.push("using Unity.Mathematics;");

@@ -2,6 +2,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { validatePath, isValidCSharpIdentifier, isValidCSharpType } from "../../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
+import { STRADA_API } from "../../context/strada-api-reference.js";
 
 export class MediatorCreateTool implements ITool {
   readonly name = "strada_create_mediator";
@@ -114,8 +115,8 @@ export class MediatorCreateTool implements ITool {
       `                value => View.${b.view_method}(value));`
     ).join("\n\n");
 
-    const code = `using Strada.Core.Sync;
-using Strada.Core.ECS;
+    const code = `using ${STRADA_API.namespaces.sync};
+using ${STRADA_API.namespaces.ecs};
 
 namespace ${namespace}
 {

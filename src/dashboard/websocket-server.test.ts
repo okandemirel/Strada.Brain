@@ -325,7 +325,7 @@ describe("WebSocketDashboardServer", () => {
     expect(response.headers.get("content-type")).toContain("text/html");
 
     const html = await response.text();
-    expect(html).toContain("Strata Brain WebSocket Dashboard");
+    expect(html).toContain("Strada Brain WebSocket Dashboard");
   });
 
   it("should serve health check endpoint", async () => {

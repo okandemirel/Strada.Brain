@@ -57,7 +57,7 @@ describe("MediatorCreateTool", () => {
     }, ctx);
 
     const code = vi.mocked(writeFile).mock.calls[0]![1] as string;
-    expect(code).toContain("TODO: Add component bindings");
+    expect(code).toContain("Add component bindings here");
     expect(result.content).toContain("No bindings configured");
   });
 

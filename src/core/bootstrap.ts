@@ -140,9 +140,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const container = customContainer!; // We ensure container exists below
 
   // Auto-migrate .strata-memory → .strada-memory
-  if (existsSync('.strata-memory') && !existsSync('.strada-memory')) {
+  try {
     renameSync('.strata-memory', '.strada-memory');
     console.info('Migrated .strata-memory -> .strada-memory');
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') throw e;
   }
 
   const logger = createLogger(config.logLevel, config.logFile);
@@ -194,6 +197,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   const dashboard = await initializeDashboard(config, metrics, memoryManager, logger);
 
+  const stoppableServers: Array<{ stop(): Promise<void> | void }> = [];
+
   if (config.websocketDashboard.enabled) {
     const { WebSocketDashboardServer } = await import("../dashboard/websocket-server.js");
     const wsDashboard = new WebSocketDashboardServer({
@@ -203,6 +208,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       getMemoryStats: () => memoryManager?.getStats(),
     });
     await wsDashboard.start();
+    stoppableServers.push(wsDashboard);
+    if (!config.websocketDashboard.authToken) {
+      logger.warn("SECURITY: WebSocket dashboard enabled without auth token — all connections unauthenticated");
+    }
     logger.info("WebSocket dashboard started", { port: config.websocketDashboard.port });
   }
 
@@ -214,6 +223,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       () => memoryManager?.getStats(),
     );
     await prometheus.start();
+    stoppableServers.push(prometheus);
+    logger.warn("SECURITY: Prometheus metrics endpoint has no authentication — restrict access at network level");
     logger.info("Prometheus metrics started", { port: config.prometheus.port });
   }
 
@@ -1025,6 +1036,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       notificationRouter: notificationRouterInstance,
       agentManager,
       delegationManager,
+      stoppableServers,
     }),
   };
 }
@@ -1657,6 +1669,7 @@ interface ShutdownOptions {
   notificationRouter?: NotificationRouter;
   agentManager?: AgentManagerType;
   delegationManager?: DelegationManagerType;
+  stoppableServers?: Array<{ stop(): Promise<void> | void }>;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -1728,6 +1741,10 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
 
     if (dashboard) {
       await dashboard.stop();
+    }
+
+    if (options.stoppableServers) {
+      await Promise.all(options.stoppableServers.map(s => s.stop()));
     }
 
     if (ragPipeline) {

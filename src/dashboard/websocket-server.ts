@@ -6,6 +6,7 @@
  */
 
 import { createServer, type Server } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { getLogger } from "../utils/logger.js";
 import { BruteForceProtection } from "../security/auth-hardened.js";
@@ -260,7 +261,12 @@ export class WebSocketDashboardServer {
       return;
     }
 
-    if (payload?.token === this.authToken) {
+    // Constant-time comparison to prevent timing attacks
+    const tokenBuffer = Buffer.from(payload?.token ?? "");
+    const authBuffer = Buffer.from(this.authToken);
+    const tokenMatch = tokenBuffer.length === authBuffer.length &&
+      timingSafeEqual(tokenBuffer, authBuffer);
+    if (tokenMatch) {
       client.isAuthenticated = true;
       this.bruteForce.recordSuccess(client.remoteIp);
       this.send(client, { type: "auth_success", payload: { message: "Authenticated successfully" } });
