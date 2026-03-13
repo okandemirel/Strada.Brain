@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Agent de D&eacute;veloppement Propuls&eacute; par l'IA pour les Projets Unity / Strada.Core</strong><br/>
-  Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7.
+  Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7. D&eacute;sormais avec orchestration multi-agent, d&eacute;l&eacute;gation de t&acirc;ches, consolidation de m&eacute;moire et un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Licence">
 </p>
 
@@ -33,7 +33,7 @@
 
 Strada.Brain est un agent IA avec lequel vous communiquez via un canal de chat. Vous d&eacute;crivez ce que vous voulez -- "cr&eacute;e un nouveau syst&egrave;me ECS pour le mouvement du joueur" ou "trouve tous les composants qui utilisent la sant&eacute;" -- et l'agent lit votre projet C#, &eacute;crit le code, lance `dotnet build`, corrige les erreurs automatiquement et vous envoie le r&eacute;sultat.
 
-Il dispose d'une m&eacute;moire persistante adoss&eacute;e &agrave; SQLite + vecteurs HNSW, apprend des erreurs pass&eacute;es gr&acirc;ce &agrave; un scoring de confiance bay&eacute;sien, d&eacute;compose les objectifs complexes en ex&eacute;cution parall&egrave;le via un DAG, synth&eacute;tise automatiquement des cha&icirc;nes d'outils multi-&eacute;tapes et peut fonctionner en tant que daemon 24/7 avec des d&eacute;clencheurs proactifs.
+Il dispose d'une m&eacute;moire persistante adoss&eacute;e &agrave; SQLite + vecteurs HNSW, apprend des erreurs pass&eacute;es gr&acirc;ce &agrave; un scoring de confiance bay&eacute;sien, d&eacute;compose les objectifs complexes en ex&eacute;cution parall&egrave;le via un DAG, synth&eacute;tise automatiquement des cha&icirc;nes d'outils multi-&eacute;tapes avec saga rollback et peut fonctionner en tant que daemon 24/7 avec des d&eacute;clencheurs proactifs. Il supporte l'orchestration multi-agent avec isolation par canal et session, la d&eacute;l&eacute;gation hi&eacute;rarchique de t&acirc;ches entre niveaux d'agents, la consolidation automatique de m&eacute;moire et un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation humaine et protection par disjoncteur.
 
 **Ceci n'est pas une biblioth&egrave;que ni une API.** C'est une application autonome que vous ex&eacute;cutez. Elle se connecte &agrave; votre plateforme de chat, lit votre projet Unity sur le disque et fonctionne de mani&egrave;re autonome dans les limites que vous configurez.
 
@@ -111,43 +111,60 @@ Une fois lanc&eacute;, envoyez un message via votre canal configur&eacute; :
 
 ```
 +-----------------------------------------------------------------+
-|  Canaux de Chat                                                  |
+|  Chat Channels                                                   |
 |  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
 +------------------------------+----------------------------------+
                                |
-                    Interface IChannelAdapter
+                    IChannelAdapter interface
                                |
 +------------------------------v----------------------------------+
-|  Orchestrateur (Boucle d'Agent PAOR)                             |
-|  Planifier -> Agir -> Observer -> R&eacute;fl&eacute;chir machine &agrave; &eacute;tats      |
-|  R&eacute;cup&eacute;ration d'instincts, classification des pannes,          |
-|  replanification automatique                                     |
+|  Orchestrator (PAOR Agent Loop)                                  |
+|  Plan -> Act -> Observe -> Reflect state machine                 |
+|  Instinct retrieval, failure classification, auto-replan         |
 +-------+--------------+-------------+-----------+----------------+
         |              |             |           |
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
-| Fournisseurs | | 30+ Outils | | Contexte   | | Apprentissage    |
-| IA           | |            | |            | |                  |
-| Claude (pri.)| | E/S fich.  | | AgentDB    | | TypedEventBus    |
-| OpenAI, Kimi | | Ops Git    | | (SQLite +  | | Bay&eacute;sien Beta   |
-| DeepSeek,Qwen| | Exec shell | |  HNSW)     | | Cycle de vie     |
-| MiniMax, Groq| | Build .NET | | Vect. RAG  | |  des instincts   |
-| Ollama +autr.| | G&eacute;n Strata| | Identit&eacute;  | | Cha&icirc;nes d'outils |
+| AI Providers | | 30+ Tools  | | Context    | | Learning System  |
+| Claude (prim)| | File I/O   | | AgentDB    | | TypedEventBus    |
+| OpenAI, Kimi | | Git ops    | | (SQLite +  | | Bayesian Beta    |
+| DeepSeek,Qwen| | Shell exec | |  HNSW)     | | Instinct life-   |
+| MiniMax, Groq| | .NET build | | RAG vectors| |  cycle           |
+| Ollama +more | | Strata gen | | Identity   | | Tool chains      |
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  D&eacute;composeur + Ex&eacute;cuteur d'objectifs     |
-                |  D&eacute;composition en DAG, ex&eacute;cution         |
-                |  parall&egrave;le par vagues, budgets d'&eacute;checs  |
+                |  Goal Decomposer + Goal Executor        |
+                |  DAG-based decomposition, wave-based    |
+                |  parallel execution, failure budgets    |
+                +---------+------------------+------------+
+                          |                  |
+          +---------------v------+  +--------v--------------------+
+          | Multi-Agent Manager  |  | Task Delegation             |
+          | Per-channel sessions |  | TierRouter (4-tier)         |
+          | AgentBudgetTracker   |  | DelegationTool + Manager    |
+          | AgentRegistry        |  | Max depth 2, budget-aware   |
+          +---------------+------+  +--------+--------------------+
+                          |                  |
+                +---------v------------------v------------+
+                |  Memory Decay & Consolidation           |
+                |  Exponential decay, idle consolidation   |
+                |  HNSW clustering, soft-delete + undo     |
                 +-----------------------------------------+
                                |
             +------------------v-------------------+
             |  Daemon (HeartbeatLoop)              |
-            |  Cron, surveillance fichiers,        |
-            |  checklist, d&eacute;clencheurs webhook     |
-            |  Disjoncteurs, suivi du budget,      |
-            |  d&eacute;duplication de d&eacute;clencheurs       |
-            |  Routeur de notifications +          |
-            |  rapports de synth&egrave;se                |
+            |  Cron, file-watch, checklist,        |
+            |  webhook, deploy triggers            |
+            |  Circuit breakers, budget tracking,  |
+            |  trigger deduplication                |
+            |  Notification router + digest reports |
+            +------------------+-------------------+
+                               |
+            +------------------v-------------------+
+            |  Deployment Subsystem                |
+            |  ReadinessChecker, DeployTrigger      |
+            |  DeploymentExecutor                   |
+            |  Approval gate + circuit breaker      |
             +--------------------------------------+
 ```
 
@@ -240,7 +257,7 @@ Les requ&ecirc;tes complexes multi-&eacute;tapes sont automatiquement d&eacute;c
 
 ## Synth&egrave;se de Cha&icirc;nes d'Outils
 
-L'agent d&eacute;tecte et synth&eacute;tise automatiquement des motifs de cha&icirc;nes d'outils multi-&eacute;tapes en outils composites r&eacute;utilisables.
+L'agent d&eacute;tecte et synth&eacute;tise automatiquement des motifs de cha&icirc;nes d'outils multi-&eacute;tapes en outils composites r&eacute;utilisables. La V2 ajoute l'ex&eacute;cution parall&egrave;le bas&eacute;e sur un DAG et le saga rollback pour les cha&icirc;nes complexes.
 
 **Pipeline :**
 1. **ChainDetector** -- analyse les donn&eacute;es de trajectoire pour trouver des s&eacute;quences d'outils r&eacute;currentes (ex. : `file_read` -> `file_edit` -> `dotnet_build`)
@@ -248,9 +265,99 @@ L'agent d&eacute;tecte et synth&eacute;tise automatiquement des motifs de cha&ic
 3. **ChainValidator** -- validation post-synth&egrave;se avec retour d'information &agrave; l'ex&eacute;cution ; suit le succ&egrave;s d'ex&eacute;cution des cha&icirc;nes via la confiance bay&eacute;sienne
 4. **ChainManager** -- orchestrateur du cycle de vie : charge les cha&icirc;nes existantes au d&eacute;marrage, lance la d&eacute;tection p&eacute;riodique, invalide automatiquement les cha&icirc;nes lorsque des outils composants sont supprim&eacute;s
 
+**Am&eacute;liorations V2 :**
+- **Ex&eacute;cution DAG** -- les &eacute;tapes ind&eacute;pendantes s'ex&eacute;cutent en parall&egrave;le
+- **Saga rollback** -- en cas d'&eacute;chec, les &eacute;tapes pr&eacute;c&eacute;dentes sont annul&eacute;es en ordre inverse
+- **Versionnage des cha&icirc;nes** -- les anciennes versions sont archiv&eacute;es
+
 **S&eacute;curit&eacute; :** Les outils composites h&eacute;ritent des indicateurs de s&eacute;curit&eacute; les plus restrictifs de leurs outils composants.
 
 **Cascade de confiance :** Les instincts de cha&icirc;nes suivent le m&ecirc;me cycle de vie bay&eacute;sien que les instincts classiques. Les cha&icirc;nes qui passent sous le seuil de d&eacute;pr&eacute;ciation sont automatiquement d&eacute;senregistr&eacute;es.
+
+---
+
+## Orchestration Multi-Agent
+
+Plusieurs instances d'agents peuvent fonctionner simultan&eacute;ment avec isolation par canal et session.
+
+**AgentManager :**
+- Cr&eacute;e et g&egrave;re les instances d'agents par canal/session
+- L'isolation des sessions garantit que les agents sur diff&eacute;rents canaux n'interf&egrave;rent pas entre eux
+- Configurable via `MULTI_AGENT_ENABLED` (opt-in, d&eacute;sactiv&eacute; par d&eacute;faut -- comportement identique au mode mono-agent lorsque d&eacute;sactiv&eacute;)
+
+**AgentBudgetTracker :**
+- Suivi budg&eacute;taire par agent en tokens et en co&ucirc;t avec limites configurables
+- Plafonds budg&eacute;taires journaliers/mensuels partag&eacute;s entre tous les agents
+- L'&eacute;puisement du budget d&eacute;clenche une d&eacute;gradation gracieuse (mode lecture seule) plut&ocirc;t qu'un &eacute;chec brutal
+
+**AgentRegistry :**
+- Registre central de toutes les instances d'agents actives
+- Supporte les v&eacute;rifications de sant&eacute; et l'arr&ecirc;t gracieux
+- Le multi-agent est enti&egrave;rement opt-in : lorsque d&eacute;sactiv&eacute;, le syst&egrave;me fonctionne de mani&egrave;re identique &agrave; la v2.0
+
+---
+
+## D&eacute;l&eacute;gation de T&acirc;ches
+
+Les agents peuvent d&eacute;l&eacute;guer des sous-t&acirc;ches &agrave; d'autres agents en utilisant un syst&egrave;me de routage par niveaux.
+
+**TierRouter (4 niveaux) :**
+- **Niveau 1** -- t&acirc;ches simples trait&eacute;es par l'agent courant (pas de d&eacute;l&eacute;gation)
+- **Niveau 2** -- complexit&eacute; mod&eacute;r&eacute;e, d&eacute;l&eacute;gu&eacute;e &agrave; un agent secondaire
+- **Niveau 3** -- haute complexit&eacute;, d&eacute;l&eacute;gu&eacute;e avec un budget &eacute;tendu
+- **Niveau 4** -- t&acirc;ches critiques n&eacute;cessitant des capacit&eacute;s d'agent sp&eacute;cialis&eacute;es
+
+**DelegationManager :**
+- G&egrave;re le cycle de vie de la d&eacute;l&eacute;gation : cr&eacute;ation, suivi, compl&eacute;tion, annulation
+- Impose une profondeur maximale de d&eacute;l&eacute;gation (d&eacute;faut : 2) pour &eacute;viter les boucles de d&eacute;l&eacute;gation infinies
+- Conscient du budget : les t&acirc;ches d&eacute;l&eacute;gu&eacute;es h&eacute;ritent d'une portion du budget restant du parent
+
+**DelegationTool :**
+- Expos&eacute; comme un outil que l'agent peut invoquer pour d&eacute;l&eacute;guer du travail
+- Inclut l'agr&eacute;gation des r&eacute;sultats des sous-t&acirc;ches d&eacute;l&eacute;gu&eacute;es
+
+---
+
+## D&eacute;gradation et Consolidation de M&eacute;moire
+
+Les entr&eacute;es m&eacute;moire se d&eacute;gradent naturellement au fil du temps selon un mod&egrave;le de d&eacute;gradation exponentielle, tandis que la consolidation en p&eacute;riode d'inactivit&eacute; r&eacute;duit la redondance.
+
+**D&eacute;gradation exponentielle :**
+- Chaque entr&eacute;e m&eacute;moire poss&egrave;de un score de d&eacute;gradation qui diminue au fil du temps
+- La fr&eacute;quence d'acc&egrave;s et l'importance renforcent la r&eacute;sistance &agrave; la d&eacute;gradation
+- Les instincts sont exempt&eacute;s de la d&eacute;gradation (n'expirent jamais)
+
+**Consolidation en p&eacute;riode d'inactivit&eacute; :**
+- Pendant les p&eacute;riodes de faible activit&eacute;, le moteur de consolidation identifie les m&eacute;moires s&eacute;mantiquement similaires par clustering HNSW
+- Les m&eacute;moires li&eacute;es sont fusionn&eacute;es en r&eacute;sum&eacute;s consolid&eacute;s, r&eacute;duisant le stockage et am&eacute;liorant la qualit&eacute; de r&eacute;cup&eacute;ration
+- Suppression douce avec annulation : les m&eacute;moires sources consolid&eacute;es sont marqu&eacute;es comme consolid&eacute;es (non supprim&eacute;es physiquement) et peuvent &ecirc;tre restaur&eacute;es
+
+**Moteur de consolidation :**
+- Seuil de similarit&eacute; configurable pour la d&eacute;tection de clusters
+- Traitement par lots avec tailles de blocs configurables
+- Piste d'audit compl&egrave;te des op&eacute;rations de consolidation
+
+---
+
+## Sous-syst&egrave;me de D&eacute;ploiement
+
+Un syst&egrave;me de d&eacute;ploiement opt-in avec portes d'approbation humaine et protection par disjoncteur.
+
+**ReadinessChecker :**
+- Valide la pr&eacute;paration du syst&egrave;me avant le d&eacute;ploiement (&eacute;tat du build, r&eacute;sultats des tests, disponibilit&eacute; des ressources)
+- Crit&egrave;res de pr&eacute;paration configurables
+
+**DeployTrigger :**
+- S'int&egrave;gre au syst&egrave;me de d&eacute;clencheurs du daemon comme nouveau type de d&eacute;clencheur
+- Se d&eacute;clenche lorsque les conditions de d&eacute;ploiement sont remplies (ex. : tous les tests passent, approbation accord&eacute;e)
+- Inclut une file d'approbation : les d&eacute;ploiements n&eacute;cessitent une approbation humaine explicite avant ex&eacute;cution
+
+**DeploymentExecutor :**
+- Ex&eacute;cute les &eacute;tapes de d&eacute;ploiement en s&eacute;quence avec capacit&eacute; de rollback
+- L'assainissement des variables d'environnement emp&ecirc;che la fuite d'identifiants dans les journaux de d&eacute;ploiement
+- Disjoncteur : les &eacute;checs de d&eacute;ploiement cons&eacute;cutifs d&eacute;clenchent un refroidissement automatique pour &eacute;viter les pannes en cascade
+
+**S&eacute;curit&eacute; :** Le d&eacute;ploiement est d&eacute;sactiv&eacute; par d&eacute;faut et n&eacute;cessite un opt-in explicite via la configuration. Toutes les actions de d&eacute;ploiement sont journalis&eacute;es et auditables.
 
 ---
 
@@ -272,6 +379,7 @@ npm run dev -- daemon --channel web
 - **Surveillance de fichiers** -- surveille les modifications du syst&egrave;me de fichiers dans les chemins configur&eacute;s
 - **Checklist** -- se d&eacute;clenche lorsque des &eacute;l&eacute;ments de la checklist arrivent &agrave; &eacute;ch&eacute;ance
 - **Webhook** -- endpoint HTTP POST d&eacute;clenchant des t&acirc;ches sur les requ&ecirc;tes entrantes
+- **Deploy** -- se d&eacute;clenche lorsque les conditions de d&eacute;ploiement sont remplies (porte d'approbation requise)
 
 **R&eacute;silience :**
 - **Disjoncteurs** -- par d&eacute;clencheur avec refroidissement &agrave; backoff exponentiel, persist&eacute;s entre les red&eacute;marrages
@@ -392,6 +500,10 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `DASHBOARD_PORT` | `3001` | Port du serveur du tableau de bord |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Active le tableau de bord en temps r&eacute;el WebSocket |
 | `ENABLE_PROMETHEUS` | `false` | Active l'endpoint de m&eacute;triques Prometheus (port 9090) |
+| `MULTI_AGENT_ENABLED` | `false` | Activer l'orchestration multi-agent |
+| `DELEGATION_ENABLED` | `false` | Activer la d&eacute;l&eacute;gation de t&acirc;ches entre agents |
+| `DELEGATION_MAX_DEPTH` | `2` | Profondeur maximale de cha&icirc;ne de d&eacute;l&eacute;gation |
+| `DEPLOYMENT_ENABLED` | `false` | Activer le sous-syst&egrave;me de d&eacute;ploiement |
 | `READ_ONLY_MODE` | `false` | Bloque toutes les op&eacute;rations d'&eacute;criture |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, ou `debug` |
 
@@ -608,7 +720,7 @@ node dist/index.js daemon --channel telegram
 ## Tests
 
 ```bash
-npm test                         # Lancer les 2775 tests
+npm test                         # Lancer les 3070 tests
 npm run test:watch               # Mode watch
 npm test -- --coverage           # Avec couverture
 npm test -- src/agents/tools/file-read.test.ts  # Fichier unique
@@ -651,6 +763,9 @@ src/
       agentdb-memory.ts      # Backend actif : SQLite + HNSW, placement automatique &agrave; 3 niveaux
       agentdb-adapter.ts     # Adaptateur IMemoryManager pour AgentDBMemory
       migration.ts           # Migration FileMemoryManager historique -> AgentDB
+      consolidation-engine.ts # Consolidation de m&eacute;moire en p&eacute;riode d'inactivit&eacute; avec clustering HNSW
+      consolidation-types.ts  # D&eacute;finitions de types et interfaces de consolidation
+    decay/                    # Syst&egrave;me de d&eacute;gradation exponentielle de la m&eacute;moire
   rag/
     rag-pipeline.ts     # Orchestration indexation + recherche + formatage
     chunker.ts          # D&eacute;coupage structurel sp&eacute;cifique au C#
@@ -677,6 +792,14 @@ src/
       composite-tool.ts    # Outil composite ex&eacute;cutable
       chain-validator.ts   # Validation post-synth&egrave;se, retour d'information &agrave; l'ex&eacute;cution
       chain-manager.ts     # Orchestrateur du cycle de vie complet
+  multi-agent/
+    agent-manager.ts    # Cycle de vie multi-agent et isolation des sessions
+    agent-budget-tracker.ts  # Suivi budg&eacute;taire par agent
+    agent-registry.ts   # Registre central des agents actifs
+  delegation/
+    delegation-manager.ts    # Gestion du cycle de vie de la d&eacute;l&eacute;gation
+    delegation-tool.ts       # Outil de d&eacute;l&eacute;gation c&ocirc;t&eacute; agent
+    tier-router.ts           # Routage de t&acirc;ches &agrave; 4 niveaux
   goals/
     goal-decomposer.ts  # D&eacute;composition d'objectifs en DAG (proactive + r&eacute;active)
     goal-executor.ts    # Ex&eacute;cution parall&egrave;le par vagues avec budgets d'&eacute;checs
@@ -705,6 +828,10 @@ src/
       file-watch-trigger.ts  # Surveillance des modifications du syst&egrave;me de fichiers
       checklist-trigger.ts   # &Eacute;l&eacute;ments de checklist &agrave; &eacute;ch&eacute;ance
       webhook-trigger.ts     # Endpoint webhook HTTP POST
+      deploy-trigger.ts      # D&eacute;clencheur de d&eacute;ploiement avec porte d'approbation
+    deployment/
+      deployment-executor.ts # Ex&eacute;cution de d&eacute;ploiement avec rollback
+      readiness-checker.ts   # Validation de pr&eacute;paration avant d&eacute;ploiement
     reporting/
       notification-router.ts # Routage des notifications par urgence
       digest-reporter.ts     # G&eacute;n&eacute;ration de synth&egrave;ses p&eacute;riodiques

@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>面向 Unity / Strada.Core 项目的 AI 驱动开发代理</strong><br/>
-  一个连接到 Web 仪表板、Telegram、Discord、Slack、WhatsApp 或终端的自主编码代理 &mdash; 读取您的代码库、编写代码、运行构建、从错误中学习，并通过 24/7 守护进程循环实现自主运行。
+  一个连接到 Web 仪表板、Telegram、Discord、Slack、WhatsApp 或终端的自主编码代理 &mdash; 读取您的代码库、编写代码、运行构建、从错误中学习，并通过 24/7 守护进程循环实现自主运行。现已支持多代理编排、任务委派、记忆整合，以及带审批门控的部署子系统。
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="测试">
+  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="测试">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="许可证">
 </p>
 
@@ -33,7 +33,7 @@
 
 Strada.Brain 是一个通过聊天频道与您对话的 AI 代理。您描述您想要的内容——"为玩家移动创建一个新的 ECS 系统"或"查找所有使用 health 的组件"——代理就会读取您的 C# 项目、编写代码、运行 `dotnet build`、自动修复错误，并将结果发送给您。
 
-它拥有基于 SQLite + HNSW 向量的持久记忆，通过贝叶斯置信度评分从过去的错误中学习，将复杂目标分解为并行 DAG 执行，自动合成多工具链，并可作为 24/7 守护进程运行，支持主动触发器。
+它拥有基于 SQLite + HNSW 向量的持久记忆，通过贝叶斯置信度评分从过去的错误中学习，将复杂目标分解为并行 DAG 执行，自动合成多工具链并支持 saga 回滚，并可作为 24/7 守护进程运行，支持主动触发器。它支持多代理编排（按通道/会话隔离）、跨代理层级的任务委派、自动记忆整合，以及带人工审批门控和断路器保护的部署子系统。
 
 **这不是一个库或 API。** 它是一个独立运行的应用程序。它连接到您的聊天平台，读取磁盘上的 Unity 项目，并在您配置的范围内自主运行。
 
@@ -133,18 +133,38 @@ npm run dev -- start --channel whatsapp
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  目标分解器 + 目标执行器                |
-                |  基于 DAG 的分解，基于波次的            |
-                |  并行执行，失败预算                      |
+                |  Goal Decomposer + Goal Executor        |
+                |  DAG-based decomposition, wave-based    |
+                |  parallel execution, failure budgets    |
+                +---------+------------------+------------+
+                          |                  |
+          +---------------v------+  +--------v--------------------+
+          | Multi-Agent Manager  |  | Task Delegation             |
+          | Per-channel sessions |  | TierRouter (4-tier)         |
+          | AgentBudgetTracker   |  | DelegationTool + Manager    |
+          | AgentRegistry        |  | Max depth 2, budget-aware   |
+          +---------------+------+  +--------+--------------------+
+                          |                  |
+                +---------v------------------v------------+
+                |  Memory Decay & Consolidation           |
+                |  Exponential decay, idle consolidation   |
+                |  HNSW clustering, soft-delete + undo     |
                 +-----------------------------------------+
                                |
             +------------------v-------------------+
-            |  守护进程（HeartbeatLoop）            |
-            |  Cron、文件监控、检查清单、            |
-            |  Webhook 触发器                       |
-            |  断路器、预算跟踪、                    |
-            |  触发器去重                            |
-            |  通知路由 + 摘要报告                   |
+            |  Daemon (HeartbeatLoop)              |
+            |  Cron, file-watch, checklist,        |
+            |  webhook, deploy triggers            |
+            |  Circuit breakers, budget tracking,  |
+            |  trigger deduplication                |
+            |  Notification router + digest reports |
+            +------------------+-------------------+
+                               |
+            +------------------v-------------------+
+            |  Deployment Subsystem                |
+            |  ReadinessChecker, DeployTrigger      |
+            |  DeploymentExecutor                   |
+            |  Approval gate + circuit breaker      |
             +--------------------------------------+
 ```
 
@@ -237,7 +257,7 @@ npm run dev -- start --channel whatsapp
 
 ## 工具链合成
 
-代理自动检测并合成多工具链模式，生成可复用的组合工具。
+代理自动检测并合成多工具链模式，生成可复用的组合工具。V2 新增基于 DAG 的并行执行和 saga 回滚，支持复杂链。
 
 **管道：**
 1. **ChainDetector** -- 分析轨迹数据，发现重复出现的工具序列（例如 `file_read` -> `file_edit` -> `dotnet_build`）
@@ -245,9 +265,99 @@ npm run dev -- start --channel whatsapp
 3. **ChainValidator** -- 合成后验证，带运行时反馈；通过贝叶斯置信度跟踪链执行成功率
 4. **ChainManager** -- 生命周期编排器：启动时加载已有链，周期性检测运行，组件工具被移除时自动失效链
 
+**V2 增强：**
+- **DAG执行** -- 独立步骤并行运行
+- **Saga回滚** -- 步骤失败时按逆序撤销已完成步骤
+- **链版本控制** -- 旧版本归档保留
+
 **安全性：** 组合工具继承其组件工具中最严格的安全标志。
 
 **置信度级联：** 链本能遵循与普通本能相同的贝叶斯生命周期。低于弃用阈值的链会被自动注销。
+
+---
+
+## 多代理编排
+
+多个代理实例可以并发运行，按通道/会话进行隔离。
+
+**AgentManager：**
+- 按通道/会话创建和管理代理实例
+- 会话隔离确保不同通道上的代理不会相互干扰
+- 通过 `MULTI_AGENT_ENABLED` 启用（默认关闭——关闭时与单代理行为完全一致）
+
+**AgentBudgetTracker：**
+- 代理级令牌和成本跟踪，支持可配置预算限制
+- 所有代理共享每日/每月预算上限
+- 预算耗尽时触发优雅降级（只读模式），而非硬性失败
+
+**AgentRegistry：**
+- 所有活跃代理实例的中央注册表
+- 支持健康检查和优雅关闭
+- 多代理完全可选：禁用时系统运行方式与 v2.0 完全一致
+
+---
+
+## 任务委派
+
+代理可以通过分层路由系统将子任务委派给其他代理。
+
+**TierRouter（4级路由）：**
+- **Tier 1** -- 简单任务由当前代理处理（不委派）
+- **Tier 2** -- 中等复杂度，委派给二级代理
+- **Tier 3** -- 高复杂度，以扩展预算进行委派
+- **Tier 4** -- 关键任务，需要专门的代理能力
+
+**DelegationManager：**
+- 管理委派生命周期：创建、跟踪、完成、取消
+- 强制最大委派深度（默认：2），防止无限委派循环
+- 预算感知：被委派的任务继承父级剩余预算的一部分
+
+**DelegationTool：**
+- 作为代理可调用的工具暴露，用于委派工作
+- 包含来自被委派子任务的结果聚合
+
+---
+
+## 记忆衰减与整合
+
+记忆条目通过指数衰减模型随时间自然衰减，同时空闲整合减少冗余。
+
+**指数衰减：**
+- 每个记忆条目都有一个随时间递减的衰减分数
+- 访问频率和重要性增强衰减抵抗力
+- 本能免于衰减（永不过期）
+
+**空闲整合：**
+- 在低活动期间，整合引擎使用 HNSW 聚类识别语义相似的记忆
+- 相关记忆被合并为整合摘要，减少存储并提高检索质量
+- 软删除与撤销支持：被整合的源记忆标记为已整合（非物理删除），可以恢复
+
+**整合引擎：**
+- 可配置的聚类检测相似度阈值
+- 批处理，支持可配置的批量大小
+- 完整的整合操作审计跟踪
+
+---
+
+## 部署子系统
+
+可选的部署系统，具备人工审批门控和断路器保护。
+
+**ReadinessChecker：**
+- 在部署前验证系统就绪状态（构建状态、测试结果、资源可用性）
+- 可配置的就绪标准
+
+**DeployTrigger：**
+- 作为新触发器类型集成到守护进程的触发系统中
+- 当部署条件满足时触发（例如所有测试通过、审批已获批）
+- 包含审批队列：部署在执行前需要明确的人工审批
+
+**DeploymentExecutor：**
+- 按顺序执行部署步骤，支持回滚能力
+- 环境变量清洗防止凭据泄漏到部署日志
+- 断路器：连续部署失败触发自动冷却，防止级联故障
+
+**安全性：** 部署默认关闭，需要通过配置明确启用。所有部署操作都有日志记录且可审计。
 
 ---
 
@@ -269,6 +379,7 @@ npm run dev -- daemon --channel web
 - **文件监控** -- 监控配置路径中的文件系统变更
 - **检查清单** -- 检查清单项到期时触发
 - **Webhook** -- HTTP POST 端点，接收请求时触发任务
+- **Deploy** -- 当部署条件满足时触发（需要审批门控）
 
 **弹性保障：**
 - **断路器** -- 每触发器独立，带指数退避冷却，跨重启持久化
@@ -389,6 +500,10 @@ npm run dev -- daemon --channel web
 | `DASHBOARD_PORT` | `3001` | 仪表板服务器端口 |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | 启用 WebSocket 实时仪表板 |
 | `ENABLE_PROMETHEUS` | `false` | 启用 Prometheus 指标端点（端口 9090） |
+| `MULTI_AGENT_ENABLED` | `false` | 启用多代理编排 |
+| `DELEGATION_ENABLED` | `false` | 启用代理间任务委派 |
+| `DELEGATION_MAX_DEPTH` | `2` | 最大委派链深度 |
+| `DEPLOYMENT_ENABLED` | `false` | 启用部署子系统 |
 | `READ_ONLY_MODE` | `false` | 阻止所有写入操作 |
 | `LOG_LEVEL` | `info` | `error`、`warn`、`info` 或 `debug` |
 
@@ -605,7 +720,7 @@ node dist/index.js daemon --channel telegram
 ## 测试
 
 ```bash
-npm test                         # 运行全部 2775 个测试
+npm test                         # 运行全部 3070 个测试
 npm run test:watch               # 监视模式
 npm test -- --coverage           # 带覆盖率
 npm test -- src/agents/tools/file-read.test.ts  # 单个文件
@@ -648,6 +763,9 @@ src/
       agentdb-memory.ts      # 活跃后端：SQLite + HNSW，3 层自动分层
       agentdb-adapter.ts     # AgentDBMemory 的 IMemoryManager 适配器
       migration.ts           # 旧版 FileMemoryManager -> AgentDB 迁移
+      consolidation-engine.ts # 空闲记忆整合与 HNSW 聚类
+      consolidation-types.ts  # 整合类型定义和接口
+    decay/                    # 指数记忆衰减系统
   rag/
     rag-pipeline.ts     # 索引 + 搜索 + 格式化编排
     chunker.ts          # C# 特定的结构化分块
@@ -674,6 +792,14 @@ src/
       composite-tool.ts    # 可执行组合工具
       chain-validator.ts   # 合成后验证、运行时反馈
       chain-manager.ts     # 完整生命周期编排器
+  multi-agent/
+    agent-manager.ts    # 多代理生命周期和会话隔离
+    agent-budget-tracker.ts  # 代理级预算跟踪
+    agent-registry.ts   # 活跃代理中央注册表
+  delegation/
+    delegation-manager.ts    # 委派生命周期管理
+    delegation-tool.ts       # 面向代理的委派工具
+    tier-router.ts           # 4 级任务路由
   goals/
     goal-decomposer.ts  # 基于 DAG 的目标分解（主动 + 反应式）
     goal-executor.ts    # 基于波次的并行执行，带失败预算
@@ -702,6 +828,10 @@ src/
       file-watch-trigger.ts  # 文件系统变更监控
       checklist-trigger.ts   # 到期日检查清单项
       webhook-trigger.ts     # HTTP POST Webhook 端点
+      deploy-trigger.ts      # 带审批门控的部署条件触发器
+    deployment/
+      deployment-executor.ts # 带回滚的部署执行
+      readiness-checker.ts   # 部署前就绪验证
     reporting/
       notification-router.ts # 基于紧急级别的通知路由
       digest-reporter.ts     # 定期摘要生成

@@ -113,7 +113,36 @@ A full RBAC system with role hierarchy, permission matrix, and policy engine.
 
 Implementation: `src/security/rbac.ts`, `src/security/auth-hardened.ts`
 
-### 9. WebSocket Origin Validation
+### 9. Multi-Agent Session Isolation
+
+When multi-agent mode is enabled, each agent instance operates in an isolated session context to prevent cross-agent data leakage.
+
+- **Per-channel isolation**: agents on different channels cannot access each other's session state or conversation history.
+- **Budget isolation**: `AgentBudgetTracker` enforces per-agent token and cost limits, preventing a single agent from exhausting shared resources.
+- **Registry controls**: `AgentRegistry` tracks all active instances with health checks and supports forced shutdown of misbehaving agents.
+- **Delegation depth enforcement**: maximum delegation depth (default: 2) prevents infinite delegation loops that could exhaust resources.
+
+Implementation: `src/multi-agent/agent-manager.ts`, `src/multi-agent/agent-budget-tracker.ts`, `src/delegation/delegation-manager.ts`
+
+### 10. Deployment Security
+
+The deployment subsystem enforces human-in-the-loop approval and circuit breaker protection.
+
+- **Approval gate**: all deployments require explicit human approval via the `ApprovalQueue` before execution begins. Pending approvals expire after a configurable timeout.
+- **Circuit breaker**: consecutive deployment failures trigger automatic cooldown with exponential backoff, preventing cascading failures.
+- **Environment sanitization**: the `DeploymentExecutor` strips environment variables from deployment logs to prevent credential leakage.
+- **Readiness validation**: `ReadinessChecker` validates system health (build status, test results, resource availability) before allowing deployment to proceed.
+- **Opt-in only**: deployment is disabled by default (`DEPLOYMENT_ENABLED=false`) and requires explicit activation.
+
+Implementation: `src/daemon/triggers/deploy-trigger.ts`, `src/daemon/deployment/deployment-executor.ts`
+
+### 11. Daemon Security
+
+`DaemonSecurityPolicy` enforces tool-level approval requirements for daemon-triggered operations. Write tools require explicit user approval via the `ApprovalQueue` before execution.
+
+Implementation: `src/daemon/security/daemon-security-policy.ts`, `src/daemon/security/approval-queue.ts`
+
+### 12. WebSocket Origin Validation
 
 WebSocket connections are validated against an origin allowlist. By default, only `localhost` and `127.0.0.1` are accepted. Additional origins can be configured via `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS`.
 
@@ -121,7 +150,7 @@ Connections with empty or `"null"` Origin headers are rejected. Non-browser clie
 
 Implementation: `src/security/origin-validation.ts`
 
-### 10. JWT Authentication
+### 13. JWT Authentication
 
 The web channel uses JWT (HS256) for authentication with the following protections:
 
@@ -136,7 +165,7 @@ The web channel uses JWT (HS256) for authentication with the following protectio
 
 Implementation: `src/security/auth-hardened.ts`
 
-### 11. Input Validation
+### 14. Input Validation
 
 All inputs are validated using Zod schemas before processing.
 
@@ -149,7 +178,7 @@ All inputs are validated using Zod schemas before processing.
 
 Implementation: `src/validation/schemas.ts`, `src/validation/index.ts`
 
-### 12. Communication Security
+### 15. Communication Security
 
 TLS and WebSocket security hardening:
 
@@ -182,6 +211,10 @@ Security-related environment variables:
 | `RATE_LIMIT_TOKENS_PER_DAY` | Max API tokens per day (all users) | `1000000` |
 | `RATE_LIMIT_DAILY_BUDGET_USD` | Max daily spend | `50` |
 | `RATE_LIMIT_MONTHLY_BUDGET_USD` | Max monthly spend | `1000` |
+| `MULTI_AGENT_ENABLED` | Enable multi-agent orchestration | `false` |
+| `DELEGATION_ENABLED` | Enable task delegation | `false` |
+| `DELEGATION_MAX_DEPTH` | Maximum delegation chain depth | `2` |
+| `DEPLOYMENT_ENABLED` | Enable deployment subsystem | `false` |
 | `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | Additional allowed WebSocket origins | (localhost only) |
 
 ## Deployment Recommendations

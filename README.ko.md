@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Unity / Strada.Core 프로젝트를 위한 AI 기반 개발 에이전트</strong><br/>
-  웹 대시보드, Telegram, Discord, Slack, WhatsApp 또는 터미널에 연결되는 자율 코딩 에이전트 &mdash; 코드베이스를 읽고, 코드를 작성하고, 빌드를 실행하고, 실수로부터 학습하며, 24/7 데몬 루프로 자율 운영됩니다.
+  웹 대시보드, Telegram, Discord, Slack, WhatsApp 또는 터미널에 연결되는 자율 코딩 에이전트 &mdash; 코드베이스를 읽고, 코드를 작성하고, 빌드를 실행하고, 실수로부터 학습하며, 24/7 데몬 루프로 자율 운영됩니다. 멀티 에이전트 오케스트레이션, 작업 위임, 메모리 통합, 승인 게이트가 포함된 배포 하위 시스템을 탑재했습니다.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="테스트">
+  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="테스트">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="라이선스">
 </p>
 
@@ -33,7 +33,7 @@
 
 Strada.Brain은 채팅 채널을 통해 대화하는 AI 에이전트입니다. 원하는 것을 설명하면 -- "플레이어 이동을 위한 새로운 ECS 시스템 생성" 또는 "health를 사용하는 모든 컴포넌트 찾기" -- 에이전트가 C# 프로젝트를 읽고, 코드를 작성하고, `dotnet build`를 실행하고, 에러를 자동으로 수정하고, 결과를 전송합니다.
 
-SQLite + HNSW 벡터 기반의 영구 메모리를 갖추고 있으며, 베이지안 신뢰도 점수를 활용하여 과거 에러로부터 학습하고, 복잡한 목표를 병렬 DAG 실행으로 분해하고, 다중 도구 체인을 자동 합성하며, 사전 트리거가 포함된 24/7 데몬으로 운영할 수 있습니다.
+SQLite + HNSW 벡터 기반의 영구 메모리를 갖추고 있으며, 베이지안 신뢰도 점수를 활용하여 과거 에러로부터 학습하고, 복잡한 목표를 병렬 DAG 실행으로 분해하고, saga 롤백이 포함된 다중 도구 체인을 자동 합성하며, 사전 트리거가 포함된 24/7 데몬으로 운영할 수 있습니다. 채널/세션별 격리가 포함된 멀티 에이전트 오케스트레이션, 계층적 작업 위임, 자동 메모리 통합, 그리고 휴먼 인 더 루프 승인 게이트와 서킷 브레이커 보호 기능이 포함된 배포 하위 시스템을 지원합니다.
 
 **이것은 라이브러리나 API가 아닙니다.** 직접 실행하는 독립형 애플리케이션입니다. 채팅 플랫폼에 연결하여 디스크의 Unity 프로젝트를 읽고, 구성한 범위 내에서 자율적으로 작동합니다.
 
@@ -133,18 +133,38 @@ npm run dev -- start --channel whatsapp
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  목표 분해기 + 목표 실행기                |
-                |  DAG 기반 분해, 웨이브 기반               |
-                |  병렬 실행, 실패 예산                     |
+                |  Goal Decomposer + Goal Executor        |
+                |  DAG-based decomposition, wave-based    |
+                |  parallel execution, failure budgets    |
+                +---------+------------------+------------+
+                          |                  |
+          +---------------v------+  +--------v--------------------+
+          | Multi-Agent Manager  |  | Task Delegation             |
+          | Per-channel sessions |  | TierRouter (4-tier)         |
+          | AgentBudgetTracker   |  | DelegationTool + Manager    |
+          | AgentRegistry        |  | Max depth 2, budget-aware   |
+          +---------------+------+  +--------+--------------------+
+                          |                  |
+                +---------v------------------v------------+
+                |  Memory Decay & Consolidation           |
+                |  Exponential decay, idle consolidation   |
+                |  HNSW clustering, soft-delete + undo     |
                 +-----------------------------------------+
                                |
             +------------------v-------------------+
-            |  데몬 (HeartbeatLoop)                |
-            |  Cron, 파일 감시, 체크리스트,         |
-            |  웹훅 트리거                          |
-            |  서킷 브레이커, 예산 추적,            |
-            |  트리거 중복 제거                      |
-            |  알림 라우터 + 다이제스트 보고서       |
+            |  Daemon (HeartbeatLoop)              |
+            |  Cron, file-watch, checklist,        |
+            |  webhook, deploy triggers            |
+            |  Circuit breakers, budget tracking,  |
+            |  trigger deduplication                |
+            |  Notification router + digest reports |
+            +------------------+-------------------+
+                               |
+            +------------------v-------------------+
+            |  Deployment Subsystem                |
+            |  ReadinessChecker, DeployTrigger      |
+            |  DeploymentExecutor                   |
+            |  Approval gate + circuit breaker      |
             +--------------------------------------+
 ```
 
@@ -237,7 +257,7 @@ npm run dev -- start --channel whatsapp
 
 ## 도구 체인 합성
 
-에이전트가 다중 도구 체인 패턴을 자동으로 감지하고 재사용 가능한 복합 도구로 합성합니다.
+에이전트가 다중 도구 체인 패턴을 자동으로 감지하고 재사용 가능한 복합 도구로 합성합니다. V2에서는 DAG 기반 병렬 실행과 복잡한 체인을 위한 saga 롤백이 추가되었습니다.
 
 **파이프라인:**
 1. **ChainDetector** -- 트라젝토리 데이터를 분석하여 반복되는 도구 시퀀스 탐색 (예: `file_read` -> `file_edit` -> `dotnet_build`)
@@ -245,9 +265,99 @@ npm run dev -- start --channel whatsapp
 3. **ChainValidator** -- 합성 후 검증과 런타임 피드백; 베이지안 신뢰도를 통한 체인 실행 성공 추적
 4. **ChainManager** -- 라이프사이클 오케스트레이터: 시작 시 기존 체인 로드, 주기적 감지 실행, 구성 도구가 제거되면 체인 자동 무효화
 
+**V2 향상 기능:**
+- **DAG 실행** -- 독립적인 단계는 병렬 실행
+- **Saga 롤백** -- 단계 실패 시 이전 단계를 역순으로 되돌림
+- **체인 버전 관리** -- 이전 버전은 아카이브됨
+
 **보안:** 복합 도구는 구성 도구 중 가장 제한적인 보안 플래그를 상속합니다.
 
 **신뢰도 연쇄:** 체인 본능은 일반 본능과 동일한 베이지안 라이프사이클을 따릅니다. 폐기 임계값 아래로 떨어지는 체인은 자동으로 등록 해제됩니다.
+
+---
+
+## 멀티 에이전트 오케스트레이션
+
+여러 에이전트 인스턴스가 채널/세션별 격리로 동시에 실행될 수 있습니다.
+
+**AgentManager:**
+- 채널/세션별로 에이전트 인스턴스를 생성하고 관리
+- 세션 격리로 서로 다른 채널의 에이전트가 간섭하지 않음
+- `MULTI_AGENT_ENABLED`로 활성화 (옵트인, 기본 비활성 -- 비활성 시 단일 에이전트 동작과 동일)
+
+**AgentBudgetTracker:**
+- 에이전트별 토큰 및 비용 추적과 구성 가능한 예산 한도
+- 모든 에이전트에 걸친 공유 일일/월간 예산 상한
+- 예산 소진 시 하드 실패 대신 정상적 저하 (읽기 전용 모드) 트리거
+
+**AgentRegistry:**
+- 모든 활성 에이전트 인스턴스의 중앙 레지스트리
+- 헬스 체크 및 정상 종료 지원
+- 멀티 에이전트는 완전한 옵트인: 비활성 시 v2.0과 동일하게 작동
+
+---
+
+## 작업 위임
+
+에이전트가 계층적 라우팅 시스템을 사용하여 하위 작업을 다른 에이전트에 위임할 수 있습니다.
+
+**TierRouter (4단계):**
+- **Tier 1** -- 현재 에이전트가 처리하는 간단한 작업 (위임 없음)
+- **Tier 2** -- 중간 복잡도, 보조 에이전트에 위임
+- **Tier 3** -- 높은 복잡도, 확장된 예산으로 위임
+- **Tier 4** -- 전문 에이전트 능력이 필요한 중요 작업
+
+**DelegationManager:**
+- 위임 수명 주기 관리: 생성, 추적, 완료, 취소
+- 무한 위임 루프를 방지하기 위한 최대 위임 깊이 적용 (기본값: 2)
+- 예산 인식: 위임된 작업은 부모의 남은 예산 일부를 상속
+
+**DelegationTool:**
+- 에이전트가 작업을 위임하기 위해 호출할 수 있는 도구로 노출
+- 위임된 하위 작업의 결과 집계 포함
+
+---
+
+## 메모리 감쇠 및 통합
+
+메모리 항목은 지수적 감쇠 모델을 사용하여 시간이 지남에 따라 자연적으로 감쇠되며, 유휴 통합으로 중복을 줄입니다.
+
+**지수적 감쇠:**
+- 각 메모리 항목은 시간이 지남에 따라 감소하는 감쇠 점수를 가짐
+- 접근 빈도와 중요도가 감쇠 저항을 강화
+- 본능은 감쇠에서 면제 (만료되지 않음)
+
+**유휴 통합:**
+- 저활동 기간에 통합 엔진이 HNSW 클러스터링을 사용하여 의미적으로 유사한 메모리를 식별
+- 관련 메모리가 통합된 요약으로 병합되어 저장 공간을 줄이고 검색 품질을 향상
+- 소프트 삭제 및 실행 취소 지원: 통합된 원본 메모리는 통합됨으로 표시 (물리적으로 삭제되지 않음)되며 복원 가능
+
+**통합 엔진:**
+- 클러스터 감지를 위한 구성 가능한 유사도 임계값
+- 구성 가능한 청크 크기의 배치 처리
+- 통합 작업의 전체 감사 추적
+
+---
+
+## 배포 하위 시스템
+
+휴먼 인 더 루프 승인 게이트와 서킷 브레이커 보호 기능이 포함된 옵트인 배포 시스템입니다.
+
+**ReadinessChecker:**
+- 배포 전 시스템 준비 상태 검증 (빌드 상태, 테스트 결과, 리소스 가용성)
+- 구성 가능한 준비 기준
+
+**DeployTrigger:**
+- 데몬의 트리거 시스템과 새로운 트리거 유형으로 통합
+- 배포 조건이 충족되면 실행 (예: 모든 테스트 통과, 승인 획득)
+- 승인 큐 포함: 배포는 실행 전에 명시적 인간 승인이 필요
+
+**DeploymentExecutor:**
+- 롤백 기능이 포함된 순차적 배포 단계 실행
+- 환경 변수 새니타이제이션으로 배포 로그에서 자격 증명 유출 방지
+- 서킷 브레이커: 연속 배포 실패 시 연쇄 실패를 방지하기 위한 자동 쿨다운 트리거
+
+**보안:** 배포는 기본적으로 비활성이며 구성을 통한 명시적 옵트인이 필요합니다. 모든 배포 작업은 로깅되고 감사 가능합니다.
 
 ---
 
@@ -269,6 +379,7 @@ npm run dev -- daemon --channel web
 - **파일 감시** -- 설정된 경로의 파일 시스템 변경 모니터링
 - **체크리스트** -- 체크리스트 항목이 기한에 도달하면 실행
 - **웹훅** -- HTTP POST 엔드포인트가 수신 요청 시 작업 트리거
+- **Deploy** -- 배포 조건이 충족되면 실행 (승인 게이트 필수)
 
 **복원력:**
 - **서킷 브레이커** -- 트리거별 지수 백오프 쿨다운, 재시작 시에도 유지
@@ -389,6 +500,10 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 | `DASHBOARD_PORT` | `3001` | 대시보드 서버 포트 |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket 실시간 대시보드 활성화 |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus 메트릭 엔드포인트 활성화 (포트 9090) |
+| `MULTI_AGENT_ENABLED` | `false` | 멀티 에이전트 오케스트레이션 활성화 |
+| `DELEGATION_ENABLED` | `false` | 에이전트 간 작업 위임 활성화 |
+| `DELEGATION_MAX_DEPTH` | `2` | 최대 위임 체인 깊이 |
+| `DEPLOYMENT_ENABLED` | `false` | 배포 하위 시스템 활성화 |
 | `READ_ONLY_MODE` | `false` | 모든 쓰기 작업 차단 |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` 또는 `debug` |
 
@@ -605,7 +720,7 @@ node dist/index.js daemon --channel telegram
 ## 테스트
 
 ```bash
-npm test                         # 전체 2775개 테스트 실행
+npm test                         # 전체 3070개 테스트 실행
 npm run test:watch               # 워치 모드
 npm test -- --coverage           # 커버리지 포함
 npm test -- src/agents/tools/file-read.test.ts  # 단일 파일
@@ -648,6 +763,9 @@ src/
       agentdb-memory.ts      # 활성 백엔드: SQLite + HNSW, 3계층 자동 티어링
       agentdb-adapter.ts     # AgentDBMemory용 IMemoryManager 어댑터
       migration.ts           # 레거시 FileMemoryManager -> AgentDB 마이그레이션
+      consolidation-engine.ts # HNSW 클러스터링을 활용한 유휴 메모리 통합
+      consolidation-types.ts  # 통합 타입 정의 및 인터페이스
+    decay/                    # 지수적 메모리 감쇠 시스템
   rag/
     rag-pipeline.ts     # 인덱스 + 검색 + 포맷 오케스트레이션
     chunker.ts          # C# 전용 구조적 청킹
@@ -674,6 +792,14 @@ src/
       composite-tool.ts    # 실행 가능한 복합 도구
       chain-validator.ts   # 합성 후 검증, 런타임 피드백
       chain-manager.ts     # 전체 라이프사이클 오케스트레이터
+  multi-agent/
+    agent-manager.ts    # 멀티 에이전트 라이프사이클 및 세션 격리
+    agent-budget-tracker.ts  # 에이전트별 예산 추적
+    agent-registry.ts   # 활성 에이전트의 중앙 레지스트리
+  delegation/
+    delegation-manager.ts    # 위임 수명 주기 관리
+    delegation-tool.ts       # 에이전트용 위임 도구
+    tier-router.ts           # 4단계 작업 라우팅
   goals/
     goal-decomposer.ts  # DAG 기반 목표 분해 (사전 + 반응형)
     goal-executor.ts    # 실패 예산이 포함된 웨이브 기반 병렬 실행
@@ -702,6 +828,10 @@ src/
       file-watch-trigger.ts  # 파일 시스템 변경 모니터링
       checklist-trigger.ts   # 기한 체크리스트 항목
       webhook-trigger.ts     # HTTP POST 웹훅 엔드포인트
+      deploy-trigger.ts      # 승인 게이트가 포함된 배포 조건 트리거
+    deployment/
+      deployment-executor.ts # 롤백이 포함된 배포 실행
+      readiness-checker.ts   # 배포 전 준비 상태 검증
     reporting/
       notification-router.ts # 긴급도 기반 알림 라우팅
       digest-reporter.ts     # 주기적 요약 다이제스트 생성

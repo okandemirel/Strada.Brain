@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>AI-Powered Development Agent for Unity / Strada.Core Projects</strong><br/>
-  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop.
+  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, and a deployment subsystem with approval gates.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
@@ -33,7 +33,7 @@
 
 Strada.Brain is an AI agent you talk to through a chat channel. You describe what you want -- "create a new ECS system for player movement" or "find all components that use health" -- and the agent reads your C# project, writes the code, runs `dotnet build`, fixes errors automatically, and sends you the result.
 
-It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using Bayesian confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains, and can run as a 24/7 daemon with proactive triggers.
+It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using Bayesian confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, and a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection.
 
 **This is not a library or an API.** It is a standalone application you run. It connects to your chat platform, reads your Unity project on disk, and operates autonomously within the boundaries you configure.
 
@@ -136,15 +136,35 @@ Once running, send a message through your configured channel:
                 |  Goal Decomposer + Goal Executor        |
                 |  DAG-based decomposition, wave-based    |
                 |  parallel execution, failure budgets    |
+                +---------+------------------+------------+
+                          |                  |
+          +---------------v------+  +--------v--------------------+
+          | Multi-Agent Manager  |  | Task Delegation             |
+          | Per-channel sessions |  | TierRouter (4-tier)         |
+          | AgentBudgetTracker   |  | DelegationTool + Manager    |
+          | AgentRegistry        |  | Max depth 2, budget-aware   |
+          +---------------+------+  +--------+--------------------+
+                          |                  |
+                +---------v------------------v------------+
+                |  Memory Decay & Consolidation           |
+                |  Exponential decay, idle consolidation   |
+                |  HNSW clustering, soft-delete + undo     |
                 +-----------------------------------------+
                                |
             +------------------v-------------------+
             |  Daemon (HeartbeatLoop)              |
             |  Cron, file-watch, checklist,        |
-            |  webhook triggers                    |
+            |  webhook, deploy triggers            |
             |  Circuit breakers, budget tracking,  |
             |  trigger deduplication                |
             |  Notification router + digest reports |
+            +------------------+-------------------+
+                               |
+            +------------------v-------------------+
+            |  Deployment Subsystem                |
+            |  ReadinessChecker, DeployTrigger      |
+            |  DeploymentExecutor                   |
+            |  Approval gate + circuit breaker      |
             +--------------------------------------+
 ```
 
@@ -237,7 +257,7 @@ Complex multi-step requests are automatically decomposed into a directed acyclic
 
 ## Tool Chain Synthesis
 
-The agent automatically detects and synthesizes multi-tool chain patterns into reusable composite tools.
+The agent automatically detects and synthesizes multi-tool chain patterns into reusable composite tools. V2 adds DAG-based parallel execution and saga rollback for complex chains.
 
 **Pipeline:**
 1. **ChainDetector** -- analyzes trajectory data to find recurring tool sequences (e.g., `file_read` -> `file_edit` -> `dotnet_build`)
@@ -245,9 +265,99 @@ The agent automatically detects and synthesizes multi-tool chain patterns into r
 3. **ChainValidator** -- post-synthesis validation with runtime feedback; tracks chain execution success via Bayesian confidence
 4. **ChainManager** -- lifecycle orchestrator: loads existing chains on startup, runs periodic detection, auto-invalidates chains when component tools are removed
 
+**V2 enhancements:**
+- **DAG execution** -- chains with independent steps run in parallel using dependency-aware scheduling
+- **Saga rollback** -- when a chain step fails, previously completed steps are undone in reverse order using registered compensating actions
+- **Chain versioning** -- chains track version history; old versions are archived, not deleted
+
 **Security:** Composite tools inherit the most restrictive security flags from their component tools.
 
 **Confidence cascade:** Chain instincts follow the same Bayesian lifecycle as regular instincts. Chains that drop below the deprecation threshold are automatically unregistered.
+
+---
+
+## Multi-Agent Orchestration
+
+Multiple agent instances can run concurrently with per-channel session isolation.
+
+**AgentManager:**
+- Creates and manages agent instances per channel/session
+- Session isolation ensures agents on different channels do not interfere with each other
+- Configurable via `MULTI_AGENT_ENABLED` (opt-in, disabled by default -- identical to single-agent behavior when off)
+
+**AgentBudgetTracker:**
+- Per-agent token and cost tracking with configurable budget limits
+- Shared daily/monthly budget caps across all agents
+- Budget exhaustion triggers graceful degradation (read-only mode) rather than hard failure
+
+**AgentRegistry:**
+- Central registry of all active agent instances
+- Supports health checks and graceful shutdown
+- Multi-agent is fully opt-in: when disabled, the system operates identically to v2.0
+
+---
+
+## Task Delegation
+
+Agents can delegate sub-tasks to other agents using a tiered routing system.
+
+**TierRouter (4-tier):**
+- **Tier 1** -- simple tasks handled by the current agent (no delegation)
+- **Tier 2** -- moderate complexity, delegated to a secondary agent
+- **Tier 3** -- high complexity, delegated with extended budget
+- **Tier 4** -- critical tasks requiring specialized agent capabilities
+
+**DelegationManager:**
+- Manages the delegation lifecycle: create, track, complete, cancel
+- Enforces maximum delegation depth (default: 2) to prevent infinite delegation loops
+- Budget-aware: delegated tasks inherit a portion of the parent's remaining budget
+
+**DelegationTool:**
+- Exposed as a tool the agent can invoke to delegate work
+- Includes result aggregation from delegated sub-tasks
+
+---
+
+## Memory Decay & Consolidation
+
+Memory entries naturally decay over time using an exponential decay model, while idle consolidation reduces redundancy.
+
+**Exponential decay:**
+- Each memory entry has a decay score that decreases over time
+- Access frequency and importance boost decay resistance
+- Instincts are exempt from decay (never expire)
+
+**Idle consolidation:**
+- During low-activity periods, the consolidation engine identifies semantically similar memories using HNSW clustering
+- Related memories are merged into consolidated summaries, reducing storage and improving retrieval quality
+- Soft-delete with undo: consolidated source memories are marked as consolidated (not physically deleted) and can be restored
+
+**Consolidation engine:**
+- Configurable similarity threshold for cluster detection
+- Batch processing with configurable chunk sizes
+- Full audit trail of consolidation operations
+
+---
+
+## Deployment Subsystem
+
+An opt-in deployment system with human-in-the-loop approval gates and circuit breaker protection.
+
+**ReadinessChecker:**
+- Validates system readiness before deployment (build status, test results, resource availability)
+- Configurable readiness criteria
+
+**DeployTrigger:**
+- Integrates with the daemon's trigger system as a new trigger type
+- Fires when deployment conditions are met (e.g., all tests pass, approval granted)
+- Includes an approval queue: deployments require explicit human approval before execution
+
+**DeploymentExecutor:**
+- Executes deployment steps in sequence with rollback capability
+- Environment variable sanitization prevents credential leakage in deployment logs
+- Circuit breaker: consecutive deployment failures trigger automatic cooldown to prevent cascading failures
+
+**Security:** Deployment is disabled by default and requires explicit opt-in via configuration. All deployment actions are logged and auditable.
 
 ---
 
@@ -269,6 +379,7 @@ npm run dev -- daemon --channel web
 - **File watch** -- monitors file system changes in configured paths
 - **Checklist** -- fires when checklist items become due
 - **Webhook** -- HTTP POST endpoint triggers tasks on incoming requests
+- **Deploy** -- fires when deployment conditions are met (requires approval gate)
 
 **Resilience:**
 - **Circuit breakers** -- per-trigger with exponential backoff cooldown, persisted across restarts
@@ -389,6 +500,10 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `DASHBOARD_PORT` | `3001` | Dashboard server port |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Enable WebSocket real-time dashboard |
 | `ENABLE_PROMETHEUS` | `false` | Enable Prometheus metrics endpoint (port 9090) |
+| `MULTI_AGENT_ENABLED` | `false` | Enable multi-agent orchestration |
+| `DELEGATION_ENABLED` | `false` | Enable task delegation between agents |
+| `DELEGATION_MAX_DEPTH` | `2` | Maximum delegation chain depth |
+| `DEPLOYMENT_ENABLED` | `false` | Enable deployment subsystem |
 | `READ_ONLY_MODE` | `false` | Block all write operations |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` |
 
@@ -605,7 +720,7 @@ node dist/index.js daemon --channel telegram
 ## Testing
 
 ```bash
-npm test                         # Run all 2775 tests
+npm test                         # Run all 3070 tests
 npm run test:watch               # Watch mode
 npm test -- --coverage           # With coverage
 npm test -- src/agents/tools/file-read.test.ts  # Single file
@@ -648,6 +763,9 @@ src/
       agentdb-memory.ts      # Active backend: SQLite + HNSW, 3-tier auto-tiering
       agentdb-adapter.ts     # IMemoryManager adapter for AgentDBMemory
       migration.ts           # Legacy FileMemoryManager -> AgentDB migration
+      consolidation-engine.ts # Idle memory consolidation with HNSW clustering
+      consolidation-types.ts  # Consolidation type definitions and interfaces
+    decay/                    # Exponential memory decay system
   rag/
     rag-pipeline.ts     # Index + search + format orchestration
     chunker.ts          # C#-specific structural chunking
@@ -674,6 +792,14 @@ src/
       composite-tool.ts    # Executable composite tool
       chain-validator.ts   # Post-synthesis validation, runtime feedback
       chain-manager.ts     # Full lifecycle orchestrator
+  multi-agent/
+    agent-manager.ts    # Multi-agent lifecycle and session isolation
+    agent-budget-tracker.ts  # Per-agent budget tracking
+    agent-registry.ts   # Central registry of active agents
+  delegation/
+    delegation-manager.ts    # Delegation lifecycle management
+    delegation-tool.ts       # Agent-facing delegation tool
+    tier-router.ts           # 4-tier task routing
   goals/
     goal-decomposer.ts  # DAG-based goal decomposition (proactive + reactive)
     goal-executor.ts    # Wave-based parallel execution with failure budgets
@@ -702,6 +828,10 @@ src/
       file-watch-trigger.ts  # File system change monitoring
       checklist-trigger.ts   # Due-date checklist items
       webhook-trigger.ts     # HTTP POST webhook endpoint
+      deploy-trigger.ts      # Deployment condition trigger with approval gate
+    deployment/
+      deployment-executor.ts # Deployment execution with rollback
+      readiness-checker.ts   # Pre-deployment readiness validation
     reporting/
       notification-router.ts # Urgency-based notification routing
       digest-reporter.ts     # Periodic summary digest generation

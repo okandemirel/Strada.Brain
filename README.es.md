@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Agente de Desarrollo con IA para Proyectos Unity / Strada.Core</strong><br/>
-  Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7.
+  Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7. Ahora con orquestacion multi-agente, delegacion de tareas, consolidacion de memoria y un subsistema de despliegue con puertas de aprobacion.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="Pruebas">
+  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="Pruebas">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Licencia">
 </p>
 
@@ -33,7 +33,7 @@
 
 Strada.Brain es un agente de IA con el que hablas a traves de un canal de chat. Describes lo que quieres -- "crea un nuevo sistema ECS para movimiento del jugador" o "encuentra todos los componentes que usan health" -- y el agente lee tu proyecto C#, escribe el codigo, ejecuta `dotnet build`, corrige errores automaticamente y te envia el resultado.
 
-Tiene memoria persistente respaldada por SQLite + vectores HNSW, aprende de errores pasados usando puntuacion de confianza bayesiana, descompone objetivos complejos en ejecucion paralela de DAGs, sintetiza automaticamente cadenas de herramientas multiples y puede ejecutarse como un daemon 24/7 con disparadores proactivos.
+Tiene memoria persistente respaldada por SQLite + vectores HNSW, aprende de errores pasados usando puntuacion de confianza bayesiana, descompone objetivos complejos en ejecucion paralela de DAGs, sintetiza automaticamente cadenas de herramientas multiples con saga rollback y puede ejecutarse como un daemon 24/7 con disparadores proactivos. Soporta orquestacion multi-agente con aislamiento de sesion por canal, delegacion jerarquica de tareas entre niveles de agentes, consolidacion automatica de memoria y un subsistema de despliegue con puertas de aprobacion humana y proteccion de disyuntor.
 
 **Esto no es una biblioteca ni una API.** Es una aplicacion independiente que ejecutas. Se conecta a tu plataforma de chat, lee tu proyecto Unity en disco y opera de forma autonoma dentro de los limites que configures.
 
@@ -134,19 +134,38 @@ Una vez en ejecucion, envia un mensaje a traves de tu canal configurado:
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  GoalDecomposer + GoalExecutor           |
-                |  Descomposicion basada en DAG, ejecucion |
-                |  paralela por olas, presupuestos de fallo|
+                |  Goal Decomposer + Goal Executor        |
+                |  DAG-based decomposition, wave-based    |
+                |  parallel execution, failure budgets    |
+                +---------+------------------+------------+
+                          |                  |
+          +---------------v------+  +--------v--------------------+
+          | Multi-Agent Manager  |  | Task Delegation             |
+          | Per-channel sessions |  | TierRouter (4-tier)         |
+          | AgentBudgetTracker   |  | DelegationTool + Manager    |
+          | AgentRegistry        |  | Max depth 2, budget-aware   |
+          +---------------+------+  +--------+--------------------+
+                          |                  |
+                +---------v------------------v------------+
+                |  Memory Decay & Consolidation           |
+                |  Exponential decay, idle consolidation   |
+                |  HNSW clustering, soft-delete + undo     |
                 +-----------------------------------------+
                                |
             +------------------v-------------------+
             |  Daemon (HeartbeatLoop)              |
-            |  Cron, vigilancia de archivos,       |
-            |  checklist, disparadores webhook     |
-            |  Circuit breakers, seguimiento de    |
-            |  presupuesto, dedup. de disparadores |
-            |  Enrutador de notificaciones +       |
-            |  reportes de resumen                 |
+            |  Cron, file-watch, checklist,        |
+            |  webhook, deploy triggers            |
+            |  Circuit breakers, budget tracking,  |
+            |  trigger deduplication                |
+            |  Notification router + digest reports |
+            +------------------+-------------------+
+                               |
+            +------------------v-------------------+
+            |  Deployment Subsystem                |
+            |  ReadinessChecker, DeployTrigger      |
+            |  DeploymentExecutor                   |
+            |  Approval gate + circuit breaker      |
             +--------------------------------------+
 ```
 
@@ -239,7 +258,7 @@ Las solicitudes complejas de multiples pasos se descomponen automaticamente en u
 
 ## Sintesis de Cadenas de Herramientas
 
-El agente detecta y sintetiza automaticamente patrones de cadenas de herramientas multiples en herramientas compuestas reutilizables.
+El agente detecta y sintetiza automaticamente patrones de cadenas de herramientas multiples en herramientas compuestas reutilizables. V2 agrega ejecucion paralela basada en DAG y saga rollback para cadenas complejas.
 
 **Pipeline:**
 1. **ChainDetector** -- analiza datos de trayectorias para encontrar secuencias recurrentes de herramientas (ej., `file_read` -> `file_edit` -> `dotnet_build`)
@@ -247,9 +266,99 @@ El agente detecta y sintetiza automaticamente patrones de cadenas de herramienta
 3. **ChainValidator** -- validacion post-sintesis con retroalimentacion en tiempo de ejecucion; rastrea el exito de ejecucion de cadenas via confianza bayesiana
 4. **ChainManager** -- orquestador de ciclo de vida: carga cadenas existentes al inicio, ejecuta deteccion periodica, invalida automaticamente cadenas cuando se eliminan herramientas componentes
 
+**Mejoras V2:**
+- **Ejecucion DAG** -- los pasos independientes se ejecutan en paralelo
+- **Saga rollback** -- al fallar un paso, los pasos anteriores se deshacen en orden inverso
+- **Versionado de cadenas** -- las versiones antiguas se archivan
+
 **Seguridad:** Las herramientas compuestas heredan los indicadores de seguridad mas restrictivos de sus herramientas componentes.
 
 **Cascada de confianza:** Los instintos de cadena siguen el mismo ciclo de vida bayesiano que los instintos regulares. Las cadenas que caen por debajo del umbral de obsolescencia se desregistran automaticamente.
+
+---
+
+## Orquestacion Multi-Agente
+
+Multiples instancias de agente pueden ejecutarse simultaneamente con aislamiento de sesion por canal.
+
+**AgentManager:**
+- Crea y gestiona instancias de agente por canal/sesion
+- El aislamiento de sesion asegura que los agentes en diferentes canales no interfieran entre si
+- Configurable via `MULTI_AGENT_ENABLED` (habilitacion opcional, deshabilitado por defecto -- identico al comportamiento de agente unico cuando esta desactivado)
+
+**AgentBudgetTracker:**
+- Seguimiento de tokens y costos por agente con limites de presupuesto configurables
+- Topes de presupuesto diario/mensual compartidos entre todos los agentes
+- El agotamiento del presupuesto activa degradacion controlada (modo solo lectura) en lugar de un fallo abrupto
+
+**AgentRegistry:**
+- Registro central de todas las instancias de agente activas
+- Soporta verificaciones de salud y apagado controlado
+- Multi-agente es completamente opcional: cuando esta deshabilitado, el sistema opera de forma identica a v2.0
+
+---
+
+## Delegacion de Tareas
+
+Los agentes pueden delegar sub-tareas a otros agentes usando un sistema de enrutamiento por niveles.
+
+**TierRouter (4 niveles):**
+- **Nivel 1** -- tareas simples manejadas por el agente actual (sin delegacion)
+- **Nivel 2** -- complejidad moderada, delegada a un agente secundario
+- **Nivel 3** -- alta complejidad, delegada con presupuesto extendido
+- **Nivel 4** -- tareas criticas que requieren capacidades de agente especializadas
+
+**DelegationManager:**
+- Gestiona el ciclo de vida de la delegacion: crear, rastrear, completar, cancelar
+- Impone profundidad maxima de delegacion (por defecto: 2) para prevenir bucles infinitos de delegacion
+- Consciente del presupuesto: las tareas delegadas heredan una porcion del presupuesto restante del padre
+
+**DelegationTool:**
+- Expuesta como una herramienta que el agente puede invocar para delegar trabajo
+- Incluye agregacion de resultados de sub-tareas delegadas
+
+---
+
+## Decaimiento y Consolidacion de Memoria
+
+Las entradas de memoria decaen naturalmente con el tiempo usando un modelo de decaimiento exponencial, mientras la consolidacion en inactividad reduce la redundancia.
+
+**Decaimiento exponencial:**
+- Cada entrada de memoria tiene una puntuacion de decaimiento que disminuye con el tiempo
+- La frecuencia de acceso y la importancia aumentan la resistencia al decaimiento
+- Los instintos estan exentos del decaimiento (nunca expiran)
+
+**Consolidacion en inactividad:**
+- Durante periodos de baja actividad, el motor de consolidacion identifica memorias semanticamente similares usando clustering HNSW
+- Las memorias relacionadas se fusionan en resumenes consolidados, reduciendo el almacenamiento y mejorando la calidad de recuperacion
+- Eliminacion suave con capacidad de deshacer: las memorias fuente consolidadas se marcan como consolidadas (no se eliminan fisicamente) y pueden restaurarse
+
+**Motor de consolidacion:**
+- Umbral de similitud configurable para deteccion de clusters
+- Procesamiento por lotes con tamanos de fragmento configurables
+- Registro completo de auditoria de operaciones de consolidacion
+
+---
+
+## Subsistema de Despliegue
+
+Un sistema de despliegue opcional con puertas de aprobacion humana y proteccion de disyuntor.
+
+**ReadinessChecker:**
+- Valida la disponibilidad del sistema antes del despliegue (estado de compilacion, resultados de pruebas, disponibilidad de recursos)
+- Criterios de disponibilidad configurables
+
+**DeployTrigger:**
+- Se integra con el sistema de disparadores del daemon como un nuevo tipo de disparador
+- Se activa cuando se cumplen las condiciones de despliegue (ej., todas las pruebas pasan, aprobacion concedida)
+- Incluye una cola de aprobacion: los despliegues requieren aprobacion humana explicita antes de la ejecucion
+
+**DeploymentExecutor:**
+- Ejecuta pasos de despliegue en secuencia con capacidad de rollback
+- La sanitizacion de variables de entorno previene la filtracion de credenciales en los registros de despliegue
+- Disyuntor: los fallos consecutivos de despliegue activan un enfriamiento automatico para prevenir fallos en cascada
+
+**Seguridad:** El despliegue esta deshabilitado por defecto y requiere habilitacion explicita via configuracion. Todas las acciones de despliegue se registran y son auditables.
 
 ---
 
@@ -271,6 +380,7 @@ npm run dev -- daemon --channel web
 - **Vigilancia de archivos** -- monitorea cambios en el sistema de archivos en rutas configuradas
 - **Checklist** -- se dispara cuando los items del checklist vencen
 - **Webhook** -- endpoint HTTP POST que activa tareas ante solicitudes entrantes
+- **Deploy** -- se activa cuando se cumplen las condiciones de despliegue (requiere puerta de aprobacion)
 
 **Resiliencia:**
 - **Circuit breakers** -- por disparador con enfriamiento por backoff exponencial, persistidos entre reinicios
@@ -391,6 +501,10 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | `DASHBOARD_PORT` | `3001` | Puerto del servidor del dashboard |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Habilitar dashboard en tiempo real via WebSocket |
 | `ENABLE_PROMETHEUS` | `false` | Habilitar endpoint de metricas Prometheus (puerto 9090) |
+| `MULTI_AGENT_ENABLED` | `false` | Habilitar orquestacion multi-agente |
+| `DELEGATION_ENABLED` | `false` | Habilitar delegacion de tareas entre agentes |
+| `DELEGATION_MAX_DEPTH` | `2` | Profundidad maxima de cadena de delegacion |
+| `DEPLOYMENT_ENABLED` | `false` | Habilitar subsistema de despliegue |
 | `READ_ONLY_MODE` | `false` | Bloquear todas las operaciones de escritura |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` o `debug` |
 
@@ -607,7 +721,7 @@ node dist/index.js daemon --channel telegram
 ## Pruebas
 
 ```bash
-npm test                         # Ejecutar las 2775 pruebas
+npm test                         # Ejecutar las 3070 pruebas
 npm run test:watch               # Modo observacion
 npm test -- --coverage           # Con cobertura
 npm test -- src/agents/tools/file-read.test.ts  # Archivo individual
@@ -650,6 +764,9 @@ src/
       agentdb-memory.ts      # Backend activo: SQLite + HNSW, auto-clasificacion en 3 niveles
       agentdb-adapter.ts     # Adaptador IMemoryManager para AgentDBMemory
       migration.ts           # Migracion de FileMemoryManager legado -> AgentDB
+      consolidation-engine.ts # Consolidacion de memoria en inactividad con clustering HNSW
+      consolidation-types.ts  # Definiciones de tipos e interfaces de consolidacion
+    decay/                    # Sistema de decaimiento exponencial de memoria
   rag/
     rag-pipeline.ts     # Orquestacion de indice + busqueda + formato
     chunker.ts          # Chunking estructural especifico para C#
@@ -676,6 +793,14 @@ src/
       composite-tool.ts    # Herramienta compuesta ejecutable
       chain-validator.ts   # Validacion post-sintesis, retroalimentacion en tiempo de ejecucion
       chain-manager.ts     # Orquestador de ciclo de vida completo
+  multi-agent/
+    agent-manager.ts    # Ciclo de vida multi-agente y aislamiento de sesion
+    agent-budget-tracker.ts  # Seguimiento de presupuesto por agente
+    agent-registry.ts   # Registro central de agentes activos
+  delegation/
+    delegation-manager.ts    # Gestion del ciclo de vida de delegacion
+    delegation-tool.ts       # Herramienta de delegacion para agentes
+    tier-router.ts           # Enrutamiento de tareas en 4 niveles
   goals/
     goal-decomposer.ts  # Descomposicion de objetivos basada en DAG (proactiva + reactiva)
     goal-executor.ts    # Ejecucion paralela por olas con presupuestos de fallo
@@ -704,6 +829,10 @@ src/
       file-watch-trigger.ts  # Monitoreo de cambios en el sistema de archivos
       checklist-trigger.ts   # Items de checklist con fecha de vencimiento
       webhook-trigger.ts     # Endpoint de webhook HTTP POST
+      deploy-trigger.ts      # Disparador de condiciones de despliegue con puerta de aprobacion
+    deployment/
+      deployment-executor.ts # Ejecucion de despliegue con rollback
+      readiness-checker.ts   # Validacion de disponibilidad pre-despliegue
     reporting/
       notification-router.ts # Enrutamiento de notificaciones basado en urgencia
       digest-reporter.ts     # Generacion de resumenes periodicos

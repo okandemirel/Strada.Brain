@@ -7,12 +7,14 @@
 <p align="center">
   <strong>KI-gesteuerter Entwicklungs-Agent fuer Unity / Strada.Core-Projekte</strong><br/>
   Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt, Fehler automatisch behebt und aus seinen Fehlern lernt &mdash; und mit einer 24/7-Daemon-Schleife autonom arbeitet.
+  <br/><br/>
+  Jetzt mit Multi-Agent-Orchestrierung, Aufgabendelegation, Ged&auml;chtniskonsolidierung und einem Deployment-Subsystem mit Genehmigungsgates.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lizenz">
 </p>
 
@@ -33,7 +35,7 @@
 
 Strada.Brain ist ein KI-Agent, mit dem Sie ueber einen Chat-Kanal kommunizieren. Sie beschreiben, was Sie moechten -- "erstelle ein neues ECS-System fuer Spielerbewegung" oder "finde alle Komponenten, die Health verwenden" -- und der Agent liest Ihr C#-Projekt, schreibt den Code, fuehrt `dotnet build` aus, behebt Fehler automatisch und sendet Ihnen das Ergebnis.
 
-Er verfuegt ueber persistenten Speicher auf Basis von SQLite + HNSW-Vektoren, lernt aus vergangenen Fehlern mittels Bayesscher Konfidenzbewertung, zerlegt komplexe Ziele in parallele DAG-Ausfuehrung, synthetisiert automatisch mehrstufige Tool-Ketten und kann als 24/7-Daemon mit proaktiven Ausloesern betrieben werden.
+Er verfuegt ueber persistenten Speicher auf Basis von SQLite + HNSW-Vektoren, lernt aus vergangenen Fehlern mittels Bayesscher Konfidenzbewertung, zerlegt komplexe Ziele in parallele DAG-Ausfuehrung, synthetisiert automatisch mehrstufige Tool-Ketten mit Saga-Rollback, orchestriert mehrere Agenten mit Aufgabendelegation, konsolidiert Gedaechtnis mittels HNSW-Clustering, verfuegt ueber ein Deployment-Subsystem mit Genehmigungsgates und kann als 24/7-Daemon mit proaktiven Ausloesern betrieben werden.
 
 **Dies ist keine Bibliothek und keine API.** Es ist eine eigenstaendige Anwendung, die Sie ausfuehren. Sie verbindet sich mit Ihrer Chat-Plattform, liest Ihr Unity-Projekt von der Festplatte und arbeitet autonom innerhalb der von Ihnen konfigurierten Grenzen.
 
@@ -133,19 +135,38 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 +--------------+ +------+-----+ +---+--------+ | Tool-Ketten      |
                         |           |           +--+---------------+
                 +-------v-----------v--------------v------+
-                |  GoalDecomposer + GoalExecutor           |
-                |  DAG-basierte Zerlegung, wellenbasierte  |
-                |  parallele Ausfuehrung, Fehlerbudgets    |
+                |  Goal Decomposer + Goal Executor        |
+                |  DAG-based decomposition, wave-based    |
+                |  parallel execution, failure budgets    |
+                +---------+------------------+------------+
+                          |                  |
+          +---------------v------+  +--------v--------------------+
+          | Multi-Agent Manager  |  | Task Delegation             |
+          | Per-channel sessions |  | TierRouter (4-tier)         |
+          | AgentBudgetTracker   |  | DelegationTool + Manager    |
+          | AgentRegistry        |  | Max depth 2, budget-aware   |
+          +---------------+------+  +--------+--------------------+
+                          |                  |
+                +---------v------------------v------------+
+                |  Memory Decay & Consolidation           |
+                |  Exponential decay, idle consolidation   |
+                |  HNSW clustering, soft-delete + undo     |
                 +-----------------------------------------+
                                |
             +------------------v-------------------+
             |  Daemon (HeartbeatLoop)              |
-            |  Cron, File-Watch, Checkliste,       |
-            |  Webhook-Ausloeser                   |
-            |  Circuit Breakers, Budget-Tracking,  |
-            |  Ausloeser-Deduplizierung            |
-            |  Benachrichtigungs-Router +           |
-            |  Zusammenfassungsberichte            |
+            |  Cron, file-watch, checklist,        |
+            |  webhook, deploy triggers            |
+            |  Circuit breakers, budget tracking,  |
+            |  trigger deduplication                |
+            |  Notification router + digest reports |
+            +------------------+-------------------+
+                               |
+            +------------------v-------------------+
+            |  Deployment Subsystem                |
+            |  ReadinessChecker, DeployTrigger      |
+            |  DeploymentExecutor                   |
+            |  Approval gate + circuit breaker      |
             +--------------------------------------+
 ```
 
@@ -248,7 +269,67 @@ Der Agent erkennt und synthetisiert automatisch mehrstufige Tool-Kettenmuster zu
 
 **Sicherheit:** Zusammengesetzte Tools erben die restriktivsten Sicherheitsflags ihrer Komponenten-Tools.
 
+**V2-Erweiterungen:**
+- **DAG-Ausfuehrung** -- Ketten mit unabhaengigen Schritten laufen parallel
+- **Saga-Rollback** -- bei Fehlern werden vorherige Schritte rueckgaengig gemacht
+- **Ketten-Versionierung** -- alte Versionen werden archiviert
+
 **Konfidenz-Kaskade:** Ketten-Instinkte folgen demselben Bayesschen Lebenszyklus wie regulaere Instinkte. Ketten, die unter die Veraltungsschwelle fallen, werden automatisch deregistriert.
+
+---
+
+## Multi-Agent-Orchestrierung
+
+Das Multi-Agent-System ermoeglicht die gleichzeitige Verwaltung mehrerer Agenten mit kanalbasierter Sitzungsisolation.
+
+**Komponenten:**
+- **AgentManager** -- verwaltet Agenten-Lebenszyklus mit kanalbasierter Sitzungsisolation
+- **AgentBudgetTracker** -- agentbasiertes Budget-Tracking mit konfigurierbaren Limits
+- **AgentRegistry** -- zentrale Registrierung aller aktiven Agenten
+
+**Aktivierung:** Opt-in ueber `MULTI_AGENT_ENABLED=true`. Bei Deaktivierung verhaelt sich das System identisch wie v2.0.
+
+---
+
+## Aufgabendelegation
+
+Das Delegationssystem ermoeglicht es Agenten, Aufgaben an andere Agenten zu delegieren.
+
+**Komponenten:**
+- **TierRouter** -- 4-stufiges Routing zur Auswahl des optimalen Agenten fuer eine Aufgabe
+- **DelegationManager** -- Lebenszyklus-Verwaltung delegierter Aufgaben mit maximaler Tiefe von 2
+- **DelegationTool** -- Tool-Schnittstelle fuer die Agenten-zu-Agenten-Delegation
+- Budgetbewusst -- delegierte Aufgaben werden gegen das Budget des delegierenden Agenten verrechnet
+
+**Aktivierung:** Opt-in ueber `DELEGATION_ENABLED=true`.
+
+---
+
+## Gedaechtnisverfall und Konsolidierung
+
+Das Gedaechtnissystem unterstuetzt nun automatischen Verfall und Konsolidierung von Eintraegen.
+
+**Verfall:**
+- Exponentieller Verfall basierend auf dem Alter und der Zugriffsfrequenz von Eintraegen
+- Instinkte sind vom Verfall ausgenommen -- sie verfallen nie
+
+**Konsolidierung:**
+- Leerlauf-Konsolidierung mit HNSW-Clustering fasst aehnliche Eintraege zusammen
+- Soft-Delete mit Rueckgaengig-Funktion -- konsolidierte Eintraege koennen wiederhergestellt werden
+
+---
+
+## Deployment-Subsystem
+
+Das Deployment-Subsystem ermoeglicht automatisierte Deployments mit Sicherheitsgates.
+
+**Komponenten:**
+- **ReadinessChecker** -- prueft Deployment-Voraussetzungen (Tests, Build, Konfiguration)
+- **DeployTrigger** -- Genehmigungswarteschlange fuer Deployment-Anfragen mit konfigurierbarer Ablaufzeit
+- **DeploymentExecutor** -- fuehrt Deployments aus mit integriertem Rollback bei Fehlern
+- **Circuit Breaker** -- unterbricht Deployments bei wiederholten Fehlern
+
+**Aktivierung:** Standardmaessig deaktiviert. Opt-in ueber `DEPLOYMENT_ENABLED=true`.
 
 ---
 
@@ -270,6 +351,7 @@ npm run dev -- daemon --channel web
 - **File Watch** -- ueberwacht Dateisystemaenderungen in konfigurierten Pfaden
 - **Checkliste** -- loest aus, wenn Checklisten-Eintraege faellig werden
 - **Webhook** -- HTTP-POST-Endpunkt loest Aufgaben bei eingehenden Anfragen aus
+- **Deploy** -- wird ausgeloest wenn Deployment-Bedingungen erfuellt sind (Genehmigungsgate erforderlich)
 
 **Widerstandsfaehigkeit:**
 - **Circuit Breakers** -- pro Ausloeser mit exponentiellem Backoff-Cooldown, ueber Neustarts hinweg persistiert
@@ -390,6 +472,10 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | `DASHBOARD_PORT` | `3001` | Dashboard-Server-Port |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket-Echtzeit-Dashboard aktivieren |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus-Metriken-Endpunkt aktivieren (Port 9090) |
+| `MULTI_AGENT_ENABLED` | `false` | Multi-Agent-Orchestrierung aktivieren |
+| `DELEGATION_ENABLED` | `false` | Aufgabendelegation zwischen Agenten aktivieren |
+| `DELEGATION_MAX_DEPTH` | `2` | Maximale Delegationskettiefe |
+| `DEPLOYMENT_ENABLED` | `false` | Deployment-Subsystem aktivieren |
 | `READ_ONLY_MODE` | `false` | Alle Schreiboperationen blockieren |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` oder `debug` |
 
@@ -606,7 +692,7 @@ node dist/index.js daemon --channel telegram
 ## Testen
 
 ```bash
-npm test                         # Alle 2775 Tests ausfuehren
+npm test                         # Alle 3070 Tests ausfuehren
 npm run test:watch               # Watch-Modus
 npm test -- --coverage           # Mit Coverage
 npm test -- src/agents/tools/file-read.test.ts  # Einzelne Datei
@@ -645,6 +731,9 @@ src/
     cli/                # Readline-REPL
   memory/
     file-memory-manager.ts   # Altes Backend: JSON + TF-IDF (Fallback)
+    consolidation-engine.ts  # Leerlauf-Konsolidierung mit HNSW-Clustering
+    consolidation-types.ts   # Typdefinitionen fuer Konsolidierung
+    decay/                   # Exponentieller Gedaechtnisverfall
     unified/
       agentdb-memory.ts      # Aktives Backend: SQLite + HNSW, 3-stufiges Auto-Tiering
       agentdb-adapter.ts     # IMemoryManager-Adapter fuer AgentDBMemory
@@ -675,6 +764,14 @@ src/
       composite-tool.ts    # Ausfuehrbares zusammengesetztes Tool
       chain-validator.ts   # Validierung nach Synthese, Laufzeit-Feedback
       chain-manager.ts     # Vollstaendiger Lebenszyklus-Orchestrator
+  multi-agent/
+    agent-manager.ts     # Multi-Agent-Verwaltung mit Sitzungsisolation
+    agent-budget-tracker.ts # Agentbasiertes Budget-Tracking
+    agent-registry.ts    # Zentrale Agentenregistrierung
+  delegation/
+    delegation-manager.ts  # Delegations-Lebenszyklus-Verwaltung
+    delegation-tool.ts     # Tool-Schnittstelle fuer Delegation
+    tier-router.ts         # 4-stufiges Aufgaben-Routing
   goals/
     goal-decomposer.ts  # DAG-basierte Zielzerlegung (proaktiv + reaktiv)
     goal-executor.ts    # Wellenbasierte parallele Ausfuehrung mit Fehlerbudgets
@@ -703,6 +800,10 @@ src/
       file-watch-trigger.ts  # Dateisystem-Aenderungsueberwachung
       checklist-trigger.ts   # Faellige Checklisten-Eintraege
       webhook-trigger.ts     # HTTP-POST-Webhook-Endpunkt
+      deploy-trigger.ts      # Deployment-Ausloeser mit Genehmigungsgate
+    deployment/
+      deployment-executor.ts # Deployment-Ausfuehrung mit Rollback
+      readiness-checker.ts   # Deployment-Voraussetzungspruefung
     reporting/
       notification-router.ts # Dringlichkeitsbasierte Benachrichtigungsweiterleitung
       digest-reporter.ts     # Periodische Zusammenfassungsgenerierung

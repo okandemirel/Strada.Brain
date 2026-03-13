@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Unity / Strada.Core Projeleri icin Yapay Zeka Destekli Gelistirme Ajani</strong><br/>
-  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir.
+  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu ve onay kapili dagitim alt sistemi ile.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-2775-brightgreen?style=flat-square" alt="Testler">
+  <img src="https://img.shields.io/badge/tests-3070-brightgreen?style=flat-square" alt="Testler">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lisans">
 </p>
 
@@ -33,7 +33,7 @@
 
 Strada.Brain, bir sohbet kanali uzerinden konustugunuz bir yapay zeka ajanidir. Ne istediginizi tanimlayarak -- "oyuncu hareketi icin yeni bir ECS sistemi olustur" veya "saglik kullanan tum bilesenleri bul" -- ajanin C# projenizi okumasini, kodu yazmasini, `dotnet build` calistirmasini, hatalari otomatik olarak duzeltmesini ve sonucu size gondermesini saglayabilirsiniz.
 
-Ajan, SQLite + HNSW vektorler ile desteklenen kalici hafizaya sahiptir; gecmis hatalardan Bayesian guven puanlamasi ile ogrenir; karmasik hedefleri paralel DAG yurutmesine ayristirir; cok aracli zincirleri otomatik olarak sentezler; ve proaktif tetikleyicilerle 7/24 daemon olarak calisabilir.
+Ajan, SQLite + HNSW vektorler ile desteklenen kalici hafizaya sahiptir; gecmis hatalardan Bayesian guven puanlamasi ile ogrenir; karmasik hedefleri paralel DAG yurutmesine ayristirir; cok aracli zincirleri saga geri alma destekli olarak otomatik sentezler; coklu ajan orkestrasyonu ve gorev delegasyonu ile karmasik isleri boler; bellek konsolidasyonu ile benzer bellekleri birlestirir; onay kapili dagitim alt sistemi ile otonom dagitim yapar; ve proaktif tetikleyicilerle 7/24 daemon olarak calisabilir.
 
 **Bu bir kutuphane veya API degildir.** Calistirdiginiz bagimsiz bir uygulamadir. Sohbet platformunuza baglanir, diskteki Unity projenizi okur ve yapilandirdiginiz sinirlar dahilinde otonom olarak calisir.
 
@@ -133,18 +133,38 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 +--------------+ +------+-----+ +---+--------+ +--+---------------+
                         |           |              |
                 +-------v-----------v--------------v------+
-                |  Hedef Ayristirici + Hedef Yurutucu     |
-                |  DAG tabanli ayristirma, dalga tabanli   |
-                |  paralel yurutme, basarisizlik butceleri |
+                |  Goal Decomposer + Goal Executor        |
+                |  DAG-based decomposition, wave-based    |
+                |  parallel execution, failure budgets    |
+                +---------+------------------+------------+
+                          |                  |
+          +---------------v------+  +--------v--------------------+
+          | Multi-Agent Manager  |  | Task Delegation             |
+          | Per-channel sessions |  | TierRouter (4-tier)         |
+          | AgentBudgetTracker   |  | DelegationTool + Manager    |
+          | AgentRegistry        |  | Max depth 2, budget-aware   |
+          +---------------+------+  +--------+--------------------+
+                          |                  |
+                +---------v------------------v------------+
+                |  Memory Decay & Consolidation           |
+                |  Exponential decay, idle consolidation   |
+                |  HNSW clustering, soft-delete + undo     |
                 +-----------------------------------------+
                                |
             +------------------v-------------------+
             |  Daemon (HeartbeatLoop)              |
-            |  Cron, dosya izleme, kontrol listesi,|
-            |  webhook tetikleyiciler              |
-            |  Devre kesiciler, butce takibi,      |
-            |  tetikleyici tekilestirme            |
-            |  Bildirim yonlendirici + ozet rapor  |
+            |  Cron, file-watch, checklist,        |
+            |  webhook, deploy triggers            |
+            |  Circuit breakers, budget tracking,  |
+            |  trigger deduplication                |
+            |  Notification router + digest reports |
+            +------------------+-------------------+
+                               |
+            +------------------v-------------------+
+            |  Deployment Subsystem                |
+            |  ReadinessChecker, DeployTrigger      |
+            |  DeploymentExecutor                   |
+            |  Approval gate + circuit breaker      |
             +--------------------------------------+
 ```
 
@@ -249,6 +269,55 @@ Ajan, cok aracli zincir kaliplarini otomatik olarak tespit eder ve yeniden kulla
 
 **Guven kademesi:** Zincir icguduleri, normal icgudularle ayni Bayesian yasam dongusunu izler. Kullanim disi birakma esiginin altina dusen zincirler otomatik olarak kayittan silinir.
 
+**V2 gelistirmeleri:**
+- **DAG yurutme** -- bagimsiz adimlar paralel calisir
+- **Saga geri alma** -- bir adim basarisiz oldugunda onceki adimlar geri alinir
+- **Zincir versiyonlama** -- eski versiyonlar arsivlenir
+
+---
+
+## Coklu Ajan Orkestrasyonu
+
+Coklu ajan orkestrasyonu, birden fazla ajanin es zamanli olarak farkli gorevler uzerinde calismasini saglar.
+
+- **AgentManager** -- kanal ve oturum bazinda ajan olusturma ve yonetim, oturum izolasyonu
+- **AgentBudgetTracker** -- ajan bazinda token ve maliyet takibi
+- **AgentRegistry** -- aktif ajanlarin merkezi kaydi
+- `MULTI_AGENT_ENABLED` ortam degiskeni ile etkinlestirilir (varsayilan: kapali)
+
+---
+
+## Gorev Delegasyonu
+
+Ajanlar, karmasik gorevleri diger ajanlara devredebilir.
+
+- **TierRouter (4 seviye)** -- basit -> orta -> yuksek -> kritik gorev siniflandirmasi
+- **DelegationManager** -- delegasyon yasam dongusu yonetimi, maksimum derinlik 2
+- **DelegationTool** -- ajanin delegasyon yapabilmesi icin yerlesik arac
+- **Butce-bilincli** -- delegasyon, ebeveyn ajanin butcesinden pay alir
+
+---
+
+## Bellek Bozunumu ve Konsolidasyon
+
+Hafiza sistemi, zaman icinde kullanilmayan bellekleri otomatik olarak yonetir.
+
+- **Ustel bozunum** -- zaman icinde azalan bozunum skoru
+- **Bosta konsolidasyon** -- HNSW kumeleme ile benzer bellekleri birlestirme
+- **Yumusak silme ve geri alma** -- silinen bellekler geri alinabilir
+
+---
+
+## Dagitim Alt Sistemi
+
+Otonom dagitim alt sistemi, onay kapisi ve guvenlik mekanizmalari ile dagitim surecini yonetir.
+
+- **ReadinessChecker** -- dagitim oncesi hazirlik kontrolu
+- **DeployTrigger** -- onay kapisi ile dagitim tetikleyici
+- **DeploymentExecutor** -- geri alma destekli dagitim yurutucusu
+- **Devre kesici** -- ardisik hatalar otomatik bekleme tetikler
+- Varsayilan olarak kapali, acik opt-in gerektirir
+
 ---
 
 ## Daemon Modu
@@ -269,6 +338,7 @@ npm run dev -- daemon --channel web
 - **Dosya izleme** -- yapilandirilmis yollardaki dosya sistemi degisikliklerini izler
 - **Kontrol listesi** -- kontrol listesi ogeleri vadesi geldiginde tetiklenir
 - **Webhook** -- gelen isteklerde gorev tetikleyen HTTP POST uc noktasi
+- **Deploy** -- dagitim kosullari karsilandiginda tetiklenir (onay kapisi gerektirir)
 
 **Dayaniklilik:**
 - **Devre kesiciler** -- ustel geri cekilme soguma sureli, yeniden baslatmalar arasinda kalici, tetikleyici bazinda
@@ -389,6 +459,10 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `DASHBOARD_PORT` | `3001` | Panel sunucu portu |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket gercek zamanli paneli etkinlestir |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus metrik uc noktasini etkinlestir (port 9090) |
+| `MULTI_AGENT_ENABLED` | `false` | Coklu ajan orkestrasyonunu etkinlestir |
+| `DELEGATION_ENABLED` | `false` | Ajanlar arasi gorev delegasyonunu etkinlestir |
+| `DELEGATION_MAX_DEPTH` | `2` | Maksimum delegasyon zincir derinligi |
+| `DEPLOYMENT_ENABLED` | `false` | Dagitim alt sistemini etkinlestir |
 | `READ_ONLY_MODE` | `false` | Tum yazma islemlerini engelle |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` veya `debug` |
 
@@ -605,7 +679,7 @@ node dist/index.js daemon --channel telegram
 ## Test
 
 ```bash
-npm test                         # Tum 2775 testi calistir
+npm test                         # Tum 3070 testi calistir
 npm run test:watch               # Izleme modu
 npm test -- --coverage           # Kapsam ile
 npm test -- src/agents/tools/file-read.test.ts  # Tekli dosya
@@ -648,6 +722,9 @@ src/
       agentdb-memory.ts      # Aktif arka uc: SQLite + HNSW, 3 katmanli otomatik kademelenme
       agentdb-adapter.ts     # AgentDBMemory icin IMemoryManager adaptoru
       migration.ts           # Eski FileMemoryManager -> AgentDB gocu
+      consolidation-engine.ts # HNSW kumeleme ile bellek konsolidasyonu
+      consolidation-types.ts  # Konsolidasyon tip tanimlari
+    decay/                   # Ustel bozunum ve bellek yasam dongusu
   rag/
     rag-pipeline.ts     # Indeksleme + arama + bicimlendirme orkestrasyonu
     chunker.ts          # C#'a ozel yapisal parcalama
@@ -674,6 +751,14 @@ src/
       composite-tool.ts    # Yurutulebilir bilesik arac
       chain-validator.ts   # Sentez sonrasi dogrulama, calisma zamani geri bildirimi
       chain-manager.ts     # Tam yasam dongusu orkestrasyonu
+  multi-agent/
+    agent-manager.ts       # Kanal/oturum bazinda ajan olusturma ve yonetim
+    agent-budget-tracker.ts # Ajan bazinda token ve maliyet takibi
+    agent-registry.ts      # Aktif ajanlarin merkezi kaydi
+  delegation/
+    delegation-manager.ts  # Delegasyon yasam dongusu yonetimi
+    delegation-tool.ts     # Ajan delegasyon araci
+    tier-router.ts         # 4 seviyeli gorev siniflandirma yonlendiricisi
   goals/
     goal-decomposer.ts  # DAG tabanli hedef ayristirma (proaktif + reaktif)
     goal-executor.ts    # Basarisizlik butceli dalga tabanli paralel yurutme
@@ -702,6 +787,10 @@ src/
       file-watch-trigger.ts  # Dosya sistemi degisiklik izleme
       checklist-trigger.ts   # Vadesi gelen kontrol listesi ogeleri
       webhook-trigger.ts     # HTTP POST webhook uc noktasi
+      deploy-trigger.ts      # Dagitim kosulu tetikleyicisi
+    deployment/
+      deployment-executor.ts # Geri alma destekli dagitim yurutucusu
+      readiness-checker.ts   # Dagitim oncesi hazirlik kontrolu
     reporting/
       notification-router.ts # Aciliyet tabanli bildirim yonlendirme
       digest-reporter.ts     # Periyodik ozet rapor olusturma
