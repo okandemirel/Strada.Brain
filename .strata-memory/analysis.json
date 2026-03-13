@@ -140,13 +140,6 @@
       },
       {
         "interfaceName": "IDisposable",
-        "implementationName": "Parser",
-        "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/MiniJSON.cs",
-        "namespace": "AmazonInternal.ThirdParty"
-      },
-      {
-        "interfaceName": "IDisposable",
         "implementationName": "IAdRequest",
         "interfaceFile": "",
         "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Common/IAdRequest.cs",
@@ -154,10 +147,10 @@
       },
       {
         "interfaceName": "IDisposable",
-        "implementationName": "ReviewPlayServicesTaskManager",
+        "implementationName": "Parser",
         "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/GooglePlayPlugins/com.google.play.review/Runtime/Scripts/Internal/ReviewPlayServiceTaskManager.cs",
-        "namespace": "Google.Play.Review.Internal"
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/MiniJSON.cs",
+        "namespace": "AmazonInternal.ThirdParty"
       },
       {
         "interfaceName": "IDisposable",
@@ -165,6 +158,13 @@
         "interfaceFile": "",
         "implementationFile": "Packages/g-template-base/Assets/ThirdParty/GooglePlayPlugins/com.google.play.core/Runtime/Scripts/Internal/PlayServicesTask.cs",
         "namespace": "Google.Play.Core.Internal"
+      },
+      {
+        "interfaceName": "IDisposable",
+        "implementationName": "ReviewPlayServicesTaskManager",
+        "interfaceFile": "",
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/GooglePlayPlugins/com.google.play.review/Runtime/Scripts/Internal/ReviewPlayServiceTaskManager.cs",
+        "namespace": "Google.Play.Review.Internal"
       },
       {
         "interfaceName": "IPreprocessBuildWithReport",
@@ -193,62 +193,6 @@
         "interfaceFile": "",
         "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/MaxSdk/Scripts/IntegrationManager/Editor/AppLovinPostProcessAndroid.cs",
         "namespace": "AppLovinMax.Scripts.IntegrationManager.Editor"
-      },
-      {
-        "interfaceName": "ISlotGroup",
-        "implementationName": "DTBSlotGroup",
-        "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBSlotGroup.cs",
-        "namespace": "AmazonAds.Android"
-      },
-      {
-        "interfaceName": "IFetchManager",
-        "implementationName": "DTBFetchManager",
-        "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBFetchManager.cs",
-        "namespace": "AmazonAds.Android"
-      },
-      {
-        "interfaceName": "IAdSize",
-        "implementationName": "DTBAdSize",
-        "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBAdSize.cs",
-        "namespace": "AmazonAds.Android"
-      },
-      {
-        "interfaceName": "IInterstitialAdSize",
-        "implementationName": "DTBInterstitialAdSize",
-        "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBAdSize.cs",
-        "namespace": "AmazonAds.Android"
-      },
-      {
-        "interfaceName": "IVideo",
-        "implementationName": "DTBVideo",
-        "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBAdSize.cs",
-        "namespace": "AmazonAds.Android"
-      },
-      {
-        "interfaceName": "IAdRequest",
-        "implementationName": "DTBAdRequest",
-        "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBAdRequest.cs",
-        "namespace": "AmazonAds.Android"
-      },
-      {
-        "interfaceName": "IAdView",
-        "implementationName": "AndroidAdView",
-        "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/AndroidAdView.cs",
-        "namespace": "AmazonAds.Android"
-      },
-      {
-        "interfaceName": "IAdInterstitial",
-        "implementationName": "AndroidAdInterstitial",
-        "interfaceFile": "",
-        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/AndroidAdInterstitial.cs",
-        "namespace": "AmazonAds.Android"
       },
       {
         "interfaceName": "IAdView",
@@ -305,6 +249,62 @@
         "interfaceFile": "",
         "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/IOS/DTBAdRequest.cs",
         "namespace": "AmazonAds.IOS"
+      },
+      {
+        "interfaceName": "ISlotGroup",
+        "implementationName": "DTBSlotGroup",
+        "interfaceFile": "",
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBSlotGroup.cs",
+        "namespace": "AmazonAds.Android"
+      },
+      {
+        "interfaceName": "IFetchManager",
+        "implementationName": "DTBFetchManager",
+        "interfaceFile": "",
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBFetchManager.cs",
+        "namespace": "AmazonAds.Android"
+      },
+      {
+        "interfaceName": "IAdSize",
+        "implementationName": "DTBAdSize",
+        "interfaceFile": "",
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBAdSize.cs",
+        "namespace": "AmazonAds.Android"
+      },
+      {
+        "interfaceName": "IInterstitialAdSize",
+        "implementationName": "DTBInterstitialAdSize",
+        "interfaceFile": "",
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBAdSize.cs",
+        "namespace": "AmazonAds.Android"
+      },
+      {
+        "interfaceName": "IVideo",
+        "implementationName": "DTBVideo",
+        "interfaceFile": "",
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBAdSize.cs",
+        "namespace": "AmazonAds.Android"
+      },
+      {
+        "interfaceName": "IAdRequest",
+        "implementationName": "DTBAdRequest",
+        "interfaceFile": "",
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/DTBAdRequest.cs",
+        "namespace": "AmazonAds.Android"
+      },
+      {
+        "interfaceName": "IAdView",
+        "implementationName": "AndroidAdView",
+        "interfaceFile": "",
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/AndroidAdView.cs",
+        "namespace": "AmazonAds.Android"
+      },
+      {
+        "interfaceName": "IAdInterstitial",
+        "implementationName": "AndroidAdInterstitial",
+        "interfaceFile": "",
+        "implementationFile": "Packages/g-template-base/Assets/ThirdParty/Ads/Amazon/Scripts/Internal/Android/AndroidAdInterstitial.cs",
+        "namespace": "AmazonAds.Android"
       }
     ],
     "mediators": [],
@@ -337,11 +337,6 @@
         "type": "inherits"
       },
       {
-        "from": "GameManager",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
         "from": "PoolManager",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -349,6 +344,11 @@
       {
         "from": "PoolData",
         "to": "ScriptableObject",
+        "type": "inherits"
+      },
+      {
+        "from": "GameManager",
+        "to": "MonoBehaviour",
         "type": "inherits"
       },
       {
@@ -392,11 +392,6 @@
         "type": "inherits"
       },
       {
-        "from": "DifficultyBadge",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
         "from": "MechanicTutorial",
         "to": "BaseTutorial",
         "type": "inherits"
@@ -404,6 +399,11 @@
       {
         "from": "FirstLevelTutorial",
         "to": "BaseTutorial",
+        "type": "inherits"
+      },
+      {
+        "from": "DifficultyBadge",
+        "to": "MonoBehaviour",
         "type": "inherits"
       },
       {
@@ -419,6 +419,21 @@
       {
         "from": "DogeBlockEscapeLevelCreator",
         "to": "BaseLevelCreator",
+        "type": "inherits"
+      },
+      {
+        "from": "TurnManager",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "LiveOpsIntegration",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "DogeBlockEscapeManager",
+        "to": "MonoBehaviour",
         "type": "inherits"
       },
       {
@@ -442,7 +457,17 @@
         "type": "inherits"
       },
       {
+        "from": "Doge",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
         "from": "InputService",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "DogeMovementManager",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
@@ -472,42 +497,17 @@
         "type": "inherits"
       },
       {
+        "from": "BaseEnemy",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
         "from": "EnemyPool",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
       {
         "from": "EnemyManager",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "BaseEnemy",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "TurnManager",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "LiveOpsIntegration",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "DogeBlockEscapeManager",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "Doge",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "DogeMovementManager",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
@@ -542,11 +542,6 @@
         "type": "implements"
       },
       {
-        "from": "BlockMovement",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
         "from": "BoardTile",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -562,34 +557,14 @@
         "type": "inherits"
       },
       {
+        "from": "BlockMovement",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
         "from": "UnicoConfig",
         "to": "IUnicoConfig",
         "type": "implements"
-      },
-      {
-        "from": "PrivacySettingsButton",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "CustomGdprTermsAndPrivacyTMP",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "CustomGdprTermsAndPrivacyTMP",
-        "to": "IPointerClickHandler",
-        "type": "implements"
-      },
-      {
-        "from": "CustomGdprSwitchToggle",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "CustomGdpr",
-        "to": "MonoBehaviour",
-        "type": "inherits"
       },
       {
         "from": "UnicoStudioProfilerRecorderSharePanelController",
@@ -627,32 +602,37 @@
         "type": "inherits"
       },
       {
+        "from": "PrivacySettingsButton",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "CustomGdprTermsAndPrivacyTMP",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "CustomGdprTermsAndPrivacyTMP",
+        "to": "IPointerClickHandler",
+        "type": "implements"
+      },
+      {
+        "from": "CustomGdprSwitchToggle",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "CustomGdpr",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
         "from": "CrossPromoScript",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
       {
         "from": "CrossPromoController",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "SampleUnicoApi",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "UnicoLoggerForApi",
-        "to": "UnicoApiClient.ILogger",
-        "type": "inherits"
-      },
-      {
-        "from": "ApiModuleInfo",
-        "to": "Unico.Core.Versioning.IVersionedModule",
-        "type": "inherits"
-      },
-      {
-        "from": "UnicoApiRunner",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
@@ -708,6 +688,21 @@
       },
       {
         "from": "AbstractAdManager",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "TutorialClick",
+        "to": "BaseTutorial",
+        "type": "inherits"
+      },
+      {
+        "from": "BaseTutorial",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "SampleUnicoApi",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
@@ -812,12 +807,17 @@
         "type": "inherits"
       },
       {
-        "from": "TutorialClick",
-        "to": "BaseTutorial",
+        "from": "UnicoLoggerForApi",
+        "to": "UnicoApiClient.ILogger",
         "type": "inherits"
       },
       {
-        "from": "BaseTutorial",
+        "from": "ApiModuleInfo",
+        "to": "Unico.Core.Versioning.IVersionedModule",
+        "type": "inherits"
+      },
+      {
+        "from": "UnicoApiRunner",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
@@ -917,6 +917,11 @@
         "type": "implements"
       },
       {
+        "from": "ProfileSprites",
+        "to": "ScriptableObject",
+        "type": "inherits"
+      },
+      {
         "from": "RemoteConfig",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -929,11 +934,6 @@
       {
         "from": "RCValueDrawer",
         "to": "UnityEditor.PropertyDrawer",
-        "type": "inherits"
-      },
-      {
-        "from": "ProfileSprites",
-        "to": "ScriptableObject",
         "type": "inherits"
       },
       {
@@ -992,6 +992,21 @@
         "type": "inherits"
       },
       {
+        "from": "ObjectLocator",
+        "to": "BaseLocator",
+        "type": "inherits"
+      },
+      {
+        "from": "NotificationManager",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "NotificationHelper",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
         "from": "TestPlayerPrefsUtils",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -1032,21 +1047,6 @@
         "type": "inherits"
       },
       {
-        "from": "NotificationManager",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "NotificationHelper",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "ObjectLocator",
-        "to": "BaseLocator",
-        "type": "inherits"
-      },
-      {
         "from": "SeasonPass",
         "to": "GiftFest",
         "type": "inherits"
@@ -1072,17 +1072,7 @@
         "type": "inherits"
       },
       {
-        "from": "SceneLevelCreator",
-        "to": "BaseLevelCreator",
-        "type": "inherits"
-      },
-      {
-        "from": "PrefabLevelCreator",
-        "to": "BaseLevelCreator",
-        "type": "inherits"
-      },
-      {
-        "from": "BaseLevelCreator",
+        "from": "InternetChecker",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
@@ -1112,7 +1102,17 @@
         "type": "inherits"
       },
       {
-        "from": "InternetChecker",
+        "from": "SceneLevelCreator",
+        "to": "BaseLevelCreator",
+        "type": "inherits"
+      },
+      {
+        "from": "PrefabLevelCreator",
+        "to": "BaseLevelCreator",
+        "type": "inherits"
+      },
+      {
+        "from": "BaseLevelCreator",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
@@ -1132,6 +1132,16 @@
         "type": "inherits"
       },
       {
+        "from": "EventBusTest",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "EventBusMonitor",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
         "from": "IAPRestorePurchaseButtonHandler",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -1147,14 +1157,9 @@
         "type": "inherits"
       },
       {
-        "from": "EventBusTest",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "EventBusMonitor",
-        "to": "MonoBehaviour",
-        "type": "inherits"
+        "from": "BaseAnalyticsBuilder",
+        "to": "IAnalyticBuilder",
+        "type": "implements"
       },
       {
         "from": "UIReferenceManager",
@@ -1162,9 +1167,14 @@
         "type": "inherits"
       },
       {
-        "from": "BaseAnalyticsBuilder",
-        "to": "IAnalyticBuilder",
-        "type": "implements"
+        "from": "AudioManager",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "AudioData",
+        "to": "ScriptableObject",
+        "type": "inherits"
       },
       {
         "from": "TMPSetTextBenchmark",
@@ -1199,16 +1209,6 @@
       {
         "from": "BaseLocalizeTextEditor",
         "to": "Editor",
-        "type": "inherits"
-      },
-      {
-        "from": "AudioManager",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "AudioData",
-        "to": "ScriptableObject",
         "type": "inherits"
       },
       {
@@ -1327,11 +1327,6 @@
         "type": "inherits"
       },
       {
-        "from": "PathNode",
-        "to": "IComparable",
-        "type": "implements"
-      },
-      {
         "from": "CD_MechanicUnlockConfig",
         "to": "ScriptableObject",
         "type": "inherits"
@@ -1342,14 +1337,9 @@
         "type": "inherits"
       },
       {
-        "from": "CD_InputConfig",
-        "to": "ScriptableObject",
-        "type": "inherits"
-      },
-      {
-        "from": "CD_EnemyConfig",
-        "to": "ScriptableObject",
-        "type": "inherits"
+        "from": "PathNode",
+        "to": "IComparable",
+        "type": "implements"
       },
       {
         "from": "CD_ColorPalette",
@@ -1358,6 +1348,16 @@
       },
       {
         "from": "CD_DogeConfig",
+        "to": "ScriptableObject",
+        "type": "inherits"
+      },
+      {
+        "from": "CD_InputConfig",
+        "to": "ScriptableObject",
+        "type": "inherits"
+      },
+      {
+        "from": "CD_EnemyConfig",
         "to": "ScriptableObject",
         "type": "inherits"
       },
@@ -1402,11 +1402,6 @@
         "type": "implements"
       },
       {
-        "from": "ProgressService",
-        "to": "IProgressService",
-        "type": "implements"
-      },
-      {
         "from": "SafeArea",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -1414,6 +1409,71 @@
       {
         "from": "WarningBubble",
         "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "LevelFailedTryAgainPanel",
+        "to": "ScaleUIStatePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "LevelFailedKeepPlayingPanel",
+        "to": "ScaleUIStatePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "KeepPlayingWithRewardedBar",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "KeepPlayingRewardButton",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "KeepPlayingCoinRewardButton",
+        "to": "BaseRewardButton",
+        "type": "inherits"
+      },
+      {
+        "from": "KeepPlayingCoinButton",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "MainMenuPanel",
+        "to": "BaseUIStatePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "MainMenuEnabler",
+        "to": "BaseUIStatePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "LoadingPanel",
+        "to": "BaseUIStatePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "LevelSuccessPanel",
+        "to": "BaseUIStatePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "LevelFailedPanel",
+        "to": "BaseUIStatePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "GameplayPanel",
+        "to": "BaseUIStatePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "GameplayEnabler",
+        "to": "BaseUIStatePanel",
         "type": "inherits"
       },
       {
@@ -1547,69 +1607,9 @@
         "type": "inherits"
       },
       {
-        "from": "MainMenuPanel",
-        "to": "BaseUIStatePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "MainMenuEnabler",
-        "to": "BaseUIStatePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "LoadingPanel",
-        "to": "BaseUIStatePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "LevelSuccessPanel",
-        "to": "BaseUIStatePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "LevelFailedPanel",
-        "to": "BaseUIStatePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "GameplayPanel",
-        "to": "BaseUIStatePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "GameplayEnabler",
-        "to": "BaseUIStatePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "LevelFailedTryAgainPanel",
-        "to": "ScaleUIStatePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "LevelFailedKeepPlayingPanel",
-        "to": "ScaleUIStatePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "KeepPlayingWithRewardedBar",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "KeepPlayingRewardButton",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "KeepPlayingCoinRewardButton",
-        "to": "BaseRewardButton",
-        "type": "inherits"
-      },
-      {
-        "from": "KeepPlayingCoinButton",
-        "to": "MonoBehaviour",
-        "type": "inherits"
+        "from": "ProgressService",
+        "to": "IProgressService",
+        "type": "implements"
       },
       {
         "from": "FirebaseEventBuilder",
@@ -1642,6 +1642,16 @@
         "type": "inherits"
       },
       {
+        "from": "TimeScaleToolbar",
+        "to": "Overlay",
+        "type": "inherits"
+      },
+      {
+        "from": "CustomToolbarButtons",
+        "to": "IPreprocessBuildWithReport",
+        "type": "implements"
+      },
+      {
         "from": "RotateObject",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -1659,31 +1669,6 @@
       {
         "from": "BaseMove",
         "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "TimeScaleToolbar",
-        "to": "Overlay",
-        "type": "inherits"
-      },
-      {
-        "from": "CustomToolbarButtons",
-        "to": "IPreprocessBuildWithReport",
-        "type": "implements"
-      },
-      {
-        "from": "MainMenuTournamentState",
-        "to": "State",
-        "type": "inherits"
-      },
-      {
-        "from": "MainMenuShopState",
-        "to": "State",
-        "type": "inherits"
-      },
-      {
-        "from": "MainMenuMapState",
-        "to": "State",
         "type": "inherits"
       },
       {
@@ -1778,6 +1763,21 @@
       },
       {
         "from": "LevelFailedKeepPlayingState",
+        "to": "State",
+        "type": "inherits"
+      },
+      {
+        "from": "MainMenuTournamentState",
+        "to": "State",
+        "type": "inherits"
+      },
+      {
+        "from": "MainMenuShopState",
+        "to": "State",
+        "type": "inherits"
+      },
+      {
+        "from": "MainMenuMapState",
         "to": "State",
         "type": "inherits"
       },
@@ -1892,11 +1892,6 @@
         "type": "inherits"
       },
       {
-        "from": "BaseScene",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
         "from": "JSONArray",
         "to": "JSONNode",
         "type": "inherits"
@@ -1947,6 +1942,11 @@
         "type": "inherits"
       },
       {
+        "from": "BaseScene",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
         "from": "WaitingPanel",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -1964,21 +1964,6 @@
       {
         "from": "VipOffersMainMenuButton",
         "to": "BaseMainMenuButton",
-        "type": "inherits"
-      },
-      {
-        "from": "TripleOfferTimerText",
-        "to": "BaseTimerText",
-        "type": "inherits"
-      },
-      {
-        "from": "TripleOfferPanelOpener",
-        "to": "BaseUIStatePanelOpener",
-        "type": "inherits"
-      },
-      {
-        "from": "TripleOfferPanel",
-        "to": "ScalePanel",
         "type": "inherits"
       },
       {
@@ -2047,6 +2032,21 @@
         "type": "inherits"
       },
       {
+        "from": "TripleOfferTimerText",
+        "to": "BaseTimerText",
+        "type": "inherits"
+      },
+      {
+        "from": "TripleOfferPanelOpener",
+        "to": "BaseUIStatePanelOpener",
+        "type": "inherits"
+      },
+      {
+        "from": "TripleOfferPanel",
+        "to": "ScalePanel",
+        "type": "inherits"
+      },
+      {
         "from": "StreakTimerText",
         "to": "BaseTimerText",
         "type": "inherits"
@@ -2097,46 +2097,6 @@
         "type": "inherits"
       },
       {
-        "from": "SoundToggleButton",
-        "to": "BaseToggleButton",
-        "type": "inherits"
-      },
-      {
-        "from": "SettingsPanelOpener",
-        "to": "BaseUIStatePanelOpener",
-        "type": "inherits"
-      },
-      {
-        "from": "SettingsPanel",
-        "to": "ScalePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "NotificationToggleButton",
-        "to": "BaseToggleButton",
-        "type": "inherits"
-      },
-      {
-        "from": "MusicToggleButton",
-        "to": "BaseToggleButton",
-        "type": "inherits"
-      },
-      {
-        "from": "HapticToggleButton",
-        "to": "BaseToggleButton",
-        "type": "inherits"
-      },
-      {
-        "from": "BaseToggleButton",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "AttToggleButton",
-        "to": "BaseToggleButton",
-        "type": "inherits"
-      },
-      {
         "from": "SpinWheels",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -2174,6 +2134,46 @@
       {
         "from": "SpinWheelMainMenuButton",
         "to": "BaseMainMenuButton",
+        "type": "inherits"
+      },
+      {
+        "from": "SoundToggleButton",
+        "to": "BaseToggleButton",
+        "type": "inherits"
+      },
+      {
+        "from": "SettingsPanelOpener",
+        "to": "BaseUIStatePanelOpener",
+        "type": "inherits"
+      },
+      {
+        "from": "SettingsPanel",
+        "to": "ScalePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "NotificationToggleButton",
+        "to": "BaseToggleButton",
+        "type": "inherits"
+      },
+      {
+        "from": "MusicToggleButton",
+        "to": "BaseToggleButton",
+        "type": "inherits"
+      },
+      {
+        "from": "HapticToggleButton",
+        "to": "BaseToggleButton",
+        "type": "inherits"
+      },
+      {
+        "from": "BaseToggleButton",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "AttToggleButton",
+        "to": "BaseToggleButton",
         "type": "inherits"
       },
       {
@@ -2277,16 +2277,6 @@
         "type": "inherits"
       },
       {
-        "from": "OtherShopPanelOpener",
-        "to": "BaseUIStatePanelOpener",
-        "type": "inherits"
-      },
-      {
-        "from": "OtherShopPanel",
-        "to": "BasicPanel",
-        "type": "inherits"
-      },
-      {
         "from": "PiggyBankTimerText",
         "to": "BaseTimerText",
         "type": "inherits"
@@ -2309,6 +2299,26 @@
       {
         "from": "PiggyBankBar",
         "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "OtherShopPanelOpener",
+        "to": "BaseUIStatePanelOpener",
+        "type": "inherits"
+      },
+      {
+        "from": "OtherShopPanel",
+        "to": "BasicPanel",
+        "type": "inherits"
+      },
+      {
+        "from": "NextFeaturePanel",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "NextFeatureData",
+        "to": "ScriptableObject",
         "type": "inherits"
       },
       {
@@ -2347,16 +2357,6 @@
         "type": "inherits"
       },
       {
-        "from": "NextFeaturePanel",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "NextFeatureData",
-        "to": "ScriptableObject",
-        "type": "inherits"
-      },
-      {
         "from": "FirstPurchaseOfferMainMenuButton",
         "to": "BaseMainMenuButton",
         "type": "inherits"
@@ -2369,6 +2369,56 @@
       {
         "from": "FailOffer",
         "to": "SlideOffer",
+        "type": "inherits"
+      },
+      {
+        "from": "EndlessSaleTimerText",
+        "to": "BaseTimerText",
+        "type": "inherits"
+      },
+      {
+        "from": "EndlessSalePanelPoint",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "EndlessSalePanelOpener",
+        "to": "BaseUIStatePanelOpener",
+        "type": "inherits"
+      },
+      {
+        "from": "EndlessSalePanel",
+        "to": "ScalePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "EndlessSaleMainMenuButton",
+        "to": "BaseMainMenuButton",
+        "type": "inherits"
+      },
+      {
+        "from": "DailyGiftTimerText",
+        "to": "BaseTimerText",
+        "type": "inherits"
+      },
+      {
+        "from": "DailyGiftPanelOpener",
+        "to": "BaseUIStatePanelOpener",
+        "type": "inherits"
+      },
+      {
+        "from": "DailyGiftPanel",
+        "to": "ScalePanel",
+        "type": "inherits"
+      },
+      {
+        "from": "DailyGiftItem",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "DailyGiftClaimButton",
+        "to": "MonoBehaviour",
         "type": "inherits"
       },
       {
@@ -2607,52 +2657,42 @@
         "type": "inherits"
       },
       {
-        "from": "EndlessSaleTimerText",
-        "to": "BaseTimerText",
-        "type": "inherits"
-      },
-      {
-        "from": "EndlessSalePanelPoint",
+        "from": "ClimbingTopUser",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
       {
-        "from": "EndlessSalePanelOpener",
+        "from": "ClimbingTopTimerText",
+        "to": "BaseTimerText",
+        "type": "inherits"
+      },
+      {
+        "from": "ClimbingTopPanelScroll",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "ClimbingTopPanelPoint",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
+        "from": "ClimbingTopPanelOpener",
         "to": "BaseUIStatePanelOpener",
         "type": "inherits"
       },
       {
-        "from": "EndlessSalePanel",
-        "to": "ScalePanel",
+        "from": "ClimbingTopPanel",
+        "to": "FadePanel",
         "type": "inherits"
       },
       {
-        "from": "EndlessSaleMainMenuButton",
+        "from": "ClimbingTopMainMenuButton",
         "to": "BaseMainMenuButton",
         "type": "inherits"
       },
       {
-        "from": "DailyGiftTimerText",
-        "to": "BaseTimerText",
-        "type": "inherits"
-      },
-      {
-        "from": "DailyGiftPanelOpener",
-        "to": "BaseUIStatePanelOpener",
-        "type": "inherits"
-      },
-      {
-        "from": "DailyGiftPanel",
-        "to": "ScalePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "DailyGiftItem",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "DailyGiftClaimButton",
+        "from": "ClimbingTopArrowParent",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
@@ -2723,46 +2763,6 @@
       },
       {
         "from": "Claim",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "ClimbingTopUser",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "ClimbingTopTimerText",
-        "to": "BaseTimerText",
-        "type": "inherits"
-      },
-      {
-        "from": "ClimbingTopPanelScroll",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "ClimbingTopPanelPoint",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "ClimbingTopPanelOpener",
-        "to": "BaseUIStatePanelOpener",
-        "type": "inherits"
-      },
-      {
-        "from": "ClimbingTopPanel",
-        "to": "FadePanel",
-        "type": "inherits"
-      },
-      {
-        "from": "ClimbingTopMainMenuButton",
-        "to": "BaseMainMenuButton",
-        "type": "inherits"
-      },
-      {
-        "from": "ClimbingTopArrowParent",
         "to": "MonoBehaviour",
         "type": "inherits"
       },
@@ -2842,6 +2842,16 @@
         "type": "inherits"
       },
       {
+        "from": "IAdRequest",
+        "to": "IDisposable",
+        "type": "implements"
+      },
+      {
+        "from": "Runner",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
         "from": "AdRequest",
         "to": "IAdRequest",
         "type": "injects"
@@ -2859,16 +2869,6 @@
       {
         "from": "APSBannerAdRequest",
         "to": "AdRequest",
-        "type": "inherits"
-      },
-      {
-        "from": "IAdRequest",
-        "to": "IDisposable",
-        "type": "implements"
-      },
-      {
-        "from": "Runner",
-        "to": "MonoBehaviour",
         "type": "inherits"
       },
       {
@@ -2927,26 +2927,6 @@
         "type": "inherits"
       },
       {
-        "from": "ReviewDemo",
-        "to": "MonoBehaviour",
-        "type": "inherits"
-      },
-      {
-        "from": "ReviewPlayServicesTaskManager",
-        "to": "IDisposable",
-        "type": "implements"
-      },
-      {
-        "from": "ReviewAsyncOperation",
-        "to": "PlayAsyncOperationImpl<TResult",
-        "type": "inherits"
-      },
-      {
-        "from": "ReviewAsyncOperation",
-        "to": "ReviewErrorCode>",
-        "type": "implements"
-      },
-      {
         "from": "TaskOnSuccessListener",
         "to": "AndroidJavaProxy",
         "type": "inherits"
@@ -2977,6 +2957,11 @@
         "type": "inherits"
       },
       {
+        "from": "ReviewDemo",
+        "to": "MonoBehaviour",
+        "type": "inherits"
+      },
+      {
         "from": "ScrollingFillAnimator",
         "to": "MonoBehaviour",
         "type": "inherits"
@@ -2999,6 +2984,21 @@
       {
         "from": "PlayAsyncOperationImpl",
         "to": "TError>",
+        "type": "implements"
+      },
+      {
+        "from": "ReviewPlayServicesTaskManager",
+        "to": "IDisposable",
+        "type": "implements"
+      },
+      {
+        "from": "ReviewAsyncOperation",
+        "to": "PlayAsyncOperationImpl<TResult",
+        "type": "inherits"
+      },
+      {
+        "from": "ReviewAsyncOperation",
+        "to": "ReviewErrorCode>",
         "type": "implements"
       },
       {
@@ -3072,6 +3072,26 @@
         "type": "inherits"
       },
       {
+        "from": "IOSPlatform",
+        "to": "PlatformApi",
+        "type": "inherits"
+      },
+      {
+        "from": "IOSAdView",
+        "to": "IAdView",
+        "type": "implements"
+      },
+      {
+        "from": "IOSAdResponse",
+        "to": "AdResponse",
+        "type": "inherits"
+      },
+      {
+        "from": "IOSAdInterstitial",
+        "to": "IAdInterstitial",
+        "type": "implements"
+      },
+      {
         "from": "DTBSlotGroup",
         "to": "ISlotGroup",
         "type": "implements"
@@ -3080,11 +3100,6 @@
         "from": "DTBFetchManager",
         "to": "IFetchManager",
         "type": "implements"
-      },
-      {
-        "from": "DTBCallback",
-        "to": "AndroidJavaProxy",
-        "type": "inherits"
       },
       {
         "from": "DTBAdSize",
@@ -3105,6 +3120,11 @@
         "from": "DTBAdRequest",
         "to": "IAdRequest",
         "type": "implements"
+      },
+      {
+        "from": "DTBCallback",
+        "to": "AndroidJavaProxy",
+        "type": "inherits"
       },
       {
         "from": "DTBAdInterstitialListener",
@@ -3135,29 +3155,9 @@
         "from": "AndroidAdInterstitial",
         "to": "IAdInterstitial",
         "type": "implements"
-      },
-      {
-        "from": "IOSPlatform",
-        "to": "PlatformApi",
-        "type": "inherits"
-      },
-      {
-        "from": "IOSAdView",
-        "to": "IAdView",
-        "type": "implements"
-      },
-      {
-        "from": "IOSAdResponse",
-        "to": "AdResponse",
-        "type": "inherits"
-      },
-      {
-        "from": "IOSAdInterstitial",
-        "to": "IAdInterstitial",
-        "type": "implements"
       }
     ],
     "csFileCount": 775,
-    "analyzedAt": "2026-03-04T20:00:48.848Z"
+    "analyzedAt": "2026-03-04T21:31:20.421Z"
   }
 }
