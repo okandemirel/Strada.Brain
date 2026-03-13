@@ -33,7 +33,7 @@
 
 Strada.Brain est un agent IA avec lequel vous communiquez via un canal de chat. Vous d&eacute;crivez ce que vous voulez -- "cr&eacute;e un nouveau syst&egrave;me ECS pour le mouvement du joueur" ou "trouve tous les composants qui utilisent la sant&eacute;" -- et l'agent lit votre projet C#, &eacute;crit le code, lance `dotnet build`, corrige les erreurs automatiquement et vous envoie le r&eacute;sultat.
 
-Il dispose d'une m&eacute;moire persistante adoss&eacute;e &agrave; SQLite + vecteurs HNSW, apprend des erreurs pass&eacute;es gr&acirc;ce &agrave; un scoring de confiance bay&eacute;sien, d&eacute;compose les objectifs complexes en ex&eacute;cution parall&egrave;le via un DAG, synth&eacute;tise automatiquement des cha&icirc;nes d'outils multi-&eacute;tapes avec saga rollback et peut fonctionner en tant que daemon 24/7 avec des d&eacute;clencheurs proactifs. Il supporte l'orchestration multi-agent avec isolation par canal et session, la d&eacute;l&eacute;gation hi&eacute;rarchique de t&acirc;ches entre niveaux d'agents, la consolidation automatique de m&eacute;moire et un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation humaine et protection par disjoncteur.
+Il dispose d'une m&eacute;moire persistante adoss&eacute;e &agrave; SQLite + vecteurs HNSW, apprend des erreurs pass&eacute;es gr&acirc;ce &agrave; un scoring de confiance hybride pond&eacute;r&eacute;, d&eacute;compose les objectifs complexes en ex&eacute;cution parall&egrave;le via un DAG, synth&eacute;tise automatiquement des cha&icirc;nes d'outils multi-&eacute;tapes avec saga rollback et peut fonctionner en tant que daemon 24/7 avec des d&eacute;clencheurs proactifs. Il supporte l'orchestration multi-agent avec isolation par canal et session, la d&eacute;l&eacute;gation hi&eacute;rarchique de t&acirc;ches entre niveaux d'agents, la consolidation automatique de m&eacute;moire et un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation humaine et protection par disjoncteur.
 
 **Ceci n'est pas une biblioth&egrave;que ni une API.** C'est une application autonome que vous ex&eacute;cutez. Elle se connecte &agrave; votre plateforme de chat, lit votre projet Unity sur le disque et fonctionne de mani&egrave;re autonome dans les limites que vous configurez.
 
@@ -126,7 +126,7 @@ Une fois lanc&eacute;, envoyez un message via votre canal configur&eacute; :
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
 | AI Providers | | 30+ Tools  | | Context    | | Learning System  |
 | Claude (prim)| | File I/O   | | AgentDB    | | TypedEventBus    |
-| OpenAI, Kimi | | Git ops    | | (SQLite +  | | Bayesian Beta    |
+| OpenAI, Kimi | | Git ops    | | (SQLite +  | | Hybrid weighted  |
 | DeepSeek,Qwen| | Shell exec | |  HNSW)     | | Instinct life-   |
 | MiniMax, Groq| | .NET build | | RAG vectors| |  cycle           |
 | Ollama +more | | Strada gen | | Identity   | | Tool chains      |
@@ -215,10 +215,10 @@ Le syst&egrave;me d'apprentissage observe le comportement de l'agent et apprend 
 - Pas de traitement par lots bas&eacute; sur des minuteurs -- les motifs sont d&eacute;tect&eacute;s et stock&eacute;s au fur et &agrave; mesure
 - La `LearningQueue` utilise un FIFO born&eacute; avec isolation des erreurs (les &eacute;checs d'apprentissage ne font jamais planter l'agent)
 
-**Scoring de confiance bay&eacute;sien :**
-- Les instincts utilisent l'**inf&eacute;rence post&eacute;rieure Beta** (`confidence = alpha / (alpha + beta)`) avec un a priori non informatif `Beta(1,1)`
-- Les scores de verdict (0.0-1.0) agissent comme des poids de preuve fractionnaires pour des mises &agrave; jour nuanc&eacute;es
-- Pas de pond&eacute;ration ni d'escompte temporel -- moyenne post&eacute;rieure bay&eacute;sienne pure
+**Scoring de confiance hybride pond&eacute;r&eacute; :**
+- Confiance = somme pond&eacute;r&eacute;e de 5 facteurs : tauxR&eacute;ussite (0.35), force du motif (0.25), r&eacute;cence (0.20), correspondance contexte (0.15), v&eacute;rification (0.05)
+- Les scores de verdict (0.0-1.0) mettent &agrave; jour les compteurs d'&eacute;vidence alpha/beta pour les intervalles de confiance
+- Les param&egrave;tres alpha/beta sont maintenus pour l'estimation d'incertitude mais ne sont pas utilis&eacute;s pour le calcul principal de confiance
 
 **Cycle de vie des instincts :**
 - **Propos&eacute;** (nouveau) -- confiance inf&eacute;rieure &agrave; 0.7
@@ -262,7 +262,7 @@ L'agent d&eacute;tecte et synth&eacute;tise automatiquement des motifs de cha&ic
 **Pipeline :**
 1. **ChainDetector** -- analyse les donn&eacute;es de trajectoire pour trouver des s&eacute;quences d'outils r&eacute;currentes (ex. : `file_read` -> `file_edit` -> `dotnet_build`)
 2. **ChainSynthesizer** -- utilise le LLM pour g&eacute;n&eacute;rer un `CompositeTool` avec un mapping entr&eacute;e/sortie et une description ad&eacute;quats
-3. **ChainValidator** -- validation post-synth&egrave;se avec retour d'information &agrave; l'ex&eacute;cution ; suit le succ&egrave;s d'ex&eacute;cution des cha&icirc;nes via la confiance bay&eacute;sienne
+3. **ChainValidator** -- validation post-synth&egrave;se avec retour d'information &agrave; l'ex&eacute;cution ; suit le succ&egrave;s d'ex&eacute;cution des cha&icirc;nes via le scoring de confiance pond&eacute;r&eacute;
 4. **ChainManager** -- orchestrateur du cycle de vie : charge les cha&icirc;nes existantes au d&eacute;marrage, lance la d&eacute;tection p&eacute;riodique, invalide automatiquement les cha&icirc;nes lorsque des outils composants sont supprim&eacute;s
 
 **Am&eacute;liorations V2 :**
@@ -272,7 +272,7 @@ L'agent d&eacute;tecte et synth&eacute;tise automatiquement des motifs de cha&ic
 
 **S&eacute;curit&eacute; :** Les outils composites h&eacute;ritent des indicateurs de s&eacute;curit&eacute; les plus restrictifs de leurs outils composants.
 
-**Cascade de confiance :** Les instincts de cha&icirc;nes suivent le m&ecirc;me cycle de vie bay&eacute;sien que les instincts classiques. Les cha&icirc;nes qui passent sous le seuil de d&eacute;pr&eacute;ciation sont automatiquement d&eacute;senregistr&eacute;es.
+**Cascade de confiance :** Les instincts de cha&icirc;nes suivent le m&ecirc;me cycle de vie de confiance que les instincts classiques. Les cha&icirc;nes qui passent sous le seuil de d&eacute;pr&eacute;ciation sont automatiquement d&eacute;senregistr&eacute;es.
 
 ---
 
@@ -788,7 +788,7 @@ src/
       learning-queue.ts     # Processeur asynchrone s&eacute;riel pour l'apprentissage &eacute;v&eacute;nementiel
       embedding-queue.ts    # G&eacute;n&eacute;ration d'embeddings asynchrone born&eacute;e
     scoring/
-      confidence-scorer.ts  # Confiance post&eacute;rieure bay&eacute;sienne Beta, Elo, intervalles de Wilson
+      confidence-scorer.ts  # Confiance hybride pond&eacute;r&eacute;e (5 facteurs), Elo, intervalles de Wilson
     matching/
       pattern-matcher.ts    # Correspondance de motifs par mots-cl&eacute;s + s&eacute;mantique
     hooks/

@@ -184,6 +184,9 @@ describe("StradaAnalyzer.formatAnalysis", () => {
         { eventType: "Damage", action: "publish", filePath: "A.cs", lineNumber: 10, className: "A" },
         { eventType: "Damage", action: "subscribe", filePath: "B.cs", lineNumber: 5, className: "B" },
       ],
+      asmdefs: [{ name: "Game.Combat", filePath: "Game.Combat.asmdef", rootNamespace: "Game.Combat", references: ["Game.Core"] }],
+      prefabs: [{ name: "Player", filePath: "Player.prefab", scriptGuids: ["abc123def456abc123def456abc123de"] }],
+      scenes: [{ name: "MainScene", filePath: "MainScene.unity", rootObjectCount: 42 }],
       csFileCount: 50,
       analyzedAt: new Date("2026-01-15T10:00:00Z"),
     };
@@ -196,6 +199,14 @@ describe("StradaAnalyzer.formatAnalysis", () => {
     expect(output).toContain("DI Services (1)");
     expect(output).toContain("Entity Mediators (1)");
     expect(output).toContain("Controllers (1)");
+    expect(output).toContain("Assembly Definitions (1)");
+    expect(output).toContain("Game.Combat");
+    expect(output).toContain("Namespace: Game.Combat");
+    expect(output).toContain("References: Game.Core");
+    expect(output).toContain("Prefabs (1)");
+    expect(output).toContain("Player (1 scripts)");
+    expect(output).toContain("Scenes (1)");
+    expect(output).toContain("MainScene (42 root objects)");
     expect(output).toContain("EventBus Usage");
     expect(output).toContain("C# Files: 50");
   });
@@ -203,7 +214,8 @@ describe("StradaAnalyzer.formatAnalysis", () => {
   it("handles empty analysis", () => {
     const analysis: StradaProjectAnalysis = {
       modules: [], systems: [], components: [], services: [],
-      mediators: [], controllers: [], events: [],
+      mediators: [], controllers: [], events: [], dependencies: [],
+      asmdefs: [], prefabs: [], scenes: [],
       csFileCount: 0, analyzedAt: new Date(),
     };
 

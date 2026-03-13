@@ -33,7 +33,7 @@
 
 Strada.Brain es un agente de IA con el que hablas a traves de un canal de chat. Describes lo que quieres -- "crea un nuevo sistema ECS para movimiento del jugador" o "encuentra todos los componentes que usan health" -- y el agente lee tu proyecto C#, escribe el codigo, ejecuta `dotnet build`, corrige errores automaticamente y te envia el resultado.
 
-Tiene memoria persistente respaldada por SQLite + vectores HNSW, aprende de errores pasados usando puntuacion de confianza bayesiana, descompone objetivos complejos en ejecucion paralela de DAGs, sintetiza automaticamente cadenas de herramientas multiples con saga rollback y puede ejecutarse como un daemon 24/7 con disparadores proactivos. Soporta orquestacion multi-agente con aislamiento de sesion por canal, delegacion jerarquica de tareas entre niveles de agentes, consolidacion automatica de memoria y un subsistema de despliegue con puertas de aprobacion humana y proteccion de disyuntor.
+Tiene memoria persistente respaldada por SQLite + vectores HNSW, aprende de errores pasados usando puntuacion de confianza hibrida ponderada, descompone objetivos complejos en ejecucion paralela de DAGs, sintetiza automaticamente cadenas de herramientas multiples con saga rollback y puede ejecutarse como un daemon 24/7 con disparadores proactivos. Soporta orquestacion multi-agente con aislamiento de sesion por canal, delegacion jerarquica de tareas entre niveles de agentes, consolidacion automatica de memoria y un subsistema de despliegue con puertas de aprobacion humana y proteccion de disyuntor.
 
 **Esto no es una biblioteca ni una API.** Es una aplicacion independiente que ejecutas. Se conecta a tu plataforma de chat, lee tu proyecto Unity en disco y opera de forma autonoma dentro de los limites que configures.
 
@@ -127,7 +127,7 @@ Una vez en ejecucion, envia un mensaje a traves de tu canal configurado:
 | Proveedores  | | 30+ Herram.| | Contexto   | | Sistema de       |
 | de IA        | | E/S Archiv.| | AgentDB    | |  Aprendizaje     |
 | Claude (pri.)| | Ops. Git   | | (SQLite +  | | TypedEventBus    |
-| OpenAI, Kimi | | Ejec. Shell| |  HNSW)     | | Beta Bayesiano   |
+| OpenAI, Kimi | | Ejec. Shell| |  HNSW)     | | Hybrid ponderado |
 | DeepSeek,Qwen| | .NET Build | | Vectores   | | Ciclo de vida    |
 | MiniMax, Groq| | Strada Gen | | RAG        | |  de instintos    |
 | Ollama + mas | |            | | Identidad  | | Cadenas herram.  |
@@ -216,10 +216,10 @@ El sistema de aprendizaje observa el comportamiento del agente y aprende de los 
 - Sin procesamiento por lotes basado en temporizadores -- los patrones se detectan y almacenan a medida que ocurren
 - El `LearningQueue` usa FIFO acotado con aislamiento de errores (los fallos de aprendizaje nunca provocan un fallo del agente)
 
-**Puntuacion de confianza bayesiana:**
-- Los instintos usan **inferencia posterior Beta** (`confianza = alfa / (alfa + beta)`) con un prior no informativo `Beta(1,1)`
-- Las puntuaciones de veredicto (0.0-1.0) actuan como pesos de evidencia fraccionarios para actualizaciones mas precisas
-- Sin mezcla ni descuento temporal -- media posterior bayesiana pura
+**Puntuacion de confianza hibrida ponderada:**
+- Confianza = suma ponderada de 5 factores: tasaExito (0.35), fuerza del patron (0.25), recencia (0.20), coincidencia de contexto (0.15), verificacion (0.05)
+- Las puntuaciones de veredicto (0.0-1.0) actualizan contadores de evidencia alfa/beta para intervalos de confianza
+- Los parametros alfa/beta se mantienen para estimacion de incertidumbre pero no se usan para el calculo principal de confianza
 
 **Ciclo de vida de instintos:**
 - **Propuesto** (nuevo) -- por debajo de 0.7 de confianza
@@ -263,7 +263,7 @@ El agente detecta y sintetiza automaticamente patrones de cadenas de herramienta
 **Pipeline:**
 1. **ChainDetector** -- analiza datos de trayectorias para encontrar secuencias recurrentes de herramientas (ej., `file_read` -> `file_edit` -> `dotnet_build`)
 2. **ChainSynthesizer** -- usa el LLM para generar un `CompositeTool` con mapeo adecuado de entradas/salidas y descripcion
-3. **ChainValidator** -- validacion post-sintesis con retroalimentacion en tiempo de ejecucion; rastrea el exito de ejecucion de cadenas via confianza bayesiana
+3. **ChainValidator** -- validacion post-sintesis con retroalimentacion en tiempo de ejecucion; rastrea el exito de ejecucion de cadenas via puntuacion de confianza ponderada
 4. **ChainManager** -- orquestador de ciclo de vida: carga cadenas existentes al inicio, ejecuta deteccion periodica, invalida automaticamente cadenas cuando se eliminan herramientas componentes
 
 **Mejoras V2:**
@@ -273,7 +273,7 @@ El agente detecta y sintetiza automaticamente patrones de cadenas de herramienta
 
 **Seguridad:** Las herramientas compuestas heredan los indicadores de seguridad mas restrictivos de sus herramientas componentes.
 
-**Cascada de confianza:** Los instintos de cadena siguen el mismo ciclo de vida bayesiano que los instintos regulares. Las cadenas que caen por debajo del umbral de obsolescencia se desregistran automaticamente.
+**Cascada de confianza:** Los instintos de cadena siguen el mismo ciclo de vida de confianza que los instintos regulares. Las cadenas que caen por debajo del umbral de obsolescencia se desregistran automaticamente.
 
 ---
 
@@ -789,7 +789,7 @@ src/
       learning-queue.ts     # Procesador asincrono serial para aprendizaje orientado a eventos
       embedding-queue.ts    # Generacion asincrona acotada de embeddings
     scoring/
-      confidence-scorer.ts  # Confianza posterior bayesiana Beta, Elo, intervalos de Wilson
+      confidence-scorer.ts  # Confianza hibrida ponderada (5 factores), Elo, intervalos de Wilson
     matching/
       pattern-matcher.ts    # Coincidencia de patrones por palabras clave + semantica
     hooks/

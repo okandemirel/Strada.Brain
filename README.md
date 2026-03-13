@@ -33,7 +33,7 @@
 
 Strada.Brain is an AI agent you talk to through a chat channel. You describe what you want -- "create a new ECS system for player movement" or "find all components that use health" -- and the agent reads your C# project, writes the code, runs `dotnet build`, fixes errors automatically, and sends you the result.
 
-It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using Bayesian confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, and a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection.
+It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using hybrid weighted confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, and a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection.
 
 **This is not a library or an API.** It is a standalone application you run. It connects to your chat platform, reads your Unity project on disk, and operates autonomously within the boundaries you configure.
 
@@ -126,7 +126,7 @@ Once running, send a message through your configured channel:
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
 | AI Providers | | 30+ Tools  | | Context    | | Learning System  |
 | Claude (prim)| | File I/O   | | AgentDB    | | TypedEventBus    |
-| OpenAI, Kimi | | Git ops    | | (SQLite +  | | Bayesian Beta    |
+| OpenAI, Kimi | | Git ops    | | (SQLite +  | | Hybrid weighted  |
 | DeepSeek,Qwen| | Shell exec | |  HNSW)     | | Instinct life-   |
 | MiniMax, Groq| | .NET build | | RAG vectors| |  cycle           |
 | Ollama +more | | Strada gen | | Identity   | | Tool chains      |
@@ -215,10 +215,10 @@ The learning system observes agent behavior and learns from errors through an ev
 - No timer-based batching -- patterns are detected and stored as they occur
 - The `LearningQueue` uses bounded FIFO with error isolation (learning failures never crash the agent)
 
-**Bayesian confidence scoring:**
-- Instincts use **Beta posterior inference** (`confidence = alpha / (alpha + beta)`) with a `Beta(1,1)` uninformative prior
-- Verdict scores (0.0-1.0) act as fractional evidence weights for nuanced updates
-- No blending or temporal discounting -- pure Bayesian posterior mean
+**Hybrid weighted confidence scoring:**
+- Confidence = weighted sum across 5 factors: successRate (0.35), pattern strength (0.25), recency (0.20), context match (0.15), verification (0.05)
+- Verdict scores (0.0-1.0) update alpha/beta evidence counters for confidence intervals
+- Alpha/beta parameters are maintained for uncertainty estimation but are not used for primary confidence computation
 
 **Instinct lifecycle:**
 - **Proposed** (new) -- below 0.7 confidence
@@ -262,7 +262,7 @@ The agent automatically detects and synthesizes multi-tool chain patterns into r
 **Pipeline:**
 1. **ChainDetector** -- analyzes trajectory data to find recurring tool sequences (e.g., `file_read` -> `file_edit` -> `dotnet_build`)
 2. **ChainSynthesizer** -- uses LLM to generate a `CompositeTool` with proper input/output mapping and description
-3. **ChainValidator** -- post-synthesis validation with runtime feedback; tracks chain execution success via Bayesian confidence
+3. **ChainValidator** -- post-synthesis validation with runtime feedback; tracks chain execution success via weighted confidence scoring
 4. **ChainManager** -- lifecycle orchestrator: loads existing chains on startup, runs periodic detection, auto-invalidates chains when component tools are removed
 
 **V2 enhancements:**
@@ -272,7 +272,7 @@ The agent automatically detects and synthesizes multi-tool chain patterns into r
 
 **Security:** Composite tools inherit the most restrictive security flags from their component tools.
 
-**Confidence cascade:** Chain instincts follow the same Bayesian lifecycle as regular instincts. Chains that drop below the deprecation threshold are automatically unregistered.
+**Confidence cascade:** Chain instincts follow the same confidence lifecycle as regular instincts. Chains that drop below the deprecation threshold are automatically unregistered.
 
 ---
 
@@ -788,7 +788,7 @@ src/
       learning-queue.ts     # Serial async processor for event-driven learning
       embedding-queue.ts    # Bounded async embedding generation
     scoring/
-      confidence-scorer.ts  # Bayesian Beta posterior confidence, Elo, Wilson intervals
+      confidence-scorer.ts  # Hybrid weighted confidence (5-factor), Elo, Wilson intervals
     matching/
       pattern-matcher.ts    # Keyword + semantic pattern matching
     hooks/

@@ -158,6 +158,36 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     logger.warn(warning);
   }
 
+  // Drift validation: compare Brain's API knowledge against Core source (fire-and-forget)
+  if (stradaDeps.coreInstalled && stradaDeps.corePath) {
+    const corePath = stradaDeps.corePath;
+    void (async () => {
+      try {
+        const { StradaCoreExtractor } = await import("../intelligence/strada-core-extractor.js");
+        const { validateDrift, formatDriftReport } = await import("../intelligence/strada-drift-validator.js");
+        const extractor = new StradaCoreExtractor(corePath);
+        const snapshot = await extractor.extract();
+        const driftReport = validateDrift(snapshot);
+        if (driftReport.errors.length > 0) {
+          logger.warn("Strada.Core API drift detected", {
+            errors: driftReport.errors.length,
+            warnings: driftReport.warnings.length,
+            driftScore: driftReport.driftScore,
+          });
+          logger.debug(formatDriftReport(driftReport));
+        } else {
+          logger.info("Strada.Core API drift check passed", {
+            driftScore: driftReport.driftScore,
+          });
+        }
+      } catch (driftError) {
+        logger.debug("Drift validation skipped", {
+          reason: driftError instanceof Error ? driftError.message : "unknown",
+        });
+      }
+    })();
+  }
+
   // Initialize security
   const auth = initializeAuth(config, channelType, logger);
 

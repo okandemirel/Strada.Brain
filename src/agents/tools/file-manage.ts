@@ -1,5 +1,7 @@
 import { unlink, rename, stat, readdir, rm } from "node:fs/promises";
 import { validatePath } from "../../security/path-guard.js";
+import { checkSafeToDelete } from "../../intelligence/unity-guid-resolver.js";
+import { metaPathFor, shouldGenerateMeta } from "./unity/meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 // ─── file_delete ──────────────────────────────────────────────────────────────
@@ -40,8 +42,32 @@ export class FileDeleteTool implements ITool {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
 
+    // GUID safety check: warn if file is referenced by other assets
+    try {
+      const safetyCheck = await checkSafeToDelete(context.projectPath, relPath);
+      if (!safetyCheck.safe && safetyCheck.warning) {
+        return {
+          content: safetyCheck.warning,
+          isError: true,
+          metadata: { guid: safetyCheck.guid, referenceCount: safetyCheck.references.length },
+        };
+      }
+    } catch {
+      // Non-fatal: proceed with delete if safety check fails
+    }
+
     try {
       await unlink(pathCheck.fullPath);
+
+      // Also delete the companion .meta file if it exists
+      if (shouldGenerateMeta(pathCheck.fullPath, context.projectPath)) {
+        try {
+          await unlink(metaPathFor(pathCheck.fullPath));
+        } catch {
+          // .meta may not exist — non-fatal
+        }
+      }
+
       return {
         content: `Deleted: ${relPath}`,
         metadata: { path: relPath },
@@ -108,6 +134,16 @@ export class FileRenameTool implements ITool {
 
     try {
       await rename(oldCheck.fullPath, newCheck.fullPath);
+
+      // Also rename the companion .meta file if it exists
+      if (shouldGenerateMeta(oldCheck.fullPath, context.projectPath)) {
+        try {
+          await rename(metaPathFor(oldCheck.fullPath), metaPathFor(newCheck.fullPath));
+        } catch {
+          // .meta may not exist — non-fatal
+        }
+      }
+
       return {
         content: `Renamed: ${oldPath} → ${newPath}`,
         metadata: { oldPath, newPath },

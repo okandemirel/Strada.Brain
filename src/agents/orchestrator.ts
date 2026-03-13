@@ -39,6 +39,7 @@ import type { IEmbeddingProvider } from "../rag/rag.interface.js";
 import { shouldForceReplan } from "./failure-classifier.js";
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
 import { WRITE_OPERATIONS } from "./autonomy/constants.js";
+import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
 import type { BackgroundTaskOptions } from "../tasks/types.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
@@ -108,6 +109,7 @@ export class Orchestrator {
   private pendingResumeTrees: GoalTree[];
   /** TaskManager reference for inline goal detection submission (lazy setter) */
   private taskManager: TaskManager | null = null;
+  private readonly dmPolicy: DMPolicy;
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -131,6 +133,7 @@ export class Orchestrator {
     crashRecoveryContext?: CrashRecoveryContext;
     reRetrievalConfig?: ReRetrievalConfig;
     embeddingProvider?: IEmbeddingProvider;
+    dmPolicyConfig?: Partial<DMPolicyConfig>;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -149,6 +152,7 @@ export class Orchestrator {
     this.pendingResumeTrees = opts.interruptedGoalTrees ?? [];
     this.reRetrievalConfig = opts.reRetrievalConfig;
     this.embeddingProvider = opts.embeddingProvider;
+    this.dmPolicy = new DMPolicy(opts.channel, opts.dmPolicyConfig);
 
     // Build tool registry
     this.tools = new Map();
@@ -371,16 +375,10 @@ export class Orchestrator {
           stopReason: response.stopReason,
           toolCallCount: response.toolCalls.length,
         });
-        this.metrics?.recordTokenUsage(
-          response.usage.inputTokens,
-          response.usage.outputTokens,
-          provider.name,
-        );
-        this.rateLimiter?.recordTokenUsage(
-          response.usage.inputTokens,
-          response.usage.outputTokens,
-          provider.name,
-        );
+        const bgInputTokens = response.usage?.inputTokens ?? 0;
+        const bgOutputTokens = response.usage?.outputTokens ?? 0;
+        this.metrics?.recordTokenUsage(bgInputTokens, bgOutputTokens, provider.name);
+        this.rateLimiter?.recordTokenUsage(bgInputTokens, bgOutputTokens, provider.name);
 
         // Final response — return text
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
@@ -850,25 +848,19 @@ export class Orchestrator {
         response = await provider.chat(activePrompt, session.messages, this.toolDefinitions);
       }
 
+      const inputTokens = response.usage?.inputTokens ?? 0;
+      const outputTokens = response.usage?.outputTokens ?? 0;
       logger.debug("LLM response", {
         chatId,
         iteration,
         stopReason: response.stopReason,
         toolCallCount: response.toolCalls.length,
-        inputTokens: response.usage.inputTokens,
-        outputTokens: response.usage.outputTokens,
+        inputTokens,
+        outputTokens,
         streamed: canStream,
       });
-      this.metrics?.recordTokenUsage(
-        response.usage.inputTokens,
-        response.usage.outputTokens,
-        provider.name,
-      );
-      this.rateLimiter?.recordTokenUsage(
-        response.usage.inputTokens,
-        response.usage.outputTokens,
-        provider.name,
-      );
+      this.metrics?.recordTokenUsage(inputTokens, outputTokens, provider.name);
+      this.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, provider.name);
 
       // ─── PAOR: Handle REFLECTING phase response ─────────────────────
       if (agentState.phase === AgentPhase.REFLECTING) {
@@ -1294,12 +1286,56 @@ export class Orchestrator {
         channel as { startStreamingMessage?: (chatId: string) => Promise<string | undefined> }
       ).startStreamingMessage?.(chatId)) ?? undefined;
 
-    const response = await (provider as IStreamingProvider).chatStream(
-      systemPrompt,
-      session.messages,
-      this.toolDefinitions,
-      onChunk,
-    );
+    let response: ProviderResponse;
+    const streamTimeout = 120_000; // 120s timeout
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), streamTimeout);
+    try {
+
+      const streamPromise = (provider as IStreamingProvider).chatStream(
+        systemPrompt,
+        session.messages,
+        this.toolDefinitions,
+        onChunk,
+      );
+
+      // Race against abort signal
+      response = await Promise.race([
+        streamPromise,
+        new Promise<never>((_, reject) => {
+          controller.signal.addEventListener("abort", () =>
+            reject(new Error("Streaming response timed out")),
+          { once: true });
+        }),
+      ]);
+
+      clearTimeout(timer);
+    } catch (streamError) {
+      clearTimeout(timer);
+      const errMsg = streamError instanceof Error ? streamError.message : "Unknown streaming error";
+      getLogger().error("Streaming error", { chatId, error: errMsg });
+      accumulated = `[Streaming error: ${errMsg}]`;
+
+      // Finalize with error message and return a synthetic response
+      if (streamId) {
+        await (
+          channel as {
+            finalizeStreamingMessage?: (
+              chatId: string,
+              streamId: string,
+              text: string,
+            ) => Promise<void>;
+          }
+        ).finalizeStreamingMessage?.(chatId, streamId, accumulated);
+      }
+
+      return {
+        text: accumulated,
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      };
+    }
 
     // Finalize the streamed message
     if (streamId && accumulated) {
@@ -1348,16 +1384,32 @@ export class Orchestrator {
         input: tc.input,
       });
 
-      // Confirmation flow for write operations
+      // Confirmation flow via DMPolicy for write operations
       if (this.requireConfirmation && this.isWriteOperation(tc.name)) {
-        const confirmed = await this.requestWriteConfirmation(chatId, tc.name, tc.input);
-        if (!confirmed) {
-          results.push({
-            toolCallId: tc.id,
-            content: "Operation cancelled by user.",
-            isError: false,
-          });
-          continue;
+        const destructive = isDestructiveOperation(tc.name, tc.input);
+        // Note: userId not available in executeToolCalls context; chatId used as userId fallback
+        const prefs = this.dmPolicy.getSessionPrefs(chatId, chatId);
+        const stubDiff = {
+          path: String(tc.input["path"] ?? ""),
+          content: "",
+          stats: { additions: 0, deletions: 0, modifications: 0, totalChanges: 1, hunks: 1 },
+          oldPath: "",
+          newPath: String(tc.input["path"] ?? ""),
+          diff: "",
+          isNew: false,
+          isDeleted: false,
+          isRename: false,
+        };
+        if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
+          const confirmed = await this.requestWriteConfirmation(chatId, tc.name, tc.input);
+          if (!confirmed) {
+            results.push({
+              toolCallId: tc.id,
+              content: "Operation cancelled by user.",
+              isError: false,
+            });
+            continue;
+          }
         }
       }
 

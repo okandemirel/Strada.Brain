@@ -266,12 +266,12 @@ export class ChainManager {
 
     this.eventBus.emit("chain:invalidated", {
       chainName,
-      reason: "Bayesian confidence below deprecation threshold",
+      reason: "Confidence below deprecation threshold",
       timestamp: Date.now(),
     });
 
     getLogger().info(
-      `Chain deprecated '${chainName}': Bayesian confidence below threshold`,
+      `Chain deprecated '${chainName}': confidence below threshold`,
     );
   }
 

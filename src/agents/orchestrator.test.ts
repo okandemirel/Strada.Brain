@@ -437,6 +437,7 @@ describe("Orchestrator", () => {
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: true,
+        dmPolicyConfig: { defaultLevel: "always" as any },
       });
 
       const toolResponse: ProviderResponse = {
@@ -1538,6 +1539,208 @@ describe("Orchestrator", () => {
       const lastPrompt = capturedPrompts[capturedPrompts.length - 1] ?? "";
       const memoryOccurrences = (lastPrompt.match(/same content/g) || []).length;
       expect(memoryOccurrences).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe("PAOR Loop End-to-End", () => {
+    it("full PAOR cycle: plan -> tool call -> observe -> reflect -> done", async () => {
+      // Phase 1: PLANNING - provider returns text with a plan + tool call (transitions to EXECUTING)
+      const planResponse: ProviderResponse = {
+        text: "Plan:\n1. Read the file\n2. Analyze content\n\n[GOAL_PLAN] Read and analyze",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "main.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 50, outputTokens: 40 },
+      };
+
+      // Phase 2: EXECUTING - provider returns another tool call
+      const execResponse: ProviderResponse = {
+        text: "Reading next file...",
+        toolCalls: [{ id: "tc2", name: "file_read", input: { path: "helper.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 80, outputTokens: 50 },
+      };
+
+      // Phase 3: After 3 tool calls total (REFLECT_INTERVAL=3), a third tool call triggers REFLECTING
+      const execResponse2: ProviderResponse = {
+        text: "One more read...",
+        toolCalls: [{ id: "tc3", name: "file_read", input: { path: "utils.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 100, outputTokens: 60 },
+      };
+
+      // Phase 4: REFLECTING - provider decides DONE
+      const reflectDoneResponse: ProviderResponse = {
+        text: "Analysis complete. All files reviewed successfully.\n\n**DONE**",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 120, outputTokens: 30 },
+      };
+
+      mockProvider.chat
+        .mockResolvedValueOnce(planResponse)
+        .mockResolvedValueOnce(execResponse)
+        .mockResolvedValueOnce(execResponse2)
+        .mockResolvedValueOnce(reflectDoneResponse);
+
+      const promise = orch.handleMessage({
+        channelType: "cli",
+        chatId: "paor-e2e-1",
+        userId: "user1",
+        text: "Analyze the project files",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // All 4 provider calls should have been made (plan + 2 exec + reflect)
+      expect(mockProvider.chat).toHaveBeenCalledTimes(4);
+      // Tool was executed 3 times
+      expect(readTool.execute).toHaveBeenCalledTimes(3);
+      // Final DONE response was sent to channel
+      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+        "paor-e2e-1",
+        expect.stringContaining("DONE"),
+      );
+    });
+
+    it("tool failure mid-loop recovery: error -> retry -> success -> done", async () => {
+      // Step 1: Provider requests a tool call
+      const firstToolCall: ProviderResponse = {
+        text: "Plan: Build the project",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "broken.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 30, outputTokens: 20 },
+      };
+
+      // Step 2: After error, reflection phase triggers. Provider issues recovery tool call.
+      const recoveryToolCall: ProviderResponse = {
+        text: "CONTINUE - let me try reading a different file",
+        toolCalls: [{ id: "tc2", name: "file_read", input: { path: "fixed.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 60, outputTokens: 30 },
+      };
+
+      // Step 3: Provider signals completion
+      const doneResponse: ProviderResponse = {
+        text: "Recovery successful. Task complete.\nDONE",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 80, outputTokens: 20 },
+      };
+
+      // First tool call fails, second succeeds
+      readTool.execute
+        .mockResolvedValueOnce({ content: "Error: file not found", isError: true })
+        .mockResolvedValueOnce({ content: "file content here" });
+
+      mockProvider.chat
+        .mockResolvedValueOnce(firstToolCall)
+        .mockResolvedValueOnce(recoveryToolCall)
+        .mockResolvedValueOnce(doneResponse);
+
+      const promise = orch.handleMessage({
+        channelType: "cli",
+        chatId: "paor-e2e-recovery",
+        userId: "user1",
+        text: "Read the project file",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // Provider was called at least 3 times (plan+error reflection, recovery, done)
+      expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(3);
+      // Tool was called twice (first failed, second succeeded)
+      expect(readTool.execute).toHaveBeenCalledTimes(2);
+      // Final response was sent
+      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+        "paor-e2e-recovery",
+        expect.stringContaining("Recovery successful"),
+      );
+    });
+
+    it("MAX_TOOL_ITERATIONS enforcement: stops after 50 iterations", async () => {
+      // Provider always returns tool_use - never ends
+      const infiniteToolResponse: ProviderResponse = {
+        text: "Continuing...",
+        toolCalls: [{ id: "tc-loop", name: "file_read", input: { path: "loop.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+
+      mockProvider.chat.mockResolvedValue(infiniteToolResponse);
+
+      const promise = orch.handleMessage({
+        channelType: "cli",
+        chatId: "paor-e2e-maxiter",
+        userId: "user1",
+        text: "Do an infinite task",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // Provider should have been called at most ~52 times (50 iterations + overhead for PAOR phases)
+      expect(mockProvider.chat.mock.calls.length).toBeLessThanOrEqual(52);
+      // Should have sent the max iterations message
+      expect(mockChannel.sendText).toHaveBeenCalledWith(
+        "paor-e2e-maxiter",
+        expect.stringContaining("maximum number of steps"),
+      );
+    });
+
+    it("streaming error handling: chatStream throws gracefully handled", async () => {
+      const streamingProvider = {
+        name: "mock-stream",
+        chat: vi.fn().mockResolvedValue({
+          text: "Fallback",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 10, outputTokens: 10 },
+        }),
+        chatStream: vi.fn().mockRejectedValue(new Error("Stream connection failed")),
+      };
+
+      const streamingChannel = {
+        ...createMockChannel(),
+        startStreamingMessage: vi.fn().mockResolvedValue("stream-id-1"),
+        updateStreamingMessage: vi.fn().mockResolvedValue(undefined),
+        finalizeStreamingMessage: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const streamOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => streamingProvider,
+          getActiveInfo: () => ({ providerName: "mock-stream", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: streamingChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        streamingEnabled: true,
+      });
+
+      const promise = streamOrch.handleMessage({
+        channelType: "cli",
+        chatId: "paor-e2e-stream-err",
+        userId: "user1",
+        text: "Test streaming",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // chatStream was attempted
+      expect(streamingProvider.chatStream).toHaveBeenCalled();
+      // Streaming message was started and finalized with error
+      expect(streamingChannel.startStreamingMessage).toHaveBeenCalled();
+      expect(streamingChannel.finalizeStreamingMessage).toHaveBeenCalledWith(
+        "paor-e2e-stream-err",
+        "stream-id-1",
+        expect.stringContaining("Streaming error"),
+      );
     });
   });
 });

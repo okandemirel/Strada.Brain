@@ -41,7 +41,7 @@ export function formatMetricsTable(agg: MetricsAggregation): string {
     `${"Avg Instincts/Task:".padEnd(24)}${agg.avgInstinctsPerInformedTask.toFixed(1)}`,
   );
 
-  // Lifecycle section (Phase 6: Bayesian Confidence System)
+  // Lifecycle section (Phase 6: Confidence System)
   if (agg.lifecycle) {
     const { statusCounts, weeklyTrends } = agg.lifecycle;
     lines.push("");

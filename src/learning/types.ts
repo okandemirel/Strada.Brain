@@ -160,9 +160,9 @@ export interface Instinct {
   readonly tags: string[];
   /** Optional pre-computed embedding vector for semantic search */
   readonly embedding?: number[];
-  /** Bayesian alpha parameter (successes + prior) */
+  /** Alpha parameter for evidence tracking (successes + prior; not used for primary confidence) */
   readonly bayesianAlpha?: number;
-  /** Bayesian beta parameter (failures + prior) */
+  /** Beta parameter for evidence tracking (failures + prior; not used for primary confidence) */
   readonly bayesianBeta?: number;
   /** When cooling period started (timestamp ms) */
   readonly coolingStartedAt?: TimestampMs;
@@ -235,9 +235,9 @@ export interface CrossSessionConfig {
   readonly promotionThreshold: number;
 }
 
-/** Bayesian confidence system configuration */
+/** Confidence system configuration (hybrid weighted scoring with alpha/beta evidence tracking) */
 export interface BayesianConfig {
-  /** Master toggle for Bayesian confidence system */
+  /** Master toggle for confidence system */
   readonly enabled: boolean;
   /** Threshold below which instinct is deprecated */
   readonly deprecatedThreshold: number;

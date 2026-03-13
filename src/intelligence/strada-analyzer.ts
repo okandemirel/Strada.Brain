@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { relative } from "node:path";
+import { relative, basename } from "node:path";
 import { glob } from "glob";
 import {
   parseDeep,
@@ -101,6 +101,25 @@ export interface DependencyEdge {
   type: "inherits" | "implements" | "injects" | "uses_event";
 }
 
+export interface AsmdefInfo {
+  name: string;
+  filePath: string;
+  rootNamespace: string;
+  references: string[];
+}
+
+export interface PrefabInfo {
+  name: string;
+  filePath: string;
+  scriptGuids: string[]; // GUIDs of referenced scripts
+}
+
+export interface SceneInfo {
+  name: string;
+  filePath: string;
+  rootObjectCount: number;
+}
+
 export interface StradaProjectAnalysis {
   modules: ModuleInfo[];
   systems: SystemInfo[];
@@ -110,6 +129,9 @@ export interface StradaProjectAnalysis {
   controllers: ControllerInfo[];
   events: EventUsage[];
   dependencies: DependencyEdge[];
+  asmdefs: AsmdefInfo[];
+  prefabs: PrefabInfo[];
+  scenes: SceneInfo[];
   csFileCount: number;
   analyzedAt: Date;
 }
@@ -187,6 +209,12 @@ export class StradaAnalyzer {
     const controllers = this.findControllers(cached);
     const dependencies = this.buildDependencyGraph(cached, events);
 
+    const [asmdefs, prefabs, scenes] = await Promise.all([
+      this.findAsmdefFiles(),
+      this.findPrefabFiles(),
+      this.findSceneFiles(),
+    ]);
+
     const result: StradaProjectAnalysis = {
       modules,
       systems,
@@ -196,6 +224,9 @@ export class StradaAnalyzer {
       controllers,
       events,
       dependencies,
+      asmdefs,
+      prefabs,
+      scenes,
       csFileCount: csFiles.length,
       analyzedAt: new Date(),
     };
@@ -207,6 +238,9 @@ export class StradaAnalyzer {
       services: services.length,
       mediators: mediators.length,
       controllers: controllers.length,
+      asmdefs: asmdefs.length,
+      prefabs: prefabs.length,
+      scenes: scenes.length,
     });
 
     return result;
@@ -445,6 +479,96 @@ export class StradaAnalyzer {
     return edges;
   }
 
+  private async findAsmdefFiles(): Promise<AsmdefInfo[]> {
+    const logger = getLogger();
+    const files = await glob("**/*.asmdef", {
+      cwd: this.projectPath,
+      absolute: true,
+      ignore: ["**/node_modules/**", "**/Library/**", "**/Temp/**"],
+    });
+    const asmdefs: AsmdefInfo[] = [];
+    for (const filePath of files) {
+      try {
+        const content = await readFile(filePath, "utf-8");
+        const json = JSON.parse(content) as Record<string, unknown>;
+        asmdefs.push({
+          name: (json.name as string) ?? "",
+          filePath: relative(this.projectPath, filePath),
+          rootNamespace: (json.rootNamespace as string) ?? "",
+          references: Array.isArray(json.references)
+            ? (json.references as string[])
+            : [],
+        });
+      } catch {
+        logger.debug(`Failed to parse asmdef: ${filePath}`);
+      }
+    }
+    return asmdefs;
+  }
+
+  private async findPrefabFiles(): Promise<PrefabInfo[]> {
+    const logger = getLogger();
+    const files = await glob("**/*.prefab", {
+      cwd: this.projectPath,
+      absolute: true,
+      ignore: ["**/node_modules/**", "**/Library/**", "**/Temp/**"],
+    });
+    const prefabs: PrefabInfo[] = [];
+    const scriptGuidPattern = /m_Script:\s*\{fileID:\s*\d+,\s*guid:\s*([0-9a-f]{32})/g;
+    for (const filePath of files) {
+      try {
+        const content = await readFile(filePath, "utf-8");
+        const guids: string[] = [];
+        const seen = new Set<string>();
+        let match;
+        scriptGuidPattern.lastIndex = 0;
+        while ((match = scriptGuidPattern.exec(content)) !== null) {
+          const guid = match[1]!;
+          if (!seen.has(guid)) {
+            seen.add(guid);
+            guids.push(guid);
+          }
+        }
+        const name = basename(filePath, ".prefab");
+        prefabs.push({
+          name,
+          filePath: relative(this.projectPath, filePath),
+          scriptGuids: guids,
+        });
+      } catch {
+        logger.debug(`Failed to parse prefab: ${filePath}`);
+      }
+    }
+    return prefabs;
+  }
+
+  private async findSceneFiles(): Promise<SceneInfo[]> {
+    const logger = getLogger();
+    const files = await glob("**/*.unity", {
+      cwd: this.projectPath,
+      absolute: true,
+      ignore: ["**/node_modules/**", "**/Library/**", "**/Temp/**"],
+    });
+    const scenes: SceneInfo[] = [];
+    const rootObjectPattern = /^--- !u!1 &/gm;
+    for (const filePath of files) {
+      try {
+        const content = await readFile(filePath, "utf-8");
+        const matches = content.match(rootObjectPattern);
+        const rootObjectCount = matches ? matches.length : 0;
+        const name = basename(filePath, ".unity");
+        scenes.push({
+          name,
+          filePath: relative(this.projectPath, filePath),
+          rootObjectCount,
+        });
+      } catch {
+        logger.debug(`Failed to parse scene: ${filePath}`);
+      }
+    }
+    return scenes;
+  }
+
   private async findCSharpFiles(): Promise<string[]> {
     return glob("**/*.cs", {
       cwd: this.projectPath,
@@ -514,6 +638,41 @@ export class StradaAnalyzer {
       lines.push(`\nControllers (${analysis.controllers.length}):`);
       for (const ctrl of analysis.controllers) {
         lines.push(`  ${ctrl.name}<${ctrl.modelType}>`);
+      }
+    }
+
+    // Assembly Definitions
+    if (analysis.asmdefs.length > 0) {
+      lines.push(`\nAssembly Definitions (${analysis.asmdefs.length}):`);
+      for (const asmdef of analysis.asmdefs) {
+        lines.push(`  ${asmdef.name}`);
+        lines.push(`    File: ${asmdef.filePath}`);
+        if (asmdef.rootNamespace) {
+          lines.push(`    Namespace: ${asmdef.rootNamespace}`);
+        }
+        if (asmdef.references.length > 0) {
+          lines.push(`    References: ${asmdef.references.join(", ")}`);
+        }
+      }
+    }
+
+    // Prefabs
+    if (analysis.prefabs.length > 0) {
+      lines.push(`\nPrefabs (${analysis.prefabs.length}):`);
+      for (const prefab of analysis.prefabs) {
+        const scriptCount = prefab.scriptGuids.length;
+        const scriptStr = scriptCount > 0 ? ` (${scriptCount} scripts)` : "";
+        lines.push(`  ${prefab.name}${scriptStr}`);
+        lines.push(`    File: ${prefab.filePath}`);
+      }
+    }
+
+    // Scenes
+    if (analysis.scenes.length > 0) {
+      lines.push(`\nScenes (${analysis.scenes.length}):`);
+      for (const scene of analysis.scenes) {
+        lines.push(`  ${scene.name} (${scene.rootObjectCount} root objects)`);
+        lines.push(`    File: ${scene.filePath}`);
       }
     }
 

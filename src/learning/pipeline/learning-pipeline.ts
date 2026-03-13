@@ -45,7 +45,7 @@ const VERDICT_SCORE = {
   PERFECT: 1.0,
 };
 
-/** Default Bayesian config used when none is provided */
+/** Default confidence system config used when none is provided */
 const DEFAULT_BAYESIAN_CONFIG: BayesianConfig = {
   enabled: true,
   deprecatedThreshold: 0.3,

@@ -536,7 +536,7 @@ describe("ChainManager", () => {
         "chain:invalidated",
         expect.objectContaining({
           chainName: "read_and_write",
-          reason: expect.stringContaining("Bayesian confidence"),
+          reason: expect.stringContaining("Confidence below"),
         }),
       );
     });

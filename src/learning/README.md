@@ -1,6 +1,6 @@
 # src/learning/
 
-Experience replay and pattern learning system. Observes agent behavior, detects error patterns, and learns reusable instincts with Bayesian confidence scoring.
+Experience replay and pattern learning system. Observes agent behavior, detects error patterns, and learns reusable instincts with hybrid weighted confidence scoring.
 
 ## Architecture
 
@@ -9,7 +9,7 @@ Agent errors / outcomes
   → ErrorLearningHooks (captures observations)
   → LearningPipeline (processes every 5 minutes)
     → PatternMatcher (matches against stored patterns)
-    → ConfidenceScorer (Bayesian + Elo + Wilson interval)
+    → ConfidenceScorer (hybrid weighted 5-factor + Elo + Wilson interval)
     → LearningStorage (SQLite persistence)
   → Instinct lifecycle: proposed → active → evolved/deprecated
 ```
@@ -36,10 +36,10 @@ Runs two periodic timers:
 
 ### ConfidenceScorer (`scoring/confidence-scorer.ts`)
 
-Bayesian confidence updates with:
+Hybrid weighted confidence scoring with 5 factors: successRate (0.35), pattern (0.25), recency (0.20), context (0.15), verification (0.05). Also provides:
 - **Elo-style rating** (`calculateEloRating()`) for instinct comparison
 - **Wilson score intervals** (`wilsonScoreInterval()`) for statistical validity
-- Scores updated on each success/failure observation
+- Alpha/beta evidence counters maintained for confidence intervals (not for primary scoring)
 
 ### PatternMatcher (`matching/pattern-matcher.ts`)
 
@@ -77,6 +77,6 @@ The `patterns` table in `AgentDBMemory` (`memory/unified/agentdb-memory.ts`) pro
 | `index.ts` | Module exports |
 | `storage/learning-storage.ts` | SQLite schema and queries |
 | `pipeline/learning-pipeline.ts` | Pattern detection and evolution timers |
-| `scoring/confidence-scorer.ts` | Bayesian/Elo/Wilson confidence calculations |
+| `scoring/confidence-scorer.ts` | Hybrid weighted/Elo/Wilson confidence calculations |
 | `matching/pattern-matcher.ts` | Multi-strategy pattern matching |
 | `hooks/error-learning-hooks.ts` | Agent error flow integration |

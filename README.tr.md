@@ -33,7 +33,7 @@
 
 Strada.Brain, bir sohbet kanali uzerinden konustugunuz bir yapay zeka ajanidir. Ne istediginizi tanimlayarak -- "oyuncu hareketi icin yeni bir ECS sistemi olustur" veya "saglik kullanan tum bilesenleri bul" -- ajanin C# projenizi okumasini, kodu yazmasini, `dotnet build` calistirmasini, hatalari otomatik olarak duzeltmesini ve sonucu size gondermesini saglayabilirsiniz.
 
-Ajan, SQLite + HNSW vektorler ile desteklenen kalici hafizaya sahiptir; gecmis hatalardan Bayesian guven puanlamasi ile ogrenir; karmasik hedefleri paralel DAG yurutmesine ayristirir; cok aracli zincirleri saga geri alma destekli olarak otomatik sentezler; coklu ajan orkestrasyonu ve gorev delegasyonu ile karmasik isleri boler; bellek konsolidasyonu ile benzer bellekleri birlestirir; onay kapili dagitim alt sistemi ile otonom dagitim yapar; ve proaktif tetikleyicilerle 7/24 daemon olarak calisabilir.
+Ajan, SQLite + HNSW vektorler ile desteklenen kalici hafizaya sahiptir; gecmis hatalardan hibrit agirlikli guven puanlamasi ile ogrenir; karmasik hedefleri paralel DAG yurutmesine ayristirir; cok aracli zincirleri saga geri alma destekli olarak otomatik sentezler; coklu ajan orkestrasyonu ve gorev delegasyonu ile karmasik isleri boler; bellek konsolidasyonu ile benzer bellekleri birlestirir; onay kapili dagitim alt sistemi ile otonom dagitim yapar; ve proaktif tetikleyicilerle 7/24 daemon olarak calisabilir.
 
 **Bu bir kutuphane veya API degildir.** Calistirdiginiz bagimsiz bir uygulamadir. Sohbet platformunuza baglanir, diskteki Unity projenizi okur ve yapilandirdiginiz sinirlar dahilinde otonom olarak calisir.
 
@@ -126,7 +126,7 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
 | AI Saglayici | | 30+ Arac   | | Baglam     | | Ogrenme Sistemi  |
 | Claude (brnc)| | Dosya I/O  | | AgentDB    | | TypedEventBus    |
-| OpenAI, Kimi | | Git islem  | | (SQLite +  | | Bayesian Beta    |
+| OpenAI, Kimi | | Git islem  | | (SQLite +  | | Hibrit agirlik.  |
 | DeepSeek,Qwen| | Kabuk cali | |  HNSW)     | | Icgudu yasam     |
 | MiniMax, Groq| | .NET derle | | RAG vektor | |  dongusu          |
 | Ollama +daha | | Strada ure | | Kimlik     | | Arac zincirleri  |
@@ -215,10 +215,10 @@ Ogrenme sistemi, ajan davranisini gozlemler ve hatalardan olay gudumlut bir hat 
 - Zamanlayici tabanli toplu isleme yoktur -- kalipler olustukca tespit edilir ve depolanir
 - `LearningQueue`, hata izolasyonlu sinirli FIFO kullanir (ogrenme hatalari ajani asla cokmesine neden olmaz)
 
-**Bayesian guven puanlamasi:**
-- Icguduler, bilgi vermeyen `Beta(1,1)` onculu ile **Beta sonsal cikarim** (`guven = alfa / (alfa + beta)`) kullanir
-- Karar puanlari (0.0-1.0), nuansli guncellemeler icin kesirli kanit agirliklari olarak islev gorur
-- Harmanla veya zamansal indirgeme yoktur -- saf Bayesian sonsal ortalama
+**Hibrit agirlikli guven puanlamasi:**
+- Guven = 5 faktor uzerinden agirlikli toplam: basariOrani (0.35), kalip gucu (0.25), yakinlik (0.20), baglam uyumu (0.15), dogrulama (0.05)
+- Karar puanlari (0.0-1.0), guven araliklari icin alfa/beta kanit sayaclarini gunceller
+- Alfa/beta parametreleri belirsizlik tahmini icin korunur ancak birincil guven hesaplamasi icin kullanilmaz
 
 **Icgudu yasam dongusu:**
 - **Onerilen** (yeni) -- 0.7 guvenin altinda
@@ -262,12 +262,12 @@ Ajan, cok aracli zincir kaliplarini otomatik olarak tespit eder ve yeniden kulla
 **Hat:**
 1. **ChainDetector** -- yinelenen arac dizilerini bulmak icin yol verisini analiz eder (orn. `file_read` -> `file_edit` -> `dotnet_build`)
 2. **ChainSynthesizer** -- uygun girdi/cikti esleme ve aciklamasiyla bir `CompositeTool` olusturmak icin LLM kullanir
-3. **ChainValidator** -- calisma zamani geri bildirimi ile sentez sonrasi dogrulama; Bayesian guven araciligiyla zincir yurutme basarisini izler
+3. **ChainValidator** -- calisma zamani geri bildirimi ile sentez sonrasi dogrulama; agirlikli guven puanlamasi araciligiyla zincir yurutme basarisini izler
 4. **ChainManager** -- yasam dongusu orkestratorü: baslatmada mevcut zincirleri yukler, periyodik algilama calistirir, bilesen araclar kaldirildiginda zincirleri otomatik gecersiz kilar
 
 **Guvenlik:** Bilesik araclar, bilesen araclarindan en kisitlayici guvenlik bayraklarini miras alir.
 
-**Guven kademesi:** Zincir icguduleri, normal icgudularle ayni Bayesian yasam dongusunu izler. Kullanim disi birakma esiginin altina dusen zincirler otomatik olarak kayittan silinir.
+**Guven kademesi:** Zincir icguduleri, normal icgudularle ayni guven yasam dongusunu izler. Kullanim disi birakma esiginin altina dusen zincirler otomatik olarak kayittan silinir.
 
 **V2 gelistirmeleri:**
 - **DAG yurutme** -- bagimsiz adimlar paralel calisir
@@ -747,7 +747,7 @@ src/
       learning-queue.ts     # Olay gudumlu ogrenme icin seri asenkron isleyici
       embedding-queue.ts    # Sinirli asenkron gomme olusturma
     scoring/
-      confidence-scorer.ts  # Bayesian Beta sonsal guven, Elo, Wilson araliklari
+      confidence-scorer.ts  # Hibrit agirlikli guven (5 faktor), Elo, Wilson araliklari
     matching/
       pattern-matcher.ts    # Anahtar kelime + anlamsal kalip esleme
     hooks/

@@ -7,7 +7,7 @@
  * - Instinct-based learning from errors and corrections
  * - Trajectory recording for experience replay
  * - Pattern matching for error recovery
- * - Confidence scoring with Bayesian updates
+ * - Hybrid weighted confidence scoring (5-factor model)
  * - Evolution from instincts to skills/commands
  * 
  * @example

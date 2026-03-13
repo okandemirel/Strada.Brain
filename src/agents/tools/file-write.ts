@@ -1,6 +1,12 @@
 import { writeFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, extname } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
+import {
+  generateUnityGuid,
+  generateMetaContent,
+  metaPathFor,
+  shouldGenerateMeta,
+} from "./unity/meta-file-utils.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const MAX_WRITE_SIZE = 256 * 1024; // 256KB max write
@@ -64,10 +70,29 @@ export class FileWriteTool implements ITool {
       await mkdir(dirname(pathCheck.fullPath), { recursive: true });
       await writeFile(pathCheck.fullPath, content, "utf-8");
 
+      // Generate .meta file for new Unity assets (atomic: wx flag prevents overwriting existing)
+      let metaGenerated = false;
+      if (shouldGenerateMeta(pathCheck.fullPath, context.projectPath)) {
+        const metaPath = metaPathFor(pathCheck.fullPath);
+        try {
+          const guid = generateUnityGuid();
+          const ext = extname(relPath);
+          const metaContent = generateMetaContent(guid, ext);
+          await writeFile(metaPath, metaContent, { encoding: "utf-8", flag: "wx" });
+          metaGenerated = true;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+            // Unexpected error — log but don't fail the main write
+          }
+          // EEXIST: .meta already exists — skip silently
+        }
+      }
+
       const lineCount = content.split("\n").length;
+      const metaMsg = metaGenerated ? " (+.meta)" : "";
       return {
-        content: `File written: ${relPath} (${lineCount} lines, ${byteLength} bytes)`,
-        metadata: { path: relPath, lineCount, byteLength },
+        content: `File written: ${relPath} (${lineCount} lines, ${byteLength} bytes)${metaMsg}`,
+        metadata: { path: relPath, lineCount, byteLength, metaGenerated },
       };
     } catch {
       return { content: "Error: could not write file", isError: true };

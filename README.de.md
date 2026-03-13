@@ -35,7 +35,7 @@
 
 Strada.Brain ist ein KI-Agent, mit dem Sie ueber einen Chat-Kanal kommunizieren. Sie beschreiben, was Sie moechten -- "erstelle ein neues ECS-System fuer Spielerbewegung" oder "finde alle Komponenten, die Health verwenden" -- und der Agent liest Ihr C#-Projekt, schreibt den Code, fuehrt `dotnet build` aus, behebt Fehler automatisch und sendet Ihnen das Ergebnis.
 
-Er verfuegt ueber persistenten Speicher auf Basis von SQLite + HNSW-Vektoren, lernt aus vergangenen Fehlern mittels Bayesscher Konfidenzbewertung, zerlegt komplexe Ziele in parallele DAG-Ausfuehrung, synthetisiert automatisch mehrstufige Tool-Ketten mit Saga-Rollback, orchestriert mehrere Agenten mit Aufgabendelegation, konsolidiert Gedaechtnis mittels HNSW-Clustering, verfuegt ueber ein Deployment-Subsystem mit Genehmigungsgates und kann als 24/7-Daemon mit proaktiven Ausloesern betrieben werden.
+Er verfuegt ueber persistenten Speicher auf Basis von SQLite + HNSW-Vektoren, lernt aus vergangenen Fehlern mittels hybrider gewichteter Konfidenzbewertung, zerlegt komplexe Ziele in parallele DAG-Ausfuehrung, synthetisiert automatisch mehrstufige Tool-Ketten mit Saga-Rollback, orchestriert mehrere Agenten mit Aufgabendelegation, konsolidiert Gedaechtnis mittels HNSW-Clustering, verfuegt ueber ein Deployment-Subsystem mit Genehmigungsgates und kann als 24/7-Daemon mit proaktiven Ausloesern betrieben werden.
 
 **Dies ist keine Bibliothek und keine API.** Es ist eine eigenstaendige Anwendung, die Sie ausfuehren. Sie verbindet sich mit Ihrer Chat-Plattform, liest Ihr Unity-Projekt von der Festplatte und arbeitet autonom innerhalb der von Ihnen konfigurierten Grenzen.
 
@@ -128,8 +128,8 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 +-------v------+ +-----v------+ +---v--------+ +v-----------------+
 | KI-Anbieter  | | 30+ Tools  | | Kontext    | | Lernsystem       |
 | Claude (prim)| | Datei-I/O  | | AgentDB    | | TypedEventBus    |
-| OpenAI, Kimi | | Git-Ops    | | (SQLite +  | | Bayessche Beta-  |
-| DeepSeek,Qwen| | Shell-Ausf.| |  HNSW)     | |  Bewertung       |
+| OpenAI, Kimi | | Git-Ops    | | (SQLite +  | | Hybride gewich-  |
+| DeepSeek,Qwen| | Shell-Ausf.| |  HNSW)     | |  tete Bewertung  |
 | MiniMax, Groq| | .NET Build | | RAG-Vekt.  | | Instinkt-Lebens- |
 | Ollama +mehr | | Strada-Gen | | Identitaet | |  zyklus          |
 +--------------+ +------+-----+ +---+--------+ | Tool-Ketten      |
@@ -217,10 +217,10 @@ Das Lernsystem beobachtet das Agentenverhalten und lernt aus Fehlern durch eine 
 - Keine Timer-basierte Stapelverarbeitung -- Muster werden erkannt und gespeichert, sobald sie auftreten
 - Die `LearningQueue` verwendet begrenztes FIFO mit Fehlerisolation (Lernfehler bringen den Agenten nie zum Absturz)
 
-**Bayessche Konfidenzbewertung:**
-- Instinkte verwenden **Beta-Posterior-Inferenz** (`confidence = alpha / (alpha + beta)`) mit einem uninformativen `Beta(1,1)`-Prior
-- Bewertungswerte (0.0-1.0) fungieren als fraktionale Evidenzgewichte fuer differenzierte Aktualisierungen
-- Keine Mischung oder zeitliche Diskontierung -- reiner Bayesscher Posterior-Mittelwert
+**Hybride gewichtete Konfidenzbewertung:**
+- Konfidenz = gewichtete Summe von 5 Faktoren: Erfolgsrate (0.35), Musterstaerke (0.25), Aktualitaet (0.20), Kontextübereinstimmung (0.15), Verifikation (0.05)
+- Bewertungswerte (0.0-1.0) aktualisieren Alpha/Beta-Evidenzzaehler fuer Konfidenzintervalle
+- Alpha/Beta-Parameter werden fuer Unsicherheitsschaetzung beibehalten, aber nicht fuer die primaere Konfidenzberechnung verwendet
 
 **Instinkt-Lebenszyklus:**
 - **Vorgeschlagen** (neu) -- unter 0.7 Konfidenz
@@ -264,7 +264,7 @@ Der Agent erkennt und synthetisiert automatisch mehrstufige Tool-Kettenmuster zu
 **Pipeline:**
 1. **ChainDetector** -- analysiert Trajektoriendaten, um wiederkehrende Tool-Sequenzen zu finden (z.B. `file_read` -> `file_edit` -> `dotnet_build`)
 2. **ChainSynthesizer** -- nutzt LLM zur Generierung eines `CompositeTool` mit korrektem Ein-/Ausgabe-Mapping und Beschreibung
-3. **ChainValidator** -- Validierung nach der Synthese mit Laufzeit-Feedback; verfolgt den Ausfuehrungserfolg von Ketten ueber Bayessche Konfidenz
+3. **ChainValidator** -- Validierung nach der Synthese mit Laufzeit-Feedback; verfolgt den Ausfuehrungserfolg von Ketten ueber gewichtete Konfidenzbewertung
 4. **ChainManager** -- Lebenszyklus-Orchestrator: laedt bestehende Ketten beim Start, fuehrt periodische Erkennung durch, invalidiert Ketten automatisch wenn Komponenten-Tools entfernt werden
 
 **Sicherheit:** Zusammengesetzte Tools erben die restriktivsten Sicherheitsflags ihrer Komponenten-Tools.
@@ -274,7 +274,7 @@ Der Agent erkennt und synthetisiert automatisch mehrstufige Tool-Kettenmuster zu
 - **Saga-Rollback** -- bei Fehlern werden vorherige Schritte rueckgaengig gemacht
 - **Ketten-Versionierung** -- alte Versionen werden archiviert
 
-**Konfidenz-Kaskade:** Ketten-Instinkte folgen demselben Bayesschen Lebenszyklus wie regulaere Instinkte. Ketten, die unter die Veraltungsschwelle fallen, werden automatisch deregistriert.
+**Konfidenz-Kaskade:** Ketten-Instinkte folgen demselben Konfidenz-Lebenszyklus wie regulaere Instinkte. Ketten, die unter die Veraltungsschwelle fallen, werden automatisch deregistriert.
 
 ---
 
@@ -760,7 +760,7 @@ src/
       learning-queue.ts     # Serieller Async-Prozessor fuer ereignisgesteuertes Lernen
       embedding-queue.ts    # Begrenzte asynchrone Embedding-Generierung
     scoring/
-      confidence-scorer.ts  # Bayessche Beta-Posterior-Konfidenz, Elo, Wilson-Intervalle
+      confidence-scorer.ts  # Hybride gewichtete Konfidenz (5 Faktoren), Elo, Wilson-Intervalle
     matching/
       pattern-matcher.ts    # Schluesselwort- + semantischer Musterabgleich
     hooks/

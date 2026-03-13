@@ -117,7 +117,7 @@ v1.0 was the first major milestone, 9 phases (1-9) shipping 32 requirements acro
 - MetricsStorage and MetricsRecorder for task completion rate, iterations, and pattern reuse
 - Dashboard /api/agent-metrics endpoint with query filters
 - CLI metrics command with table/JSON output
-- Bayesian Beta posterior confidence scoring replacing LLM-only judgment
+- Hybrid weighted confidence scoring (5-factor model) replacing LLM-only judgment
 - Instinct lifecycle: cooling, deprecation (confidence < 0.3), and promotion (confidence > 0.95)
 - GoalNode DAG with Kahn's algorithm cycle detection and max depth 3
 - GoalDecomposer with proactive/reactive decomposition and dependency edges
@@ -137,7 +137,7 @@ v1.0 was the first major milestone, 9 phases (1-9) shipping 32 requirements acro
 
 ### Added
 - Dependency injection container, bootstrap system, and tool registry (`src/core/`)
-- Learning system with experience replay, Bayesian confidence scoring, and pattern matching (`src/learning/`)
+- Learning system with experience replay, hybrid weighted confidence scoring, and pattern matching (`src/learning/`)
 - HNSW vector store delivering 150x--12,500x search performance improvement over flat scan
 - Discord and Slack channel adapters (`src/channels/`)
 - Unified 3-tier memory architecture (Working / Ephemeral / Persistent)

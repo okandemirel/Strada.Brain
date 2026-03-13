@@ -96,6 +96,17 @@ program
     crossSessionCommand(opts);
   });
 
+program
+  .command("sync")
+  .description("Validate and sync Brain's Strada.Core API knowledge against source")
+  .requiredOption("--core-path <path>", "Path to Strada.Core source directory")
+  .option("--dry-run", "Show drift report without applying changes", false)
+  .option("--apply", "Apply auto-generated API updates", false)
+  .action(async (opts: { corePath: string; dryRun: boolean; apply: boolean }) => {
+    const { runSyncCommand } = await import("./intelligence/strada-api-sync.js");
+    await runSyncCommand(opts);
+  });
+
 // Register daemon management commands (status, trigger, reset, audit, config, budget)
 // Context is provided via callback since daemon may not be initialized at registration time
 let appResult: import("./core/bootstrap.js").BootstrapResult | undefined;

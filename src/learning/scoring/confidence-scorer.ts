@@ -1,8 +1,11 @@
 /**
  * Confidence Scorer
- * 
- * Multi-factor confidence calculation and Bayesian updating for instincts.
- * Tracks success/failure history and updates confidence using Bayesian inference.
+ *
+ * Hybrid weighted confidence calculation for instincts.
+ * The primary scoring model uses a weighted sum across 5 factors:
+ *   successRate (0.35), pattern (0.25), recency (0.20), context (0.15), verification (0.05).
+ * Alpha/beta parameters are maintained for evidence tracking and confidence intervals
+ * but are NOT used for the primary confidence computation (no Beta posterior).
  */
 
 import { CONFIDENCE_THRESHOLDS, type Instinct, type InstinctStatus, type InstinctStats } from "../types.js";
@@ -43,7 +46,7 @@ const DEFAULT_WEIGHTS: ConfidenceWeights = {
 export class ConfidenceScorer {
   private weights: ConfidenceWeights;
 
-  /** Prior belief for Bayesian updates (uninformative Beta(1,1) prior matching MAX_INITIAL=0.5) */
+  /** Prior values for alpha/beta evidence tracking (not used for primary confidence computation) */
   private readonly priorAlpha = 1;
   private readonly priorBeta = 1;
 
@@ -83,11 +86,13 @@ export class ConfidenceScorer {
   }
 
   /**
-   * Update confidence using pure Beta posterior inference.
+   * Update confidence after a success/failure observation.
    *
-   * Pure Bayesian: confidence = alpha / (alpha + beta) (no blending, no temporal discount).
-   * Verdict weights (0.9/0.6/0.2) are applied as fractional evidence updates.
-   * Permanent instincts are frozen (returned unchanged).
+   * Updates alpha/beta evidence counters and recomputes the posterior mean
+   * (alpha / (alpha + beta)) for storage. The primary confidence score used
+   * for lifecycle decisions comes from the weighted 5-factor model (calculate()),
+   * not from this posterior. Verdict weights (0.9/0.6/0.2) are applied as
+   * fractional evidence updates. Permanent instincts are frozen (returned unchanged).
    *
    * @param instinct - The instinct to update
    * @param success - Whether the application was successful
@@ -141,7 +146,7 @@ export class ConfidenceScorer {
     // Pure posterior mean — no blending, no temporal discount
     const newConfidence = newAlpha / (newAlpha + newBeta);
 
-    // Return new instinct with updated stats and Bayesian parameters
+    // Return new instinct with updated stats and alpha/beta evidence counters
     return {
       ...instinct,
       stats: {

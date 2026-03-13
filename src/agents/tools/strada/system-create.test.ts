@@ -58,7 +58,8 @@ describe("SystemCreateTool", () => {
     expect(code).toContain("protected override void OnUpdate(float deltaTime)");
     expect(code).toContain("protected override void OnInitialize()");
     expect(code).toContain("protected override void OnDispose()");
-    expect(code).toContain("[SystemOrder(0)]");
+    expect(code).toContain("[StradaSystem]");
+    expect(code).toContain("[ExecutionOrder(0)]");
   });
 
   it("creates a valid JobSystemBase system with Burst and Jobs usings", async () => {
@@ -82,13 +83,14 @@ describe("SystemCreateTool", () => {
     expect(code).toContain("using Unity.Jobs;");
   });
 
-  it("creates a valid BurstSystemBase system", async () => {
+  it("creates a BurstSystem with generic variants", async () => {
     const result = await tool.execute(
       {
         name: "ParticleSystem",
         path: "Assets/Systems/ParticleSystem.cs",
         namespace: "Game.Particles",
-        base_class: "BurstSystemBase",
+        burst_component_count: 2,
+        query_components: ["Position", "Velocity"],
       },
       ctx
     );
@@ -97,7 +99,8 @@ describe("SystemCreateTool", () => {
 
     const filePath = join(tempDir, "Assets/Systems/ParticleSystem.cs");
     const code = readFileSync(filePath, "utf-8");
-    expect(code).toContain("public class ParticleSystem : BurstSystemBase");
+    expect(code).toContain("BurstSystem");
+    expect(code).toContain("[BurstCompile]");
   });
 
   it("generates query with ForEach delegate pattern", async () => {
@@ -159,7 +162,7 @@ describe("SystemCreateTool", () => {
     expect(result.isError).toBeUndefined();
     const filePath = join(tempDir, "Assets/Systems/LateSystem.cs");
     const code = readFileSync(filePath, "utf-8");
-    expect(code).toContain("[SystemOrder(100)]");
+    expect(code).toContain("[ExecutionOrder(100)]");
   });
 
   it("returns error for invalid system name", async () => {
@@ -208,7 +211,7 @@ describe("SystemCreateTool", () => {
     expect(result.content).toContain("base_class must be one of");
     expect(result.content).toContain("SystemBase");
     expect(result.content).toContain("JobSystemBase");
-    expect(result.content).toContain("BurstSystemBase");
+    // BurstSystemBase removed — only SystemBase and JobSystemBase are valid base classes
   });
 
   it("returns error for invalid component name in query_components", async () => {

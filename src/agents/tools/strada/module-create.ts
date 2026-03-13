@@ -8,7 +8,7 @@ export class ModuleCreateTool implements ITool {
   readonly name = "strada_create_module";
   readonly description =
     "Create a new Strada.Core module with all necessary files following Strada conventions. " +
-    "Generates: ModuleConfig, asmdef, folder structure (Systems/, Services/, Components/, Mediators/).";
+    "Generates: ModuleConfig, asmdef, folder structure (Systems/, Services/, Components/, Mediators/, and optional Controllers/, Events/, Signals/, Models/, Views/, Data/).";
 
   readonly inputSchema = {
     type: "object",
@@ -46,6 +46,18 @@ export class ModuleCreateTool implements ITool {
       include_signals: {
         type: "boolean",
         description: "Include a Signals/ folder. Default: false",
+      },
+      include_model: {
+        type: "boolean",
+        description: "Include a Models/ folder. Default: false",
+      },
+      include_view: {
+        type: "boolean",
+        description: "Include a Views/ folder. Default: false",
+      },
+      include_data: {
+        type: "boolean",
+        description: "Include a Data/ folder. Default: false",
       },
       include_tests: {
         type: "boolean",
@@ -109,11 +121,17 @@ export class ModuleCreateTool implements ITool {
       const includeController = input["include_controller"] === true;
       const includeEvents = input["include_events"] === true;
       const includeSignals = input["include_signals"] === true;
+      const includeModel = input["include_model"] === true;
+      const includeView = input["include_view"] === true;
+      const includeData = input["include_data"] === true;
       const includeTests = input["include_tests"] === true;
 
       if (includeController) dirs.push(join(fullBase, "Scripts", "Controllers"));
       if (includeEvents) dirs.push(join(fullBase, "Scripts", "Events"));
       if (includeSignals) dirs.push(join(fullBase, "Scripts", "Signals"));
+      if (includeModel) dirs.push(join(fullBase, "Scripts", "Models"));
+      if (includeView) dirs.push(join(fullBase, "Scripts", "Views"));
+      if (includeData) dirs.push(join(fullBase, "Scripts", "Data"));
       if (includeTests) dirs.push(join(fullBase, "Tests"));
 
       await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
@@ -251,7 +269,8 @@ using ${STRADA_API.namespaces.systems};
 
 namespace ${namespace}
 {
-    [SystemOrder(0)]
+    [StradaSystem]
+    [ExecutionOrder(0)]
     public class ${name}System : SystemBase
     {
         protected override void OnInitialize() { }

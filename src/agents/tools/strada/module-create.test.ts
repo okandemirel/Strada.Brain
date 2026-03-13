@@ -66,7 +66,8 @@ describe("ModuleCreateTool", () => {
     expect(systemCall).toBeTruthy();
     const systemCode = systemCall![1] as string;
     expect(systemCode).toContain("using Strada.Core.ECS.Systems;");
-    expect(systemCode).toContain("[SystemOrder(0)]");
+    expect(systemCode).toContain("[StradaSystem]");
+    expect(systemCode).toContain("[ExecutionOrder(0)]");
     expect(systemCode).toContain("protected override void OnInitialize()");
     expect(systemCode).toContain("protected override void OnDispose()");
     expect(systemCode).not.toContain("World.Query");

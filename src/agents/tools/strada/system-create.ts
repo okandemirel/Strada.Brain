@@ -8,7 +8,7 @@ export class SystemCreateTool implements ITool {
   readonly name = "strada_create_system";
   readonly description =
     "Create a new ECS System for Strada.Core. Systems process entities with specific component queries. " +
-    "Supports SystemBase (standard), JobSystemBase (Burst-compiled), and BurstSystemBase (SIMD-accelerated).";
+    "Supports SystemBase (standard), JobSystemBase (Burst-compiled), and BurstSystem (generic Burst with 1-4 component type args).";
 
   readonly inputSchema = {
     type: "object",
@@ -28,7 +28,11 @@ export class SystemCreateTool implements ITool {
       base_class: {
         type: "string",
         enum: STRADA_API.baseClasses.systems,
-        description: "Base class to inherit from. Default: SystemBase",
+        description: "Base class to inherit from: SystemBase (standard) or JobSystemBase (Burst-compiled). For generic BurstSystem, use SystemBase and set burst_component_count. Default: SystemBase",
+      },
+      burst_component_count: {
+        type: "number",
+        description: "Number of component type args for generic BurstSystem (1-4). When set, generates a BurstSystem<TJob, T1, ...> instead of the base_class. Requires query_components to match the count.",
       },
       query_components: {
         type: "array",
@@ -42,7 +46,7 @@ export class SystemCreateTool implements ITool {
       },
       system_order: {
         type: "number",
-        description: "Execution order via [SystemOrder] attribute. Default: 0",
+        description: "Execution order via [ExecutionOrder] attribute. Default: 0",
       },
       update_phase: {
         type: "string",
@@ -86,6 +90,7 @@ export class SystemCreateTool implements ITool {
     const baseClass = String(input["base_class"] ?? "SystemBase");
     const queryComponents = (input["query_components"] as string[]) ?? [];
     const injectServices = (input["inject_services"] as string[]) ?? [];
+    const burstComponentCount = typeof input["burst_component_count"] === "number" ? input["burst_component_count"] : undefined;
     const systemOrder = typeof input["system_order"] === "number" ? input["system_order"] : 0;
     const updatePhase = String(input["update_phase"] ?? "");
     const runBefore = (input["run_before"] as string[]) ?? [];
@@ -113,6 +118,21 @@ export class SystemCreateTool implements ITool {
         content: `Error: base_class must be one of: ${validBases.join(", ")}`,
         isError: true,
       };
+    }
+
+    if (burstComponentCount !== undefined) {
+      if (!Number.isInteger(burstComponentCount) || burstComponentCount < 1 || burstComponentCount > 4) {
+        return {
+          content: "Error: burst_component_count must be an integer between 1 and 4",
+          isError: true,
+        };
+      }
+      if (queryComponents.length !== burstComponentCount) {
+        return {
+          content: `Error: query_components must have exactly ${burstComponentCount} component(s) to match burst_component_count`,
+          isError: true,
+        };
+      }
     }
 
     for (const comp of queryComponents) {
@@ -150,16 +170,19 @@ export class SystemCreateTool implements ITool {
 
     const code = generateSystemCode({
       name, namespace, baseClass, queryComponents, injectServices,
-      systemOrder, updatePhase, runBefore, runAfter, requiresSystem,
+      burstComponentCount, systemOrder, updatePhase, runBefore, runAfter, requiresSystem,
     });
 
     try {
       await mkdir(dirname(pathCheck.fullPath), { recursive: true });
       await writeFile(pathCheck.fullPath, code, "utf-8");
 
+      const effectiveBase = burstComponentCount
+        ? `BurstSystem<${name}Job, ${queryComponents.join(", ")}>`
+        : baseClass;
       const lines = [
         `System '${name}' created at: ${relPath}`,
-        `  Base: ${baseClass}`,
+        `  Base: ${effectiveBase}`,
       ];
       if (queryComponents.length > 0) {
         lines.push(`  Query: <${queryComponents.join(", ")}>`);
@@ -185,6 +208,7 @@ interface SystemCodeOptions {
   baseClass: string;
   queryComponents: string[];
   injectServices: string[];
+  burstComponentCount?: number;
   systemOrder: number;
   updatePhase: string;
   runBefore: string[];
@@ -193,15 +217,20 @@ interface SystemCodeOptions {
 }
 
 function generateSystemCode(opts: SystemCodeOptions): string {
-  const { name, namespace, baseClass, queryComponents, injectServices, systemOrder, updatePhase, runBefore, runAfter, requiresSystem } = opts;
+  const { name, namespace, baseClass, queryComponents, injectServices, burstComponentCount, systemOrder, updatePhase, runBefore, runAfter, requiresSystem } = opts;
+  const isBurstSystem = burstComponentCount !== undefined && burstComponentCount >= 1 && burstComponentCount <= 4;
+
   const usings = [
     `using ${STRADA_API.namespaces.ecs};`,
     `using ${STRADA_API.namespaces.systems};`,
   ];
 
-  if (baseClass === "JobSystemBase") {
+  if (baseClass === "JobSystemBase" || isBurstSystem) {
     usings.push("using Unity.Burst;");
     usings.push("using Unity.Jobs;");
+  }
+  if (isBurstSystem) {
+    usings.push("using Unity.Collections;");
   }
 
   // [Inject] field injection
@@ -217,6 +246,28 @@ function generateSystemCode(opts: SystemCodeOptions): string {
       return `        [Inject] private readonly ${svc} _${fieldName};`;
     })
     .join("\n");
+
+  const attributes: string[] = [];
+  attributes.push("[StradaSystem]");
+  attributes.push(`[ExecutionOrder(${systemOrder})]`);
+  if (updatePhase) {
+    attributes.push(`[UpdatePhase(UpdatePhase.${updatePhase})]`);
+  }
+  for (const sys of runBefore) {
+    attributes.push(`[RunBefore(typeof(${sys}))]`);
+  }
+  for (const sys of runAfter) {
+    attributes.push(`[RunAfter(typeof(${sys}))]`);
+  }
+  for (const sys of requiresSystem) {
+    attributes.push(`[RequiresSystem(typeof(${sys}))]`);
+  }
+
+  if (isBurstSystem) {
+    return generateBurstSystemCode({
+      name, namespace, usings, attributes, fields, queryComponents, burstComponentCount: burstComponentCount!,
+    });
+  }
 
   // Query body using ForEach pattern
   let queryBody: string;
@@ -237,21 +288,6 @@ function generateSystemCode(opts: SystemCodeOptions): string {
             // });`;
   }
 
-  const attributes: string[] = [];
-  attributes.push(`[SystemOrder(${systemOrder})]`);
-  if (updatePhase) {
-    attributes.push(`[UpdatePhase(UpdatePhase.${updatePhase})]`);
-  }
-  for (const sys of runBefore) {
-    attributes.push(`[RunBefore(typeof(${sys}))]`);
-  }
-  for (const sys of runAfter) {
-    attributes.push(`[RunAfter(typeof(${sys}))]`);
-  }
-  for (const sys of requiresSystem) {
-    attributes.push(`[RequiresSystem(typeof(${sys}))]`);
-  }
-
   return `${usings.join("\n")}
 
 namespace ${namespace}
@@ -266,6 +302,73 @@ ${fields ? fields + "\n" : ""}
         {
 ${queryBody}
         }
+
+        protected override void OnDispose() { }
+    }
+}
+`;
+}
+
+interface BurstSystemCodeOptions {
+  name: string;
+  namespace: string;
+  usings: string[];
+  attributes: string[];
+  fields: string;
+  queryComponents: string[];
+  burstComponentCount: number;
+}
+
+function generateBurstSystemCode(opts: BurstSystemCodeOptions): string {
+  const { name, namespace, usings, attributes, fields, queryComponents } = opts;
+  const jobName = `${name}Job`;
+  const typeArgs = queryComponents.join(", ");
+  const baseType = `BurstSystem<${jobName}, ${typeArgs}>`;
+
+  // Generate job struct fields and Execute parameters
+  const jobFields = queryComponents
+    .map((c) => {
+      const fieldName = c.charAt(0).toLowerCase() + c.slice(1);
+      return `            public NativeArray<${c}> ${fieldName}Array;`;
+    })
+    .join("\n");
+
+  const executeParams = queryComponents
+    .map((c) => {
+      const fieldName = c.charAt(0).toLowerCase() + c.slice(1);
+      return `                var ${fieldName} = ${fieldName}Array[index];`;
+    })
+    .join("\n");
+
+  return `${usings.join("\n")}
+
+namespace ${namespace}
+{
+    [BurstCompile]
+    public struct ${jobName} : IJobParallelFor
+    {
+${jobFields}
+
+        public void Execute(int index)
+        {
+${executeParams}
+            // TODO: Process components
+        }
+    }
+
+${attributes.map(a => `    ${a}`).join("\n")}
+    public class ${name} : ${baseType}
+    {
+${fields ? fields + "\n" : ""}
+        protected override ${jobName} CreateJob()
+        {
+            return new ${jobName}
+            {
+                // TODO: Assign NativeArrays from component data
+            };
+        }
+
+        protected override void OnInitialize() { }
 
         protected override void OnDispose() { }
     }

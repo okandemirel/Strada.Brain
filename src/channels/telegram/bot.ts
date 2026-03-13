@@ -7,6 +7,8 @@ import type {
 } from "../channel.interface.js";
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
+import { RateLimiter } from "../../security/rate-limiter.js";
+import type { RateLimitConfig } from "../../security/rate-limiter.js";
 import type { FileDiff, BatchDiff } from "../../utils/diff-generator.js";
 import { formatDiffForTelegram, formatBatchDiffForTelegram } from "../../utils/diff-formatter.js";
 
@@ -47,6 +49,7 @@ export class TelegramChannel implements IChannelAdapter {
 
   private readonly bot: Bot;
   private readonly auth: AuthManager;
+  private readonly rateLimiter: RateLimiter;
   private handler: MessageHandler | null = null;
   private readonly pendingConfirmations = new Map<
     string,
@@ -54,9 +57,13 @@ export class TelegramChannel implements IChannelAdapter {
   >();
   private readonly pendingDiffConfirmations = new Map<string, PendingDiffConfirmation>();
 
-  constructor(token: string, auth: AuthManager) {
+  constructor(token: string, auth: AuthManager, rateLimitConfig?: Partial<RateLimitConfig>) {
     this.bot = new Bot(token);
     this.auth = auth;
+    this.rateLimiter = new RateLimiter({
+      messagesPerMinute: rateLimitConfig?.messagesPerMinute ?? 20,
+      messagesPerHour: rateLimitConfig?.messagesPerHour ?? 200,
+    });
     this.setupMiddleware();
     this.setupHandlers();
   }
@@ -81,6 +88,7 @@ export class TelegramChannel implements IChannelAdapter {
       onStart: (info) => {
         logger.info(`Telegram bot started: @${info.username}`);
       },
+      drop_pending_updates: true,
     });
   }
 
@@ -507,10 +515,20 @@ export class TelegramChannel implements IChannelAdapter {
       return;
     }
 
+    const userId = String(ctx.from?.id ?? "");
+
+    // Rate limit check
+    const rateResult = this.rateLimiter.checkMessageRate(userId);
+    if (!rateResult.allowed) {
+      getLogger().warn("Telegram: rate limited", { userId, reason: rateResult.reason });
+      await ctx.reply("You have sent too many messages. Please wait before trying again.");
+      return;
+    }
+
     const msg: IncomingMessage = {
       channelType: "telegram",
       chatId: String(ctx.chat?.id ?? ""),
-      userId: String(ctx.from?.id ?? ""),
+      userId,
       text: ctx.message?.text ?? "",
       replyTo: ctx.message?.reply_to_message?.message_id?.toString(),
       timestamp: new Date(
