@@ -4,10 +4,66 @@ All notable changes to Strada.Brain are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [4.1.0] - 2026-03-13 — Deep Audit & Embedding Upgrade
 
 ### Added
+- Gemini Embedding 2.0 (`gemini-embedding-2-preview`) with Matryoshka dimension support (128–3072)
+- `EMBEDDING_DIMENSIONS` configuration parameter for variable-dimension embeddings
+- Authoritative `STRADA_API` constants module as single source of truth for Strada.Core API references
+- `croner` scheduling library for cron-based trigger evaluation
+- Security warnings for unauthenticated monitoring endpoints
+
+### Changed
+- All hardcoded namespace/assembly references replaced with `STRADA_API` constants across codegen tools
+- Redundant regex call eliminated in service field name generation
+- Directory creation parallelized with `Promise.all` in module-create tool
+- Memory directory migration optimized with try-catch error handling for ENOTEMPTY/EEXIST
+- Brand rename completed: all remaining `STRATA_SYSTEM_PROMPT` references updated to `STRADA`
+- STRADA analyzer performance optimized with reduced redundant processing
+- OpenAI embeddings provider now sends `dimensions` parameter to API (was configured but not transmitted)
+
+### Fixed
+- Hardcoded update phase enum replaced with `STRADA_API` constant in system-create
+- Hardcoded assembly reference replaced with `STRADA_API` constant in module-create
+- Hardcoded namespaces replaced with `STRADA_API` constants in mediator-create and component-create
+- Brand rename in integration test and orchestrator test mocks
+- Input validation added for system dependencies in codegen tools
+
+### Security
+- Command injection prevention hardened in bootstrap and process runner
+- Critical input validation for system dependencies
+- Authentication gap warnings for dashboard monitoring endpoints
+
+---
+
+## [4.0.0] - 2026-03-13 — Strada.Core API Truth
+
+### Added
+- Authoritative Strada.Core API reference constants for compile-clean code generation
+
+### Changed
+- All code generation tools updated to produce valid Strada.Core v4 output
+
+---
+
+## [3.0.0] - 2026-03-12 — Multi-Agent & Deployment (Level 5+)
+
+v3.0 added 5 phases (21–25), shipping 22 requirements across 18 plans with 3070 tests and 135K LOC, adding multi-agent orchestration and deployment automation.
+
+### Added
+- AgentManager with per-channel session isolation and lifecycle management
+- AgentRegistry and AgentBudgetTracker for multi-agent resource control
+- DelegationManager with DelegationTool, TierRouter (4-tier), and depth enforcement (max 2)
+- DeploymentExecutor with ReadinessChecker, DeployTrigger, approval gate, and circuit breaker
+- Memory consolidation engine with HNSW clustering
+- Dashboard delegations and agents panels with API endpoints
+- CLI commands for agent and delegation management
 - Phase 20 gap closure: trigger fire history persistence, goal:failed event emission, plan_summary column migration
+
+### Changed
+- Multi-agent opt-in via config; disabled = identical to v2.0
+- Max delegation depth enforced at 2
+- Deployment defaults to disabled, requires explicit opt-in
 
 ---
 

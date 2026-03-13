@@ -5,7 +5,7 @@ Thank you for your interest in contributing. This guide covers the development s
 ## Prerequisites
 
 - **Node.js** >= 20.0.0
-- **npm** (comes with Node.js)
+- **Bun** or **npm** (Bun recommended for faster installs)
 - A code editor with TypeScript support (VS Code recommended)
 
 ## Development Setup
@@ -60,8 +60,8 @@ npm run dev -- cli
 - Place test files next to the source file they test, named `*.test.ts`.
 - Mock external dependencies (AI providers, file system, network) in unit tests.
 - Test edge cases: empty inputs, large inputs, error conditions.
-- Integration tests go in `src/tests/`.
-- Current test suite: 2775+ tests across 130+ test files.
+- Integration tests go in `src/` (co-located as `integration.test.ts`).
+- Current test suite: 3070+ tests across 179 test files.
 
 ## Adding a New Tool
 
@@ -72,6 +72,8 @@ npm run dev -- cli
 5. Write tests covering success and error paths.
 
 ## Adding a New Channel
+
+Strada.Brain supports 6 channels: Web (default), Telegram, Discord, Slack, WhatsApp, and CLI.
 
 1. Create a directory under `src/channels/` (e.g., `src/channels/mychannel/`).
 2. Implement the `IChannelAdapter` interface from `channel.interface.ts`.
