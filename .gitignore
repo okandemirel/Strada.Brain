@@ -11,4 +11,6 @@ dist/
 coverage/
 .worktrees/
 .planning/
+.claude/settings.local.json
+.kimi/
 .strada-memory/
