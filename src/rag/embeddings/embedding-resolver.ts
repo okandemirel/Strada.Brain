@@ -38,6 +38,7 @@ export function collectApiKeys(config: Config): Record<string, string | undefine
 interface CreateProviderOptions {
   modelOverride?: string;
   baseUrlOverride?: string;
+  dimensionsOverride?: number;
   sourcePrefix: string;
 }
 
@@ -71,12 +72,18 @@ function createEmbeddingProvider(
   const providerPreset = PROVIDER_PRESETS[name];
   const baseUrl = options.baseUrlOverride ?? providerPreset?.baseUrl;
 
+  const requestDimensions = options.dimensionsOverride
+    && preset.supportedDimensions.includes(options.dimensionsOverride)
+    ? options.dimensionsOverride
+    : undefined;
+
   return {
     provider: new OpenAIEmbeddingProvider({
       apiKey,
       model: options.modelOverride ?? preset.model,
       baseUrl,
       dimensions: preset.dimensions,
+      requestDimensions,
       batchSize: preset.maxBatchSize,
       label: preset.label,
     }),
@@ -98,17 +105,20 @@ export function resolveEmbeddingProvider(config: Config): EmbeddingResolution | 
   const apiKeys = collectApiKeys(config);
   const modelOverride = config.rag.model;
 
+  const dimensionsOverride = config.rag.dimensions;
+
   // 1. Explicit provider (not "auto")
   if (providerName !== "auto") {
     return createEmbeddingProvider(providerName, apiKeys, {
       modelOverride,
       baseUrlOverride: config.rag.baseUrl,
+      dimensionsOverride,
       sourcePrefix: "explicit",
     });
   }
 
   // 2. Auto mode -- scan provider chain for first embedding-capable provider
-  const autoOptions: CreateProviderOptions = { modelOverride, sourcePrefix: "auto" };
+  const autoOptions: CreateProviderOptions = { modelOverride, dimensionsOverride, sourcePrefix: "auto" };
 
   const chainNames = config.providerChain
     ? config.providerChain.split(",").map((s) => s.trim().toLowerCase())

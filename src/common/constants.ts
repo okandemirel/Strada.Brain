@@ -105,23 +105,26 @@ export interface EmbeddingPreset {
   readonly model: string;
   readonly dimensions: number;
   readonly maxBatchSize: number;
+  readonly maxInputTokens: number;
+  /** Matryoshka-supported output dimensions (empty = fixed only) */
+  readonly supportedDimensions: readonly number[];
   readonly label: string;
 }
 
 /** Embedding presets for all known providers */
 export const EMBEDDING_PRESETS: Record<string, EmbeddingPreset> = {
-  openai:    { supported: true,  model: "text-embedding-3-small",                    dimensions: 1536, maxBatchSize: 100, label: "OpenAI" },
-  deepseek:  { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "DeepSeek" },
-  mistral:   { supported: true,  model: "mistral-embed",                             dimensions: 1024, maxBatchSize: 100, label: "Mistral" },
-  together:  { supported: true,  model: "togethercomputer/m2-bert-80M-8k-retrieval", dimensions: 768,  maxBatchSize: 100, label: "Together AI" },
-  fireworks: { supported: true,  model: "nomic-ai/nomic-embed-text-v1.5",            dimensions: 768,  maxBatchSize: 100, label: "Fireworks AI" },
-  qwen:      { supported: true,  model: "text-embedding-v3",                         dimensions: 1024, maxBatchSize: 100, label: "Qwen" },
-  gemini:    { supported: true,  model: "gemini-embedding-001",                      dimensions: 3072, maxBatchSize: 1,   label: "Gemini" },
-  claude:    { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "Claude" },
-  kimi:      { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "Kimi" },
-  minimax:   { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "MiniMax" },
-  groq:      { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   label: "Groq" },
-  ollama:    { supported: true,  model: "nomic-embed-text",                          dimensions: 768,  maxBatchSize: 100, label: "Ollama" },
+  openai:    { supported: true,  model: "text-embedding-3-small",                    dimensions: 1536, maxBatchSize: 100, maxInputTokens: 8191,  supportedDimensions: [512, 1536],               label: "OpenAI" },
+  deepseek:  { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   maxInputTokens: 0,     supportedDimensions: [],                        label: "DeepSeek" },
+  mistral:   { supported: true,  model: "mistral-embed",                             dimensions: 1024, maxBatchSize: 100, maxInputTokens: 8192,  supportedDimensions: [],                        label: "Mistral" },
+  together:  { supported: true,  model: "togethercomputer/m2-bert-80M-8k-retrieval", dimensions: 768,  maxBatchSize: 100, maxInputTokens: 8192,  supportedDimensions: [],                        label: "Together AI" },
+  fireworks: { supported: true,  model: "nomic-ai/nomic-embed-text-v1.5",            dimensions: 768,  maxBatchSize: 100, maxInputTokens: 8192,  supportedDimensions: [],                        label: "Fireworks AI" },
+  qwen:      { supported: true,  model: "text-embedding-v3",                         dimensions: 1024, maxBatchSize: 100, maxInputTokens: 8192,  supportedDimensions: [],                        label: "Qwen" },
+  gemini:    { supported: true,  model: "gemini-embedding-2-preview",                dimensions: 3072, maxBatchSize: 100, maxInputTokens: 8192,  supportedDimensions: [256, 512, 768, 1536, 3072], label: "Gemini" },
+  claude:    { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   maxInputTokens: 0,     supportedDimensions: [],                        label: "Claude" },
+  kimi:      { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   maxInputTokens: 0,     supportedDimensions: [],                        label: "Kimi" },
+  minimax:   { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   maxInputTokens: 0,     supportedDimensions: [],                        label: "MiniMax" },
+  groq:      { supported: false, model: "",                                           dimensions: 0,    maxBatchSize: 0,   maxInputTokens: 0,     supportedDimensions: [],                        label: "Groq" },
+  ollama:    { supported: true,  model: "nomic-embed-text",                          dimensions: 768,  maxBatchSize: 100, maxInputTokens: 8192,  supportedDimensions: [],                        label: "Ollama" },
 };
 
 // ============================================================================

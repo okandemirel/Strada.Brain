@@ -16,6 +16,8 @@ interface OpenAIEmbeddingOptions {
   model?: string;
   baseUrl?: string;
   dimensions?: number;
+  /** Request specific output dimensions from the API (Matryoshka support) */
+  requestDimensions?: number;
   label?: string;
   batchSize?: number;
 }
@@ -33,12 +35,14 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
   private readonly model: string;
   private readonly baseUrl: string;
   private readonly batchSize: number;
+  private readonly requestDimensions?: number;
 
   constructor(opts: OpenAIEmbeddingOptions) {
     this.apiKey = opts.apiKey;
     this.model = opts.model ?? "text-embedding-3-small";
     this.baseUrl = opts.baseUrl ?? "https://api.openai.com/v1";
-    this.dimensions = opts.dimensions ?? KNOWN_MODELS[this.model] ?? 1536;
+    this.requestDimensions = opts.requestDimensions;
+    this.dimensions = opts.requestDimensions ?? opts.dimensions ?? KNOWN_MODELS[this.model] ?? 1536;
     this.batchSize = opts.batchSize ?? DEFAULT_BATCH_SIZE;
     const providerLabel = opts.label ?? "OpenAI";
     this.name = `${providerLabel}:${this.model}`;
@@ -111,6 +115,7 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
           body: JSON.stringify({
             input: texts,
             model: this.model,
+            ...(this.requestDimensions ? { dimensions: this.requestDimensions } : {}),
           }),
         });
       } catch (err) {

@@ -78,6 +78,7 @@ export type EnvVarName =
   | "EMBEDDING_PROVIDER"
   | "EMBEDDING_MODEL"
   | "EMBEDDING_BASE_URL"
+  | "EMBEDDING_DIMENSIONS"
   | "RAG_CONTEXT_MAX_TOKENS"
   | "STREAMING_ENABLED"
   | "RATE_LIMIT_ENABLED"
@@ -326,6 +327,7 @@ export interface RAGConfig {
   readonly provider: EmbeddingProvider;
   readonly model?: string;
   readonly baseUrl?: string;
+  readonly dimensions?: number;
   readonly contextMaxTokens: number;
 }
 
@@ -657,6 +659,7 @@ export const configSchema = z
     embeddingProvider: embeddingProviderSchema.default("auto"),
     embeddingModel: z.string().optional(),
     embeddingBaseUrl: z.string().optional(),
+    embeddingDimensions: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(128).max(3072)).optional(),
     ragContextMaxTokens: z
       .string()
       .transform((s) => parseInt(s, 10))
@@ -1031,6 +1034,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       provider: rawConfig.embeddingProvider,
       model: rawConfig.embeddingModel,
       baseUrl: rawConfig.embeddingBaseUrl,
+      dimensions: rawConfig.embeddingDimensions,
       contextMaxTokens: rawConfig.ragContextMaxTokens,
     },
 
@@ -1629,6 +1633,7 @@ function loadFromEnv(): EnvVars {
     embeddingProvider: process.env["EMBEDDING_PROVIDER"],
     embeddingModel: process.env["EMBEDDING_MODEL"],
     embeddingBaseUrl: process.env["EMBEDDING_BASE_URL"],
+    embeddingDimensions: process.env["EMBEDDING_DIMENSIONS"],
     ragContextMaxTokens: process.env["RAG_CONTEXT_MAX_TOKENS"],
     streamingEnabled: process.env["STREAMING_ENABLED"],
     shellEnabled: process.env["SHELL_ENABLED"],

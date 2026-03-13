@@ -136,7 +136,7 @@ describe("resolveEmbeddingProvider", () => {
     expect(result!.provider.name).toContain("text-embedding-3-large");
   });
 
-  it("gemini uses batchSize=1", () => {
+  it("gemini uses gemini-embedding-2-preview with 3072 dimensions", () => {
     const config = makeConfig({
       geminiApiKey: "gem-key",
       rag: { enabled: true, provider: "gemini", contextMaxTokens: 4000 },
@@ -145,6 +145,28 @@ describe("resolveEmbeddingProvider", () => {
     const result = resolveEmbeddingProvider(config);
     expect(result).not.toBeNull();
     expect(result!.provider.name).toContain("Gemini");
+    expect(result!.provider.dimensions).toBe(3072);
+  });
+
+  it("gemini respects EMBEDDING_DIMENSIONS override via Matryoshka", () => {
+    const config = makeConfig({
+      geminiApiKey: "gem-key",
+      rag: { enabled: true, provider: "gemini", dimensions: 768, contextMaxTokens: 4000 },
+    });
+
+    const result = resolveEmbeddingProvider(config);
+    expect(result).not.toBeNull();
+    expect(result!.provider.dimensions).toBe(768);
+  });
+
+  it("ignores unsupported dimension override", () => {
+    const config = makeConfig({
+      geminiApiKey: "gem-key",
+      rag: { enabled: true, provider: "gemini", dimensions: 999, contextMaxTokens: 4000 },
+    });
+
+    const result = resolveEmbeddingProvider(config);
+    expect(result).not.toBeNull();
     expect(result!.provider.dimensions).toBe(3072);
   });
 
