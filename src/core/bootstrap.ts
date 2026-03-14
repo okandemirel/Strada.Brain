@@ -1702,7 +1702,7 @@ async function initializeChannel(
     }
 
     case "web":
-      return new WebChannel(config.web.port, config.dashboard?.port ?? 3100);
+      return new WebChannel(config.web.port, config.dashboard.port);
 
     case "matrix": {
       const { MatrixChannel } = await import("../channels/matrix/channel.js");

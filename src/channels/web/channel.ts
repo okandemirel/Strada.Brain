@@ -488,30 +488,61 @@ export class WebChannel
    * Proxy /api/* requests to the dashboard server (same-origin solution).
    * Eliminates CORS issues by serving dashboard data from the same port.
    */
+  /** Allowlisted dashboard API paths for proxy forwarding. */
+  private static readonly ALLOWED_PROXY_PATHS = new Set([
+    "/api/metrics",
+    "/api/daemon",
+    "/api/maintenance",
+    "/api/chain-resilience",
+    "/api/agents",
+    "/api/delegations",
+    "/api/consolidation",
+    "/api/deployment",
+  ]);
+
+  /**
+   * Proxy GET /api/* requests to the dashboard server (same-origin solution).
+   * Restricted to GET-only with path allowlist for security.
+   */
   private async proxyToDashboard(req: HttpReq, res: ServerResponse, url: string): Promise<void> {
+    // Only allow GET — all dashboard read endpoints are GET
+    if (req.method !== "GET") {
+      res.writeHead(405, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method Not Allowed" }));
+      return;
+    }
+
+    // Allowlist check (strip query string for matching)
+    const pathOnly = url.split("?")[0]!;
+    const isAllowed =
+      WebChannel.ALLOWED_PROXY_PATHS.has(pathOnly) ||
+      pathOnly.startsWith("/api/goals") ||
+      pathOnly.startsWith("/api/agent-metrics") ||
+      pathOnly.startsWith("/api/triggers");
+
+    if (!isAllowed) {
+      res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden" }));
+      return;
+    }
+
     try {
-      const dashboardUrl = `http://127.0.0.1:${this.dashboardPort}${url}`;
+      // Defense-in-depth: validate constructed URL points to expected target
+      const target = new URL(url, `http://127.0.0.1:${this.dashboardPort}`);
+      if (target.hostname !== "127.0.0.1" || target.port !== String(this.dashboardPort)) {
+        res.writeHead(400, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Bad Request" }));
+        return;
+      }
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
 
-      const method = req.method ?? "GET";
-      const hasBody = method !== "GET" && method !== "HEAD";
-      const headers: Record<string, string> = { "Accept": "application/json" };
-      if (req.headers["content-type"]) {
-        headers["Content-Type"] = req.headers["content-type"];
-      }
-
-      const fetchOptions: RequestInit & { duplex?: string } = {
-        method,
+      const response = await fetch(target.href, {
+        method: "GET",
         signal: controller.signal,
-        headers,
-      };
-      if (hasBody) {
-        fetchOptions.body = req as unknown as BodyInit;
-        fetchOptions.duplex = "half";
-      }
-
-      const response = await fetch(dashboardUrl, fetchOptions);
+        headers: { "Accept": "application/json" },
+      });
       clearTimeout(timeout);
 
       const body = await response.text();
@@ -521,7 +552,6 @@ export class WebChannel
       });
       res.end(body);
     } catch {
-      // Dashboard server not running or unreachable
       res.writeHead(503, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Dashboard API unavailable", hint: "Set DASHBOARD_ENABLED=true" }));
     }

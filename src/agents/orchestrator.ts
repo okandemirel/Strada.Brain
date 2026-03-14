@@ -410,11 +410,8 @@ export class Orchestrator {
     if (this.instinctRetriever) {
       try {
         const insightResult = await this.instinctRetriever.getInsightsForTask(prompt);
-        if (insightResult.insights && (Array.isArray(insightResult.insights) ? insightResult.insights.length > 0 : insightResult.insights)) {
-          // Store insights in system prompt for background task context
-          const insightsText = Array.isArray(insightResult.insights)
-            ? insightResult.insights.join("\n")
-            : String(insightResult.insights);
+        if (insightResult.insights.length > 0) {
+          const insightsText = insightResult.insights.join("\n");
           systemPrompt += `\n\n## Learned Insights\n${insightsText}\n`;
         }
       } catch {
