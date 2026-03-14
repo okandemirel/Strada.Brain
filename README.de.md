@@ -8,13 +8,13 @@
   <strong>KI-gesteuerter Entwicklungs-Agent fuer Unity / Strada.Core-Projekte</strong><br/>
   Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt, Fehler automatisch behebt und aus seinen Fehlern lernt &mdash; und mit einer 24/7-Daemon-Schleife autonom arbeitet.
   <br/><br/>
-  Jetzt mit Multi-Agent-Orchestrierung, Aufgabendelegation, Ged&auml;chtniskonsolidierung und einem Deployment-Subsystem mit Genehmigungsgates.
+  Jetzt mit Multi-Agent-Orchestrierung, Aufgabendelegation, Ged&auml;chtniskonsolidierung, einem Deployment-Subsystem mit Genehmigungsgates und Medienfreigabe mit LLM-Vision-Unterstuetzung.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3100%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3180%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lizenz">
 </p>
 
@@ -503,7 +503,7 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 
 ## Tools
 
-Der Agent verfuegt ueber mehr als 30 integrierte Tools, organisiert nach Kategorie:
+Der Agent verfuegt ueber mehr als 40 integrierte Tools, organisiert nach Kategorie:
 
 ### Dateioperationen
 | Tool | Beschreibung |
@@ -585,10 +585,11 @@ Die RAG-Pipeline (Retrieval-Augmented Generation) indiziert Ihren C#-Quellcode f
 | Funktion | Web | Telegram | Discord | Slack | WhatsApp | CLI |
 |----------|-----|----------|---------|-------|----------|-----|
 | Textnachrichten | Ja | Ja | Ja | Ja | Ja | Ja |
+| Medienanhänge | Ja (base64) | Ja (Foto/Dok/Video/Sprache) | Ja (beliebiger Anhang) | Ja (Datei-Download) | Ja (Bild/Video/Audio/Dok) | Nein |
+| Vision (Bild→LLM) | Ja | Ja | Ja | Ja | Ja | Nein |
 | Streaming (In-Place-Bearbeitung) | Ja | Ja | Ja | Ja | Ja | Ja |
 | Tipp-Anzeige | Ja | Ja | Ja | Nein | Ja | Nein |
 | Bestaetigungsdialoge | Ja (Modal) | Ja (Inline-Tastatur) | Ja (Buttons) | Ja (Block Kit) | Ja (nummerierte Antwort) | Ja (Readline) |
-| Datei-Uploads | Ja | Nein | Nein | Ja | Ja | Nein |
 | Thread-Unterstuetzung | Nein | Nein | Ja | Ja | Nein | Nein |
 | Ratenbegrenzer (ausgehend) | Ja (pro Sitzung) | Nein | Ja (Token Bucket) | Ja (4-stufiges Schiebefenster) | Inline-Drosselung | Nein |
 
@@ -616,22 +617,25 @@ Pro-Benutzer-Schiebefenster (Minute/Stunde) + globale taegliche/monatliche Token
 ### Schicht 3: Pfadschutz
 Jede Dateioperation loest Symlinks auf und validiert, dass der Pfad innerhalb des Projektstammverzeichnisses bleibt. Ueber 30 sensible Muster werden blockiert (`.env`, `.git/credentials`, SSH-Schluessel, Zertifikate, `node_modules/`).
 
-### Schicht 4: Geheimnis-Bereinigung
+### Schicht 4: Mediensicherheit
+Alle Medienanhänge werden vor der Verarbeitung validiert: MIME-Allowlist, typspezifische Groessenlimits (20 MB Bild, 50 MB Video, 25 MB Audio, 10 MB Dokument), Magic-Bytes-Verifizierung und SSRF-Schutz bei Download-URLs.
+
+### Schicht 5: Geheimnis-Bereinigung
 24 Regex-Muster erkennen und maskieren Anmeldeinformationen in allen Tool-Ausgaben, bevor sie das LLM erreichen. Abgedeckt: OpenAI-Schluessel, GitHub-Tokens, Slack-/Discord-/Telegram-Tokens, AWS-Schluessel, JWTs, Bearer-Auth, PEM-Schluessel, Datenbank-URLs und generische Geheimnis-Muster.
 
-### Schicht 5: Nur-Lesen-Modus
+### Schicht 6: Nur-Lesen-Modus
 Wenn `READ_ONLY_MODE=true`, werden 23 Schreib-Tools vollstaendig aus der Tool-Liste des Agenten entfernt -- das LLM kann nicht einmal versuchen, sie aufzurufen.
 
-### Schicht 6: Operationsbestaetigung
+### Schicht 7: Operationsbestaetigung
 Schreiboperationen (Dateischreibvorgaenge, Git-Commits, Shell-Ausfuehrung) koennen eine Benutzerbestaetigung ueber die interaktive Oberflaeche des Kanals erfordern (Buttons, Inline-Tastaturen, Text-Eingabeaufforderungen).
 
-### Schicht 7: Tool-Ausgabe-Bereinigung
+### Schicht 8: Tool-Ausgabe-Bereinigung
 Alle Tool-Ergebnisse werden auf 8192 Zeichen begrenzt und vor der Rueckgabe an das LLM auf API-Schluessel-Muster geprueft.
 
-### Schicht 8: RBAC (intern)
+### Schicht 9: RBAC (intern)
 5 Rollen (Superadmin, Admin, Entwickler, Betrachter, Service) mit einer Berechtigungsmatrix fuer 9 Ressourcentypen. Die Richtlinien-Engine unterstuetzt zeit-, IP- und benutzerdefinierte Bedingungen.
 
-### Schicht 9: Daemon-Sicherheit
+### Schicht 10: Daemon-Sicherheit
 `DaemonSecurityPolicy` erzwingt Tool-spezifische Genehmigungsanforderungen fuer Daemon-ausgeloeste Operationen. Schreib-Tools erfordern eine ausdrueckliche Benutzergenehmigung ueber die `ApprovalQueue` vor der Ausfuehrung.
 
 ---

@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Agente de Desarrollo con IA para Proyectos Unity / Strada.Core</strong><br/>
-  Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7. Ahora con orquestacion multi-agente, delegacion de tareas, consolidacion de memoria y un subsistema de despliegue con puertas de aprobacion.
+  Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7. Ahora con orquestacion multi-agente, delegacion de tareas, consolidacion de memoria, un subsistema de despliegue con puertas de aprobacion y comparticion de medios con soporte de vision LLM.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3100%2B-brightgreen?style=flat-square" alt="Pruebas">
+  <img src="https://img.shields.io/badge/tests-3180%2B-brightgreen?style=flat-square" alt="Pruebas">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Licencia">
 </p>
 
@@ -532,7 +532,7 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 
 ## Herramientas
 
-El agente tiene mas de 30 herramientas integradas organizadas por categoria:
+El agente tiene mas de 40 herramientas integradas organizadas por categoria:
 
 ### Operaciones de Archivos
 | Herramienta | Descripcion |
@@ -614,10 +614,11 @@ El pipeline RAG (Retrieval-Augmented Generation) indexa tu codigo fuente C# para
 | Capacidad | Web | Telegram | Discord | Slack | WhatsApp | CLI |
 |-----------|-----|----------|---------|-------|----------|-----|
 | Mensajes de texto | Si | Si | Si | Si | Si | Si |
+| Adjuntos multimedia | Si (base64) | Si (foto/doc/video/voz) | Si (cualquier adjunto) | Si (descarga de archivo) | Si (imagen/video/audio/doc) | No |
+| Vision (imagen→LLM) | Si | Si | Si | Si | Si | No |
 | Streaming (edicion in situ) | Si | Si | Si | Si | Si | Si |
 | Indicador de escritura | Si | Si | Si | No | Si | No |
 | Dialogos de confirmacion | Si (modal) | Si (teclado inline) | Si (botones) | Si (Block Kit) | Si (respuesta numerada) | Si (readline) |
-| Carga de archivos | Si | No | No | Si | Si | No |
 | Soporte de hilos | No | No | Si | Si | No | No |
 | Limitador de tasa (salida) | Si (por sesion) | No | Si (token bucket) | Si (ventana deslizante 4 niveles) | Limitacion inline | No |
 
@@ -645,22 +646,25 @@ Ventana deslizante por usuario (minuto/hora) + topes globales diarios/mensuales 
 ### Capa 3: Proteccion de Rutas
 Cada operacion de archivo resuelve symlinks y valida que la ruta permanezca dentro del directorio raiz del proyecto. Mas de 30 patrones sensibles estan bloqueados (`.env`, `.git/credentials`, claves SSH, certificados, `node_modules/`).
 
-### Capa 4: Sanitizacion de Secretos
+### Capa 4: Seguridad de Medios
+Todos los adjuntos multimedia son validados antes de su procesamiento: lista de MIME permitidos, limites de tamano por tipo (20 MB imagen, 50 MB video, 25 MB audio, 10 MB documento), verificacion de bytes magicos y proteccion SSRF en URLs de descarga.
+
+### Capa 5: Sanitizacion de Secretos
 24 patrones regex detectan y enmascaran credenciales en todas las salidas de herramientas antes de que lleguen al LLM. Cubre: claves OpenAI, tokens de GitHub, tokens de Slack/Discord/Telegram, claves AWS, JWTs, autenticacion Bearer, claves PEM, URLs de bases de datos y patrones genericos de secretos.
 
-### Capa 5: Modo Solo Lectura
+### Capa 6: Modo Solo Lectura
 Cuando `READ_ONLY_MODE=true`, se eliminan 23 herramientas de escritura completamente de la lista de herramientas del agente -- el LLM ni siquiera puede intentar llamarlas.
 
-### Capa 6: Confirmacion de Operaciones
+### Capa 7: Confirmacion de Operaciones
 Las operaciones de escritura (escritura de archivos, commits de Git, ejecucion de shell) pueden requerir confirmacion del usuario a traves de la interfaz interactiva del canal (botones, teclados inline, prompts de texto).
 
-### Capa 7: Sanitizacion de Salida de Herramientas
+### Capa 8: Sanitizacion de Salida de Herramientas
 Todos los resultados de herramientas se limitan a 8192 caracteres y se limpian de patrones de claves API antes de devolverse al LLM.
 
-### Capa 8: RBAC (Interno)
+### Capa 9: RBAC (Interno)
 5 roles (superadmin, admin, desarrollador, visualizador, servicio) con una matriz de permisos que cubre 9 tipos de recursos. El motor de politicas soporta condiciones basadas en tiempo, IP y condiciones personalizadas.
 
-### Capa 9: Seguridad del Daemon
+### Capa 10: Seguridad del Daemon
 `DaemonSecurityPolicy` impone requisitos de aprobacion a nivel de herramienta para operaciones activadas por el daemon. Las herramientas de escritura requieren aprobacion explicita del usuario a traves del `ApprovalQueue` antes de su ejecucion.
 
 ---

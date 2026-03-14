@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Agent de D&eacute;veloppement Propuls&eacute; par l'IA pour les Projets Unity / Strada.Core</strong><br/>
-  Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7. D&eacute;sormais avec orchestration multi-agent, d&eacute;l&eacute;gation de t&acirc;ches, consolidation de m&eacute;moire et un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation.
+  Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7. D&eacute;sormais avec orchestration multi-agent, d&eacute;l&eacute;gation de t&acirc;ches, consolidation de m&eacute;moire, un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation et partage de m&eacute;dias avec support de vision LLM.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3100%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3180%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Licence">
 </p>
 
@@ -531,7 +531,7 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 
 ## Outils
 
-L'agent dispose de plus de 30 outils int&eacute;gr&eacute;s organis&eacute;s par cat&eacute;gorie :
+L'agent dispose de plus de 40 outils int&eacute;gr&eacute;s organis&eacute;s par cat&eacute;gorie :
 
 ### Op&eacute;rations sur les Fichiers
 | Outil | Description |
@@ -613,10 +613,11 @@ Le pipeline RAG (Retrieval-Augmented Generation) indexe votre code source C# pou
 | Capacit&eacute; | Web | Telegram | Discord | Slack | WhatsApp | CLI |
 |----------|-----|----------|---------|-------|----------|-----|
 | Messagerie texte | Oui | Oui | Oui | Oui | Oui | Oui |
+| Pi&egrave;ces jointes m&eacute;dias | Oui (base64) | Oui (photo/doc/vid&eacute;o/voix) | Oui (toute pi&egrave;ce jointe) | Oui (t&eacute;l&eacute;chargement de fichier) | Oui (image/vid&eacute;o/audio/doc) | Non |
+| Vision (image→LLM) | Oui | Oui | Oui | Oui | Oui | Non |
 | Streaming (&eacute;dition en place) | Oui | Oui | Oui | Oui | Oui | Oui |
 | Indicateur de saisie | Oui | Oui | Oui | No-op | Oui | Non |
 | Dialogues de confirmation | Oui (modal) | Oui (clavier inline) | Oui (boutons) | Oui (Block Kit) | Oui (r&eacute;ponse num&eacute;rot&eacute;e) | Oui (readline) |
-| Envoi de fichiers | Oui | Non | Non | Oui | Oui | Non |
 | Support des fils | Non | Non | Oui | Oui | Non | Non |
 | Limiteur de d&eacute;bit (sortant) | Oui (par session) | Non | Oui (token bucket) | Oui (fen&ecirc;tre glissante 4 niveaux) | Limitation en ligne | Non |
 
@@ -644,22 +645,25 @@ Fen&ecirc;tre glissante par utilisateur (minute/heure) + plafonds globaux quotid
 ### Couche 3 : Gardien de Chemin
 Chaque op&eacute;ration sur les fichiers r&eacute;sout les liens symboliques et valide que le chemin reste dans la racine du projet. Plus de 30 motifs sensibles sont bloqu&eacute;s (`.env`, `.git/credentials`, cl&eacute;s SSH, certificats, `node_modules/`).
 
-### Couche 4 : Assainisseur de Secrets
+### Couche 4 : S&eacute;curit&eacute; des M&eacute;dias
+Toutes les pi&egrave;ces jointes m&eacute;dias sont valid&eacute;es avant traitement : liste d'autorisation MIME, limites de taille par type (20 Mo image, 50 Mo vid&eacute;o, 25 Mo audio, 10 Mo document), v&eacute;rification des octets magiques et protection SSRF sur les URLs de t&eacute;l&eacute;chargement.
+
+### Couche 5 : Assainisseur de Secrets
 24 motifs regex d&eacute;tectent et masquent les identifiants dans toutes les sorties d'outils avant qu'elles n'atteignent le LLM. Couvre : cl&eacute;s OpenAI, tokens GitHub, tokens Slack/Discord/Telegram, cl&eacute;s AWS, JWT, authentification Bearer, cl&eacute;s PEM, URLs de bases de donn&eacute;es et motifs g&eacute;n&eacute;riques de secrets.
 
-### Couche 5 : Mode Lecture Seule
+### Couche 6 : Mode Lecture Seule
 Quand `READ_ONLY_MODE=true`, 23 outils d'&eacute;criture sont enti&egrave;rement retir&eacute;s de la liste d'outils de l'agent -- le LLM ne peut m&ecirc;me pas tenter de les appeler.
 
-### Couche 6 : Confirmation des Op&eacute;rations
+### Couche 7 : Confirmation des Op&eacute;rations
 Les op&eacute;rations d'&eacute;criture (&eacute;criture de fichiers, commits Git, ex&eacute;cution shell) peuvent n&eacute;cessiter une confirmation de l'utilisateur via l'interface interactive du canal (boutons, claviers inline, invites texte).
 
-### Couche 7 : Assainissement des Sorties d'Outils
+### Couche 8 : Assainissement des Sorties d'Outils
 Toutes les sorties d'outils sont limit&eacute;es &agrave; 8192 caract&egrave;res et nettoy&eacute;es des motifs de cl&eacute;s API avant d'&ecirc;tre renvoy&eacute;es au LLM.
 
-### Couche 8 : RBAC (Interne)
+### Couche 9 : RBAC (Interne)
 5 r&ocirc;les (superadmin, admin, developer, viewer, service) avec une matrice de permissions couvrant 9 types de ressources. Le moteur de politiques supporte des conditions bas&eacute;es sur le temps, l'IP et des conditions personnalis&eacute;es.
 
-### Couche 9 : S&eacute;curit&eacute; du Daemon
+### Couche 10 : S&eacute;curit&eacute; du Daemon
 `DaemonSecurityPolicy` impose des exigences d'approbation au niveau des outils pour les op&eacute;rations d&eacute;clench&eacute;es par le daemon. Les outils d'&eacute;criture n&eacute;cessitent l'approbation explicite de l'utilisateur via l'`ApprovalQueue` avant ex&eacute;cution.
 
 ---
