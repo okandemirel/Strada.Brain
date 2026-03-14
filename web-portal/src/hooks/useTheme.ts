@@ -5,7 +5,7 @@ export type Theme = 'dark' | 'light'
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(() => {
     const saved = localStorage.getItem('strada-theme')
-    return (saved === 'light' ? 'light' : 'dark') as Theme
+    return saved === 'light' ? 'light' : 'dark'
   })
 
   useEffect(() => {

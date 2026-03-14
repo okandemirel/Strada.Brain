@@ -20,7 +20,7 @@ export interface MarkdownMessage {
 export interface StreamStartMessage {
   type: 'stream_start'
   streamId: string
-  text: string
+  text?: string
 }
 
 export interface StreamUpdateMessage {

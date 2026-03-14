@@ -18,7 +18,7 @@ export interface UseWebSocketReturn {
   status: ConnectionStatus
   confirmation: ConfirmationState | null
   isTyping: boolean
-  sendMessage: (text: string, attachments?: Attachment[]) => void
+  sendMessage: (text: string, attachments?: Attachment[]) => boolean
   sendConfirmation: (confirmId: string, option: string) => void
 }
 
@@ -90,19 +90,6 @@ export function useWebSocket(): UseWebSocketReturn {
           break
 
         case 'text':
-          setIsTyping(false)
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: data.messageId || generateId(),
-              sender: 'assistant',
-              text: data.text,
-              isMarkdown: false,
-              timestamp: Date.now(),
-            },
-          ])
-          break
-
         case 'markdown':
           setIsTyping(false)
           setMessages((prev) => [
@@ -111,7 +98,7 @@ export function useWebSocket(): UseWebSocketReturn {
               id: data.messageId || generateId(),
               sender: 'assistant',
               text: data.text,
-              isMarkdown: true,
+              isMarkdown: data.type === 'markdown',
               timestamp: Date.now(),
             },
           ])
@@ -187,9 +174,9 @@ export function useWebSocket(): UseWebSocketReturn {
     }
   }, [connect])
 
-  const sendMessage = useCallback((text: string, attachments?: Attachment[]) => {
+  const sendMessage = useCallback((text: string, attachments?: Attachment[]): boolean => {
     const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false
 
     // Add user message to display
     setMessages((prev) => [
@@ -208,6 +195,7 @@ export function useWebSocket(): UseWebSocketReturn {
       payload.attachments = attachments
     }
     ws.send(JSON.stringify(payload))
+    return true
   }, [])
 
   const sendConfirmation = useCallback((confirmId: string, option: string) => {

@@ -290,7 +290,7 @@ body {
 
 /* ===== Confirmation Dialog ===== */
 .confirmation-overlay {
-  display: none;
+  display: flex;
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
@@ -298,10 +298,6 @@ body {
   align-items: center;
   justify-content: center;
   backdrop-filter: blur(2px);
-}
-
-.confirmation-overlay.active {
-  display: flex;
 }
 
 .confirmation-dialog {
@@ -358,7 +354,6 @@ body {
 .input-area {
   display: flex;
   flex-direction: column;
-  gap: 0;
   padding: 12px 20px 16px;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);

@@ -4,6 +4,9 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import type { ChatMessage as ChatMessageType } from '../types/messages'
 
+const REMARK_PLUGINS = [remarkGfm]
+const REHYPE_PLUGINS = [rehypeHighlight]
+
 interface ChatMessageProps {
   message: ChatMessageType
 }
@@ -16,7 +19,7 @@ function ChatMessageComponent({ message }: ChatMessageProps) {
       {isUser || !message.isMarkdown ? (
         <span>{message.text}</span>
       ) : (
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+        <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
           {message.text}
         </ReactMarkdown>
       )}

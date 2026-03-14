@@ -1,8 +1,8 @@
-import { useCallback, useRef, useState, type KeyboardEvent, type ChangeEvent, type DragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ChangeEvent, type DragEvent } from 'react'
 import type { Attachment } from '../types/messages'
 
 interface ChatInputProps {
-  onSend: (text: string, attachments?: Attachment[]) => void
+  onSend: (text: string, attachments?: Attachment[]) => boolean | void
   disabled: boolean
 }
 
@@ -20,7 +20,17 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
+const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20 MB
+const MAX_FILES = 5
+const ALLOWED_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  'video/mp4', 'video/webm', 'video/quicktime',
+  'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/mp4',
+  'application/pdf', 'text/plain', 'text/csv',
+])
+
 interface FilePreview {
+  id: string
   file: File
   previewUrl: string | null
 }
@@ -32,13 +42,42 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Track latest files in a ref so the unmount cleanup sees the current value
+  const filesRef = useRef(files)
+  filesRef.current = files
+
+  // Revoke blob URLs whenever files change (handles removed files)
+  useEffect(() => {
+    return () => {
+      files.forEach((f) => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl) })
+    }
+  }, [files])
+
+  // Clean up any remaining preview URLs on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      filesRef.current.forEach((f) => {
+        if (f.previewUrl) URL.revokeObjectURL(f.previewUrl)
+      })
+    }
+  }, [])
+
   const addFiles = useCallback((newFiles: FileList | File[]) => {
     const fileArray = Array.from(newFiles)
-    const previews: FilePreview[] = fileArray.map((file) => ({
-      file,
-      previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
-    }))
-    setFiles((prev) => [...prev, ...previews])
+    const filtered = fileArray
+      .filter((f) => f.size <= MAX_FILE_SIZE)
+      .filter((f) => !f.type || ALLOWED_TYPES.has(f.type))
+    setFiles((prev) => {
+      const remaining = MAX_FILES - prev.length
+      if (remaining <= 0) return prev
+      const toAdd = filtered.slice(0, remaining)
+      const previews: FilePreview[] = toAdd.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+      }))
+      return [...prev, ...previews]
+    })
   }, [])
 
   const removeFile = useCallback((index: number) => {
@@ -65,7 +104,9 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
       )
     }
 
-    onSend(trimmed || '(file attachment)', attachments)
+    const sent = onSend(trimmed || '(file attachment)', attachments)
+    if (sent === false) return
+
     setText('')
     // Clean up preview URLs
     files.forEach((f) => {
@@ -139,7 +180,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
       {files.length > 0 && (
         <div className="file-previews">
           {files.map((fp, i) => (
-            <div key={i} className="file-preview">
+            <div key={fp.id} className="file-preview">
               {fp.previewUrl ? (
                 <img src={fp.previewUrl} alt={fp.file.name} />
               ) : (

@@ -235,15 +235,15 @@ export class WebChannel
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
-    // Allow scripts/styles from self and the CDN referenced by index.html.
     "Content-Security-Policy":
       "default-src 'self'; " +
-      "script-src 'self' https://cdnjs.cloudflare.com; " +
-      "style-src 'self' https://cdnjs.cloudflare.com; " +
-      "connect-src 'self' ws://localhost:* ws://127.0.0.1:*; " +
+      "script-src 'self'; " +
+      "style-src 'self'; " +
+      "connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*; " +
       "img-src 'self' data: blob:; " +
       "object-src 'none'; " +
-      "base-uri 'none';",
+      "base-uri 'none'; " +
+      "frame-ancestors 'none';",
   };
 
   private async handleHttp(req: HttpReq, res: ServerResponse): Promise<void> {
