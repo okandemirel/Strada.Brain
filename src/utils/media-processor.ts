@@ -180,10 +180,11 @@ export function isUrlSafeToFetch(url: string): boolean {
 
     const hostname = parsed.hostname.toLowerCase();
 
-    // Block private/reserved IP ranges
+    // Block private/reserved IP ranges (IPv4 + IPv6)
     if (
       hostname === "localhost" ||
       hostname === "[::1]" ||
+      hostname.startsWith("[") ||           // Block all IPv6 literals (CDNs never use raw IPv6)
       /^127\./.test(hostname) ||
       /^10\./.test(hostname) ||
       /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
