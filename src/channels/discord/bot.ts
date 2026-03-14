@@ -669,7 +669,7 @@ export class DiscordChannel implements IChannelAdapter {
         await interaction.deferReply();
 
         const msg: IncomingMessage = {
-          channelType: "web",
+          channelType: "discord",
           chatId: interaction.channelId,
           userId: interaction.user.id,
           text: question,
@@ -686,7 +686,7 @@ export class DiscordChannel implements IChannelAdapter {
         await interaction.deferReply();
 
         const msg: IncomingMessage = {
-          channelType: "web",
+          channelType: "discord",
           chatId: interaction.channelId,
           userId: interaction.user.id,
           text: "Analyze project structure",
@@ -707,7 +707,7 @@ export class DiscordChannel implements IChannelAdapter {
         await interaction.deferReply();
 
         const msg: IncomingMessage = {
-          channelType: "web",
+          channelType: "discord",
           chatId: interaction.channelId,
           userId: interaction.user.id,
           text: `Create ${type} named "${name}"${description ? `: ${description}` : ""}`,
@@ -770,7 +770,7 @@ export class DiscordChannel implements IChannelAdapter {
     }
 
     const msg: IncomingMessage = {
-      channelType: "web",
+      channelType: "discord",
       chatId: message.channelId,
       userId: message.author.id,
       text: message.content,

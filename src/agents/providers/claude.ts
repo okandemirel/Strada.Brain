@@ -18,7 +18,7 @@ import { getLogger } from "../../utils/logger.js";
 export class ClaudeProvider implements IAIProvider {
   readonly name = "claude";
   readonly capabilities: ProviderCapabilities = {
-    maxTokens: 4096,
+    maxTokens: 8192,
     streaming: true,
     structuredStreaming: false,
     toolCalling: true,
@@ -28,7 +28,7 @@ export class ClaudeProvider implements IAIProvider {
   private readonly client: Anthropic;
   private readonly model: string;
 
-  constructor(apiKey: string, model = "claude-sonnet-4-20250514") {
+  constructor(apiKey: string, model = "claude-sonnet-4-6-20250514") {
     this.client = new Anthropic({ apiKey });
     this.model = model;
   }
@@ -55,7 +55,7 @@ export class ClaudeProvider implements IAIProvider {
 
     const response = await this.client.messages.create({
       model: this.model,
-      max_tokens: 4096,
+      max_tokens: this.capabilities.maxTokens,
       system: systemPrompt,
       messages: anthropicMessages,
       tools: anthropicTools.length > 0 ? anthropicTools : undefined,
@@ -86,7 +86,7 @@ export class ClaudeProvider implements IAIProvider {
 
     const stream = this.client.messages.stream({
       model: this.model,
-      max_tokens: 4096,
+      max_tokens: this.capabilities.maxTokens,
       system: systemPrompt,
       messages: anthropicMessages,
       tools: anthropicTools.length > 0 ? anthropicTools : undefined,

@@ -15,7 +15,7 @@ describe("KimiProvider", () => {
     const provider = new KimiProvider("test-key");
     expect(provider.name).toBe("Kimi (Moonshot)");
     expect(provider.capabilities.maxTokens).toBe(8192);
-    expect(provider.capabilities.vision).toBe(true);
+    expect(provider.capabilities.vision).toBe(false);
     expect(provider.capabilities.toolCalling).toBe(true);
     expect(provider.capabilities.systemPrompt).toBe(true);
   });

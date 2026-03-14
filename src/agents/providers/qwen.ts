@@ -17,10 +17,10 @@ import type { OpenAIMessage } from "./openai.js";
 export class QwenProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities = {
     maxTokens: 8192,
-    streaming: false,
+    streaming: true,
     structuredStreaming: false,
     toolCalling: true,
-    vision: true,
+    vision: false,
     systemPrompt: true,
   };
 

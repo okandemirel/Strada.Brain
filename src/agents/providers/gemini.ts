@@ -2,9 +2,10 @@ import type {
   ConversationMessage,
   ProviderResponse,
   ToolCall,
+  ProviderCapabilities,
 } from "./provider.interface.js";
 import type { MessageContent } from "./provider-core.interface.js";
-import { OpenAIProvider } from "./openai.js";
+import { OpenAIProvider, OPENAI_STOP_REASON_MAP } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
 
 /**
@@ -14,8 +15,21 @@ import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
  * Gemini 2.5+/3.x returns `extra_content` on tool_call objects containing
  * `google.thought_signature`. This signature MUST be echoed back in
  * subsequent requests or the API returns HTTP 400.
+ *
+ * Streaming is disabled because the SSE streaming path cannot capture
+ * extra_content/thought_signature from delta chunks, which would cause
+ * HTTP 400 on the next turn when the signature is missing.
  */
 export class GeminiProvider extends OpenAIProvider {
+  override readonly capabilities: ProviderCapabilities = {
+    maxTokens: 4096,
+    streaming: false,
+    structuredStreaming: false,
+    toolCalling: true,
+    vision: false,
+    systemPrompt: true,
+  };
+
   constructor(
     apiKey: string,
     model = "gemini-3-flash-preview",
@@ -49,11 +63,7 @@ export class GeminiProvider extends OpenAIProvider {
         : { id: tc.id, name: tc.function.name, input };
     });
 
-    const STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
-      tool_calls: "tool_use",
-      length: "max_tokens",
-    };
-    const stopReason = STOP_REASON_MAP[choice.finish_reason] ?? "end_turn";
+    const stopReason = OPENAI_STOP_REASON_MAP[choice.finish_reason] ?? "end_turn";
 
     return {
       text,

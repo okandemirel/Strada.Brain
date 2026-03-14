@@ -125,17 +125,34 @@ describe("OpenAIProvider", () => {
     });
   });
 
-  it("throws an error with the status code on API failure", async () => {
+  it("throws an error with the status code on non-retryable API failure", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => "Bad Request",
+      headers: new Headers(),
+    });
+
+    const provider = new OpenAIProvider("sk-test");
+    await expect(provider.chat("system", [{ role: "user", content: "Hi" }], [])).rejects.toThrow(
+      "OpenAI API error 400 at https://api.openai.com/v1",
+    );
+  });
+
+  it("retries on 429 and eventually throws after max retries", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 429,
       text: async () => "Rate limit exceeded",
+      headers: new Headers({ "retry-after": "0" }),
     });
 
     const provider = new OpenAIProvider("sk-test");
     await expect(provider.chat("system", [{ role: "user", content: "Hi" }], [])).rejects.toThrow(
       "OpenAI API error 429 at https://api.openai.com/v1",
     );
+    // Initial attempt + 3 retries = 4 calls
+    expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
   it("maps stop reasons: tool_calls->tool_use, length->max_tokens, stop->end_turn", async () => {

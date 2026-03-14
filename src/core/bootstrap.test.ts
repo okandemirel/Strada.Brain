@@ -52,12 +52,40 @@ vi.mock("../memory/unified/migration.js", () => {
   };
 });
 
+vi.mock("../agents/providers/provider-registry.js", () => {
+  return {
+    buildProviderChain: vi.fn().mockImplementation((names: string[]) => ({
+      name: names.join(","),
+      healthCheck: vi.fn().mockResolvedValue(true),
+    })),
+  };
+});
+
+vi.mock("../agents/providers/provider-manager.js", () => {
+  const MockProviderManager = vi.fn().mockImplementation((defaultProvider: unknown) => ({
+    defaultProvider,
+    getProvider: vi.fn().mockReturnValue(defaultProvider),
+    shutdown: vi.fn(),
+  }));
+  return { ProviderManager: MockProviderManager };
+});
+
+vi.mock("../agents/providers/claude.js", () => {
+  const MockClaudeProvider = vi.fn().mockImplementation(() => ({
+    name: "claude",
+    healthCheck: vi.fn().mockResolvedValue(true),
+  }));
+  return { ClaudeProvider: MockClaudeProvider };
+});
+
 // Import the function under test
-import { initializeMemory } from "./bootstrap.js";
+import { initializeAIProvider, initializeMemory } from "./bootstrap.js";
 import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
 import { AgentDBAdapter } from "../memory/unified/agentdb-adapter.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
 import { runAutomaticMigration } from "../memory/unified/migration.js";
+import { buildProviderChain } from "../agents/providers/provider-registry.js";
+import { ProviderManager } from "../agents/providers/provider-manager.js";
 import type { Config } from "../config/config.js";
 import type * as winston from "winston";
 
@@ -76,8 +104,25 @@ function createTestConfig(overrides: {
   enabled?: boolean;
   backend?: "agentdb" | "file";
   ragEnabled?: boolean;
+  providerChain?: string;
+  anthropicApiKey?: string;
+  geminiApiKey?: string;
+  kimiApiKey?: string;
 } = {}): Config {
   return {
+    anthropicApiKey: overrides.anthropicApiKey,
+    geminiApiKey: overrides.geminiApiKey,
+    kimiApiKey: overrides.kimiApiKey,
+    openaiApiKey: undefined,
+    deepseekApiKey: undefined,
+    qwenApiKey: undefined,
+    minimaxApiKey: undefined,
+    groqApiKey: undefined,
+    mistralApiKey: undefined,
+    togetherApiKey: undefined,
+    fireworksApiKey: undefined,
+    providerChain: overrides.providerChain,
+    providerModels: {},
     memory: {
       enabled: overrides.enabled ?? true,
       dbPath: "/tmp/test-memory",
@@ -323,5 +368,50 @@ describe("initializeMemory", () => {
       // Migration should still be called after recovery
       expect(runAutomaticMigration).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("initializeAIProvider", () => {
+  let logger: winston.Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    logger = createMockLogger();
+  });
+
+  it("skips unavailable providers in the configured chain and continues", async () => {
+    const config = createTestConfig({
+      providerChain: "kimi,gemini",
+      geminiApiKey: "gem-key",
+    });
+
+    const result = await initializeAIProvider(config, logger);
+
+    expect(buildProviderChain).toHaveBeenCalledWith(
+      ["gemini"],
+      expect.objectContaining({ gemini: "gem-key", kimi: undefined }),
+      expect.any(Object),
+    );
+    expect(result.notices).toContain("Unavailable AI providers were skipped: kimi.");
+    expect(result.manager).toBeDefined();
+  });
+
+  it("falls back to detected providers when the configured chain has no usable providers", async () => {
+    const config = createTestConfig({
+      providerChain: "kimi",
+      geminiApiKey: "gem-key",
+    });
+
+    const result = await initializeAIProvider(config, logger);
+
+    expect(buildProviderChain).toHaveBeenCalledWith(
+      ["gemini"],
+      expect.objectContaining({ gemini: "gem-key" }),
+      expect.any(Object),
+    );
+    expect(result.notices).toContain(
+      "Configured provider chain had no usable providers. Falling back to: gemini.",
+    );
+    expect(ProviderManager).toHaveBeenCalledTimes(1);
   });
 });

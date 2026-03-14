@@ -75,7 +75,7 @@ describe("DelegationLog", () => {
         parentAgentId: "agent-1",
         subAgentId: "sub-2",
         type: "analysis",
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6-20250514",
         tier: "standard",
         depth: 0,
       });
@@ -182,7 +182,7 @@ describe("DelegationLog", () => {
         parentAgentId: "agent-1",
         subAgentId: "sub-2",
         type: "analysis",
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6-20250514",
         tier: "standard",
         depth: 0,
       });
@@ -226,7 +226,7 @@ describe("DelegationLog", () => {
         parentAgentId: "agent-2",
         subAgentId: "sub-2",
         type: "analysis",
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6-20250514",
         tier: "standard",
         depth: 0,
       });
@@ -253,7 +253,7 @@ describe("DelegationLog", () => {
         parentAgentId: "agent-1",
         subAgentId: "sub-2",
         type: "analysis",
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6-20250514",
         tier: "standard",
         depth: 0,
       });
@@ -293,7 +293,7 @@ describe("DelegationLog", () => {
         parentAgentId: "agent-1",
         subAgentId: "sub-3",
         type: "analysis",
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6-20250514",
         tier: "standard",
         depth: 0,
       });

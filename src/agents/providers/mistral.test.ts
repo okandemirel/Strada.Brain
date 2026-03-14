@@ -19,7 +19,7 @@ describe("MistralProvider", () => {
   it("has correct name and capabilities", () => {
     expect(provider.name).toBe("Mistral");
     expect(provider.capabilities.maxTokens).toBe(8192);
-    expect(provider.capabilities.vision).toBe(true);
+    expect(provider.capabilities.vision).toBe(false);
     expect(provider.capabilities.toolCalling).toBe(true);
   });
 
@@ -33,7 +33,7 @@ describe("MistralProvider", () => {
     const body = buildBody(messages, undefined);
     expect(body["model"]).toBeDefined();
     expect(body["messages"]).toBe(messages);
-    expect(body["max_tokens"]).toBe(4096);
+    expect(body["max_tokens"]).toBe(8192);
   });
 
   it("includes tools when provided", () => {

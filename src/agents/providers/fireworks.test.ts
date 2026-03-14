@@ -18,7 +18,7 @@ describe("FireworksProvider", () => {
   it("has correct name and capabilities", () => {
     expect(provider.name).toBe("Fireworks AI");
     expect(provider.capabilities.maxTokens).toBe(4096);
-    expect(provider.capabilities.vision).toBe(true);
+    expect(provider.capabilities.vision).toBe(false);
     expect(provider.capabilities.toolCalling).toBe(true);
   });
 

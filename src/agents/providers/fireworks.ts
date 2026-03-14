@@ -29,10 +29,10 @@ interface FireworksResponse extends OpenAIResponse {
 export class FireworksProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities = {
     maxTokens: 4096,
-    streaming: false,
+    streaming: true,
     structuredStreaming: false,
     toolCalling: true,
-    vision: true,
+    vision: false,
     systemPrompt: true,
   };
 

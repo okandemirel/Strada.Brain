@@ -200,6 +200,8 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
     return createHash("sha256")
       .update(this.inner.name)
       .update("\x00")
+      .update(String(this.inner.dimensions))
+      .update("\x00")
       .update(text)
       .digest("hex");
   }

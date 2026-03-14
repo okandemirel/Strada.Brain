@@ -6,6 +6,7 @@ import type {
 } from "./provider.interface.js";
 import { OpenAIProvider } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
+import { stripReasoningBlocks } from "./openai.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
@@ -54,7 +55,7 @@ interface DeepSeekResponse {
 export class DeepSeekProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities = {
     maxTokens: 8192,
-    streaming: false,
+    streaming: true,
     structuredStreaming: false,
     toolCalling: true,
     vision: false,
@@ -126,13 +127,8 @@ export class DeepSeekProvider extends OpenAIProvider {
   protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
     const result = super.buildMessages(systemPrompt, messages);
 
-    // Strip reasoning blocks from assistant messages.
     // DeepSeek requires reasoning_content NOT be fed back in subsequent requests.
-    for (const msg of result) {
-      if (msg.role === "assistant" && msg.content) {
-        msg.content = msg.content.replace(/<reasoning>\n[\s\S]*?\n<\/reasoning>\n\n/, "");
-      }
-    }
+    stripReasoningBlocks(result);
 
     return result;
   }

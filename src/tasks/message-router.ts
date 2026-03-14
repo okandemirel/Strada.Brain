@@ -10,16 +10,31 @@
  */
 
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
+import type { IChannelSender } from "../channels/channel-core.interface.js";
 import type { TaskManager } from "./task-manager.js";
 import { CommandHandler } from "./command-handler.js";
 import { detectCommand } from "./command-detector.js";
 import { getLogger } from "../utils/logger.js";
 
 export class MessageRouter {
+  private readonly notifiedChats = new Set<string>();
+  private readonly startupNoticeMarkdown?: string;
+
   constructor(
     private readonly taskManager: TaskManager,
     private readonly commandHandler: CommandHandler,
-  ) {}
+    private readonly channel?: IChannelSender,
+    startupNotices: string[] = [],
+  ) {
+    const notices = [...new Set(startupNotices.map((notice) => notice.trim()).filter(Boolean))];
+    if (notices.length > 0) {
+      this.startupNoticeMarkdown = [
+        "*System Status*",
+        "",
+        ...notices.map((notice) => `- ${notice}`),
+      ].join("\n");
+    }
+  }
 
   /**
    * Route an incoming message to the appropriate handler.
@@ -30,6 +45,8 @@ export class MessageRouter {
     const { chatId, text, channelType } = msg;
 
     if (!text.trim()) return;
+
+    await this.sendStartupNotice(chatId);
 
     const classification = detectCommand(text);
 
@@ -52,5 +69,22 @@ export class MessageRouter {
     });
 
     this.taskManager.submit(chatId, channelType, text);
+  }
+
+  private async sendStartupNotice(chatId: string): Promise<void> {
+    if (!this.channel || !this.startupNoticeMarkdown || this.notifiedChats.has(chatId)) {
+      return;
+    }
+
+    this.notifiedChats.add(chatId);
+
+    try {
+      await this.channel.sendMarkdown(chatId, this.startupNoticeMarkdown);
+    } catch (error) {
+      getLogger().warn("Failed to send startup capability notice", {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }

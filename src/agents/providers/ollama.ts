@@ -27,7 +27,7 @@ export class OllamaProvider implements IAIProvider {
   private readonly baseUrl: string;
   private readonly model: string;
 
-  constructor(model = "llama3.1", baseUrl = "http://localhost:11434") {
+  constructor(model = "llama3.3", baseUrl = "http://localhost:11434") {
     this.model = model;
     this.baseUrl = baseUrl;
   }

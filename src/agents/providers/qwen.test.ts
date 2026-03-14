@@ -19,7 +19,7 @@ describe("QwenProvider", () => {
   it("has correct name and capabilities", () => {
     expect(provider.name).toBe("Qwen (Alibaba)");
     expect(provider.capabilities.maxTokens).toBe(8192);
-    expect(provider.capabilities.vision).toBe(true);
+    expect(provider.capabilities.vision).toBe(false);
   });
 
   it("includes result_format=message in request body", () => {

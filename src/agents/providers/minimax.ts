@@ -1,10 +1,12 @@
 import type {
+  ConversationMessage,
   ProviderResponse,
   ToolCall,
   ProviderCapabilities,
 } from "./provider.interface.js";
 import { OpenAIProvider } from "./openai.js";
-import type { OpenAIResponse } from "./openai.js";
+import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
+import { stripReasoningBlocks, OPENAI_STOP_REASON_MAP } from "./openai.js";
 
 /**
  * MiniMax extends the OpenAI response with reasoning_details.
@@ -43,7 +45,7 @@ interface MiniMaxResponse {
 export class MiniMaxProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities = {
     maxTokens: 4096,
-    streaming: false,
+    streaming: true,
     structuredStreaming: false,
     toolCalling: true,
     vision: false,
@@ -56,6 +58,15 @@ export class MiniMaxProvider extends OpenAIProvider {
     baseUrl = "https://api.minimax.io/v1",
   ) {
     super(apiKey, model, baseUrl, "MiniMax");
+  }
+
+  protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
+    const result = super.buildMessages(systemPrompt, messages);
+
+    // MiniMax M2.5 reasoning_details must not be sent back in subsequent requests.
+    stripReasoningBlocks(result);
+
+    return result;
   }
 
   protected override parseResponse(data: OpenAIResponse): ProviderResponse {
@@ -82,11 +93,7 @@ export class MiniMaxProvider extends OpenAIProvider {
       return { id: tc.id, name: tc.function.name, input };
     });
 
-    const STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
-      tool_calls: "tool_use",
-      length: "max_tokens",
-    };
-    const stopReason = STOP_REASON_MAP[choice.finish_reason] ?? "end_turn";
+    const stopReason = OPENAI_STOP_REASON_MAP[choice.finish_reason] ?? "end_turn";
 
     const usage = mmData.usage;
     return {

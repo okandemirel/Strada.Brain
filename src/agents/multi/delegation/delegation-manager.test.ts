@@ -73,8 +73,8 @@ vi.mock("../../providers/provider-manager.js", () => {
 const TEST_TIER_MAP: Record<ModelTier, string> = {
   local: "ollama:llama3.3",
   cheap: "deepseek:deepseek-chat",
-  standard: "claude:claude-sonnet-4-20250514",
-  premium: "claude:claude-opus-4-20250514",
+  standard: "claude:claude-sonnet-4-6-20250514",
+  premium: "claude:claude-opus-4-6-20250514",
 };
 
 const TEST_CONFIG: DelegationConfig = {

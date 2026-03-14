@@ -12,8 +12,8 @@ import type { ModelTier } from "./delegation-types.js";
 const TEST_TIER_MAP: Record<ModelTier, string> = {
   local: "ollama:llama3.3",
   cheap: "deepseek:deepseek-chat",
-  standard: "claude:claude-sonnet-4-20250514",
-  premium: "claude:claude-opus-4-20250514",
+  standard: "claude:claude-sonnet-4-6-20250514",
+  premium: "claude:claude-opus-4-6-20250514",
 };
 
 describe("TierRouter", () => {
@@ -33,11 +33,11 @@ describe("TierRouter", () => {
     });
 
     it("resolves standard tier", () => {
-      expect(router.resolveProviderSpec("standard")).toBe("claude:claude-sonnet-4-20250514");
+      expect(router.resolveProviderSpec("standard")).toBe("claude:claude-sonnet-4-6-20250514");
     });
 
     it("resolves premium tier", () => {
-      expect(router.resolveProviderSpec("premium")).toBe("claude:claude-opus-4-20250514");
+      expect(router.resolveProviderSpec("premium")).toBe("claude:claude-opus-4-6-20250514");
     });
   });
 
@@ -49,7 +49,7 @@ describe("TierRouter", () => {
 
     it("parses claude provider config", () => {
       const config = router.resolveProviderConfig("premium");
-      expect(config).toEqual({ name: "claude", model: "claude-opus-4-20250514" });
+      expect(config).toEqual({ name: "claude", model: "claude-opus-4-6-20250514" });
     });
 
     it("parses ollama provider config", () => {
@@ -79,7 +79,7 @@ describe("TierRouter", () => {
   describe("runtime overrides (in-memory)", () => {
     it("setOverride causes resolveProviderSpec to return overridden tier spec", () => {
       router.setOverride("cheap", "standard");
-      expect(router.resolveProviderSpec("cheap")).toBe("claude:claude-sonnet-4-20250514");
+      expect(router.resolveProviderSpec("cheap")).toBe("claude:claude-sonnet-4-6-20250514");
     });
 
     it("getOverride returns the override", () => {

@@ -22,7 +22,8 @@ const MAX_CACHED_PROVIDERS = 50;
 
 export class ProviderManager {
   private readonly preferences: ProviderPreferenceStore;
-  private readonly providerCache = new Map<string, IAIProvider>();
+  private readonly providerCache = new Map<string, { provider: IAIProvider; accessOrder: number }>();
+  private accessCounter = 0;
 
   constructor(
     private readonly defaultProvider: IAIProvider,
@@ -46,7 +47,10 @@ export class ProviderManager {
       : pref.providerName;
 
     const cached = this.providerCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      cached.accessOrder = this.accessCounter++;
+      return cached.provider;
+    }
 
     try {
       const provider = createProvider({
@@ -55,10 +59,17 @@ export class ProviderManager {
         model: pref.model ?? this.modelOverrides?.[pref.providerName],
       });
       if (this.providerCache.size >= MAX_CACHED_PROVIDERS) {
-        const oldest = this.providerCache.keys().next().value as string;
-        this.providerCache.delete(oldest);
+        let lruKey: string | undefined;
+        let lruOrder = Infinity;
+        for (const [key, entry] of this.providerCache) {
+          if (entry.accessOrder < lruOrder) {
+            lruOrder = entry.accessOrder;
+            lruKey = key;
+          }
+        }
+        if (lruKey) this.providerCache.delete(lruKey);
       }
-      this.providerCache.set(cacheKey, provider);
+      this.providerCache.set(cacheKey, { provider, accessOrder: this.accessCounter++ });
       return provider;
     } catch (error) {
       getLogger().warn("Failed to create preferred provider, using default", {
@@ -102,7 +113,7 @@ export class ProviderManager {
     const available: Array<{ name: string; label: string; defaultModel: string }> = [];
 
     if (this.isAvailable("claude")) {
-      available.push({ name: "claude", label: "Anthropic Claude", defaultModel: this.modelOverrides?.["claude"] ?? "claude-sonnet-4-20250514" });
+      available.push({ name: "claude", label: "Anthropic Claude", defaultModel: this.modelOverrides?.["claude"] ?? "claude-sonnet-4-6-20250514" });
     }
 
     available.push({ name: "ollama", label: "Ollama (Local)", defaultModel: this.modelOverrides?.["ollama"] ?? "llama3.3" });

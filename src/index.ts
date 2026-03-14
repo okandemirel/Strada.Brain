@@ -139,6 +139,7 @@ program.parse();
 
 async function startApp(channelType: string, daemonMode = false): Promise<void> {
   const MAX_WIZARD_ATTEMPTS = 3;
+  const wizardPort = Number.parseInt(process.env["SETUP_WIZARD_PORT"] ?? "3000", 10) || 3000;
 
   // Try loading config — if invalid and using web channel, launch setup wizard
   let configResult = loadConfigSafe();
@@ -150,8 +151,8 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
             ? "Configuration missing or invalid. Starting setup wizard..."
             : `Configuration still invalid. Retrying setup wizard (attempt ${attempt}/${MAX_WIZARD_ATTEMPTS})...`,
         );
-        console.log("Open http://localhost:3000 in your browser to configure.");
-        const wizard = new SetupWizard({ port: 3000 });
+        console.log(`Open http://localhost:${wizardPort} in your browser to configure.`);
+        const wizard = new SetupWizard({ port: wizardPort });
         await wizard.start();
         console.log("Setup complete! Validating configuration...");
         // Reload .env into process.env and reset config cache

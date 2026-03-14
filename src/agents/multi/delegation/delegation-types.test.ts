@@ -114,8 +114,8 @@ describe("delegation-types", () => {
         tiers: {
           local: "ollama:llama3.3",
           cheap: "deepseek:deepseek-chat",
-          standard: "claude:claude-sonnet-4-20250514",
-          premium: "claude:claude-opus-4-20250514",
+          standard: "claude:claude-sonnet-4-6-20250514",
+          premium: "claude:claude-opus-4-6-20250514",
         },
         types: DEFAULT_DELEGATION_TYPES,
         verbosity: "normal",
@@ -155,7 +155,7 @@ describe("delegation-types", () => {
       const result: DelegationResult = {
         content: "Analysis done",
         metadata: {
-          model: "claude-sonnet-4-20250514",
+          model: "claude-sonnet-4-6-20250514",
           tier: "standard",
           costUsd: 0.05,
           durationMs: 15000,
@@ -338,8 +338,8 @@ describe("delegation config schema", () => {
     if (result.success) {
       expect(result.data.delegationTierLocal).toBe("ollama:llama3.3");
       expect(result.data.delegationTierCheap).toBe("deepseek:deepseek-chat");
-      expect(result.data.delegationTierStandard).toBe("claude:claude-sonnet-4-20250514");
-      expect(result.data.delegationTierPremium).toBe("claude:claude-opus-4-20250514");
+      expect(result.data.delegationTierStandard).toBe("claude:claude-sonnet-4-6-20250514");
+      expect(result.data.delegationTierPremium).toBe("claude:claude-opus-4-6-20250514");
     }
   });
 

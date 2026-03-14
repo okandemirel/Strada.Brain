@@ -29,7 +29,7 @@ import { resolveEmbeddingProvider, collectApiKeys } from "../rag/embeddings/embe
 import { RateLimiter } from "../security/rate-limiter.js";
 import type { DIContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
-import { AppError, MissingConfigError } from "../common/errors.js";
+import { AppError } from "../common/errors.js";
 import { checkStradaDeps } from "../config/strada-deps.js";
 import {
   SESSION_CLEANUP_INTERVAL_MS,
@@ -192,20 +192,26 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const auth = initializeAuth(config, channelType, logger);
 
   // Initialize AI provider manager
-  const providerManager = await initializeAIProvider(config, logger);
+  const providerInit = await initializeAIProvider(config, logger);
+  const providerManager = providerInit.manager;
+  const startupNotices = [...providerInit.notices];
 
   // Initialize memory manager
   const memoryManager = await initializeMemory(config, logger);
 
   // Initialize RAG pipeline
   const ragResult = await initializeRAG(config, logger);
-  const ragPipeline = ragResult?.pipeline;
-  const cachedEmbeddingProvider = ragResult?.cachedProvider;
+  const ragPipeline = ragResult.pipeline;
+  const cachedEmbeddingProvider = ragResult.cachedProvider;
+  if (ragResult.notice) {
+    startupNotices.push(ragResult.notice);
+  }
 
   // Initialize learning system (pass shared embedding provider if available)
   // Note: identityManager may not be initialized yet at this point,
   // but it's created later. We pass undefined now and wire scope context after identity init.
   const learningResult = await initializeLearning(config, logger, cachedEmbeddingProvider);
+  startupNotices.push(...learningResult.notices);
 
   // Initialize tools (registry created here, initialized after metricsStorage below)
   const toolRegistry = new ToolRegistry(config.pluginDirs);
@@ -518,7 +524,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   taskManager.recoverOnStartup();
 
   const commandHandler = new CommandHandler(taskManager, channel, providerManager);
-  const messageRouter = new MessageRouter(taskManager, commandHandler);
+  const messageRouter = new MessageRouter(taskManager, commandHandler, channel, startupNotices);
   // ProgressReporter subscribes to taskManager events in constructor
   new ProgressReporter(channel, taskManager);
 
@@ -526,32 +532,34 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   if (options.daemonMode) {
     const daemonConfig = config.daemon;
 
-    // Validate budget is configured (required for daemon mode)
     if (!daemonConfig.budget.dailyBudgetUsd) {
-      throw new MissingConfigError("STRADA_DAEMON_DAILY_BUDGET");
-    }
+      const notice =
+        "Daemon disabled: STRADA_DAEMON_DAILY_BUDGET is not set, so autonomous background execution is unavailable.";
+      startupNotices.push(notice);
+      logger.warn(notice);
+    } else {
 
-    // daemonEventBus is guaranteed defined when daemonMode is true
-    const daemonBus = daemonEventBus!;
+      // daemonEventBus is guaranteed defined when daemonMode is true
+      const daemonBus = daemonEventBus!;
 
-    // Initialize daemon storage
-    const daemonDbPath = join(config.memory.dbPath, "daemon.db");
-    const daemonStorage = new DaemonStorage(daemonDbPath);
-    daemonStorage.initialize();
+      // Initialize daemon storage
+      const daemonDbPath = join(config.memory.dbPath, "daemon.db");
+      const daemonStorage = new DaemonStorage(daemonDbPath);
+      daemonStorage.initialize();
 
-    // Create subsystems
-    const triggerRegistry = new TriggerRegistry();
-    const budgetTrackerInstance = new BudgetTracker(daemonStorage, daemonConfig.budget);
-    const approvalQueueInstance = new ApprovalQueue(
-      daemonStorage,
-      daemonConfig.security.approvalTimeoutMin,
-      daemonBus,
-    );
-    const securityPolicyInstance = new DaemonSecurityPolicy(
-      (name) => toolRegistry.getMetadata(name),
-      approvalQueueInstance,
-      new Set(daemonConfig.security.autoApproveTools),
-    );
+      // Create subsystems
+      const triggerRegistry = new TriggerRegistry();
+      const budgetTrackerInstance = new BudgetTracker(daemonStorage, daemonConfig.budget);
+      const approvalQueueInstance = new ApprovalQueue(
+        daemonStorage,
+        daemonConfig.security.approvalTimeoutMin,
+        daemonBus,
+      );
+      const securityPolicyInstance = new DaemonSecurityPolicy(
+        (name) => toolRegistry.getMetadata(name),
+        approvalQueueInstance,
+        new Set(daemonConfig.security.autoApproveTools),
+      );
 
     // Parse HEARTBEAT.md and register triggers (path validated against project root)
     const heartbeatPath = resolve(process.cwd(), daemonConfig.heartbeat.heartbeatFile);
@@ -977,6 +985,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         triggerFireRetentionDays: daemonConfig.triggerFireRetentionDays,
       });
     }
+    }
   }
 
   // Wire up message handler
@@ -1012,6 +1021,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Start channel
   await channel.connect();
   logger.info("Strada Brain is running!");
+  if (startupNotices.length > 0) {
+    logger.warn("Startup capability notices", {
+      notices: [...new Set(startupNotices)],
+    });
+  }
 
   // Register AgentManager with dashboard (Plan 23-03)
   if (dashboard && agentManager) {
@@ -1097,18 +1111,111 @@ function initializeAuth(config: Config, channelType: string, logger: winston.Log
   });
 }
 
-async function initializeAIProvider(config: Config, logger: winston.Logger): Promise<ProviderManager> {
+interface ProviderInitResult {
+  manager: ProviderManager;
+  notices: string[];
+}
+
+function normalizeProviderNames(providerChain?: string): string[] {
+  if (!providerChain) return [];
+  const seen = new Set<string>();
+  const names: string[] = [];
+
+  for (const rawName of providerChain.split(",")) {
+    const normalized = rawName.trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    names.push(normalized);
+  }
+
+  return names;
+}
+
+function hasUsableProviderConfig(name: string, apiKeys: Record<string, string | undefined>): boolean {
+  if (name === "ollama") return true;
+  if (name === "claude" || name === "anthropic") {
+    return !!(apiKeys["claude"] || apiKeys["anthropic"]);
+  }
+  return !!apiKeys[name];
+}
+
+function detectConfiguredProviderNames(apiKeys: Record<string, string | undefined>): string[] {
+  const names: string[] = [];
+
+  if (apiKeys["claude"] || apiKeys["anthropic"]) {
+    names.push("claude");
+  }
+
+  for (const name of [
+    "openai",
+    "deepseek",
+    "qwen",
+    "kimi",
+    "minimax",
+    "groq",
+    "mistral",
+    "together",
+    "fireworks",
+    "gemini",
+  ]) {
+    if (apiKeys[name]) {
+      names.push(name);
+    }
+  }
+
+  return names;
+}
+
+export async function initializeAIProvider(
+  config: Config,
+  logger: winston.Logger,
+): Promise<ProviderInitResult> {
   const apiKeys = collectApiKeys(config);
+  const notices: string[] = [];
 
   let defaultProvider: IAIProvider;
 
   // 1) Explicit provider chain
   if (config.providerChain) {
-    const names = config.providerChain.split(",").map((s) => s.trim());
-    defaultProvider = buildProviderChain(names, apiKeys, {
-      models: config.providerModels,
-    });
-    logger.info("AI provider chain initialized", { chain: names });
+    const requestedNames = normalizeProviderNames(config.providerChain);
+    const usableNames = requestedNames.filter((name) => hasUsableProviderConfig(name, apiKeys));
+    const unavailableNames = requestedNames.filter((name) => !usableNames.includes(name));
+
+    if (unavailableNames.length > 0) {
+      const notice = `Unavailable AI providers were skipped: ${unavailableNames.join(", ")}.`;
+      notices.push(notice);
+      logger.warn("Configured AI providers are unavailable, skipping", {
+        unavailableProviders: unavailableNames,
+      });
+    }
+
+    if (usableNames.length > 0) {
+      defaultProvider = buildProviderChain(usableNames, apiKeys, {
+        models: config.providerModels,
+      });
+      logger.info("AI provider chain initialized", { chain: usableNames });
+    } else {
+      const detectedNames = detectConfiguredProviderNames(apiKeys);
+      if (detectedNames.length === 0) {
+        throw new AppError(
+          "No AI provider configured. Please set at least one provider API key.",
+          "NO_AI_PROVIDER",
+        );
+      }
+
+      const notice =
+        `Configured provider chain had no usable providers. Falling back to: ${detectedNames.join(", ")}.`;
+      notices.push(notice);
+      logger.warn("Configured provider chain had no usable providers, falling back", {
+        requestedChain: requestedNames,
+        fallbackChain: detectedNames,
+      });
+
+      defaultProvider = buildProviderChain(detectedNames, apiKeys, {
+        models: config.providerModels,
+      });
+      logger.info("AI provider auto-detected from available keys", { chain: detectedNames });
+    }
   }
   // 2) Anthropic key present — use ClaudeProvider directly
   else if (config.anthropicApiKey) {
@@ -1152,7 +1259,10 @@ async function initializeAIProvider(config: Config, logger: winston.Logger): Pro
   );
   logger.info("ProviderManager initialized with per-chat switching support");
 
-  return providerManager;
+  return {
+    manager: providerManager,
+    notices,
+  };
 }
 
 /**
@@ -1326,24 +1436,27 @@ async function initializeFileMemory(
 }
 
 interface RAGResult {
-  pipeline: IRAGPipeline;
-  cachedProvider: CachedEmbeddingProvider;
+  pipeline?: IRAGPipeline;
+  cachedProvider?: CachedEmbeddingProvider;
+  notice?: string;
 }
 
 async function initializeRAG(
   config: Config,
   logger: winston.Logger,
-): Promise<RAGResult | undefined> {
+): Promise<RAGResult> {
   if (!config.rag.enabled) {
     logger.info("RAG: disabled by configuration");
-    return undefined;
+    return {};
   }
 
   try {
     const resolution = resolveEmbeddingProvider(config);
     if (!resolution) {
+      const notice =
+        "RAG disabled: no compatible embedding provider found. Semantic code search is unavailable.";
       logger.warn("RAG: disabled — no compatible embedding provider found");
-      return undefined;
+      return { notice };
     }
 
     logger.info(`RAG: using ${resolution.provider.name} for embeddings`, {
@@ -1418,10 +1531,12 @@ async function initializeRAG(
 
     return { pipeline, cachedProvider };
   } catch (error) {
+    const notice =
+      "RAG disabled: embedding initialization failed. Semantic code search is unavailable.";
     logger.warn("RAG initialization failed", {
       error: error instanceof Error ? error.message : String(error),
     });
-    return undefined;
+    return { notice };
   }
 }
 
@@ -1433,9 +1548,11 @@ interface LearningResult {
   errorRecovery: ErrorRecoveryEngine;
   eventBus?: IEventBus<LearningEventMap>;
   learningQueue?: LearningQueue;
+  notices: string[];
 }
 
 async function initializeLearning(config: Config, logger: winston.Logger, embeddingProvider?: CachedEmbeddingProvider): Promise<LearningResult> {
+  const notices: string[] = [];
   try {
     const learningDbPath = join(config.memory.dbPath, "learning.db");
     const learningStorage = new LearningStorage(learningDbPath);
@@ -1461,6 +1578,13 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
     // Create event bus for decoupled learning (created before pipeline so it can be injected)
     const eventBus = new TypedEventBus<LearningEventMap>();
     const learningQueue = new LearningQueue();
+
+    if (!embeddingProvider) {
+      const notice =
+        "Instinct embeddings disabled: learning continues with lexical matching only.";
+      notices.push(notice);
+      logger.warn("Learning initialized without embedding provider; semantic instinct features disabled");
+    }
 
     const pipeline = new LearningPipeline(learningStorage, {
       dbPath: learningDbPath,
@@ -1504,14 +1628,27 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
       stats: pipeline.getStats(),
     });
 
-    return { pipeline, storage: learningStorage, patternMatcher, taskPlanner, errorRecovery, eventBus, learningQueue };
+    return {
+      pipeline,
+      storage: learningStorage,
+      patternMatcher,
+      taskPlanner,
+      errorRecovery,
+      eventBus,
+      learningQueue,
+      notices,
+    };
   } catch (error) {
+    const notice =
+      "Learning pipeline disabled: startup initialization failed. Core chat remains available.";
+    notices.push(notice);
     logger.warn("Learning pipeline initialization failed", {
       error: error instanceof Error ? error.message : String(error),
     });
     return {
       taskPlanner: new TaskPlanner(),
       errorRecovery: new ErrorRecoveryEngine(),
+      notices,
     };
   }
 }
