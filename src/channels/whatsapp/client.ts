@@ -301,7 +301,9 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
             userId: senderId,
             text,
             attachments: attachments.length > 0 ? attachments : undefined,
-            timestamp: new Date((msg.messageTimestamp as number) * 1000),
+            timestamp: msg.messageTimestamp != null
+              ? new Date((msg.messageTimestamp as number) * 1000)
+              : new Date(),
           };
 
           if (this.messageHandler) {

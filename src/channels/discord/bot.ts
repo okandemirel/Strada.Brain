@@ -165,7 +165,9 @@ export class DiscordChannel implements IChannelAdapter {
 
   private startQueueProcessor(): void {
     this.queueInterval = setInterval(() => {
-      this.processMessageQueue();
+      void this.processMessageQueue().catch((err) => {
+        getLogger().error("Queue processor error", { error: err instanceof Error ? err.message : String(err) });
+      });
     }, QUEUE_PROCESS_INTERVAL_MS);
   }
 
@@ -186,48 +188,49 @@ export class DiscordChannel implements IChannelAdapter {
   private async processMessageQueue(): Promise<void> {
     if (this.queueProcessing || this.messageQueue.length === 0) return;
     if (this.rateLimited && Date.now() < this.rateLimitResetTime) return;
-    
+
     this.queueProcessing = true;
     this.rateLimited = false;
 
-    // Process up to 5 messages per interval (respecting rate limits)
-    const batchSize = Math.min(5, this.messageQueue.length);
-    
-    for (let i = 0; i < batchSize; i++) {
-      const message = this.messageQueue[0];
-      if (!message) break;
+    try {
+      // Process up to 5 messages per interval (respecting rate limits)
+      const batchSize = Math.min(5, this.messageQueue.length);
 
-      try {
-        await this.processQueuedMessage(message);
-        this.messageQueue.shift(); // Remove successfully processed message
-      } catch (error) {
-        if (this.isRateLimitError(error)) {
-          // Rate limited - pause processing
-          const retryAfter = this.extractRetryAfter(error) || RATE_LIMIT_BACKOFF_MS;
-          this.rateLimited = true;
-          this.rateLimitResetTime = Date.now() + retryAfter;
-          getLogger().warn("Discord rate limited", { retryAfter });
-          break;
-        }
-        
-        // Retry logic
-        message.retries++;
-        if (message.retries >= MAX_RETRIES) {
-          message.reject(error instanceof Error ? error : new Error(String(error)));
-          this.messageQueue.shift();
-        } else {
-          // Move to end of queue with exponential backoff
-          const delay = RETRY_BASE_DELAY_MS * Math.pow(2, message.retries - 1);
-          setTimeout(() => {
-            // Will be retried in next processing cycle
-          }, delay);
-          this.messageQueue.shift();
-          this.messageQueue.push(message);
+      for (let i = 0; i < batchSize; i++) {
+        const message = this.messageQueue[0];
+        if (!message) break;
+
+        try {
+          await this.processQueuedMessage(message);
+          this.messageQueue.shift(); // Remove successfully processed message
+        } catch (error) {
+          if (this.isRateLimitError(error)) {
+            // Rate limited - pause processing
+            const retryAfter = this.extractRetryAfter(error) || RATE_LIMIT_BACKOFF_MS;
+            this.rateLimited = true;
+            this.rateLimitResetTime = Date.now() + retryAfter;
+            getLogger().warn("Discord rate limited", { retryAfter });
+            break;
+          }
+
+          // Retry logic
+          message.retries++;
+          if (message.retries >= MAX_RETRIES) {
+            message.reject(error instanceof Error ? error : new Error(String(error)));
+            this.messageQueue.shift();
+          } else {
+            // Move to end of queue with exponential backoff — re-enqueue after delay
+            const delay = RETRY_BASE_DELAY_MS * Math.pow(2, message.retries - 1);
+            this.messageQueue.shift();
+            setTimeout(() => {
+              this.messageQueue.push(message);
+            }, delay);
+          }
         }
       }
+    } finally {
+      this.queueProcessing = false;
     }
-
-    this.queueProcessing = false;
   }
 
   private async processQueuedMessage(msg: QueuedMessage): Promise<void> {
@@ -273,7 +276,8 @@ export class DiscordChannel implements IChannelAdapter {
     if (error && typeof error === 'object') {
       const retryAfter = (error as { retryAfter?: number }).retryAfter;
       if (typeof retryAfter === 'number') {
-        return retryAfter;
+        // discord.js v14 gives ms; raw API gives seconds. Heuristic: < 100 means seconds.
+        return retryAfter < 100 ? retryAfter * 1000 : retryAfter;
       }
     }
     return null;
@@ -847,6 +851,13 @@ export class DiscordChannel implements IChannelAdapter {
 
   private async registerSlashCommands(): Promise<void> {
     const logger = getLogger();
+
+    if (!this.client.user?.id) {
+      logger.warn("Cannot register slash commands: client user ID not available yet");
+      return;
+    }
+
+    const appId = this.client.user.id;
     logger.info("Registering Discord slash commands...");
 
     try {
@@ -857,16 +868,13 @@ export class DiscordChannel implements IChannelAdapter {
 
       if (this.guildId) {
         await rest.put(
-          Routes.applicationGuildCommands(
-            this.client.user?.id ?? "",
-            this.guildId
-          ),
+          Routes.applicationGuildCommands(appId, this.guildId),
           { body: commandsData }
         );
         logger.info(`Registered ${commandsData.length} guild slash commands`);
       } else {
         await rest.put(
-          Routes.applicationCommands(this.client.user?.id ?? ""),
+          Routes.applicationCommands(appId),
           { body: commandsData }
         );
         logger.info(`Registered ${commandsData.length} global slash commands`);
