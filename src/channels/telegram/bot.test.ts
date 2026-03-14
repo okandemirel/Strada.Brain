@@ -10,11 +10,22 @@ vi.mock("../../utils/logger.js", () => ({
   }),
 }));
 
+vi.mock("../../utils/media-processor.js", () => ({
+  downloadMedia: vi.fn().mockResolvedValue({
+    data: Buffer.from([0xff, 0xd8, 0xff]),
+    mimeType: "image/jpeg",
+    size: 3,
+  }),
+  validateMediaAttachment: vi.fn().mockReturnValue({ valid: true }),
+  validateMagicBytes: vi.fn().mockReturnValue(true),
+}));
+
 // Mock grammy's Bot
 const mockBotApi = {
   sendMessage: vi.fn().mockResolvedValue(undefined),
   sendChatAction: vi.fn().mockResolvedValue(undefined),
   setMyCommands: vi.fn().mockResolvedValue(undefined),
+  getFile: vi.fn().mockResolvedValue({ file_id: "file-1", file_path: "photos/photo.jpg" }),
 };
 
 const mockMiddlewares: Array<(ctx: any, next: () => Promise<void>) => Promise<void>> = [];
@@ -22,6 +33,7 @@ const mockHandlers = new Map<string, (ctx: any) => Promise<void>>();
 
 vi.mock("grammy", () => ({
   Bot: vi.fn().mockImplementation(() => ({
+    token: "test-token",
     api: mockBotApi,
     use: vi.fn((middleware: any) => mockMiddlewares.push(middleware)),
     on: vi.fn((event: string, handler: any) => mockHandlers.set(event, handler)),
@@ -152,5 +164,146 @@ describe("TelegramChannel", () => {
 
   it("isHealthy returns bot init state", () => {
     expect(channel.isHealthy()).toBe(true);
+  });
+
+  describe("media handling", () => {
+    it("registers media handlers", () => {
+      expect(mockHandlers.has("message:photo")).toBe(true);
+      expect(mockHandlers.has("message:document")).toBe(true);
+      expect(mockHandlers.has("message:video")).toBe(true);
+      expect(mockHandlers.has("message:voice")).toBe(true);
+      expect(mockHandlers.has("message:audio")).toBe(true);
+    });
+
+    it("routes photo message with attachment to handler", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      channel.onMessage(handler);
+
+      const photoHandler = mockHandlers.get("message:photo")!;
+      await photoHandler({
+        chat: { id: 42 },
+        from: { id: 123 },
+        message: {
+          photo: [
+            { file_id: "small", width: 90, height: 90 },
+            { file_id: "large", width: 800, height: 600 },
+          ],
+          caption: "check this image",
+          date: 1700000000,
+        },
+        reply: vi.fn(),
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_id: "large", file_path: "photos/photo.jpg" }),
+          sendChatAction: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelType: "telegram",
+          chatId: "42",
+          userId: "123",
+          text: "check this image",
+          attachments: expect.arrayContaining([
+            expect.objectContaining({
+              type: "image",
+              name: "photo.jpg",
+              mimeType: "image/jpeg",
+            }),
+          ]),
+        })
+      );
+    });
+
+    it("routes document message with attachment to handler", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      channel.onMessage(handler);
+
+      const docHandler = mockHandlers.get("message:document")!;
+      await docHandler({
+        chat: { id: 42 },
+        from: { id: 123 },
+        message: {
+          document: {
+            file_id: "doc-1",
+            file_name: "report.pdf",
+            mime_type: "application/pdf",
+          },
+          caption: "here is the report",
+          date: 1700000000,
+        },
+        reply: vi.fn(),
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_id: "doc-1", file_path: "documents/report.pdf" }),
+          sendChatAction: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelType: "telegram",
+          chatId: "42",
+          text: "here is the report",
+          attachments: expect.arrayContaining([
+            expect.objectContaining({
+              type: "document",
+              name: "report.pdf",
+              mimeType: "application/pdf",
+            }),
+          ]),
+        })
+      );
+    });
+
+    it("replies not ready when no handler is set", async () => {
+      const photoHandler = mockHandlers.get("message:photo")!;
+      const replyMock = vi.fn();
+      await photoHandler({
+        chat: { id: 42 },
+        from: { id: 123 },
+        message: {
+          photo: [{ file_id: "f1", width: 100, height: 100 }],
+          date: 1700000000,
+        },
+        reply: replyMock,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_id: "f1", file_path: "photos/p.jpg" }),
+          sendChatAction: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+
+      expect(replyMock).toHaveBeenCalledWith("Brain is not ready yet. Please try again later.");
+    });
+
+    it("sends media message without attachments when download fails", async () => {
+      const { downloadMedia: mockDownload } = await import("../../utils/media-processor.js");
+      (mockDownload as any).mockResolvedValueOnce(null);
+
+      const handler = vi.fn().mockResolvedValue(undefined);
+      channel.onMessage(handler);
+
+      const photoHandler = mockHandlers.get("message:photo")!;
+      await photoHandler({
+        chat: { id: 42 },
+        from: { id: 123 },
+        message: {
+          photo: [{ file_id: "f1", width: 100, height: 100 }],
+          caption: "broken image",
+          date: 1700000000,
+        },
+        reply: vi.fn(),
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_id: "f1", file_path: "photos/p.jpg" }),
+          sendChatAction: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "broken image",
+          attachments: undefined,
+        })
+      );
+    });
   });
 });
