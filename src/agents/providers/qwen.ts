@@ -12,6 +12,11 @@ import type { OpenAIMessage } from "./openai.js";
  *   (supported by qwen-max and qwen3-max models)
  * - result_format: Ensures OpenAI-compatible message response format
  *
+ * Base URLs (API keys are NOT interchangeable across regions):
+ * - International (Singapore): https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+ * - US (Virginia): https://dashscope-us.aliyuncs.com/compatible-mode/v1
+ * - China (Beijing): https://dashscope.aliyuncs.com/compatible-mode/v1
+ *
  * @see https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope
  */
 export class QwenProvider extends OpenAIProvider {
@@ -27,7 +32,7 @@ export class QwenProvider extends OpenAIProvider {
   constructor(
     apiKey: string,
     model = "qwen-max",
-    baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    baseUrl = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
   ) {
     super(apiKey, model, baseUrl, "Qwen (Alibaba)");
   }

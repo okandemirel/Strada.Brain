@@ -53,7 +53,7 @@ export const PROVIDER_PRESETS: Record<
     label: "DeepSeek",
   },
   qwen: {
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     defaultModel: "qwen-max",
     label: "Qwen (Alibaba)",
   },
