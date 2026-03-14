@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "cd web-portal && npm run build && cd .. && tsc && rm -rf dist/channels/web/static && cp -r src/channels/web/static dist/channels/web/static",
+    "build": "npm run build:portal && tsc && cp -r src/channels/web/static dist/channels/web/static",
     "build:portal": "cd web-portal && npm run build",
     "start": "node dist/index.js",
     "lint": "eslint src/",
