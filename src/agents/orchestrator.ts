@@ -8,8 +8,10 @@ import type {
 } from "./providers/provider.interface.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import type { ITool, ToolContext } from "./tools/tool.interface.js";
-import type { IChannelAdapter, IncomingMessage } from "../channels/channel.interface.js";
+import type { IChannelAdapter, IncomingMessage, Attachment } from "../channels/channel.interface.js";
 import { supportsRichMessaging } from "../channels/channel.interface.js";
+import { isVisionCompatible, toBase64ImageSource } from "../utils/media-processor.js";
+import type { MessageContent } from "./providers/provider-core.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import { isOk, isSome } from "../types/index.js";
 import type { ChatId } from "../types/index.js";
@@ -61,6 +63,65 @@ const API_KEY_PATTERN =
 interface Session {
   messages: ConversationMessage[];
   lastActivity: Date;
+}
+
+/**
+ * Build user message content, converting image attachments to vision blocks
+ * when the provider supports it.
+ */
+export function buildUserContent(
+  text: string,
+  attachments: Attachment[] | undefined,
+  supportsVision: boolean,
+): string | MessageContent[] {
+  if (!attachments || attachments.length === 0) {
+    return text;
+  }
+
+  const imageAttachments = attachments.filter(
+    (a) => a.mimeType && isVisionCompatible(a.mimeType) && (a.data || a.url),
+  );
+  const nonImageAttachments = attachments.filter(
+    (a) => !a.mimeType || !isVisionCompatible(a.mimeType) || (!a.data && !a.url),
+  );
+
+  // If no vision support or no image attachments, append text notes
+  if (!supportsVision || imageAttachments.length === 0) {
+    const notes = attachments
+      .map((a) => `[Attached: ${a.name} (${a.mimeType ?? "unknown"})]`)
+      .join("\n");
+    return text ? `${text}\n\n${notes}` : notes;
+  }
+
+  // Build MessageContent[] with image blocks
+  const content: MessageContent[] = [];
+
+  // Text block (with non-image notes appended)
+  let textPart = text;
+  if (nonImageAttachments.length > 0) {
+    const notes = nonImageAttachments
+      .map((a) => `[Attached: ${a.name} (${a.mimeType ?? "unknown"})]`)
+      .join("\n");
+    textPart = textPart ? `${textPart}\n\n${notes}` : notes;
+  }
+  content.push({ type: "text", text: textPart || "What is in this image?" });
+
+  // Image blocks
+  for (const att of imageAttachments) {
+    if (att.data) {
+      content.push({
+        type: "image",
+        source: toBase64ImageSource(att.data, att.mimeType!),
+      });
+    } else if (att.url) {
+      content.push({
+        type: "image",
+        source: { type: "url", url: att.url },
+      });
+    }
+  }
+
+  return content;
 }
 
 /**
@@ -645,8 +706,11 @@ export class Orchestrator {
     const session = this.getOrCreateSession(chatId);
     session.lastActivity = new Date();
 
-    // Add user message
-    session.messages.push({ role: "user", content: text });
+    // Add user message (with vision blocks if applicable)
+    const provider = this.providerManager.getProvider(chatId);
+    const supportsVision = provider.capabilities.vision;
+    const userContent = buildUserContent(text, msg.attachments, supportsVision);
+    session.messages.push({ role: "user", content: userContent });
 
     // Trim old messages to manage context window
     // Persist trimmed messages to memory before discarding
@@ -660,9 +724,16 @@ export class Orchestrator {
           if (typeof m.content !== "string") return false;
           return true;
         })
-        .map(
-          (m) => `[${m.role}] ${typeof m.content === "string" ? m.content : "[complex content]"}`,
-        )
+        .map((m) => {
+          if (typeof m.content === "string") return `[${m.role}] ${m.content}`;
+          if (Array.isArray(m.content)) {
+            const textParts = (m.content as MessageContent[])
+              .filter((b): b is { type: "text"; text: string } => b.type === "text")
+              .map((b) => b.text);
+            return `[${m.role}] ${textParts.join(" ") || "[media message]"}`;
+          }
+          return `[${m.role}] [complex content]`;
+        })
         .join("\n");
       if (summary) {
         await this.memoryManager.storeConversation(chatId as ChatId, summary);
