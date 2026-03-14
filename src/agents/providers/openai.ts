@@ -88,10 +88,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       `${this.baseUrl}/chat/completions`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers: this.buildHeaders(),
         body: JSON.stringify(body),
       },
     );
@@ -124,10 +121,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       `${this.baseUrl}/chat/completions`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers: this.buildHeaders(),
         body: JSON.stringify(body),
       },
     );
@@ -272,6 +266,17 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
 
     return result;
+  }
+
+  /**
+   * Build HTTP headers for API requests.
+   * Subclasses can override to add provider-specific headers (e.g., User-Agent).
+   */
+  protected buildHeaders(): Record<string, string> {
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${this.apiKey}`,
+    };
   }
 
   protected buildRequestBody(

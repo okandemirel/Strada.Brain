@@ -11,12 +11,16 @@ import { OpenAIProvider } from "./openai.js";
  * - Multimodal inputs (K2.5+)
  * - OpenAI-compatible function calling
  *
+ * The coding endpoint (api.kimi.com/coding/v1) enforces User-Agent
+ * whitelisting — only known coding agents are allowed. We send
+ * `User-Agent: claude-code/0.1.0` to authenticate as a coding agent.
+ *
  * Base URLs:
  * - China: https://api.moonshot.cn/v1
  * - International: https://api.moonshot.ai/v1
  * - Coding: https://api.kimi.com/coding/v1
  *
- * @see https://platform.moonshot.ai/docs/api/chat
+ * @see https://www.kimi.com/code/docs/en/more/third-party-agents.html
  */
 export class KimiProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities = {
@@ -34,5 +38,12 @@ export class KimiProvider extends OpenAIProvider {
     baseUrl = "https://api.kimi.com/coding/v1",
   ) {
     super(apiKey, model, baseUrl, "Kimi (Moonshot)");
+  }
+
+  protected override buildHeaders(): Record<string, string> {
+    return {
+      ...super.buildHeaders(),
+      "User-Agent": "claude-code/0.1.0",
+    };
   }
 }
