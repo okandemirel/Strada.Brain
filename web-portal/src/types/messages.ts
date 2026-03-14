@@ -96,6 +96,7 @@ export interface ChatMessage {
   isStreaming?: boolean
   streamId?: string
   timestamp: number
+  attachments?: Attachment[]
 }
 
 /** Connection status */

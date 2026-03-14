@@ -1,16 +1,21 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Header from './components/Header'
 import ChatMessage from './components/ChatMessage'
 import ChatInput from './components/ChatInput'
 import ConfirmDialog from './components/ConfirmDialog'
 import TypingIndicator from './components/TypingIndicator'
 import EmptyState from './components/EmptyState'
+import SidePanel from './components/SidePanel'
+import DashboardView from './components/DashboardView'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useTheme } from './hooks/useTheme'
 
+type Tab = 'chat' | 'dashboard'
+
 export default function App() {
-  const { messages, status, confirmation, isTyping, sendMessage, sendConfirmation } = useWebSocket()
+  const { messages, status, confirmation, isTyping, sessionId, sendMessage, sendConfirmation } = useWebSocket()
   const { theme, toggleTheme } = useTheme()
+  const [activeTab, setActiveTab] = useState<Tab>('chat')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const userScrolledUpRef = useRef(false)
@@ -44,25 +49,57 @@ export default function App() {
     <div className="app">
       <Header status={status} theme={theme} onToggleTheme={toggleTheme} />
 
-      <div className="messages" ref={messagesContainerRef}>
-        {messages.length === 0 && !isTyping ? (
-          <EmptyState />
-        ) : (
-          <>
-            {messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} />
-            ))}
-            {isTyping && <TypingIndicator />}
-          </>
-        )}
-        <div ref={messagesEndRef} />
+      <div className="tab-bar">
+        <button
+          className={`tab ${activeTab === 'chat' ? 'active' : ''}`}
+          onClick={() => setActiveTab('chat')}
+        >
+          Chat
+        </button>
+        <button
+          className={`tab ${activeTab === 'dashboard' ? 'active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+        >
+          Dashboard
+        </button>
       </div>
 
-      {confirmation && (
-        <ConfirmDialog confirmation={confirmation} onRespond={sendConfirmation} />
-      )}
+      {activeTab === 'chat' ? (
+        <div className="app-body">
+          <div className="chat-area">
+            <div className="messages" ref={messagesContainerRef}>
+              {messages.length === 0 && !isTyping ? (
+                <EmptyState />
+              ) : (
+                <>
+                  {messages.map((msg) => (
+                    <ChatMessage key={msg.id} message={msg} />
+                  ))}
+                  {isTyping && <TypingIndicator />}
+                </>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
 
-      <ChatInput onSend={sendMessage} disabled={isDisconnected} />
+            {confirmation && (
+              <ConfirmDialog confirmation={confirmation} onRespond={sendConfirmation} />
+            )}
+
+            <ChatInput onSend={sendMessage} disabled={isDisconnected} />
+          </div>
+
+          <SidePanel
+            status={status}
+            messageCount={messages.length}
+            isTyping={isTyping}
+            sessionId={sessionId}
+          />
+        </div>
+      ) : (
+        <div className="app-body">
+          <DashboardView />
+        </div>
+      )}
     </div>
   )
 }

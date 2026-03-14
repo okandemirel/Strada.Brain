@@ -20,6 +20,12 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20 MB
 const MAX_FILES = 5
 const ALLOWED_TYPES = new Set([
@@ -41,24 +47,14 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [isDragOver, setIsDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const sendingRef = useRef(false)
 
-  // Track latest files in a ref so the unmount cleanup sees the current value
+  // Revoke all remaining blob URLs on unmount
   const filesRef = useRef(files)
   filesRef.current = files
-
-  // Revoke blob URLs whenever files change (handles removed files)
   useEffect(() => {
     return () => {
-      files.forEach((f) => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl) })
-    }
-  }, [files])
-
-  // Clean up any remaining preview URLs on unmount to prevent memory leaks
-  useEffect(() => {
-    return () => {
-      filesRef.current.forEach((f) => {
-        if (f.previewUrl) URL.revokeObjectURL(f.previewUrl)
-      })
+      filesRef.current.forEach((f) => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl) })
     }
   }, [])
 
@@ -89,34 +85,36 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   }, [])
 
   const handleSend = useCallback(async () => {
-    const trimmed = text.trim()
-    if (!trimmed && files.length === 0) return
+    if (sendingRef.current) return
+    sendingRef.current = true
+    try {
+      const trimmed = text.trim()
+      if (!trimmed && files.length === 0) return
 
-    let attachments: Attachment[] | undefined
-    if (files.length > 0) {
-      attachments = await Promise.all(
-        files.map(async ({ file }) => ({
-          name: file.name,
-          type: file.type,
-          data: await fileToBase64(file),
-          size: file.size,
-        })),
-      )
-    }
+      let attachments: Attachment[] | undefined
+      if (files.length > 0) {
+        attachments = await Promise.all(
+          files.map(async ({ file }) => ({
+            name: file.name,
+            type: file.type,
+            data: await fileToBase64(file),
+            size: file.size,
+          })),
+        )
+      }
 
-    const sent = onSend(trimmed || '(file attachment)', attachments)
-    if (sent === false) return
+      const sent = onSend(trimmed || '(file attachment)', attachments)
+      if (sent === false) return
 
-    setText('')
-    // Clean up preview URLs
-    files.forEach((f) => {
-      if (f.previewUrl) URL.revokeObjectURL(f.previewUrl)
-    })
-    setFiles([])
+      setText('')
+      setFiles([])
 
-    // Reset textarea height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
+      // Reset textarea height
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto'
+      }
+    } finally {
+      sendingRef.current = false
     }
   }, [text, files, onSend])
 
@@ -156,7 +154,9 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   const handleDragLeave = useCallback((e: DragEvent) => {
     e.preventDefault()
-    setIsDragOver(false)
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragOver(false)
+    }
   }, [])
 
   const handleDrop = useCallback(
@@ -173,6 +173,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   return (
     <div
       className={`input-area ${isDragOver ? 'drag-over' : ''}`}
+      onDragEnter={handleDragOver}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -189,6 +190,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
                 </div>
               )}
               <span className="file-name">{fp.file.name}</span>
+              <span className="file-size">{formatFileSize(fp.file.size)}</span>
               <button className="file-remove" onClick={() => removeFile(i)} title="Remove file">
                 &times;
               </button>
@@ -206,6 +208,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
           </svg>
+          {files.length > 0 && <span className="attach-badge">{files.length}</span>}
         </button>
         <textarea
           ref={textareaRef}

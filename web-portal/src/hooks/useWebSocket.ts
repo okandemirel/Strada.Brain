@@ -18,6 +18,7 @@ export interface UseWebSocketReturn {
   status: ConnectionStatus
   confirmation: ConfirmationState | null
   isTyping: boolean
+  sessionId: string | null
   sendMessage: (text: string, attachments?: Attachment[]) => boolean
   sendConfirmation: (confirmId: string, option: string) => void
 }
@@ -27,6 +28,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null)
   const [isTyping, setIsTyping] = useState(false)
+  const [sessionId, setSessionId] = useState<string | null>(localStorage.getItem('strada-chatId'))
 
   const wsRef = useRef<WebSocket | null>(null)
   const chatIdRef = useRef<string | null>(localStorage.getItem('strada-chatId'))
@@ -86,6 +88,7 @@ export function useWebSocket(): UseWebSocketReturn {
       switch (data.type) {
         case 'connected':
           chatIdRef.current = data.chatId
+          setSessionId(data.chatId)
           localStorage.setItem('strada-chatId', data.chatId)
           break
 
@@ -187,6 +190,7 @@ export function useWebSocket(): UseWebSocketReturn {
         text,
         isMarkdown: false,
         timestamp: Date.now(),
+        attachments,
       },
     ])
 
@@ -211,6 +215,7 @@ export function useWebSocket(): UseWebSocketReturn {
     status,
     confirmation,
     isTyping,
+    sessionId,
     sendMessage,
     sendConfirmation,
   }
