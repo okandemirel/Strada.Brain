@@ -18,6 +18,7 @@ import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
 import { CHANNEL_DEFAULTS, type SupportedChannelType } from "./common/constants.js";
 import { runMetricsCommand } from "./metrics/metrics-cli.js";
 import { registerDaemonCommands } from "./daemon/daemon-cli.js";
+import { registerPresetCommands } from "./config/preset-cli.js";
 
 // Setup global error handlers
 setupGlobalErrorHandlers(
@@ -124,6 +125,9 @@ program
       failOnWarnings: opts.failOnWarnings,
     });
   });
+
+// Register preset management commands (list, show, set, models)
+registerPresetCommands(program);
 
 // Register daemon management commands (status, trigger, reset, audit, config, budget)
 // Context is provided via callback since daemon may not be initialized at registration time

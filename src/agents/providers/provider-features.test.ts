@@ -78,10 +78,10 @@ describe("Feature: Streaming (chatStream)", () => {
     });
   }
 
-  it("Gemini does NOT support streaming (thought_signature safety)", () => {
+  it("Gemini supports streaming with thought_signature capture", () => {
     const gemini = new GeminiProvider("key");
-    expect(gemini.capabilities.streaming).toBe(false);
-    expect(supportsStreaming(gemini)).toBe(false);
+    expect(gemini.capabilities.streaming).toBe(true);
+    expect(supportsStreaming(gemini)).toBe(true);
   });
 
   it("Ollama does NOT support streaming", () => {
@@ -277,17 +277,20 @@ describe("Feature: Reasoning block stripping", () => {
 });
 
 // ============================================================================
-// 5. Vision: false — All providers correctly declare no vision
+// 5. Vision capability — providers declare correct vision support
 // ============================================================================
 
-describe("Feature: Vision correctly disabled", () => {
-  const allProviders = [
+describe("Feature: Vision capability", () => {
+  const visionEnabled = [
     { name: "OpenAI", provider: new OpenAIProvider("k") },
-    { name: "DeepSeek", provider: new DeepSeekProvider("k") },
     { name: "Gemini", provider: new GeminiProvider("k") },
+    { name: "Kimi", provider: new KimiProvider("k") },
+  ];
+
+  const visionDisabled = [
+    { name: "DeepSeek", provider: new DeepSeekProvider("k") },
     { name: "Groq", provider: new GroqProvider("k") },
     { name: "Mistral", provider: new MistralProvider("k") },
-    { name: "Kimi", provider: new KimiProvider("k") },
     { name: "Qwen", provider: new QwenProvider("k") },
     { name: "MiniMax", provider: new MiniMaxProvider("k") },
     { name: "Together", provider: new TogetherProvider("k") },
@@ -296,7 +299,13 @@ describe("Feature: Vision correctly disabled", () => {
     { name: "Ollama", provider: new OllamaProvider() },
   ];
 
-  for (const { name, provider } of allProviders) {
+  for (const { name, provider } of visionEnabled) {
+    it(`${name} has vision: true`, () => {
+      expect(provider.capabilities.vision).toBe(true);
+    });
+  }
+
+  for (const { name, provider } of visionDisabled) {
     it(`${name} has vision: false`, () => {
       expect(provider.capabilities.vision).toBe(false);
     });

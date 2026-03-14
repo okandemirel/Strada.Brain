@@ -225,12 +225,17 @@
       statusDot.classList.add("connected");
       statusText.textContent = "Connected";
       reconnectDelay = 1000;
+
+      // Attempt to reconnect with previous session
+      var savedChatId = localStorage.getItem("strada-chatId");
+      if (savedChatId) {
+        ws.send(JSON.stringify({ type: "reconnect", chatId: savedChatId }));
+      }
     });
 
     ws.addEventListener("close", () => {
       statusDot.classList.remove("connected");
       statusText.textContent = "Disconnected";
-      chatId = null;
       // Auto-reconnect with exponential backoff
       setTimeout(() => {
         statusText.textContent = "Reconnecting...";
@@ -254,6 +259,7 @@
       switch (data.type) {
         case "connected":
           chatId = data.chatId;
+          localStorage.setItem("strada-chatId", chatId);
           break;
 
         case "text":

@@ -7,7 +7,7 @@
 /**
  * Supported channel types
  */
-export type ChannelType = "telegram" | "whatsapp" | "cli" | "web" | "discord" | "slack";
+export type ChannelType = "telegram" | "whatsapp" | "cli" | "web" | "discord" | "slack" | "matrix" | "irc" | "teams";
 
 /**
  * Represents an incoming message from any channel.

@@ -11,12 +11,10 @@ import type {
 import type { MessageContent } from "./provider-core.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
-import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
+import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-retry.js";
 
 const MAX_RETRIES = 3;
-const RETRY_BASE_DELAY_MS = 500;
-const MAX_SSE_BUFFER_BYTES = 1 * 1024 * 1024; // 1 MB
-const MAX_RETRY_DELAY_MS = 60_000; // Cap retry-after at 60s to prevent server-controlled hangs
+export const MAX_SSE_BUFFER_BYTES = 1 * 1024 * 1024; // 1 MB
 
 /** Maps OpenAI finish_reason values to internal stop reasons */
 export const OPENAI_STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
@@ -47,7 +45,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     streaming: true,
     structuredStreaming: false,
     toolCalling: true,
-    vision: false,
+    vision: true,
     systemPrompt: true,
   };
   protected readonly apiKey: string;
@@ -235,6 +233,11 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
           for (const block of msg.content as MessageContent[]) {
             if (block.type === "text") {
               result.push({ role: "user", content: block.text });
+            } else if (block.type === "image") {
+              const imageContent = block.source.type === "base64"
+                ? { type: "image_url" as const, image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` } }
+                : { type: "image_url" as const, image_url: { url: block.source.url } };
+              result.push({ role: "user", content: [imageContent] as unknown as string });
             } else if (block.type === "tool_result") {
               result.push({
                 role: "tool",
@@ -322,37 +325,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     url: string,
     options: RequestInit,
   ): Promise<Response> {
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const response = await fetch(url, options);
-
-      if (response.ok) return response;
-
-      const status = response.status;
-      const isRetryable = status === 429 || (status >= 500 && status < 600);
-
-      if (!isRetryable || attempt === MAX_RETRIES) {
-        const rawText = (await response.text()).slice(0, 200);
-        const errorText = sanitizeSecrets(rawText);
-        throw new Error(`${this.name} API error ${status} at ${this.baseUrl}: ${errorText}`);
-      }
-
-      const retryAfterMs = parseInt(response.headers.get("retry-after") ?? "", 10) * 1000;
-      const delay = Number.isFinite(retryAfterMs) && retryAfterMs > 0
-        ? Math.min(retryAfterMs, MAX_RETRY_DELAY_MS)
-        : RETRY_BASE_DELAY_MS * Math.pow(2, attempt) + Math.random() * 100;
-
-      // Drain the response body to release the underlying TCP connection
-      try { await response.body?.cancel(); } catch { /* ignore */ }
-
-      getLogger().warn(`${this.name} API ${status}, retrying in ${Math.round(delay)}ms`, {
-        attempt: attempt + 1,
-        maxRetries: MAX_RETRIES,
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-
-    throw new Error(`${this.name} max retries exceeded`);
+    return sharedFetchWithRetry(url, options, {
+      maxRetries: MAX_RETRIES,
+      callerName: this.name,
+    });
   }
 
   protected parseResponse(data: OpenAIResponse): ProviderResponse {

@@ -68,12 +68,12 @@ export const DEFAULT_RATE_LIMITS = {
   messagesPerMinute: 0,
   /** Messages per hour (0 = unlimited) */
   messagesPerHour: 0,
-  /** Tokens per day (0 = unlimited) */
-  tokensPerDay: 0,
-  /** Daily budget in USD (0 = unlimited) */
-  dailyBudgetUsd: 0,
-  /** Monthly budget in USD (0 = unlimited) */
-  monthlyBudgetUsd: 0,
+  /** Tokens per day — 500K default for production safety */
+  tokensPerDay: 500_000,
+  /** Daily budget in USD */
+  dailyBudgetUsd: 5.0,
+  /** Monthly budget in USD */
+  monthlyBudgetUsd: 100.0,
 } as const;
 
 // ============================================================================
@@ -254,7 +254,7 @@ export const CHANNEL_DEFAULTS = {
   /** Default channel type */
   DEFAULT_TYPE: "web" as const,
   /** Supported channels */
-  SUPPORTED_TYPES: ["web", "telegram", "discord", "whatsapp", "cli", "slack"] as const,
+  SUPPORTED_TYPES: ["web", "telegram", "discord", "whatsapp", "cli", "slack", "matrix", "irc", "teams"] as const,
   /** WhatsApp session path */
   WHATSAPP_SESSION_PATH: ".whatsapp-session",
 } as const;

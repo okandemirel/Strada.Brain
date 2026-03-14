@@ -10,6 +10,7 @@
 
 import type { GoalTree, GoalNode, GoalNodeId, GoalStatus } from "./types.js";
 import { calculateProgress, renderProgressBar } from "./goal-progress.js";
+import { renderGoalTreeMermaid, getMermaidInkUrl, wrapMermaidForWeb } from "../visualization/mermaid-renderer.js";
 
 // =============================================================================
 // STATUS ICONS
@@ -42,6 +43,10 @@ const SPINNER_CHARS = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834
 export interface GoalRendererOptions {
   /** When true, annotates parallelizable nodes (for when parallel execution is disabled) */
   annotateParallelizable?: boolean;
+  /** Output format: "ascii" (default) or "mermaid" (flowchart diagram) */
+  format?: "ascii" | "mermaid";
+  /** Channel type hint for format-specific output (e.g., "web" for inline mermaid) */
+  channelType?: string;
 }
 
 // =============================================================================
@@ -55,6 +60,14 @@ export interface GoalRendererOptions {
  * Truncates output to MAX_RENDER_LENGTH with summary if exceeded.
  */
 export function renderGoalTree(tree: GoalTree, options?: GoalRendererOptions): string {
+  // Mermaid format: return flowchart diagram
+  if (options?.format === "mermaid") {
+    const mermaid = renderGoalTreeMermaid(tree);
+    return options.channelType === "web"
+      ? wrapMermaidForWeb(mermaid)
+      : getMermaidInkUrl(mermaid);
+  }
+
   const root = tree.nodes.get(tree.rootId);
   if (!root) return "(empty tree)";
 

@@ -40,69 +40,7 @@ const DEFAULT_ANALYSIS_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const FLUSH_DEBOUNCE_MS = 5000;
 const MAX_FLUSH_WAIT_MS = 30000; // Maximum time to wait before forced flush
 
-/**
- * LRU Cache implementation with O(1) access and eviction
- */
-class LRUCache<K, V> {
-  private cache: Map<K, V>;
-  private readonly maxSize: number;
-
-  constructor(maxSize: number) {
-    this.maxSize = maxSize;
-    this.cache = new Map();
-  }
-
-  get(key: K): V | undefined {
-    const value = this.cache.get(key);
-    if (value !== undefined) {
-      // Move to end (most recently used)
-      this.cache.delete(key);
-      this.cache.set(key, value);
-    }
-    return value;
-  }
-
-  set(key: K, value: V): void {
-    if (this.cache.has(key)) {
-      this.cache.delete(key);
-    } else if (this.cache.size >= this.maxSize) {
-      // Evict least recently used (first item)
-      const firstKey = this.cache.keys().next().value;
-      if (firstKey !== undefined) {
-        this.cache.delete(firstKey);
-      }
-    }
-    this.cache.set(key, value);
-  }
-
-  delete(key: K): boolean {
-    return this.cache.delete(key);
-  }
-
-  has(key: K): boolean {
-    return this.cache.has(key);
-  }
-
-  get size(): number {
-    return this.cache.size;
-  }
-
-  keys(): IterableIterator<K> {
-    return this.cache.keys();
-  }
-
-  values(): IterableIterator<V> {
-    return this.cache.values();
-  }
-
-  entries(): IterableIterator<[K, V]> {
-    return this.cache.entries();
-  }
-
-  clear(): void {
-    this.cache.clear();
-  }
-}
+import { LRUCache } from "../common/lru-cache.js";
 
 /**
  * Optimized TF-IDF computation with caching

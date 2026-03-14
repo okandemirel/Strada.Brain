@@ -3,15 +3,10 @@ import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import type { IEmbeddingProvider, EmbeddingBatch } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
+import { LRUCache } from "../../common/lru-cache.js";
 
 const DEFAULT_MAX_CACHE_SIZE = 10_000;
 const CACHE_FILENAME = "embedding-cache.json";
-
-interface CacheEntry {
-  embedding: number[];
-  /** Insertion order counter used for LRU tracking */
-  accessOrder: number;
-}
 
 interface PersistedCache {
   version: number;
@@ -45,8 +40,7 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
   private readonly maxCacheSize: number;
   private readonly persistPath: string | undefined;
 
-  private readonly cache = new Map<string, CacheEntry>();
-  private accessCounter = 0;
+  private readonly cache: LRUCache<string, number[]>;
   private dirty = false;
   private hits = 0;
   private misses = 0;
@@ -58,6 +52,7 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
     this.inner = inner;
     this.maxCacheSize = opts.maxCacheSize ?? DEFAULT_MAX_CACHE_SIZE;
     this.persistPath = opts.persistPath;
+    this.cache = new LRUCache<string, number[]>(this.maxCacheSize);
   }
 
   // ---------------------------------------------------------------------------
@@ -75,7 +70,7 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
       const persisted = JSON.parse(raw) as PersistedCache;
       for (const { key, embedding } of persisted.entries) {
         if (this.cache.size >= this.maxCacheSize) break;
-        this.cache.set(key, { embedding, accessOrder: this.accessCounter++ });
+        this.cache.set(key, embedding);
       }
       logger.debug("EmbeddingCache: loaded from disk", {
         entries: this.cache.size,
@@ -101,9 +96,9 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
 
     try {
       await mkdir(this.persistPath, { recursive: true });
-      const entries = Array.from(this.cache.entries()).map(([key, entry]) => ({
+      const entries = Array.from(this.cache.entries()).map(([key, embedding]) => ({
         key,
-        embedding: entry.embedding,
+        embedding,
       }));
       const persisted: PersistedCache = { version: 1, entries };
       await writeFile(filePath, JSON.stringify(persisted), "utf8");
@@ -139,9 +134,6 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
       const key = keys[i]!;
       if (this.cache.has(key)) {
         this.hits++;
-        // Update LRU access order
-        const entry = this.cache.get(key)!;
-        entry.accessOrder = this.accessCounter++;
       } else {
         this.misses++;
         uncachedIndices.push(i);
@@ -165,14 +157,14 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
         const originalIdx = uncachedIndices[j]!;
         const key = keys[originalIdx]!;
         const embedding = result.embeddings[j]!;
-        this.insertWithEviction(key, embedding);
+        this.cache.set(key, embedding);
       }
 
       this.dirty = true;
     }
 
     // Assemble results in original order
-    const embeddings = keys.map((key) => this.cache.get(key)!.embedding);
+    const embeddings = keys.map((key) => this.cache.get(key)!);
 
     return { embeddings, usage: { totalTokens } };
   }
@@ -206,26 +198,4 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
       .digest("hex");
   }
 
-  private insertWithEviction(key: string, embedding: number[]): void {
-    if (this.cache.size >= this.maxCacheSize) {
-      this.evictLRU();
-    }
-    this.cache.set(key, { embedding, accessOrder: this.accessCounter++ });
-  }
-
-  private evictLRU(): void {
-    let lruKey: string | undefined;
-    let lruOrder = Infinity;
-
-    for (const [key, entry] of this.cache) {
-      if (entry.accessOrder < lruOrder) {
-        lruOrder = entry.accessOrder;
-        lruKey = key;
-      }
-    }
-
-    if (lruKey !== undefined) {
-      this.cache.delete(lruKey);
-    }
-  }
 }

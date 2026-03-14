@@ -1,0 +1,46 @@
+[Unit]
+Description=Strada.Brain AI Development Assistant
+Documentation=https://github.com/okandemirel/Strada.Brain
+After=network.target
+
+[Service]
+Type=simple
+User=strada
+Group=strada
+WorkingDirectory=/opt/strada-brain
+
+ExecStart=/usr/bin/node dist/index.js start --channel web
+ExecStop=/bin/kill -SIGTERM $MAINPID
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=200%
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/strada-brain/.strada-memory /opt/strada-brain/logs
+PrivateTmp=true
+
+# Environment
+Environment=NODE_ENV=production
+EnvironmentFile=-/opt/strada-brain/.env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=strada-brain
+
+# Shutdown
+TimeoutStopSec=35
+
+[Install]
+WantedBy=multi-user.target

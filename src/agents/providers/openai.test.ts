@@ -135,7 +135,7 @@ describe("OpenAIProvider", () => {
 
     const provider = new OpenAIProvider("sk-test");
     await expect(provider.chat("system", [{ role: "user", content: "Hi" }], [])).rejects.toThrow(
-      "OpenAI API error 400 at https://api.openai.com/v1",
+      "OpenAI API error 400",
     );
   });
 
@@ -149,7 +149,7 @@ describe("OpenAIProvider", () => {
 
     const provider = new OpenAIProvider("sk-test");
     await expect(provider.chat("system", [{ role: "user", content: "Hi" }], [])).rejects.toThrow(
-      "OpenAI API error 429 at https://api.openai.com/v1",
+      "OpenAI API error 429",
     );
     // Initial attempt + 3 retries = 4 calls
     expect(mockFetch).toHaveBeenCalledTimes(4);

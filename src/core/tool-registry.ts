@@ -581,6 +581,38 @@ export class ToolRegistry {
         readOnly: true,
       },
     );
+
+    // Browser automation (Playwright-based, 11 actions, session management)
+    // Dynamic import to avoid pulling heavy playwright dependency at startup
+    void (async () => {
+      try {
+        const { BrowserAutomationTool } = await import("../agents/tools/browser-automation.js");
+        this.register(new BrowserAutomationTool(), {
+          category: ToolCategories.BROWSER,
+          dangerous: true,
+          readOnly: false,
+        });
+      } catch {
+        // Playwright not installed — browser tool unavailable
+      }
+    })();
+
+    // Speech-to-text (Whisper API) — requires OpenAI API key
+    const openaiKey = process.env["OPENAI_API_KEY"];
+    if (openaiKey) {
+      void (async () => {
+        try {
+          const { SpeechToTextTool } = await import("../agents/tools/speech-to-text.js");
+          this.register(new SpeechToTextTool(openaiKey), {
+            category: ToolCategories.CUSTOM,
+            dangerous: false,
+            readOnly: true,
+          });
+        } catch {
+          // Speech-to-text tool loading failed
+        }
+      })();
+    }
   }
 }
 

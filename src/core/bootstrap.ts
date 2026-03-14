@@ -191,15 +191,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Initialize security
   const auth = initializeAuth(config, channelType, logger);
 
-  // Initialize AI provider manager
-  const providerInit = await initializeAIProvider(config, logger);
+  // Phase 1: Initialize independent services in parallel
+  const [providerInit, memoryManager, channel] = await Promise.all([
+    initializeAIProvider(config, logger),
+    initializeMemory(config, logger),
+    initializeChannel(channelType, config, auth, logger),
+  ]);
   const providerManager = providerInit.manager;
   const startupNotices = [...providerInit.notices];
 
-  // Initialize memory manager
-  const memoryManager = await initializeMemory(config, logger);
-
-  // Initialize RAG pipeline
+  // Phase 2: RAG + dashboard (depend on memoryManager / config only)
   const ragResult = await initializeRAG(config, logger);
   const ragPipeline = ragResult.pipeline;
   const cachedEmbeddingProvider = ragResult.cachedProvider;
@@ -207,17 +208,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     startupNotices.push(ragResult.notice);
   }
 
-  // Initialize learning system (pass shared embedding provider if available)
-  // Note: identityManager may not be initialized yet at this point,
-  // but it's created later. We pass undefined now and wire scope context after identity init.
+  // Phase 3: Learning system (depends on cachedEmbeddingProvider from RAG)
   const learningResult = await initializeLearning(config, logger, cachedEmbeddingProvider);
   startupNotices.push(...learningResult.notices);
 
   // Initialize tools (registry created here, initialized after metricsStorage below)
   const toolRegistry = new ToolRegistry(config.pluginDirs);
-
-  // Initialize channel
-  const channel = await initializeChannel(channelType, config, auth, logger);
 
   // Initialize metrics and dashboard
   const metrics = new MetricsCollector();
@@ -1692,6 +1688,44 @@ async function initializeChannel(
     case "web":
       return new WebChannel(config.web.port);
 
+    case "matrix": {
+      const { MatrixChannel } = await import("../channels/matrix/channel.js");
+      const homeserver = process.env["MATRIX_HOMESERVER"];
+      const accessToken = process.env["MATRIX_ACCESS_TOKEN"];
+      const matrixUserId = process.env["MATRIX_USER_ID"];
+      if (!homeserver || !accessToken || !matrixUserId) {
+        throw new AppError(
+          "MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID are required for Matrix channel",
+          "MISSING_MATRIX_CONFIG",
+        );
+      }
+      return new MatrixChannel(homeserver, accessToken, matrixUserId);
+    }
+
+    case "irc": {
+      const { IRCChannel } = await import("../channels/irc/channel.js");
+      const ircServer = process.env["IRC_SERVER"];
+      const ircNick = process.env["IRC_NICK"] ?? "strada-brain";
+      const ircChannels = (process.env["IRC_CHANNELS"] ?? "").split(",").filter(Boolean);
+      if (!ircServer) {
+        throw new AppError("IRC_SERVER is required for IRC channel", "MISSING_IRC_CONFIG");
+      }
+      return new IRCChannel(ircServer, ircNick, ircChannels);
+    }
+
+    case "teams": {
+      const { TeamsChannel } = await import("../channels/teams/channel.js");
+      const teamsAppId = process.env["TEAMS_APP_ID"];
+      const teamsAppPassword = process.env["TEAMS_APP_PASSWORD"];
+      if (!teamsAppId || !teamsAppPassword) {
+        throw new AppError(
+          "TEAMS_APP_ID and TEAMS_APP_PASSWORD are required for Teams channel",
+          "MISSING_TEAMS_CONFIG",
+        );
+      }
+      return new TeamsChannel(teamsAppId, teamsAppPassword);
+    }
+
     case "telegram":
     default: {
       if (!config.telegram.botToken) {
@@ -1836,94 +1870,113 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
   const logger = getLogger();
 
   return async (): Promise<void> => {
-    logger.info("Shutting down Strada Brain...");
+    const SHUTDOWN_TIMEOUT_MS = 30_000;
 
-    clearInterval(cleanupInterval);
+    const gracefulShutdown = async (): Promise<void> => {
+      logger.info("Shutting down Strada Brain...");
 
-    // Stop reporting before heartbeat loop
-    if (options.digestReporter) {
-      options.digestReporter.stop();
-    }
-    if (options.notificationRouter) {
-      options.notificationRouter.stop();
-    }
+      clearInterval(cleanupInterval);
 
-    // Shut down delegation manager before multi-agent system
-    if (options.delegationManager) {
-      await options.delegationManager.shutdown();
-    }
+      // Stop reporting before heartbeat loop
+      if (options.digestReporter) {
+        options.digestReporter.stop();
+      }
+      if (options.notificationRouter) {
+        options.notificationRouter.stop();
+      }
 
-    // Shut down multi-agent system before heartbeat loop
-    if (options.agentManager) {
-      await options.agentManager.shutdown();
-    }
+      // Shut down delegation manager before multi-agent system
+      if (options.delegationManager) {
+        await options.delegationManager.shutdown();
+      }
 
-    // Stop heartbeat loop before draining events
-    if (options.heartbeatLoop) {
-      options.heartbeatLoop.stop();
-    }
+      // Shut down multi-agent system before heartbeat loop
+      if (options.agentManager) {
+        await options.agentManager.shutdown();
+      }
 
-    // Stop chain detection timer before draining events
-    if (options.chainManager) {
-      options.chainManager.stop();
-    }
+      // Stop heartbeat loop before draining events
+      if (options.heartbeatLoop) {
+        options.heartbeatLoop.stop();
+      }
 
-    // Drain event bus and learning queue before stopping pipeline
-    if (options.eventBus) {
-      await options.eventBus.shutdown();
-    }
-    if (options.learningQueue) {
-      await options.learningQueue.shutdown();
-    }
+      // Stop chain detection timer before draining events
+      if (options.chainManager) {
+        options.chainManager.stop();
+      }
 
-    // Then stop the pipeline (clears evolution timer, shuts down embedding queue)
-    if (learningPipeline) {
-      learningPipeline.stop();
-    }
+      // Drain event bus and learning queue before stopping pipeline
+      if (options.eventBus) {
+        await options.eventBus.shutdown();
+      }
+      if (options.learningQueue) {
+        await options.learningQueue.shutdown();
+      }
 
-    if (options.metricsStorage) {
-      options.metricsStorage.close();
-    }
+      // Then stop the pipeline (clears evolution timer, shuts down embedding queue)
+      if (learningPipeline) {
+        learningPipeline.stop();
+      }
 
-    if (options.goalStorage) {
-      options.goalStorage.close();
-    }
+      if (options.metricsStorage) {
+        options.metricsStorage.close();
+      }
 
-    if (options.taskStorage) {
-      options.taskStorage.close();
-    }
+      if (options.goalStorage) {
+        options.goalStorage.close();
+      }
 
-    if (options.providerManager) {
-      options.providerManager.shutdown();
-    }
+      if (options.taskStorage) {
+        options.taskStorage.close();
+      }
 
-    if (dashboard) {
-      await dashboard.stop();
-    }
+      if (options.providerManager) {
+        options.providerManager.shutdown();
+      }
 
-    if (options.stoppableServers) {
-      await Promise.all(options.stoppableServers.map(s => s.stop()));
-    }
+      if (dashboard) {
+        await dashboard.stop();
+      }
 
-    if (ragPipeline) {
-      await ragPipeline.shutdown();
-    }
+      if (options.stoppableServers) {
+        await Promise.all(options.stoppableServers.map(s => s.stop()));
+      }
 
-    if (memoryManager) {
-      await memoryManager.shutdown();
-    }
+      if (ragPipeline) {
+        await ragPipeline.shutdown();
+      }
 
-    // Identity shutdown: record clean shutdown and flush uptime (before DB closes)
-    if (options.uptimeInterval) {
-      clearInterval(options.uptimeInterval);
-    }
-    if (options.identityManager) {
-      options.identityManager.recordShutdown();
-      options.identityManager.close();
-    }
+      if (memoryManager) {
+        await memoryManager.shutdown();
+      }
 
-    await channel.disconnect();
-    logger.info("Strada Brain stopped.");
+      // Identity shutdown: record clean shutdown and flush uptime (before DB closes)
+      if (options.uptimeInterval) {
+        clearInterval(options.uptimeInterval);
+      }
+      if (options.identityManager) {
+        options.identityManager.recordShutdown();
+        options.identityManager.close();
+      }
+
+      await channel.disconnect();
+      logger.info("Strada Brain stopped.");
+    };
+
+    try {
+      await Promise.race([
+        gracefulShutdown(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Shutdown timeout exceeded")), SHUTDOWN_TIMEOUT_MS),
+        ),
+      ]);
+    } catch (err) {
+      if (err instanceof Error && err.message === "Shutdown timeout exceeded") {
+        logger.error("Forced shutdown: graceful shutdown took longer than 30s");
+        process.exit(1);
+      }
+      throw err;
+    }
   };
 }
 

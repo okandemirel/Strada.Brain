@@ -38,3 +38,42 @@ export function configureSqlitePragmas(
   db.pragma("busy_timeout = 5000");
   db.pragma("foreign_keys = ON");
 }
+
+/**
+ * Validate database integrity and attempt auto-repair on corruption.
+ *
+ * Steps: WAL checkpoint, integrity_check, REINDEX if needed.
+ * Returns true if healthy (or successfully repaired), false if unrecoverable.
+ */
+export function validateAndRepairSqlite(
+  db: Database.Database,
+  _profile: SqliteProfile,
+): boolean {
+  try {
+    // Checkpoint WAL to ensure all writes are committed
+    db.pragma("wal_checkpoint(RESTART)");
+  } catch {
+    // Non-fatal: WAL might not exist yet on first run
+  }
+
+  try {
+    const result = db.pragma("integrity_check") as Array<{ integrity_check: string }>;
+    const ok = result.length === 1 && result[0]?.integrity_check === "ok";
+
+    if (!ok) {
+      // Attempt repair via REINDEX
+      try {
+        db.pragma("REINDEX");
+        // Re-check after repair
+        const recheck = db.pragma("integrity_check") as Array<{ integrity_check: string }>;
+        return recheck.length === 1 && recheck[0]?.integrity_check === "ok";
+      } catch {
+        return false;
+      }
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}

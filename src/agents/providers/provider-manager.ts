@@ -11,6 +11,7 @@ import type { IAIProvider } from "./provider.interface.js";
 import { createProvider, PROVIDER_PRESETS } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import { getLogger } from "../../utils/logger.js";
+import { LRUCache } from "../../common/lru-cache.js";
 
 export interface ProviderActiveInfo {
   providerName: string;
@@ -22,8 +23,7 @@ const MAX_CACHED_PROVIDERS = 50;
 
 export class ProviderManager {
   private readonly preferences: ProviderPreferenceStore;
-  private readonly providerCache = new Map<string, { provider: IAIProvider; accessOrder: number }>();
-  private accessCounter = 0;
+  private readonly providerCache = new LRUCache<string, IAIProvider>(MAX_CACHED_PROVIDERS);
 
   constructor(
     private readonly defaultProvider: IAIProvider,
@@ -47,10 +47,7 @@ export class ProviderManager {
       : pref.providerName;
 
     const cached = this.providerCache.get(cacheKey);
-    if (cached) {
-      cached.accessOrder = this.accessCounter++;
-      return cached.provider;
-    }
+    if (cached) return cached;
 
     try {
       const provider = createProvider({
@@ -58,18 +55,7 @@ export class ProviderManager {
         apiKey: this.apiKeys[pref.providerName],
         model: pref.model ?? this.modelOverrides?.[pref.providerName],
       });
-      if (this.providerCache.size >= MAX_CACHED_PROVIDERS) {
-        let lruKey: string | undefined;
-        let lruOrder = Infinity;
-        for (const [key, entry] of this.providerCache) {
-          if (entry.accessOrder < lruOrder) {
-            lruOrder = entry.accessOrder;
-            lruKey = key;
-          }
-        }
-        if (lruKey) this.providerCache.delete(lruKey);
-      }
-      this.providerCache.set(cacheKey, { provider, accessOrder: this.accessCounter++ });
+      this.providerCache.set(cacheKey, provider);
       return provider;
     } catch (error) {
       getLogger().warn("Failed to create preferred provider, using default", {

@@ -126,7 +126,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --start-interval=5s 
 ENTRYPOINT ["dumb-init", "--"]
 
 # Default command
-CMD ["node", "dist/index.js", "start", "--channel", "telegram"]
+CMD ["node", "dist/index.js", "start", "--channel", "web"]
 
 # =============================================================================
 # STAGE 3: Development (optional)

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import { configureSqlitePragmas } from "./sqlite-pragmas.js";
+import { configureSqlitePragmas, validateAndRepairSqlite } from "./sqlite-pragmas.js";
 import type {
   IUnifiedMemory,
   UnifiedMemoryEntry,
@@ -1398,6 +1398,9 @@ export class AgentDBMemory implements IUnifiedMemory {
     try {
       const sqlitePath = join(this.dbPath, "memory.db");
       this.sqliteDb = new Database(sqlitePath);
+
+      // Validate and auto-repair on corruption
+      validateAndRepairSqlite(this.sqliteDb, "memory");
 
       // Standardized pragma configuration (16MB cache, 5s busy_timeout)
       configureSqlitePragmas(this.sqliteDb, "memory");

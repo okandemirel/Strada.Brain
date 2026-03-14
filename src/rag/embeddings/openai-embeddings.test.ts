@@ -14,6 +14,10 @@ vi.mock("../../utils/logger.js", () => ({
   }),
 }));
 
+vi.mock("../../security/secret-sanitizer.js", () => ({
+  sanitizeSecrets: (text: string) => text,
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -298,9 +302,9 @@ describe("OpenAIEmbeddingProvider", () => {
     embedPromise.catch(() => {});
     await vi.runAllTimersAsync();
 
-    await expect(embedPromise).rejects.toThrow(/HTTP 500/);
-    // 3 attempts total (MAX_RETRIES = 3)
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    await expect(embedPromise).rejects.toThrow(/API error 500/);
+    // Initial attempt + 3 retries = 4 calls
+    expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
   it("throws after exhausting all retries on persistent HTTP 429", async () => {
@@ -313,8 +317,8 @@ describe("OpenAIEmbeddingProvider", () => {
     embedPromise.catch(() => {});
     await vi.runAllTimersAsync();
 
-    await expect(embedPromise).rejects.toThrow(/HTTP 429/);
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    await expect(embedPromise).rejects.toThrow(/API error 429/);
+    expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
   // -------------------------------------------------------------------------
@@ -327,7 +331,7 @@ describe("OpenAIEmbeddingProvider", () => {
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-bad" });
 
-    await expect(provider.embed(["hello"])).rejects.toThrow(/HTTP 401/);
+    await expect(provider.embed(["hello"])).rejects.toThrow(/API error 401/);
     // Must not retry a 401
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
@@ -338,7 +342,7 @@ describe("OpenAIEmbeddingProvider", () => {
 
     const provider = new OpenAIEmbeddingProvider({ apiKey: "sk-test" });
 
-    await expect(provider.embed(["hello"])).rejects.toThrow(/HTTP 400/);
+    await expect(provider.embed(["hello"])).rejects.toThrow(/API error 400/);
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 

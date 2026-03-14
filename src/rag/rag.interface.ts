@@ -531,11 +531,35 @@ export interface RAGStats {
 // =============================================================================
 
 /**
- * Calculate token count (rough approximation)
+ * Calculate token count using character-class heuristic.
+ *
+ * ASCII text averages ~4 chars/token, CJK characters average ~1.5 chars/token.
+ * This weighted approach gives better estimates for mixed-language content.
  */
 export function estimateTokens(text: string): number {
-  // ~4 characters per token on average for code
-  return Math.ceil(text.length / 4);
+  if (text.length === 0) return 0;
+
+  let asciiChars = 0;
+  let cjkChars = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    // CJK Unified Ideographs + common CJK ranges
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) || // CJK Unified
+      (code >= 0x3400 && code <= 0x4dbf) || // CJK Extension A
+      (code >= 0x3000 && code <= 0x303f) || // CJK Symbols
+      (code >= 0x3040 && code <= 0x309f) || // Hiragana
+      (code >= 0x30a0 && code <= 0x30ff) || // Katakana
+      (code >= 0xac00 && code <= 0xd7af)    // Hangul
+    ) {
+      cjkChars++;
+    } else {
+      asciiChars++;
+    }
+  }
+
+  return Math.ceil(asciiChars / 4 + cjkChars / 1.5);
 }
 
 /**

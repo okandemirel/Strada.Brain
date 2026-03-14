@@ -31,6 +31,7 @@ vi.mock("better-sqlite3", () => {
 
 vi.mock("./sqlite-pragmas.js", () => ({
   configureSqlitePragmas: vi.fn(),
+  validateAndRepairSqlite: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock("../../rag/hnsw/hnsw-vector-store.js", () => ({

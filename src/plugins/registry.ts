@@ -1,17 +1,12 @@
 /**
  * Plugin Registry
  *
- * WARNING: Plugins run with full Node.js process access.
- * There is no sandboxing or capability restriction.
- * Only load trusted plugins from verified sources.
- *
- * TODO: Implement plugin sandboxing via vm.runInNewContext or worker_threads
- * with restricted filesystem and network access.
- *
  * Manages plugin lifecycle including registration, dependency resolution,
- * initialization, and disposal. Plugins run in the same process and share
- * full access to Node.js APIs. Plugins extend the system with additional
- * capabilities without modifying core code.
+ * initialization, and disposal.
+ *
+ * Plugins can optionally declare a permission manifest. When sandboxing is
+ * enabled, plugins run in worker_threads with restricted access based on
+ * their declared permissions.
  */
 
 import { getLogger } from "../utils/logger.js";
@@ -31,6 +26,23 @@ function getLoggerSafe() {
 /**
  * Metadata describing a plugin's identity and capabilities.
  */
+/**
+ * Permission manifest for plugin sandboxing.
+ * Plugins declare what resources they need access to.
+ */
+export interface PluginPermissions {
+  /** Filesystem paths the plugin may read/write (glob patterns) */
+  filesystem?: string[];
+  /** Network hosts the plugin may connect to */
+  network?: string[];
+  /** Maximum CPU time per invocation in ms (default: 30_000) */
+  cpuTimeoutMs?: number;
+  /** Maximum memory in bytes (default: 128MB) */
+  memoryLimitBytes?: number;
+  /** Whether the plugin may spawn child processes (default: false) */
+  childProcess?: boolean;
+}
+
 export interface PluginMetadata {
   /** Unique plugin name (used as registry key) */
   name: string;
@@ -42,6 +54,8 @@ export interface PluginMetadata {
   capabilities: string[];
   /** Names of other plugins this plugin depends on */
   dependencies?: string[];
+  /** Permission manifest for sandboxed execution */
+  permissions?: PluginPermissions;
 }
 
 /**

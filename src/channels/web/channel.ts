@@ -70,6 +70,11 @@ export class WebChannel
   private healthy = false;
   private clients = new Map<string, WsClient>();
   private pendingConfirmations = new Map<string, PendingConfirmation>();
+  /** Recently disconnected chatIds eligible for reconnect (5 min TTL) */
+  private recentlyDisconnected = new Map<string, number>();
+
+  private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
 
   constructor(private readonly port: number = 3000) {}
 
@@ -97,11 +102,29 @@ export class WebChannel
     });
 
     this.healthy = true;
+
+    // Periodically prune expired entries from the reconnect map
+    this._reconnectCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [id, ts] of this.recentlyDisconnected) {
+        if (now - ts > WebChannel.RECONNECT_TTL_MS) {
+          this.recentlyDisconnected.delete(id);
+        }
+      }
+    }, WebChannel.RECONNECT_TTL_MS);
+
     console.log(`Web channel running at http://localhost:${this.port}`);
   }
 
+  private _reconnectCleanupInterval: ReturnType<typeof setInterval> | undefined;
+
   async disconnect(): Promise<void> {
     this.healthy = false;
+
+    if (this._reconnectCleanupInterval) {
+      clearInterval(this._reconnectCleanupInterval);
+    }
+    this.recentlyDisconnected.clear();
 
     for (const [, pending] of this.pendingConfirmations) {
       clearTimeout(pending.timer);
@@ -225,6 +248,20 @@ export class WebChannel
   private async handleHttp(req: HttpReq, res: ServerResponse): Promise<void> {
     const url = req.url ?? "/";
 
+    // Health endpoint for Docker/K8s liveness probes
+    if (url === "/health") {
+      const body = JSON.stringify({
+        status: this.healthy ? "ok" : "degraded",
+        timestamp: new Date().toISOString(),
+        channel: "web",
+        uptime: process.uptime(),
+        clients: this.clients.size,
+      });
+      res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.end(body);
+      return;
+    }
+
     // Only allow GET for static files
     if (req.method !== "GET") {
       res.writeHead(405, WebChannel.SECURITY_HEADERS);
@@ -267,8 +304,11 @@ export class WebChannel
   // ===========================================================================
 
   private handleWsConnection(ws: WebSocket): void {
-    const chatId = randomUUID();
-    this.clients.set(chatId, { ws, chatId, msgCount: 0, windowStart: Date.now() });
+    let chatId: string = randomUUID();
+    let assignedId = false;
+
+    const client: WsClient = { ws, chatId, msgCount: 0, windowStart: Date.now() };
+    this.clients.set(chatId, client);
 
     // Send welcome with chatId
     this.sendJson(ws, { type: "connected", chatId });
@@ -276,6 +316,31 @@ export class WebChannel
     ws.on("message", (raw) => {
       try {
         const data = JSON.parse(raw.toString()) as Record<string, unknown>;
+
+        // Handle reconnect: reuse old chatId if recently disconnected
+        if (!assignedId && data.type === "reconnect" && typeof data.chatId === "string") {
+          const oldId = data.chatId;
+          // Validate UUID format to prevent arbitrary string injection
+          if (WebChannel.UUID_RE.test(oldId)) {
+            const disconnectedAt = this.recentlyDisconnected.get(oldId);
+            const withinTtl = disconnectedAt && (Date.now() - disconnectedAt) < WebChannel.RECONNECT_TTL_MS;
+            const existing = this.clients.get(oldId);
+            if (withinTtl && (!existing || existing.ws.readyState !== 1)) {
+              // Remove stale entry and remap
+              if (existing) this.clients.delete(oldId);
+              this.recentlyDisconnected.delete(oldId);
+              this.clients.delete(chatId);
+              chatId = oldId;
+              client.chatId = oldId;
+              this.clients.set(chatId, client);
+              this.sendJson(ws, { type: "connected", chatId });
+            }
+          }
+          assignedId = true;
+          return;
+        }
+        assignedId = true;
+
         this.handleWsMessage(chatId, data);
       } catch {
         // Ignore malformed messages
@@ -283,11 +348,20 @@ export class WebChannel
     });
 
     ws.on("close", () => {
-      this.clients.delete(chatId);
+      const current = this.clients.get(chatId);
+      if (current && current.ws === ws) {
+        this.clients.delete(chatId);
+        // Allow reconnect within TTL window
+        this.recentlyDisconnected.set(chatId, Date.now());
+      }
     });
 
     ws.on("error", () => {
-      this.clients.delete(chatId);
+      const current = this.clients.get(chatId);
+      if (current && current.ws === ws) {
+        this.clients.delete(chatId);
+        this.recentlyDisconnected.set(chatId, Date.now());
+      }
     });
   }
 

@@ -28,7 +28,9 @@ export function createLogger(level: string, logFile: string): winston.Logger {
       new winston.transports.File({
         filename: logFile,
         maxsize: 10 * 1024 * 1024, // 10MB
-        maxFiles: 3,
+        maxFiles: 5,
+        tailable: true,
+        zippedArchive: true,
       }),
     ],
   });

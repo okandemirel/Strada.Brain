@@ -1,5 +1,6 @@
 import type { IEmbeddingProvider, EmbeddingBatch } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
+import { fetchWithRetry } from "../../common/fetch-with-retry.js";
 
 const KNOWN_MODELS: Record<string, number> = {
   "text-embedding-3-small": 1536,
@@ -9,7 +10,6 @@ const KNOWN_MODELS: Record<string, number> = {
 
 const DEFAULT_BATCH_SIZE = 100;
 const MAX_RETRIES = 3;
-const RETRY_BASE_DELAY_MS = 500;
 
 interface OpenAIEmbeddingOptions {
   apiKey: string;
@@ -86,76 +86,26 @@ export class OpenAIEmbeddingProvider implements IEmbeddingProvider {
 
   private async embedBatchWithRetry(
     texts: string[],
-    batchIdx: number,
+    _batchIdx: number,
   ): Promise<OpenAIEmbeddingResponse> {
-    const logger = getLogger();
     const url = `${this.baseUrl}/embeddings`;
 
-    let lastError: Error | null = null;
+    const response = await fetchWithRetry(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        input: texts,
+        model: this.model,
+        ...(this.requestDimensions ? { dimensions: this.requestDimensions } : {}),
+      }),
+    }, {
+      maxRetries: MAX_RETRIES,
+      callerName: this.name,
+    });
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      if (attempt > 0) {
-        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-        logger.debug("OpenAI embed: retrying batch", {
-          batchIdx,
-          attempt,
-          delayMs: delay,
-        });
-        await sleep(delay);
-      }
-
-      let response: Response;
-      try {
-        response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify({
-            input: texts,
-            model: this.model,
-            ...(this.requestDimensions ? { dimensions: this.requestDimensions } : {}),
-          }),
-        });
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        logger.debug("OpenAI embed: network error", {
-          batchIdx,
-          attempt,
-          error: lastError.message,
-        });
-        continue;
-      }
-
-      if (response.ok) {
-        const data = (await response.json()) as OpenAIEmbeddingResponse;
-        return data;
-      }
-
-      const status = response.status;
-      const body = (await response.text().catch(() => "(unreadable)")).slice(0, 200);
-      lastError = new Error(
-        `${this.name} embedding request failed: HTTP ${status} at ${this.baseUrl} — ${body}`,
-      );
-
-      if (status === 429 || status >= 500) {
-        logger.debug("OpenAI embed: retryable error", {
-          batchIdx,
-          attempt,
-          status,
-        });
-        continue;
-      }
-
-      // Non-retryable client error
-      throw lastError;
-    }
-
-    throw lastError ?? new Error(`${this.name} embed: unknown error after retries`);
+    return (await response.json()) as OpenAIEmbeddingResponse;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

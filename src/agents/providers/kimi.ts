@@ -54,7 +54,7 @@ export class KimiProvider extends OpenAIProvider {
     streaming: true,
     structuredStreaming: false,
     toolCalling: true,
-    vision: false,
+    vision: true,
     systemPrompt: true,
   };
 
