@@ -535,15 +535,9 @@ export function setupGlobalErrorHandlers(
     onError?.(error);
   });
 
-  // Graceful shutdown signals
-  const shutdown = (signal: string) => {
-    logger.info(`Received ${signal}, shutting down gracefully...`);
-    onShutdown?.();
-    process.exit(0);
-  };
-
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
+  // Note: SIGTERM/SIGINT handlers are registered in index.ts setupShutdownHandlers()
+  // which runs the full graceful shutdown sequence (DB close, flush queues, etc.).
+  // Do NOT register process.exit() here — it would bypass that sequence.
 }
 
 /**

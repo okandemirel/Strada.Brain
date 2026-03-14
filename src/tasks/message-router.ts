@@ -17,8 +17,8 @@ import { detectCommand } from "./command-detector.js";
 import { getLogger } from "../utils/logger.js";
 
 export class MessageRouter {
-  private readonly notifiedChats = new Set<string>();
-  private readonly startupNoticeMarkdown?: string;
+  private notifiedChats: Set<string> | null = new Set<string>();
+  private startupNoticeMarkdown?: string;
 
   constructor(
     private readonly taskManager: TaskManager,
@@ -34,6 +34,12 @@ export class MessageRouter {
         ...notices.map((notice) => `- ${notice}`),
       ].join("\n");
     }
+
+    // Auto-clear startup notice state after 60s — no need to track chats forever
+    setTimeout(() => {
+      this.notifiedChats = null;
+      this.startupNoticeMarkdown = undefined;
+    }, 60_000);
   }
 
   /**
@@ -72,7 +78,7 @@ export class MessageRouter {
   }
 
   private async sendStartupNotice(chatId: string): Promise<void> {
-    if (!this.channel || !this.startupNoticeMarkdown || this.notifiedChats.has(chatId)) {
+    if (!this.channel || !this.startupNoticeMarkdown || !this.notifiedChats || this.notifiedChats.has(chatId)) {
       return;
     }
 

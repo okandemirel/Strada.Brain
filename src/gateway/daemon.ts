@@ -111,11 +111,24 @@ export class Daemon {
 
     logger.info("Child process spawned", { pid: this.child.pid });
 
+    // Track uptime to reset restart counter after stable runs
+    const spawnTime = Date.now();
+    const STABLE_UPTIME_MS = 5 * 60 * 1000; // 5 minutes = stable
+
     this.child.on("exit", (code, signal) => {
       logger.warn("Child process exited", { code, signal });
       this.child = null;
 
       if (!this.running) return;
+
+      // Reset restart counter if the process ran stably (>5 min)
+      const uptime = Date.now() - spawnTime;
+      if (uptime >= STABLE_UPTIME_MS) {
+        if (this.restartCount > 0) {
+          logger.info(`Process ran for ${Math.round(uptime / 1000)}s, resetting restart counter`);
+        }
+        this.restartCount = 0;
+      }
 
       if (this.restartCount >= this.maxRestarts) {
         logger.error(`Maximum restart attempts (${this.maxRestarts}) reached. Daemon stopping.`);
