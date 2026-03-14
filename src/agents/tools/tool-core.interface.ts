@@ -24,6 +24,12 @@ export interface ToolContext {
   chatId?: string;
   /** Session ID for tracking */
   sessionId?: string;
+  /**
+   * Channel adapter for interactive tools (ask_user, show_plan).
+   * Use `supportsInteractivity(channel)` to check before calling
+   * `requestConfirmation`. Optional — tools degrade gracefully.
+   */
+  channel?: unknown;
 }
 
 // ============================================================================

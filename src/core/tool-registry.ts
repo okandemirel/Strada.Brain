@@ -103,6 +103,10 @@ import { MemorySearchTool } from "../agents/tools/memory-search.js";
 import { AgentStatusTool } from "../agents/tools/agent-status.js";
 import { LearningStatsTool } from "../agents/tools/learning-stats.js";
 
+// Interactive tools
+import { AskUserTool } from "../agents/tools/ask-user.js";
+import { ShowPlanTool } from "../agents/tools/show-plan.js";
+
 // ============================================================================
 // Tool Registry
 // ============================================================================
@@ -582,6 +586,19 @@ export class ToolRegistry {
       },
     );
 
+    // Interactive tools (ask_user, show_plan)
+    this.register(new AskUserTool(), {
+      category: ToolCategories.INTROSPECTION,
+      dangerous: false,
+      readOnly: true,
+    });
+
+    this.register(new ShowPlanTool(), {
+      category: ToolCategories.INTROSPECTION,
+      dangerous: false,
+      readOnly: true,
+    });
+
     // Browser automation (Playwright-based, 11 actions, session management)
     // Dynamic import to avoid pulling heavy playwright dependency at startup
     void (async () => {
@@ -667,4 +684,6 @@ export const ShellTools = {
 export const IntrospectionTools = {
   AGENT_STATUS: "agent_status",
   LEARNING_STATS: "learning_stats",
+  ASK_USER: "ask_user",
+  SHOW_PLAN: "show_plan",
 } as const;
