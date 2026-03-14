@@ -285,6 +285,7 @@ describe("Feature: Vision capability", () => {
     { name: "OpenAI", provider: new OpenAIProvider("k") },
     { name: "Gemini", provider: new GeminiProvider("k") },
     { name: "Kimi", provider: new KimiProvider("k") },
+    { name: "Claude", provider: new ClaudeProvider("k") },
   ];
 
   const visionDisabled = [
@@ -295,7 +296,6 @@ describe("Feature: Vision capability", () => {
     { name: "MiniMax", provider: new MiniMaxProvider("k") },
     { name: "Together", provider: new TogetherProvider("k") },
     { name: "Fireworks", provider: new FireworksProvider("k") },
-    { name: "Claude", provider: new ClaudeProvider("k") },
     { name: "Ollama", provider: new OllamaProvider() },
   ];
 
