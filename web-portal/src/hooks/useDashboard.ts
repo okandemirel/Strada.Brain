@@ -187,8 +187,10 @@ export function useDashboard(): UseDashboardReturn {
         deployment,
         maintenance,
       })
-      if (mountedRef.current) setLoading(false)
-      setLastUpdated(Date.now())
+      if (mountedRef.current) {
+        setLoading(false)
+        setLastUpdated(Date.now())
+      }
     } catch {
       if (mountedRef.current) setLoading(false)
     }

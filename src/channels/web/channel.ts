@@ -77,11 +77,10 @@ export class WebChannel
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
 
-  private readonly dashboardPort: number;
-
-  constructor(private readonly port: number = 3000, dashboardPort: number = 3100) {
-    this.dashboardPort = dashboardPort;
-  }
+  constructor(
+    private readonly port: number = 3000,
+    private readonly dashboardPort: number = 3100,
+  ) {}
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
@@ -495,11 +494,24 @@ export class WebChannel
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
 
-      const response = await fetch(dashboardUrl, {
-        method: req.method ?? "GET",
+      const method = req.method ?? "GET";
+      const hasBody = method !== "GET" && method !== "HEAD";
+      const headers: Record<string, string> = { "Accept": "application/json" };
+      if (req.headers["content-type"]) {
+        headers["Content-Type"] = req.headers["content-type"];
+      }
+
+      const fetchOptions: RequestInit & { duplex?: string } = {
+        method,
         signal: controller.signal,
-        headers: { "Accept": "application/json" },
-      });
+        headers,
+      };
+      if (hasBody) {
+        fetchOptions.body = req as unknown as BodyInit;
+        fetchOptions.duplex = "half";
+      }
+
+      const response = await fetch(dashboardUrl, fetchOptions);
       clearTimeout(timeout);
 
       const body = await response.text();
