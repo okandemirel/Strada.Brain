@@ -12,14 +12,12 @@ import { getLogger } from "../utils/logger.js";
 
 export class ProgressReporter {
   private readonly lastUpdate = new Map<TaskId, number>();
-  private readonly throttleMs: number;
 
   constructor(
     private readonly channel: IChannelSender,
     taskManager: TaskManager,
-    throttleMs = 10_000,
+    _throttleMs = 10_000,
   ) {
-    this.throttleMs = throttleMs;
     this.setupListeners(taskManager);
   }
 
@@ -57,27 +55,20 @@ export class ProgressReporter {
     });
   }
 
-  private reportCreated(task: Task): void {
-    const msg = `⏳ Task accepted: *${escapeMarkdown(task.title)}*\nID: \`${task.id}\`\nUse /status to check progress.`;
-    this.sendToChannel(task.chatId, msg);
+  private reportCreated(_task: Task): void {
+    // Suppressed — the typing indicator already signals processing.
+    // The user sees only the final result when the task completes.
   }
 
-  private reportProgress(task: Task, message: string): void {
-    if (!this.shouldThrottle(task.id)) {
-      return;
-    }
-
-    const msg = `⚙️ \`${task.id}\`: ${escapeMarkdown(message)}`;
-    this.sendToChannel(task.chatId, msg);
+  private reportProgress(_task: Task, _message: string): void {
+    // Suppressed — tool execution details are internal implementation.
+    // The user sees only task acceptance and the final result.
   }
 
   private reportCompleted(task: Task, result: string): void {
     this.lastUpdate.delete(task.id);
-    const elapsed = this.formatDuration(Date.now() - task.createdAt);
-    const truncatedResult =
-      result.length > 1000 ? result.slice(0, 1000) + "\n...(truncated)" : result;
-    const msg = `✅ Task completed (${elapsed})\n\`${task.id}\`: *${escapeMarkdown(task.title)}*\n\n${truncatedResult}`;
-    this.sendToChannel(task.chatId, msg);
+    // Send the full result — no truncation. The user wants complete responses.
+    this.sendToChannel(task.chatId, result);
   }
 
   private reportFailed(task: Task, error: string): void {
@@ -92,22 +83,6 @@ export class ProgressReporter {
     this.sendToChannel(task.chatId, msg);
   }
 
-  /**
-   * Returns true if enough time has passed to send another update.
-   * Records the timestamp for throttling.
-   */
-  private shouldThrottle(taskId: TaskId): boolean {
-    const now = Date.now();
-    const last = this.lastUpdate.get(taskId) ?? 0;
-
-    if (now - last < this.throttleMs) {
-      return false;
-    }
-
-    this.lastUpdate.set(taskId, now);
-    return true;
-  }
-
   private sendToChannel(chatId: string, message: string): void {
     this.channel.sendMarkdown(chatId, message).catch((err) => {
       getLogger().error("Failed to send progress update", {
@@ -115,12 +90,6 @@ export class ProgressReporter {
         error: err instanceof Error ? err.message : String(err),
       });
     });
-  }
-
-  private formatDuration(ms: number): string {
-    if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
-    if (ms < 3600_000) return `${Math.round(ms / 60_000)}m`;
-    return `${Math.round(ms / 3600_000)}h`;
   }
 }
 

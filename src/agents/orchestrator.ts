@@ -11,7 +11,7 @@ import type { ITool, ToolContext } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage, Attachment } from "../channels/channel.interface.js";
 import { supportsRichMessaging } from "../channels/channel.interface.js";
 import { isVisionCompatible, toBase64ImageSource } from "../utils/media-processor.js";
-import type { MessageContent } from "./providers/provider-core.interface.js";
+import type { MessageContent, AssistantMessage } from "./providers/provider-core.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import { isOk, isSome } from "../types/index.js";
 import type { ChatId } from "../types/index.js";
@@ -1635,15 +1635,29 @@ export class Orchestrator {
 
     const overflow = session.messages.length - maxMessages;
 
-    // Find the first safe trim boundary: a user message that has no toolResults
-    // (i.e., a plain text message, not a tool_result response).
-    let trimTo = overflow;
+    // Find a safe trim boundary that does NOT orphan tool_call/tool_result pairs.
+    // A safe boundary is a user message with plain string content (not a tool_result array)
+    // that is NOT immediately preceded by an assistant message with tool_calls.
+    let trimTo = 0;
     for (let i = overflow; i < session.messages.length; i++) {
       const msg = session.messages[i]!;
-      if (msg.role === "user" && !("toolResults" in msg)) {
-        trimTo = i;
-        break;
+
+      // Must be a plain user message (string content, not tool_result array)
+      if (msg.role !== "user") continue;
+      if (typeof msg.content !== "string") continue;
+
+      // Check the previous message — if it's an assistant with tool_calls,
+      // this user message might be a tool_result response (content mismatch
+      // but we need to be safe). Only trim if the previous is NOT a tool_call.
+      if (i > 0) {
+        const prev = session.messages[i - 1]!;
+        if (prev.role === "assistant" && (prev as AssistantMessage).tool_calls?.length) {
+          continue; // Skip — trimming here would orphan the tool_calls
+        }
       }
+
+      trimTo = i;
+      break;
     }
 
     if (trimTo > 0) {
