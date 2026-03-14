@@ -146,11 +146,8 @@ export async function validatePath(
   }
 
   // Check that path is within project root (with trailing separator to avoid prefix collision)
-  // For new files (where realFullPath wasn't resolved via realpath), we already validated
-  // the parent directory above, so we only need to check if realFullPath was resolved.
-  // For existing paths, we need to verify they're within the project root.
   if (realFullPath !== rawFullPath) {
-    // Path was resolved by realpath - verify it's within project root
+    // Path was resolved by realpath (existing file) — verify against realpath'd root
     if (
       realFullPath !== realRoot &&
       !realFullPath.startsWith(realRoot + sep)
@@ -161,8 +158,21 @@ export async function validatePath(
         error: "Path resolves outside the project directory",
       };
     }
+  } else {
+    // New file (realpath failed, parent was validated above) or no-symlink system.
+    // Verify against the raw (un-symlinked) project root to catch traversal on Linux.
+    const rawRoot = resolve(projectRoot);
+    if (
+      rawFullPath !== rawRoot &&
+      !rawFullPath.startsWith(rawRoot + sep)
+    ) {
+      return {
+        valid: false,
+        fullPath: rawFullPath,
+        error: "Path resolves outside the project directory",
+      };
+    }
   }
-  // For new files (realFullPath === rawFullPath), parent validation above is sufficient
 
   // Check against sensitive file patterns
   for (const pattern of BLOCKED_PATTERNS) {
