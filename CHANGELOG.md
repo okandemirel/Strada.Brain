@@ -9,6 +9,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - `sync:check` documentation across root READMEs and contributor guidance
 - Local Unity fixture documentation for real Strada/Unity generator validation
+- Media sharing pipeline: all channels now receive and forward image/video/audio/document attachments
+- MediaProcessor utility (`src/utils/media-processor.ts`) with download, MIME validation, magic bytes, SSRF protection
+- Claude provider vision support enabled (was disabled) with image block handling in `buildMessages()`
+- Orchestrator `buildUserContent()` converts image attachments to MessageContent[] vision blocks
+- Telegram: photo, document, video, voice/audio message handlers with media download and validation
+- Discord: message attachment extraction with MIME classification and size validation
+- WhatsApp: video/audio attachment detection, image data download for vision support
+- Web channel: base64 media in WebSocket JSON with validation (max 5 per message)
+- Slack: file extraction with authenticated download (Bearer token) and parallel processing
+- SSRF protection: `isUrlSafeToFetch()` blocks private IPs, metadata endpoints, rejects redirects
+- Streaming download with incremental size enforcement (prevents OOM from chunked responses)
+- `mimeToAttachmentType()` shared helper for consistent MIME classification across channels
+
+### Security
+- SSRF protection on all media download URLs (private IP blocklist, redirect rejection)
+- Media validation enforced across all channels: MIME allowlist, per-type size limits, magic bytes
+- Telegram bot token sanitized from download URL logs
+- Web channel error messages no longer leak internal details
 
 ### Changed
 - README tool descriptions now reflect `BurstSystem` scaffolding instead of the old `SystemGroup` wording

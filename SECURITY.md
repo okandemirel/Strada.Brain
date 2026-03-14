@@ -178,7 +178,39 @@ All inputs are validated using Zod schemas before processing.
 
 Implementation: `src/validation/schemas.ts`, `src/validation/index.ts`
 
-### 15. Communication Security
+### 15. Media Attachment Security
+
+All incoming media attachments are validated through multiple security layers before processing.
+
+**MIME allowlist:**
+- Images: JPEG, PNG, GIF, WebP
+- Video: MP4, WebM, QuickTime
+- Audio: MPEG, OGG, WAV, WebM, MP4
+- Documents: PDF, plain text, CSV
+- All other MIME types are rejected.
+
+**Size limits:**
+- Images: 20 MB
+- Video: 50 MB
+- Audio: 25 MB
+- Documents: 10 MB
+
+**Magic bytes verification:** File headers are checked against known signatures for JPEG, PNG, GIF, WebP, MP4, and PDF to prevent MIME type spoofing.
+
+**SSRF protection:** All media download URLs are validated before fetching:
+- Private/reserved IP ranges blocked (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x, ::1)
+- Only HTTP/HTTPS schemes allowed
+- Known host allowlist for platform APIs (api.telegram.org, cdn.discordapp.com, files.slack.com, mmg.whatsapp.net)
+- HTTP redirects rejected (`redirect: "error"`) to prevent redirect-based SSRF bypass
+- AWS metadata endpoint (`169.254.169.254`) explicitly blocked
+
+**Streaming download:** Response bodies are read incrementally with a 50 MB absolute cap. Downloads exceeding the limit are aborted mid-stream to prevent memory exhaustion. A 30-second timeout prevents slow-loris attacks.
+
+**Bot token protection:** Telegram file download URLs (which embed the bot token) are sanitized before logging using `sanitizeUrlForLog()`.
+
+Implementation: `src/utils/media-processor.ts`
+
+### 16. Communication Security
 
 TLS and WebSocket security hardening:
 
