@@ -82,15 +82,16 @@ export class KimiProvider extends OpenAIProvider {
     const reasoning = message.reasoning_content;
     const content = message.content ?? "";
 
-    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc) => {
+    // reasoning_content is a turn-level concept — attach only to the first tool call
+    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc, idx) => {
       let input: import("../../types/index.js").JsonObject;
       try {
         input = JSON.parse(tc.function.arguments) as import("../../types/index.js").JsonObject;
       } catch {
         input = { _rawArguments: tc.function.arguments };
       }
-      // Store reasoning_content in providerMetadata so buildMessages can echo it back
-      const providerMetadata = reasoning ? { reasoning_content: reasoning } : undefined;
+      // Store reasoning_content only on first tool call (buildMessages reads it back)
+      const providerMetadata = idx === 0 && reasoning ? { reasoning_content: reasoning } : undefined;
       return providerMetadata
         ? { id: tc.id, name: tc.function.name, input, providerMetadata }
         : { id: tc.id, name: tc.function.name, input };
@@ -135,8 +136,10 @@ export class KimiProvider extends OpenAIProvider {
         if (msg.tool_calls && msg.tool_calls.length > 0) {
           // Kimi K2.5 requires reasoning_content on assistant tool call messages
           // when thinking mode is active. Omit if empty (Kimi rejects empty string).
-          const reasoning = msg.tool_calls[0]?.providerMetadata?.reasoning_content as string | undefined;
-          const assistantMsg: Record<string, unknown> = {
+          const reasoning = msg.tool_calls
+            .find(tc => tc.providerMetadata?.reasoning_content)
+            ?.providerMetadata?.reasoning_content as string | undefined;
+          const assistantMsg: OpenAIMessage = {
             role: "assistant",
             content: msg.content || null,
             tool_calls: msg.tool_calls.map((tc) => ({
@@ -149,9 +152,9 @@ export class KimiProvider extends OpenAIProvider {
             })),
           };
           if (reasoning) {
-            assistantMsg["reasoning_content"] = reasoning;
+            (assistantMsg as unknown as Record<string, unknown>)["reasoning_content"] = reasoning;
           }
-          result.push(assistantMsg as unknown as OpenAIMessage);
+          result.push(assistantMsg);
         } else {
           result.push({ role: "assistant", content: msg.content });
         }

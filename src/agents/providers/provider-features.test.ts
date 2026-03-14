@@ -532,7 +532,148 @@ describe("Feature: Gemini thought_signature round-trip", () => {
 });
 
 // ============================================================================
-// 9. SSE streaming — buffer overflow and null body protection
+// 9. Kimi reasoning_content — parseResponse captures, buildMessages echoes
+// ============================================================================
+
+describe("Feature: Kimi reasoning_content round-trip", () => {
+  it("parseResponse captures reasoning_content in providerMetadata (first tool call only)", () => {
+    const kimi = new KimiProvider("key");
+    const parse = (data: unknown) => (kimi as any).parseResponse(data);
+
+    const data = {
+      choices: [{
+        message: {
+          content: null,
+          reasoning_content: "Let me think about this...",
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "file_read", arguments: '{"path":"a.ts"}' } },
+            { id: "call_2", type: "function", function: { name: "file_read", arguments: '{"path":"b.ts"}' } },
+          ],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    };
+
+    const result = parse(data);
+    // First tool call has reasoning
+    expect(result.toolCalls[0].providerMetadata?.reasoning_content).toBe("Let me think about this...");
+    // Second tool call does NOT (turn-level, not per-call)
+    expect(result.toolCalls[1].providerMetadata).toBeUndefined();
+  });
+
+  it("parseResponse omits providerMetadata when reasoning_content is null", () => {
+    const kimi = new KimiProvider("key");
+    const parse = (data: unknown) => (kimi as any).parseResponse(data);
+
+    const data = {
+      choices: [{
+        message: {
+          content: "Simple answer",
+          reasoning_content: null,
+          tool_calls: [{ id: "call_1", type: "function", function: { name: "test", arguments: '{}' } }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 3 },
+    };
+
+    const result = parse(data);
+    expect(result.toolCalls[0].providerMetadata).toBeUndefined();
+  });
+
+  it("parseResponse omits providerMetadata when reasoning_content is empty string", () => {
+    const kimi = new KimiProvider("key");
+    const parse = (data: unknown) => (kimi as any).parseResponse(data);
+
+    const data = {
+      choices: [{
+        message: {
+          content: "answer",
+          reasoning_content: "",
+          tool_calls: [{ id: "call_1", type: "function", function: { name: "test", arguments: '{}' } }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 3 },
+    };
+
+    const result = parse(data);
+    // Empty string is falsy, so no providerMetadata
+    expect(result.toolCalls[0].providerMetadata).toBeUndefined();
+  });
+
+  it("buildMessages echoes reasoning_content on assistant tool call message", () => {
+    const kimi = new KimiProvider("key");
+    const build = (sys: string, msgs: any[]) => (kimi as any).buildMessages(sys, msgs);
+
+    const messages = [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{
+          id: "call_1",
+          name: "file_read",
+          input: { path: "test.cs" },
+          providerMetadata: { reasoning_content: "I need to read the file first" },
+        }],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "call_1", content: "file contents" }],
+      },
+    ];
+
+    const result = build("system", messages);
+    const assistantMsg = result.find((m: any) => m.role === "assistant");
+    expect(assistantMsg.reasoning_content).toBe("I need to read the file first");
+  });
+
+  it("buildMessages omits reasoning_content when not present", () => {
+    const kimi = new KimiProvider("key");
+    const build = (sys: string, msgs: any[]) => (kimi as any).buildMessages(sys, msgs);
+
+    const messages = [
+      {
+        role: "assistant",
+        content: "no thinking here",
+        tool_calls: [{
+          id: "call_1",
+          name: "test",
+          input: {},
+          // No providerMetadata
+        }],
+      },
+    ];
+
+    const result = build("system", messages);
+    const assistantMsg = result.find((m: any) => m.role === "assistant");
+    expect(assistantMsg.reasoning_content).toBeUndefined();
+  });
+
+  it("buildMessages finds reasoning_content from any tool call position", () => {
+    const kimi = new KimiProvider("key");
+    const build = (sys: string, msgs: any[]) => (kimi as any).buildMessages(sys, msgs);
+
+    const messages = [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          { id: "call_1", name: "a", input: {} },
+          { id: "call_2", name: "b", input: {}, providerMetadata: { reasoning_content: "found it" } },
+        ],
+      },
+    ];
+
+    const result = build("system", messages);
+    const assistantMsg = result.find((m: any) => m.role === "assistant");
+    expect(assistantMsg.reasoning_content).toBe("found it");
+  });
+});
+
+// ============================================================================
+// 10. SSE streaming — buffer overflow and null body protection
 // ============================================================================
 
 describe("Feature: SSE streaming safety", () => {
