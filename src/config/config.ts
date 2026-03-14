@@ -20,6 +20,7 @@ import type { NotificationConfig, QuietHoursConfig, DigestConfig } from "../daem
 import type { AgentConfig } from "../agents/multi/agent-types.js";
 import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
 import type { DeploymentConfig } from "../daemon/deployment/deployment-types.js";
+import { getPreset } from "./presets.js";
 
 dotenv.config();
 
@@ -40,6 +41,7 @@ export type EnvVarName =
   | "TOGETHER_API_KEY"
   | "FIREWORKS_API_KEY"
   | "GEMINI_API_KEY"
+  | "SYSTEM_PRESET"
   | "PROVIDER_CHAIN"
   | "TELEGRAM_BOT_TOKEN"
   | "DISCORD_BOT_TOKEN"
@@ -1783,18 +1785,34 @@ export function loadConfig(): Config {
     throw new Error(pathResult.error);
   }
 
-  // Parse per-provider model overrides
+  // Apply system preset if configured (env vars override preset values)
+  const presetName = process.env["SYSTEM_PRESET"];
+  const preset = presetName ? getPreset(presetName) : undefined;
+
+  // Parse per-provider model overrides (manual env > preset > defaults)
   const providerModels: Record<string, string> = {};
+  if (preset) {
+    Object.assign(providerModels, preset.providerModels);
+  }
   for (const p of ["openai", "deepseek", "qwen", "kimi", "minimax", "groq", "mistral", "together", "fireworks", "gemini", "claude", "ollama"]) {
     const val = process.env[`${p.toUpperCase()}_MODEL`];
     if (val) providerModels[p] = val;
   }
 
-  // Update with resolved path
+  // Update with resolved path + preset overrides
   cachedConfig = {
     ...config,
     unityProjectPath: pathResult.value,
     providerModels,
+    // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)
+    ...(preset && !process.env["PROVIDER_CHAIN"] ? { providerChain: preset.providerChain } : {}),
+    ...(preset && !process.env["EMBEDDING_PROVIDER"] ? { embeddingProvider: preset.embeddingProvider } : {}),
+    ...(preset && !process.env["EMBEDDING_MODEL"] ? { embeddingModel: preset.embeddingModel } : {}),
+    ...(preset && !process.env["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { embeddingBaseUrl: preset.embeddingBaseUrl } : {}),
+    ...(preset && !process.env["DELEGATION_TIER_LOCAL"] ? { delegationTierLocal: preset.delegationTierLocal } : {}),
+    ...(preset && !process.env["DELEGATION_TIER_CHEAP"] ? { delegationTierCheap: preset.delegationTierCheap } : {}),
+    ...(preset && !process.env["DELEGATION_TIER_STANDARD"] ? { delegationTierStandard: preset.delegationTierStandard } : {}),
+    ...(preset && !process.env["DELEGATION_TIER_PREMIUM"] ? { delegationTierPremium: preset.delegationTierPremium } : {}),
   };
 
   return cachedConfig;
