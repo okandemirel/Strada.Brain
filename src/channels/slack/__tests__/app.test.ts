@@ -50,7 +50,7 @@ vi.mock("@slack/bolt", () => ({
   directMention: vi.fn().mockReturnValue("directMention"),
 }));
 
-// Mock media-processor — downloadMedia returns data by default
+// Mock media-processor — downloadMedia returns data by default; bypass security validation
 const mockDownloadMedia = vi.fn().mockResolvedValue({
   data: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
   mimeType: "image/png",
@@ -65,6 +65,8 @@ vi.mock("../../../utils/media-processor.js", () => ({
     if (mime.startsWith("audio/")) return "audio";
     return "document";
   },
+  validateMediaAttachment: () => ({ valid: true }),
+  validateMagicBytes: () => true,
 }));
 
 describe("SlackChannel", () => {
@@ -458,7 +460,8 @@ describe("SlackChannel file extraction", () => {
     expect(incoming.attachments[0].type).toBe("image");
     expect(incoming.attachments[0].name).toBe("photo.png");
     expect(incoming.attachments[0].mimeType).toBe("image/png");
-    expect(incoming.attachments[0].size).toBe(1024);
+    // After download, size reflects the actual downloaded data length (8 bytes from mock)
+    expect(incoming.attachments[0].size).toBe(8);
     expect(incoming.attachments[0].url).toBe(
       "https://files.slack.com/files-pri/T001-F001/photo.png"
     );

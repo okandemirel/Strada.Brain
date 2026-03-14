@@ -18,9 +18,11 @@ vi.mock("../../utils/logger.js", () => ({
   createLogger: vi.fn(),
 }));
 
-// Mock media-processor
+// Mock media-processor — bypass security validation in channel-level tests
 vi.mock("../../utils/media-processor.js", () => ({
   downloadMedia: vi.fn().mockResolvedValue(null),
+  validateMediaAttachment: () => ({ valid: true }),
+  validateMagicBytes: () => true,
 }));
 
 describe("WhatsAppChannel", () => {

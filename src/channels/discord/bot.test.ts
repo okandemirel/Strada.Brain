@@ -11,6 +11,19 @@ vi.mock("../../utils/logger.js", () => ({
   }),
 }));
 
+// Mock media-processor — bypass security validation in channel-level tests
+vi.mock("../../utils/media-processor.js", () => ({
+  validateMediaAttachment: () => ({ valid: true }),
+  validateMagicBytes: () => true,
+  mimeToAttachmentType: (mime: string | undefined | null) => {
+    if (!mime) return "document";
+    if (mime.startsWith("image/")) return "image";
+    if (mime.startsWith("video/")) return "video";
+    if (mime.startsWith("audio/")) return "audio";
+    return "document";
+  },
+}));
+
 // Mock discord.js
 vi.mock("discord.js", async () => {
   const actual = await vi.importActual("discord.js");

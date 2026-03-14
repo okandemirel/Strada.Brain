@@ -19,7 +19,7 @@ import { registerSlashCommands } from "./commands.js";
 import { createConfirmationBlocks, createStreamingBlock, splitLongText } from "./blocks.js";
 import { formatToSlackMrkdwn, truncateForSlack } from "./formatters.js";
 import { sanitizeError } from "../../security/secret-sanitizer.js";
-import { downloadMedia, mimeToAttachmentType } from "../../utils/media-processor.js";
+import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 
 interface SlackConfig {
   botToken: string;
@@ -754,12 +754,17 @@ export class SlackChannel implements IChannelAdapter {
 
       const results = await Promise.all(downloads);
       for (const { file, data } of results) {
+        const type = mimeToAttachmentType(file.mimetype);
+        const size = data?.length ?? file.size ?? 0;
+        const v = validateMediaAttachment({ mimeType: file.mimetype, size, type });
+        if (!v.valid) continue; // Skip unsupported or oversized files
+        if (data && !validateMagicBytes(data, file.mimetype!)) continue;
         attachments.push({
-          type: mimeToAttachmentType(file.mimetype),
+          type,
           name: file.name!,
           url: file.url_private,
           mimeType: file.mimetype,
-          size: file.size ?? data?.length,
+          size,
           data,
         });
       }

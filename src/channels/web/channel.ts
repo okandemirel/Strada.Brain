@@ -433,10 +433,10 @@ export class WebChannel
           timestamp: new Date(),
         };
 
-        this.handler(msg).catch((err) => {
+        this.handler(msg).catch(() => {
           this.sendToClient(chatId, {
             type: "text",
-            text: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+            text: "An error occurred while processing your request. Please try again.",
             messageId: randomUUID(),
           });
         });

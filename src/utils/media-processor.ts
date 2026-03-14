@@ -154,21 +154,87 @@ export function toBase64ImageSource(
   };
 }
 
+// ── SSRF Protection ──────────────────────────────────────────────────────────
+
+/** Known safe host patterns for media downloads. */
+const ALLOWED_HOST_PATTERNS = [
+  /^api\.telegram\.org$/,
+  /^files\.slack\.com$/,
+  /^cdn\.discordapp\.com$/,
+  /^media\.discordapp\.net$/,
+  /^mmg\.whatsapp\.net$/,
+  /^.*\.whatsapp\.net$/,
+];
+
+/**
+ * Validate a URL is safe to fetch (SSRF protection).
+ * Rejects private IPs, non-HTTPS schemes (except known hosts), and suspicious targets.
+ */
+export function isUrlSafeToFetch(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+
+    // Only allow http/https
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+
+    const hostname = parsed.hostname.toLowerCase();
+
+    // Block private/reserved IP ranges
+    if (
+      hostname === "localhost" ||
+      hostname === "[::1]" ||
+      /^127\./.test(hostname) ||
+      /^10\./.test(hostname) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+      /^192\.168\./.test(hostname) ||
+      /^169\.254\./.test(hostname) ||
+      /^0\./.test(hostname) ||
+      hostname === "metadata.google.internal"
+    ) {
+      return false;
+    }
+
+    // Allow known host patterns
+    if (ALLOWED_HOST_PATTERNS.some((p) => p.test(hostname))) {
+      return true;
+    }
+
+    // Allow any HTTPS URL to external hosts (for user-provided image URLs)
+    return parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 // ── Download ─────────────────────────────────────────────────────────────────
 
 /** Max overall download size — abort early if content-length signals too large. */
 const DOWNLOAD_MAX_BYTES = MAX_VIDEO_SIZE; // 50 MB absolute cap
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 
+/** Sanitize a URL for logging — strip tokens from Telegram-style bot URLs. */
+function sanitizeUrlForLog(url: string): string {
+  return url.replace(/\/bot[^/]+\//, "/bot****/");
+}
+
 /**
  * Download media from a URL. Returns null on failure.
- * Validates content-length before downloading body.
+ * Validates URL safety (SSRF), content-length, and enforces streaming size limit.
  */
 export async function downloadMedia(
   url: string,
   options?: { headers?: Record<string, string> },
 ): Promise<DownloadedMedia | null> {
   const logger = getLogger();
+  const safeUrl = sanitizeUrlForLog(url);
+
+  // SSRF protection: validate URL before fetching
+  if (!isUrlSafeToFetch(url)) {
+    logger.warn("Media download blocked — unsafe URL", { url: safeUrl });
+    return null;
+  }
 
   try {
     const controller = new AbortController();
@@ -177,11 +243,12 @@ export async function downloadMedia(
     const response = await fetch(url, {
       signal: controller.signal,
       headers: options?.headers,
+      redirect: "follow",
     });
     clearTimeout(timeout);
 
     if (!response.ok) {
-      logger.warn("Media download failed", { url, status: response.status });
+      logger.warn("Media download failed", { url: safeUrl, status: response.status });
       return null;
     }
 
@@ -190,20 +257,42 @@ export async function downloadMedia(
     if (rawLength !== null) {
       const contentLength = parseInt(rawLength, 10);
       if (!isNaN(contentLength) && contentLength > DOWNLOAD_MAX_BYTES) {
-        logger.warn("Media too large", { url, contentLength });
+        logger.warn("Media too large", { url: safeUrl, contentLength });
         return null;
       }
     }
 
-    const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "application/octet-stream";
-    const arrayBuffer = await response.arrayBuffer();
-    const data = Buffer.from(arrayBuffer);
+    // Streaming download with size enforcement
+    const chunks: Buffer[] = [];
+    let totalSize = 0;
+    const reader = response.body?.getReader();
 
-    // Post-download size check for responses without content-length
-    if (data.length > DOWNLOAD_MAX_BYTES) {
-      logger.warn("Downloaded media exceeds size limit", { url, size: data.length });
-      return null;
+    if (!reader) {
+      // Fallback for environments without ReadableStream
+      const arrayBuffer = await response.arrayBuffer();
+      const data = Buffer.from(arrayBuffer);
+      if (data.length > DOWNLOAD_MAX_BYTES) {
+        logger.warn("Downloaded media exceeds size limit", { url: safeUrl, size: data.length });
+        return null;
+      }
+      const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "application/octet-stream";
+      return { data, mimeType, size: data.length };
     }
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalSize += value.byteLength;
+      if (totalSize > DOWNLOAD_MAX_BYTES) {
+        reader.cancel();
+        logger.warn("Media download aborted — size limit exceeded during streaming", { url: safeUrl, totalSize });
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+
+    const data = Buffer.concat(chunks);
+    const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "application/octet-stream";
 
     return {
       data,
@@ -212,7 +301,7 @@ export async function downloadMedia(
     };
   } catch (error) {
     logger.warn("Media download error", {
-      url,
+      url: safeUrl,
       error: error instanceof Error ? error.message : String(error),
     });
     return null;
