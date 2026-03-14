@@ -22,7 +22,7 @@ export class ClaudeProvider implements IAIProvider {
     streaming: true,
     structuredStreaming: false,
     toolCalling: true,
-    vision: false,
+    vision: true,
     systemPrompt: true,
   };
   private readonly client: Anthropic;
@@ -132,6 +132,20 @@ export class ClaudeProvider implements IAIProvider {
           for (const block of msg.content as MessageContent[]) {
             if (block.type === "text") {
               content.push({ type: "text", text: block.text });
+            } else if (block.type === "image") {
+              content.push({
+                type: "image",
+                source: block.source.type === "base64"
+                  ? {
+                      type: "base64" as const,
+                      media_type: block.source.media_type as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+                      data: block.source.data,
+                    }
+                  : {
+                      type: "url" as const,
+                      url: block.source.url,
+                    },
+              });
             } else if (block.type === "tool_result") {
               content.push({
                 type: "tool_result",

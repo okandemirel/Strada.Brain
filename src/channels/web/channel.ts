@@ -16,6 +16,7 @@ import { join, extname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin } from "../../security/origin-validation.js";
+import { validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 import type {
   IChannelAdapter,
   IChannelStreaming,
@@ -240,7 +241,7 @@ export class WebChannel
       "script-src 'self' https://cdnjs.cloudflare.com; " +
       "style-src 'self' https://cdnjs.cloudflare.com; " +
       "connect-src 'self' ws://localhost:* ws://127.0.0.1:*; " +
-      "img-src 'self' data:; " +
+      "img-src 'self' data: blob:; " +
       "object-src 'none'; " +
       "base-uri 'none';",
   };
@@ -389,20 +390,53 @@ export class WebChannel
     switch (data.type) {
       case "message": {
         const text = String(data.text ?? "").trim();
-        if (!text || !this.handler) return;
+        const rawAttachments = data.attachments as Array<{
+          type?: string;
+          name?: string;
+          mimeType?: string;
+          data?: string; // base64
+          size?: number;
+        }> | undefined;
+
+        if (!text && (!rawAttachments || rawAttachments.length === 0)) return;
+        if (!this.handler) return;
+
+        // Convert base64 attachments to Attachment[] with validation
+        const attachments: Attachment[] = [];
+        if (rawAttachments && Array.isArray(rawAttachments)) {
+          for (const raw of rawAttachments.slice(0, 5)) { // Max 5 attachments per message
+            if (!raw.name || !raw.mimeType) continue;
+            const buf = raw.data ? Buffer.from(raw.data, "base64") : undefined;
+            const size = buf?.length ?? raw.size ?? 0;
+
+            // Validate before accepting
+            const validation = validateMediaAttachment({ mimeType: raw.mimeType, size, type: raw.type ?? "file" });
+            if (!validation.valid) continue;
+            if (buf && !validateMagicBytes(buf, raw.mimeType)) continue;
+
+            attachments.push({
+              type: (raw.type as Attachment["type"]) ?? "file",
+              name: raw.name,
+              mimeType: raw.mimeType,
+              data: buf,
+              size,
+            });
+          }
+        }
 
         const msg: IncomingMessage = {
           channelType: "web",
           chatId,
           userId: `web-${chatId}`,
-          text,
+          text: text || "",
+          attachments: attachments.length > 0 ? attachments : undefined,
           timestamp: new Date(),
         };
 
-        this.handler(msg).catch((err) => {
+        this.handler(msg).catch(() => {
           this.sendToClient(chatId, {
             type: "text",
-            text: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+            text: "An error occurred while processing your request. Please try again.",
             messageId: randomUUID(),
           });
         });

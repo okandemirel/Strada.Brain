@@ -19,6 +19,7 @@ import { registerSlashCommands } from "./commands.js";
 import { createConfirmationBlocks, createStreamingBlock, splitLongText } from "./blocks.js";
 import { formatToSlackMrkdwn, truncateForSlack } from "./formatters.js";
 import { sanitizeError } from "../../security/secret-sanitizer.js";
+import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 
 interface SlackConfig {
   botToken: string;
@@ -727,12 +728,54 @@ export class SlackChannel implements IChannelAdapter {
 
     const attachments: Attachment[] = [];
 
+    // Extract files from message
+    const files = (message as any).files as Array<{
+      id: string;
+      name?: string;
+      mimetype?: string;
+      size?: number;
+      url_private?: string;
+    }> | undefined;
+
+    if (files && Array.isArray(files)) {
+      // Download files in parallel — Slack url_private requires Bearer auth
+      const downloads = files
+        .filter((f) => f.name && f.mimetype)
+        .map(async (file) => {
+          let data: Buffer | undefined;
+          if (file.url_private && this.config.botToken) {
+            const downloaded = await downloadMedia(file.url_private, {
+              headers: { Authorization: `Bearer ${this.config.botToken}` },
+            });
+            if (downloaded) data = downloaded.data;
+          }
+          return { file, data };
+        });
+
+      const results = await Promise.all(downloads);
+      for (const { file, data } of results) {
+        const type = mimeToAttachmentType(file.mimetype);
+        const size = data?.length ?? file.size ?? 0;
+        const v = validateMediaAttachment({ mimeType: file.mimetype, size, type });
+        if (!v.valid) continue; // Skip unsupported or oversized files
+        if (data && !validateMagicBytes(data, file.mimetype!)) continue;
+        attachments.push({
+          type,
+          name: file.name!,
+          url: file.url_private,
+          mimeType: file.mimetype,
+          size,
+          data,
+        });
+      }
+    }
+
     const incomingMessage: IncomingMessage = {
       channelType: "slack",
       chatId: channelId,
       userId: userId,
       text: text,
-      attachments,
+      attachments: attachments.length > 0 ? attachments : undefined,
       replyTo: threadTs,
       timestamp: new Date(Number(message.ts) * 1000),
     };

@@ -18,6 +18,13 @@ vi.mock("../../utils/logger.js", () => ({
   createLogger: vi.fn(),
 }));
 
+// Mock media-processor — bypass security validation in channel-level tests
+vi.mock("../../utils/media-processor.js", () => ({
+  downloadMedia: vi.fn().mockResolvedValue(null),
+  validateMediaAttachment: () => ({ valid: true }),
+  validateMagicBytes: () => true,
+}));
+
 describe("WhatsAppChannel", () => {
   let channel: WhatsAppChannel;
 
@@ -257,6 +264,240 @@ describe("WhatsAppChannel", () => {
     it("should not throw when not connected", async () => {
       // sendTypingIndicator returns early if no sock
       await expect(channel.sendTypingIndicator("chat1")).resolves.not.toThrow();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Media attachment detection (via mocked baileys connect)
+  // ---------------------------------------------------------------------------
+
+  describe("media attachment detection", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let eventHandlers: Record<string, (...args: any[]) => void>;
+    let connectedChannel: WhatsAppChannel;
+
+    beforeEach(async () => {
+      eventHandlers = {};
+
+      const mockSock = {
+        ev: {
+          on: vi.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+            eventHandlers[event] = handler;
+          }),
+        },
+        sendMessage: vi.fn().mockResolvedValue({ key: { id: "msg1" } }),
+        sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
+        end: vi.fn(),
+      };
+
+      // Mock baileys dynamic import
+      vi.doMock("@whiskeysockets/baileys", () => ({
+        default: () => mockSock,
+        useMultiFileAuthState: vi.fn().mockResolvedValue({
+          state: {},
+          saveCreds: vi.fn(),
+        }),
+        DisconnectReason: { loggedOut: 401 },
+      }));
+
+      // Create a channel with no allowed-number restriction
+      connectedChannel = new WhatsAppChannel(".test-session", []);
+      await connectedChannel.connect();
+
+      // Simulate connection open
+      if (eventHandlers["connection.update"]) {
+        eventHandlers["connection.update"]({ connection: "open" });
+      }
+    });
+
+    afterEach(async () => {
+      await connectedChannel.disconnect();
+      vi.doUnmock("@whiskeysockets/baileys");
+    });
+
+    it("should detect video message attachment", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", fromMe: false },
+            message: {
+              videoMessage: {
+                url: "https://example.com/video.mp4",
+                caption: "Check this out",
+                mimetype: "video/mp4",
+              },
+            },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const incoming = handler.mock.calls[0]![0];
+      expect(incoming.text).toBe("Check this out");
+      expect(incoming.attachments).toHaveLength(1);
+      expect(incoming.attachments[0]).toMatchObject({
+        type: "video",
+        name: "video.mp4",
+        mimeType: "video/mp4",
+        url: "https://example.com/video.mp4",
+      });
+    });
+
+    it("should detect audio message attachment", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", fromMe: false },
+            message: {
+              audioMessage: {
+                url: "https://example.com/audio.ogg",
+                mimetype: "audio/ogg",
+              },
+            },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const incoming = handler.mock.calls[0]![0];
+      expect(incoming.attachments).toHaveLength(1);
+      expect(incoming.attachments[0]).toMatchObject({
+        type: "audio",
+        name: "audio.ogg",
+        mimeType: "audio/ogg",
+        url: "https://example.com/audio.ogg",
+      });
+    });
+
+    it("should use default mimeType for video without mimetype", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", fromMe: false },
+            message: {
+              videoMessage: {
+                url: "https://example.com/video",
+              },
+            },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const incoming = handler.mock.calls[0]![0];
+      expect(incoming.attachments![0].mimeType).toBe("video/mp4");
+    });
+
+    it("should use default mimeType for audio without mimetype", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", fromMe: false },
+            message: {
+              audioMessage: {
+                url: "https://example.com/audio",
+              },
+            },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const incoming = handler.mock.calls[0]![0];
+      expect(incoming.attachments![0].mimeType).toBe("audio/ogg");
+    });
+
+    it("should attempt to download image data when URL is present", async () => {
+      const { downloadMedia } = await import("../../utils/media-processor.js");
+      const mockDownload = vi.mocked(downloadMedia);
+      mockDownload.mockResolvedValueOnce({
+        data: Buffer.from("fake-image-data"),
+        mimeType: "image/jpeg",
+        size: 15,
+      });
+
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", fromMe: false },
+            message: {
+              imageMessage: {
+                url: "https://example.com/photo.jpg",
+                mimetype: "image/jpeg",
+              },
+            },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(mockDownload).toHaveBeenCalledWith("https://example.com/photo.jpg");
+      expect(handler).toHaveBeenCalledTimes(1);
+      const incoming = handler.mock.calls[0]![0];
+      expect(incoming.attachments).toHaveLength(1);
+      expect(incoming.attachments[0].type).toBe("image");
+      expect(incoming.attachments[0].data).toEqual(Buffer.from("fake-image-data"));
+    });
+
+    it("should proceed with URL only when image download fails", async () => {
+      const { downloadMedia } = await import("../../utils/media-processor.js");
+      const mockDownload = vi.mocked(downloadMedia);
+      mockDownload.mockRejectedValueOnce(new Error("Network error"));
+
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", fromMe: false },
+            message: {
+              imageMessage: {
+                url: "https://example.com/photo.jpg",
+                mimetype: "image/jpeg",
+              },
+            },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const incoming = handler.mock.calls[0]![0];
+      expect(incoming.attachments).toHaveLength(1);
+      expect(incoming.attachments[0].url).toBe("https://example.com/photo.jpg");
+      expect(incoming.attachments[0].data).toBeUndefined();
     });
   });
 });

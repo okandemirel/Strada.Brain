@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { getLogger } from "../../utils/logger.js";
+import { downloadMedia, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 import { RateLimiter } from "../../security/rate-limiter.js";
 import type { RateLimitConfig } from "../../security/rate-limiter.js";
 import type {
@@ -167,7 +168,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
       });
 
       // --- messages.upsert with rate limiting, media, and session tracking ---
-      this.sock.ev.on("messages.upsert", (upsert: MessagesUpsert) => {
+      this.sock.ev.on("messages.upsert", async (upsert: MessagesUpsert) => {
         for (const msg of upsert.messages) {
           if (!msg.message || msg.key.fromMe) continue;
 
@@ -179,25 +180,71 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
             msg.message.conversation ??
             msg.message.extendedTextMessage?.text ??
             msg.message.imageMessage?.caption ??
+            msg.message.videoMessage?.caption ??
             "";
 
           // 4.4 Detect media attachments
           const attachments: Attachment[] = [];
           if (msg.message.imageMessage) {
+            const mime = msg.message.imageMessage.mimetype ?? "image/jpeg";
+            const imgUrl = msg.message.imageMessage.url;
+            let imgData: Buffer | undefined;
+            if (imgUrl) {
+              try {
+                const downloaded = await downloadMedia(imgUrl);
+                if (downloaded) {
+                  const v = validateMediaAttachment({ mimeType: mime, size: downloaded.size, type: "image" });
+                  if (v.valid && validateMagicBytes(downloaded.data, downloaded.mimeType)) {
+                    imgData = downloaded.data;
+                  }
+                }
+              } catch {
+                // Non-critical — proceed with URL only
+              }
+            }
             attachments.push({
               type: "image",
               name: "image",
-              mimeType: msg.message.imageMessage.mimetype ?? "image/jpeg",
-              url: msg.message.imageMessage.url ?? undefined,
+              mimeType: mime,
+              url: imgUrl ?? undefined,
+              data: imgData,
             });
           }
           if (msg.message.documentMessage) {
-            attachments.push({
-              type: "document",
-              name: msg.message.documentMessage.fileName ?? "document",
-              mimeType: msg.message.documentMessage.mimetype ?? "application/octet-stream",
-              url: msg.message.documentMessage.url ?? undefined,
-            });
+            const docMime = msg.message.documentMessage.mimetype ?? "application/octet-stream";
+            const v = validateMediaAttachment({ mimeType: docMime, size: 0, type: "document" });
+            if (v.valid) {
+              attachments.push({
+                type: "document",
+                name: msg.message.documentMessage.fileName ?? "document",
+                mimeType: docMime,
+                url: msg.message.documentMessage.url ?? undefined,
+              });
+            }
+          }
+          if (msg.message.videoMessage) {
+            const videoMime = msg.message.videoMessage.mimetype ?? "video/mp4";
+            const v = validateMediaAttachment({ mimeType: videoMime, size: 0, type: "video" });
+            if (v.valid) {
+              attachments.push({
+                type: "video",
+                name: "video.mp4",
+                mimeType: videoMime,
+                url: msg.message.videoMessage.url ?? undefined,
+              });
+            }
+          }
+          if (msg.message.audioMessage) {
+            const audioMime = msg.message.audioMessage.mimetype ?? "audio/ogg";
+            const v = validateMediaAttachment({ mimeType: audioMime, size: 0, type: "audio" });
+            if (v.valid) {
+              attachments.push({
+                type: "audio",
+                name: "audio.ogg",
+                mimeType: audioMime,
+                url: msg.message.audioMessage.url ?? undefined,
+              });
+            }
           }
 
           // Skip messages with no text and no attachments
@@ -611,6 +658,15 @@ interface MessagesUpsert {
       documentMessage?: {
         url?: string;
         fileName?: string;
+        mimetype?: string;
+      };
+      videoMessage?: {
+        url?: string;
+        caption?: string;
+        mimetype?: string;
+      };
+      audioMessage?: {
+        url?: string;
         mimetype?: string;
       };
     };

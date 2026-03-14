@@ -18,9 +18,11 @@ import type {
   IChannelAdapter,
   IncomingMessage,
   ConfirmationRequest,
+  Attachment,
 } from "../channel.interface.js";
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
+import { mimeToAttachmentType, validateMediaAttachment } from "../../utils/media-processor.js";
 import { DiscordRateLimiter } from "./rate-limiter.js";
 import { formatToDiscordMarkdown, truncateForDiscord } from "./formatters.js";
 import type { SlashCommand } from "./commands.js";
@@ -769,11 +771,29 @@ export class DiscordChannel implements IChannelAdapter {
       return;
     }
 
+    // Extract attachments from the Discord message (validated)
+    const attachments: Attachment[] = [];
+    if (message.attachments.size > 0) {
+      for (const [, att] of message.attachments) {
+        const type = mimeToAttachmentType(att.contentType);
+        const v = validateMediaAttachment({ mimeType: att.contentType ?? undefined, size: att.size, type });
+        if (!v.valid) continue; // Skip unsupported or oversized files
+        attachments.push({
+          type,
+          name: att.name ?? "attachment",
+          url: att.url,
+          mimeType: att.contentType ?? undefined,
+          size: att.size,
+        });
+      }
+    }
+
     const msg: IncomingMessage = {
       channelType: "discord",
       chatId: message.channelId,
       userId: message.author.id,
       text: message.content,
+      attachments: attachments.length > 0 ? attachments : undefined,
       replyTo: message.reference?.messageId ?? undefined,
       timestamp: message.createdAt,
     };

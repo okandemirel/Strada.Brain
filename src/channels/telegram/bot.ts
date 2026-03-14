@@ -4,7 +4,9 @@ import type {
   IChannelAdapter,
   IncomingMessage,
   ConfirmationRequest,
+  Attachment,
 } from "../channel.interface.js";
+import { downloadMedia, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
 import { RateLimiter } from "../../security/rate-limiter.js";
@@ -453,6 +455,30 @@ export class TelegramChannel implements IChannelAdapter {
       );
     });
 
+    // Handle photo messages
+    this.bot.on("message:photo", async (ctx) => {
+      await this.routeMediaMessage(ctx, "image");
+    });
+
+    // Handle document messages
+    this.bot.on("message:document", async (ctx) => {
+      await this.routeMediaMessage(ctx, "document");
+    });
+
+    // Handle video messages
+    this.bot.on("message:video", async (ctx) => {
+      await this.routeMediaMessage(ctx, "video");
+    });
+
+    // Handle voice/audio messages
+    this.bot.on("message:voice", async (ctx) => {
+      await this.routeMediaMessage(ctx, "audio");
+    });
+
+    this.bot.on("message:audio", async (ctx) => {
+      await this.routeMediaMessage(ctx, "audio");
+    });
+
     // Handle all text messages -> route to orchestrator
     this.bot.on("message:text", async (ctx) => {
       await this.routeMessage(ctx);
@@ -548,6 +574,141 @@ export class TelegramChannel implements IChannelAdapter {
       await ctx.reply(
         "An error occurred while processing your request. Please try again."
       );
+    }
+  }
+
+  private async routeMediaMessage(ctx: Context, mediaType: Attachment["type"]): Promise<void> {
+    if (!this.handler) {
+      await ctx.reply("Brain is not ready yet. Please try again later.");
+      return;
+    }
+
+    const userId = String(ctx.from?.id ?? "");
+    const rateResult = this.rateLimiter.checkMessageRate(userId);
+    if (!rateResult.allowed) {
+      getLogger().warn("Telegram: rate limited", { userId, reason: rateResult.reason });
+      await ctx.reply("You have sent too many messages. Please wait before trying again.");
+      return;
+    }
+
+    const attachments: Attachment[] = [];
+    const message = ctx.message;
+    if (!message) return;
+
+    try {
+      if (mediaType === "image" && message.photo && message.photo.length > 0) {
+        const photo = message.photo[message.photo.length - 1]!;
+        const file = await ctx.api.getFile(photo.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
+        const downloaded = await downloadMedia(fileUrl);
+        if (downloaded) {
+          const validation = validateMediaAttachment({
+            mimeType: downloaded.mimeType,
+            size: downloaded.size,
+            type: "image",
+          });
+          if (validation.valid && validateMagicBytes(downloaded.data, downloaded.mimeType)) {
+            attachments.push({
+              type: "image",
+              name: file.file_path?.split("/").pop() ?? "photo.jpg",
+              mimeType: downloaded.mimeType || "image/jpeg",
+              data: downloaded.data,
+              size: downloaded.size,
+            });
+          }
+        }
+      } else if (mediaType === "document" && message.document) {
+        const doc = message.document;
+        const file = await ctx.api.getFile(doc.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
+        const downloaded = await downloadMedia(fileUrl);
+        if (downloaded) {
+          const validation = validateMediaAttachment({
+            mimeType: doc.mime_type ?? downloaded.mimeType,
+            size: downloaded.size,
+            type: "document",
+          });
+          if (validation.valid) {
+            attachments.push({
+              type: "document",
+              name: doc.file_name ?? "document",
+              mimeType: doc.mime_type ?? downloaded.mimeType,
+              data: downloaded.data,
+              size: downloaded.size,
+            });
+          }
+        }
+      } else if (mediaType === "video" && message.video) {
+        const video = message.video;
+        const file = await ctx.api.getFile(video.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
+        const downloaded = await downloadMedia(fileUrl);
+        if (downloaded) {
+          const validation = validateMediaAttachment({
+            mimeType: video.mime_type ?? downloaded.mimeType,
+            size: downloaded.size,
+            type: "video",
+          });
+          if (validation.valid) {
+            attachments.push({
+              type: "video",
+              name: file.file_path?.split("/").pop() ?? "video.mp4",
+              mimeType: video.mime_type ?? downloaded.mimeType,
+              data: downloaded.data,
+              size: downloaded.size,
+            });
+          }
+        }
+      } else if (mediaType === "audio") {
+        const audio = (message as any).voice ?? (message as any).audio;
+        if (audio) {
+          const file = await ctx.api.getFile(audio.file_id);
+          const fileUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
+          const downloaded = await downloadMedia(fileUrl);
+          if (downloaded) {
+            const validation = validateMediaAttachment({
+              mimeType: downloaded.mimeType,
+              size: downloaded.size,
+              type: "audio",
+            });
+            if (validation.valid) {
+              attachments.push({
+                type: "audio",
+                name: file.file_path?.split("/").pop() ?? "audio.ogg",
+                mimeType: downloaded.mimeType,
+                data: downloaded.data,
+                size: downloaded.size,
+              });
+            }
+          }
+        }
+      }
+    } catch (error) {
+      getLogger().warn("Failed to process media", {
+        type: mediaType,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const caption = (message as any).caption ?? "";
+
+    const msg: IncomingMessage = {
+      channelType: "telegram",
+      chatId: String(ctx.chat?.id ?? ""),
+      userId,
+      text: caption,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      replyTo: message.reply_to_message?.message_id?.toString(),
+      timestamp: new Date((message.date ?? Math.floor(Date.now() / 1000)) * 1000),
+    };
+
+    try {
+      await ctx.api.sendChatAction(parseInt(msg.chatId, 10), "typing");
+      await this.handler(msg);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Unknown error";
+      getLogger().error("Error handling media message", { chatId: msg.chatId, error: errMsg });
+      await ctx.reply("An error occurred while processing your media. Please try again.");
     }
   }
 }

@@ -22,6 +22,14 @@ vi.mock("./context/strada-knowledge.js", () => ({
 function createMockProvider() {
   return {
     name: "mock",
+    capabilities: {
+      maxTokens: 4096,
+      streaming: false,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+    },
     chat: vi.fn().mockResolvedValue({
       text: "Hello!",
       toolCalls: [],
@@ -1180,6 +1188,10 @@ describe("Orchestrator", () => {
       const mockRecorder = createMockRecorder();
       const badProvider = {
         name: "bad",
+        capabilities: {
+          maxTokens: 4096, streaming: false, structuredStreaming: false,
+          toolCalling: true, vision: false, systemPrompt: true,
+        },
         chat: vi.fn().mockRejectedValue(new Error("API down")),
       };
 
@@ -1692,6 +1704,10 @@ describe("Orchestrator", () => {
     it("streaming error handling: chatStream throws gracefully handled", async () => {
       const streamingProvider = {
         name: "mock-stream",
+        capabilities: {
+          maxTokens: 4096, streaming: true, structuredStreaming: false,
+          toolCalling: true, vision: false, systemPrompt: true,
+        },
         chat: vi.fn().mockResolvedValue({
           text: "Fallback",
           toolCalls: [],
