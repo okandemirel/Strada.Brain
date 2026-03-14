@@ -464,6 +464,12 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `DELEGATION_ENABLED` | `false` | Ajanlar arasi gorev delegasyonunu etkinlestir |
 | `DELEGATION_MAX_DEPTH` | `2` | Maksimum delegasyon zincir derinligi |
 | `DEPLOYMENT_ENABLED` | `false` | Dagitim alt sistemini etkinlestir |
+| `SOUL_FILE` | `soul.md` | Ajan kisilik dosyasinin yolu (degisiklikte sicak yeniden yuklenir) |
+| `SOUL_FILE_WEB` | (ayarsiz) | Web kanali icin kanal bazli kisilik gecikmesi |
+| `SOUL_FILE_TELEGRAM` | (ayarsiz) | Telegram icin kanal bazli kisilik gecikmesi |
+| `SOUL_FILE_DISCORD` | (ayarsiz) | Discord icin kanal bazli kisilik gecikmesi |
+| `SOUL_FILE_SLACK` | (ayarsiz) | Slack icin kanal bazli kisilik gecikmesi |
+| `SOUL_FILE_WHATSAPP` | (ayarsiz) | WhatsApp icin kanal bazli kisilik gecikmesi |
 | `READ_ONLY_MODE` | `false` | Tum yazma islemlerini engelle |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` veya `debug` |
 
@@ -536,6 +542,13 @@ Ajan, kategorilere gore duzenlenmis 40'dan fazla yerlesik araca sahiptir:
 |------|----------|
 | `dotnet_build` | `dotnet build` calistirma, MSBuild hatalarini yapilandirilmis ciktiya donusturme |
 | `dotnet_test` | `dotnet test` calistirma, basarili/basarisiz/atlanan sonuclari ayristirma |
+
+### Ajan Etkilesimi
+| Arac | Aciklama |
+|------|----------|
+| `ask_user` | Kullaniciya coktan secmeli ve onerilen cevapli aciklayici soru sorar |
+| `show_plan` | Yurutme planini gosterir ve kullanici onayini bekler (Onayla/Duzenle/Reddet) |
+| `switch_personality` | Ajan kisiligini calisma zamaninda degistirir (casual/formal/minimal/default) |
 
 ### Diger
 | Arac | Aciklama |

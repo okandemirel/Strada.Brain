@@ -506,6 +506,12 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | `DELEGATION_ENABLED` | `false` | Habilitar delegacion de tareas entre agentes |
 | `DELEGATION_MAX_DEPTH` | `2` | Profundidad maxima de cadena de delegacion |
 | `DEPLOYMENT_ENABLED` | `false` | Habilitar subsistema de despliegue |
+| `SOUL_FILE` | `soul.md` | Ruta al archivo de personalidad del agente (recarga en caliente al cambiar) |
+| `SOUL_FILE_WEB` | (no definido) | Anulacion de personalidad por canal para el canal web |
+| `SOUL_FILE_TELEGRAM` | (no definido) | Anulacion de personalidad por canal para Telegram |
+| `SOUL_FILE_DISCORD` | (no definido) | Anulacion de personalidad por canal para Discord |
+| `SOUL_FILE_SLACK` | (no definido) | Anulacion de personalidad por canal para Slack |
+| `SOUL_FILE_WHATSAPP` | (no definido) | Anulacion de personalidad por canal para WhatsApp |
 | `READ_ONLY_MODE` | `false` | Bloquear todas las operaciones de escritura |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` o `debug` |
 
@@ -578,6 +584,13 @@ El agente tiene mas de 40 herramientas integradas organizadas por categoria:
 |-------------|-------------|
 | `dotnet_build` | Ejecutar `dotnet build`, parsear errores MSBuild en salida estructurada |
 | `dotnet_test` | Ejecutar `dotnet test`, parsear resultados aprobado/fallido/omitido |
+
+### Interaccion del Agente
+| Herramienta | Descripcion |
+|-------------|-------------|
+| `ask_user` | Hace al usuario una pregunta de aclaracion con opciones multiples y respuesta recomendada |
+| `show_plan` | Muestra el plan de ejecucion y espera aprobacion del usuario (Aprobar/Modificar/Rechazar) |
+| `switch_personality` | Cambia la personalidad del agente en tiempo de ejecucion (casual/formal/minimal/default) |
 
 ### Otros
 | Herramienta | Descripcion |

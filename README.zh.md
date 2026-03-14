@@ -505,6 +505,12 @@ npm run dev -- daemon --channel web
 | `DELEGATION_ENABLED` | `false` | 启用代理间任务委派 |
 | `DELEGATION_MAX_DEPTH` | `2` | 最大委派链深度 |
 | `DEPLOYMENT_ENABLED` | `false` | 启用部署子系统 |
+| `SOUL_FILE` | `soul.md` | 代理个性文件路径（变更时热重载） |
+| `SOUL_FILE_WEB` | (未设置) | Web 频道的频道级个性覆盖 |
+| `SOUL_FILE_TELEGRAM` | (未设置) | Telegram 的频道级个性覆盖 |
+| `SOUL_FILE_DISCORD` | (未设置) | Discord 的频道级个性覆盖 |
+| `SOUL_FILE_SLACK` | (未设置) | Slack 的频道级个性覆盖 |
+| `SOUL_FILE_WHATSAPP` | (未设置) | WhatsApp 的频道级个性覆盖 |
 | `READ_ONLY_MODE` | `false` | 阻止所有写入操作 |
 | `LOG_LEVEL` | `info` | `error`、`warn`、`info` 或 `debug` |
 
@@ -577,6 +583,13 @@ npm run dev -- daemon --channel web
 |------|------|
 | `dotnet_build` | 运行 `dotnet build`，将 MSBuild 错误解析为结构化输出 |
 | `dotnet_test` | 运行 `dotnet test`，解析通过/失败/跳过结果 |
+
+### 代理交互
+| 工具 | 说明 |
+|------|------|
+| `ask_user` | 向用户发送带有多项选择和推荐答案的澄清问题 |
+| `show_plan` | 显示执行计划并等待用户审批（批准/修改/拒绝） |
+| `switch_personality` | 在运行时切换代理个性（casual/formal/minimal/default） |
 
 ### 其他
 | 工具 | 说明 |

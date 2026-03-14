@@ -505,6 +505,12 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 | `DELEGATION_ENABLED` | `false` | 에이전트 간 작업 위임 활성화 |
 | `DELEGATION_MAX_DEPTH` | `2` | 최대 위임 체인 깊이 |
 | `DEPLOYMENT_ENABLED` | `false` | 배포 하위 시스템 활성화 |
+| `SOUL_FILE` | `soul.md` | 에이전트 성격 파일 경로 (변경 시 핫 리로드) |
+| `SOUL_FILE_WEB` | (미설정) | 웹 채널용 채널별 성격 재정의 |
+| `SOUL_FILE_TELEGRAM` | (미설정) | Telegram용 채널별 성격 재정의 |
+| `SOUL_FILE_DISCORD` | (미설정) | Discord용 채널별 성격 재정의 |
+| `SOUL_FILE_SLACK` | (미설정) | Slack용 채널별 성격 재정의 |
+| `SOUL_FILE_WHATSAPP` | (미설정) | WhatsApp용 채널별 성격 재정의 |
 | `READ_ONLY_MODE` | `false` | 모든 쓰기 작업 차단 |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` 또는 `debug` |
 
@@ -577,6 +583,13 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 |------|------|
 | `dotnet_build` | `dotnet build` 실행, MSBuild 에러를 구조화된 출력으로 파싱 |
 | `dotnet_test` | `dotnet test` 실행, 통과/실패/스킵 결과 파싱 |
+
+### 에이전트 인터랙션
+| 도구 | 설명 |
+|------|------|
+| `ask_user` | 다중 선택지와 추천 답변이 포함된 명확화 질문을 사용자에게 전송 |
+| `show_plan` | 실행 계획을 보여주고 사용자 승인 대기 (승인/수정/거부) |
+| `switch_personality` | 런타임에 에이전트 성격 전환 (casual/formal/minimal/default) |
 
 ### 기타
 | 도구 | 설명 |

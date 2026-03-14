@@ -505,6 +505,12 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `DELEGATION_ENABLED` | `false` | Activer la d&eacute;l&eacute;gation de t&acirc;ches entre agents |
 | `DELEGATION_MAX_DEPTH` | `2` | Profondeur maximale de cha&icirc;ne de d&eacute;l&eacute;gation |
 | `DEPLOYMENT_ENABLED` | `false` | Activer le sous-syst&egrave;me de d&eacute;ploiement |
+| `SOUL_FILE` | `soul.md` | Chemin vers le fichier de personnalit&eacute; de l'agent (rechargement &agrave; chaud lors des changements) |
+| `SOUL_FILE_WEB` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour le canal web |
+| `SOUL_FILE_TELEGRAM` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour Telegram |
+| `SOUL_FILE_DISCORD` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour Discord |
+| `SOUL_FILE_SLACK` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour Slack |
+| `SOUL_FILE_WHATSAPP` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour WhatsApp |
 | `READ_ONLY_MODE` | `false` | Bloque toutes les op&eacute;rations d'&eacute;criture |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, ou `debug` |
 
@@ -577,6 +583,13 @@ L'agent dispose de plus de 40 outils int&eacute;gr&eacute;s organis&eacute;s par
 |-------|-------------|
 | `dotnet_build` | Lance `dotnet build`, analyse les erreurs MSBuild en sortie structur&eacute;e |
 | `dotnet_test` | Lance `dotnet test`, analyse les r&eacute;sultats pass/fail/skip |
+
+### Interaction Agent
+| Outil | Description |
+|-------|-------------|
+| `ask_user` | Pose &agrave; l'utilisateur une question de clarification avec choix multiples et r&eacute;ponse recommand&eacute;e |
+| `show_plan` | Affiche le plan d'ex&eacute;cution et attend l'approbation de l'utilisateur (Approuver/Modifier/Rejeter) |
+| `switch_personality` | Change la personnalit&eacute; de l'agent &agrave; l'ex&eacute;cution (casual/formal/minimal/default) |
 
 ### Autres
 | Outil | Description |

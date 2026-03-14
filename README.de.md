@@ -477,6 +477,12 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | `DELEGATION_ENABLED` | `false` | Aufgabendelegation zwischen Agenten aktivieren |
 | `DELEGATION_MAX_DEPTH` | `2` | Maximale Delegationskettiefe |
 | `DEPLOYMENT_ENABLED` | `false` | Deployment-Subsystem aktivieren |
+| `SOUL_FILE` | `soul.md` | Pfad zur Agenten-Persoenlichkeitsdatei (Hot-Reload bei Aenderung) |
+| `SOUL_FILE_WEB` | (nicht gesetzt) | Kanalspezifische Persoenlichkeit fuer den Web-Kanal |
+| `SOUL_FILE_TELEGRAM` | (nicht gesetzt) | Kanalspezifische Persoenlichkeit fuer Telegram |
+| `SOUL_FILE_DISCORD` | (nicht gesetzt) | Kanalspezifische Persoenlichkeit fuer Discord |
+| `SOUL_FILE_SLACK` | (nicht gesetzt) | Kanalspezifische Persoenlichkeit fuer Slack |
+| `SOUL_FILE_WHATSAPP` | (nicht gesetzt) | Kanalspezifische Persoenlichkeit fuer WhatsApp |
 | `READ_ONLY_MODE` | `false` | Alle Schreiboperationen blockieren |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` oder `debug` |
 
@@ -549,6 +555,13 @@ Der Agent verfuegt ueber mehr als 40 integrierte Tools, organisiert nach Kategor
 |------|-------------|
 | `dotnet_build` | `dotnet build` ausfuehren, MSBuild-Fehler in strukturierte Ausgabe parsen |
 | `dotnet_test` | `dotnet test` ausfuehren, Bestanden/Fehlgeschlagen/Uebersprungen-Ergebnisse parsen |
+
+### Agenten-Interaktion
+| Tool | Beschreibung |
+|------|-------------|
+| `ask_user` | Stellt dem Benutzer eine Klaerungsfrage mit Mehrfachauswahl und empfohlener Antwort |
+| `show_plan` | Zeigt den Ausfuehrungsplan und wartet auf Benutzerfreigabe (Genehmigen/Aendern/Ablehnen) |
+| `switch_personality` | Wechselt die Agenten-Persoenlichkeit zur Laufzeit (casual/formal/minimal/default) |
 
 ### Sonstiges
 | Tool | Beschreibung |
