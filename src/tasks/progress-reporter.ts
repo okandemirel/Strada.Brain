@@ -6,7 +6,8 @@
  * signals processing, and the user sees only the final result.
  */
 
-import type { IChannelSender } from "../channels/channel-core.interface.js";
+import type { IChannelSender, IChannelRichMessaging } from "../channels/channel-core.interface.js";
+import { supportsRichMessaging } from "../channels/channel-core.interface.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Task, TaskId } from "./types.js";
 import { getLogger } from "../utils/logger.js";
@@ -53,18 +54,24 @@ export class ProgressReporter {
     });
   }
 
-  private reportCreated(_task: Task): void {
-    // Suppressed — the typing indicator already signals processing.
-    // The user sees only the final result when the task completes.
+  private reportCreated(task: Task): void {
+    // Send typing indicator so user knows agent is working
+    this.sendTyping(task.chatId);
   }
 
-  private reportProgress(_task: Task, _message: string): void {
-    // Suppressed — tool execution details are internal implementation.
-    // The user sees only task acceptance and the final result.
+  private reportProgress(task: Task, _message: string): void {
+    // Keep typing indicator alive during long tasks
+    this.sendTyping(task.chatId);
   }
 
-  private reportCompleted(_task: Task, result: string): void {
-    this.sendToChannel(_task.chatId, result);
+  private sendTyping(chatId: string): void {
+    if (supportsRichMessaging(this.channel)) {
+      (this.channel as IChannelRichMessaging).sendTypingIndicator(chatId).catch(() => {});
+    }
+  }
+
+  private reportCompleted(task: Task, result: string): void {
+    this.sendToChannel(task.chatId, result);
   }
 
   private reportFailed(task: Task, error: string): void {

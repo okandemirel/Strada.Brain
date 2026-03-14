@@ -485,6 +485,8 @@ export class Orchestrator {
           });
           // ────────────────────────────────────────────────────────────
 
+          // Persist background task conversation to memory
+          await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
           return response.text || "Task completed without output.";
         }
 
