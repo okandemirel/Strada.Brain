@@ -50,6 +50,23 @@ vi.mock("@slack/bolt", () => ({
   directMention: vi.fn().mockReturnValue("directMention"),
 }));
 
+// Mock media-processor — downloadMedia returns data by default
+const mockDownloadMedia = vi.fn().mockResolvedValue({
+  data: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+  mimeType: "image/png",
+  size: 4,
+});
+vi.mock("../../../utils/media-processor.js", () => ({
+  downloadMedia: (...args: unknown[]) => mockDownloadMedia(...args),
+  mimeToAttachmentType: (mime: string | undefined | null) => {
+    if (!mime) return "document";
+    if (mime.startsWith("image/")) return "image";
+    if (mime.startsWith("video/")) return "video";
+    if (mime.startsWith("audio/")) return "audio";
+    return "document";
+  },
+}));
+
 describe("SlackChannel", () => {
   let channel: SlackChannel;
   const mockConfig = {
@@ -408,11 +425,11 @@ describe("SlackChannel file extraction", () => {
   });
 
   it("should extract image files from message events", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    mockDownloadMedia.mockResolvedValueOnce({
+      data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x00, 0x00]),
+      mimeType: "image/png",
+      size: 8,
     });
-    vi.stubGlobal("fetch", mockFetch);
 
     const message = {
       type: "message",
@@ -446,16 +463,14 @@ describe("SlackChannel file extraction", () => {
       "https://files.slack.com/files-pri/T001-F001/photo.png"
     );
     expect(incoming.attachments[0].data).toBeInstanceOf(Buffer);
-
-    vi.unstubAllGlobals();
   });
 
   it("should classify video, audio, and document types correctly", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
+    mockDownloadMedia.mockResolvedValue({
+      data: Buffer.from([0x00, 0x00, 0x00, 0x00]),
+      mimeType: "application/octet-stream",
+      size: 4,
     });
-    vi.stubGlobal("fetch", mockFetch);
 
     const message = {
       type: "message",
@@ -479,16 +494,14 @@ describe("SlackChannel file extraction", () => {
     expect(incoming.attachments[0].type).toBe("video");
     expect(incoming.attachments[1].type).toBe("audio");
     expect(incoming.attachments[2].type).toBe("document");
-
-    vi.unstubAllGlobals();
   });
 
-  it("should use Bearer token auth for downloads", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
+  it("should use downloadMedia with Bearer token auth", async () => {
+    mockDownloadMedia.mockResolvedValueOnce({
+      data: Buffer.from("text-data"),
+      mimeType: "text/plain",
+      size: 9,
     });
-    vi.stubGlobal("fetch", mockFetch);
 
     const message = {
       type: "message",
@@ -505,16 +518,13 @@ describe("SlackChannel file extraction", () => {
     const say = vi.fn();
     await capturedMessageCallback!({ message, say });
 
-    expect(mockFetch).toHaveBeenCalledWith("https://files.slack.com/secret", {
+    expect(mockDownloadMedia).toHaveBeenCalledWith("https://files.slack.com/secret", {
       headers: { Authorization: "Bearer xoxb-test-token" },
     });
-
-    vi.unstubAllGlobals();
   });
 
   it("should handle download failures gracefully", async () => {
-    const mockFetch = vi.fn().mockRejectedValue(new Error("Network error"));
-    vi.stubGlobal("fetch", mockFetch);
+    mockDownloadMedia.mockResolvedValueOnce(null); // simulate download failure
 
     const message = {
       type: "message",
@@ -538,13 +548,9 @@ describe("SlackChannel file extraction", () => {
     expect(incoming.attachments[0].name).toBe("broken.png");
     expect(incoming.attachments[0].url).toBe("https://files.slack.com/broken");
     expect(incoming.attachments[0].data).toBeUndefined();
-
-    vi.unstubAllGlobals();
   });
 
   it("should skip files without name or mimetype", async () => {
-    vi.stubGlobal("fetch", vi.fn());
-
     const message = {
       type: "message",
       user: "U456",
@@ -566,8 +572,6 @@ describe("SlackChannel file extraction", () => {
     // Only the second file (valid.png) has both name and mimetype
     expect(incoming.attachments).toHaveLength(1);
     expect(incoming.attachments[0].name).toBe("valid.png");
-
-    vi.unstubAllGlobals();
   });
 });
 

@@ -65,6 +65,9 @@ interface Session {
   lastActivity: Date;
 }
 
+/** Default prompt when user sends an image with no text. */
+const DEFAULT_IMAGE_PROMPT = "What is in this image?";
+
 /**
  * Build user message content, converting image attachments to vision blocks
  * when the provider supports it.
@@ -78,12 +81,15 @@ export function buildUserContent(
     return text;
   }
 
-  const imageAttachments = attachments.filter(
-    (a) => a.mimeType && isVisionCompatible(a.mimeType) && (a.data || a.url),
-  );
-  const nonImageAttachments = attachments.filter(
-    (a) => !a.mimeType || !isVisionCompatible(a.mimeType) || (!a.data && !a.url),
-  );
+  const imageAttachments: Attachment[] = [];
+  const nonImageAttachments: Attachment[] = [];
+  for (const a of attachments) {
+    if (a.mimeType && isVisionCompatible(a.mimeType) && (a.data || a.url)) {
+      imageAttachments.push(a);
+    } else {
+      nonImageAttachments.push(a);
+    }
+  }
 
   // If no vision support or no image attachments, append text notes
   if (!supportsVision || imageAttachments.length === 0) {
@@ -104,7 +110,7 @@ export function buildUserContent(
       .join("\n");
     textPart = textPart ? `${textPart}\n\n${notes}` : notes;
   }
-  content.push({ type: "text", text: textPart || "What is in this image?" });
+  content.push({ type: "text", text: textPart || DEFAULT_IMAGE_PROMPT });
 
   // Image blocks
   for (const att of imageAttachments) {
