@@ -71,16 +71,16 @@ export class ProgressReporter {
     this.sendToChannel(task.chatId, result);
   }
 
-  private reportFailed(task: Task, error: string): void {
-    this.lastUpdate.delete(task.id);
-    const msg = `❌ Task failed\n\`${task.id}\`: *${escapeMarkdown(task.title)}*\nError: ${escapeMarkdown(error.slice(0, 300))}`;
-    this.sendToChannel(task.chatId, msg);
+  private reportFailed(_task: Task, _error: string): void {
+    this.lastUpdate.delete(_task.id);
+    // Send generic error — don't leak internal API errors to user
+    this.sendToChannel(_task.chatId, "An error occurred while processing your request. Please try again.");
+    getLogger().error("Task failed", { taskId: _task.id, error: _error });
   }
 
-  private reportCancelled(task: Task): void {
-    this.lastUpdate.delete(task.id);
-    const msg = `🚫 Task cancelled: \`${task.id}\``;
-    this.sendToChannel(task.chatId, msg);
+  private reportCancelled(_task: Task): void {
+    this.lastUpdate.delete(_task.id);
+    // Suppressed — cancellation is internal state
   }
 
   private sendToChannel(chatId: string, message: string): void {
@@ -91,8 +91,4 @@ export class ProgressReporter {
       });
     });
   }
-}
-
-function escapeMarkdown(text: string): string {
-  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
 }

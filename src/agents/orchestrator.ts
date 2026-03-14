@@ -767,6 +767,8 @@ export class Orchestrator {
       );
     } finally {
       clearInterval(typingInterval);
+      // Persist conversation summary after every message exchange
+      await this.persistSessionToMemory(chatId, session);
     }
   }
 
@@ -1677,10 +1679,45 @@ export class Orchestrator {
     const now = Date.now();
     for (const [chatId, session] of this.sessions) {
       if (now - session.lastActivity.getTime() > maxAgeMs) {
+        // Persist before cleanup
+        void this.persistSessionToMemory(chatId, session);
         this.sessions.delete(chatId);
         this.sessionLocks.delete(chatId);
         this.activeGoalTrees.delete(chatId);
       }
+    }
+  }
+
+  /**
+   * Persist the recent conversation to memory so the agent remembers it next session.
+   * Takes the last N user+assistant text exchanges and stores as a conversation summary.
+   */
+  private async persistSessionToMemory(chatId: string, session: Session): Promise<void> {
+    if (!this.memoryManager) return;
+    if (session.messages.length < 2) return; // Need at least one exchange
+
+    try {
+      // Extract the last 10 text messages for a conversation summary
+      const recentTexts = session.messages
+        .slice(-10)
+        .map((m) => {
+          if (typeof m.content === "string") return `[${m.role}] ${m.content}`;
+          if (Array.isArray(m.content)) {
+            const texts = (m.content as MessageContent[])
+              .filter((b): b is { type: "text"; text: string } => b.type === "text")
+              .map((b) => b.text);
+            if (texts.length > 0) return `[${m.role}] ${texts.join(" ")}`;
+          }
+          return null;
+        })
+        .filter((line): line is string => line !== null);
+
+      if (recentTexts.length === 0) return;
+
+      const summary = recentTexts.join("\n");
+      await this.memoryManager.storeConversation(chatId as ChatId, summary);
+    } catch {
+      // Memory persistence failure is non-fatal
     }
   }
 
