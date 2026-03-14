@@ -177,6 +177,7 @@ export class Orchestrator {
   /** TaskManager reference for inline goal detection submission (lazy setter) */
   private taskManager: TaskManager | null = null;
   private readonly dmPolicy: DMPolicy;
+  private readonly lastPersistTime = new Map<string, number>();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -721,26 +722,8 @@ export class Orchestrator {
     // Trim old messages to manage context window
     // Persist trimmed messages to memory before discarding
     const trimmed = this.trimSession(session, 40);
-    if (trimmed.length > 0 && this.memoryManager) {
-      const summary = trimmed
-        .filter((m) => {
-          if (!m.content) return false;
-          return true;
-        })
-        .map((m) => {
-          if (typeof m.content === "string") return `[${m.role}] ${m.content}`;
-          if (Array.isArray(m.content)) {
-            const textParts = (m.content as MessageContent[])
-              .filter((b): b is { type: "text"; text: string } => b.type === "text")
-              .map((b) => b.text);
-            return `[${m.role}] ${textParts.join(" ") || "[media message]"}`;
-          }
-          return `[${m.role}] [complex content]`;
-        })
-        .join("\n");
-      if (summary) {
-        await this.memoryManager.storeConversation(chatId as ChatId, summary);
-      }
+    if (trimmed.length > 0) {
+      await this.persistSessionToMemory(chatId, trimmed, /* force */ true);
     }
 
     // Start typing indicator loop
@@ -767,8 +750,8 @@ export class Orchestrator {
       );
     } finally {
       clearInterval(typingInterval);
-      // Persist conversation summary after every message exchange
-      await this.persistSessionToMemory(chatId, session);
+      // Persist conversation summary (debounced to avoid excessive writes)
+      await this.persistSessionToMemory(chatId, session.messages.slice(-10));
     }
   }
 
@@ -1665,6 +1648,27 @@ export class Orchestrator {
     if (trimTo > 0) {
       return session.messages.splice(0, trimTo);
     }
+
+    // Fallback: if no safe boundary found and session exceeds hard cap (2x max),
+    // force trim at the oldest complete tool pair boundary to prevent unbounded growth
+    const hardCap = maxMessages * 2;
+    if (session.messages.length > hardCap) {
+      getLogger().warn("Session exceeds hard cap, force-trimming", {
+        size: session.messages.length,
+        hardCap,
+      });
+      // Find the first complete pair boundary (user message after a tool_result)
+      for (let i = 1; i < overflow; i++) {
+        const msg = session.messages[i]!;
+        const prev = session.messages[i - 1]!;
+        if (msg.role === "user" && prev.role === "user") {
+          return session.messages.splice(0, i);
+        }
+      }
+      // Last resort: trim at overflow, accepting potential orphaning
+      return session.messages.splice(0, overflow);
+    }
+
     return [];
   }
 
@@ -1679,8 +1683,9 @@ export class Orchestrator {
     const now = Date.now();
     for (const [chatId, session] of this.sessions) {
       if (now - session.lastActivity.getTime() > maxAgeMs) {
-        // Persist before cleanup
-        void this.persistSessionToMemory(chatId, session);
+        // Persist before cleanup (forced — session is being evicted)
+        void this.persistSessionToMemory(chatId, session.messages.slice(-10), /* force */ true);
+        this.lastPersistTime.delete(chatId);
         this.sessions.delete(chatId);
         this.sessionLocks.delete(chatId);
         this.activeGoalTrees.delete(chatId);
@@ -1688,34 +1693,49 @@ export class Orchestrator {
     }
   }
 
+  /** Minimum interval between debounced memory persists per chat (30s). */
+  private static readonly PERSIST_DEBOUNCE_MS = 30_000;
+
   /**
-   * Persist the recent conversation to memory so the agent remembers it next session.
-   * Takes the last N user+assistant text exchanges and stores as a conversation summary.
+   * Persist conversation messages to memory so the agent remembers them next session.
+   * Debounced by default — pass `force: true` for trim evictions and session cleanup.
    */
-  private async persistSessionToMemory(chatId: string, session: Session): Promise<void> {
+  private async persistSessionToMemory(
+    chatId: string,
+    messages: ConversationMessage[],
+    force = false,
+  ): Promise<void> {
     if (!this.memoryManager) return;
-    if (session.messages.length < 2) return; // Need at least one exchange
+    if (messages.length < 2) return;
+
+    if (!force) {
+      const now = Date.now();
+      const lastTime = this.lastPersistTime.get(chatId) ?? 0;
+      if (now - lastTime < Orchestrator.PERSIST_DEBOUNCE_MS) return;
+      this.lastPersistTime.set(chatId, now);
+    }
 
     try {
-      // Extract the last 10 text messages for a conversation summary
-      const recentTexts = session.messages
-        .slice(-10)
+      const summary = messages
         .map((m) => {
           if (typeof m.content === "string") return `[${m.role}] ${m.content}`;
           if (Array.isArray(m.content)) {
             const texts = (m.content as MessageContent[])
               .filter((b): b is { type: "text"; text: string } => b.type === "text")
               .map((b) => b.text);
-            if (texts.length > 0) return `[${m.role}] ${texts.join(" ")}`;
+            return texts.length > 0
+              ? `[${m.role}] ${texts.join(" ")}`
+              : `[${m.role}] [media message]`;
           }
-          return null;
+          return `[${m.role}] [complex content]`;
         })
-        .filter((line): line is string => line !== null);
+        .join("\n");
 
-      if (recentTexts.length === 0) return;
-
-      const summary = recentTexts.join("\n");
-      await this.memoryManager.storeConversation(chatId as ChatId, summary);
+      if (summary) {
+        // Sanitize before persisting — strip any leaked API keys/secrets
+        const sanitized = summary.replace(API_KEY_PATTERN, "[REDACTED]");
+        await this.memoryManager.storeConversation(chatId as ChatId, sanitized);
+      }
     } catch {
       // Memory persistence failure is non-fatal
     }
