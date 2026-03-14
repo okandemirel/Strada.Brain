@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SoulLoader } from "./soul-loader.js";
-import { writeFile, unlink, mkdir } from "node:fs/promises";
+import { writeFile, unlink, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -28,6 +28,7 @@ describe("SoulLoader", () => {
     try { await unlink(join(testDir, "soul.md")); } catch {}
     try { await unlink(join(testDir, "soul-telegram.md")); } catch {}
     try { await unlink(join(testDir, "my-soul.md")); } catch {}
+    try { await rm(join(testDir, "profiles"), { recursive: true }); } catch {}
   });
 
   it("loads default soul.md", async () => {
@@ -101,6 +102,47 @@ describe("SoulLoader", () => {
       });
       await loader.initialize();
       expect(loader.getContent("telegram")).toBe("default");
+    });
+  });
+
+  describe("switchProfile", () => {
+    it("switches to a profile from profiles/ directory", async () => {
+      await writeFile(join(testDir, "soul.md"), "default personality");
+      await mkdir(join(testDir, "profiles"), { recursive: true });
+      await writeFile(join(testDir, "profiles", "casual.md"), "casual personality");
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+      expect(loader.getContent()).toBe("default personality");
+
+      const success = await loader.switchProfile("casual");
+      expect(success).toBe(true);
+      expect(loader.getContent()).toBe("casual personality");
+    });
+
+    it("switches back to default profile", async () => {
+      await writeFile(join(testDir, "soul.md"), "default personality");
+      await mkdir(join(testDir, "profiles"), { recursive: true });
+      await writeFile(join(testDir, "profiles", "formal.md"), "formal personality");
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+
+      await loader.switchProfile("formal");
+      expect(loader.getContent()).toBe("formal personality");
+
+      const success = await loader.switchProfile("default");
+      expect(success).toBe(true);
+      expect(loader.getContent()).toBe("default personality");
+    });
+
+    it("returns false for non-existent profile", async () => {
+      await writeFile(join(testDir, "soul.md"), "default personality");
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+
+      const success = await loader.switchProfile("nonexistent");
+      expect(success).toBe(false);
+      // Default content should remain unchanged
+      expect(loader.getContent()).toBe("default personality");
     });
   });
 

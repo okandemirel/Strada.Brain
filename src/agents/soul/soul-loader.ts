@@ -19,6 +19,7 @@ export class SoulLoader {
   private cache = new Map<string, string>();
   private watchers: FSWatcher[] = [];
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private switchInFlight = false;
   private readonly basePath: string;
   private readonly soulFile: string;
   private readonly channelOverrides: Map<string, string>;
@@ -148,6 +149,45 @@ export class SoulLoader {
     } catch {
       // File doesn't exist — return the unresolved path
       return filePath;
+    }
+  }
+
+  /**
+   * Switch the active personality profile at runtime.
+   * Reads from profiles/ directory. "default" reads soul.md.
+   * Preserves the current personality if the target profile fails to load.
+   */
+  async switchProfile(profileName: string): Promise<boolean> {
+    const logger = getLogger();
+
+    if (this.switchInFlight) return false;
+
+    // Defense-in-depth: only allow alphanumeric, dash, underscore
+    if (profileName !== "default" && !/^[a-zA-Z0-9_-]+$/.test(profileName)) {
+      logger.warn("Profile name rejected — invalid characters", { profileName });
+      return false;
+    }
+
+    this.switchInFlight = true;
+    try {
+      const previous = this.cache.get("default") ?? null;
+      const fileName = profileName === "default"
+        ? this.soulFile
+        : `profiles/${profileName}.md`;
+
+      const success = await this.loadFile("default", fileName);
+      if (!success) {
+        if (previous !== null) {
+          this.cache.set("default", previous);
+        } else {
+          this.cache.delete("default");
+        }
+      } else {
+        logger.info("Personality profile switched", { profile: profileName });
+      }
+      return success;
+    } finally {
+      this.switchInFlight = false;
     }
   }
 

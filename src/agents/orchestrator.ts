@@ -1444,12 +1444,13 @@ export class Orchestrator {
     const logger = getLogger();
     const results: ToolResult[] = [];
 
-    const toolContext: ToolContext = {
+    const toolContext: ToolContext & { soulLoader?: SoulLoader | null } = {
       projectPath: this.projectPath,
       workingDirectory: this.projectPath,
       readOnly: this.readOnly,
       chatId,
       channel: this.channel,
+      soulLoader: this.soulLoader,
     };
 
     for (const tc of toolCalls) {
