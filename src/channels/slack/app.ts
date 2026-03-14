@@ -727,6 +727,49 @@ export class SlackChannel implements IChannelAdapter {
 
     const attachments: Attachment[] = [];
 
+    // Extract files from message
+    const files = (message as any).files as Array<{
+      id: string;
+      name?: string;
+      mimetype?: string;
+      size?: number;
+      url_private?: string;
+    }> | undefined;
+
+    if (files && Array.isArray(files)) {
+      for (const file of files) {
+        if (!file.name || !file.mimetype) continue;
+        const type = file.mimetype.startsWith("image/") ? "image" as const
+          : file.mimetype.startsWith("video/") ? "video" as const
+          : file.mimetype.startsWith("audio/") ? "audio" as const
+          : "document" as const;
+
+        // url_private requires Bearer auth — download now while we have the token
+        let data: Buffer | undefined;
+        if (file.url_private && this.config.botToken) {
+          try {
+            const resp = await fetch(file.url_private, {
+              headers: { Authorization: `Bearer ${this.config.botToken}` },
+            });
+            if (resp.ok) {
+              data = Buffer.from(await resp.arrayBuffer());
+            }
+          } catch {
+            // Non-critical — attachment will have URL but no data
+          }
+        }
+
+        attachments.push({
+          type,
+          name: file.name,
+          url: file.url_private,
+          mimeType: file.mimetype,
+          size: file.size ?? data?.length,
+          data,
+        });
+      }
+    }
+
     const incomingMessage: IncomingMessage = {
       channelType: "slack",
       chatId: channelId,
