@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Unity / Strada.Core Projeleri icin Yapay Zeka Destekli Gelistirme Ajani</strong><br/>
-  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu ve onay kapili dagitim alt sistemi ile.
+  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu, onay kapili dagitim alt sistemi ve LLM goruntu destegiyle medya paylasimi ile.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3100%2B-brightgreen?style=flat-square" alt="Testler">
+  <img src="https://img.shields.io/badge/tests-3180%2B-brightgreen?style=flat-square" alt="Testler">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lisans">
 </p>
 
@@ -490,7 +490,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 
 ## Araclar
 
-Ajan, kategorilere gore duzenlenmis 30'dan fazla yerlesik araca sahiptir:
+Ajan, kategorilere gore duzenlenmis 40'dan fazla yerlesik araca sahiptir:
 
 ### Dosya Islemleri
 | Arac | Aciklama |
@@ -572,10 +572,11 @@ RAG (Retrieval-Augmented Generation) boru hatti, anlamsal arama icin C# kaynak k
 | Yetenek | Web | Telegram | Discord | Slack | WhatsApp | CLI |
 |---------|-----|----------|---------|-------|----------|-----|
 | Metin mesajlasma | Evet | Evet | Evet | Evet | Evet | Evet |
+| Medya ekleri | Evet (base64) | Evet (foto/belge/video/ses) | Evet (herhangi ek) | Evet (dosya indirme) | Evet (resim/video/ses/belge) | Hayir |
+| Goruntu (resim->LLM) | Evet | Evet | Evet | Evet | Evet | Hayir |
 | Akis (yerinde duzenleme) | Evet | Evet | Evet | Evet | Evet | Evet |
 | Yazma gostergesi | Evet | Evet | Evet | Islevsiz | Evet | Hayir |
 | Onay diyaloglari | Evet (modal) | Evet (satirici klavye) | Evet (butonlar) | Evet (Block Kit) | Evet (numarali yanit) | Evet (readline) |
-| Dosya yukleme | Evet | Hayir | Hayir | Evet | Evet | Hayir |
 | Konu destegi | Hayir | Hayir | Evet | Evet | Hayir | Hayir |
 | Hiz sinirlamasi (giden) | Evet (oturum basina) | Hayir | Evet (token bucket) | Evet (4 katmanli kayar pencere) | Satirici kisitlama | Hayir |
 
@@ -603,22 +604,25 @@ Kullanici basina kayar pencere (dakika/saat) + genel gunluk/aylik token ve USD b
 ### Katman 3: Yol Korumasi
 Her dosya islemi sembolik baglantilari cozer ve yolun proje koku icinde kaldigini dogrular. 30'dan fazla hassas desen engellenir (`.env`, `.git/credentials`, SSH anahtarlari, sertifikalar, `node_modules/`).
 
-### Katman 4: Gizli Bilgi Temizleyici
+### Katman 4: Medya Guvenligi
+Tum medya ekleri islenmeden once dogrulanir: MIME izin listesi, tur bazinda boyut sinirlari (20MB resim, 50MB video, 25MB ses, 10MB belge), sihirli bayt dorulamasi ve indirme URL'leri icin SSRF korumasi.
+
+### Katman 5: Gizli Bilgi Temizleyici
 24 regex deseni, tum arac ciktilarinda kimlik bilgilerini LLM'e ulasmadan once tespit eder ve maskeler. Kapsar: OpenAI anahtarlari, GitHub token'lari, Slack/Discord/Telegram token'lari, AWS anahtarlari, JWT'ler, Bearer kimlik dogrulama, PEM anahtarlari, veritabani URL'leri ve genel gizli bilgi desenleri.
 
-### Katman 5: Salt Okunur Mod
+### Katman 6: Salt Okunur Mod
 `READ_ONLY_MODE=true` oldugunda, 23 yazma araci ajanin arac listesinden tamamen kaldirilir -- LLM bunlari cagirmayi bile deneyemez.
 
-### Katman 6: Islem Onayi
+### Katman 7: Islem Onayi
 Yazma islemleri (dosya yazma, git commit, kabuk calistirma) kanalin etkilesimli arayuzu (butonlar, satirici klavyeler, metin istemleri) araciligiyla kullanici onayi gerektirebilir.
 
-### Katman 7: Arac Ciktisi Temizleme
+### Katman 8: Arac Ciktisi Temizleme
 Tum arac sonuclari 8192 karakter ile sinirlandirilir ve LLM'e geri beslenmeden once API anahtari desenleri icin taranir.
 
-### Katman 8: RBAC (Dahili)
+### Katman 9: RBAC (Dahili)
 9 kaynak turunu kapsayan izin matrisi ile 5 rol (superadmin, admin, developer, viewer, service). Politika motoru zaman tabanli, IP tabanli ve ozel kosullari destekler.
 
-### Katman 9: Daemon Guvenligi
+### Katman 10: Daemon Guvenligi
 `DaemonSecurityPolicy`, daemon tarafindan tetiklenen islemler icin arac duzeyli onay gereksinimlerini zorlar. Yazma araclari, yurutmeden once `ApprovalQueue` araciligiyla acik kullanici onayi gerektirir.
 
 ---
