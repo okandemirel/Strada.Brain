@@ -725,9 +725,6 @@ export class Orchestrator {
       const summary = trimmed
         .filter((m) => {
           if (!m.content) return false;
-          if (m.role === "assistant") return true;
-          // For user messages, check if it's a tool result message (has MessageContent array)
-          if (typeof m.content !== "string") return false;
           return true;
         })
         .map((m) => {
@@ -787,11 +784,22 @@ export class Orchestrator {
       const lastUserMsg = [...session.messages]
         .reverse()
         .find((m) => m.role === "user" && m.content);
-      if (lastUserMsg && typeof lastUserMsg.content === "string") {
+      // Extract text from both string and MessageContent[] (vision) messages
+      const queryText = lastUserMsg
+        ? typeof lastUserMsg.content === "string"
+          ? lastUserMsg.content
+          : Array.isArray(lastUserMsg.content)
+            ? (lastUserMsg.content as MessageContent[])
+                .filter((b): b is { type: "text"; text: string } => b.type === "text")
+                .map((b) => b.text)
+                .join(" ")
+            : ""
+        : "";
+      if (lastUserMsg && queryText) {
         try {
           const memoriesResult = await this.memoryManager.retrieve({
             mode: "text",
-            query: lastUserMsg.content,
+            query: queryText,
             limit: 3,
             minScore: 0.15,
           });
@@ -813,9 +821,9 @@ export class Orchestrator {
         }
 
         // Inject RAG code context
-        if (this.ragPipeline && typeof lastUserMsg.content === "string") {
+        if (this.ragPipeline && queryText) {
           try {
-            const ragResults = await this.ragPipeline.search(lastUserMsg.content, {
+            const ragResults = await this.ragPipeline.search(queryText, {
               topK: 6,
               minScore: 0.2,
             });
@@ -1583,8 +1591,13 @@ export class Orchestrator {
   private extractLastUserMessage(session: Session): string {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i]!;
-      if (msg.role === "user" && typeof msg.content === "string") {
-        return msg.content;
+      if (msg.role !== "user") continue;
+      if (typeof msg.content === "string") return msg.content;
+      if (Array.isArray(msg.content)) {
+        const textParts = (msg.content as MessageContent[])
+          .filter((b): b is { type: "text"; text: string } => b.type === "text")
+          .map((b) => b.text);
+        if (textParts.length > 0) return textParts.join(" ");
       }
     }
     return "";

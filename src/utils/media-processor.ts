@@ -163,7 +163,6 @@ const ALLOWED_HOST_PATTERNS = [
   /^cdn\.discordapp\.com$/,
   /^media\.discordapp\.net$/,
   /^mmg\.whatsapp\.net$/,
-  /^.*\.whatsapp\.net$/,
 ];
 
 /**
@@ -243,7 +242,7 @@ export async function downloadMedia(
     const response = await fetch(url, {
       signal: controller.signal,
       headers: options?.headers,
-      redirect: "follow",
+      redirect: "error",
     });
     clearTimeout(timeout);
 
