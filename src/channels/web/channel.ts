@@ -77,7 +77,11 @@ export class WebChannel
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
 
-  constructor(private readonly port: number = 3000) {}
+  private readonly dashboardPort: number;
+
+  constructor(private readonly port: number = 3000, dashboardPort: number = 3100) {
+    this.dashboardPort = dashboardPort;
+  }
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
@@ -260,6 +264,12 @@ export class WebChannel
       });
       res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(body);
+      return;
+    }
+
+    // Proxy /api/* requests to the dashboard server (same-origin solution)
+    if (url.startsWith("/api/")) {
+      await this.proxyToDashboard(req, res, url);
       return;
     }
 
@@ -472,6 +482,36 @@ export class WebChannel
       ws.send(JSON.stringify(data));
     } catch {
       // Connection may have closed
+    }
+  }
+
+  /**
+   * Proxy /api/* requests to the dashboard server (same-origin solution).
+   * Eliminates CORS issues by serving dashboard data from the same port.
+   */
+  private async proxyToDashboard(req: HttpReq, res: ServerResponse, url: string): Promise<void> {
+    try {
+      const dashboardUrl = `http://127.0.0.1:${this.dashboardPort}${url}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      const response = await fetch(dashboardUrl, {
+        method: req.method ?? "GET",
+        signal: controller.signal,
+        headers: { "Accept": "application/json" },
+      });
+      clearTimeout(timeout);
+
+      const body = await response.text();
+      res.writeHead(response.status, {
+        ...WebChannel.SECURITY_HEADERS,
+        "Content-Type": response.headers.get("content-type") ?? "application/json",
+      });
+      res.end(body);
+    } catch {
+      // Dashboard server not running or unreachable
+      res.writeHead(503, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Dashboard API unavailable", hint: "Set DASHBOARD_ENABLED=true" }));
     }
   }
 }

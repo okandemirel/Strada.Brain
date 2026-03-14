@@ -120,11 +120,8 @@ export interface UseDashboardReturn {
   lastUpdated: number | null
 }
 
-function getDashboardBaseUrl(): string {
-  const stored = localStorage.getItem('strada-dashboard-port')
-  const port = stored && /^\d{1,5}$/.test(stored) ? stored : '3100'
-  return `http://localhost:${port}`
-}
+// Dashboard API is proxied through the web channel on the same origin (/api/*)
+// No cross-origin fetch needed — web channel forwards to dashboard server internally
 
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T | null> {
   try {
@@ -155,19 +152,15 @@ export function useDashboard(): UseDashboardReturn {
 
   const fetchAll = useCallback(async (signal?: AbortSignal) => {
     try {
-      const baseUrl = getDashboardBaseUrl()
-
-      // Fetch health from same origin (web channel port)
+      // All endpoints on same origin — web channel proxies /api/* to dashboard server
       const healthPromise = fetchJson<HealthData>('/health', signal)
-
-      // Fetch all dashboard endpoints (separate port)
-      const metricsPromise = fetchJson<MetricsData>(`${baseUrl}/api/metrics`, signal)
-      const triggersPromise = fetchJson<TriggerData[]>(`${baseUrl}/api/triggers`, signal)
-      const agentsPromise = fetchJson<AgentsData>(`${baseUrl}/api/agents`, signal)
-      const delegationsPromise = fetchJson<DelegationsData>(`${baseUrl}/api/delegations`, signal)
-      const consolidationPromise = fetchJson<ConsolidationData>(`${baseUrl}/api/consolidation`, signal)
-      const deploymentPromise = fetchJson<DeploymentData>(`${baseUrl}/api/deployment`, signal)
-      const maintenancePromise = fetchJson<MaintenanceData>(`${baseUrl}/api/maintenance`, signal)
+      const metricsPromise = fetchJson<MetricsData>('/api/metrics', signal)
+      const triggersPromise = fetchJson<TriggerData[]>('/api/triggers', signal)
+      const agentsPromise = fetchJson<AgentsData>('/api/agents', signal)
+      const delegationsPromise = fetchJson<DelegationsData>('/api/delegations', signal)
+      const consolidationPromise = fetchJson<ConsolidationData>('/api/consolidation', signal)
+      const deploymentPromise = fetchJson<DeploymentData>('/api/deployment', signal)
+      const maintenancePromise = fetchJson<MaintenanceData>('/api/maintenance', signal)
 
       const [
         health, metrics, triggers,
