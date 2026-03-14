@@ -18,6 +18,7 @@ import type {
   IChannelAdapter,
   IncomingMessage,
   ConfirmationRequest,
+  Attachment,
 } from "../channel.interface.js";
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
@@ -769,11 +770,31 @@ export class DiscordChannel implements IChannelAdapter {
       return;
     }
 
+    // Extract attachments from the Discord message
+    const attachments: Attachment[] = [];
+    if (message.attachments.size > 0) {
+      for (const [, att] of message.attachments) {
+        const type = att.contentType?.startsWith("image/") ? "image" as const
+          : att.contentType?.startsWith("video/") ? "video" as const
+          : att.contentType?.startsWith("audio/") ? "audio" as const
+          : "document" as const;
+
+        attachments.push({
+          type,
+          name: att.name ?? "attachment",
+          url: att.url,
+          mimeType: att.contentType ?? undefined,
+          size: att.size,
+        });
+      }
+    }
+
     const msg: IncomingMessage = {
       channelType: "discord",
       chatId: message.channelId,
       userId: message.author.id,
       text: message.content,
+      attachments: attachments.length > 0 ? attachments : undefined,
       replyTo: message.reference?.messageId ?? undefined,
       timestamp: message.createdAt,
     };

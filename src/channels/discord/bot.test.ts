@@ -228,6 +228,203 @@ describe("DiscordChannel", () => {
   });
 });
 
+describe("DiscordChannel attachment extraction", () => {
+  let channel: DiscordChannel;
+  let auth: AuthManager;
+  let messageCreateHandler: (message: Record<string, unknown>) => Promise<void>;
+
+  beforeEach(() => {
+    auth = new AuthManager([], {
+      allowedDiscordIds: new Set(["allowed123"]),
+      allowedDiscordRoles: new Set(),
+    });
+
+    // Create channel — capture the MessageCreate handler
+    channel = new DiscordChannel("fake-token", auth, {
+      guildId: "guild123",
+    });
+
+    const client = channel.getClient();
+    const onCalls = (client.on as ReturnType<typeof vi.fn>).mock.calls;
+    const mcEntry = onCalls.find(
+      (c: unknown[]) => c[0] === "messageCreate"
+    );
+    messageCreateHandler = mcEntry![1] as (message: Record<string, unknown>) => Promise<void>;
+  });
+
+  function makeMessage(overrides: Record<string, unknown> = {}) {
+    return {
+      author: { bot: false, id: "allowed123" },
+      channelId: "ch1",
+      content: "hello",
+      reference: null,
+      createdAt: new Date(),
+      attachments: new Map(),
+      channel: { isTextBased: () => true, sendTyping: vi.fn() },
+      reply: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it("should pass attachments=undefined when message has no attachments", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+
+    await messageCreateHandler(makeMessage());
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const msg = handler.mock.calls[0][0];
+    expect(msg.attachments).toBeUndefined();
+  });
+
+  it("should extract image attachment", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+
+    const attachments = new Map([
+      ["1", {
+        name: "photo.png",
+        url: "https://cdn.discord.com/photo.png",
+        contentType: "image/png",
+        size: 12345,
+      }],
+    ]);
+
+    await messageCreateHandler(makeMessage({ attachments }));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const msg = handler.mock.calls[0][0];
+    expect(msg.attachments).toHaveLength(1);
+    expect(msg.attachments[0]).toEqual({
+      type: "image",
+      name: "photo.png",
+      url: "https://cdn.discord.com/photo.png",
+      mimeType: "image/png",
+      size: 12345,
+    });
+  });
+
+  it("should extract video attachment", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+
+    const attachments = new Map([
+      ["1", {
+        name: "clip.mp4",
+        url: "https://cdn.discord.com/clip.mp4",
+        contentType: "video/mp4",
+        size: 999999,
+      }],
+    ]);
+
+    await messageCreateHandler(makeMessage({ attachments }));
+
+    const msg = handler.mock.calls[0][0];
+    expect(msg.attachments).toHaveLength(1);
+    expect(msg.attachments[0].type).toBe("video");
+  });
+
+  it("should extract audio attachment", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+
+    const attachments = new Map([
+      ["1", {
+        name: "voice.ogg",
+        url: "https://cdn.discord.com/voice.ogg",
+        contentType: "audio/ogg",
+        size: 5000,
+      }],
+    ]);
+
+    await messageCreateHandler(makeMessage({ attachments }));
+
+    const msg = handler.mock.calls[0][0];
+    expect(msg.attachments).toHaveLength(1);
+    expect(msg.attachments[0].type).toBe("audio");
+  });
+
+  it("should default to document type for unknown content types", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+
+    const attachments = new Map([
+      ["1", {
+        name: "data.zip",
+        url: "https://cdn.discord.com/data.zip",
+        contentType: "application/zip",
+        size: 50000,
+      }],
+    ]);
+
+    await messageCreateHandler(makeMessage({ attachments }));
+
+    const msg = handler.mock.calls[0][0];
+    expect(msg.attachments).toHaveLength(1);
+    expect(msg.attachments[0].type).toBe("document");
+  });
+
+  it("should handle null contentType as document", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+
+    const attachments = new Map([
+      ["1", {
+        name: null,
+        url: "https://cdn.discord.com/unknown",
+        contentType: null,
+        size: 100,
+      }],
+    ]);
+
+    await messageCreateHandler(makeMessage({ attachments }));
+
+    const msg = handler.mock.calls[0][0];
+    expect(msg.attachments).toHaveLength(1);
+    expect(msg.attachments[0]).toEqual({
+      type: "document",
+      name: "attachment",
+      url: "https://cdn.discord.com/unknown",
+      mimeType: undefined,
+      size: 100,
+    });
+  });
+
+  it("should extract multiple attachments of mixed types", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+
+    const attachments = new Map([
+      ["1", {
+        name: "photo.jpg",
+        url: "https://cdn.discord.com/photo.jpg",
+        contentType: "image/jpeg",
+        size: 1000,
+      }],
+      ["2", {
+        name: "readme.txt",
+        url: "https://cdn.discord.com/readme.txt",
+        contentType: "text/plain",
+        size: 200,
+      }],
+      ["3", {
+        name: "song.mp3",
+        url: "https://cdn.discord.com/song.mp3",
+        contentType: "audio/mpeg",
+        size: 3000,
+      }],
+    ]);
+
+    await messageCreateHandler(makeMessage({ attachments }));
+
+    const msg = handler.mock.calls[0][0];
+    expect(msg.attachments).toHaveLength(3);
+    expect(msg.attachments[0].type).toBe("image");
+    expect(msg.attachments[1].type).toBe("document");
+    expect(msg.attachments[2].type).toBe("audio");
+  });
+});
+
 describe("DiscordChannel with auth checks", () => {
   it("should check user authorization", () => {
     const auth = new AuthManager([], {
