@@ -1788,6 +1788,11 @@ export function loadConfig(): Config {
   // Apply system preset if configured (env vars override preset values)
   const presetName = process.env["SYSTEM_PRESET"];
   const preset = presetName ? getPreset(presetName) : undefined;
+  if (presetName && !preset) {
+    throw new Error(
+      `Invalid SYSTEM_PRESET "${presetName}". Valid values: free, budget, balanced, performance, premium`,
+    );
+  }
 
   // Parse per-provider model overrides (manual env > preset > defaults)
   const providerModels: Record<string, string> = {};

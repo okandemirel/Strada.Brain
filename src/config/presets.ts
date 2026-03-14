@@ -139,7 +139,7 @@ export const SYSTEM_PRESETS: Record<PresetName, SystemPreset> = {
     },
     delegationTierLocal: "ollama:llama3.3",
     delegationTierCheap: "deepseek:deepseek-chat",
-    delegationTierStandard: "gemini:gemini-3-flash-preview",
+    delegationTierStandard: "deepseek:deepseek-chat",
     delegationTierPremium: "gemini:gemini-3-flash-preview",
     embeddingProvider: "openai",
     embeddingModel: "text-embedding-3-small",
@@ -197,10 +197,11 @@ export const SYSTEM_PRESETS: Record<PresetName, SystemPreset> = {
     label: "Premium ($50-100/mo)",
     description: "Claude Opus 4.6 + GPT-5.2 fallback. Maximum intelligence, no compromises.",
     estimatedMonthlyCost: "$50-100",
-    providerChain: "claude,openai",
+    providerChain: "claude,openai,deepseek",
     providerModels: {
       claude: "claude-opus-4-6-20250514",    // $5/$25 per 1M, frontier
       openai: "gpt-5.2",                     // $1.75/$14 per 1M (fallback)
+      deepseek: "deepseek-chat",             // $0.28/$0.42 per 1M (cheap delegation)
     },
     delegationTierLocal: "ollama:llama3.3",
     delegationTierCheap: "deepseek:deepseek-chat",
