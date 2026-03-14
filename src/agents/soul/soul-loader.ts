@@ -105,6 +105,12 @@ export class SoulLoader {
   private async validateFilePath(fileName: string): Promise<string | null> {
     const logger = getLogger();
 
+    // Reject null bytes
+    if (fileName.includes("\0")) {
+      logger.warn("Soul file rejected — null byte in path", { file: fileName });
+      return null;
+    }
+
     // Reject absolute paths
     if (fileName.startsWith("/") || fileName.startsWith("\\") || /^[a-zA-Z]:/.test(fileName)) {
       logger.warn("Soul file rejected — absolute path not allowed", { file: fileName });

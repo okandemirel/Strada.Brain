@@ -21,12 +21,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - SSRF protection: `isUrlSafeToFetch()` blocks private IPs, metadata endpoints, rejects redirects
 - Streaming download with incremental size enforcement (prevents OOM from chunked responses)
 - `mimeToAttachmentType()` shared helper for consistent MIME classification across channels
+- SOUL.md agent personality system with hot-reload and per-channel overrides (`SOUL_FILE_{CHANNEL}` env vars)
+- Personality profiles: casual, formal, minimal (in `profiles/` directory)
+- `switch_personality` tool for runtime personality switching (casual/formal/minimal/default)
+- `ask_user` tool for LLM-driven clarification questions with multiple-choice options and recommended answer
+- `show_plan` tool for execution plan approval workflow (Approve/Modify/Reject)
+- React + Vite web portal replacing vanilla HTML/JS (dark/light theme, file upload, streaming responses)
+- Dashboard tab in web portal with full metrics (system health, tokens, tools, agent performance, daemon, deployment)
+- Collapsible side panel in web portal with agent status and session info
 
 ### Security
 - SSRF protection on all media download URLs (private IP blocklist, redirect rejection)
 - Media validation enforced across all channels: MIME allowlist, per-type size limits, magic bytes
 - Telegram bot token sanitized from download URL logs
 - Web channel error messages no longer leak internal details
+- IPv6 SSRF bypass vector blocked in media download
+- WhatsApp video/audio/document now validated with actual file size (was size:0 bypass)
+- Discord image attachments now downloaded and magic-bytes validated
+
+### Fixed
+- trimSession now preserves tool_call/tool_result pairs (prevents Kimi API 400 errors)
+- Conversation persistence after every message exchange (agent remembers across sessions)
+- Task progress spam suppressed — user sees only final results
+- Task failure shows generic error message (no internal API error leakage)
 
 ### Changed
 - README tool descriptions now reflect `BurstSystem` scaffolding instead of the old `SystemGroup` wording

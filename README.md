@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>AI-Powered Development Agent for Unity / Strada.Core Projects</strong><br/>
-  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, and media sharing with LLM vision support.
+  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, and interactive clarification tools.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3180%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3220%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
@@ -505,6 +505,12 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `DELEGATION_ENABLED` | `false` | Enable task delegation between agents |
 | `DELEGATION_MAX_DEPTH` | `2` | Maximum delegation chain depth |
 | `DEPLOYMENT_ENABLED` | `false` | Enable deployment subsystem |
+| `SOUL_FILE` | `soul.md` | Path to the agent personality file (SOUL.md); hot-reloaded on change |
+| `SOUL_FILE_WEB` | (unset) | Per-channel personality override for the web channel |
+| `SOUL_FILE_TELEGRAM` | (unset) | Per-channel personality override for Telegram |
+| `SOUL_FILE_DISCORD` | (unset) | Per-channel personality override for Discord |
+| `SOUL_FILE_SLACK` | (unset) | Per-channel personality override for Slack |
+| `SOUL_FILE_WHATSAPP` | (unset) | Per-channel personality override for WhatsApp |
 | `READ_ONLY_MODE` | `false` | Block all write operations |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` |
 
@@ -577,6 +583,13 @@ The agent has 40+ built-in tools organized by category:
 |------|-------------|
 | `dotnet_build` | Run `dotnet build`, parse MSBuild errors into structured output |
 | `dotnet_test` | Run `dotnet test`, parse pass/fail/skip results |
+
+### Agent Interaction
+| Tool | Description |
+|------|-------------|
+| `ask_user` | Ask the user a clarifying question with multiple-choice options and a recommended answer |
+| `show_plan` | Show the execution plan and wait for user approval (Approve/Modify/Reject) |
+| `switch_personality` | Switch agent personality at runtime (casual/formal/minimal/default) |
 
 ### Other
 | Tool | Description |
@@ -766,15 +779,18 @@ src/
     autonomy/           # Error recovery, task planning, self-verification
     context/            # System prompt (Strada.Core knowledge base)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + more
-    tools/              # 30+ tool implementations
+    tools/              # 30+ tool implementations (ask_user, show_plan, switch_personality, ...)
+    soul/               # SOUL.md personality loader with hot-reload and per-channel overrides
     plugins/            # External plugin loader
+  profiles/             # Personality profile files: casual.md, formal.md, minimal.md
   channels/
     telegram/           # Grammy-based bot
     discord/            # discord.js bot with slash commands
     slack/              # Slack Bolt (socket mode) with Block Kit
     whatsapp/           # Baileys-based client with session management
-    web/                # Express + WebSocket web dashboard
+    web/                # Express + WebSocket web channel
     cli/                # Readline REPL
+  web-portal/           # React + Vite chat UI (dark/light theme, file upload, streaming, dashboard tab, side panel)
   memory/
     file-memory-manager.ts   # Legacy backend: JSON + TF-IDF (fallback)
     unified/
