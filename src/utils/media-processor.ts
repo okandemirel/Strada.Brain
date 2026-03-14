@@ -44,6 +44,14 @@ export const ALLOWED_DOCUMENT_TYPES = new Set([
   "text/csv",
 ]);
 
+/** Combined set of all allowed MIME types (hoisted to avoid per-call allocation). */
+const ALL_ALLOWED_TYPES = new Set([
+  ...ALLOWED_IMAGE_TYPES,
+  ...ALLOWED_VIDEO_TYPES,
+  ...ALLOWED_AUDIO_TYPES,
+  ...ALLOWED_DOCUMENT_TYPES,
+]);
+
 // ── Magic Bytes ──────────────────────────────────────────────────────────────
 
 const MAGIC_BYTES: Record<string, { offset: number; bytes: number[] }[]> = {
@@ -93,15 +101,7 @@ export function validateMediaAttachment(input: ValidationInput): MediaValidation
     return { valid: false, reason: "Missing file size" };
   }
 
-  // Check MIME type is allowed
-  const allAllowed = new Set([
-    ...ALLOWED_IMAGE_TYPES,
-    ...ALLOWED_VIDEO_TYPES,
-    ...ALLOWED_AUDIO_TYPES,
-    ...ALLOWED_DOCUMENT_TYPES,
-  ]);
-
-  if (!allAllowed.has(mimeType)) {
+  if (!ALL_ALLOWED_TYPES.has(mimeType)) {
     return { valid: false, reason: `Unsupported media type: ${mimeType}` };
   }
 
@@ -164,14 +164,20 @@ const DOWNLOAD_TIMEOUT_MS = 30_000;
  * Download media from a URL. Returns null on failure.
  * Validates content-length before downloading body.
  */
-export async function downloadMedia(url: string): Promise<DownloadedMedia | null> {
+export async function downloadMedia(
+  url: string,
+  options?: { headers?: Record<string, string> },
+): Promise<DownloadedMedia | null> {
   const logger = getLogger();
 
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
 
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: options?.headers,
+    });
     clearTimeout(timeout);
 
     if (!response.ok) {
@@ -179,16 +185,25 @@ export async function downloadMedia(url: string): Promise<DownloadedMedia | null
       return null;
     }
 
-    // Check content-length before downloading
-    const contentLength = parseInt(response.headers.get("content-length") ?? "0", 10);
-    if (contentLength > DOWNLOAD_MAX_BYTES) {
-      logger.warn("Media too large", { url, contentLength });
-      return null;
+    // Check content-length before downloading (only when header is present)
+    const rawLength = response.headers.get("content-length");
+    if (rawLength !== null) {
+      const contentLength = parseInt(rawLength, 10);
+      if (!isNaN(contentLength) && contentLength > DOWNLOAD_MAX_BYTES) {
+        logger.warn("Media too large", { url, contentLength });
+        return null;
+      }
     }
 
     const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "application/octet-stream";
     const arrayBuffer = await response.arrayBuffer();
     const data = Buffer.from(arrayBuffer);
+
+    // Post-download size check for responses without content-length
+    if (data.length > DOWNLOAD_MAX_BYTES) {
+      logger.warn("Downloaded media exceeds size limit", { url, size: data.length });
+      return null;
+    }
 
     return {
       data,
@@ -210,4 +225,17 @@ export async function downloadMedia(url: string): Promise<DownloadedMedia | null
  */
 export function isVisionCompatible(mimeType: string): boolean {
   return ALLOWED_IMAGE_TYPES.has(mimeType);
+}
+
+/**
+ * Classify a MIME type into an Attachment type category.
+ */
+export function mimeToAttachmentType(
+  mimeType: string | undefined | null,
+): "image" | "video" | "audio" | "document" {
+  if (!mimeType) return "document";
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  return "document";
 }
