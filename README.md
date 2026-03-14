@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>AI-Powered Development Agent for Unity / Strada.Core Projects</strong><br/>
-  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, and a deployment subsystem with approval gates.
+  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, and media sharing with LLM vision support.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3100%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3180%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
@@ -170,7 +170,7 @@ Once running, send a message through your configured channel:
 
 ### How the Agent Loop Works
 
-1. **Message arrives** from a chat channel
+1. **Message arrives** from a chat channel (text, images, video, audio, or documents)
 2. **Memory retrieval** -- AgentDB hybrid search (70% semantic HNSW + 30% TF-IDF) finds the most relevant past conversations
 3. **RAG retrieval** -- semantic search over your C# codebase (HNSW vectors, top 6 results)
 4. **Instinct retrieval** -- proactively queries learned patterns relevant to the task (semantic + keyword matching)
@@ -531,7 +531,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 
 ## Tools
 
-The agent has 30+ built-in tools organized by category:
+The agent has 40+ built-in tools organized by category:
 
 ### File Operations
 | Tool | Description |
@@ -613,10 +613,11 @@ The RAG (Retrieval-Augmented Generation) pipeline indexes your C# source code fo
 | Capability | Web | Telegram | Discord | Slack | WhatsApp | CLI |
 |------------|-----|----------|---------|-------|----------|-----|
 | Text messaging | Yes | Yes | Yes | Yes | Yes | Yes |
+| Media attachments | Yes (base64) | Yes (photo/doc/video/voice) | Yes (any attachment) | Yes (file download) | Yes (image/video/audio/doc) | No |
+| Vision (image→LLM) | Yes | Yes | Yes | Yes | Yes | No |
 | Streaming (edit-in-place) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Typing indicator | Yes | Yes | Yes | No-op | Yes | No |
 | Confirmation dialogs | Yes (modal) | Yes (inline keyboard) | Yes (buttons) | Yes (Block Kit) | Yes (numbered reply) | Yes (readline) |
-| File uploads | Yes | No | No | Yes | Yes | No |
 | Thread support | No | No | Yes | Yes | No | No |
 | Rate limiter (outbound) | Yes (per-session) | No | Yes (token bucket) | Yes (4-tier sliding window) | Inline throttle | No |
 
@@ -644,22 +645,25 @@ Per-user sliding window (minute/hour) + global daily/monthly token and USD budge
 ### Layer 3: Path Guard
 Every file operation resolves symlinks and validates the path stays within the project root. 30+ sensitive patterns are blocked (`.env`, `.git/credentials`, SSH keys, certificates, `node_modules/`).
 
-### Layer 4: Secret Sanitizer
+### Layer 4: Media Security
+All media attachments are validated before processing: MIME allowlist (image/video/audio/document), per-type size limits (20MB image, 50MB video, 25MB audio, 10MB document), magic bytes verification (JPEG, PNG, GIF, WebP, MP4, PDF), and SSRF protection on download URLs (blocks private IPs, metadata endpoints, rejects redirects).
+
+### Layer 5: Secret Sanitizer
 24 regex patterns detect and mask credentials in all tool outputs before they reach the LLM. Covers: OpenAI keys, GitHub tokens, Slack/Discord/Telegram tokens, AWS keys, JWTs, Bearer auth, PEM keys, database URLs, and generic secret patterns.
 
-### Layer 5: Read-Only Mode
+### Layer 6: Read-Only Mode
 When `READ_ONLY_MODE=true`, 23 write tools are removed from the agent's tool list entirely -- the LLM cannot even attempt to call them.
 
-### Layer 6: Operation Confirmation
+### Layer 7: Operation Confirmation
 Write operations (file writes, git commits, shell execution) can require user confirmation via the channel's interactive UI (buttons, inline keyboards, text prompts).
 
-### Layer 7: Tool Output Sanitization
+### Layer 8: Tool Output Sanitization
 All tool results are capped at 8192 characters and scrubbed for API key patterns before feeding back to the LLM.
 
-### Layer 8: RBAC (Internal)
+### Layer 9: RBAC (Internal)
 5 roles (superadmin, admin, developer, viewer, service) with a permission matrix covering 9 resource types. Policy engine supports time-based, IP-based, and custom conditions.
 
-### Layer 9: Daemon Security
+### Layer 10: Daemon Security
 `DaemonSecurityPolicy` enforces tool-level approval requirements for daemon-triggered operations. Write tools require explicit user approval via the `ApprovalQueue` before execution.
 
 ---
@@ -865,6 +869,8 @@ src/
     metrics-storage.ts  # SQLite metrics storage
     metrics-recorder.ts # Per-session metric capture
     metrics-cli.ts      # CLI metrics display command
+  utils/
+    media-processor.ts  # Media download, validation (MIME/size/magic bytes), SSRF protection
   security/             # Auth, RBAC, path guard, rate limiter, secret sanitizer
   intelligence/         # C# parsing, project analysis, code quality
   dashboard/            # HTTP, WebSocket, Prometheus dashboards
