@@ -1,0 +1,110 @@
+/** Incoming message types from the WebSocket server */
+
+export interface ConnectedMessage {
+  type: 'connected'
+  chatId: string
+}
+
+export interface TextMessage {
+  type: 'text'
+  text: string
+  messageId?: string
+}
+
+export interface MarkdownMessage {
+  type: 'markdown'
+  text: string
+  messageId?: string
+}
+
+export interface StreamStartMessage {
+  type: 'stream_start'
+  streamId: string
+  text: string
+}
+
+export interface StreamUpdateMessage {
+  type: 'stream_update'
+  streamId: string
+  text: string
+}
+
+export interface StreamEndMessage {
+  type: 'stream_end'
+  streamId: string
+  text: string
+}
+
+export interface ConfirmationMessage {
+  type: 'confirmation'
+  confirmId: string
+  question: string
+  options: string[]
+  details?: string
+}
+
+export interface TypingMessage {
+  type: 'typing'
+  active: boolean
+}
+
+export type IncomingMessage =
+  | ConnectedMessage
+  | TextMessage
+  | MarkdownMessage
+  | StreamStartMessage
+  | StreamUpdateMessage
+  | StreamEndMessage
+  | ConfirmationMessage
+  | TypingMessage
+
+/** Outgoing message types to the WebSocket server */
+
+export interface SendMessage {
+  type: 'message'
+  text: string
+  attachments?: Attachment[]
+}
+
+export interface ConfirmationResponse {
+  type: 'confirmation_response'
+  confirmId: string
+  option: string
+}
+
+export interface ReconnectMessage {
+  type: 'reconnect'
+  chatId: string
+}
+
+export type OutgoingMessage = SendMessage | ConfirmationResponse | ReconnectMessage
+
+/** Attachment for file uploads */
+export interface Attachment {
+  name: string
+  type: string
+  data: string // base64
+  size: number
+}
+
+/** Chat message for display */
+export interface ChatMessage {
+  id: string
+  sender: 'user' | 'assistant'
+  text: string
+  isMarkdown: boolean
+  isStreaming?: boolean
+  streamId?: string
+  timestamp: number
+}
+
+/** Connection status */
+export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting'
+
+/** Confirmation dialog state */
+export interface ConfirmationState {
+  confirmId: string
+  question: string
+  options: string[]
+  details?: string
+}
