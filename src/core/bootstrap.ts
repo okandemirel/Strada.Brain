@@ -16,6 +16,7 @@ import { ClaudeProvider } from "../agents/providers/claude.js";
 import { buildProviderChain } from "../agents/providers/provider-registry.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
 import { Orchestrator } from "../agents/orchestrator.js";
+import { SoulLoader } from "../agents/soul/index.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { DashboardServer } from "../dashboard/server.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
@@ -411,6 +412,19 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     dashboard.registerServices({ memoryManager, channel, metricsStorage, learningStorage: learningResult.storage, goalStorage, chainResilienceConfig: config.toolChain.resilience });
   }
 
+  // Initialize soul personality system
+  const soulOverrides: Record<string, string> = {};
+  for (const channel of ["telegram", "discord", "slack", "whatsapp", "web"] as const) {
+    const envValue = process.env[`SOUL_FILE_${channel.toUpperCase()}`];
+    if (envValue) soulOverrides[channel] = envValue;
+  }
+
+  const soulLoader = new SoulLoader(config.unityProjectPath, {
+    soulFile: process.env.SOUL_FILE ?? "soul.md",
+    channelOverrides: Object.keys(soulOverrides).length > 0 ? soulOverrides : undefined,
+  });
+  await soulLoader.initialize();
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -434,6 +448,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     crashRecoveryContext: crashContext ?? undefined,
     reRetrievalConfig: config.reRetrieval,
     embeddingProvider: cachedEmbeddingProvider,
+    soulLoader,
   });
 
   // Initialize tool chain synthesis (TOOL-01 through TOOL-05)
@@ -1068,6 +1083,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       agentManager,
       delegationManager,
       stoppableServers,
+      soulLoader,
     }),
   };
 }
@@ -1862,6 +1878,7 @@ interface ShutdownOptions {
   agentManager?: AgentManagerType;
   delegationManager?: DelegationManagerType;
   stoppableServers?: Array<{ stop(): Promise<void> | void }>;
+  soulLoader?: SoulLoader;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -1876,6 +1893,11 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
       logger.info("Shutting down Strada Brain...");
 
       clearInterval(cleanupInterval);
+
+      // Stop soul file watchers
+      if (options.soulLoader) {
+        options.soulLoader.shutdown();
+      }
 
       // Stop reporting before heartbeat loop
       if (options.digestReporter) {

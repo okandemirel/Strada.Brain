@@ -1,0 +1,124 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { SoulLoader } from "./soul-loader.js";
+import { writeFile, unlink, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+
+vi.mock("../../utils/logger.js", () => ({
+  getLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
+describe("SoulLoader", () => {
+  let testDir: string;
+  let loader: SoulLoader;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `soul-test-${randomUUID()}`);
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    if (loader) loader.shutdown();
+    try { await unlink(join(testDir, "soul.md")); } catch {}
+    try { await unlink(join(testDir, "soul-telegram.md")); } catch {}
+    try { await unlink(join(testDir, "my-soul.md")); } catch {}
+  });
+
+  it("loads default soul.md", async () => {
+    await writeFile(join(testDir, "soul.md"), "# Identity\nI am a test agent");
+    loader = new SoulLoader(testDir);
+    await loader.initialize();
+    expect(loader.getContent()).toBe("# Identity\nI am a test agent");
+  });
+
+  it("returns empty string when soul.md missing", async () => {
+    loader = new SoulLoader(testDir);
+    await loader.initialize();
+    expect(loader.getContent()).toBe("");
+  });
+
+  it("returns channel override when available", async () => {
+    await writeFile(join(testDir, "soul.md"), "default personality");
+    await writeFile(join(testDir, "soul-telegram.md"), "telegram personality");
+    loader = new SoulLoader(testDir, {
+      channelOverrides: { telegram: "soul-telegram.md" },
+    });
+    await loader.initialize();
+    expect(loader.getContent("telegram")).toBe("telegram personality");
+    expect(loader.getContent("web")).toBe("default personality");
+    expect(loader.getContent()).toBe("default personality");
+  });
+
+  it("falls back to default when channel override missing", async () => {
+    await writeFile(join(testDir, "soul.md"), "default personality");
+    loader = new SoulLoader(testDir, {
+      channelOverrides: { discord: "soul-discord.md" },
+    });
+    await loader.initialize();
+    expect(loader.getContent("discord")).toBe("default personality");
+  });
+
+  it("supports custom soul file name", async () => {
+    await writeFile(join(testDir, "my-soul.md"), "custom name");
+    loader = new SoulLoader(testDir, { soulFile: "my-soul.md" });
+    await loader.initialize();
+    expect(loader.getContent()).toBe("custom name");
+  });
+
+  it("shutdown clears cache and watchers", async () => {
+    await writeFile(join(testDir, "soul.md"), "content");
+    loader = new SoulLoader(testDir);
+    await loader.initialize();
+    expect(loader.getContent()).toBe("content");
+    loader.shutdown();
+    expect(loader.getContent()).toBe("");
+  });
+
+  // Security tests
+  describe("path traversal protection", () => {
+    it("rejects absolute path", async () => {
+      loader = new SoulLoader(testDir, { soulFile: "/etc/passwd" });
+      await loader.initialize();
+      expect(loader.getContent()).toBe("");
+    });
+
+    it("rejects .. traversal", async () => {
+      loader = new SoulLoader(testDir, { soulFile: "../../etc/passwd" });
+      await loader.initialize();
+      expect(loader.getContent()).toBe("");
+    });
+
+    it("rejects .. in channel override", async () => {
+      await writeFile(join(testDir, "soul.md"), "default");
+      loader = new SoulLoader(testDir, {
+        channelOverrides: { telegram: "../../../etc/passwd" },
+      });
+      await loader.initialize();
+      expect(loader.getContent("telegram")).toBe("default");
+    });
+  });
+
+  describe("file size limit", () => {
+    it("rejects files exceeding 10KB", async () => {
+      const bigContent = "x".repeat(11 * 1024); // 11KB
+      await writeFile(join(testDir, "soul.md"), bigContent);
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+      expect(loader.getContent()).toBe(""); // Rejected, falls back to empty
+    });
+
+    it("accepts files at exactly 10KB", async () => {
+      const content = "x".repeat(10 * 1024); // exactly 10KB
+      await writeFile(join(testDir, "soul.md"), content);
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+      expect(loader.getContent()).toBe(content);
+    });
+  });
+});

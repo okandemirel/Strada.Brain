@@ -51,6 +51,7 @@ import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.j
 import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
 import { parseGoalBlock, buildGoalTreeFromBlock } from "../goals/types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
+import type { SoulLoader } from "./soul/index.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -176,6 +177,7 @@ export class Orchestrator {
   private pendingResumeTrees: GoalTree[];
   /** TaskManager reference for inline goal detection submission (lazy setter) */
   private taskManager: TaskManager | null = null;
+  private readonly soulLoader: SoulLoader | null;
   private readonly dmPolicy: DMPolicy;
   private readonly lastPersistTime = new Map<string, number>();
 
@@ -201,6 +203,7 @@ export class Orchestrator {
     crashRecoveryContext?: CrashRecoveryContext;
     reRetrievalConfig?: ReRetrievalConfig;
     embeddingProvider?: IEmbeddingProvider;
+    soulLoader?: SoulLoader;
     dmPolicyConfig?: Partial<DMPolicyConfig>;
   }) {
     this.providerManager = opts.providerManager;
@@ -220,6 +223,7 @@ export class Orchestrator {
     this.pendingResumeTrees = opts.interruptedGoalTrees ?? [];
     this.reRetrievalConfig = opts.reRetrievalConfig;
     this.embeddingProvider = opts.embeddingProvider;
+    this.soulLoader = opts.soulLoader ?? null;
     this.dmPolicy = new DMPolicy(opts.channel, opts.dmPolicyConfig);
 
     // Build tool registry
@@ -285,6 +289,14 @@ export class Orchestrator {
     this.taskManager = tm;
   }
 
+  /** Append soul personality section to a system prompt if available. */
+  private injectSoulPersonality(systemPrompt: string, channelType?: string): string {
+    if (!this.soulLoader) return systemPrompt;
+    const soulContent = this.soulLoader.getContent(channelType);
+    if (!soulContent) return systemPrompt;
+    return systemPrompt + `\n\n## Agent Personality\n\n${soulContent}\n`;
+  }
+
   /**
    * Handle an incoming message from any channel.
    * Uses a per-session lock to prevent concurrent processing.
@@ -345,7 +357,8 @@ export class Orchestrator {
     };
 
     // Build system prompt with memory/RAG context
-    let systemPrompt = this.systemPrompt;
+    let systemPrompt = this.injectSoulPersonality(this.systemPrompt, options.channelType);
+
     const bgInitialContentHashes: string[] = [];
     if (this.memoryManager) {
       try {
@@ -763,7 +776,8 @@ export class Orchestrator {
     const provider = this.providerManager.getProvider(chatId);
 
     // Retrieve relevant memory context for the first iteration
-    let systemPrompt = this.systemPrompt;
+    let systemPrompt = this.injectSoulPersonality(this.systemPrompt, channelType);
+
     const initialContentHashes: string[] = [];
     if (this.memoryManager && session.messages.length > 0) {
       const lastUserMsg = [...session.messages]
