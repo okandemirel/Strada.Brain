@@ -22,7 +22,7 @@ import type {
 } from "../channel.interface.js";
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
-import { mimeToAttachmentType, validateMediaAttachment } from "../../utils/media-processor.js";
+import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 import { DiscordRateLimiter } from "./rate-limiter.js";
 import { formatToDiscordMarkdown, truncateForDiscord } from "./formatters.js";
 import type { SlashCommand } from "./commands.js";
@@ -778,12 +778,27 @@ export class DiscordChannel implements IChannelAdapter {
         const type = mimeToAttachmentType(att.contentType);
         const v = validateMediaAttachment({ mimeType: att.contentType ?? undefined, size: att.size, type });
         if (!v.valid) continue; // Skip unsupported or oversized files
+
+        let data: Buffer | undefined;
+        // Download image data for vision support + magic bytes validation
+        if (type === "image" && att.url) {
+          try {
+            const downloaded = await downloadMedia(att.url);
+            if (downloaded && validateMagicBytes(downloaded.data, downloaded.mimeType)) {
+              data = downloaded.data;
+            }
+          } catch {
+            // Non-critical — proceed with URL only
+          }
+        }
+
         attachments.push({
           type,
           name: att.name ?? "attachment",
           url: att.url,
           mimeType: att.contentType ?? undefined,
           size: att.size,
+          data,
         });
       }
     }

@@ -185,64 +185,71 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
 
           // 4.4 Detect media attachments
           const attachments: Attachment[] = [];
+          const mediaEntries: Array<{
+            type: Attachment["type"];
+            name: string;
+            mime: string;
+            url: string | undefined;
+          }> = [];
+
           if (msg.message.imageMessage) {
-            const mime = msg.message.imageMessage.mimetype ?? "image/jpeg";
-            const imgUrl = msg.message.imageMessage.url;
-            let imgData: Buffer | undefined;
-            if (imgUrl) {
-              try {
-                const downloaded = await downloadMedia(imgUrl);
-                if (downloaded) {
-                  const v = validateMediaAttachment({ mimeType: mime, size: downloaded.size, type: "image" });
-                  if (v.valid && validateMagicBytes(downloaded.data, downloaded.mimeType)) {
-                    imgData = downloaded.data;
-                  }
-                }
-              } catch {
-                // Non-critical — proceed with URL only
-              }
-            }
-            attachments.push({
+            mediaEntries.push({
               type: "image",
               name: "image",
-              mimeType: mime,
-              url: imgUrl ?? undefined,
-              data: imgData,
+              mime: msg.message.imageMessage.mimetype ?? "image/jpeg",
+              url: msg.message.imageMessage.url,
             });
           }
           if (msg.message.documentMessage) {
-            const docMime = msg.message.documentMessage.mimetype ?? "application/octet-stream";
-            const v = validateMediaAttachment({ mimeType: docMime, size: 0, type: "document" });
-            if (v.valid) {
-              attachments.push({
-                type: "document",
-                name: msg.message.documentMessage.fileName ?? "document",
-                mimeType: docMime,
-                url: msg.message.documentMessage.url ?? undefined,
-              });
-            }
+            mediaEntries.push({
+              type: "document",
+              name: msg.message.documentMessage.fileName ?? "document",
+              mime: msg.message.documentMessage.mimetype ?? "application/octet-stream",
+              url: msg.message.documentMessage.url,
+            });
           }
           if (msg.message.videoMessage) {
-            const videoMime = msg.message.videoMessage.mimetype ?? "video/mp4";
-            const v = validateMediaAttachment({ mimeType: videoMime, size: 0, type: "video" });
-            if (v.valid) {
-              attachments.push({
-                type: "video",
-                name: "video.mp4",
-                mimeType: videoMime,
-                url: msg.message.videoMessage.url ?? undefined,
-              });
-            }
+            mediaEntries.push({
+              type: "video",
+              name: "video.mp4",
+              mime: msg.message.videoMessage.mimetype ?? "video/mp4",
+              url: msg.message.videoMessage.url,
+            });
           }
           if (msg.message.audioMessage) {
-            const audioMime = msg.message.audioMessage.mimetype ?? "audio/ogg";
-            const v = validateMediaAttachment({ mimeType: audioMime, size: 0, type: "audio" });
-            if (v.valid) {
+            mediaEntries.push({
+              type: "audio",
+              name: "audio.ogg",
+              mime: msg.message.audioMessage.mimetype ?? "audio/ogg",
+              url: msg.message.audioMessage.url,
+            });
+          }
+
+          for (const entry of mediaEntries) {
+            let data: Buffer | undefined;
+            if (entry.url) {
+              try {
+                const downloaded = await downloadMedia(entry.url);
+                if (downloaded) {
+                  // Use server-returned MIME for consistent validation (not WhatsApp-declared)
+                  const effectiveMime = downloaded.mimeType || entry.mime;
+                  const v = validateMediaAttachment({ mimeType: effectiveMime, size: downloaded.size, type: entry.type });
+                  if (v.valid && validateMagicBytes(downloaded.data, effectiveMime)) {
+                    data = downloaded.data;
+                  }
+                }
+              } catch {
+                // Non-critical -- proceed with URL only
+              }
+            }
+            if (data || entry.url) {
               attachments.push({
-                type: "audio",
-                name: "audio.ogg",
-                mimeType: audioMime,
-                url: msg.message.audioMessage.url ?? undefined,
+                type: entry.type,
+                name: entry.name,
+                mimeType: entry.mime,
+                url: entry.url ?? undefined,
+                data,
+                size: data?.length,
               });
             }
           }
