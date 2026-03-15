@@ -411,10 +411,10 @@ export class SetupWizard {
 
     this.json(res, 200, { success: true });
 
-    // Signal completion after a short delay so the response can be sent
+    // Signal completion after a delay so the response and any follow-up polling can be handled
     setTimeout(() => {
       if (this.onComplete) this.onComplete();
-    }, 500);
+    }, 2000);
   }
 
   private readBody(req: IncomingMessage): Promise<string> {
