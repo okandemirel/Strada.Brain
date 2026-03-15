@@ -173,8 +173,19 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
         process.exit(1);
       }
     } else {
+      // Non-web channels: offer setup wizard as a web-based option
       console.error(`Configuration error: ${configResult.error}`);
-      process.exit(1);
+      console.log(`\nStarting setup wizard on http://localhost:${wizardPort} — open in your browser to configure.`);
+      const wizard = new SetupWizard({ port: wizardPort });
+      await wizard.start();
+      console.log("Setup complete! Validating configuration...");
+      dotenv.config({ override: true });
+      resetConfigCache();
+      configResult = loadConfigSafe();
+      if (configResult.kind === "err") {
+        console.error(`Configuration still invalid: ${configResult.error}`);
+        process.exit(1);
+      }
     }
   }
 

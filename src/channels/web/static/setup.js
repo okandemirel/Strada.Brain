@@ -675,7 +675,7 @@ async function saveConfig() {
         }
         if (attempts >= maxAttempts) {
           clearInterval(pollInterval);
-          status.textContent = "Agent is starting. Please refresh the page manually.";
+          status.textContent = "Setup complete! You can close this tab. Your agent is starting on the configured channel.";
         }
       }, 1000);
     } else {
