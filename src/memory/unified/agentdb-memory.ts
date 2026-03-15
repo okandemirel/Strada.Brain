@@ -6,7 +6,7 @@
  */
 
 import { join } from "node:path";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { configureSqlitePragmas, validateAndRepairSqlite } from "./sqlite-pragmas.js";
@@ -39,6 +39,7 @@ import type {
 } from "../../types/index.js";
 import { ok, err, some, none, createBrand } from "../../types/index.js";
 import { HnswWriteMutex } from "./hnsw-write-mutex.js";
+import { UserProfileStore } from "./user-profile-store.js";
 import { MS_PER_DAY } from "../../learning/types.js";
 import type { DecayStats, DecayTierStats, MemoryDecayConfig } from "../memory.interface.js";
 export type { MemoryDecayConfig } from "../memory.interface.js";
@@ -140,6 +141,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   private sqliteDb: Database.Database | null = null;
   private sqliteStatements: Map<string, Database.Statement> = new Map();
   private decayConfig: MemoryDecayConfig | null = null;
+  private userProfileStore: UserProfileStore | null = null;
 
   constructor(config: Partial<UnifiedMemoryConfig> = {}) {
     this.config = { ...DEFAULT_MEMORY_CONFIG, ...config };
@@ -176,6 +178,11 @@ export class AgentDBMemory implements IUnifiedMemory {
       // Initialize SQLite persistence
       this.initSqlite();
 
+      // Initialize user profile store (shares SQLite DB)
+      if (this.sqliteDb) {
+        this.userProfileStore = new UserProfileStore(this.sqliteDb);
+      }
+
       // Initialize HNSW vector store
       const vectorStorePath = join(this.dbPath, "hnsw");
       this.hnswStore = await createHNSWVectorStore(vectorStorePath, {
@@ -187,6 +194,9 @@ export class AgentDBMemory implements IUnifiedMemory {
         metric: "cosine",
         quantization: this.config.quantizationType,
       });
+
+      // Detect HNSW dimension mismatch (e.g. user switched embedding provider)
+      await this.detectAndHandleDimensionMismatch();
 
       // Load existing entries from AgentDB-style storage
       await this.loadEntries();
@@ -229,6 +239,14 @@ export class AgentDBMemory implements IUnifiedMemory {
     } catch (error) {
       return err(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // User Profile Store
+  // ---------------------------------------------------------------------------
+
+  getUserProfileStore(): UserProfileStore | null {
+    return this.userProfileStore;
   }
 
   // ---------------------------------------------------------------------------
@@ -1247,6 +1265,214 @@ export class AgentDBMemory implements IUnifiedMemory {
   // ---------------------------------------------------------------------------
   // Private Helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Detect if the existing HNSW index was built with a different vector dimension
+   * than the current config (e.g. user switched from OpenAI 1536 to Gemini 3072).
+   * If mismatch is found and an embedding provider is available, triggers a full
+   * re-embed + index rebuild. Otherwise logs a warning and continues.
+   */
+  private async detectAndHandleDimensionMismatch(): Promise<void> {
+    if (!this.hnswStore) return;
+
+    try {
+      // getHNSWStats may not exist if store is a partial mock or legacy implementation
+      if (typeof this.hnswStore.getHNSWStats !== "function") return;
+
+      const stats = this.hnswStore.getHNSWStats();
+      const indexDimensions = stats.config.dimensions;
+      const configDimensions = this.config.dimensions;
+
+      // No mismatch or empty index — nothing to do
+      if (indexDimensions === configDimensions || stats.elementCount === 0) {
+        return;
+      }
+
+      getLoggerSafe().warn("[AgentDBMemory] HNSW dimension mismatch detected", {
+        indexDimensions,
+        configDimensions,
+        existingElements: stats.elementCount,
+      });
+
+      if (!this.config.embeddingProvider) {
+        getLoggerSafe().warn(
+          "[AgentDBMemory] No embedding provider available — skipping HNSW rebuild. " +
+          "Hash-based fallback will be used, but semantic search quality will be degraded.",
+        );
+        return;
+      }
+
+      await this.rebuildHnswIndex();
+    } catch (error) {
+      getLoggerSafe().warn("[AgentDBMemory] Dimension mismatch detection failed, continuing", {
+        error: String(error),
+      });
+    }
+  }
+
+  /**
+   * Rebuild the HNSW index from scratch with the current config dimensions.
+   * Re-embeds all in-memory entries via the configured embedding provider.
+   * Individual entry failures are logged and skipped — they will not abort the rebuild.
+   */
+  private async rebuildHnswIndex(): Promise<void> {
+    getLoggerSafe().info("[AgentDBMemory] Starting HNSW index rebuild with new dimensions", {
+      dimensions: this.config.dimensions,
+    });
+
+    // Delete old HNSW index files so createHNSWVectorStore starts fresh
+    const vectorStorePath = join(this.dbPath, "hnsw");
+    try {
+      rmSync(vectorStorePath, { recursive: true, force: true });
+    } catch (e) {
+      getLoggerSafe().warn("[AgentDBMemory] Failed to remove old HNSW index files", {
+        error: String(e),
+      });
+    }
+
+    // Recreate HNSW store with correct dimensions
+    this.hnswStore = await createHNSWVectorStore(vectorStorePath, {
+      dimensions: this.config.dimensions,
+      maxElements: Object.values(this.config.maxEntriesPerTier).reduce((a, b) => a + b, 0),
+      M: this.config.hnswParams.M,
+      efConstruction: this.config.hnswParams.efConstruction,
+      efSearch: this.config.hnswParams.efSearch,
+      metric: "cosine",
+      quantization: this.config.quantizationType,
+    });
+
+    // Load entries from SQLite (entries map may be empty at this point during init)
+    // We need to load them first if they haven't been loaded yet
+    const hadEntries = this.entries.size > 0;
+    if (!hadEntries) {
+      // Temporarily load entries from SQLite without HNSW indexing
+      await this.loadEntriesWithoutHnsw();
+    }
+
+    const totalEntries = this.entries.size;
+    if (totalEntries === 0) {
+      getLoggerSafe().info("[AgentDBMemory] No entries to re-embed — rebuild complete");
+      return;
+    }
+
+    let succeeded = 0;
+    let failed = 0;
+    const store = this.hnswStore;
+
+    for (const entry of this.entries.values()) {
+      try {
+        // Re-embed the entry content
+        const newEmbedding = await this.generateEmbedding(entry.content);
+        (entry as unknown as { embedding: Vector<number> }).embedding = newEmbedding;
+
+        // Upsert into new HNSW index
+        await this.writeMutex.withLock(() =>
+          store.upsert([
+            {
+              id: entry.id as string,
+              vector: newEmbedding,
+              chunk: {
+                id: entry.id as string,
+                content: entry.content,
+                contentHash: "",
+                filePath: (entry.chatId as string) ?? "memory",
+                indexedAt: entry.createdAt as TimestampMs,
+                kind: "class" as const,
+                startLine: 0,
+                endLine: 0,
+                language: "typescript",
+              },
+              addedAt: entry.createdAt as TimestampMs,
+              accessCount: entry.accessCount,
+            },
+          ]),
+        );
+
+        // Persist updated embedding to SQLite
+        this.persistEntry(entry);
+
+        succeeded++;
+
+        // Log progress every 50 entries
+        if (succeeded % 50 === 0 || succeeded === totalEntries) {
+          getLoggerSafe().info(
+            `[AgentDBMemory] Re-embedding ${succeeded}/${totalEntries} entries...`,
+          );
+        }
+      } catch (entryError) {
+        failed++;
+        getLoggerSafe().warn("[AgentDBMemory] Failed to re-embed entry, skipping", {
+          entryId: entry.id as string,
+          error: String(entryError),
+        });
+      }
+    }
+
+    getLoggerSafe().info("[AgentDBMemory] HNSW index rebuild complete", {
+      succeeded,
+      failed,
+      totalEntries,
+      newDimensions: this.config.dimensions,
+    });
+  }
+
+  /**
+   * Load entries from SQLite into the in-memory map WITHOUT indexing into HNSW.
+   * Used during rebuild to populate this.entries before re-embedding.
+   */
+  private async loadEntriesWithoutHnsw(): Promise<void> {
+    if (!this.sqliteDb) return;
+
+    try {
+      const stmt = this.sqliteStatements.get("getAllMemories");
+      if (!stmt) return;
+
+      const rows = stmt.all() as MemoryRow[];
+
+      for (const row of rows) {
+        try {
+          const parsed = JSON.parse(row.value) as Record<string, unknown>;
+          const embedding = row.embedding ? this.bufferToEmbedding(row.embedding as Buffer) : null;
+
+          const baseEntry = {
+            id: createBrand(row.id, "MemoryId" as const),
+            type: parsed.type as string,
+            content: parsed.content as string,
+            createdAt: createBrand(row.created_at, "TimestampMs" as const),
+            tags: (parsed.tags as string[]) ?? [],
+            importance: (parsed.importance as string) ?? "medium",
+            archived: (parsed.archived as boolean) ?? false,
+            metadata: JSON.parse(row.metadata) as Record<string, unknown>,
+            embedding,
+            tier: (parsed.tier as MemoryTier) ?? MemoryTier.Ephemeral,
+            accessCount: (parsed.accessCount as number) ?? 0,
+            lastAccessedAt: createBrand(
+              (parsed.lastAccessedAt as number) ?? row.created_at,
+              "TimestampMs" as const,
+            ),
+            expiresAt: parsed.expiresAt
+              ? createBrand(parsed.expiresAt as number, "TimestampMs" as const)
+              : undefined,
+            hnswIndex: (parsed.hnswIndex as number) ?? 0,
+            version: (parsed.version as number) ?? 1,
+            importanceScore:
+              (parsed.importanceScore as NormalizedScore) ?? (0.5 as NormalizedScore),
+            domain: parsed.domain as string | undefined,
+            chatId: createBrand((parsed.chatId as string) ?? "default", "ChatId" as const),
+          };
+
+          const unifiedEntry = baseEntry as unknown as UnifiedMemoryEntry;
+          this.entries.set(row.id, unifiedEntry);
+        } catch {
+          // Skip corrupted rows silently during rebuild
+        }
+      }
+    } catch (error) {
+      getLoggerSafe().error("[AgentDBMemory] Failed to load entries for rebuild", {
+        error: String(error),
+      });
+    }
+  }
 
   private async generateEmbedding(text: string): Promise<Vector<number>> {
     if (this.config.embeddingProvider) {

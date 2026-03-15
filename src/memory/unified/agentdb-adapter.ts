@@ -35,6 +35,7 @@ import type {
 } from "../../types/index.js";
 import { ok, err, some, none } from "../../types/index.js";
 import type { AgentDBMemory } from "./agentdb-memory.js";
+import type { UserProfileStore } from "./user-profile-store.js";
 import { getLogger } from "../../utils/logger.js";
 
 function getLoggerSafe() {
@@ -51,6 +52,11 @@ export class AgentDBAdapter implements IMemoryManager {
   /** Get the underlying AgentDBMemory instance (for consolidation engine access, Phase 25) */
   getAgentDBMemory(): AgentDBMemory {
     return this.agentdb;
+  }
+
+  /** Get the user profile store (returns null if memory not initialized) */
+  getUserProfileStore(): UserProfileStore | null {
+    return this.agentdb.getUserProfileStore();
   }
 
   // =========================================================================
