@@ -35,6 +35,7 @@ import type {
 } from "../../types/index.js";
 import { ok, err, some, none } from "../../types/index.js";
 import type { AgentDBMemory } from "./agentdb-memory.js";
+import { MemoryTier } from "./unified-memory.interface.js";
 import type { UserProfileStore } from "./user-profile-store.js";
 import { getLogger } from "../../utils/logger.js";
 
@@ -150,7 +151,7 @@ export class AgentDBAdapter implements IMemoryManager {
         chatId,
         summary,
         options?.tags,
-        undefined, // tier defaults to Ephemeral
+        MemoryTier.Working,
         {
           userMessage: options?.userMessage,
           assistantMessage: options?.assistantMessage,

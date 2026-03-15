@@ -389,7 +389,7 @@ describe("AgentDBAdapter", () => {
         chatId,
         "test summary",
         ["a", "b"],
-        undefined,
+        MemoryTier.Working,
         { userMessage: undefined, assistantMessage: undefined },
       );
     });
@@ -405,7 +405,7 @@ describe("AgentDBAdapter", () => {
         "chat_2",
         "summary",
         undefined,
-        undefined,
+        MemoryTier.Working,
         { userMessage: undefined, assistantMessage: undefined },
       );
     });

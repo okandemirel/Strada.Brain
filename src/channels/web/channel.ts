@@ -89,13 +89,14 @@ export class WebChannel
   async connect(): Promise<void> {
     this.server = createServer((req, res) => this.handleHttp(req, res));
 
-    // maxPayload: 1 MiB prevents memory exhaustion from oversized frames.
+    // maxPayload: 25 MiB accommodates the 20 MB media validation limit with
+    // room for base64 overhead (~33% inflation).
     // verifyClient: reject WebSocket connections whose Origin header does not
     // match localhost, blocking cross-origin WebSocket hijacking from a
     // malicious page open in the same browser.
     this.wss = new WebSocketServer({
       server: this.server,
-      maxPayload: 1 * 1024 * 1024,
+      maxPayload: 25 * 1024 * 1024,
       verifyClient: ({ req }: { req: HttpReq }) => isAllowedOrigin(req.headers.origin),
     });
     this.wss.on("connection", (ws) => this.handleWsConnection(ws));
@@ -428,8 +429,22 @@ export class WebChannel
               : mimeType.startsWith("video/") ? "video"
               : mimeType.startsWith("audio/") ? "audio" : "file";
             const validation = validateMediaAttachment({ mimeType, size, type: attachType });
-            if (!validation.valid) continue;
-            if (buf && !validateMagicBytes(buf, mimeType)) continue;
+            if (!validation.valid) {
+              this.sendToClient(chatId, {
+                type: "text",
+                text: `File "${raw.name || 'attachment'}" was rejected: unsupported format or invalid content.`,
+                messageId: randomUUID(),
+              });
+              continue;
+            }
+            if (buf && !validateMagicBytes(buf, mimeType)) {
+              this.sendToClient(chatId, {
+                type: "text",
+                text: `File "${raw.name || 'attachment'}" was rejected: unsupported format or invalid content.`,
+                messageId: randomUUID(),
+              });
+              continue;
+            }
 
             attachments.push({
               type: attachType as Attachment["type"],

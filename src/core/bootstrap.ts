@@ -195,7 +195,18 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Phase 0: Resolve embedding provider (needed by both memory and RAG)
   const embeddingResult = await resolveAndCacheEmbeddings(config, logger);
-  const cachedEmbeddingProvider = embeddingResult.cachedProvider;
+  let cachedEmbeddingProvider = embeddingResult.cachedProvider;
+
+  // Verify embedding provider is actually reachable
+  if (cachedEmbeddingProvider) {
+    try {
+      await cachedEmbeddingProvider.embed(["test"]);
+      logger.info("Embedding provider verified");
+    } catch (err) {
+      logger.warn(`Embedding provider unreachable, falling back to hash embeddings: ${err instanceof Error ? err.message : String(err)}`);
+      cachedEmbeddingProvider = undefined;
+    }
+  }
 
   // Phase 1: Initialize independent services in parallel
   const [providerInit, memoryManager, channel] = await Promise.all([
@@ -1076,6 +1087,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   if (startupNotices.length > 0) {
     logger.warn("Startup capability notices", {
       notices: [...new Set(startupNotices)],
+    });
+  }
+
+  // Wire identity manager to dashboard even without daemon mode
+  if (dashboard && identityManager && !dashboard["identityManager"]) {
+    dashboard.setDaemonContext({
+      identityManager,
+      dashboardToken: config.websocketDashboard.authToken,
     });
   }
 

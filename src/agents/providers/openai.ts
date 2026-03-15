@@ -28,7 +28,7 @@ const REASONING_BLOCK_RE = /<reasoning>\s*\n[\s\S]*?\n\s*<\/reasoning>\s*\n*/g;
 /** Strip <reasoning> blocks from assistant messages before replay */
 export function stripReasoningBlocks(messages: OpenAIMessage[]): void {
   for (const msg of messages) {
-    if (msg.role === "assistant" && msg.content) {
+    if (msg.role === "assistant" && typeof msg.content === "string") {
       msg.content = msg.content.replace(REASONING_BLOCK_RE, "");
     }
   }
@@ -229,21 +229,37 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         if (typeof msg.content === "string") {
           result.push({ role: "user", content: msg.content });
         } else if (Array.isArray(msg.content)) {
-          // Convert MessageContent[] to OpenAI format
+          // Bundle text + image blocks into a single user message with content array.
+          // tool_result blocks become separate role:"tool" messages.
+          const contentParts: OpenAIContentPart[] = [];
           for (const block of msg.content as MessageContent[]) {
             if (block.type === "text") {
-              result.push({ role: "user", content: block.text });
+              contentParts.push({ type: "text", text: block.text });
             } else if (block.type === "image") {
-              const imageContent = block.source.type === "base64"
-                ? { type: "image_url" as const, image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` } }
-                : { type: "image_url" as const, image_url: { url: block.source.url } };
-              result.push({ role: "user", content: [imageContent] as unknown as string });
+              const url = block.source.type === "base64"
+                ? `data:${block.source.media_type};base64,${block.source.data}`
+                : block.source.url;
+              contentParts.push({ type: "image_url", image_url: { url } });
             } else if (block.type === "tool_result") {
+              // Flush accumulated content parts before the tool message
+              if (contentParts.length > 0) {
+                result.push({ role: "user", content: [...contentParts] });
+                contentParts.length = 0;
+              }
               result.push({
                 role: "tool",
                 tool_call_id: block.tool_use_id,
                 content: block.content,
               });
+            }
+          }
+          // Flush remaining content parts
+          if (contentParts.length > 0) {
+            // Optimisation: collapse to plain string when only a single text part
+            if (contentParts.length === 1 && contentParts[0]!.type === "text") {
+              result.push({ role: "user", content: contentParts[0]!.text });
+            } else {
+              result.push({ role: "user", content: contentParts });
             }
           }
         }
@@ -366,9 +382,14 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
 // --- OpenAI API types ---
 
+/** Content part for multimodal messages (text + image) */
+export type OpenAIContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface OpenAIMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | OpenAIContentPart[] | null;
   tool_calls?: Array<{
     id: string;
     type: "function";
