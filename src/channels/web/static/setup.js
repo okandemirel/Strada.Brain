@@ -628,12 +628,28 @@ async function saveConfig() {
 
     const data = await res.json();
     if (data.success) {
-      status.textContent = "Configuration saved! Restarting...";
+      status.textContent = "Configuration saved! Starting agent...";
       status.className = "save-status success";
-      setTimeout(() => {
-        status.textContent = "Reloading...";
-        window.location.reload();
-      }, 3000);
+      // Poll until the main web channel is ready (wizard server shuts down, app restarts)
+      let attempts = 0;
+      const maxAttempts = 30;
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        try {
+          const check = await fetch("/", { method: "HEAD" });
+          if (check.ok) {
+            clearInterval(pollInterval);
+            status.textContent = "Agent ready! Redirecting...";
+            window.location.href = "/";
+          }
+        } catch {
+          status.textContent = `Starting agent... (${attempts}s)`;
+        }
+        if (attempts >= maxAttempts) {
+          clearInterval(pollInterval);
+          status.textContent = "Setup complete! You can close this tab. Your agent is starting on the configured channel.";
+        }
+      }, 1000);
     } else {
       status.textContent = data.error || "Save failed.";
       status.className = "save-status error";
