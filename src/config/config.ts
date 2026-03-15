@@ -213,7 +213,10 @@ export type EnvVarName =
   | "DEPLOY_EXECUTION_TIMEOUT_MS"
   | "DEPLOY_COOLDOWN_MINUTES"
   | "DEPLOY_NOTIFICATION_URGENCY"
-  | "DEPLOY_POST_SCRIPT_PATH";
+  | "DEPLOY_POST_SCRIPT_PATH"
+
+  // Language Preference
+  | "LANGUAGE_PREFERENCE";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -466,6 +469,9 @@ export interface Config {
 
   // Identity
   readonly agentName: string;
+
+  // Language Preference
+  readonly language: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
 
   // Daemon
   readonly daemon: DaemonConfig;
@@ -765,6 +771,9 @@ export const configSchema = z
 
     // Identity
     agentName: z.string().default("Strada Brain"),
+
+    // Language Preference
+    language: z.enum(["en", "tr", "ja", "ko", "zh", "de", "es", "fr"]).default("en"),
 
     // Daemon
     daemonIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10000).max(300000)).default("60000"),
@@ -1116,6 +1125,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     agentName: rawConfig.agentName,
+    language: rawConfig.language,
 
     daemon: {
       heartbeat: {
@@ -1512,6 +1522,7 @@ interface EnvVars {
   crossSessionScopeBoost: string | undefined;
   crossSessionPromotionThreshold: string | undefined;
   agentName: string | undefined;
+  language: string | undefined;
   daemonIntervalMs: string | undefined;
   daemonTimezone: string | undefined;
   daemonHeartbeatFile: string | undefined;
@@ -1686,6 +1697,7 @@ function loadFromEnv(): EnvVars {
     crossSessionScopeBoost: process.env["STRADA_INSTINCT_SCOPE_BOOST"],
     crossSessionPromotionThreshold: process.env["STRADA_INSTINCT_PROMOTION_THRESHOLD"],
     agentName: process.env["STRADA_AGENT_NAME"],
+    language: process.env["LANGUAGE_PREFERENCE"],
     daemonIntervalMs: process.env["STRADA_DAEMON_INTERVAL_MS"],
     daemonTimezone: process.env["STRADA_DAEMON_TIMEZONE"],
     daemonHeartbeatFile: process.env["STRADA_DAEMON_HEARTBEAT_FILE"],
