@@ -23,6 +23,7 @@ import type {
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
 import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
+import { classifyErrorMessage } from "../../utils/error-messages.js";
 import { DiscordRateLimiter } from "./rate-limiter.js";
 import { formatToDiscordMarkdown, truncateForDiscord } from "./formatters.js";
 import type { SlashCommand } from "./commands.js";
@@ -900,9 +901,7 @@ export class DiscordChannel implements IChannelAdapter {
         chatId: msg.chatId,
         error: errMsg,
       });
-      await message.reply(
-        "An error occurred while processing your request. Please try again."
-      );
+      await message.reply(classifyErrorMessage(error));
     }
   }
 

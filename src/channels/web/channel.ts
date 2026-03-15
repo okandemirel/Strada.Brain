@@ -26,6 +26,7 @@ import type {
   Attachment,
 } from "../channel.interface.js";
 import type { IncomingMessage } from "../channel-messages.interface.js";
+import { classifyErrorMessage } from "../../utils/error-messages.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -465,10 +466,10 @@ export class WebChannel
           timestamp: new Date(),
         };
 
-        this.handler(msg).catch(() => {
+        this.handler(msg).catch((err) => {
           this.sendToClient(chatId, {
             type: "text",
-            text: "An error occurred while processing your request. Please try again.",
+            text: classifyErrorMessage(err),
             messageId: randomUUID(),
           });
         });
@@ -551,10 +552,6 @@ export class WebChannel
     }
   }
 
-  /**
-   * Proxy /api/* requests to the dashboard server (same-origin solution).
-   * Eliminates CORS issues by serving dashboard data from the same port.
-   */
   /** Allowlisted dashboard API paths for proxy forwarding. */
   private static readonly ALLOWED_PROXY_PATHS = new Set([
     "/api/metrics",
@@ -572,20 +569,25 @@ export class WebChannel
     "/api/logs",
     "/api/identity",
     "/api/personality",
+    "/api/personality/profiles",
+    "/api/personality/switch",
     "/api/memory",
   ]);
 
+  /** Paths that accept POST or DELETE in addition to GET. */
+  private static readonly MUTABLE_PROXY_PATHS = new Set([
+    "/api/personality/profiles",
+    "/api/personality/switch",
+    "/api/user/autonomous",
+    "/api/providers/switch",
+  ]);
+
   /**
-   * Proxy GET /api/* requests to the dashboard server (same-origin solution).
-   * Restricted to GET-only with path allowlist for security.
+   * Proxy /api/* requests to the dashboard server (same-origin solution).
+   * GET is allowed for all allowlisted paths; POST/DELETE only for mutable paths.
    */
   private async proxyToDashboard(req: HttpReq, res: ServerResponse, url: string): Promise<void> {
-    // Only allow GET — all dashboard read endpoints are GET
-    if (req.method !== "GET") {
-      res.writeHead(405, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Method Not Allowed" }));
-      return;
-    }
+    const method = req.method ?? "GET";
 
     // Allowlist check (strip query string for matching)
     const pathOnly = url.split("?")[0]!;
@@ -594,6 +596,7 @@ export class WebChannel
       pathOnly.startsWith("/api/goals") ||
       pathOnly.startsWith("/api/agent-metrics") ||
       pathOnly.startsWith("/api/triggers") ||
+      pathOnly.startsWith("/api/personality/profiles/") ||
       pathOnly === "/api/providers/available" ||
       pathOnly === "/api/providers/active" ||
       pathOnly === "/api/user/autonomous";
@@ -601,6 +604,16 @@ export class WebChannel
     if (!isAllowed) {
       res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Forbidden" }));
+      return;
+    }
+
+    // Method check: GET always allowed, POST/DELETE only for mutable paths
+    const isMutable =
+      WebChannel.MUTABLE_PROXY_PATHS.has(pathOnly) ||
+      pathOnly.startsWith("/api/personality/profiles/");
+    if (method !== "GET" && !(isMutable && (method === "POST" || method === "DELETE"))) {
+      res.writeHead(405, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method Not Allowed" }));
       return;
     }
 
@@ -616,11 +629,40 @@ export class WebChannel
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
 
-      const response = await fetch(target.href, {
-        method: "GET",
+      // For POST/DELETE, forward the request body
+      const fetchOpts: RequestInit = {
+        method,
         signal: controller.signal,
         headers: { "Accept": "application/json" },
-      });
+      };
+      if (method === "POST" || method === "DELETE") {
+        fetchOpts.headers = { "Accept": "application/json", "Content-Type": "application/json" };
+        const bodyChunks: Buffer[] = [];
+        let bodySize = 0;
+        const PROXY_BODY_LIMIT = 64 * 1024; // 64KB
+        await new Promise<void>((resolve, reject) => {
+          req.on("data", (chunk: Buffer) => {
+            bodySize += chunk.length;
+            if (bodySize > PROXY_BODY_LIMIT) {
+              req.destroy();
+              reject(new Error("Body too large"));
+              return;
+            }
+            bodyChunks.push(chunk);
+          });
+          req.on("end", () => resolve());
+          req.on("error", reject);
+        }).catch(() => {
+          res.writeHead(413, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Request body too large" }));
+          return;
+        });
+        if (bodyChunks.length > 0) {
+          fetchOpts.body = Buffer.concat(bodyChunks).toString();
+        }
+      }
+
+      const response = await fetch(target.href, fetchOpts);
       clearTimeout(timeout);
 
       const body = await response.text();

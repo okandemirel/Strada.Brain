@@ -107,6 +107,7 @@ import { LearningStatsTool } from "../agents/tools/learning-stats.js";
 import { AskUserTool } from "../agents/tools/ask-user.js";
 import { ShowPlanTool } from "../agents/tools/show-plan.js";
 import { SwitchPersonalityTool } from "../agents/tools/switch-personality.js";
+import { CreatePersonalityTool } from "../agents/tools/create-personality.js";
 
 // ============================================================================
 // Tool Registry
@@ -606,6 +607,12 @@ export class ToolRegistry {
       readOnly: false,
     });
 
+    this.register(new CreatePersonalityTool(), {
+      category: ToolCategories.INTROSPECTION,
+      dangerous: false,
+      readOnly: false,
+    });
+
     // Browser automation (Playwright-based, 11 actions, session management)
     // Dynamic import to avoid pulling heavy playwright dependency at startup
     void (async () => {
@@ -694,4 +701,5 @@ export const IntrospectionTools = {
   ASK_USER: "ask_user",
   SHOW_PLAN: "show_plan",
   SWITCH_PERSONALITY: "switch_personality",
+  CREATE_PERSONALITY: "create_personality",
 } as const;

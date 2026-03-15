@@ -8,7 +8,7 @@ import type {
   ProviderCapabilities,
   IStreamingProvider,
 } from "./provider.interface.js";
-import type { MessageContent } from "./provider-core.interface.js";
+import type { MessageContent, AssistantMessage } from "./provider-core.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
 import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-retry.js";
@@ -196,7 +196,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.values())
       .filter((tc) => tc.id)
-      .map((tc) => {
+      .map((tc: any) => {
         let input: import("../../types/index.js").JsonObject;
         try {
           input = JSON.parse(tc.arguments) as import("../../types/index.js").JsonObject;
@@ -225,59 +225,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     for (const msg of messages) {
       if (msg.role === "user") {
-        // Handle both simple string content and MessageContent[] format
-        if (typeof msg.content === "string") {
-          result.push({ role: "user", content: msg.content });
-        } else if (Array.isArray(msg.content)) {
-          // Bundle text + image blocks into a single user message with content array.
-          // tool_result blocks become separate role:"tool" messages.
-          const contentParts: OpenAIContentPart[] = [];
-          for (const block of msg.content as MessageContent[]) {
-            if (block.type === "text") {
-              contentParts.push({ type: "text", text: block.text });
-            } else if (block.type === "image") {
-              const url = block.source.type === "base64"
-                ? `data:${block.source.media_type};base64,${block.source.data}`
-                : block.source.url;
-              contentParts.push({ type: "image_url", image_url: { url } });
-            } else if (block.type === "tool_result") {
-              // Flush accumulated content parts before the tool message
-              if (contentParts.length > 0) {
-                result.push({ role: "user", content: [...contentParts] });
-                contentParts.length = 0;
-              }
-              result.push({
-                role: "tool",
-                tool_call_id: block.tool_use_id,
-                content: block.content,
-              });
-            }
-          }
-          // Flush remaining content parts
-          if (contentParts.length > 0) {
-            // Optimisation: collapse to plain string when only a single text part
-            if (contentParts.length === 1 && contentParts[0]!.type === "text") {
-              result.push({ role: "user", content: contentParts[0]!.text });
-            } else {
-              result.push({ role: "user", content: contentParts });
-            }
-          }
-        }
+        this.appendUserMessage(result, msg);
       } else if (msg.role === "assistant") {
         if (msg.tool_calls && msg.tool_calls.length > 0) {
-          const assistantMsg: OpenAIMessage = {
-            role: "assistant",
-            content: msg.content || null,
-            tool_calls: msg.tool_calls.map((tc) => ({
-              id: tc.id,
-              type: "function" as const,
-              function: {
-                name: tc.name,
-                arguments: JSON.stringify(tc.input),
-              },
-            })),
-          };
-          result.push(assistantMsg);
+          result.push(this.buildAssistantToolCallMessage(msg));
         } else {
           result.push({ role: "assistant", content: msg.content });
         }
@@ -285,6 +236,68 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
 
     return result;
+  }
+
+  /**
+   * Convert a user ConversationMessage into OpenAI message(s).
+   * Handles tool_result reordering, text/image content parts, and single-text collapse.
+   * Shared by all OpenAI-compatible providers.
+   */
+  protected appendUserMessage(result: OpenAIMessage[], msg: ConversationMessage): void {
+    if (typeof msg.content === "string") {
+      result.push({ role: "user", content: msg.content });
+      return;
+    }
+    if (!Array.isArray(msg.content)) return;
+
+    // Emit tool_result blocks FIRST as role:"tool" messages so they sit
+    // directly after the preceding assistant tool_calls message. OpenAI-
+    // compatible APIs require tool responses immediately after the
+    // assistant message — interleaving user messages breaks the pairing.
+    const contentParts: OpenAIContentPart[] = [];
+    for (const block of msg.content as MessageContent[]) {
+      if (block.type === "tool_result") {
+        result.push({
+          role: "tool",
+          tool_call_id: block.tool_use_id,
+          content: block.content,
+        });
+      } else if (block.type === "text") {
+        contentParts.push({ type: "text", text: block.text });
+      } else if (block.type === "image") {
+        const url = block.source.type === "base64"
+          ? `data:${block.source.media_type};base64,${block.source.data}`
+          : block.source.url;
+        contentParts.push({ type: "image_url", image_url: { url } });
+      }
+    }
+    if (contentParts.length > 0) {
+      // Optimisation: collapse to plain string when only a single text part
+      if (contentParts.length === 1 && contentParts[0]!.type === "text") {
+        result.push({ role: "user", content: contentParts[0]!.text });
+      } else {
+        result.push({ role: "user", content: contentParts });
+      }
+    }
+  }
+
+  /**
+   * Build an assistant message with tool_calls.
+   * Subclasses override to attach provider-specific metadata (e.g., thought_signature, reasoning_content).
+   */
+  protected buildAssistantToolCallMessage(msg: AssistantMessage): OpenAIMessage {
+    return {
+      role: "assistant",
+      content: msg.content || null,
+      tool_calls: msg.tool_calls!.map((tc) => ({
+        id: tc.id,
+        type: "function" as const,
+        function: {
+          name: tc.name,
+          arguments: JSON.stringify(tc.input),
+        },
+      })),
+    };
   }
 
   /**
@@ -355,7 +368,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     const message = choice.message;
     const text = message.content ?? "";
-    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc) => {
+    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc: any) => {
       let input: import("../../types/index.js").JsonObject;
       try {
         input = JSON.parse(tc.function.arguments) as import("../../types/index.js").JsonObject;

@@ -54,6 +54,7 @@ import type { TaskManager } from "../tasks/task-manager.js";
 import type { SoulLoader } from "./soul/index.js";
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
+import { classifyErrorMessage } from "../utils/error-messages.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -1059,11 +1060,7 @@ export class Orchestrator {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
-      // M2: Don't leak internal details to users
-      await this.channel.sendText(
-        chatId,
-        "An error occurred while processing your request. Please try again.",
-      );
+      await this.channel.sendText(chatId, classifyErrorMessage(error));
     } finally {
       clearInterval(typingInterval);
       // Persist conversation summary (forced to ensure no messages are lost)

@@ -556,7 +556,8 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
     // Load metadata
     const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
-    this.config = metadata.config;
+    const incomingDimensions = this.config.dimensions;
+    this.config = { ...metadata.config, dimensions: incomingDimensions };
     this.nextIndex = metadata.nextIndex;
     this.chunks = new Map(metadata.chunks);
     this.idToIndex = new Map(metadata.idToIndex);

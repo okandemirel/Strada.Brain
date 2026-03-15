@@ -13,6 +13,7 @@ import { RateLimiter } from "../../security/rate-limiter.js";
 import type { RateLimitConfig } from "../../security/rate-limiter.js";
 import type { FileDiff, BatchDiff } from "../../utils/diff-generator.js";
 import { formatDiffForTelegram, formatBatchDiffForTelegram } from "../../utils/diff-formatter.js";
+import { classifyErrorMessage } from "../../utils/error-messages.js";
 
 /**
  * Options for diff confirmation requests
@@ -575,9 +576,7 @@ export class TelegramChannel implements IChannelAdapter {
         chatId: msg.chatId,
         error: errMsg,
       });
-      await ctx.reply(
-        "An error occurred while processing your request. Please try again."
-      );
+      await ctx.reply(classifyErrorMessage(error));
     }
   }
 

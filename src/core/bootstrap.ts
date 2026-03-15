@@ -582,7 +582,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   orchestrator.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
 
-  const commandHandler = new CommandHandler(taskManager, channel, providerManager, dmPolicy, userProfileStore);
+  const commandHandler = new CommandHandler(taskManager, channel, providerManager, dmPolicy, userProfileStore, soulLoader);
   const messageRouter = new MessageRouter(taskManager, commandHandler, channel, startupNotices);
   // ProgressReporter subscribes to taskManager events in constructor
   new ProgressReporter(channel, taskManager);

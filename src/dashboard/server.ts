@@ -131,7 +131,16 @@ interface DashboardSoulLoader {
   getActiveProfile(): string;
   getProfiles(): string[];
   getChannelOverrides(): Record<string, string>;
+  switchProfile(name: string): Promise<boolean>;
+  saveProfile(name: string, content: string): Promise<boolean>;
+  deleteProfile(name: string): Promise<boolean>;
 }
+
+/** Profile names that cannot be created or deleted via the API. */
+const SYSTEM_PROFILES = new Set(["default", "casual", "formal", "minimal"]);
+
+/** Regex for valid profile names: alphanumeric, dashes, underscores. */
+const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
 /** Structural interface for provider management used by dashboard /api/providers endpoints */
 interface DashboardProviderManager {
@@ -850,6 +859,126 @@ export class DashboardServer {
             channelOverrides: this.soulLoader.getChannelOverrides(),
           },
         }));
+        return;
+      }
+
+      // POST /api/personality/profiles -- Create a custom profile
+      if (req.method === "POST" && url === "/api/personality/profiles") {
+        if (!this.soulLoader) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Soul loader not available" }));
+          return;
+        }
+        void this.readJsonBody<{ name?: string; content?: string }>(req, res, 12_288).then(async (parsed) => {
+          if (!parsed) return;
+          const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
+          const content = typeof parsed.content === "string" ? parsed.content : "";
+          if (!name || !PROFILE_NAME_RE.test(name)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid profile name (alphanumeric, dash, underscore only)" }));
+            return;
+          }
+          if (SYSTEM_PROFILES.has(name)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: `Cannot create a profile named '${name}' — it is a system profile` }));
+            return;
+          }
+          if (!content || content.length > 10240) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Content must be non-empty and at most 10KB" }));
+            return;
+          }
+          try {
+            const success = await this.soulLoader!.saveProfile(name, content);
+            if (!success) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Failed to save profile" }));
+              return;
+            }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: true, profile: name, profiles: this.soulLoader!.getProfiles() }));
+          } catch (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        });
+        return;
+      }
+
+      // DELETE /api/personality/profiles/{name} -- Delete a custom profile
+      if (req.method === "DELETE" && url.startsWith("/api/personality/profiles/")) {
+        if (!this.soulLoader) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Soul loader not available" }));
+          return;
+        }
+        const profileName = decodeURIComponent(url.slice("/api/personality/profiles/".length).split("?")[0]!);
+        if (!profileName || !PROFILE_NAME_RE.test(profileName)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid profile name" }));
+          return;
+        }
+        if (SYSTEM_PROFILES.has(profileName)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `Cannot delete system profile '${profileName}'` }));
+          return;
+        }
+        void (async () => {
+          try {
+            const success = await this.soulLoader!.deleteProfile(profileName);
+            if (!success) {
+              res.writeHead(404, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: `Profile '${profileName}' not found or could not be deleted` }));
+              return;
+            }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: true, profiles: this.soulLoader!.getProfiles() }));
+          } catch (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        })();
+        return;
+      }
+
+      // POST /api/personality/switch -- Switch active personality profile
+      if (req.method === "POST" && url === "/api/personality/switch") {
+        if (!this.soulLoader) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Soul loader not available" }));
+          return;
+        }
+        void this.readJsonBody<{ profile?: string; chatId?: string }>(req, res).then(async (parsed) => {
+          if (!parsed) return;
+          const profile = typeof parsed.profile === "string" ? parsed.profile.trim() : "";
+          if (!profile || !PROFILE_NAME_RE.test(profile)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid profile name" }));
+            return;
+          }
+          try {
+            const success = await this.soulLoader!.switchProfile(profile);
+            if (!success) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: `Failed to switch to profile '${profile}'` }));
+              return;
+            }
+            // Update user profile store if chatId provided
+            if (parsed.chatId && this.userProfileStore) {
+              try {
+                const store = this.userProfileStore as unknown as { setActivePersona?: (chatId: string, persona: string) => Promise<void> };
+                if (typeof store.setActivePersona === "function") {
+                  await store.setActivePersona(parsed.chatId, profile);
+                }
+              } catch { /* non-fatal — persona update is best-effort */ }
+            }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: true, activeProfile: profile }));
+          } catch (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        });
         return;
       }
 

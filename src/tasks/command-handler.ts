@@ -12,6 +12,7 @@ import type { TaskManager } from "./task-manager.js";
 import type { ProviderManager } from "../agents/providers/provider-manager.js";
 import type { DMPolicy } from "../security/dm-policy.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
+import type { SoulLoader } from "../agents/soul/index.js";
 
 export class CommandHandler {
   constructor(
@@ -20,6 +21,7 @@ export class CommandHandler {
     private readonly providerManager?: ProviderManager,
     private readonly dmPolicy?: DMPolicy,
     private readonly userProfileStore?: UserProfileStore,
+    private readonly soulLoader?: SoulLoader,
   ) {}
 
   async handle(chatId: string, command: TaskCommand, args: string[]): Promise<void> {
@@ -53,6 +55,9 @@ export class CommandHandler {
         break;
       case "autonomous":
         await this.handleAutonomous(chatId, args);
+        break;
+      case "persona":
+        await this.handlePersona(chatId, args);
         break;
     }
   }
@@ -185,7 +190,15 @@ export class CommandHandler {
       "`/autonomous off` - Disable autonomous mode",
       "`/autonomous` - Show autonomous mode status",
       "",
-      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /model listele, /model sıfırla",
+      "*Personality*",
+      "",
+      "`/persona` - Show active personality profile",
+      "`/persona list` - List all profiles",
+      "`/persona switch <name>` - Switch to a profile",
+      "`/persona create <name>` - Create a custom profile",
+      "`/persona delete <name>` - Delete a custom profile",
+      "",
+      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /model listele, /model sıfırla",
       "",
       "Send any other message to start a new background task.",
     ].join("\n");
@@ -363,6 +376,144 @@ export class CommandHandler {
     }
 
     await this.channel.sendText(chatId, "Usage: /autonomous on [hours] | off | status");
+  }
+
+  private async handlePersona(chatId: string, args: string[]): Promise<void> {
+    if (!this.soulLoader) {
+      await this.channel.sendText(chatId, "Personality management is not available.");
+      return;
+    }
+
+    const subcommand = args[0]?.toLowerCase();
+
+    // No args → show current profile + usage
+    if (!subcommand) {
+      const active = this.soulLoader.getActiveProfile();
+      const profiles = this.soulLoader.getProfiles();
+      const customTag = this.soulLoader.isCustomProfile(active) ? " (custom)" : "";
+      await this.channel.sendMarkdown(
+        chatId,
+        `*Active Personality:* \`${active}\`${customTag}\n` +
+        `*Available:* ${profiles.map(p => `\`${p}\``).join(", ")}\n\n` +
+        "Usage:\n" +
+        "`/persona list` - List all profiles\n" +
+        "`/persona switch <name>` - Switch profile\n" +
+        "`/persona create <name>` - Create a custom profile\n" +
+        "`/persona delete <name>` - Delete a custom profile",
+      );
+      return;
+    }
+
+    // list / listele
+    if (subcommand === "list" || subcommand === "listele") {
+      const profiles = this.soulLoader.getProfiles();
+      const active = this.soulLoader.getActiveProfile();
+      const lines = profiles.map((p) => {
+        const marker = p === active ? " **(active)**" : "";
+        const custom = this.soulLoader!.isCustomProfile(p) ? " _(custom)_" : "";
+        return `\`${p}\`${marker}${custom}`;
+      });
+      await this.channel.sendMarkdown(
+        chatId,
+        `*Personality Profiles*\n\n${lines.join("\n")}`,
+      );
+      return;
+    }
+
+    // switch / degistir
+    if (subcommand === "switch" || subcommand === "degistir") {
+      const name = args[1]?.toLowerCase();
+      if (!name) {
+        await this.channel.sendText(chatId, "Usage: /persona switch <name>");
+        return;
+      }
+
+      const success = await this.soulLoader.switchProfile(name);
+      if (success) {
+        // Update user profile store if available
+        if (this.userProfileStore) {
+          try {
+            this.userProfileStore.setActivePersona(chatId, name);
+          } catch {
+            // Non-fatal
+          }
+        }
+        await this.channel.sendMarkdown(
+          chatId,
+          `Personality switched to \`${name}\`. My responses will now reflect this style.`,
+        );
+      } else {
+        const available = this.soulLoader.getProfiles();
+        await this.channel.sendText(
+          chatId,
+          `Profile "${name}" not found. Available: ${available.join(", ")}`,
+        );
+      }
+      return;
+    }
+
+    // create / olustur
+    if (subcommand === "create" || subcommand === "olustur") {
+      const name = args[1]?.toLowerCase();
+      if (!name) {
+        await this.channel.sendText(chatId, "Usage: /persona create <name>");
+        return;
+      }
+      await this.channel.sendText(
+        chatId,
+        `Tell me what kind of personality you want for "${name}" and I'll create it for you! ` +
+        "Describe the tone, style, and behavior you'd like.",
+      );
+      return;
+    }
+
+    // delete / sil
+    if (subcommand === "delete" || subcommand === "sil") {
+      const name = args[1]?.toLowerCase();
+      if (!name) {
+        await this.channel.sendText(chatId, "Usage: /persona delete <name>");
+        return;
+      }
+
+      const SYSTEM_PROFILES = ["default", "casual", "formal", "minimal"];
+      if (SYSTEM_PROFILES.includes(name)) {
+        await this.channel.sendText(
+          chatId,
+          `Cannot delete system profile "${name}". Only custom profiles can be deleted.`,
+        );
+        return;
+      }
+
+      const success = await this.soulLoader.deleteProfile(name);
+      if (success) {
+        // If active persona was deleted, update profile store
+        if (this.userProfileStore) {
+          try {
+            this.userProfileStore.setActivePersona(chatId, "default");
+          } catch {
+            // Non-fatal
+          }
+        }
+        await this.channel.sendMarkdown(
+          chatId,
+          `Custom profile \`${name}\` deleted.` +
+          (this.soulLoader.getActiveProfile() === "default"
+            ? " Switched back to default personality."
+            : ""),
+        );
+      } else {
+        await this.channel.sendText(
+          chatId,
+          `Could not delete "${name}". It may not exist or may be a system profile.`,
+        );
+      }
+      return;
+    }
+
+    await this.channel.sendText(
+      chatId,
+      "Usage: /persona | /persona list | /persona switch <name> | /persona create <name> | /persona delete <name>",
+    );
   }
 
   // ─── Formatting ─────────────────────────────────────────────────────────────

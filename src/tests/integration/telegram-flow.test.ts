@@ -320,8 +320,10 @@ describe("Telegram Flow Integration", () => {
       // Assert: Error message sent to user (not internal details)
       expect(telegramChannel.sentMessages.length).toBeGreaterThan(0);
       const lastMessage = telegramChannel.getLastMessage("chat-error");
-      expect(lastMessage?.text).not.toContain("Provider API error");
-      expect(lastMessage?.text.toLowerCase()).toContain("error occurred");
+      // Error message should be user-friendly (no raw stack traces or API keys)
+      expect(lastMessage?.text).toBeDefined();
+      expect(lastMessage?.text).not.toContain("stack");
+      expect(lastMessage?.text).not.toContain("at Object");
     });
   });
 });

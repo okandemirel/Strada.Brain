@@ -1,12 +1,11 @@
 import type {
-  ConversationMessage,
   ProviderResponse,
   ToolCall,
   ProviderCapabilities,
 } from "./provider.interface.js";
-import type { MessageContent } from "./provider-core.interface.js";
+import type { AssistantMessage } from "./provider-core.interface.js";
 import { OpenAIProvider, OPENAI_STOP_REASON_MAP } from "./openai.js";
-import type { OpenAIMessage, OpenAIResponse, OpenAIContentPart } from "./openai.js";
+import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
 
 /**
  * Kimi response extends OpenAI format with reasoning_content.
@@ -113,76 +112,19 @@ export class KimiProvider extends OpenAIProvider {
     };
   }
 
-  protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
-    const result: OpenAIMessage[] = [{ role: "system", content: systemPrompt }];
+  /**
+   * Override to attach reasoning_content on assistant tool call messages.
+   * Kimi K2.5 requires this when thinking mode is active. Omit if empty (Kimi rejects empty string).
+   */
+  protected override buildAssistantToolCallMessage(msg: AssistantMessage): OpenAIMessage {
+    const reasoning = msg.tool_calls
+      ?.find(tc => tc.providerMetadata?.reasoning_content)
+      ?.providerMetadata?.reasoning_content as string | undefined;
 
-    for (const msg of messages) {
-      if (msg.role === "user") {
-        if (typeof msg.content === "string") {
-          result.push({ role: "user", content: msg.content });
-        } else if (Array.isArray(msg.content)) {
-          // Bundle text + image blocks into a single user message with content array.
-          // tool_result blocks become separate role:"tool" messages.
-          const contentParts: OpenAIContentPart[] = [];
-          for (const block of msg.content as MessageContent[]) {
-            if (block.type === "text") {
-              contentParts.push({ type: "text", text: block.text });
-            } else if (block.type === "image") {
-              const url = block.source.type === "base64"
-                ? `data:${block.source.media_type};base64,${block.source.data}`
-                : block.source.url;
-              contentParts.push({ type: "image_url", image_url: { url } });
-            } else if (block.type === "tool_result") {
-              // Flush accumulated content parts before the tool message
-              if (contentParts.length > 0) {
-                result.push({ role: "user", content: [...contentParts] });
-                contentParts.length = 0;
-              }
-              result.push({
-                role: "tool",
-                tool_call_id: block.tool_use_id,
-                content: block.content,
-              });
-            }
-          }
-          // Flush remaining content parts
-          if (contentParts.length > 0) {
-            if (contentParts.length === 1 && contentParts[0]!.type === "text") {
-              result.push({ role: "user", content: contentParts[0]!.text });
-            } else {
-              result.push({ role: "user", content: contentParts });
-            }
-          }
-        }
-      } else if (msg.role === "assistant") {
-        if (msg.tool_calls && msg.tool_calls.length > 0) {
-          // Kimi K2.5 requires reasoning_content on assistant tool call messages
-          // when thinking mode is active. Omit if empty (Kimi rejects empty string).
-          const reasoning = msg.tool_calls
-            .find(tc => tc.providerMetadata?.reasoning_content)
-            ?.providerMetadata?.reasoning_content as string | undefined;
-          const assistantMsg: OpenAIMessage = {
-            role: "assistant",
-            content: msg.content || null,
-            tool_calls: msg.tool_calls.map((tc) => ({
-              id: tc.id,
-              type: "function" as const,
-              function: {
-                name: tc.name,
-                arguments: JSON.stringify(tc.input),
-              },
-            })),
-          };
-          if (reasoning) {
-            (assistantMsg as unknown as Record<string, unknown>)["reasoning_content"] = reasoning;
-          }
-          result.push(assistantMsg);
-        } else {
-          result.push({ role: "assistant", content: msg.content });
-        }
-      }
+    const assistantMsg = super.buildAssistantToolCallMessage(msg);
+    if (reasoning) {
+      (assistantMsg as unknown as Record<string, unknown>)["reasoning_content"] = reasoning;
     }
-
-    return result;
+    return assistantMsg;
   }
 }

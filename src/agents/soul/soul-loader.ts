@@ -5,9 +5,9 @@
  * Security: path traversal protection, symlink resolution, file size limits.
  */
 
-import { readFile, realpath, readdir } from "node:fs/promises";
-import { watch, type FSWatcher } from "node:fs";
-import { resolve } from "node:path";
+import { readFile, realpath, readdir, writeFile, unlink } from "node:fs/promises";
+import { watch, mkdirSync, existsSync, type FSWatcher } from "node:fs";
+import { resolve, join } from "node:path";
 import { getLogger } from "../../utils/logger.js";
 import type { ChannelType } from "../../channels/channel-messages.interface.js";
 
@@ -26,6 +26,7 @@ export class SoulLoader {
   private readonly soulFile: string;
   private readonly channelOverrides: Map<string, string>;
   private readonly channelOverridesRecord: Record<string, string>;
+  private readonly customProfilesDir: string;
 
   constructor(
     projectPath: string,
@@ -40,6 +41,7 @@ export class SoulLoader {
       Object.entries(options?.channelOverrides ?? {}),
     );
     this.channelOverridesRecord = Object.fromEntries(this.channelOverrides);
+    this.customProfilesDir = join(projectPath, ".strada-memory", "profiles");
   }
 
   /**
@@ -70,15 +72,37 @@ export class SoulLoader {
     }
 
     // Scan profiles/ directory for available profiles
+    const systemProfiles: string[] = [];
     try {
       const profilesDir = resolve(this.basePath, "profiles");
       const entries = await readdir(profilesDir, { withFileTypes: true });
-      this.profileNames = [
-        "default",
+      systemProfiles.push(
         ...entries.filter(e => e.isFile() && e.name.endsWith(".md")).map(e => e.name.replace(/\.md$/, "")),
-      ];
+      );
     } catch {
-      this.profileNames = ["default"];
+      // No system profiles directory — that's fine
+    }
+
+    // Ensure custom profiles directory exists and scan it
+    const customProfiles: string[] = [];
+    try {
+      mkdirSync(this.customProfilesDir, { recursive: true });
+      const customEntries = await readdir(this.customProfilesDir, { withFileTypes: true });
+      customProfiles.push(
+        ...customEntries.filter(e => e.isFile() && e.name.endsWith(".md")).map(e => e.name.replace(/\.md$/, "")),
+      );
+    } catch {
+      // Custom profiles directory not accessible — that's fine
+    }
+
+    // Merge: default first, then system, then custom (deduplicated)
+    const seen = new Set<string>(["default"]);
+    this.profileNames = ["default"];
+    for (const name of [...systemProfiles, ...customProfiles]) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        this.profileNames.push(name);
+      }
     }
 
     logger.info("SoulLoader initialized", {
@@ -208,8 +232,7 @@ export class SoulLoader {
 
     if (this.switchInFlight) return false;
 
-    // Defense-in-depth: only allow alphanumeric, dash, underscore
-    if (profileName !== "default" && !/^[a-zA-Z0-9_-]+$/.test(profileName)) {
+    if (profileName !== "default" && !this.isValidCustomProfileName(profileName)) {
       logger.warn("Profile name rejected — invalid characters", { profileName });
       return false;
     }
@@ -217,9 +240,7 @@ export class SoulLoader {
     this.switchInFlight = true;
     try {
       const previous = this.cache.get("default") ?? null;
-      const fileName = profileName === "default"
-        ? this.soulFile
-        : `profiles/${profileName}.md`;
+      const fileName = this.resolveProfilePath(profileName);
 
       const success = await this.loadFile("default", fileName);
       if (!success) {
@@ -244,7 +265,6 @@ export class SoulLoader {
    * Safe for concurrent multi-user scenarios.
    */
   async getProfileContent(profileName: string): Promise<string | null> {
-    // Defense-in-depth: only allow alphanumeric, dash, underscore
     if (!/^[a-zA-Z0-9_-]+$/.test(profileName)) {
       getLogger().warn("Profile name rejected — invalid characters", { profileName });
       return null;
@@ -254,8 +274,7 @@ export class SoulLoader {
       return this.cache.get("default") ?? null;
     }
 
-    const fileName = `profiles/${profileName}.md`;
-    const validPath = await this.validateFilePath(fileName);
+    const validPath = await this.validateFilePath(this.resolveProfilePath(profileName));
     if (!validPath) return null;
 
     try {
@@ -271,6 +290,124 @@ export class SoulLoader {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Save a custom profile to .strada-memory/profiles/.
+   * Validates name, rejects "default", enforces size limit.
+   */
+  async saveProfile(name: string, content: string): Promise<boolean> {
+    const logger = getLogger();
+
+    if (!this.isValidCustomProfileName(name)) {
+      logger.warn("Profile save rejected — invalid name", { name });
+      return false;
+    }
+
+    if (content.length > MAX_SOUL_FILE_SIZE) {
+      logger.warn("Profile save rejected — exceeds size limit", {
+        name,
+        size: content.length,
+        maxSize: MAX_SOUL_FILE_SIZE,
+      });
+      return false;
+    }
+
+    const validPath = await this.validateCustomProfilePath(name);
+    if (!validPath) return false;
+
+    try {
+      mkdirSync(this.customProfilesDir, { recursive: true });
+      await writeFile(validPath, content, "utf-8");
+
+      if (!this.profileNames.includes(name)) {
+        this.profileNames.push(name);
+      }
+
+      this.watchFile(`custom-profile:${name}`, `.strada-memory/profiles/${name}.md`);
+      logger.info("Custom profile saved", { name, size: content.length });
+      return true;
+    } catch (err) {
+      logger.warn("Profile save failed", { name, error: String(err) });
+      return false;
+    }
+  }
+
+  /**
+   * Delete a custom profile from .strada-memory/profiles/.
+   * Only allows deleting custom profiles, never system profiles.
+   * Switches back to "default" if the deleted profile was active.
+   */
+  async deleteProfile(name: string): Promise<boolean> {
+    const logger = getLogger();
+
+    if (!this.isValidCustomProfileName(name)) {
+      logger.warn("Profile delete rejected — invalid name", { name });
+      return false;
+    }
+
+    const filePath = join(this.customProfilesDir, `${name}.md`);
+    if (!existsSync(filePath)) {
+      logger.warn("Profile delete rejected — not a custom profile or does not exist", { name });
+      return false;
+    }
+
+    const validPath = await this.validateCustomProfilePath(name);
+    if (!validPath) return false;
+
+    try {
+      await unlink(validPath);
+      this.profileNames = this.profileNames.filter(p => p !== name);
+
+      if (this.activeProfileName === name) {
+        this.activeProfileName = "default";
+        await this.loadFile("default", this.soulFile);
+        logger.info("Active profile deleted, switched back to default", { name });
+      } else {
+        logger.info("Custom profile deleted", { name });
+      }
+
+      return true;
+    } catch (err) {
+      logger.warn("Profile delete failed", { name, error: String(err) });
+      return false;
+    }
+  }
+
+  /**
+   * Check if a profile is a custom (user-created) profile.
+   * Returns true if the profile exists in .strada-memory/profiles/.
+   */
+  isCustomProfile(name: string): boolean {
+    if (!this.isValidCustomProfileName(name)) return false;
+    return existsSync(join(this.customProfilesDir, `${name}.md`));
+  }
+
+  /**
+   * Validate that a profile name is safe for use as a custom profile.
+   * Rejects "default" and names with invalid characters.
+   */
+  private isValidCustomProfileName(name: string): boolean {
+    return name !== "default" && /^[a-zA-Z0-9_-]+$/.test(name);
+  }
+
+  /**
+   * Resolve a profile name to its relative file path.
+   * Custom profiles (.strada-memory/profiles/) take precedence over system profiles (profiles/).
+   */
+  private resolveProfilePath(profileName: string): string {
+    if (profileName === "default") return this.soulFile;
+    const customPath = join(this.customProfilesDir, `${profileName}.md`);
+    return existsSync(customPath)
+      ? `.strada-memory/profiles/${profileName}.md`
+      : `profiles/${profileName}.md`;
+  }
+
+  /**
+   * Validate the filesystem path for a custom profile name.
+   */
+  private validateCustomProfilePath(name: string): Promise<string | null> {
+    return this.validateFilePath(`.strada-memory/profiles/${name}.md`);
   }
 
   private async loadFile(key: string, fileName: string): Promise<boolean> {

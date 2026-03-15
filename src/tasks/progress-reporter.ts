@@ -11,6 +11,7 @@ import { supportsRichMessaging } from "../channels/channel-core.interface.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Task, TaskId } from "./types.js";
 import { getLogger } from "../utils/logger.js";
+import { classifyTaskErrorMessage } from "../utils/error-messages.js";
 
 export class ProgressReporter {
   constructor(
@@ -75,7 +76,7 @@ export class ProgressReporter {
   }
 
   private reportFailed(task: Task, error: string): void {
-    this.sendToChannel(task.chatId, "An error occurred while processing your request. Please try again.");
+    this.sendToChannel(task.chatId, classifyTaskErrorMessage(error));
     getLogger().error("Task failed", { taskId: task.id, error });
   }
 

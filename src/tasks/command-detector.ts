@@ -32,6 +32,8 @@ const PREFIX_COMMANDS: Record<string, TaskCommand> = {
   "/autonomy": "autonomous",
   "/otonom": "autonomous",
   "/otonomi": "autonomous",
+  "/persona": "persona",
+  "/kisilik": "persona",
 };
 
 // ─── Keyword Patterns (bilingual TR/EN) ──────────────────────────────────────────

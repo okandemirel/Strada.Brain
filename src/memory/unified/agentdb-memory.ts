@@ -118,6 +118,34 @@ export function _setNowFn(fn: () => TimestampMs): void {
   _nowFn = fn;
 }
 
+/** Build a VectorEntry from a unified memory entry for HNSW indexing. */
+function toVectorEntry(entry: {
+  id: string;
+  content: string;
+  chatId?: string;
+  embedding: number[];
+  createdAt: number;
+  accessCount: number;
+}): VectorEntry {
+  return {
+    id: entry.id,
+    vector: entry.embedding,
+    chunk: {
+      id: entry.id,
+      content: entry.content,
+      contentHash: "",
+      filePath: entry.chatId ?? "memory",
+      indexedAt: entry.createdAt,
+      kind: "class" as const,
+      startLine: 0,
+      endLine: 0,
+      language: "typescript",
+    },
+    addedAt: entry.createdAt as TimestampMs,
+    accessCount: entry.accessCount,
+  };
+}
+
 /** @internal Test-only: reset the clock to real time */
 export function _resetNowFn(): void {
   _nowFn = () => createBrand(Date.now(), "TimestampMs" as const);
@@ -630,28 +658,21 @@ export class AgentDBMemory implements IUnifiedMemory {
       this.entries.set(id as string, unifiedEntry);
 
       // Add to HNSW index (mutex-serialized to prevent interleaved writes)
-      if (this.hnswStore) {
+      if (this.hnswStore && embedding.length === this.config.dimensions) {
         const store = this.hnswStore;
-        await this.writeMutex.withLock(() =>
-          store.upsert([
-            {
-              id: id as string,
-              vector: embedding,
-              chunk: {
-                id: id as string,
-                content: entry.content,
-                contentHash: "",
-                filePath: (entry.chatId as string) ?? "memory",
-                indexedAt: Date.now() as TimestampMs,
-                kind: "class" as const,
-                startLine: 0,
-                endLine: 0,
-                language: "typescript",
-              },
-              addedAt: Date.now() as TimestampMs,
-              accessCount: 0,
-            },
-          ]),
+        const vectorEntry = toVectorEntry({
+          id: id as string,
+          content: entry.content,
+          chatId: entry.chatId as string | undefined,
+          embedding,
+          createdAt: Date.now(),
+          accessCount: 0,
+        });
+        await this.writeMutex.withLock(() => store.upsert([vectorEntry]));
+      } else if (this.hnswStore && embedding.length !== this.config.dimensions) {
+        getLoggerSafe().warn(
+          `[AgentDB] Skipping entry with mismatched dimensions (got ${embedding.length}, expected ${this.config.dimensions})`,
+          { id: id as string },
         );
       }
 
@@ -1185,25 +1206,30 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       getLoggerSafe().info("[AgentDBMemory] Rebuilding HNSW index");
 
-      // Rebuild from all entries
+      // Rebuild from all entries, skipping those with mismatched dimensions
       const entries = Array.from(this.entries.values());
-      const vectorEntries = entries.map((e) => ({
-        id: e.id as string,
-        vector: e.embedding,
-        chunk: {
+      const expectedDimensions = this.config.dimensions;
+      let dimensionMismatchCount = 0;
+      const vectorEntries: VectorEntry[] = [];
+      for (const e of entries) {
+        if (e.embedding && e.embedding.length !== expectedDimensions) {
+          dimensionMismatchCount++;
+          continue;
+        }
+        vectorEntries.push(toVectorEntry({
           id: e.id as string,
           content: e.content,
-          contentHash: "",
-          filePath: (e.chatId as string) ?? "memory",
-          indexedAt: e.createdAt as number,
-          kind: "class" as const,
-          startLine: 0,
-          endLine: 0,
-          language: "typescript",
-        },
-        addedAt: e.createdAt as TimestampMs,
-        accessCount: e.accessCount,
-      }));
+          chatId: e.chatId as string | undefined,
+          embedding: e.embedding,
+          createdAt: e.createdAt as number,
+          accessCount: e.accessCount,
+        }));
+      }
+      if (dimensionMismatchCount > 0) {
+        getLoggerSafe().warn(
+          `[AgentDB] Skipped ${dimensionMismatchCount} entries with mismatched embedding dimensions (expected ${expectedDimensions})`,
+        );
+      }
 
       // Clear and re-add (mutex-serialized to prevent interleaved writes)
       const store = this.hnswStore;
@@ -1967,26 +1993,32 @@ export class AgentDBMemory implements IUnifiedMemory {
       // Rebuild HNSW index from loaded entries
       if (this.hnswStore) {
         const vectors: VectorEntry[] = [];
+        let dimensionMismatchCount = 0;
+        const expectedDimensions = this.config.dimensions;
         for (const entry of this.entries.values()) {
           if (entry.embedding) {
-            vectors.push({
+            // Skip entries whose embedding dimensions don't match the current config.
+            // This happens when the user switches embedding providers (e.g. OpenAI 1536 -> Ollama 768).
+            // The entry stays in SQLite and can be re-embedded later.
+            if (entry.embedding.length !== expectedDimensions) {
+              dimensionMismatchCount++;
+              continue;
+            }
+            vectors.push(toVectorEntry({
               id: entry.id as string,
-              vector: entry.embedding,
-              chunk: {
-                id: entry.id as string,
-                content: entry.content,
-                contentHash: "",
-                filePath: (entry.chatId as string) ?? "memory",
-                indexedAt: entry.createdAt as TimestampMs,
-                kind: "class" as const,
-                startLine: 0,
-                endLine: 0,
-                language: "typescript",
-              },
-              addedAt: entry.createdAt as TimestampMs,
+              content: entry.content,
+              chatId: entry.chatId as string | undefined,
+              embedding: entry.embedding,
+              createdAt: entry.createdAt as number,
               accessCount: entry.accessCount,
-            });
+            }));
           }
+        }
+        if (dimensionMismatchCount > 0) {
+          getLoggerSafe().warn(
+            `[AgentDB] Skipped ${dimensionMismatchCount} entries with mismatched embedding dimensions (expected ${expectedDimensions}). ` +
+            "These entries remain in SQLite and will be re-embedded when an embedding provider is available.",
+          );
         }
         if (vectors.length > 0) {
           const store = this.hnswStore;

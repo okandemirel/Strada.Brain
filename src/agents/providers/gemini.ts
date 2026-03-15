@@ -6,12 +6,11 @@ import type {
   StreamCallback,
   ProviderCapabilities,
 } from "./provider.interface.js";
-import type { MessageContent } from "./provider-core.interface.js";
-import { OpenAIProvider, OPENAI_STOP_REASON_MAP } from "./openai.js";
-import type { OpenAIMessage, OpenAIResponse, OpenAIContentPart } from "./openai.js";
+import type { AssistantMessage } from "./provider-core.interface.js";
+import { OpenAIProvider, OPENAI_STOP_REASON_MAP, MAX_SSE_BUFFER_BYTES } from "./openai.js";
+import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
 import { getLogger } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
-import { MAX_SSE_BUFFER_BYTES } from "./openai.js";
 
 /** SSE chunk with extra_content support for thought_signature */
 interface GeminiStreamChunk {
@@ -67,7 +66,7 @@ export class GeminiProvider extends OpenAIProvider {
 
     const message = choice.message;
     const text = message.content ?? "";
-    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc) => {
+    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc: any) => {
       let input: import("../../types/index.js").JsonObject;
       try {
         input = JSON.parse(tc.function.arguments) as import("../../types/index.js").JsonObject;
@@ -204,7 +203,7 @@ export class GeminiProvider extends OpenAIProvider {
 
     const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.values())
       .filter((tc) => tc.id)
-      .map((tc) => {
+      .map((tc: any) => {
         let input: import("../../types/index.js").JsonObject;
         try {
           input = JSON.parse(tc.arguments) as import("../../types/index.js").JsonObject;
@@ -225,70 +224,23 @@ export class GeminiProvider extends OpenAIProvider {
     };
   }
 
-  protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
-    const result: OpenAIMessage[] = [{ role: "system", content: systemPrompt }];
-
-    for (const msg of messages) {
-      if (msg.role === "user") {
-        if (typeof msg.content === "string") {
-          result.push({ role: "user", content: msg.content });
-        } else if (Array.isArray(msg.content)) {
-          // Bundle text + image blocks into a single user message with content array.
-          // tool_result blocks become separate role:"tool" messages.
-          const contentParts: OpenAIContentPart[] = [];
-          for (const block of msg.content as MessageContent[]) {
-            if (block.type === "text") {
-              contentParts.push({ type: "text", text: block.text });
-            } else if (block.type === "image") {
-              const url = block.source.type === "base64"
-                ? `data:${block.source.media_type};base64,${block.source.data}`
-                : block.source.url;
-              contentParts.push({ type: "image_url", image_url: { url } });
-            } else if (block.type === "tool_result") {
-              // Flush accumulated content parts before the tool message
-              if (contentParts.length > 0) {
-                result.push({ role: "user", content: [...contentParts] });
-                contentParts.length = 0;
-              }
-              result.push({
-                role: "tool",
-                tool_call_id: block.tool_use_id,
-                content: block.content,
-              });
-            }
-          }
-          // Flush remaining content parts
-          if (contentParts.length > 0) {
-            if (contentParts.length === 1 && contentParts[0]!.type === "text") {
-              result.push({ role: "user", content: contentParts[0]!.text });
-            } else {
-              result.push({ role: "user", content: contentParts });
-            }
-          }
-        }
-      } else if (msg.role === "assistant") {
-        if (msg.tool_calls && msg.tool_calls.length > 0) {
-          const assistantMsg: OpenAIMessage = {
-            role: "assistant",
-            content: msg.content || null,
-            tool_calls: msg.tool_calls.map((tc) => ({
-              id: tc.id,
-              type: "function" as const,
-              function: {
-                name: tc.name,
-                arguments: JSON.stringify(tc.input),
-              },
-              // Echo back extra_content (thought_signature) from providerMetadata
-              ...(tc.providerMetadata ?? {}),
-            })),
-          };
-          result.push(assistantMsg);
-        } else {
-          result.push({ role: "assistant", content: msg.content });
-        }
-      }
-    }
-
-    return result;
+  /**
+   * Override to echo back extra_content (thought_signature) from providerMetadata
+   * on assistant tool_calls messages. Gemini 2.5+/3.x requires this or returns 400.
+   */
+  protected override buildAssistantToolCallMessage(msg: AssistantMessage): OpenAIMessage {
+    return {
+      role: "assistant",
+      content: msg.content || null,
+      tool_calls: msg.tool_calls!.map((tc) => ({
+        id: tc.id,
+        type: "function" as const,
+        function: {
+          name: tc.name,
+          arguments: JSON.stringify(tc.input),
+        },
+        ...(tc.providerMetadata ?? {}),
+      })),
+    };
   }
 }

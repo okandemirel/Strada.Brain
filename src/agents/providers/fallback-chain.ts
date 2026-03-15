@@ -12,9 +12,28 @@ import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
+ * Check whether a provider error is likely caused by the request itself
+ * (e.g., malformed tool_calls, invalid schema) rather than a transient
+ * provider issue. Non-retryable errors should NOT fall through to the
+ * next provider because they would fail identically.
+ */
+function isNonRetryableRequestError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  // HTTP 400 bad request — typically malformed body / invalid tool schema
+  if (/\b400\b/.test(msg) && /bad.?request|invalid|malformed/i.test(msg)) return true;
+  // HTTP 401/403 — auth errors won't resolve by switching provider
+  if (/\b40[13]\b/.test(msg)) return true;
+  // Explicit "invalid" schema / tool_calls format errors
+  if (/invalid.*tool|tool.*invalid|invalid.*schema/i.test(msg)) return true;
+  return false;
+}
+
+/**
  * Provider that chains multiple AI providers with automatic fallback.
  *
  * Tries providers in order. If one fails, falls through to the next.
+ * Non-retryable errors (400 bad request, auth failures) are re-thrown
+ * immediately without trying subsequent providers.
  * Logs each attempt and failure for observability.
  */
 export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
@@ -71,43 +90,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[]
   ): Promise<ProviderResponse> {
-    const logger = getLogger();
-
-    for (let i = 0; i < this.providers.length; i++) {
-      const provider = this.providers[i]!;
-      try {
-        const safeMessages = this.stripImages(messages, provider);
-        const response = await provider.chat(systemPrompt, safeMessages, tools);
-        if (i > 0) {
-          logger.info("Fallback provider succeeded", {
-            provider: provider.name,
-            attempt: i + 1,
-          });
-        }
-        return response;
-      } catch (error) {
-        const isLast = i === this.providers.length - 1;
-        const errorMsg = error instanceof Error ? error.message : String(error);
-
-        if (isLast) {
-          logger.error("All providers failed", {
-            provider: provider.name,
-            error: errorMsg,
-            totalProviders: this.providers.length,
-          });
-          throw error;
-        }
-
-        logger.warn("Provider failed, trying next", {
-          failedProvider: provider.name,
-          nextProvider: this.providers[i + 1]!.name,
-          error: errorMsg,
-        });
-      }
-    }
-
-    // Unreachable, but TypeScript needs it
-    throw new Error("No providers available");
+    return this.tryWithFallback("chat", (provider, safeMessages) =>
+      provider.chat(systemPrompt, safeMessages, tools),
+      messages,
+    );
   }
 
   async chatStream(
@@ -116,30 +102,59 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     tools: ToolDefinition[],
     onChunk: StreamCallback
   ): Promise<ProviderResponse> {
+    return this.tryWithFallback("streaming", (provider, safeMessages) => {
+      if (supportsStreaming(provider)) {
+        return provider.chatStream(systemPrompt, safeMessages, tools, onChunk);
+      }
+      return provider.chat(systemPrompt, safeMessages, tools);
+    }, messages);
+  }
+
+  /**
+   * Try each provider in order, falling back on transient errors.
+   * Non-retryable errors (400, auth) are re-thrown immediately.
+   */
+  private async tryWithFallback(
+    label: string,
+    attempt: (provider: IAIProvider & Partial<IStreamingProvider>, messages: ConversationMessage[]) => Promise<ProviderResponse>,
+    messages: ConversationMessage[],
+  ): Promise<ProviderResponse> {
     const logger = getLogger();
 
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i]!;
       try {
         const safeMessages = this.stripImages(messages, provider);
-        // Use streaming if available, fall back to non-streaming
-        if (supportsStreaming(provider)) {
-          return await provider.chatStream(systemPrompt, safeMessages, tools, onChunk);
+        const response = await attempt(provider, safeMessages);
+        if (i > 0) {
+          logger.info("Fallback provider succeeded", {
+            provider: provider.name,
+            attempt: i + 1,
+          });
         }
-        return await provider.chat(systemPrompt, safeMessages, tools);
+        return response;
       } catch (error) {
-        const isLast = i === this.providers.length - 1;
         const errorMsg = error instanceof Error ? error.message : String(error);
 
-        if (isLast) {
-          logger.error("All providers failed (streaming)", {
+        if (isNonRetryableRequestError(error)) {
+          logger.error(`Non-retryable provider error (${label}), not trying fallbacks`, {
             provider: provider.name,
             error: errorMsg,
           });
           throw error;
         }
 
-        logger.warn("Provider failed (streaming), trying next", {
+        const isLast = i === this.providers.length - 1;
+        if (isLast) {
+          logger.error(`All providers failed (${label})`, {
+            provider: provider.name,
+            error: errorMsg,
+            totalProviders: this.providers.length,
+          });
+          throw new Error(`All providers failed. Last error: ${errorMsg}`);
+        }
+
+        logger.warn(`Provider failed (${label}), trying next`, {
           failedProvider: provider.name,
           nextProvider: this.providers[i + 1]!.name,
           error: errorMsg,
@@ -147,6 +162,6 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       }
     }
 
-    throw new Error("No providers available");
+    throw new Error("All providers failed");
   }
 }
