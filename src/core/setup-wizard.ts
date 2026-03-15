@@ -385,6 +385,12 @@ export class SetupWizard {
       lines.push("", "# Gemini offers free embedding with excellent quality", `EMBEDDING_PROVIDER=${sanitizeEnvValue("gemini")}`);
     }
 
+    // System preset
+    const KNOWN_PRESETS = new Set(["free", "budget", "balanced", "performance", "premium"]);
+    if (config.SYSTEM_PRESET && KNOWN_PRESETS.has(String(config.SYSTEM_PRESET))) {
+      lines.push("", "# System Preset", `SYSTEM_PRESET=${sanitizeEnvValue(String(config.SYSTEM_PRESET))}`);
+    }
+
     // Channel selection
     if (config._channel && KNOWN_CHANNELS.has(String(config._channel))) {
       lines.push("", "# Channel", `DEFAULT_CHANNEL=${sanitizeEnvValue(String(config._channel))}`);

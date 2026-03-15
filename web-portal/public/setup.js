@@ -6,6 +6,17 @@ const totalSteps = 5;
 let csrfToken = null;
 let csrfReady = false;
 
+// Preset definitions — mirrors backend SYSTEM_PRESETS
+const PRESETS = [
+  { id: "free", name: "Free", cost: "$0/mo", desc: "Ollama local only", providers: ["ollama"] },
+  { id: "budget", name: "Budget", cost: "$1-3/mo", desc: "DeepSeek + Groq", providers: ["deepseek", "groq"] },
+  { id: "balanced", name: "Balanced", cost: "$5-10/mo", desc: "Gemini + DeepSeek", providers: ["gemini", "deepseek"] },
+  { id: "performance", name: "Performance", cost: "$15-30/mo", desc: "Claude + Gemini", providers: ["claude", "gemini"] },
+  { id: "premium", name: "Premium", cost: "$50-100/mo", desc: "Claude + OpenAI", providers: ["claude", "openai", "deepseek"] },
+];
+
+let selectedPreset = null;
+
 // Provider registry — mirrors backend PROVIDER_PRESETS + claude + ollama
 const PROVIDERS = [
   {
@@ -92,6 +103,17 @@ const PROVIDERS = [
 // O(1) lookup map for provider metadata
 const PROVIDER_MAP = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
 
+// Channel-specific config — map of DOM element IDs to env keys
+const CHANNEL_CONFIG_FIELDS = {
+  telegram:  [["telegramToken",       "TELEGRAM_BOT_TOKEN"],
+              ["telegramUsers",       "ALLOWED_TELEGRAM_USER_IDS"]],
+  discord:   [["discordToken",        "DISCORD_BOT_TOKEN"]],
+  slack:     [["slackBotToken",       "SLACK_BOT_TOKEN"],
+              ["slackAppToken",       "SLACK_APP_TOKEN"]],
+  whatsapp:  [["whatsappAllowedNumbers", "WHATSAPP_ALLOWED_NUMBERS"],
+              ["whatsappSessionPath",    "WHATSAPP_SESSION_PATH"]],
+};
+
 function getCheckedProviders() {
   return Array.from(document.querySelectorAll('input[name="provider"]:checked'));
 }
@@ -115,7 +137,8 @@ fetch("/api/setup/csrf")
     container.appendChild(dot);
   }
 
-  // Build provider grid
+  // Build preset grid and provider grid
+  buildPresetGrid();
   buildProviderGrid();
 
   // Channel selection listeners
@@ -144,6 +167,64 @@ fetch("/api/setup/csrf")
   updateRagInfo();
   onChannelChange();
 })();
+
+function buildPresetGrid() {
+  const grid = document.getElementById("presetGrid");
+  if (!grid) return;
+
+  PRESETS.forEach((preset) => {
+    const card = document.createElement("div");
+    card.className = "preset-card";
+    card.dataset.presetId = preset.id;
+
+    const name = document.createElement("div");
+    name.className = "preset-name";
+    name.textContent = preset.name;
+    card.appendChild(name);
+
+    const cost = document.createElement("div");
+    cost.className = "preset-cost";
+    cost.textContent = preset.cost;
+    card.appendChild(cost);
+
+    const desc = document.createElement("div");
+    desc.className = "preset-desc";
+    desc.textContent = preset.desc;
+    card.appendChild(desc);
+
+    card.setAttribute("role", "button");
+    card.setAttribute("tabindex", "0");
+    card.addEventListener("click", () => onPresetSelect(preset.id));
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onPresetSelect(preset.id);
+      }
+    });
+    grid.appendChild(card);
+  });
+}
+
+function onPresetSelect(presetId) {
+  const preset = PRESETS.find((p) => p.id === presetId);
+  if (!preset) return;
+
+  selectedPreset = presetId;
+
+  // Update visual selection
+  document.querySelectorAll(".preset-card").forEach((card) => {
+    card.classList.toggle("selected", card.dataset.presetId === presetId);
+  });
+
+  // Uncheck all providers, then check only preset's providers
+  document.querySelectorAll('input[name="provider"]').forEach((cb) => {
+    cb.checked = preset.providers.includes(cb.value);
+  });
+
+  // Refresh provider config fields and RAG info
+  updateProviderConfigs();
+  updateRagInfo();
+}
 
 function buildProviderGrid() {
   const grid = document.getElementById("providerGrid");
@@ -184,6 +265,9 @@ function buildProviderGrid() {
 }
 
 function onProviderToggle() {
+  // Manual provider toggle clears any preset selection
+  selectedPreset = null;
+  document.querySelectorAll(".preset-card").forEach((card) => card.classList.remove("selected"));
   updateProviderConfigs();
   updateRagInfo();
 }
@@ -255,23 +339,19 @@ function updateRagInfo() {
     return;
   }
 
+  // Toggle is ON — show provider-specific status
   const checked = getCheckedProviders().map((cb) => cb.value);
-
-  // Find first embedding-capable provider from selection
   const embeddingProvider = checked.find((id) => EMBEDDING_CAPABLE.has(id));
 
   if (embeddingProvider) {
     const name = PROVIDER_MAP[embeddingProvider]?.name ?? embeddingProvider;
-    infoEl.textContent = "RAG will use " + name + " for embeddings.";
+    infoEl.textContent = "\u2713 RAG enabled \u2014 will use " + name + " for embeddings.";
     infoEl.className = "rag-info";
   } else if (checked.length > 0) {
-    const names = checked.map((id) => PROVIDER_MAP[id]?.name ?? id).join(", ");
-    infoEl.textContent =
-      names +
-      " does not support embeddings. Add OpenAI, Mistral, or Ollama for code search.";
+    infoEl.textContent = "\u26A0 RAG enabled but selected providers don't support embeddings. Add OpenAI, Gemini, or Ollama.";
     infoEl.className = "rag-info warning";
   } else {
-    infoEl.textContent = "Select a provider to enable RAG.";
+    infoEl.textContent = "\u26A0 RAG enabled \u2014 embedding provider will be auto-detected from your providers.";
     infoEl.className = "rag-info warning";
   }
 }
@@ -322,16 +402,12 @@ function validateCurrentStep() {
       return false;
     }
     // Verify at least one checked provider has a key (or is Ollama)
-    let hasKey = false;
-    checked.forEach((cb) => {
+    const hasKey = checked.some((cb) => {
       const p = PROVIDER_MAP[cb.value];
-      if (!p) return;
-      if (!p.envKey) {
-        hasKey = true;
-        return;
-      } // Ollama
+      if (!p) return false;
+      if (!p.envKey) return true; // Ollama — no key needed
       const input = document.getElementById("key_" + p.id);
-      if (input && input.value.trim()) hasKey = true;
+      return input && input.value.trim();
     });
     if (!hasKey) {
       alert("Please enter an API key for at least one selected provider.");
@@ -410,17 +486,6 @@ function getConfig() {
     config.PROVIDER_CHAIN = providerChain.join(",");
   }
 
-  // Channel-specific config — map of DOM element IDs to env keys
-  const CHANNEL_CONFIG_FIELDS = {
-    telegram:  [["telegramToken",       "TELEGRAM_BOT_TOKEN"],
-                ["telegramUsers",       "ALLOWED_TELEGRAM_USER_IDS"]],
-    discord:   [["discordToken",        "DISCORD_BOT_TOKEN"]],
-    slack:     [["slackBotToken",       "SLACK_BOT_TOKEN"],
-                ["slackAppToken",       "SLACK_APP_TOKEN"]],
-    whatsapp:  [["whatsappAllowedNumbers", "WHATSAPP_ALLOWED_NUMBERS"],
-                ["whatsappSessionPath",    "WHATSAPP_SESSION_PATH"]],
-  };
-
   const fields = CHANNEL_CONFIG_FIELDS[channel] ?? [];
   for (const [domId, envKey] of fields) {
     const val = document.getElementById(domId)?.value.trim();
@@ -439,6 +504,11 @@ function getConfig() {
     config.RAG_ENABLED = "false";
   }
 
+  // Preset selection
+  if (selectedPreset) {
+    config.SYSTEM_PRESET = selectedPreset;
+  }
+
   config._channel = channel;
   return config;
 }
@@ -451,7 +521,7 @@ function maskKey(key) {
 function buildReview() {
   const config = getConfig();
   const list = document.getElementById("reviewList");
-  while (list.firstChild) list.removeChild(list.firstChild);
+  list.replaceChildren();
 
   const items = [];
 
@@ -464,6 +534,11 @@ function buildReview() {
     }
   });
 
+  if (config.SYSTEM_PRESET) {
+    const presetInfo = PRESETS.find((p) => p.id === config.SYSTEM_PRESET);
+    items.push(["Preset", presetInfo ? presetInfo.name + " (" + presetInfo.cost + ")" : config.SYSTEM_PRESET]);
+  }
+
   if (config.PROVIDER_CHAIN) {
     items.push(["Provider Chain", config.PROVIDER_CHAIN]);
   }
@@ -474,11 +549,9 @@ function buildReview() {
   if (config.RAG_ENABLED === "false") {
     items.push(["RAG (Code Search)", "Disabled"]);
   } else {
-    const chain = config.PROVIDER_CHAIN ? config.PROVIDER_CHAIN.split(",") : [];
-    const embProvider = chain.find((id) => EMBEDDING_CAPABLE.has(id.trim()));
-    const embName = embProvider
-      ? PROVIDER_MAP[embProvider.trim()]?.name ?? embProvider.trim()
-      : null;
+    const chain = config.PROVIDER_CHAIN ? config.PROVIDER_CHAIN.split(",").map((s) => s.trim()) : [];
+    const embProvider = chain.find((id) => EMBEDDING_CAPABLE.has(id));
+    const embName = embProvider ? PROVIDER_MAP[embProvider]?.name ?? embProvider : null;
     items.push(["RAG (Code Search)", embName ? "Enabled (" + embName + " embeddings)" : "Enabled"]);
   }
 
@@ -547,7 +620,7 @@ async function browseTo(path) {
 
 function renderBreadcrumb(fullPath) {
   const container = document.getElementById("browserBreadcrumb");
-  while (container.firstChild) container.removeChild(container.firstChild);
+  container.replaceChildren();
 
   const parts = fullPath.split("/").filter(Boolean);
   // Root
@@ -576,7 +649,7 @@ function renderBreadcrumb(fullPath) {
 
 function renderEntries(entries) {
   const list = document.getElementById("browserList");
-  while (list.firstChild) list.removeChild(list.firstChild);
+  list.replaceChildren();
 
   if (entries.length === 0) {
     list.textContent = "Empty directory";

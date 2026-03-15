@@ -884,6 +884,40 @@ export class Orchestrator {
   }
 
   /**
+   * Parse an ask_user response during onboarding and persist the relevant field.
+   */
+  private parseOnboardingResponse(chatId: string, input: unknown, response: string): void {
+    const question = ((input as Record<string, unknown>)?.question as string ?? "").toLowerCase();
+    const answer = response.replace(/^User answered:\s*/i, "").trim();
+    if (!answer) return;
+
+    const updates: Partial<{ displayName: string; language: string; preferences: Record<string, unknown> }> = {};
+
+    if (question.includes("name") || question.includes("address") || question.includes("call you")) {
+      // Cap display name length to prevent oversized profile data
+      updates.displayName = answer.slice(0, 80);
+    } else if (question.includes("language") || question.includes("dil")) {
+      const langMap: Record<string, string> = {
+        english: "en", turkish: "tr", "türkçe": "tr",
+        japanese: "ja", korean: "ko", chinese: "zh",
+        german: "de", spanish: "es", french: "fr",
+      };
+      const mapped = langMap[answer.toLowerCase()];
+      if (mapped) updates.language = mapped;
+      // Unknown languages are ignored — don't store raw user input as a language code
+    } else if (question.includes("style") || question.includes("casual") || question.includes("formal")) {
+      const existing = this.userProfileStore!.getProfile(chatId)?.preferences ?? {};
+      updates.preferences = { ...existing, communicationStyle: answer.slice(0, 40).toLowerCase() };
+    } else if (question.includes("detail") || question.includes("explanation")) {
+      const existing = this.userProfileStore!.getProfile(chatId)?.preferences ?? {};
+      updates.preferences = { ...existing, detailLevel: answer.slice(0, 40).toLowerCase() };
+    }
+
+    if (Object.keys(updates).length === 0) return;
+    this.userProfileStore!.upsertProfile(chatId, updates);
+  }
+
+  /**
    * The core agent loop: LLM → Tool calls → LLM → ... → Response
    */
   private async runAgentLoop(chatId: string, session: Session, channelType?: string): Promise<void> {
@@ -892,6 +926,10 @@ export class Orchestrator {
 
     // Load user profile once for the entire agent loop
     const profile = this.userProfileStore?.getProfile(chatId) ?? null;
+
+    // Snapshot onboarding state at loop start — stays true for the entire loop
+    // even after displayName is set by the first ask_user response
+    const isOnboarding = !!(profile && !profile.displayName);
 
     // Per-user persona override (from profile, not global SoulLoader mutation)
     let personaContent: string | undefined;
@@ -1307,6 +1345,13 @@ Be natural and conversational — this should feel like meeting a new colleague,
         }
 
         this.emitToolResult(chatId, tc, toolResults[i]!);
+
+        // Persist onboarding answers from ask_user tool results to user profile.
+        // Uses the snapshot flag so all answers in the batch are captured,
+        // even after the first one sets displayName.
+        if (isOnboarding && tc.name === "ask_user" && !tr.isError && this.userProfileStore) {
+          this.parseOnboardingResponse(chatId, tc.input, toolResults[i]!.content);
+        }
       }
 
       // Inject state-aware context (stall detection, budget warnings)
