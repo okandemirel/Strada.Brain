@@ -376,6 +376,12 @@ export class SetupWizard {
       lines.push("", "# Gemini offers free embedding with excellent quality", `EMBEDDING_PROVIDER=${sanitizeEnvValue("gemini")}`);
     }
 
+    // Channel selection
+    const KNOWN_CHANNELS = new Set(["web", "telegram", "discord", "slack", "whatsapp", "cli"]);
+    if (config._channel && KNOWN_CHANNELS.has(String(config._channel))) {
+      lines.push("", "# Channel", `DEFAULT_CHANNEL=${sanitizeEnvValue(String(config._channel))}`);
+    }
+
     // Always add some defaults
     lines.push(
       "",

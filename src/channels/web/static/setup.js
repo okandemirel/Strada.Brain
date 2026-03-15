@@ -343,6 +343,26 @@ function validateCurrentStep() {
       alert("Unity Project Path is required.");
       return false;
     }
+    const pathStatus = document.getElementById("pathStatus");
+    if (pathStatus && pathStatus.classList.contains("invalid")) {
+      alert("Please fix the project path before continuing.");
+      return false;
+    }
+  }
+  if (currentStep === 4) {
+    const ch = document.querySelector('input[name="channel"]:checked')?.value;
+    if (ch === "telegram" && !document.getElementById("telegramToken")?.value.trim()) {
+      alert("Telegram Bot Token is required.");
+      return false;
+    }
+    if (ch === "discord" && !document.getElementById("discordToken")?.value.trim()) {
+      alert("Discord Bot Token is required.");
+      return false;
+    }
+    if (ch === "slack" && !document.getElementById("slackBotToken")?.value.trim()) {
+      alert("Slack Bot Token is required.");
+      return false;
+    }
   }
   return true;
 }
@@ -425,10 +445,21 @@ function getConfig() {
     if (app) config.SLACK_APP_TOKEN = app;
   }
 
+  // Language preference
+  const langSelect = document.getElementById("languageSelect");
+  if (langSelect && langSelect.value && langSelect.value !== "en") {
+    config.LANGUAGE_PREFERENCE = langSelect.value;
+  }
+
   // RAG configuration
   const ragEnabled = document.getElementById("ragEnabled");
   if (ragEnabled && !ragEnabled.checked) {
     config.RAG_ENABLED = "false";
+  }
+
+  // Auto-set Gemini embedding when Gemini key is present
+  if (config.GEMINI_API_KEY && !config.RAG_ENABLED) {
+    config.EMBEDDING_PROVIDER = config.EMBEDDING_PROVIDER || "gemini";
   }
 
   config._channel = channel;
@@ -590,7 +621,10 @@ function renderEntries(entries) {
     row.appendChild(icon);
     row.appendChild(name);
 
-    row.onclick = () => browseTo(browserCurrentPath + "/" + entry.name);
+    row.onclick = () => {
+      const base = browserCurrentPath.endsWith("/") ? browserCurrentPath.slice(0, -1) : browserCurrentPath;
+      browseTo(base + "/" + entry.name);
+    };
     list.appendChild(row);
   });
 }
