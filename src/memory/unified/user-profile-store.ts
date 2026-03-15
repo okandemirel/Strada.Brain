@@ -98,7 +98,7 @@ export class UserProfileStore {
   private readonly stmtUpdateContext: Database.Statement;
   private readonly stmtTouchLastSeen: Database.Statement;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(db: Database.Database) {
     // Create table (static SQL, no user input)
     db.exec(USER_PROFILES_SCHEMA);
 

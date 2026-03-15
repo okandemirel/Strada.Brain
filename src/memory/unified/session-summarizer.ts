@@ -204,6 +204,6 @@ export class SessionSummarizer {
   private stripMarkdownFencing(text: string): string {
     const fencePattern = /^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/;
     const match = fencePattern.exec(text.trim());
-    return match ? match[1] : text;
+    return match ? match[1]! : text;
   }
 }

@@ -178,9 +178,9 @@ export class AgentDBAdapter implements IMemoryManager {
           importance: e.importance,
           archived: e.archived,
           metadata: e.metadata,
-          chatId: (e as Record<string, unknown>).chatId as ChatId ?? _chatId,
-          userMessage: (e.metadata?.userMessage as string) ?? e.content,
-          turnNumber: (e as Record<string, unknown>).turnNumber as number | undefined,
+          chatId: ((e as unknown as Record<string, unknown>).chatId as ChatId) ?? _chatId,
+          userMessage: ((e.metadata as Record<string, unknown> | undefined)?.userMessage as string) ?? e.content,
+          turnNumber: (e as unknown as Record<string, unknown>).turnNumber as number | undefined,
         }));
       return ok(conversations);
     } catch (e) {
@@ -235,7 +235,7 @@ export class AgentDBAdapter implements IMemoryManager {
     entry: Omit<T, "id" | "createdAt" | "accessCount">,
   ): Promise<Result<T, Error>> {
     try {
-      const result = await this.agentdb.storeEntry(entry as Parameters<typeof this.agentdb.storeEntry>[0]);
+      const result = await this.agentdb.storeEntry(entry as unknown as Parameters<typeof this.agentdb.storeEntry>[0]);
       if (result.kind === "ok") {
         return ok(result.value as T);
       }
