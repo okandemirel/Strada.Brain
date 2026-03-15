@@ -99,7 +99,7 @@
             <div class="channel-card">
               <span class="channel-icon">&#128241;</span>
               <span class="channel-name">WhatsApp</span>
-              <span class="channel-desc">Business API</span>
+              <span class="channel-desc">QR code pairing</span>
             </div>
           </label>
           <label class="channel-option">
@@ -141,6 +141,23 @@
           <div class="form-group">
             <label for="slackAppToken">Slack App Token</label>
             <input type="password" id="slackAppToken" placeholder="xapp-..." autocomplete="off">
+          </div>
+        </div>
+
+        <!-- WhatsApp config -->
+        <div class="channel-config" id="whatsappConfig" style="display:none">
+          <div class="whatsapp-qr-section">
+            <p>WhatsApp uses QR code pairing via the Baileys library. After setup completes, a QR code will appear in the terminal. Scan it with your phone to connect.</p>
+            <div class="form-group">
+              <label for="whatsappAllowedNumbers">Allowed Phone Numbers <span class="required">*</span></label>
+              <input type="text" id="whatsappAllowedNumbers" placeholder="+15551234567,+15559876543">
+              <small>Comma-separated international format numbers allowed to message the bot.</small>
+            </div>
+            <div class="form-group">
+              <label for="whatsappSessionPath">Session Path <span class="optional">(optional)</span></label>
+              <input type="text" id="whatsappSessionPath" placeholder=".whatsapp-session">
+              <small>Where to store the pairing session. Default: .whatsapp-session</small>
+            </div>
           </div>
         </div>
 

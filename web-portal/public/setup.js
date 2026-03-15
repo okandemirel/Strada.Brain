@@ -142,6 +142,7 @@ fetch("/api/setup/csrf")
   // RAG toggle + provider-aware info
   document.getElementById("ragEnabled").addEventListener("change", updateRagInfo);
   updateRagInfo();
+  onChannelChange();
 })();
 
 function buildProviderGrid() {
@@ -347,10 +348,9 @@ function validateCurrentStep() {
 function onChannelChange() {
   const selected = document.querySelector('input[name="channel"]:checked').value;
 
-  // Show/hide config
-  ["telegram", "discord", "slack"].forEach((ch) => {
-    const el = document.getElementById(ch + "Config");
-    if (el) el.style.display = selected === ch ? "block" : "none";
+  // Show/hide config — driven by DOM, not a hardcoded list
+  document.querySelectorAll(".channel-config").forEach((el) => {
+    el.style.display = el.id === selected + "Config" ? "block" : "none";
   });
 }
 
@@ -407,19 +407,27 @@ function getConfig() {
     config.PROVIDER_CHAIN = providerChain.join(",");
   }
 
-  if (channel === "telegram") {
-    const token = document.getElementById("telegramToken").value.trim();
-    const users = document.getElementById("telegramUsers").value.trim();
-    if (token) config.TELEGRAM_BOT_TOKEN = token;
-    if (users) config.ALLOWED_TELEGRAM_USER_IDS = users;
-  } else if (channel === "discord") {
-    const token = document.getElementById("discordToken").value.trim();
-    if (token) config.DISCORD_BOT_TOKEN = token;
-  } else if (channel === "slack") {
-    const bot = document.getElementById("slackBotToken").value.trim();
-    const app = document.getElementById("slackAppToken").value.trim();
-    if (bot) config.SLACK_BOT_TOKEN = bot;
-    if (app) config.SLACK_APP_TOKEN = app;
+  // Channel-specific config — map of DOM element IDs to env keys
+  const CHANNEL_CONFIG_FIELDS = {
+    telegram:  [["telegramToken",       "TELEGRAM_BOT_TOKEN"],
+                ["telegramUsers",       "ALLOWED_TELEGRAM_USER_IDS"]],
+    discord:   [["discordToken",        "DISCORD_BOT_TOKEN"]],
+    slack:     [["slackBotToken",       "SLACK_BOT_TOKEN"],
+                ["slackAppToken",       "SLACK_APP_TOKEN"]],
+    whatsapp:  [["whatsappAllowedNumbers", "WHATSAPP_ALLOWED_NUMBERS"],
+                ["whatsappSessionPath",    "WHATSAPP_SESSION_PATH"]],
+  };
+
+  const fields = CHANNEL_CONFIG_FIELDS[channel] ?? [];
+  for (const [domId, envKey] of fields) {
+    const val = document.getElementById(domId)?.value.trim();
+    if (val) config[envKey] = val;
+  }
+
+  // Language preference
+  const langSelect = document.getElementById("languageSelect");
+  if (langSelect && langSelect.value) {
+    config.LANGUAGE_PREFERENCE = langSelect.value;
   }
 
   // RAG configuration

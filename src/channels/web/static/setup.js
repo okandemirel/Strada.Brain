@@ -142,6 +142,7 @@ fetch("/api/setup/csrf")
   // RAG toggle + provider-aware info
   document.getElementById("ragEnabled").addEventListener("change", updateRagInfo);
   updateRagInfo();
+  onChannelChange();
 })();
 
 function buildProviderGrid() {
@@ -291,9 +292,6 @@ function showStep(step) {
     else if (s === step) dot.classList.add("active");
   });
 
-  // Refresh RAG info when entering step 4
-  if (step === 4) updateRagInfo();
-
   // Build review on step 5
   if (step === 5) buildReview();
 }
@@ -343,26 +341,6 @@ function validateCurrentStep() {
       alert("Unity Project Path is required.");
       return false;
     }
-    const pathStatus = document.getElementById("pathStatus");
-    if (pathStatus && pathStatus.classList.contains("invalid")) {
-      alert("Please fix the project path before continuing.");
-      return false;
-    }
-  }
-  if (currentStep === 4) {
-    const ch = document.querySelector('input[name="channel"]:checked')?.value;
-    if (ch === "telegram" && !document.getElementById("telegramToken")?.value.trim()) {
-      alert("Telegram Bot Token is required.");
-      return false;
-    }
-    if (ch === "discord" && !document.getElementById("discordToken")?.value.trim()) {
-      alert("Discord Bot Token is required.");
-      return false;
-    }
-    if (ch === "slack" && !document.getElementById("slackBotToken")?.value.trim()) {
-      alert("Slack Bot Token is required.");
-      return false;
-    }
   }
   return true;
 }
@@ -370,10 +348,9 @@ function validateCurrentStep() {
 function onChannelChange() {
   const selected = document.querySelector('input[name="channel"]:checked').value;
 
-  // Show/hide config
-  ["telegram", "discord", "slack"].forEach((ch) => {
-    const el = document.getElementById(ch + "Config");
-    if (el) el.style.display = selected === ch ? "block" : "none";
+  // Show/hide config — driven by DOM, not a hardcoded list
+  document.querySelectorAll(".channel-config").forEach((el) => {
+    el.style.display = el.id === selected + "Config" ? "block" : "none";
   });
 }
 
@@ -430,24 +407,26 @@ function getConfig() {
     config.PROVIDER_CHAIN = providerChain.join(",");
   }
 
-  if (channel === "telegram") {
-    const token = document.getElementById("telegramToken").value.trim();
-    const users = document.getElementById("telegramUsers").value.trim();
-    if (token) config.TELEGRAM_BOT_TOKEN = token;
-    if (users) config.ALLOWED_TELEGRAM_USER_IDS = users;
-  } else if (channel === "discord") {
-    const token = document.getElementById("discordToken").value.trim();
-    if (token) config.DISCORD_BOT_TOKEN = token;
-  } else if (channel === "slack") {
-    const bot = document.getElementById("slackBotToken").value.trim();
-    const app = document.getElementById("slackAppToken").value.trim();
-    if (bot) config.SLACK_BOT_TOKEN = bot;
-    if (app) config.SLACK_APP_TOKEN = app;
+  // Channel-specific config — map of DOM element IDs to env keys
+  const CHANNEL_CONFIG_FIELDS = {
+    telegram:  [["telegramToken",       "TELEGRAM_BOT_TOKEN"],
+                ["telegramUsers",       "ALLOWED_TELEGRAM_USER_IDS"]],
+    discord:   [["discordToken",        "DISCORD_BOT_TOKEN"]],
+    slack:     [["slackBotToken",       "SLACK_BOT_TOKEN"],
+                ["slackAppToken",       "SLACK_APP_TOKEN"]],
+    whatsapp:  [["whatsappAllowedNumbers", "WHATSAPP_ALLOWED_NUMBERS"],
+                ["whatsappSessionPath",    "WHATSAPP_SESSION_PATH"]],
+  };
+
+  const fields = CHANNEL_CONFIG_FIELDS[channel] ?? [];
+  for (const [domId, envKey] of fields) {
+    const val = document.getElementById(domId)?.value.trim();
+    if (val) config[envKey] = val;
   }
 
   // Language preference
   const langSelect = document.getElementById("languageSelect");
-  if (langSelect && langSelect.value && langSelect.value !== "en") {
+  if (langSelect && langSelect.value) {
     config.LANGUAGE_PREFERENCE = langSelect.value;
   }
 
@@ -455,11 +434,6 @@ function getConfig() {
   const ragEnabled = document.getElementById("ragEnabled");
   if (ragEnabled && !ragEnabled.checked) {
     config.RAG_ENABLED = "false";
-  }
-
-  // Auto-set Gemini embedding when Gemini key is present
-  if (config.GEMINI_API_KEY && !config.RAG_ENABLED) {
-    config.EMBEDDING_PROVIDER = config.EMBEDDING_PROVIDER || "gemini";
   }
 
   config._channel = channel;
@@ -621,10 +595,7 @@ function renderEntries(entries) {
     row.appendChild(icon);
     row.appendChild(name);
 
-    row.onclick = () => {
-      const base = browserCurrentPath.endsWith("/") ? browserCurrentPath.slice(0, -1) : browserCurrentPath;
-      browseTo(base + "/" + entry.name);
-    };
+    row.onclick = () => browseTo(browserCurrentPath + "/" + entry.name);
     list.appendChild(row);
   });
 }
@@ -662,28 +633,12 @@ async function saveConfig() {
 
     const data = await res.json();
     if (data.success) {
-      status.textContent = "Configuration saved! Starting agent...";
+      status.textContent = "Configuration saved! Restarting...";
       status.className = "save-status success";
-      // Poll until the main web channel is ready (wizard server shuts down, app restarts)
-      let attempts = 0;
-      const maxAttempts = 30;
-      const pollInterval = setInterval(async () => {
-        attempts++;
-        try {
-          const check = await fetch("/", { method: "HEAD" });
-          if (check.ok) {
-            clearInterval(pollInterval);
-            status.textContent = "Agent ready! Redirecting...";
-            window.location.href = "/";
-          }
-        } catch {
-          status.textContent = `Starting agent... (${attempts}s)`;
-        }
-        if (attempts >= maxAttempts) {
-          clearInterval(pollInterval);
-          status.textContent = "Setup complete! You can close this tab. Your agent is starting on the configured channel.";
-        }
-      }, 1000);
+      setTimeout(() => {
+        status.textContent = "Reloading...";
+        window.location.reload();
+      }, 3000);
     } else {
       status.textContent = data.error || "Save failed.";
       status.className = "save-status error";
