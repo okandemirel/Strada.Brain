@@ -1512,9 +1512,14 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   private async generateEmbedding(text: string): Promise<Vector<number>> {
     if (this.config.embeddingProvider) {
-      return this.config.embeddingProvider(text) as Promise<Vector<number>>;
+      try {
+        return await this.config.embeddingProvider(text) as Vector<number>;
+      } catch (error) {
+        getLoggerSafe().warn("[AgentDBMemory] Embedding provider failed, using hash fallback", { error: String(error) });
+        // Fall through to hash-based fallback
+      }
     }
-    // Hash-based fallback — not semantic, used when no provider configured
+    // Hash-based fallback — not semantic, used when no provider configured or provider fails
     const dimensions = this.config.dimensions;
     const embedding = new Array(dimensions).fill(0);
 

@@ -425,7 +425,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     if (envValue) soulOverrides[channel] = envValue;
   }
 
-  const soulLoader = new SoulLoader(config.unityProjectPath, {
+  // SoulLoader looks for soul.md + profiles/ in the base path.
+  // Use Strada.Brain root (process.cwd()), not the Unity project path.
+  const soulBasePath = process.cwd();
+  const soulLoader = new SoulLoader(soulBasePath, {
     soulFile: process.env.SOUL_FILE ?? "soul.md",
     channelOverrides: Object.keys(soulOverrides).length > 0 ? soulOverrides : undefined,
   });

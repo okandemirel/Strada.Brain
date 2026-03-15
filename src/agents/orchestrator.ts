@@ -2126,10 +2126,13 @@ export class Orchestrator {
           }
           return undefined;
         };
-        await this.memoryManager.storeConversation(chatId as ChatId, sanitized, {
+        const result = await this.memoryManager.storeConversation(chatId as ChatId, sanitized, {
           userMessage: extractText(userMsg),
           assistantMessage: extractText(assistantMsg),
         });
+        if (result && typeof result === "object" && "kind" in result && result.kind === "err") {
+          getLogger().warn("Memory storeConversation failed", { chatId, error: String((result as { error: unknown }).error) });
+        }
       }
     } catch (error) {
       getLogger().warn("Memory persistence failed", { chatId, error: error instanceof Error ? error.message : String(error) });
