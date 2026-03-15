@@ -245,20 +245,12 @@ export class DashboardServer {
     goalStorage?: GoalStorage;
     chainResilienceConfig?: ChainResilienceConfig;
   }): void {
-    this.memoryManager = services.memoryManager;
-    this.channel = services.channel;
-    if (services.metricsStorage) {
-      this.metricsStorage = services.metricsStorage;
-    }
-    if (services.learningStorage) {
-      this.learningStorage = services.learningStorage;
-    }
-    if (services.goalStorage) {
-      this.goalStorage = services.goalStorage;
-    }
-    if (services.chainResilienceConfig) {
-      this.chainResilienceConfig = services.chainResilienceConfig;
-    }
+    this.memoryManager = services.memoryManager ?? this.memoryManager;
+    this.channel = services.channel ?? this.channel;
+    this.metricsStorage = services.metricsStorage ?? this.metricsStorage;
+    this.learningStorage = services.learningStorage ?? this.learningStorage;
+    this.goalStorage = services.goalStorage ?? this.goalStorage;
+    this.chainResilienceConfig = services.chainResilienceConfig ?? this.chainResilienceConfig;
   }
 
   /**
@@ -269,12 +261,8 @@ export class DashboardServer {
     agentManager?: DashboardAgentManager;
     agentBudgetTracker?: DashboardAgentBudgetTracker;
   }): void {
-    if (services.agentManager) {
-      this.agentManager = services.agentManager;
-    }
-    if (services.agentBudgetTracker) {
-      this.agentBudgetTracker = services.agentBudgetTracker;
-    }
+    this.agentManager = services.agentManager ?? this.agentManager;
+    this.agentBudgetTracker = services.agentBudgetTracker ?? this.agentBudgetTracker;
   }
 
   /**
@@ -310,10 +298,10 @@ export class DashboardServer {
     soulLoader?: DashboardSoulLoader;
     configSnapshot?: () => Record<string, unknown>;
   }): void {
-    if (services.toolRegistry) this.toolRegistry = services.toolRegistry;
-    if (services.orchestratorSessions) this.orchestratorSessions = services.orchestratorSessions;
-    if (services.soulLoader) this.soulLoader = services.soulLoader;
-    if (services.configSnapshot) this.configSnapshot = services.configSnapshot;
+    this.toolRegistry = services.toolRegistry ?? this.toolRegistry;
+    this.orchestratorSessions = services.orchestratorSessions ?? this.orchestratorSessions;
+    this.soulLoader = services.soulLoader ?? this.soulLoader;
+    this.configSnapshot = services.configSnapshot ?? this.configSnapshot;
   }
 
   /**
@@ -465,19 +453,7 @@ export class DashboardServer {
 
       // Daemon approval management endpoints (POST) — requires dashboard auth
       if (url.startsWith("/api/daemon/approvals/") && req.method === "POST") {
-        // Auth check: require dashboard token
-        if (!this.dashboardToken) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Dashboard authentication not configured" }));
-          return;
-        }
-        const authHeader = req.headers["authorization"] as string | undefined;
-        const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
-        if (!token || !timingSafeTokenCompare(token, this.dashboardToken)) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Authentication required" }));
-          return;
-        }
+        if (!this.requireDashboardAuth(req, res)) return;
 
         const match = url.match(/^\/api\/daemon\/approvals\/([^/]+)\/(approve|deny)$/);
         if (!match) {
@@ -756,18 +732,7 @@ export class DashboardServer {
       // POST /api/deployment/check -- Trigger readiness check (Plan 25-03)
       // SECURITY: Requires dashboard token auth (runs test commands via spawn)
       if (url === "/api/deployment/check" && req.method === "POST") {
-        if (!this.dashboardToken) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Dashboard authentication not configured" }));
-          return;
-        }
-        const authHeader = req.headers["authorization"] as string | undefined;
-        const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
-        if (!token || !timingSafeTokenCompare(token, this.dashboardToken)) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Authentication required" }));
-          return;
-        }
+        if (!this.requireDashboardAuth(req, res)) return;
         if (!this.readinessChecker) {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ enabled: false }));
@@ -858,9 +823,19 @@ export class DashboardServer {
 
       // GET /api/identity -- Identity state
       if (url === "/api/identity") {
-        let identity: IdentityState | null = null;
+        let identity: IdentityState | Record<string, unknown> | null = null;
         if (this.identityManager) {
           try { identity = this.identityManager.getState(); } catch { /* non-fatal */ }
+        }
+        // Provide basic identity info even without identity manager
+        if (!identity) {
+          identity = {
+            agentName: process.env["STRADA_AGENT_NAME"] ?? "Strada Brain",
+            bootCount: 1,
+            cumulativeUptimeMs: process.uptime() * 1000,
+            firstBootTs: Date.now() - process.uptime() * 1000,
+            lastActivityTs: Date.now(),
+          };
         }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ identity }));
@@ -955,6 +930,29 @@ export class DashboardServer {
         resolve();
       });
     });
+  }
+
+  /**
+   * Validate dashboard token from request headers.
+   * Returns true if auth succeeds, false if it sent an error response.
+   */
+  private requireDashboardAuth(
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+  ): boolean {
+    if (!this.dashboardToken) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Dashboard authentication not configured" }));
+      return false;
+    }
+    const authHeader = req.headers["authorization"] as string | undefined;
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
+    if (!token || !timingSafeTokenCompare(token, this.dashboardToken)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Authentication required" }));
+      return false;
+    }
+    return true;
   }
 
   /**

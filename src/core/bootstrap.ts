@@ -781,6 +781,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         reRetrievalConfig: config.reRetrieval,
         embeddingProvider: cachedEmbeddingProvider,
         memoryConfig: { dimensions: config.memory.unified.dimensions, dbBasePath: config.memory.dbPath },
+        soulLoader,
       });
 
       // Add agentManager to daemon context for CLI commands

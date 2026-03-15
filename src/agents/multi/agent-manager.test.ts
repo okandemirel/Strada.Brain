@@ -47,6 +47,7 @@ vi.mock("../../memory/unified/agentdb-memory.js", () => {
       initialize: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
       shutdown: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
       close: vi.fn().mockResolvedValue(undefined),
+      getUserProfileStore: vi.fn().mockReturnValue(null),
     })),
   };
 });

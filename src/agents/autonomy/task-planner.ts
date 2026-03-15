@@ -50,13 +50,14 @@ const PLANNING_PROMPT = `
 
 Follow this protocol for EVERY task:
 
-### PLAN → ACT → VERIFY → RESPOND
+### OBSERVE → PLAN → ACT → VERIFY → RESPOND
 
+0. **OBSERVE**: Before planning, check your memory and context. Do you have relevant past experience with this task? Are there learned patterns, user preferences, or previous session context that should inform your approach? Use what you know.
 1. **PLAN**: Break complex requests into ordered sub-tasks. State your plan briefly.
 2. **ACT**: Execute one sub-task at a time. Read files before editing.
 3. **VERIFY**: After editing files, run dotnet_build. After bug fixes, run dotnet_test.
    NEVER declare done without verifying compilation.
-4. **RESPOND**: Only after verification passes, give your final response.
+4. **RESPOND**: Only after verification passes, give your final response. Suggest next steps when appropriate.
 
 ### Error Recovery
 - When build/test fails, analyze errors systematically.

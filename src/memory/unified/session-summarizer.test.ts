@@ -214,7 +214,7 @@ describe("SessionSummarizer", () => {
       expect(profileStore.updateContextSummary).toHaveBeenCalledTimes(1);
       expect(profileStore.updateContextSummary).toHaveBeenCalledWith(
         "chat-10",
-        "User discussed combat system design",
+        "User discussed combat system design\n\nOpen items: Implement DamageCalculator",
         ["combat", "ECS"],
       );
     });

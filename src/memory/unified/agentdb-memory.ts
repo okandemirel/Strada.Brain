@@ -181,7 +181,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       // Initialize SQLite persistence
       this.initSqlite();
 
-      if (this.sqliteInitFailed) {
+      if (this.sqliteInitFailed && !this.sqliteDb) {
         getLoggerSafe().warn(
           "[AgentDBMemory] Running in degraded mode — SQLite persistence unavailable",
         );
@@ -1670,10 +1670,37 @@ export class AgentDBMemory implements IUnifiedMemory {
       // Create schema using exec (safe - no user input, static SQL only)
       this.sqliteDb.exec(MEMORY_SCHEMA_SQL);
 
-      // Prepare commonly-used statements
-      this.sqliteStatements.set(
-        "upsertMemory",
-        this.sqliteDb.prepare(`
+      this.prepareSqliteStatements();
+
+      getLoggerSafe().info("[AgentDBMemory] SQLite persistence initialized", { path: sqlitePath });
+    } catch (error) {
+      getLoggerSafe().warn(
+        "[AgentDBMemory] File-based SQLite failed, attempting in-memory fallback",
+        { error: String(error) },
+      );
+      // Attempt in-memory fallback so UserProfileStore and persistence still work
+      try {
+        this.sqliteDb = new Database(":memory:");
+        configureSqlitePragmas(this.sqliteDb, "memory");
+        this.sqliteDb.exec(MEMORY_SCHEMA_SQL);
+        this.prepareSqliteStatements();
+        getLoggerSafe().warn("[AgentDBMemory] Running with in-memory SQLite fallback — data will not survive restarts");
+      } catch (fallbackError) {
+        getLoggerSafe().error(
+          "[AgentDBMemory] In-memory SQLite fallback also failed",
+          { error: String(fallbackError) },
+        );
+        this.sqliteDb = null;
+        this.sqliteInitFailed = true;
+      }
+    }
+  }
+
+  /** Prepare commonly-used SQLite statements. Requires this.sqliteDb to be non-null. */
+  private prepareSqliteStatements(): void {
+    this.sqliteStatements.set(
+      "upsertMemory",
+      this.sqliteDb!.prepare(`
           INSERT INTO memories (id, key, value, metadata, embedding, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
@@ -1682,47 +1709,35 @@ export class AgentDBMemory implements IUnifiedMemory {
             embedding = excluded.embedding,
             updated_at = excluded.updated_at
         `),
-      );
+    );
 
-      this.sqliteStatements.set(
-        "getAllMemories",
-        this.sqliteDb.prepare("SELECT * FROM memories ORDER BY created_at DESC"),
-      );
+    this.sqliteStatements.set(
+      "getAllMemories",
+      this.sqliteDb!.prepare("SELECT * FROM memories ORDER BY created_at DESC"),
+    );
 
-      this.sqliteStatements.set(
-        "deleteMemory",
-        this.sqliteDb.prepare("DELETE FROM memories WHERE id = ?"),
-      );
+    this.sqliteStatements.set(
+      "deleteMemory",
+      this.sqliteDb!.prepare("DELETE FROM memories WHERE id = ?"),
+    );
 
-      this.sqliteStatements.set(
-        "upsertPattern",
-        this.sqliteDb.prepare(`
+    this.sqliteStatements.set(
+      "upsertPattern",
+      this.sqliteDb!.prepare(`
           INSERT INTO patterns (id, pattern_key, data, confidence, created_at)
           VALUES (?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             data = excluded.data,
             confidence = excluded.confidence
         `),
-      );
+    );
 
-      this.sqliteStatements.set(
-        "getPatternsByKey",
-        this.sqliteDb.prepare(
-          "SELECT * FROM patterns WHERE pattern_key = ? ORDER BY confidence DESC",
-        ),
-      );
-
-      getLoggerSafe().info("[AgentDBMemory] SQLite persistence initialized", { path: sqlitePath });
-    } catch (error) {
-      getLoggerSafe().error(
-        "[AgentDBMemory] SQLite initialization failed, running in-memory only",
-        {
-          error: String(error),
-        },
-      );
-      this.sqliteDb = null;
-      this.sqliteInitFailed = true;
-    }
+    this.sqliteStatements.set(
+      "getPatternsByKey",
+      this.sqliteDb!.prepare(
+        "SELECT * FROM patterns WHERE pattern_key = ? ORDER BY confidence DESC",
+      ),
+    );
   }
 
   private closeSqlite(): void {

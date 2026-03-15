@@ -98,8 +98,10 @@ export function buildReflectionPrompt(state: AgentState): string {
     "- **CONTINUE** - proceed with the current plan",
     "- **REPLAN** - the current approach needs a new plan",
     "- **DONE** - the task is complete",
+    "- **DONE_WITH_SUGGESTIONS** - task complete, but include proactive next-step recommendations for the user",
     "",
-    "Your final line MUST be one of: **CONTINUE**, **REPLAN**, or **DONE**",
+    "Prefer DONE_WITH_SUGGESTIONS over DONE when you can identify useful follow-up actions.",
+    "Your final line MUST be one of: **CONTINUE**, **REPLAN**, **DONE**, or **DONE_WITH_SUGGESTIONS**",
   );
 
   return lines.join("\n");

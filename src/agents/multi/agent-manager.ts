@@ -29,11 +29,11 @@ import type { IdentityState } from "../../identity/identity-state.js";
 import type { ReRetrievalConfig } from "../../config/config.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
-import type { IMemoryManager } from "../../memory/memory.interface.js";
 import { Orchestrator } from "../orchestrator.js";
 import { AgentDBMemory } from "../../memory/unified/agentdb-memory.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { AgentBudgetTracker } from "./agent-budget-tracker.js";
+import { AgentDBAdapter } from "../../memory/unified/agentdb-adapter.js";
 import {
   createAgentId,
   resolveAgentKey,
@@ -83,6 +83,7 @@ export interface AgentManagerOptions {
   readonly reRetrievalConfig?: ReRetrievalConfig;
   readonly embeddingProvider?: IEmbeddingProvider;
   readonly memoryConfig: MemoryConfig;
+  readonly soulLoader?: import("../../agents/soul/index.js").SoulLoader;
 }
 
 /** In-memory representation of a running agent with its resources */
@@ -419,10 +420,13 @@ export class AgentManager {
 
     // TODO(phase-24): enforce maxMemoryEntries cap on per-agent memory writes
     const memory = new AgentDBMemory({
-      dbPath: join(agentMemoryDir, "memory.db"),
+      dbPath: agentMemoryDir,
       dimensions: this.opts.memoryConfig.dimensions,
     });
     await memory.initialize();
+
+    const adapter = new AgentDBAdapter(memory);
+    const profileStore = adapter.getUserProfileStore() ?? undefined;
 
     const orchestrator = new Orchestrator({
       providerManager: this.opts.providerManager,
@@ -431,7 +435,7 @@ export class AgentManager {
       projectPath: this.opts.projectPath,
       readOnly: this.opts.readOnly,
       requireConfirmation: this.opts.requireConfirmation,
-      memoryManager: memory as unknown as IMemoryManager,
+      memoryManager: adapter,
       metrics: this.opts.metrics,
       ragPipeline: this.opts.ragPipeline,
       rateLimiter: this.opts.rateLimiter,
@@ -444,6 +448,8 @@ export class AgentManager {
       getIdentityState: this.opts.getIdentityState,
       reRetrievalConfig: this.opts.reRetrievalConfig,
       embeddingProvider: this.opts.embeddingProvider,
+      userProfileStore: profileStore,
+      soulLoader: this.opts.soulLoader,
     });
 
     // Inject delegation tools if factory is available (Phase 24)

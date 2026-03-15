@@ -120,9 +120,14 @@ export class SessionSummarizer {
 
     if (summary.summary) {
       try {
+        // Append open items to summary so they're preserved for next session context
+        let fullSummary = summary.summary;
+        if (summary.openItems.length > 0) {
+          fullSummary += "\n\nOpen items: " + summary.openItems.join("; ");
+        }
         this.profileStore.updateContextSummary(
           chatId,
-          summary.summary,
+          fullSummary,
           summary.topics,
         );
       } catch (err) {
