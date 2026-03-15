@@ -1039,6 +1039,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Wire up message handler
   if (agentManager) {
+    // Give AgentManager the command handler so prefix commands bypass LLM
+    agentManager.setCommandHandler(commandHandler);
+
     // Multi-agent mode: route through AgentManager (AGENT-06)
     channel.onMessage(async (msg) => {
       // Interrupt consolidation on user activity (MEM-13)

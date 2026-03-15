@@ -16,6 +16,8 @@ import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import type { IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import type { IncomingMessage } from "../../channels/channel-messages.interface.js";
+import { detectCommand } from "../../tasks/command-detector.js";
+import type { CommandHandler } from "../../tasks/command-handler.js";
 import type { IChannelAdapter } from "../../channels/channel.interface.js";
 import type { ProviderManager } from "../../agents/providers/provider-manager.js";
 import type { MetricsCollector } from "../../dashboard/metrics.js";
@@ -116,6 +118,9 @@ export class AgentManager {
   /** Optional factory for injecting delegation tools per-agent (Phase 24) */
   private delegationToolFactory?: (parentAgentId: AgentId, depth: number) => ITool[];
 
+  /** Optional command handler for intercepting prefix commands before LLM routing */
+  private commandHandler?: CommandHandler;
+
   constructor(opts: AgentManagerOptions) {
     this.config = opts.config;
     this.registry = opts.registry;
@@ -148,6 +153,11 @@ export class AgentManager {
     this.delegationToolFactory = factory;
   }
 
+  /** Set the command handler so prefix commands bypass the LLM pipeline */
+  setCommandHandler(handler: CommandHandler): void {
+    this.commandHandler = handler;
+  }
+
   // ===========================================================================
   // Public API -- Routing
   // ===========================================================================
@@ -157,6 +167,15 @@ export class AgentManager {
    * Creates agent lazily on first message. Enforces budget and status checks.
    */
   async routeMessage(msg: IncomingMessage): Promise<string | void> {
+    // Intercept prefix commands before routing to agent/LLM (instant response)
+    if (this.commandHandler && msg.text.trim()) {
+      const classification = detectCommand(msg.text);
+      if (classification.type === "command") {
+        await this.commandHandler.handle(msg.chatId, classification.command, classification.args);
+        return;
+      }
+    }
+
     const liveAgent = await this.resolveAgent(msg);
 
     // Budget check before processing
