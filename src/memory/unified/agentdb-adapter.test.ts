@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AgentDBMemory } from "./agentdb-memory.js";
-import type { MemoryEntry, RetrievalResult } from "../memory.interface.js";
+import type { MemoryEntry, ConversationMemoryEntry, RetrievalResult } from "../memory.interface.js";
 import type { UnifiedMemoryStats, HnswHealth } from "./unified-memory.interface.js";
 import { MemoryTier } from "./unified-memory.interface.js";
-import type { MemoryId, ChatId, NormalizedScore, DurationMs } from "../../types/index.js";
+import type { MemoryId, ChatId, NormalizedScore, DurationMs, TimestampMs } from "../../types/index.js";
 import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 
 // Mock the logger to suppress output during tests
@@ -536,16 +536,252 @@ describe("AgentDBAdapter", () => {
   });
 
   // =========================================================================
-  // Stub methods
+  // Core method: getChatHistory
+  // =========================================================================
+
+  describe("getChatHistory()", () => {
+    it("delegates to agentdb.getChatHistory() and maps entries to ConversationMemoryEntry", async () => {
+      const chatId = "chat_42" as ChatId;
+      const mockEntries: MemoryEntry[] = [
+        {
+          id: "mem_100" as MemoryId,
+          type: "conversation",
+          content: "User asked about deployment",
+          createdAt: 1700000000000 as TimestampMs,
+          accessCount: 2,
+          tags: ["conversation"],
+          importance: "medium",
+          archived: false,
+          metadata: { userMessage: "How do I deploy?" },
+          chatId,
+          turnNumber: 1,
+        } as unknown as MemoryEntry,
+        {
+          id: "mem_101" as MemoryId,
+          type: "conversation",
+          content: "Follow-up question",
+          createdAt: 1700000001000 as TimestampMs,
+          accessCount: 1,
+          tags: ["conversation"],
+          importance: "low",
+          archived: false,
+          metadata: {},
+          chatId,
+        } as unknown as MemoryEntry,
+      ];
+      (mockDb.getChatHistory as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntries);
+
+      const result = await adapter.getChatHistory(chatId, { limit: 10 });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.value).toHaveLength(2);
+        expect(result.value[0].type).toBe("conversation");
+        expect(result.value[0].chatId).toBe(chatId);
+        expect(result.value[0].userMessage).toBe("How do I deploy?");
+        // When no userMessage in metadata, falls back to content
+        expect(result.value[1].userMessage).toBe("Follow-up question");
+      }
+      expect(mockDb.getChatHistory).toHaveBeenCalledWith(chatId, 10);
+    });
+
+    it("filters out non-conversation entries", async () => {
+      const chatId = "chat_43" as ChatId;
+      const mockEntries: MemoryEntry[] = [
+        {
+          id: "mem_200" as MemoryId,
+          type: "conversation",
+          content: "A conversation entry",
+          createdAt: 1700000000000 as TimestampMs,
+          accessCount: 0,
+          tags: [],
+          importance: "medium",
+          archived: false,
+          metadata: {},
+        } as unknown as MemoryEntry,
+        {
+          id: "mem_201" as MemoryId,
+          type: "note",
+          content: "A note entry",
+          createdAt: 1700000001000 as TimestampMs,
+          accessCount: 0,
+          tags: [],
+          importance: "low",
+          archived: false,
+          metadata: {},
+        } as unknown as MemoryEntry,
+      ];
+      (mockDb.getChatHistory as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntries);
+
+      const result = await adapter.getChatHistory(chatId);
+
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.value).toHaveLength(1);
+        expect(result.value[0].id).toBe("mem_200");
+      }
+    });
+
+    it("returns empty array when no entries exist", async () => {
+      (mockDb.getChatHistory as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      const result = await adapter.getChatHistory("chat_empty" as ChatId);
+
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.value).toEqual([]);
+      }
+    });
+
+    it("returns err() when getChatHistory throws", async () => {
+      (mockDb.getChatHistory as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("db error"));
+
+      const result = await adapter.getChatHistory("chat_1" as ChatId);
+
+      expect(result.kind).toBe("err");
+      if (result.kind === "err") {
+        expect(result.error.message).toBe("db error");
+      }
+    });
+  });
+
+  // =========================================================================
+  // Core method: storeNote
+  // =========================================================================
+
+  describe("storeNote()", () => {
+    it("delegates to agentdb.storeNote() and returns entry.id wrapped in ok()", async () => {
+      const mockEntry = {
+        id: "mem_note_1" as MemoryId,
+        type: "note",
+        content: "important note",
+      } as unknown as MemoryEntry;
+      (mockDb.storeNote as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntry);
+
+      const result = await adapter.storeNote("important note", { tags: ["deploy", "config"] });
+
+      expect(result).toEqual({ kind: "ok", value: "mem_note_1" });
+      expect(mockDb.storeNote).toHaveBeenCalledWith("important note", ["deploy", "config"]);
+    });
+
+    it("passes undefined tags when options is omitted", async () => {
+      const mockEntry = {
+        id: "mem_note_2" as MemoryId,
+        type: "note",
+        content: "bare note",
+      } as unknown as MemoryEntry;
+      (mockDb.storeNote as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntry);
+
+      const result = await adapter.storeNote("bare note");
+
+      expect(result).toEqual({ kind: "ok", value: "mem_note_2" });
+      expect(mockDb.storeNote).toHaveBeenCalledWith("bare note", undefined);
+    });
+
+    it("returns err() when storeNote throws", async () => {
+      (mockDb.storeNote as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("storage failed"));
+
+      const result = await adapter.storeNote("note content");
+
+      expect(result.kind).toBe("err");
+      if (result.kind === "err") {
+        expect(result.error.message).toBe("storage failed");
+      }
+    });
+
+    it("wraps non-Error throws in Error", async () => {
+      (mockDb.storeNote as ReturnType<typeof vi.fn>).mockRejectedValue("string error");
+
+      const result = await adapter.storeNote("note content");
+
+      expect(result.kind).toBe("err");
+      if (result.kind === "err") {
+        expect(result.error.message).toBe("string error");
+      }
+    });
+  });
+
+  // =========================================================================
+  // Core method: retrieveFromChat
+  // =========================================================================
+
+  describe("retrieveFromChat()", () => {
+    it("delegates to agentdb.retrieve() with chat mode and filters conversation entries", async () => {
+      const chatId = "chat_50" as ChatId;
+      const mockResults: RetrievalResult[] = [
+        {
+          entry: {
+            id: "mem_300" as MemoryId,
+            type: "conversation",
+            content: "matching conversation",
+            chatId,
+            userMessage: "test",
+          } as unknown as MemoryEntry,
+          score: 0.85 as NormalizedScore,
+        },
+        {
+          entry: {
+            id: "mem_301" as MemoryId,
+            type: "note",
+            content: "matching note",
+          } as unknown as MemoryEntry,
+          score: 0.75 as NormalizedScore,
+        },
+      ];
+      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue(mockResults);
+
+      const result = await adapter.retrieveFromChat(chatId, { query: "test query", limit: 5 });
+
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        // Only conversation entries should be returned
+        expect(result.value).toHaveLength(1);
+        expect(result.value[0].entry.type).toBe("conversation");
+        expect(result.value[0].entry.id).toBe("mem_300");
+      }
+      expect(mockDb.retrieve).toHaveBeenCalledWith("test query", {
+        mode: "chat",
+        chatId,
+        limit: 5,
+        query: "test query",
+      });
+    });
+
+    it("uses empty string query when no query option is provided", async () => {
+      const chatId = "chat_51" as ChatId;
+      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      const result = await adapter.retrieveFromChat(chatId);
+
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.value).toEqual([]);
+      }
+      expect(mockDb.retrieve).toHaveBeenCalledWith("", {
+        mode: "chat",
+        chatId,
+        limit: undefined,
+        query: "",
+      });
+    });
+
+    it("returns err() when retrieve throws", async () => {
+      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("retrieve failed"));
+
+      const result = await adapter.retrieveFromChat("chat_1" as ChatId, { query: "test" });
+
+      expect(result.kind).toBe("err");
+      if (result.kind === "err") {
+        expect(result.error.message).toBe("retrieve failed");
+      }
+    });
+  });
+
+  // =========================================================================
+  // Remaining stub methods
   // =========================================================================
 
   describe("stub methods", () => {
-    it("storeNote returns ok with a stub MemoryId", async () => {
-      const result = await adapter.storeNote("content", {});
-
-      expect(result.kind).toBe("ok");
-    });
-
     it("storeError returns ok with a stub MemoryId", async () => {
       const result = await adapter.storeError(new Error("test"), { category: "test" });
 

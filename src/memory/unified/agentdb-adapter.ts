@@ -202,8 +202,12 @@ export class AgentDBAdapter implements IMemoryManager {
       metadata?: MemoryMetadata;
     },
   ): Promise<Result<MemoryId, Error>> {
-    getLoggerSafe().debug("[AgentDBAdapter] storeNote stub called");
-    return ok("stub_note_id" as MemoryId);
+    try {
+      const entry = await this.agentdb.storeNote(_content, _options?.tags);
+      return ok(entry.id);
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
   }
 
   async storeError(
@@ -286,8 +290,21 @@ export class AgentDBAdapter implements IMemoryManager {
     _chatId: ChatId,
     _options?: Omit<ChatRetrievalOptions, "mode" | "chatId">,
   ): Promise<Result<RetrievalResult<ConversationMemoryEntry>[], Error>> {
-    getLoggerSafe().debug("[AgentDBAdapter] retrieveFromChat stub called");
-    return ok([]);
+    try {
+      const query = _options?.query ?? "";
+      const results = await this.agentdb.retrieve(query, {
+        mode: "chat" as const,
+        chatId: _chatId,
+        limit: _options?.limit,
+        query,
+      });
+      const filtered = results.filter(
+        (r): r is RetrievalResult<ConversationMemoryEntry> => r.entry.type === "conversation",
+      );
+      return ok(filtered);
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
   }
 
   // =========================================================================
