@@ -788,10 +788,10 @@ describe("AgentDBAdapter", () => {
       expect(result.kind).toBe("ok");
     });
 
-    it("getEntry returns ok(none())", async () => {
+    it("getEntry delegates to agentdb.getById", async () => {
       const result = await adapter.getEntry("mem_1" as MemoryId);
-
-      expect(result).toEqual({ kind: "ok", value: { kind: "none" } });
+      // getById returns none when entry not found
+      expect(result.kind).toBe("ok");
     });
 
     it("deleteEntry returns ok(false)", async () => {

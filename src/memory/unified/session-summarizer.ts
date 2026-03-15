@@ -177,7 +177,12 @@ export class SessionSummarizer {
   private parseResponse(responseText: string): SessionSummary {
     const cleaned = this.stripMarkdownFencing(responseText).trim();
 
-    const parsed: unknown = JSON.parse(cleaned);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      return { ...EMPTY_SUMMARY };
+    }
 
     if (typeof parsed !== "object" || parsed === null) {
       return { ...EMPTY_SUMMARY };

@@ -142,6 +142,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   private sqliteStatements: Map<string, Database.Statement> = new Map();
   private decayConfig: MemoryDecayConfig | null = null;
   private userProfileStore: UserProfileStore | null = null;
+  private rebuildInProgress = false;
 
   constructor(config: Partial<UnifiedMemoryConfig> = {}) {
     this.config = { ...DEFAULT_MEMORY_CONFIG, ...config };
@@ -1320,6 +1321,12 @@ export class AgentDBMemory implements IUnifiedMemory {
    * Individual entry failures are logged and skipped — they will not abort the rebuild.
    */
   private async rebuildHnswIndex(): Promise<void> {
+    if (this.rebuildInProgress) {
+      getLoggerSafe().warn("[AgentDBMemory] HNSW rebuild already in progress, skipping");
+      return;
+    }
+    this.rebuildInProgress = true;
+    try {
     getLoggerSafe().info("[AgentDBMemory] Starting HNSW index rebuild with new dimensions", {
       dimensions: this.config.dimensions,
     });
@@ -1418,6 +1425,9 @@ export class AgentDBMemory implements IUnifiedMemory {
       totalEntries,
       newDimensions: this.config.dimensions,
     });
+    } finally {
+      this.rebuildInProgress = false;
+    }
   }
 
   /**

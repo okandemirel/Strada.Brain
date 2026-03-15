@@ -232,15 +232,32 @@ export class AgentDBAdapter implements IMemoryManager {
   }
 
   async storeEntry<T extends MemoryEntry>(
-    _entry: Omit<T, "id" | "createdAt" | "accessCount">,
+    entry: Omit<T, "id" | "createdAt" | "accessCount">,
   ): Promise<Result<T, Error>> {
-    getLoggerSafe().debug("[AgentDBAdapter] storeEntry stub called");
-    return err(new Error("storeEntry not yet implemented in AgentDBAdapter"));
+    try {
+      const result = await this.agentdb.storeEntry(entry as Parameters<typeof this.agentdb.storeEntry>[0]);
+      if (result.kind === "ok") {
+        return ok(result.value as T);
+      }
+      return err(result.error);
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
   }
 
-  async getEntry<T extends MemoryEntry>(_id: MemoryId): Promise<Result<Option<T>, Error>> {
-    getLoggerSafe().debug("[AgentDBAdapter] getEntry stub called");
-    return ok(none());
+  async getEntry<T extends MemoryEntry>(id: MemoryId): Promise<Result<Option<T>, Error>> {
+    try {
+      const result = await this.agentdb.getById(id);
+      if (!result || result.kind !== "ok") {
+        return ok(none());
+      }
+      if (result.value.kind === "some") {
+        return ok(some(result.value.value as T));
+      }
+      return ok(none());
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
   }
 
   async updateEntry<T extends MemoryEntry>(
