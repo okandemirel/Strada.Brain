@@ -192,19 +192,25 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Initialize security
   const auth = initializeAuth(config, channelType, logger);
 
+  // Phase 0: Resolve embedding provider (needed by both memory and RAG)
+  const embeddingResult = await resolveAndCacheEmbeddings(config, logger);
+  const cachedEmbeddingProvider = embeddingResult.cachedProvider;
+
   // Phase 1: Initialize independent services in parallel
   const [providerInit, memoryManager, channel] = await Promise.all([
     initializeAIProvider(config, logger),
-    initializeMemory(config, logger),
+    initializeMemory(config, logger, cachedEmbeddingProvider),
     initializeChannel(channelType, config, auth, logger),
   ]);
   const providerManager = providerInit.manager;
   const startupNotices = [...providerInit.notices];
+  if (embeddingResult.notice) {
+    startupNotices.push(embeddingResult.notice);
+  }
 
-  // Phase 2: RAG + dashboard (depend on memoryManager / config only)
-  const ragResult = await initializeRAG(config, logger);
+  // Phase 2: RAG pipeline (reuses the already-resolved embedding provider)
+  const ragResult = await initializeRAG(config, logger, cachedEmbeddingProvider);
   const ragPipeline = ragResult.pipeline;
-  const cachedEmbeddingProvider = ragResult.cachedProvider;
   if (ragResult.notice) {
     startupNotices.push(ragResult.notice);
   }
@@ -1291,6 +1297,7 @@ export async function initializeAIProvider(
 export async function initializeMemory(
   config: Config,
   logger: winston.Logger,
+  embeddingProvider?: CachedEmbeddingProvider,
 ): Promise<IMemoryManager | undefined> {
   if (!config.memory.enabled) {
     return undefined;
@@ -1305,7 +1312,7 @@ export async function initializeMemory(
   const agentdbPath = join(config.memory.dbPath, "agentdb");
   const agentdbConfig = {
     dbPath: agentdbPath,
-    dimensions: config.memory.unified.dimensions,
+    dimensions: embeddingProvider?.dimensions ?? config.memory.unified.dimensions,
     maxEntriesPerTier: {
       working: config.memory.unified.tierLimits.working,
       ephemeral: config.memory.unified.tierLimits.ephemeral,
@@ -1313,11 +1320,17 @@ export async function initializeMemory(
     },
     enableAutoTiering: config.memory.unified.autoTiering,
     ephemeralTtlMs: (config.memory.unified.ephemeralTtlHours * 3600000) as DurationMs,
+    embeddingProvider: embeddingProvider
+      ? async (text: string) => {
+          const batch = await embeddingProvider.embed([text]);
+          return batch.embeddings[0]!;
+        }
+      : undefined,
   };
 
   // Post-init steps shared between first attempt and repair path
   async function finalizeAgentDB(agentdb: AgentDBMemory): Promise<AgentDBAdapter> {
-    if (!config.rag.enabled) {
+    if (!embeddingProvider) {
       logger.warn(
         "AgentDB running with hash-based fallback embeddings - semantic search quality is degraded. Configure an embedding provider for better results.",
       );
@@ -1447,6 +1460,54 @@ async function initializeFileMemory(
   }
 }
 
+interface EmbeddingResolutionResult {
+  cachedProvider?: CachedEmbeddingProvider;
+  notice?: string;
+}
+
+/**
+ * Resolve and cache the embedding provider independently from the RAG pipeline.
+ * This allows the embedding provider to be shared with AgentDBMemory and learning.
+ */
+async function resolveAndCacheEmbeddings(
+  config: Config,
+  logger: winston.Logger,
+): Promise<EmbeddingResolutionResult> {
+  if (!config.rag.enabled) {
+    logger.info("Embeddings: RAG disabled by configuration, no embedding provider resolved");
+    return {};
+  }
+
+  try {
+    const resolution = resolveEmbeddingProvider(config);
+    if (!resolution) {
+      const notice =
+        "RAG disabled: no compatible embedding provider found. Semantic code search is unavailable.";
+      logger.warn("Embeddings: no compatible embedding provider found");
+      return { notice };
+    }
+
+    logger.info(`Embeddings: using ${resolution.provider.name}`, {
+      source: resolution.source,
+      dimensions: resolution.provider.dimensions,
+    });
+
+    const cachedProvider = new CachedEmbeddingProvider(resolution.provider, {
+      persistPath: join(config.memory.dbPath, "cache"),
+    });
+    await cachedProvider.initialize();
+
+    return { cachedProvider };
+  } catch (error) {
+    const notice =
+      "RAG disabled: embedding initialization failed. Semantic code search is unavailable.";
+    logger.warn("Embedding resolution failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { notice };
+  }
+}
+
 interface RAGResult {
   pipeline?: IRAGPipeline;
   cachedProvider?: CachedEmbeddingProvider;
@@ -1456,30 +1517,22 @@ interface RAGResult {
 async function initializeRAG(
   config: Config,
   logger: winston.Logger,
+  cachedProvider?: CachedEmbeddingProvider,
 ): Promise<RAGResult> {
   if (!config.rag.enabled) {
     logger.info("RAG: disabled by configuration");
     return {};
   }
 
+  if (!cachedProvider) {
+    // No provider was resolved upstream — RAG cannot function
+    const notice =
+      "RAG disabled: no embedding provider available. Semantic code search is unavailable.";
+    logger.warn("RAG: disabled — no embedding provider available");
+    return { notice };
+  }
+
   try {
-    const resolution = resolveEmbeddingProvider(config);
-    if (!resolution) {
-      const notice =
-        "RAG disabled: no compatible embedding provider found. Semantic code search is unavailable.";
-      logger.warn("RAG: disabled — no compatible embedding provider found");
-      return { notice };
-    }
-
-    logger.info(`RAG: using ${resolution.provider.name} for embeddings`, {
-      source: resolution.source,
-    });
-
-    const cachedProvider = new CachedEmbeddingProvider(resolution.provider, {
-      persistPath: join(config.memory.dbPath, "cache"),
-    });
-    await cachedProvider.initialize();
-
     const vectorStorePath = join(config.memory.dbPath, "vectors");
     const vectorStore = new FileVectorStore(vectorStorePath, cachedProvider.dimensions);
 
