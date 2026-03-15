@@ -312,31 +312,25 @@ export class Orchestrator {
    * Build 4-layer context injection for system prompt enrichment.
    * Layers: User Profile, Last Session Summary, Open Tasks/Goals, Semantic Memory.
    */
-  private async buildContextLayers(chatId: string, userMessage: string): Promise<{ context: string; contentHashes: string[] }> {
+  private async buildContextLayers(chatId: string, userMessage: string, profile: import("../memory/unified/user-profile-store.js").UserProfile | null): Promise<{ context: string; contentHashes: string[] }> {
     const layers: string[] = [];
     const contentHashes: string[] = [];
 
     // Layer 1: User Profile
-    if (this.userProfileStore) {
-      const profile = this.userProfileStore.getProfile(chatId);
-      if (profile) {
-        const parts: string[] = [];
-        if (profile.displayName) parts.push(`Name: ${profile.displayName}`);
-        parts.push(`Language: ${profile.language}`);
-        if (profile.activePersona !== "default") parts.push(`Communication Style: ${profile.activePersona}`);
-        const verbosity = (profile.preferences as Record<string, unknown>).verbosity;
-        if (verbosity) parts.push(`Detail Level: ${String(verbosity)}`);
-        if (parts.length > 0) layers.push(`## User Context\n${parts.join("\n")}`);
-      }
+    if (profile) {
+      const parts: string[] = [];
+      if (profile.displayName) parts.push(`Name: ${profile.displayName}`);
+      parts.push(`Language: ${profile.language}`);
+      if (profile.activePersona !== "default") parts.push(`Communication Style: ${profile.activePersona}`);
+      const verbosity = (profile.preferences as Record<string, unknown>).verbosity;
+      if (verbosity) parts.push(`Detail Level: ${String(verbosity)}`);
+      if (parts.length > 0) layers.push(`## User Context\n${parts.join("\n")}`);
     }
 
     // Layer 2: Last Session Summary
-    if (this.userProfileStore) {
-      const profile = this.userProfileStore.getProfile(chatId);
-      if (profile?.contextSummary) {
-        layers.push(`## Previous Session\n${profile.contextSummary}`);
-        contentHashes.push(profile.contextSummary);
-      }
+    if (profile?.contextSummary) {
+      layers.push(`## Previous Session\n${profile.contextSummary}`);
+      contentHashes.push(profile.contextSummary);
     }
 
     // Layer 3: Open Tasks/Goals
@@ -818,9 +812,13 @@ export class Orchestrator {
     const session = this.getOrCreateSession(chatId);
     session.lastActivity = new Date();
 
-    // Touch user profile (lastSeenAt)
+    // Touch user profile (lastSeenAt) — debounced to avoid per-message SQLite writes
     if (this.userProfileStore) {
-      this.userProfileStore.touchLastSeen(chatId);
+      const lastTouch = this.lastPersistTime.get(`touch:${chatId}`) ?? 0;
+      if (Date.now() - lastTouch > 60_000) {
+        this.userProfileStore.touchLastSeen(chatId);
+        this.lastPersistTime.set(`touch:${chatId}`, Date.now());
+      }
     }
 
     // Add user message (with vision blocks if applicable)
@@ -887,22 +885,19 @@ export class Orchestrator {
     const logger = getLogger();
     const provider = this.providerManager.getProvider(chatId);
 
+    // Load user profile once for the entire agent loop
+    const profile = this.userProfileStore?.getProfile(chatId) ?? null;
+
     // Per-user persona override (from profile, not global SoulLoader mutation)
     let personaContent: string | undefined;
-    if (this.userProfileStore && this.soulLoader) {
-      const profile = this.userProfileStore.getProfile(chatId);
-      if (profile?.activePersona && profile.activePersona !== "default") {
-        personaContent = await this.soulLoader.getProfileContent(profile.activePersona) ?? undefined;
-      }
+    if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
+      personaContent = await this.soulLoader.getProfileContent(profile.activePersona) ?? undefined;
     }
     let systemPrompt = this.injectSoulPersonality(this.systemPrompt, channelType, personaContent);
 
     // Language directive
-    if (this.userProfileStore) {
-      const profile = this.userProfileStore.getProfile(chatId);
-      if (profile?.language && profile.language !== "en") {
-        systemPrompt += `\nIMPORTANT: Communicate with the user in ${profile.language}.\n`;
-      }
+    if (profile?.language && profile.language !== "en") {
+      systemPrompt += `\nIMPORTANT: Communicate with the user in ${profile.language}.\n`;
     }
 
     // 4-layer context injection (user profile, session summary, open tasks, semantic memory)
@@ -918,7 +913,7 @@ export class Orchestrator {
           : ""
       : "";
 
-    const { context: contextLayers, contentHashes } = await this.buildContextLayers(chatId, queryText);
+    const { context: contextLayers, contentHashes } = await this.buildContextLayers(chatId, queryText, profile);
     systemPrompt += contextLayers;
     const initialContentHashes: string[] = [...contentHashes];
 
@@ -964,9 +959,7 @@ export class Orchestrator {
     }
 
     // First-time user onboarding directive
-    if (this.userProfileStore) {
-      const profile = this.userProfileStore.getProfile(chatId);
-      if (profile && !profile.displayName) {
+    if (profile && !profile.displayName) {
         systemPrompt += `\n\n## First-Time User Onboarding
 This is a new user who hasn't been onboarded yet. Before answering their question, warmly introduce yourself and use the ask_user tool to learn about them:
 1. Ask their name (how to address them)
@@ -974,7 +967,6 @@ This is a new user who hasn't been onboarded yet. Before answering their questio
 3. Ask how detailed they want explanations (brief/moderate/detailed)
 After receiving answers, acknowledge them warmly and proceed to answer their original question.
 Be natural and conversational — this should feel like meeting a new colleague, not filling out a form.\n`;
-      }
     }
 
     // ─── Autonomy layer ──────────────────────────────────────────────────
@@ -1880,7 +1872,10 @@ Be natural and conversational — this should feel like meeting a new colleague,
         const sanitized = summary.replace(API_KEY_PATTERN, "[REDACTED]");
         // Extract first user message and last assistant message for structured storage
         const userMsg = messages.find((m) => m.role === "user");
-        const assistantMsg = [...messages].reverse().find((m) => m.role === "assistant");
+        let assistantMsg: ConversationMessage | undefined;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i]!.role === "assistant") { assistantMsg = messages[i]; break; }
+        }
         const extractText = (msg: ConversationMessage | undefined): string | undefined => {
           if (!msg) return undefined;
           if (typeof msg.content === "string") return msg.content.slice(0, 500);

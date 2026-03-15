@@ -16,16 +16,14 @@ import type {
 } from "../../agents/providers/provider-core.interface.js";
 import type { UserProfileStore } from "./user-profile-store.js";
 
-// Try to use structured logger; fall back to console in test/bootstrap scenarios
-let log: { warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
-try {
-  const { getLogger } = await import("../../utils/logger.js");
-  log = getLogger();
-} catch {
-  log = {
-    warn: (...args: unknown[]) => console.warn("[SessionSummarizer]", ...args),
-    error: (...args: unknown[]) => console.error("[SessionSummarizer]", ...args),
-  };
+import { getLogger } from "../../utils/logger.js";
+
+function getLoggerSafe() {
+  try {
+    return getLogger();
+  } catch {
+    return console;
+  }
 }
 
 // =============================================================================
@@ -104,7 +102,7 @@ export class SessionSummarizer {
 
       return this.parseResponse(response.text);
     } catch (err) {
-      log.warn("Session summarization failed", { error: err });
+      getLoggerSafe().warn("Session summarization failed", { error: err });
       return { ...EMPTY_SUMMARY };
     }
   }
@@ -128,7 +126,7 @@ export class SessionSummarizer {
           summary.topics,
         );
       } catch (err) {
-        log.warn("Failed to update profile after summarization", { error: err });
+        getLoggerSafe().warn("Failed to update profile after summarization", { error: err });
       }
     }
 

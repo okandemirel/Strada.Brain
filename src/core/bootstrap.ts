@@ -436,8 +436,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let userProfileStore: import("../memory/unified/user-profile-store.js").UserProfileStore | undefined;
   if (memoryManager) {
     try {
-      const { AgentDBAdapter: AdapterType } = await import("../memory/unified/agentdb-adapter.js");
-      if (memoryManager instanceof AdapterType) {
+      if (memoryManager instanceof AgentDBAdapter) {
         const profileStore = memoryManager.getUserProfileStore();
         if (profileStore) {
           userProfileStore = profileStore;
