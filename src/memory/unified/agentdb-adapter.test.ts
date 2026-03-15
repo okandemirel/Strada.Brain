@@ -385,7 +385,13 @@ describe("AgentDBAdapter", () => {
       const result = await adapter.storeConversation(chatId, "test summary", { tags: ["a", "b"] });
 
       expect(result).toEqual({ kind: "ok", value: "mem_123" });
-      expect(mockDb.storeConversation).toHaveBeenCalledWith(chatId, "test summary", ["a", "b"]);
+      expect(mockDb.storeConversation).toHaveBeenCalledWith(
+        chatId,
+        "test summary",
+        ["a", "b"],
+        undefined,
+        { userMessage: undefined, assistantMessage: undefined },
+      );
     });
 
     it("handles missing options", async () => {
@@ -395,7 +401,13 @@ describe("AgentDBAdapter", () => {
       const result = await adapter.storeConversation("chat_2" as ChatId, "summary");
 
       expect(result).toEqual({ kind: "ok", value: "mem_456" });
-      expect(mockDb.storeConversation).toHaveBeenCalledWith("chat_2", "summary", undefined);
+      expect(mockDb.storeConversation).toHaveBeenCalledWith(
+        "chat_2",
+        "summary",
+        undefined,
+        undefined,
+        { userMessage: undefined, assistantMessage: undefined },
+      );
     });
 
     it("returns err() when storeConversation throws", async () => {

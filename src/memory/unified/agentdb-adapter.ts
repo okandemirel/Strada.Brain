@@ -144,7 +144,16 @@ export class AgentDBAdapter implements IMemoryManager {
     },
   ): Promise<Result<MemoryId, Error>> {
     try {
-      const entry = await this.agentdb.storeConversation(chatId, summary, options?.tags);
+      const entry = await this.agentdb.storeConversation(
+        chatId,
+        summary,
+        options?.tags,
+        undefined, // tier defaults to Ephemeral
+        {
+          userMessage: options?.userMessage,
+          assistantMessage: options?.assistantMessage,
+        },
+      );
       return ok(entry.id);
     } catch (e) {
       return err(e instanceof Error ? e : new Error(String(e)));
@@ -155,8 +164,28 @@ export class AgentDBAdapter implements IMemoryManager {
     _chatId: ChatId,
     _options?: { limit?: number; before?: TimestampMs },
   ): Promise<Result<ConversationMemoryEntry[], Error>> {
-    getLoggerSafe().debug("[AgentDBAdapter] getChatHistory stub called");
-    return ok([]);
+    try {
+      const entries = await this.agentdb.getChatHistory(_chatId, _options?.limit);
+      const conversations: ConversationMemoryEntry[] = entries
+        .filter((e): boolean => e.type === "conversation")
+        .map((e) => ({
+          id: e.id,
+          type: "conversation" as const,
+          content: e.content,
+          createdAt: e.createdAt,
+          accessCount: e.accessCount,
+          tags: e.tags,
+          importance: e.importance,
+          archived: e.archived,
+          metadata: e.metadata,
+          chatId: (e as Record<string, unknown>).chatId as ChatId ?? _chatId,
+          userMessage: (e.metadata?.userMessage as string) ?? e.content,
+          turnNumber: (e as Record<string, unknown>).turnNumber as number | undefined,
+        }));
+      return ok(conversations);
+    } catch (e) {
+      return err(e instanceof Error ? e : new Error(String(e)));
+    }
   }
 
   // =========================================================================

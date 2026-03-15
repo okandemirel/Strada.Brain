@@ -1749,7 +1749,25 @@ export class Orchestrator {
       if (summary) {
         // Sanitize before persisting — strip any leaked API keys/secrets
         const sanitized = summary.replace(API_KEY_PATTERN, "[REDACTED]");
-        await this.memoryManager.storeConversation(chatId as ChatId, sanitized);
+        // Extract first user message and last assistant message for structured storage
+        const userMsg = messages.find((m) => m.role === "user");
+        const assistantMsg = [...messages].reverse().find((m) => m.role === "assistant");
+        const extractText = (msg: ConversationMessage | undefined): string | undefined => {
+          if (!msg) return undefined;
+          if (typeof msg.content === "string") return msg.content.slice(0, 500);
+          if (Array.isArray(msg.content)) {
+            const texts = (msg.content as Array<{ type: string; text?: string }>)
+              .filter((b) => b.type === "text" && b.text)
+              .map((b) => b.text)
+              .join(" ");
+            return texts.slice(0, 500) || undefined;
+          }
+          return undefined;
+        };
+        await this.memoryManager.storeConversation(chatId as ChatId, sanitized, {
+          userMessage: extractText(userMsg),
+          assistantMessage: extractText(assistantMsg),
+        });
       }
     } catch {
       // Memory persistence failure is non-fatal
