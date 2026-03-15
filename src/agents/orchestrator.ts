@@ -79,7 +79,35 @@ const VALID_DETAIL_LEVELS = new Set(["brief", "moderate", "detailed"]);
 
 /** Strip markdown control characters from user-supplied display names. */
 function sanitizeDisplayName(raw: string): string {
-  return raw.replace(/[*[\]()#`>!\\<&]/g, "").trim();
+  return raw.replace(/[*[\]()#`>!\\<&\r\n]/g, "").trim();
+}
+
+/** Build a list of profile attribute lines for system prompt injection. */
+function buildProfileParts(profile: { displayName?: string; language: string; activePersona: string; preferences: unknown }): string[] {
+  const parts: string[] = [];
+  if (profile.displayName) parts.push(`Name: ${profile.displayName}`);
+  parts.push(`Language: ${profile.language}`);
+  if (profile.activePersona !== "default") parts.push(`Communication Style: ${profile.activePersona}`);
+  const verbosity = (profile.preferences as Record<string, unknown>).verbosity;
+  if (verbosity) parts.push(`Detail Level: ${String(verbosity)}`);
+  return parts;
+}
+
+const FIRST_TIME_USER_PROMPT = `\n\n## First-Time User
+This is a new user you haven't met before. In your FIRST response:
+1. Introduce yourself warmly as Strada Brain
+2. Ask their name naturally (e.g., "What should I call you?")
+3. Match their language — if they write in Turkish, respond in Turkish
+4. Still answer their actual question or help with what they asked
+
+After they tell you their name, remember it for future messages. Don't run through a checklist of questions — just be natural and helpful.\n`;
+
+/** Strip prompt injection patterns from stored text before injecting into system prompts. */
+function sanitizePromptInjection(text: string): string {
+  return text
+    .replace(API_KEY_PATTERN, "[REDACTED]")
+    .replace(/^(#{1,3}\s*(SYSTEM|IMPORTANT|INSTRUCTION|OVERRIDE|IGNORE))[:\s]/gim, "[filtered] ")
+    .replace(/\r/g, "");
 }
 
 /** Default prompt when user sends an image with no text. */
@@ -332,20 +360,15 @@ export class Orchestrator {
     const layers: string[] = [];
     const contentHashes: string[] = [];
 
-    // Layer 1: User Profile (data only, not instructions)
+    // Layer 1: User Profile
     if (profile) {
-      const parts: string[] = [];
-      if (profile.displayName) parts.push(`Name: ${profile.displayName}`);
-      parts.push(`Language: ${profile.language}`);
-      if (profile.activePersona !== "default") parts.push(`Communication Style: ${profile.activePersona}`);
-      const verbosity = (profile.preferences as Record<string, unknown>).verbosity;
-      if (verbosity) parts.push(`Detail Level: ${String(verbosity)}`);
+      const parts = buildProfileParts(profile);
       if (parts.length > 0) layers.push(`## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${parts.join("\n")}`);
     }
 
     // Layer 2: Last Session Summary (data only, not instructions)
     if (profile?.contextSummary) {
-      layers.push(`## Previous Session\nReference this context naturally when relevant. Mention past work to show continuity.\n${profile.contextSummary}`);
+      layers.push(`## Previous Session\nReference this context naturally when relevant. Mention past work to show continuity.\n${sanitizePromptInjection(profile.contextSummary)}`);
       contentHashes.push(profile.contextSummary);
     }
 
@@ -505,33 +528,21 @@ export class Orchestrator {
     // Build system prompt with memory/RAG context
     let systemPrompt = this.injectSoulPersonality(this.systemPrompt, options.channelType);
 
-    // Inject user profile context or onboarding instructions
-    const currentProfile = profile ?? this.userProfileStore?.getProfile(chatId) ?? null;
-    if (currentProfile && currentProfile.displayName) {
+    // Inject user profile context (onboarding only for user-originated tasks, not daemon/goal subtasks)
+    const isUserTask = !options.parentMetricId;
+    if (profile && profile.displayName) {
       // Returning user — inject their preferences
-      const profileParts: string[] = [];
-      profileParts.push(`Name: ${currentProfile.displayName}`);
-      profileParts.push(`Language: ${currentProfile.language}`);
-      if (currentProfile.activePersona !== "default") profileParts.push(`Communication Style: ${currentProfile.activePersona}`);
-      const verbosity = (currentProfile.preferences as Record<string, unknown>).verbosity;
-      if (verbosity) profileParts.push(`Detail Level: ${String(verbosity)}`);
+      const profileParts = buildProfileParts(profile);
       systemPrompt += `\n\n## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${profileParts.join("\n")}\n`;
-      if (currentProfile.contextSummary) {
-        systemPrompt += `\n## Previous Session\nReference this context naturally when relevant.\n${currentProfile.contextSummary}\n`;
+      if (profile.contextSummary) {
+        systemPrompt += `\n## Previous Session\nReference this context naturally when relevant.\n${sanitizePromptInjection(profile.contextSummary)}\n`;
       }
-      if (currentProfile.language && currentProfile.language !== "en") {
-        systemPrompt += `\nIMPORTANT: Communicate with the user in ${currentProfile.language}.\n`;
+      if (profile.language && profile.language !== "en") {
+        systemPrompt += `\nIMPORTANT: Communicate with the user in ${profile.language}.\n`;
       }
-    } else {
-      // New user — inject natural onboarding instructions
-      systemPrompt += `\n\n## First-Time User
-This is a new user you haven't met before. In your FIRST response:
-1. Introduce yourself warmly as Strada Brain
-2. Ask their name naturally (e.g., "What should I call you?")
-3. Match their language — if they write in Turkish, respond in Turkish
-4. Still answer their actual question or help with what they asked
-
-After they tell you their name, remember it for future messages. Don't run through a checklist of questions — just be natural and helpful.\n`;
+    } else if (isUserTask) {
+      // Only inject onboarding for direct user messages, not background/daemon tasks
+      systemPrompt += FIRST_TIME_USER_PROMPT;
     }
 
     const bgInitialContentHashes: string[] = [];
@@ -681,9 +692,11 @@ After they tell you their name, remember it for future messages. Don't run throu
               const langFromMsg = this.detectLanguageFromText(prompt);
               const updates: Record<string, unknown> = {};
               if (langFromMsg) updates.language = langFromMsg;
-              // Try simple name extraction patterns: "Ben X", "I'm X", "My name is X", "Adım X", single word responses
-              const nameMatch = prompt.match(/(?:ben\s+|i'm\s+|my name is\s+|ad[ıi]m\s+|bana\s+)([\p{L}]+)/iu)
-                ?? (prompt.trim().split(/\s+/).length <= 2 && /^[\p{L}]{2,20}$/u.test(prompt.trim()) ? [, prompt.trim()] : null);
+              // Try name extraction: "Ben X", "I'm X", "My name is X", "Adım X"
+              const NAME_INTRO_RE = /(?:ben\s+|i'm\s+|my name is\s+|ad[ıi]m\s+|bana\s+)([\p{L}]+)/iu;
+              const trimmed = prompt.trim();
+              const isSingleWord = trimmed.split(/\s+/).length <= 2 && /^[\p{L}]{2,20}$/u.test(trimmed);
+              const nameMatch = trimmed.match(NAME_INTRO_RE) ?? (isSingleWord ? [, trimmed] : null);
               if (nameMatch?.[1]) {
                 updates.displayName = sanitizeDisplayName(nameMatch[1]);
               }
@@ -1141,7 +1154,7 @@ After they tell you their name, remember it for future messages. Don't run throu
     state: { name?: string; lang?: string; style?: string },
     detailAnswer: string,
   ): Promise<void> {
-    const lang = ONBOARDING_LANG_MAP[state.lang?.toLowerCase() ?? ""] ?? state.lang ?? "en";
+    const lang = ONBOARDING_LANG_MAP[state.lang?.toLowerCase() ?? ""] ?? "en";
     const rawStyle = (state.style ?? "casual").toLowerCase();
     const style = VALID_STYLES.has(rawStyle) ? rawStyle : "casual";
     const rawDetail = detailAnswer.toLowerCase().slice(0, 40);
@@ -1355,23 +1368,7 @@ After they tell you their name, remember it for future messages. Don't run throu
       if (agentState.phase === AgentPhase.REFLECTING) {
         const decision = parseReflectionDecision(response.text);
 
-        if (decision === "DONE") {
-          if (response.text) {
-            session.messages.push({ role: "assistant", content: response.text });
-            if (!canStream) await this.channel.sendMarkdown(chatId, response.text);
-          }
-          // ─── Metrics: record DONE ───────────────────────────────────
-          this.recordMetricEnd(metricId, {
-            agentPhase: AgentPhase.COMPLETE,
-            iterations: agentState.iteration,
-            toolCallCount: agentState.stepResults.length,
-            hitMaxIterations: false,
-          });
-          // ──────────────────────────────────────────────────────────
-          return;
-        }
-
-        if (decision === "DONE_WITH_SUGGESTIONS") {
+        if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
             if (!canStream) await this.channel.sendMarkdown(chatId, response.text);
@@ -2297,21 +2294,18 @@ function replaceSection(prompt: string, tag: string, newContent: string): string
   return prompt.substring(0, startIdx) + startMarker + "\n" + sanitized + "\n" + endMarker + prompt.substring(endIdx + endMarker.length);
 }
 
-const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\s*\*\*/;
+type ReflectionDecision = "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTIONS";
 
-function parseReflectionDecision(text: string | null | undefined): "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTIONS" {
+const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\s*\*\*/;
+const VALID_DECISIONS = new Set<ReflectionDecision>(["CONTINUE", "REPLAN", "DONE", "DONE_WITH_SUGGESTIONS"]);
+
+function parseReflectionDecision(text: string | null | undefined): ReflectionDecision {
   if (!text) return "CONTINUE";
   const match = text.match(REFLECTION_DECISION_RE);
-  if (match) {
-    const decision = match[1] as string;
-    if (decision === "DONE_WITH_SUGGESTIONS") return "DONE_WITH_SUGGESTIONS";
-    return decision as "DONE" | "REPLAN" | "CONTINUE";
-  }
+  if (match) return match[1] as ReflectionDecision;
   // Fallback: check last line for bare keyword
-  const lastLine = text.trim().split("\n").pop()?.toUpperCase() ?? "";
-  if (lastLine === "DONE_WITH_SUGGESTIONS") return "DONE_WITH_SUGGESTIONS";
-  if (lastLine === "DONE") return "DONE";
-  if (lastLine === "REPLAN") return "REPLAN";
+  const lastLine = (text.trim().split("\n").pop() ?? "").toUpperCase() as ReflectionDecision;
+  if (VALID_DECISIONS.has(lastLine)) return lastLine;
   return "CONTINUE";
 }
 
