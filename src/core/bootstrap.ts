@@ -431,6 +431,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   });
   await soulLoader.initialize();
 
+  // Wire SessionSummarizer and UserProfileStore (requires AgentDBAdapter)
+  let sessionSummarizer: import("../memory/unified/session-summarizer.js").SessionSummarizer | undefined;
+  let userProfileStore: import("../memory/unified/user-profile-store.js").UserProfileStore | undefined;
+  if (memoryManager) {
+    try {
+      const { AgentDBAdapter: AdapterType } = await import("../memory/unified/agentdb-adapter.js");
+      if (memoryManager instanceof AdapterType) {
+        const profileStore = memoryManager.getUserProfileStore();
+        if (profileStore) {
+          userProfileStore = profileStore;
+          const { SessionSummarizer: SummarizerClass } = await import("../memory/unified/session-summarizer.js");
+          sessionSummarizer = new SummarizerClass(providerManager.getProvider(""), profileStore);
+          logger.info("SessionSummarizer wired for session-end summarization");
+        }
+      }
+    } catch {
+      // SessionSummarizer wiring failure is non-fatal
+      logger.debug("SessionSummarizer wiring skipped");
+    }
+  }
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -455,6 +476,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     reRetrievalConfig: config.reRetrieval,
     embeddingProvider: cachedEmbeddingProvider,
     soulLoader,
+    sessionSummarizer,
+    userProfileStore,
   });
 
   // Initialize tool chain synthesis (TOOL-01 through TOOL-05)

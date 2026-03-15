@@ -52,6 +52,8 @@ import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
 import { parseGoalBlock, buildGoalTreeFromBlock } from "../goals/types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { SoulLoader } from "./soul/index.js";
+import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
+import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -180,6 +182,8 @@ export class Orchestrator {
   private readonly soulLoader: SoulLoader | null;
   private readonly dmPolicy: DMPolicy;
   private readonly lastPersistTime = new Map<string, number>();
+  private readonly sessionSummarizer?: SessionSummarizer;
+  /* userProfileStore is held by sessionSummarizer; accepted in opts for future direct use */
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -205,6 +209,8 @@ export class Orchestrator {
     embeddingProvider?: IEmbeddingProvider;
     soulLoader?: SoulLoader;
     dmPolicyConfig?: Partial<DMPolicyConfig>;
+    sessionSummarizer?: SessionSummarizer;
+    userProfileStore?: UserProfileStore;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -225,6 +231,7 @@ export class Orchestrator {
     this.embeddingProvider = opts.embeddingProvider;
     this.soulLoader = opts.soulLoader ?? null;
     this.dmPolicy = new DMPolicy(opts.channel, opts.dmPolicyConfig);
+    this.sessionSummarizer = opts.sessionSummarizer;
 
     // Build tool registry
     this.tools = new Map();
@@ -1698,6 +1705,13 @@ export class Orchestrator {
     const now = Date.now();
     for (const [chatId, session] of this.sessions) {
       if (now - session.lastActivity.getTime() > maxAgeMs) {
+        // Session-end summarization (fire-and-forget)
+        if (this.sessionSummarizer && session.messages.length >= 2) {
+          void this.sessionSummarizer.summarizeAndUpdateProfile(chatId, session.messages)
+            .catch(() => {
+              // Session summarization failure is non-fatal
+            });
+        }
         // Persist before cleanup (forced — session is being evicted)
         void this.persistSessionToMemory(chatId, session.messages.slice(-10), /* force */ true);
         this.lastPersistTime.delete(chatId);
