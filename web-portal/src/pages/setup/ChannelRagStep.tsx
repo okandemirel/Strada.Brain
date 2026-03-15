@@ -1,4 +1,4 @@
-import { CHANNELS, LANGUAGES, EMBEDDING_CAPABLE } from '../../types/setup-constants'
+import { CHANNELS, LANGUAGES, EMBEDDING_CAPABLE, PROVIDER_MAP } from '../../types/setup-constants'
 
 interface ChannelRagStepProps {
   channel: string
@@ -28,9 +28,8 @@ export default function ChannelRagStep({
   onBack,
 }: ChannelRagStepProps) {
   const selectedChannel = CHANNELS.find((c) => c.id === channel)
-  const hasEmbeddingProvider = Array.from(checkedProviders).some((id) =>
-    EMBEDDING_CAPABLE.has(id),
-  )
+  const embeddingProviderId = Array.from(checkedProviders).find((id) => EMBEDDING_CAPABLE.has(id))
+  const embeddingProviderName = embeddingProviderId ? PROVIDER_MAP[embeddingProviderId]?.name : null
 
   return (
     <div className="step">
@@ -102,10 +101,11 @@ export default function ChannelRagStep({
             {ragEnabled ? 'Enabled' : 'Disabled'}
           </span>
         </label>
-        <p className="rag-info">
-          {hasEmbeddingProvider
-            ? 'RAG will use your selected providers for embeddings to enhance context retrieval.'
-            : 'None of your selected providers support embeddings. RAG requires an embedding-capable provider (OpenAI, Gemini, Mistral, Together, Fireworks, Qwen, or Ollama).'}
+        <p className={`rag-info${!ragEnabled || !embeddingProviderName ? ' warning' : ''}`}>
+          {!ragEnabled && 'RAG is disabled. Code search will not be available.'}
+          {ragEnabled && embeddingProviderName && `\u2713 RAG enabled \u2014 will use ${embeddingProviderName} for embeddings.`}
+          {ragEnabled && !embeddingProviderName && checkedProviders.size > 0 && '\u26A0 Your selected providers don\'t support embeddings. Go back and add Ollama (free, local) or Gemini to enable RAG code search.'}
+          {ragEnabled && !embeddingProviderName && checkedProviders.size === 0 && '\u26A0 RAG enabled \u2014 embedding provider will be auto-detected from your providers.'}
         </p>
       </div>
 

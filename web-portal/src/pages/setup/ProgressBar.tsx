@@ -7,8 +7,10 @@ export default function ProgressBar({ step, totalSteps }: ProgressBarProps) {
   const fillWidth = `${(step / totalSteps) * 100}%`
 
   return (
-    <div className="progress-bar">
-      <div className="progress-fill" style={{ width: fillWidth }} />
+    <div className="progress-wrapper">
+      <div className="progress-bar">
+        <div className="progress-fill" style={{ width: fillWidth }} />
+      </div>
       <div className="step-dots">
         {Array.from({ length: totalSteps }, (_, i) => {
           const stepNum = i + 1

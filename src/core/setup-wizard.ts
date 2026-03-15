@@ -124,6 +124,13 @@ export class SetupWizard {
     const method = req.method ?? "GET";
 
     try {
+      // Redirect root to /setup so React Router renders the wizard
+      if (url === "/" && method === "GET") {
+        res.writeHead(302, { ...SECURITY_HEADERS, Location: "/setup" });
+        res.end();
+        return;
+      }
+
       // API endpoints
       if (url.startsWith("/api/setup/browse") && method === "GET") {
         await this.handleBrowse(url, res);

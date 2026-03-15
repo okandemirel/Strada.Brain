@@ -52,10 +52,12 @@ export function useWebSocket(): UseWebSocketReturn {
       setStatus('connected')
       reconnectDelayRef.current = 1000
 
-      // Attempt reconnect with previous session
-      const savedChatId = localStorage.getItem('strada-chatId')
-      if (savedChatId) {
-        ws.send(JSON.stringify({ type: 'reconnect', chatId: savedChatId }))
+      // Attempt reconnect with previous session (skip on first-run to get fresh chatId)
+      if (localStorage.getItem('strada-firstRun') !== '1') {
+        const savedChatId = localStorage.getItem('strada-chatId')
+        if (savedChatId) {
+          ws.send(JSON.stringify({ type: 'reconnect', chatId: savedChatId }))
+        }
       }
     })
 
