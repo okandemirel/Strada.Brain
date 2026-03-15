@@ -19,6 +19,30 @@ const MIME_TYPES: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8",
 };
 
+const KNOWN_LANGUAGES = new Set(["en", "tr", "ja", "ko", "zh", "de", "es", "fr"]);
+
+const KNOWN_PROVIDERS = new Set([
+  "claude", "openai", "deepseek", "kimi", "qwen", "gemini",
+  "groq", "mistral", "together", "fireworks", "minimax", "ollama",
+]);
+
+const KNOWN_EMBEDDING_PROVIDERS = new Set([
+  "auto", "openai", "deepseek", "mistral", "together",
+  "fireworks", "qwen", "gemini", "ollama",
+]);
+
+const PROVIDER_ENV_KEYS = [
+  "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
+  "QWEN_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY",
+  "GROQ_API_KEY", "MISTRAL_API_KEY", "TOGETHER_API_KEY",
+  "FIREWORKS_API_KEY", "GEMINI_API_KEY",
+] as const;
+
+const CHANNEL_ENV_KEYS = [
+  "TELEGRAM_BOT_TOKEN", "ALLOWED_TELEGRAM_USER_IDS",
+  "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN",
+] as const;
+
 /** Security headers sent with every HTTP response. */
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -27,7 +51,8 @@ const SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy":
     "default-src 'self'; " +
     "script-src 'self'; " +
-    "style-src 'self'; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data:; " +
     "connect-src 'self'; " +
     "object-src 'none'; " +
     "base-uri 'none'; " +
@@ -284,28 +309,14 @@ export class SetupWizard {
     }
 
     // At least one provider API key must be present (Ollama excluded — no key needed)
-    const providerKeys = [
-      "ANTHROPIC_API_KEY",
-      "OPENAI_API_KEY",
-      "DEEPSEEK_API_KEY",
-      "QWEN_API_KEY",
-      "KIMI_API_KEY",
-      "MINIMAX_API_KEY",
-      "GROQ_API_KEY",
-      "MISTRAL_API_KEY",
-      "TOGETHER_API_KEY",
-      "FIREWORKS_API_KEY",
-      "GEMINI_API_KEY",
-    ];
     const hasProvider =
-      providerKeys.some((k) => config[k]) || config.PROVIDER_CHAIN?.includes("ollama");
+      PROVIDER_ENV_KEYS.some((k) => config[k]) || config.PROVIDER_CHAIN?.includes("ollama");
     if (!hasProvider) {
       this.json(res, 400, { success: false, error: "At least one AI provider key is required" });
       return;
     }
 
     // Validate LANGUAGE_PREFERENCE if provided
-    const KNOWN_LANGUAGES = new Set(["en", "tr", "ja", "ko", "zh", "de", "es", "fr"]);
     if (config.LANGUAGE_PREFERENCE && !KNOWN_LANGUAGES.has(String(config.LANGUAGE_PREFERENCE))) {
       this.json(res, 400, { success: false, error: "Invalid LANGUAGE_PREFERENCE value" });
       return;
@@ -318,25 +329,11 @@ export class SetupWizard {
     ];
 
     // Write all provider API keys that are present
-    for (const key of providerKeys) {
+    for (const key of PROVIDER_ENV_KEYS) {
       if (config[key]) lines.push(`${key}=${sanitizeEnvValue(config[key])}`);
     }
 
     // Write provider chain for multi-provider fallback (validate names)
-    const KNOWN_PROVIDERS = new Set([
-      "claude",
-      "openai",
-      "deepseek",
-      "kimi",
-      "qwen",
-      "gemini",
-      "groq",
-      "mistral",
-      "together",
-      "fireworks",
-      "minimax",
-      "ollama",
-    ]);
     if (config.PROVIDER_CHAIN) {
       const names = String(config.PROVIDER_CHAIN)
         .split(",")
@@ -349,22 +346,11 @@ export class SetupWizard {
     }
 
     // Channel-specific config
-    const channelKeys = [
-      "TELEGRAM_BOT_TOKEN",
-      "ALLOWED_TELEGRAM_USER_IDS",
-      "DISCORD_BOT_TOKEN",
-      "SLACK_BOT_TOKEN",
-      "SLACK_APP_TOKEN",
-    ];
-    for (const key of channelKeys) {
+    for (const key of CHANNEL_ENV_KEYS) {
       if (config[key]) lines.push(`${key}=${sanitizeEnvValue(config[key])}`);
     }
 
     // RAG configuration
-    const KNOWN_EMBEDDING_PROVIDERS = new Set([
-      "auto", "openai", "deepseek", "mistral", "together",
-      "fireworks", "qwen", "gemini", "ollama",
-    ]);
     if (config.RAG_ENABLED === "false") {
       lines.push("", "# RAG (Code Search)", "RAG_ENABLED=false");
     } else if (config.EMBEDDING_PROVIDER && config.EMBEDDING_PROVIDER !== "auto") {
