@@ -481,56 +481,15 @@ export class Orchestrator {
       lastActivity: new Date(),
     };
 
-    // ─── Onboarding intercept for background task path ─────────────────
-    // If user is mid-onboarding, process their answer instead of running task
-    const pendingOnboard = this.onboardingState.get(chatId);
-    if (pendingOnboard) {
-      const answer = prompt.trim();
-      switch (pendingOnboard.step) {
-        case 'awaiting_name': {
-          const name = sanitizeDisplayName(answer.slice(0, 80));
-          await this.runOnboardingQuestions(chatId, name || undefined);
-          break;
-        }
-        case 'awaiting_lang':
-          pendingOnboard.lang = answer;
-          pendingOnboard.step = 'awaiting_style';
-          await this.askOnboardingQuestion(chatId, pendingOnboard);
-          break;
-        case 'awaiting_style':
-          pendingOnboard.style = answer;
-          pendingOnboard.step = 'awaiting_detail';
-          await this.askOnboardingQuestion(chatId, pendingOnboard);
-          break;
-        case 'awaiting_detail':
-          this.onboardingState.delete(chatId);
-          await this.finalizeOnboarding(chatId, pendingOnboard, answer);
-          break;
-      }
-      this.recordMetricEnd(metricId, {
-        agentPhase: AgentPhase.COMPLETE,
-        iterations: 0,
-        toolCallCount: 0,
-        hitMaxIterations: false,
-      });
-      return "Onboarding step processed.";
-    }
-
-    // Detect new users and trigger onboarding
+    // ─── New user detection: LLM-driven natural onboarding ─────────────
+    // Instead of a hardcoded Q&A flow, inject onboarding instructions into
+    // the system prompt. The LLM naturally introduces itself, asks the user's
+    // name in conversation, and we extract preferences from the response.
     const profile = this.userProfileStore?.getProfile(chatId) ?? null;
     if (this.userProfileStore && !profile) {
-      // New user — create empty profile and trigger onboarding
+      // Create profile immediately so subsequent messages skip this block
       this.userProfileStore.upsertProfile(chatId, {});
-      logger.info("Starting deterministic onboarding (background path)", { chatId });
-      await this.runOnboardingFlow(chatId);
-      // Return early — first message triggers onboarding, not task execution
-      this.recordMetricEnd(metricId, {
-        agentPhase: AgentPhase.COMPLETE,
-        iterations: 0,
-        toolCallCount: 0,
-        hitMaxIterations: false,
-      });
-      return "Onboarding started — please complete the setup questions.";
+      logger.info("New user detected, injecting onboarding context", { chatId });
     }
 
     // Touch user profile (debounced)
@@ -546,24 +505,33 @@ export class Orchestrator {
     // Build system prompt with memory/RAG context
     let systemPrompt = this.injectSoulPersonality(this.systemPrompt, options.channelType);
 
-    // Inject user profile context (name, language, preferences)
-    if (profile) {
+    // Inject user profile context or onboarding instructions
+    const currentProfile = profile ?? this.userProfileStore?.getProfile(chatId) ?? null;
+    if (currentProfile && currentProfile.displayName) {
+      // Returning user — inject their preferences
       const profileParts: string[] = [];
-      if (profile.displayName) profileParts.push(`Name: ${profile.displayName}`);
-      profileParts.push(`Language: ${profile.language}`);
-      if (profile.activePersona !== "default") profileParts.push(`Communication Style: ${profile.activePersona}`);
-      const verbosity = (profile.preferences as Record<string, unknown>).verbosity;
+      profileParts.push(`Name: ${currentProfile.displayName}`);
+      profileParts.push(`Language: ${currentProfile.language}`);
+      if (currentProfile.activePersona !== "default") profileParts.push(`Communication Style: ${currentProfile.activePersona}`);
+      const verbosity = (currentProfile.preferences as Record<string, unknown>).verbosity;
       if (verbosity) profileParts.push(`Detail Level: ${String(verbosity)}`);
-      if (profileParts.length > 0) {
-        systemPrompt += `\n\n## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${profileParts.join("\n")}\n`;
+      systemPrompt += `\n\n## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${profileParts.join("\n")}\n`;
+      if (currentProfile.contextSummary) {
+        systemPrompt += `\n## Previous Session\nReference this context naturally when relevant.\n${currentProfile.contextSummary}\n`;
       }
-      if (profile.contextSummary) {
-        systemPrompt += `\n## Previous Session\nReference this context naturally when relevant.\n${profile.contextSummary}\n`;
+      if (currentProfile.language && currentProfile.language !== "en") {
+        systemPrompt += `\nIMPORTANT: Communicate with the user in ${currentProfile.language}.\n`;
       }
-      // Language directive
-      if (profile.language && profile.language !== "en") {
-        systemPrompt += `\nIMPORTANT: Communicate with the user in ${profile.language}.\n`;
-      }
+    } else {
+      // New user — inject natural onboarding instructions
+      systemPrompt += `\n\n## First-Time User
+This is a new user you haven't met before. In your FIRST response:
+1. Introduce yourself warmly as Strada Brain
+2. Ask their name naturally (e.g., "What should I call you?")
+3. Match their language — if they write in Turkish, respond in Turkish
+4. Still answer their actual question or help with what they asked
+
+After they tell you their name, remember it for future messages. Don't run through a checklist of questions — just be natural and helpful.\n`;
     }
 
     const bgInitialContentHashes: string[] = [];
@@ -704,6 +672,27 @@ export class Orchestrator {
 
           // Persist background task conversation to memory
           await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
+
+          // Natural onboarding: extract user's name from conversation if profile is empty
+          if (this.userProfileStore) {
+            const latestProfile = this.userProfileStore.getProfile(chatId);
+            if (latestProfile && !latestProfile.displayName && prompt) {
+              // Detect language from user's message
+              const langFromMsg = this.detectLanguageFromText(prompt);
+              const updates: Record<string, unknown> = {};
+              if (langFromMsg) updates.language = langFromMsg;
+              // Try simple name extraction patterns: "Ben X", "I'm X", "My name is X", "Adım X", single word responses
+              const nameMatch = prompt.match(/(?:ben\s+|i'm\s+|my name is\s+|ad[ıi]m\s+|bana\s+)([\p{L}]+)/iu)
+                ?? (prompt.trim().split(/\s+/).length <= 2 && /^[\p{L}]{2,20}$/u.test(prompt.trim()) ? [, prompt.trim()] : null);
+              if (nameMatch?.[1]) {
+                updates.displayName = sanitizeDisplayName(nameMatch[1]);
+              }
+              if (Object.keys(updates).length > 0) {
+                this.userProfileStore.upsertProfile(chatId, updates);
+              }
+            }
+          }
+
           return response.text || "Task completed without output.";
         }
 
@@ -2219,6 +2208,26 @@ export class Orchestrator {
     } catch (error) {
       getLogger().warn("Memory persistence failed", { chatId, error: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  /** Simple heuristic language detection from text content. */
+  private detectLanguageFromText(text: string): string | null {
+    const lower = text.toLowerCase();
+    // Turkish indicators
+    if (/[çğıöşüÇĞİÖŞÜ]/.test(text) || /\b(merhaba|selam|nasıl|proje|yardım|bir|ile|için)\b/.test(lower)) return "tr";
+    // Japanese
+    if (/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(text)) return "ja";
+    // Korean
+    if (/[\uAC00-\uD7AF]/.test(text)) return "ko";
+    // Chinese (no Japanese/Korean)
+    if (/[\u4E00-\u9FFF]/.test(text) && !/[\u3040-\u309F\uAC00-\uD7AF]/.test(text)) return "zh";
+    // German
+    if (/[äöüßÄÖÜ]/.test(text) || /\b(hallo|projekt|hilfe)\b/.test(lower)) return "de";
+    // Spanish
+    if (/[ñ¡¿]/.test(text) || /\b(hola|proyecto|ayuda)\b/.test(lower)) return "es";
+    // French
+    if (/[àâæçéèêëïîôœùûüÿ]/.test(text) || /\b(bonjour|projet|aide)\b/.test(lower)) return "fr";
+    return null; // Default: don't override, keep "en"
   }
 
   private emitToolResult(chatId: string, tc: { name: string; input: unknown }, tr: { content: string; isError?: boolean }): void {
