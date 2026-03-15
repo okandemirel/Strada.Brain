@@ -261,7 +261,14 @@ function updateRagInfo() {
 
   if (embeddingProvider) {
     const name = PROVIDER_MAP[embeddingProvider]?.name ?? embeddingProvider;
-    infoEl.textContent = "RAG will use " + name + " for embeddings.";
+    if (embeddingProvider === "gemini") {
+      infoEl.textContent = "RAG will use " + name + " for embeddings. Tip: Gemini offers free embedding with excellent quality.";
+    } else {
+      // If Gemini is also checked, hint that it's a good choice for embeddings
+      const hasGemini = checked.includes("gemini");
+      infoEl.textContent = "RAG will use " + name + " for embeddings." +
+        (hasGemini ? " Tip: Gemini offers free embedding with excellent quality and will be auto-selected." : "");
+    }
     infoEl.className = "rag-info";
   } else if (checked.length > 0) {
     const names = checked.map((id) => PROVIDER_MAP[id]?.name ?? id).join(", ");
@@ -422,10 +429,22 @@ function getConfig() {
     if (app) config.SLACK_APP_TOKEN = app;
   }
 
+  // Language preference
+  const langSelect = document.getElementById("languageSelect");
+  if (langSelect && langSelect.value && langSelect.value !== "en") {
+    config.LANGUAGE_PREFERENCE = langSelect.value;
+  }
+
   // RAG configuration
   const ragEnabled = document.getElementById("ragEnabled");
   if (ragEnabled && !ragEnabled.checked) {
     config.RAG_ENABLED = "false";
+  }
+
+  // Gemini embedding recommendation: auto-set when Gemini key is present
+  // and no explicit embedding provider override, and RAG is enabled
+  if (config.GEMINI_API_KEY && config.RAG_ENABLED !== "false") {
+    config.EMBEDDING_PROVIDER = config.EMBEDDING_PROVIDER || "gemini";
   }
 
   config._channel = channel;
@@ -459,6 +478,16 @@ function buildReview() {
 
   items.push(["Project Path", config.UNITY_PROJECT_PATH]);
   items.push(["Channel", config._channel]);
+
+  // Language preference
+  const LANG_LABELS = {
+    en: "English", tr: "T\u00fcrk\u00e7e", ja: "\u65e5\u672c\u8a9e",
+    ko: "\ud55c\uad6d\uc5b4", zh: "\u4e2d\u6587", de: "Deutsch",
+    es: "Espa\u00f1ol", fr: "Fran\u00e7ais",
+  };
+  const langVal = config.LANGUAGE_PREFERENCE || "en";
+  items.push(["Language", LANG_LABELS[langVal] || langVal]);
+
   // Show RAG status with embedding provider info
   if (config.RAG_ENABLED === "false") {
     items.push(["RAG (Code Search)", "Disabled"]);
