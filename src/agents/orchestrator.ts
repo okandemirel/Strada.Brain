@@ -481,8 +481,90 @@ export class Orchestrator {
       lastActivity: new Date(),
     };
 
+    // ─── Onboarding intercept for background task path ─────────────────
+    // If user is mid-onboarding, process their answer instead of running task
+    const pendingOnboard = this.onboardingState.get(chatId);
+    if (pendingOnboard) {
+      const answer = prompt.trim();
+      switch (pendingOnboard.step) {
+        case 'awaiting_name': {
+          const name = sanitizeDisplayName(answer.slice(0, 80));
+          await this.runOnboardingQuestions(chatId, name || undefined);
+          break;
+        }
+        case 'awaiting_lang':
+          pendingOnboard.lang = answer;
+          pendingOnboard.step = 'awaiting_style';
+          await this.askOnboardingQuestion(chatId, pendingOnboard);
+          break;
+        case 'awaiting_style':
+          pendingOnboard.style = answer;
+          pendingOnboard.step = 'awaiting_detail';
+          await this.askOnboardingQuestion(chatId, pendingOnboard);
+          break;
+        case 'awaiting_detail':
+          this.onboardingState.delete(chatId);
+          await this.finalizeOnboarding(chatId, pendingOnboard, answer);
+          break;
+      }
+      this.recordMetricEnd(metricId, {
+        agentPhase: AgentPhase.COMPLETE,
+        iterations: 0,
+        toolCallCount: 0,
+        hitMaxIterations: false,
+      });
+      return "Onboarding step processed.";
+    }
+
+    // Detect new users and trigger onboarding
+    const profile = this.userProfileStore?.getProfile(chatId) ?? null;
+    if (this.userProfileStore && !profile) {
+      // New user — create empty profile and trigger onboarding
+      this.userProfileStore.upsertProfile(chatId, {});
+      logger.info("Starting deterministic onboarding (background path)", { chatId });
+      await this.runOnboardingFlow(chatId);
+      // Return early — first message triggers onboarding, not task execution
+      this.recordMetricEnd(metricId, {
+        agentPhase: AgentPhase.COMPLETE,
+        iterations: 0,
+        toolCallCount: 0,
+        hitMaxIterations: false,
+      });
+      return "Onboarding started — please complete the setup questions.";
+    }
+
+    // Touch user profile (debounced)
+    if (this.userProfileStore && profile) {
+      const lastTouch = this.lastPersistTime.get(`touch:${chatId}`) ?? 0;
+      if (Date.now() - lastTouch > 60_000) {
+        this.userProfileStore.touchLastSeen(chatId);
+        this.lastPersistTime.set(`touch:${chatId}`, Date.now());
+      }
+    }
+    // ────────────────────────────────────────────────────────────────────
+
     // Build system prompt with memory/RAG context
     let systemPrompt = this.injectSoulPersonality(this.systemPrompt, options.channelType);
+
+    // Inject user profile context (name, language, preferences)
+    if (profile) {
+      const profileParts: string[] = [];
+      if (profile.displayName) profileParts.push(`Name: ${profile.displayName}`);
+      profileParts.push(`Language: ${profile.language}`);
+      if (profile.activePersona !== "default") profileParts.push(`Communication Style: ${profile.activePersona}`);
+      const verbosity = (profile.preferences as Record<string, unknown>).verbosity;
+      if (verbosity) profileParts.push(`Detail Level: ${String(verbosity)}`);
+      if (profileParts.length > 0) {
+        systemPrompt += `\n\n## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${profileParts.join("\n")}\n`;
+      }
+      if (profile.contextSummary) {
+        systemPrompt += `\n## Previous Session\nReference this context naturally when relevant.\n${profile.contextSummary}\n`;
+      }
+      // Language directive
+      if (profile.language && profile.language !== "en") {
+        systemPrompt += `\nIMPORTANT: Communicate with the user in ${profile.language}.\n`;
+      }
+    }
 
     const bgInitialContentHashes: string[] = [];
 
