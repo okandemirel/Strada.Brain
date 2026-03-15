@@ -298,11 +298,96 @@ export class Orchestrator {
   }
 
   /** Append soul personality section to a system prompt if available. */
-  private injectSoulPersonality(systemPrompt: string, channelType?: string): string {
+  private injectSoulPersonality(systemPrompt: string, channelType?: string, personaOverride?: string): string {
+    if (personaOverride) {
+      return systemPrompt + `\n\n## Agent Personality\n\n${personaOverride}\n`;
+    }
     if (!this.soulLoader) return systemPrompt;
     const soulContent = this.soulLoader.getContent(channelType);
     if (!soulContent) return systemPrompt;
     return systemPrompt + `\n\n## Agent Personality\n\n${soulContent}\n`;
+  }
+
+  /**
+   * Build 4-layer context injection for system prompt enrichment.
+   * Layers: User Profile, Last Session Summary, Open Tasks/Goals, Semantic Memory.
+   */
+  private async buildContextLayers(chatId: string, userMessage: string): Promise<{ context: string; contentHashes: string[] }> {
+    const layers: string[] = [];
+    const contentHashes: string[] = [];
+
+    // Layer 1: User Profile
+    if (this.userProfileStore) {
+      const profile = this.userProfileStore.getProfile(chatId);
+      if (profile) {
+        const parts: string[] = [];
+        if (profile.displayName) parts.push(`Name: ${profile.displayName}`);
+        parts.push(`Language: ${profile.language}`);
+        if (profile.activePersona !== "default") parts.push(`Communication Style: ${profile.activePersona}`);
+        const verbosity = (profile.preferences as Record<string, unknown>).verbosity;
+        if (verbosity) parts.push(`Detail Level: ${String(verbosity)}`);
+        if (parts.length > 0) layers.push(`## User Context\n${parts.join("\n")}`);
+      }
+    }
+
+    // Layer 2: Last Session Summary
+    if (this.userProfileStore) {
+      const profile = this.userProfileStore.getProfile(chatId);
+      if (profile?.contextSummary) {
+        layers.push(`## Previous Session\n${profile.contextSummary}`);
+        contentHashes.push(profile.contextSummary);
+      }
+    }
+
+    // Layer 3: Open Tasks/Goals
+    const activeGoalTree = this.activeGoalTrees?.get(chatId);
+    if (activeGoalTree) {
+      const pendingGoals: Array<{ task: string; status: string }> = [];
+      for (const node of activeGoalTree.nodes.values()) {
+        if (node.status === "pending" || node.status === "executing") {
+          pendingGoals.push({ task: node.task, status: node.status });
+        }
+      }
+      if (pendingGoals.length > 0) {
+        const taskLines = pendingGoals
+          .slice(0, 5)
+          .map((g) => `- ${g.task} — ${g.status}`)
+          .join("\n");
+        layers.push(`## Open Tasks\n${taskLines}`);
+      }
+    }
+
+    // Layer 4: Semantic Memory (real embedding search)
+    if (this.memoryManager && userMessage) {
+      try {
+        const memoriesResult = await this.memoryManager.retrieve({
+          mode: "text",
+          query: userMessage,
+          limit: 5,
+          minScore: 0.15,
+        });
+        if (isOk(memoriesResult)) {
+          const memories = memoriesResult.value;
+          if (memories.length > 0) {
+            const memoryContext = memories
+              .map((m) => m.entry.content)
+              .join("\n---\n");
+            layers.push(`## Relevant Memory\n${memoryContext}`);
+            for (const m of memories) {
+              contentHashes.push(m.entry.content);
+            }
+          }
+        }
+      } catch {
+        // Memory retrieval failure is non-fatal
+      }
+    }
+
+    const context = layers.length > 0
+      ? `\n\n<!-- context-layers:start -->\n${layers.join("\n\n")}\n<!-- context-layers:end -->\n`
+      : "";
+
+    return { context, contentHashes };
   }
 
   /**
@@ -733,6 +818,11 @@ export class Orchestrator {
     const session = this.getOrCreateSession(chatId);
     session.lastActivity = new Date();
 
+    // Touch user profile (lastSeenAt)
+    if (this.userProfileStore) {
+      this.userProfileStore.touchLastSeen(chatId);
+    }
+
     // Add user message (with vision blocks if applicable)
     const provider = this.providerManager.getProvider(chatId);
     const supportsVision = provider.capabilities.vision;
@@ -797,50 +887,43 @@ export class Orchestrator {
     const logger = getLogger();
     const provider = this.providerManager.getProvider(chatId);
 
-    // Retrieve relevant memory context for the first iteration
-    let systemPrompt = this.injectSoulPersonality(this.systemPrompt, channelType);
+    // Per-user persona override (from profile, not global SoulLoader mutation)
+    let personaContent: string | undefined;
+    if (this.userProfileStore && this.soulLoader) {
+      const profile = this.userProfileStore.getProfile(chatId);
+      if (profile?.activePersona && profile.activePersona !== "default") {
+        personaContent = await this.soulLoader.getProfileContent(profile.activePersona) ?? undefined;
+      }
+    }
+    let systemPrompt = this.injectSoulPersonality(this.systemPrompt, channelType, personaContent);
 
-    const initialContentHashes: string[] = [];
-    if (this.memoryManager && session.messages.length > 0) {
-      const lastUserMsg = [...session.messages]
-        .reverse()
-        .find((m) => m.role === "user" && m.content);
-      // Extract text from both string and MessageContent[] (vision) messages
-      const queryText = lastUserMsg
-        ? typeof lastUserMsg.content === "string"
-          ? lastUserMsg.content
-          : Array.isArray(lastUserMsg.content)
-            ? (lastUserMsg.content as MessageContent[])
-                .filter((b): b is { type: "text"; text: string } => b.type === "text")
-                .map((b) => b.text)
-                .join(" ")
-            : ""
-        : "";
+    // Language directive
+    if (this.userProfileStore) {
+      const profile = this.userProfileStore.getProfile(chatId);
+      if (profile?.language && profile.language !== "en") {
+        systemPrompt += `\nIMPORTANT: Communicate with the user in ${profile.language}.\n`;
+      }
+    }
+
+    // 4-layer context injection (user profile, session summary, open tasks, semantic memory)
+    const lastUserMsg = [...session.messages].reverse().find((m) => m.role === "user" && m.content);
+    const queryText = lastUserMsg
+      ? typeof lastUserMsg.content === "string"
+        ? lastUserMsg.content
+        : Array.isArray(lastUserMsg.content)
+          ? (lastUserMsg.content as Array<{ type: string; text?: string }>)
+              .filter((b) => b.type === "text" && b.text)
+              .map((b) => b.text)
+              .join(" ")
+          : ""
+      : "";
+
+    const { context: contextLayers, contentHashes } = await this.buildContextLayers(chatId, queryText);
+    systemPrompt += contextLayers;
+    const initialContentHashes: string[] = [...contentHashes];
+
+    if (session.messages.length > 0) {
       if (lastUserMsg && queryText) {
-        try {
-          const memoriesResult = await this.memoryManager.retrieve({
-            mode: "text",
-            query: queryText,
-            limit: 3,
-            minScore: 0.15,
-          });
-          if (isOk(memoriesResult)) {
-            const memories = memoriesResult.value;
-            if (memories.length > 0) {
-              const memoryContext = memories.map((m) => m.entry.content).join("\n---\n");
-              systemPrompt += `\n\n<!-- re-retrieval:memory:start -->\n## Relevant Memory\n${memoryContext}\n<!-- re-retrieval:memory:end -->\n`;
-              for (const m of memories) initialContentHashes.push(m.entry.content);
-              logger.debug("Injected memory context", {
-                chatId,
-                memoryCount: memories.length,
-                topScore: memories[0]!.score.toFixed(3),
-              });
-            }
-          }
-        } catch {
-          // Memory retrieval failure is non-fatal
-        }
-
         // Inject RAG code context
         if (this.ragPipeline && queryText) {
           try {
@@ -865,16 +948,18 @@ export class Orchestrator {
       }
 
       // Inject cached analysis summary into system prompt
-      try {
-        const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
-        if (isOk(analysisResult)) {
-          const analysisOpt = analysisResult.value;
-          if (isSome(analysisOpt)) {
-            systemPrompt += buildAnalysisSummary(analysisOpt.value);
+      if (this.memoryManager) {
+        try {
+          const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
+          if (isOk(analysisResult)) {
+            const analysisOpt = analysisResult.value;
+            if (isSome(analysisOpt)) {
+              systemPrompt += buildAnalysisSummary(analysisOpt.value);
+            }
           }
+        } catch {
+          // Analysis cache failure is non-fatal
         }
-      } catch {
-        // Analysis cache failure is non-fatal
       }
     }
 
