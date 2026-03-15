@@ -73,6 +73,8 @@ export interface Task {
   origin?: TaskOrigin;
   /** Pre-decomposed goal tree for goal tasks (passed from Orchestrator to BackgroundExecutor) */
   goalTree?: GoalTree;
+  /** Attachments forwarded from the incoming message (images, files) */
+  attachments?: import("../channels/channel.interface.js").Attachment[];
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────────
@@ -99,6 +101,8 @@ export interface BackgroundTaskOptions {
   onProgress: (message: string) => void;
   chatId: string;
   channelType: string;
+  /** Attachments from the original message for vision/file support */
+  attachments?: import("../channels/channel.interface.js").Attachment[];
   /** Parent metric ID for subtask tracking (passed from BackgroundExecutor for decomposed tasks) */
   parentMetricId?: string;
 }

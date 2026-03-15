@@ -227,20 +227,20 @@ describe("TaskPlanner", () => {
   });
 
   describe("Correction Recording", () => {
-    it("should record corrections", () => {
+    it("should record corrections", async () => {
       const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
       const dbPath = join(tempDir, "test.db");
       const storage = new LearningStorage(dbPath);
       storage.initialize();
       const pipeline = new LearningPipeline(storage);
-      
+
       planner.startTask({
         sessionId: "test-session",
         taskDescription: "Test task",
         learningPipeline: pipeline,
       });
 
-      planner.recordCorrection({
+      await planner.recordCorrection({
         toolName: "file_edit",
         originalInput: { path: "test.cs" },
         originalOutput: "Wrong code",

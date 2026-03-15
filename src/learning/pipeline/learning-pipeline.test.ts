@@ -85,8 +85,8 @@ describe("LearningPipeline", () => {
   });
 
   describe("observeCorrection", () => {
-    it("should record correction observation", () => {
-      pipeline.observeCorrection({
+    it("should record correction observation", async () => {
+      await pipeline.observeCorrection({
         sessionId: "session-1",
         toolName: "file_edit",
         originalInput: { path: "test.cs" },
@@ -100,8 +100,8 @@ describe("LearningPipeline", () => {
       expect(stats.observationCount).toBe(1);
     });
 
-    it("should consider creating instinct from correction", () => {
-      pipeline.observeCorrection({
+    it("should consider creating instinct from correction", async () => {
+      await pipeline.observeCorrection({
         sessionId: "session-1",
         toolName: "file_edit",
         originalInput: { path: "test.cs" },
@@ -111,10 +111,10 @@ describe("LearningPipeline", () => {
       });
 
       storage.flush();
-      
+
       // After batch processing, an instinct might be created
-      pipeline.runDetectionBatch();
-      
+      await pipeline.runDetectionBatch();
+
       const stats = pipeline.getStats();
       // May or may not create instinct depending on confidence calculation
       expect(stats.observationCount).toBeGreaterThan(0);
@@ -236,7 +236,7 @@ describe("LearningPipeline", () => {
   });
 
   describe("runDetectionBatch", () => {
-    it("should process unprocessed observations", () => {
+    it("should process unprocessed observations", async () => {
       pipeline.observeToolUse({
         sessionId: "session-1",
         toolName: "dotnet_build",
@@ -250,24 +250,24 @@ describe("LearningPipeline", () => {
         },
       });
 
-      const result = pipeline.runDetectionBatch();
-      
+      const result = await pipeline.runDetectionBatch();
+
       expect(result.patternsDetected).toBeGreaterThanOrEqual(0);
     });
 
-    it("should return zero when disabled", () => {
+    it("should return zero when disabled", async () => {
       const disabledPipeline = new LearningPipeline(storage, { enabled: false });
-      
-      const result = disabledPipeline.runDetectionBatch();
-      
+
+      const result = await disabledPipeline.runDetectionBatch();
+
       expect(result.instinctsCreated).toBe(0);
       expect(result.patternsDetected).toBe(0);
     });
   });
 
   describe("considerInstinctCreation", () => {
-    it("should create an instinct when confidence is high enough", () => {
-      const instinct = pipeline.considerInstinctCreation({
+    it("should create an instinct when confidence is high enough", async () => {
+      const instinct = await pipeline.considerInstinctCreation({
         type: "error_fix",
         triggerPattern: "CS0246: The type or namespace name 'Test' could not be found. This is a detailed error message with specific information about the missing type.",
         action: "Add using TestNamespace;",
@@ -281,7 +281,7 @@ describe("LearningPipeline", () => {
       }
     });
 
-    it("should not create duplicate instincts", () => {
+    it("should not create duplicate instincts", async () => {
       const uniqueTrigger = `CS0246: The type or namespace name 'Test${Date.now()}' could not be found. This is a detailed error message with specific information about the missing type.`;
       const params = {
         type: "error_fix" as const,
@@ -290,11 +290,11 @@ describe("LearningPipeline", () => {
         toolName: "dotnet_build",
       };
 
-      const first = pipeline.considerInstinctCreation(params);
-      
+      const first = await pipeline.considerInstinctCreation(params);
+
       // If first was created, second should not be
       if (first) {
-        const second = pipeline.considerInstinctCreation(params);
+        const second = await pipeline.considerInstinctCreation(params);
         expect(second).toBeNull();
       }
     });
@@ -349,7 +349,7 @@ describe("LearningPipeline", () => {
   });
 
   describe("handleToolResult", () => {
-    it("should call observeToolUse with event data", () => {
+    it("should call observeToolUse with event data", async () => {
       const event: ToolResultEvent = {
         sessionId: "session-1",
         toolName: "dotnet_build",
@@ -359,14 +359,14 @@ describe("LearningPipeline", () => {
         timestamp: Date.now(),
       };
 
-      pipeline.handleToolResult(event);
+      await pipeline.handleToolResult(event);
 
       storage.flush();
       const stats = pipeline.getStats();
       expect(stats.observationCount).toBe(1);
     });
 
-    it("should call processObservation for the new observation", () => {
+    it("should call processObservation for the new observation", async () => {
       const event: ToolResultEvent = {
         sessionId: "session-1",
         toolName: "dotnet_build",
@@ -381,7 +381,7 @@ describe("LearningPipeline", () => {
         timestamp: Date.now(),
       };
 
-      pipeline.handleToolResult(event);
+      await pipeline.handleToolResult(event);
 
       storage.flush();
       // Observations are processed inline (marked processed)
@@ -390,7 +390,7 @@ describe("LearningPipeline", () => {
       expect(stats.unprocessedObservationCount).toBe(0);
     });
 
-    it("should update confidence for matching instincts only (tool_name contextCondition match)", () => {
+    it("should update confidence for matching instincts only (tool_name contextCondition match)", async () => {
       // Create an instinct with tool_name contextCondition matching "dotnet_build"
       const instinct: Instinct = {
         id: `instinct_match_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -421,7 +421,7 @@ describe("LearningPipeline", () => {
         timestamp: Date.now(),
       };
 
-      pipeline.handleToolResult(event);
+      await pipeline.handleToolResult(event);
 
       // Instinct should have been updated
       const updated = storage.getInstinct(instinct.id);
@@ -430,7 +430,7 @@ describe("LearningPipeline", () => {
       expect(updated!.confidence).not.toBe(instinct.confidence);
     });
 
-    it("should NOT update confidence for instincts with non-matching tool_name", () => {
+    it("should NOT update confidence for instincts with non-matching tool_name", async () => {
       // Create an instinct with tool_name contextCondition matching "file_edit" (not dotnet_build)
       const instinct: Instinct = {
         id: `instinct_nomatch_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -461,7 +461,7 @@ describe("LearningPipeline", () => {
         timestamp: Date.now(),
       };
 
-      pipeline.handleToolResult(event);
+      await pipeline.handleToolResult(event);
 
       // Instinct should NOT have been updated
       const updated = storage.getInstinct(instinct.id);
@@ -777,7 +777,7 @@ describe("LearningPipeline", () => {
       expect(logs[0]!.toStatus).toBe("permanent");
     });
 
-    it("handleToolResult should skip confidence update for permanent instincts", () => {
+    it("handleToolResult should skip confidence update for permanent instincts", async () => {
       const instinct = createTestInstinct({
         status: "permanent",
         confidence: 0.96,
@@ -797,7 +797,7 @@ describe("LearningPipeline", () => {
         timestamp: Date.now(),
       };
 
-      pipeline.handleToolResult(event);
+      await pipeline.handleToolResult(event);
 
       const updated = storage.getInstinct(instinct.id);
       expect(updated).not.toBeNull();
@@ -807,7 +807,7 @@ describe("LearningPipeline", () => {
       expect(updated!.bayesianBeta).toBe(1);
     });
 
-    it("handleToolResult should use appliedInstinctIds from event for attribution when present", () => {
+    it("handleToolResult should use appliedInstinctIds from event for attribution when present", async () => {
       // Create two instincts, only one in the appliedInstinctIds list
       const instinctApplied = createTestInstinct({
         id: `instinct_applied_${Date.now()}` as any,
@@ -834,7 +834,7 @@ describe("LearningPipeline", () => {
         timestamp: Date.now(),
       };
 
-      pipeline.handleToolResult(event);
+      await pipeline.handleToolResult(event);
 
       const updatedApplied = storage.getInstinct(instinctApplied.id);
       const updatedNotApplied = storage.getInstinct(instinctNotApplied.id);

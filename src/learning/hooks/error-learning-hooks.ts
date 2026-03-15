@@ -149,15 +149,15 @@ export class ErrorLearningHooks {
    * 
    * @param resolution - Resolution context
    */
-  onAfterErrorResolution(resolution: ResolutionContext): void {
+  async onAfterErrorResolution(resolution: ResolutionContext): Promise<void> {
     if (!this.enabled) return;
 
     const errorId = this.generateErrorId(resolution.errorContext);
-    
+
     // Check if we have a matching active error
     if (!this.activeErrors.has(errorId)) {
       // Error wasn't tracked, but we can still learn from it
-      this.learnFromUntrackedResolution(resolution);
+      await this.learnFromUntrackedResolution(resolution);
       return;
     }
 
@@ -166,13 +166,13 @@ export class ErrorLearningHooks {
 
     // Update learning based on resolution success
     if (resolution.success) {
-      this.handleSuccessfulResolution(resolution);
+      await this.handleSuccessfulResolution(resolution);
     } else {
       this.handleFailedResolution(resolution);
     }
 
     // Record observation
-    this.recordResolutionObservation(resolution);
+    await this.recordResolutionObservation(resolution);
   }
 
   // ─── Instinct Reinforcement ──────────────────────────────────────────────────
@@ -237,10 +237,10 @@ export class ErrorLearningHooks {
 
   // ─── Private Methods ─────────────────────────────────────────────────────────
 
-  private handleSuccessfulResolution(resolution: ResolutionContext): void {
+  private async handleSuccessfulResolution(resolution: ResolutionContext): Promise<void> {
     // Find if any instinct was applied
     const appliedInstinct = this.findAppliedInstinct(resolution);
-    
+
     if (appliedInstinct) {
       // Reinforce the applied instinct
       this.reinforceInstinct(appliedInstinct.id, {
@@ -250,7 +250,7 @@ export class ErrorLearningHooks {
       });
     } else {
       // No instinct was applied - consider creating one from this successful resolution
-      this.considerInstinctFromResolution(resolution);
+      await this.considerInstinctFromResolution(resolution);
     }
   }
 
@@ -280,7 +280,7 @@ export class ErrorLearningHooks {
     return null;
   }
 
-  private considerInstinctFromResolution(resolution: ResolutionContext): void {
+  private async considerInstinctFromResolution(resolution: ResolutionContext): Promise<void> {
     // Extract error pattern
     const errorDetails: ErrorDetails = {
       category: this.inferErrorCategory(resolution.errorContext.analysis) ?? "unknown",
@@ -290,7 +290,7 @@ export class ErrorLearningHooks {
     };
 
     // Create instinct via pipeline
-    this.pipeline.considerInstinctCreation({
+    await this.pipeline.considerInstinctCreation({
       type: "error_fix",
       triggerPattern: errorDetails.message,
       action: resolution.action,
@@ -302,14 +302,14 @@ export class ErrorLearningHooks {
     });
   }
 
-  private learnFromUntrackedResolution(resolution: ResolutionContext): void {
+  private async learnFromUntrackedResolution(resolution: ResolutionContext): Promise<void> {
     // Still record as observation even if we didn't track the original error
-    this.recordResolutionObservation(resolution);
+    await this.recordResolutionObservation(resolution);
   }
 
-  private recordResolutionObservation(resolution: ResolutionContext): void {
+  private async recordResolutionObservation(resolution: ResolutionContext): Promise<void> {
     if (resolution.success) {
-      this.pipeline.observeCorrection({
+      await this.pipeline.observeCorrection({
         sessionId: resolution.errorContext.sessionId,
         toolName: resolution.errorContext.toolName,
         originalInput: { error: resolution.errorContext.errorOutput },

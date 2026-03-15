@@ -71,7 +71,7 @@ export class InstinctRetriever {
       findOptions.scope = this.scopeContext;
     }
 
-    const matches = this.matcher.findSimilarInstincts(taskDescription, findOptions);
+    const matches = await this.matcher.findSimilarInstincts(taskDescription, findOptions);
     const instinctsScanned = matches.length;
 
     // Filter out deprecated instincts (EVAL-05: deprecated excluded from retrieval)

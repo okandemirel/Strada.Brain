@@ -92,25 +92,25 @@ describe("PatternMatcher", () => {
   });
 
   describe("findSimilarInstincts", () => {
-    it("should find similar instincts by pattern", () => {
-      const matches = matcher.findSimilarInstincts(
+    it("should find similar instincts by pattern", async () => {
+      const matches = await matcher.findSimilarInstincts(
         "The type or namespace name could not be found"
       );
       expect(matches.length).toBeGreaterThan(0);
     });
 
-    it("should return exact match for identical patterns", () => {
-      const matches = matcher.findSimilarInstincts(
+    it("should return exact match for identical patterns", async () => {
+      const matches = await matcher.findSimilarInstincts(
         "CS0246: The type or namespace name 'MyType' could not be found"
       );
-      
+
       const exactMatch = matches.find(m => m.type === "exact" || m.confidence > 0.9);
       expect(exactMatch).toBeDefined();
     });
 
-    it("should filter by type when specified", () => {
-      const allMatches = matcher.findSimilarInstincts("error pattern");
-      const filteredMatches = matcher.findSimilarInstincts("error pattern", {
+    it("should filter by type when specified", async () => {
+      const allMatches = await matcher.findSimilarInstincts("error pattern");
+      const filteredMatches = await matcher.findSimilarInstincts("error pattern", {
         typeFilter: "correction",
       });
 

@@ -215,7 +215,7 @@ export class ErrorRecoveryEngine {
   /**
    * Record a successful resolution for learning
    */
-  recordResolution(params: {
+  async recordResolution(params: {
     toolName: string;
     errorOutput: string;
     analysis: ErrorAnalysis;
@@ -223,10 +223,10 @@ export class ErrorRecoveryEngine {
     success: boolean;
     resolutionTimeMs?: number;
     attempts?: number;
-  }): void {
+  }): Promise<void> {
     if (!this.isLearningEnabled() || !this.learningHooks) return;
 
-    this.learningHooks.onAfterErrorResolution({
+    await this.learningHooks.onAfterErrorResolution({
       errorContext: {
         toolName: params.toolName,
         errorOutput: params.errorOutput,

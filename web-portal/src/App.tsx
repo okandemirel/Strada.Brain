@@ -2,7 +2,14 @@ import { Routes, Route } from 'react-router-dom'
 import AppLayout from './components/layout/AppLayout'
 import ChatView from './components/ChatView'
 import DashboardView from './components/DashboardView'
-import PlaceholderPage from './components/placeholder/PlaceholderPage'
+import ConfigPage from './pages/ConfigPage'
+import ToolsPage from './pages/ToolsPage'
+import ChannelsPage from './pages/ChannelsPage'
+import SessionsPage from './pages/SessionsPage'
+import LogsPage from './pages/LogsPage'
+import IdentityPage from './pages/IdentityPage'
+import PersonalityPage from './pages/PersonalityPage'
+import MemoryPage from './pages/MemoryPage'
 import SetupWizard from './pages/SetupWizard'
 
 export default function App() {
@@ -12,14 +19,14 @@ export default function App() {
       <Route element={<AppLayout />}>
         <Route index element={<ChatView />} />
         <Route path="dashboard" element={<DashboardView />} />
-        <Route path="config" element={<PlaceholderPage title="Config" />} />
-        <Route path="tools" element={<PlaceholderPage title="Tools" />} />
-        <Route path="channels" element={<PlaceholderPage title="Channels" />} />
-        <Route path="sessions" element={<PlaceholderPage title="Sessions" />} />
-        <Route path="logs" element={<PlaceholderPage title="Logs" />} />
-        <Route path="identity" element={<PlaceholderPage title="Identity" />} />
-        <Route path="personality" element={<PlaceholderPage title="Personality" />} />
-        <Route path="memory" element={<PlaceholderPage title="Memory" />} />
+        <Route path="config" element={<ConfigPage />} />
+        <Route path="tools" element={<ToolsPage />} />
+        <Route path="channels" element={<ChannelsPage />} />
+        <Route path="sessions" element={<SessionsPage />} />
+        <Route path="logs" element={<LogsPage />} />
+        <Route path="identity" element={<IdentityPage />} />
+        <Route path="personality" element={<PersonalityPage />} />
+        <Route path="memory" element={<MemoryPage />} />
         <Route path="*" element={<ChatView />} />
       </Route>
     </Routes>

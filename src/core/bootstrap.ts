@@ -1706,7 +1706,7 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
     // Subscribe learning pipeline to tool result events via serial queue
     eventBus.on("tool:result", (event) => {
       learningQueue.enqueue(async () => {
-        pipeline.handleToolResult(event);
+        await pipeline.handleToolResult(event);
       });
     });
 

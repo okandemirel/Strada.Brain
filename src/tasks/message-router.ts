@@ -74,7 +74,7 @@ export class MessageRouter {
       promptLength: text.length,
     });
 
-    this.taskManager.submit(chatId, channelType, text);
+    this.taskManager.submit(chatId, channelType, text, { attachments: msg.attachments });
   }
 
   private async sendStartupNotice(chatId: string): Promise<void> {

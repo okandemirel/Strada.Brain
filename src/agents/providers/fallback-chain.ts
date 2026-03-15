@@ -33,7 +33,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       streaming: providers.some((p) => p.capabilities.streaming),
       structuredStreaming: providers.some((p) => p.capabilities.structuredStreaming),
       toolCalling: providers.every((p) => p.capabilities.toolCalling),
-      vision: providers.every((p) => p.capabilities.vision),
+      vision: providers.some((p) => p.capabilities.vision),
       systemPrompt: providers.every((p) => p.capabilities.systemPrompt),
     };
   }

@@ -80,6 +80,7 @@ interface GoalNodeRow {
   started_at: number | null;
   completed_at: number | null;
   retry_count: number;
+  redecomposition_count: number;
 }
 
 // =============================================================================
@@ -125,6 +126,11 @@ export class GoalStorage {
         "ALTER TABLE goal_nodes ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
       );
     }
+    if (!colNames.has("redecomposition_count")) {
+      this.db.exec(
+        "ALTER TABLE goal_nodes ADD COLUMN redecomposition_count INTEGER NOT NULL DEFAULT 0",
+      );
+    }
 
     // Phase 20: Add plan_summary column if missing (safe migration for pre-Phase-16 DBs)
     const treeCols = this.db.pragma("table_info(goal_trees)") as Array<{
@@ -158,13 +164,13 @@ export class GoalStorage {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       insertNode: `
-        INSERT INTO goal_nodes (id, root_id, parent_id, task, depends_on, depth, status, result, error, created_at, updated_at, started_at, completed_at, retry_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO goal_nodes (id, root_id, parent_id, task, depends_on, depth, status, result, error, created_at, updated_at, started_at, completed_at, retry_count, redecomposition_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       getTree: `SELECT * FROM goal_trees WHERE root_id = ?`,
       getNodesByRoot: `SELECT * FROM goal_nodes WHERE root_id = ?`,
       updateNodeStatus: `
-        UPDATE goal_nodes SET status = ?, result = ?, error = ?, updated_at = ? WHERE id = ?
+        UPDATE goal_nodes SET status = ?, result = ?, error = ?, updated_at = ?, retry_count = ?, redecomposition_count = ? WHERE id = ?
       `,
       getTreesBySession: `SELECT * FROM goal_trees WHERE session_id = ? ORDER BY created_at DESC LIMIT 50`,
       deleteTree: `DELETE FROM goal_trees WHERE root_id = ?`,
@@ -232,6 +238,7 @@ export class GoalStorage {
           node.startedAt ?? null,
           node.completedAt ?? null,
           node.retryCount ?? 0,
+          node.redecompositionCount ?? 0,
         );
       }
     });
@@ -257,15 +264,27 @@ export class GoalStorage {
     status: GoalStatus,
     result?: string,
     error?: string,
+    retryCount?: number,
+    redecompositionCount?: number,
   ): void {
     this.ensureConnection();
+    const now = Date.now();
     this.getStatement("updateNodeStatus").run(
       status,
       result ?? null,
       error ?? null,
-      Date.now(),
+      now,
+      retryCount ?? 0,
+      redecompositionCount ?? 0,
       nodeId,
     );
+    // Also update timing columns
+    if (status === "executing") {
+      this.db!.prepare("UPDATE goal_nodes SET started_at = ? WHERE id = ? AND started_at IS NULL").run(now, nodeId);
+    }
+    if (status === "completed" || status === "failed" || status === "skipped") {
+      this.db!.prepare("UPDATE goal_nodes SET completed_at = ? WHERE id = ?").run(now, nodeId);
+    }
   }
 
   /** Get all trees for a given session */
@@ -302,6 +321,7 @@ export class GoalStorage {
       startedAt: row.started_at ?? undefined,
       completedAt: row.completed_at ?? undefined,
       retryCount: row.retry_count ?? 0,
+      redecompositionCount: row.redecomposition_count ?? 0,
     };
   }
 
@@ -357,6 +377,7 @@ export class GoalStorage {
           node.startedAt ?? null,
           node.completedAt ?? null,
           node.retryCount ?? 0,
+          node.redecompositionCount ?? 0,
         );
       }
     });

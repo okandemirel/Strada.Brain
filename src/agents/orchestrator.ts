@@ -61,7 +61,7 @@ const MAX_SESSIONS = 100;
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
 const API_KEY_PATTERN =
-  /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+)[a-zA-Z0-9_\-.]{10,}/gi;
+  /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+|AKIA[0-9A-Z]{16}|-----BEGIN\s(?:RSA\s)?PRIVATE\sKEY-----|mongodb(?:\+srv)?:\/\/[^\s]+@)[a-zA-Z0-9_\-.]{10,}/gi;
 
 interface Session {
   messages: ConversationMessage[];
@@ -401,6 +401,20 @@ export class Orchestrator {
   }
 
   /**
+   * Public accessor for active sessions (used by dashboard /api/sessions).
+   */
+  getSessions(): Map<string, { lastActivity: Date; messageCount: number }> {
+    const result = new Map<string, { lastActivity: Date; messageCount: number }>();
+    for (const [chatId, session] of this.sessions) {
+      result.set(chatId, {
+        lastActivity: session.lastActivity,
+        messageCount: session.messages.length,
+      });
+    }
+    return result;
+  }
+
+  /**
    * Handle an incoming message from any channel.
    * Uses a per-session lock to prevent concurrent processing.
    */
@@ -453,9 +467,11 @@ export class Orchestrator {
     });
     // ────────────────────────────────────────────────────────────────
 
-    // Isolated session for this task
+    // Build user content with vision support if attachments present
+    const supportsVision = provider.capabilities.vision;
+    const userContent = buildUserContent(prompt || DEFAULT_IMAGE_PROMPT, options.attachments, supportsVision);
     const session: Session = {
-      messages: [{ role: "user", content: prompt }],
+      messages: [{ role: "user", content: userContent }],
       lastActivity: new Date(),
     };
 
@@ -816,8 +832,11 @@ export class Orchestrator {
     }
 
     // New user detection: no profile yet -> start deterministic onboarding
-    if (this.userProfileStore && !this.userProfileStore.getProfile(chatId)) {
-      this.userProfileStore.upsertProfile(chatId, {});
+    const hasProfileStore = !!this.userProfileStore;
+    const existingProfile = hasProfileStore ? this.userProfileStore!.getProfile(chatId) : null;
+    if (hasProfileStore && !existingProfile) {
+      this.userProfileStore!.upsertProfile(chatId, {});
+      logger.info("Starting deterministic onboarding", { chatId });
       await this.runOnboardingFlow(chatId);
       return;
     }
@@ -912,8 +931,8 @@ export class Orchestrator {
       );
     } finally {
       clearInterval(typingInterval);
-      // Persist conversation summary (debounced to avoid excessive writes)
-      await this.persistSessionToMemory(chatId, session.messages.slice(-10));
+      // Persist conversation summary (forced to ensure no messages are lost)
+      await this.persistSessionToMemory(chatId, session.messages.slice(-10), /* force */ true);
       // Periodic summarization: every 10 messages, generate an LLM summary
       if (this.sessionSummarizer && session.messages.length > 0 && session.messages.length % 10 === 0) {
         void this.sessionSummarizer.summarizeAndUpdateProfile(chatId, session.messages)
@@ -1990,8 +2009,8 @@ export class Orchestrator {
     }
   }
 
-  /** Minimum interval between debounced memory persists per chat (30s). */
-  private static readonly PERSIST_DEBOUNCE_MS = 30_000;
+  /** Minimum interval between debounced memory persists per chat (5s). */
+  private static readonly PERSIST_DEBOUNCE_MS = 5_000;
 
   /**
    * Persist conversation messages to memory so the agent remembers them next session.

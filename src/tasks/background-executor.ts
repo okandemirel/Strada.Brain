@@ -179,6 +179,7 @@ export class BackgroundExecutor {
         onProgress,
         chatId: task.chatId,
         channelType: task.channelType,
+        attachments: task.attachments,
       });
 
       if (signal.aborted) {
@@ -275,7 +276,11 @@ export class BackgroundExecutor {
       // Persist individual node status change (not full tree rewrite)
       if (this.goalStorage) {
         try {
-          this.goalStorage.updateNodeStatus(updatedNode.id, updatedNode.status, updatedNode.error);
+          this.goalStorage.updateNodeStatus(
+            updatedNode.id, updatedNode.status,
+            updatedNode.result, updatedNode.error,
+            updatedNode.retryCount, updatedNode.redecompositionCount,
+          );
         } catch (e) {
           logger.debug("Goal node persistence failed", { error: e instanceof Error ? e.message : String(e) });
         }

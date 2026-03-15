@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { createHash } from "node:crypto";
-import { getLogger } from "../utils/logger.js";
+import { getLogger, getLogRingBuffer } from "../utils/logger.js";
+import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { IMemoryManager, MemoryHealth } from "../memory/memory.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
@@ -114,6 +115,24 @@ interface DashboardReadinessChecker {
   }>;
 }
 
+/** Structural interface for tool registry used by dashboard /api/tools endpoint */
+interface DashboardToolRegistry {
+  getAllTools(): Array<{ name: string; description: string; parameters?: unknown }>;
+}
+
+/** Structural interface for orchestrator sessions used by dashboard /api/sessions endpoint */
+interface DashboardOrchestratorSessions {
+  getSessions(): Map<string, { lastActivity: Date; messageCount: number }>;
+}
+
+/** Structural interface for SoulLoader used by dashboard /api/personality endpoint */
+interface DashboardSoulLoader {
+  getContent(): string;
+  getActiveProfile(): string;
+  getProfiles(): string[];
+  getChannelOverrides(): Record<string, string>;
+}
+
 /**
  * Lightweight HTTP dashboard server.
  * No external dependencies — uses Node.js built-in http module.
@@ -173,6 +192,12 @@ export class DashboardServer {
   private consolidationEngine?: DashboardConsolidationEngine;
   private deploymentExecutor?: DashboardDeploymentExecutor;
   private readinessChecker?: DashboardReadinessChecker;
+
+  // Extended dashboard services (new endpoints)
+  private toolRegistry?: DashboardToolRegistry;
+  private orchestratorSessions?: DashboardOrchestratorSessions;
+  private soulLoader?: DashboardSoulLoader;
+  private configSnapshot?: () => Record<string, unknown>;
 
   constructor(
     port: number,
@@ -251,6 +276,22 @@ export class DashboardServer {
     this.consolidationEngine = services.consolidationEngine ?? this.consolidationEngine;
     this.deploymentExecutor = services.deploymentExecutor ?? this.deploymentExecutor;
     this.readinessChecker = services.readinessChecker ?? this.readinessChecker;
+  }
+
+  /**
+   * Register extended dashboard services for new API endpoints.
+   * Call after relevant services are initialized.
+   */
+  registerExtendedServices(services: {
+    toolRegistry?: DashboardToolRegistry;
+    orchestratorSessions?: DashboardOrchestratorSessions;
+    soulLoader?: DashboardSoulLoader;
+    configSnapshot?: () => Record<string, unknown>;
+  }): void {
+    if (services.toolRegistry) this.toolRegistry = services.toolRegistry;
+    if (services.orchestratorSessions) this.orchestratorSessions = services.orchestratorSessions;
+    if (services.soulLoader) this.soulLoader = services.soulLoader;
+    if (services.configSnapshot) this.configSnapshot = services.configSnapshot;
   }
 
   /**
@@ -718,6 +759,119 @@ export class DashboardServer {
         return;
       }
 
+      // GET /api/config -- Masked configuration snapshot
+      if (url === "/api/config") {
+        const config = this.configSnapshot ? this.configSnapshot() : {};
+        const masked = DashboardServer.maskSensitiveConfig(config);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ config: masked }));
+        return;
+      }
+
+      // GET /api/tools -- Registered tools list
+      if (url === "/api/tools") {
+        const tools = this.toolRegistry?.getAllTools() ?? [];
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ tools, count: tools.length }));
+        return;
+      }
+
+      // GET /api/channels -- Channel status
+      if (url === "/api/channels") {
+        const ch = this.channel as unknown as Record<string, unknown> | undefined;
+        const channelInfo = {
+          name: ch ? ch.name ?? "unknown" : "none",
+          healthy: this.channel?.isHealthy() ?? false,
+          clients: (ch?.clients as Map<string, unknown> | undefined)?.size ?? 0,
+        };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ channels: [channelInfo] }));
+        return;
+      }
+
+      // GET /api/sessions -- Active orchestrator sessions
+      if (url === "/api/sessions") {
+        if (!this.orchestratorSessions) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ sessions: [], count: 0 }));
+          return;
+        }
+        const sessions = this.orchestratorSessions.getSessions();
+        const list = Array.from(sessions.entries()).map(([chatId, s]) => ({
+          chatId,
+          lastActivity: s.lastActivity,
+          messageCount: s.messageCount,
+        }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ sessions: list, count: list.length }));
+        return;
+      }
+
+      // GET /api/logs -- Recent log entries from ring buffer
+      // Sanitize to strip any secrets/tokens that may have been logged
+      if (url === "/api/logs") {
+        const rawLogs = getLogRingBuffer();
+        const logs = rawLogs.map((entry) => ({
+          ...entry,
+          message: sanitizeSecrets(entry.message),
+          meta: entry.meta
+            ? JSON.parse(sanitizeSecrets(JSON.stringify(entry.meta))) as Record<string, unknown>
+            : undefined,
+        }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ logs, count: logs.length }));
+        return;
+      }
+
+      // GET /api/identity -- Identity state
+      if (url === "/api/identity") {
+        let identity: IdentityState | null = null;
+        if (this.identityManager) {
+          try { identity = this.identityManager.getState(); } catch { /* non-fatal */ }
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ identity }));
+        return;
+      }
+
+      // GET /api/personality -- Soul/personality info
+      if (url === "/api/personality") {
+        if (!this.soulLoader) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ personality: null }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          personality: {
+            content: this.soulLoader.getContent(),
+            activeProfile: this.soulLoader.getActiveProfile(),
+            profiles: this.soulLoader.getProfiles(),
+            channelOverrides: this.soulLoader.getChannelOverrides(),
+          },
+        }));
+        return;
+      }
+
+      // GET /api/memory -- Memory tier stats and health
+      if (url === "/api/memory") {
+        const stats = this.getMemoryStats();
+        let memoryHealth: MemoryHealth | undefined;
+        if (this.memoryManager) {
+          try {
+            memoryHealth = (this.memoryManager as unknown as { getHealth?: () => MemoryHealth }).getHealth?.();
+          } catch { /* non-fatal */ }
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          memory: {
+            ...stats,
+            health: memoryHealth ?? null,
+          },
+        }));
+        return;
+      }
+
       if (url === "/api/metrics") {
         const snapshot = this.metrics.getSnapshot(this.getMemoryStats());
         res.writeHead(200, {
@@ -836,6 +990,29 @@ export class DashboardServer {
     } catch {
       return { status: "error", detail: "Failed to query channel health" };
     }
+  }
+
+  /** Sensitive key name patterns for config masking. */
+  private static readonly SENSITIVE_KEY_RE = /key|token|secret|password|credential|auth|uri|dsn/i;
+
+  /**
+   * Recursively mask sensitive values in a config snapshot.
+   * Matches key names that may contain secrets and redacts their values.
+   */
+  static maskSensitiveConfig(obj: Record<string, unknown>): Record<string, unknown> {
+    const masked: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (DashboardServer.SENSITIVE_KEY_RE.test(key)) {
+        const val = String(value ?? "");
+        masked[key] = val.length > 8 ? val.slice(0, 4) + "***" + val.slice(-4) : "***";
+      } else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+        masked[key] = DashboardServer.maskSensitiveConfig(value as Record<string, unknown>);
+      } else {
+        // Additionally sanitize string values that look like they contain secrets
+        masked[key] = typeof value === "string" ? sanitizeSecrets(value) : value;
+      }
+    }
+    return masked;
   }
 
   /**

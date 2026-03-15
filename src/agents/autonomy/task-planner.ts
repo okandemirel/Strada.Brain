@@ -248,16 +248,16 @@ export class TaskPlanner {
   /**
    * Record a correction for learning
    */
-  recordCorrection(params: {
+  async recordCorrection(params: {
     toolName: string;
     originalInput: Record<string, unknown>;
     originalOutput: string;
     correctedOutput: string;
     correction: string;
-  }): void {
+  }): Promise<void> {
     if (!this.learningPipeline) return;
 
-    this.learningPipeline.observeCorrection({
+    await this.learningPipeline.observeCorrection({
       sessionId: this.sessionId,
       toolName: params.toolName,
       originalInput: params.originalInput,

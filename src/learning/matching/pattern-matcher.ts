@@ -175,7 +175,7 @@ export class PatternMatcher {
    * @param options - Matching options (with optional scope context for cross-session filtering)
    * @returns Array of similar instincts with similarity scores
    */
-  findSimilarInstincts(
+  async findSimilarInstincts(
     triggerPattern: string,
     options: {
       minSimilarity?: number;
@@ -183,7 +183,7 @@ export class PatternMatcher {
       typeFilter?: string;
       scope?: ScopeContext;
     } = {}
-  ): PatternMatch[] {
+  ): Promise<PatternMatch[]> {
     const {
       minSimilarity = 0.6,
       maxResults = 5,
@@ -264,6 +264,44 @@ export class PatternMatcher {
             }
           }
         }
+      }
+    }
+
+    // Merge semantic results if embedder is available (async bridge)
+    if (this.embedder) {
+      try {
+        const { denseCosineSimilarity } = await import("../../rag/vector-math.js");
+        const { vector: queryVector } = await this.embedder.embed(triggerPattern);
+
+        for (const instinct of candidates) {
+          // Skip if already matched lexically or no embedding
+          if (matches.some(m => m.instinct?.id === instinct.id)) continue;
+          if (!instinct.embedding || instinct.embedding.length === 0) continue;
+          if (instinct.embedding.length !== queryVector.length) continue;
+
+          const similarity = denseCosineSimilarity(queryVector, instinct.embedding);
+          if (similarity >= minSimilarity) {
+            let confidence = similarity * instinct.confidence;
+            if (scope) {
+              confidence *= scope.scopeBoost;
+              const ageDays = Math.max(0, Math.floor((Date.now() - instinct.createdAt) / MS_PER_DAY));
+              const recencyFactor = Math.max(0.5, 1.0 - (ageDays / 365));
+              confidence *= scope.recencyBoost * recencyFactor;
+            }
+            matches.push({
+              id: instinct.id,
+              type: "semantic",
+              confidence,
+              relevance: similarity,
+              instinct,
+              matchReason: `Semantic similarity: ${(similarity * 100).toFixed(1)}%`,
+              matchedFields: ["embedding"],
+              priority: Math.round(confidence * 100),
+            });
+          }
+        }
+      } catch {
+        // Semantic search failure is non-fatal; lexical results still returned
       }
     }
 
@@ -377,19 +415,33 @@ export class PatternMatcher {
 
       // Match error code
       if (input.errorCode && pattern.codePattern) {
-        const codeRegex = new RegExp(pattern.codePattern, "i");
-        if (codeRegex.test(input.errorCode)) {
-          score += 0.4;
-          matchTypes.push("error_code");
+        try {
+          const codeRegex = new RegExp(pattern.codePattern, "i");
+          if (codeRegex.test(input.errorCode)) {
+            score += 0.4;
+            matchTypes.push("error_code");
+          }
+        } catch {
+          // Malformed regex in stored pattern — fall back to string includes
+          if (input.errorCode.toLowerCase().includes(pattern.codePattern.toLowerCase())) {
+            score += 0.3;
+            matchTypes.push("error_code");
+          }
         }
       }
 
       // Match error message
       if (input.errorMessage) {
-        const messageRegex = new RegExp(pattern.messagePattern, "i");
         const similarity = stringSimilarity(input.errorMessage, pattern.messagePattern);
-        
-        if (messageRegex.test(input.errorMessage) || similarity > this.FUZZY_THRESHOLD) {
+        let regexMatched = false;
+        try {
+          const messageRegex = new RegExp(pattern.messagePattern, "i");
+          regexMatched = messageRegex.test(input.errorMessage);
+        } catch {
+          // Malformed regex — rely on similarity only
+        }
+
+        if (regexMatched || similarity > this.FUZZY_THRESHOLD) {
           score += 0.5 * similarity;
           matchTypes.push("message_pattern");
         }

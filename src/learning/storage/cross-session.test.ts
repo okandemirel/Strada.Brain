@@ -830,7 +830,7 @@ describe("PatternMatcher scope-aware retrieval", () => {
       scopeBoost: 1.1,
     };
 
-    const results = matcher.findSimilarInstincts("fix typescript import error", { scope });
+    const results = await matcher.findSimilarInstincts("fix typescript import error", { scope });
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results[0]!.instinct!.id).toBe("instinct_scope_a");
 
@@ -853,7 +853,7 @@ describe("PatternMatcher scope-aware retrieval", () => {
     const matcher = new PatternMatcher(storage);
 
     // No scope: should use getInstincts (old path)
-    const results = matcher.findSimilarInstincts("fix typescript import error");
+    const results = await matcher.findSimilarInstincts("fix typescript import error");
     expect(results.length).toBeGreaterThanOrEqual(1);
 
     storage.close();
@@ -876,7 +876,7 @@ describe("PatternMatcher scope-aware retrieval", () => {
     const matcher = new PatternMatcher(storage);
 
     // Without scope boost
-    const noScopeResults = matcher.findSimilarInstincts("handle null reference");
+    const noScopeResults = await matcher.findSimilarInstincts("handle null reference");
     const noScopeConfidence = noScopeResults[0]?.confidence ?? 0;
 
     // With scope boost
@@ -887,7 +887,7 @@ describe("PatternMatcher scope-aware retrieval", () => {
       scopeBoost: 1.5, // High boost to make difference clear
     };
 
-    const scopeResults = matcher.findSimilarInstincts("handle null reference", { scope });
+    const scopeResults = await matcher.findSimilarInstincts("handle null reference", { scope });
     const scopeConfidence = scopeResults[0]?.confidence ?? 0;
 
     // Scope-boosted confidence should be higher
@@ -931,7 +931,7 @@ describe("PatternMatcher scope-aware retrieval", () => {
       scopeBoost: 1.0, // Isolate recency effect
     };
 
-    const results = matcher.findSimilarInstincts("optimize database query for speed and performance", { scope, minSimilarity: 0.3 });
+    const results = await matcher.findSimilarInstincts("optimize database query for speed and performance", { scope, minSimilarity: 0.3 });
     // Recent instinct should rank higher because of recency boost
     const recentResult = results.find(r => r.instinct?.id === "instinct_recent");
     const oldResult = results.find(r => r.instinct?.id === "instinct_old_recency");
@@ -971,7 +971,7 @@ describe("PatternMatcher scope-aware retrieval", () => {
       scopeBoost: 1.0,
     };
 
-    matcher.findSimilarInstincts("fix typescript import error in module", { scope });
+    await matcher.findSimilarInstincts("fix typescript import error in module", { scope });
 
     // After dedup, the lower-confidence instinct should be gone
     const remaining1 = storage.getInstinct("instinct_dedup_1");

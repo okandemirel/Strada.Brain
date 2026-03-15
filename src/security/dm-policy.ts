@@ -435,8 +435,22 @@ export function isDestructiveOperation(toolName: string, input: Record<string, u
 
   if (toolName === "shell_exec") {
     const command = String(input["command"] || "").toLowerCase();
-    const dangerous = ["rm ", "del ", "rmdir", "format", "mkfs", ">", "dd ", "shutdown", "reboot"];
-    return dangerous.some((p) => command.includes(p));
+    const dangerous = [
+      "rm ", "del ", "rmdir", "format", "mkfs", ">", "dd ",
+      "shutdown", "reboot", "truncate ", "shred ", "chmod 777",
+    ];
+    if (dangerous.some((p) => command.includes(p))) return true;
+    // Detect piped remote execution and subshell injection
+    const dangerousPatterns = [
+      /(?:curl|wget|fetch)\s.*\|\s*(ba)?sh/,     // Pipe-to-shell
+      /\$\s*\(/,                                   // Subshell injection (with optional whitespace)
+      /`[^`]+`/,                                   // Backtick command substitution
+      /\|\s*(?:ba)?sh\b/,                          // Any pipe to sh/bash
+      /python[23]?\s+-c\s/,                        // Python one-liner execution
+      /node\s+-e\s/,                               // Node.js one-liner execution
+      />\s*\/etc\//,                               // Redirect to /etc/
+    ];
+    return dangerousPatterns.some((p) => p.test(command));
   }
 
   return true;

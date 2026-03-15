@@ -502,6 +502,14 @@ export class WebChannel
     "/api/delegations",
     "/api/consolidation",
     "/api/deployment",
+    "/api/config",
+    "/api/tools",
+    "/api/channels",
+    "/api/sessions",
+    "/api/logs",
+    "/api/identity",
+    "/api/personality",
+    "/api/memory",
   ]);
 
   /**

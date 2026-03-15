@@ -161,14 +161,14 @@ export class LearningPipeline {
     }
   }
 
-  observeCorrection(params: {
+  async observeCorrection(params: {
     sessionId: string;
     toolName: string;
     originalInput: Record<string, unknown>;
     originalOutput: string;
     correctedOutput: string;
     correction: string;
-  }): void {
+  }): Promise<void> {
     const observation: Observation = {
       id: `obs_${randomUUID()}` as ObservationId,
       type: "correction",
@@ -184,7 +184,7 @@ export class LearningPipeline {
     this.storage.recordObservation(observation);
     this.storage.flush();
 
-    this.considerInstinctCreation({
+    await this.considerInstinctCreation({
       type: "correction",
       triggerPattern: this.extractTriggerPattern(params.originalOutput),
       action: params.correction,
@@ -199,7 +199,7 @@ export class LearningPipeline {
    * Runs the full pipeline per event: observe -> process -> confidence update.
    * Replaces the batch detection timer for per-event learning.
    */
-  handleToolResult(event: ToolResultEvent): void {
+  async handleToolResult(event: ToolResultEvent): Promise<void> {
     // 1. Build observation in-memory (avoids write→read DB round-trip)
     const observation: Observation = {
       id: `obs_${randomUUID()}` as ObservationId,
@@ -222,7 +222,7 @@ export class LearningPipeline {
       this.recordErrorPattern(event.errorDetails as ErrorDetails, event.toolName);
     }
 
-    this.processObservation(observation);
+    await this.processObservation(observation);
     this.storage.markObservationsProcessed([observation.id]);
 
     // 3. Update confidence for relevant instincts
@@ -317,7 +317,7 @@ export class LearningPipeline {
 
   // ─── Batch Processing ────────────────────────────────────────────────────────
 
-  runDetectionBatch(): { instinctsCreated: number; patternsDetected: number } {
+  async runDetectionBatch(): Promise<{ instinctsCreated: number; patternsDetected: number }> {
     if (!this.config.enabled) return { instinctsCreated: 0, patternsDetected: 0 };
 
     let instinctsCreated = 0;
@@ -326,14 +326,14 @@ export class LearningPipeline {
     // Process observations
     const observations = this.storage.getUnprocessedObservations(this.config.batchSize);
     for (const obs of observations) {
-      if (this.processObservation(obs)) patternsDetected++;
+      if (await this.processObservation(obs)) patternsDetected++;
     }
     this.storage.markObservationsProcessed(observations.map(o => o.id));
 
     // Process trajectories
     const trajectories = this.storage.getUnprocessedTrajectories(this.config.batchSize);
     for (const trajectory of trajectories) {
-      const instinct = this.extractInstinctFromTrajectory(trajectory);
+      const instinct = await this.extractInstinctFromTrajectory(trajectory);
       if (instinct) {
         this.storage.createInstinct(instinct, this.projectPath);
         this.checkScopePromotion(instinct);
@@ -350,15 +350,15 @@ export class LearningPipeline {
 
   // ─── Instinct Management ─────────────────────────────────────────────────────
 
-  considerInstinctCreation(params: {
+  async considerInstinctCreation(params: {
     type: InstinctType;
     triggerPattern: string;
     action: string;
     toolName?: string;
     contextConditions?: ContextCondition[];
-  }): Instinct | null {
+  }): Promise<Instinct | null> {
     // Check for similar existing instincts (use similarity threshold, not confidence)
-    const similar = this.patternMatcher.findSimilarInstincts(params.triggerPattern);
+    const similar = await this.patternMatcher.findSimilarInstincts(params.triggerPattern);
     // Check raw similarity (relevance), not confidence-weighted score
     if (similar.some(m => m.relevance > CONFIDENCE_THRESHOLDS.SIMILAR)) return null;
 
@@ -678,14 +678,14 @@ export class LearningPipeline {
     this.storage.upsertErrorPattern(pattern);
   }
 
-  private processObservation(obs: Observation): boolean {
+  private async processObservation(obs: Observation): Promise<boolean> {
     switch (obs.type) {
       case "error":
         if (obs.errorDetails) this.recordErrorPattern(obs.errorDetails, obs.toolName);
         return true;
       case "correction":
         if (obs.correction) {
-          this.considerInstinctCreation({
+          await this.considerInstinctCreation({
             type: "correction",
             triggerPattern: this.extractTriggerPattern(obs.output ?? ""),
             action: obs.correction,
@@ -698,21 +698,21 @@ export class LearningPipeline {
     }
   }
 
-  private extractInstinctFromTrajectory(trajectory: Trajectory): Instinct | null {
+  private async extractInstinctFromTrajectory(trajectory: Trajectory): Promise<Instinct | null> {
     if (!trajectory.outcome.success) return null;
 
     // Find error→fix patterns
     for (let i = 0; i < trajectory.steps.length - 1; i++) {
       const step = trajectory.steps[i]!;
       const nextStep = trajectory.steps[i + 1]!;
-      
+
       // Check if step result is error and next step is success
       const isError = step.result.kind === "error";
       const isNextSuccess = nextStep.result.kind === "success";
-      
+
       if (isError && isNextSuccess) {
         const errorResult = step.result;
-        return this.considerInstinctCreation({
+        return await this.considerInstinctCreation({
           type: "error_fix",
           triggerPattern: errorResult.error.message,
           action: this.stepToAction(nextStep),

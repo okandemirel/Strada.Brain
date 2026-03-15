@@ -825,7 +825,7 @@ export const configSchema = z
     stradaMemoryReRetrievalRagTopK: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("6"),
 
     // Multi-Agent (Phase 23)
-    multiAgentEnabled: boolFromString(false),
+    multiAgentEnabled: boolFromString(true),
     agentDefaultBudgetUsd: z.string().transform(parseFloat).pipe(z.number().min(0.01).max(100)).default("5.00"),
     agentMaxConcurrent: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
     agentIdleTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000)).default("3600000"),

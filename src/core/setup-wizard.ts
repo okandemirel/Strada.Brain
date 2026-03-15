@@ -417,6 +417,8 @@ export class SetupWizard {
       "# Defaults",
       "STREAMING_ENABLED=true",
       "REQUIRE_EDIT_CONFIRMATION=true",
+      "DASHBOARD_ENABLED=true",
+      "MULTI_AGENT_ENABLED=true",
       "LOG_LEVEL=info",
     );
 
