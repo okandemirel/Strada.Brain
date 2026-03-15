@@ -564,10 +564,11 @@ describe("RAG Search Flow Integration", () => {
 
       await channel.simulateIncomingMessage("chat-rag-multi-1", "How is damage calculated?");
 
-      // Assert: Both searches were performed
+      // Assert: Both tool-driven searches were performed
+      // (context injection may add additional RAG searches per message)
       expect(searchQueries).toContain("combat system");
       expect(searchQueries).toContain("damage calculation");
-      expect(searchQueries.length).toBe(2);
+      expect(searchQueries.length).toBeGreaterThanOrEqual(2);
     });
 
     it("should respect RAG search limits", async () => {
