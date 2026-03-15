@@ -56,6 +56,11 @@ function ProviderGrid({
             {provider.recommended && (
               <span className="provider-badge">Recommended</span>
             )}
+            {provider.embeddingRecommended && (
+              <span className="provider-badge provider-badge-embedding">
+                Recommended for embeddings
+              </span>
+            )}
           </div>
         </label>
       ))}

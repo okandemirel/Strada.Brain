@@ -254,4 +254,72 @@ export class UserProfileStore {
       now,
     });
   }
+
+  // -------------------------------------------------------------------------
+  // Autonomous mode convenience methods
+  // -------------------------------------------------------------------------
+
+  /**
+   * Enable or disable autonomous mode for a user.
+   * Stores the flag and optional expiration timestamp in the profile's
+   * preferences object.  When disabling, the expiration is removed.
+   */
+  async setAutonomousMode(
+    chatId: string,
+    enabled: boolean,
+    expiresAt?: number,
+  ): Promise<void> {
+    const profile = this.getProfile(chatId);
+    const prefs: Record<string, unknown> = profile?.preferences
+      ? { ...profile.preferences }
+      : {};
+
+    prefs.autonomousMode = enabled;
+
+    if (enabled && expiresAt !== undefined) {
+      prefs.autonomousExpiresAt = expiresAt;
+    } else {
+      delete prefs.autonomousExpiresAt;
+    }
+
+    this.upsertProfile(chatId, { preferences: prefs });
+  }
+
+  /**
+   * Check whether autonomous mode is active for a user.
+   * If the mode was enabled with an expiration and that time has passed,
+   * it is automatically disabled and the updated state is persisted.
+   */
+  async isAutonomousMode(
+    chatId: string,
+  ): Promise<{ enabled: boolean; expiresAt?: number; remainingMs?: number }> {
+    const profile = this.getProfile(chatId);
+    const prefs = profile?.preferences ?? {};
+
+    const enabled = prefs.autonomousMode === true;
+
+    if (!enabled) {
+      return { enabled: false };
+    }
+
+    const expiresAt =
+      typeof prefs.autonomousExpiresAt === "number"
+        ? prefs.autonomousExpiresAt
+        : undefined;
+
+    if (expiresAt !== undefined) {
+      const remainingMs = expiresAt - Date.now();
+
+      if (remainingMs <= 0) {
+        // Expired — auto-disable and persist
+        await this.setAutonomousMode(chatId, false);
+        return { enabled: false };
+      }
+
+      return { enabled: true, expiresAt, remainingMs };
+    }
+
+    // Enabled with no expiration
+    return { enabled: true };
+  }
 }

@@ -63,6 +63,8 @@ export default function SetupWizard() {
             setLanguage={wiz.setLanguage}
             ragEnabled={wiz.ragEnabled}
             setRagEnabled={wiz.setRagEnabled}
+            embeddingProvider={wiz.embeddingProvider}
+            setEmbeddingProvider={wiz.setEmbeddingProvider}
             checkedProviders={wiz.checkedProviders}
             onNext={wiz.nextStep}
             onBack={wiz.prevStep}
@@ -78,6 +80,7 @@ export default function SetupWizard() {
             channel={wiz.channel}
             language={wiz.language}
             ragEnabled={wiz.ragEnabled}
+            embeddingProvider={wiz.embeddingProvider}
             saveStatus={wiz.saveStatus}
             saveError={wiz.saveError}
             onBack={wiz.prevStep}

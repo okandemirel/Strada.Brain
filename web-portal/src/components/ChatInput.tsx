@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ChangeEvent, type DragEvent } from 'react'
 import type { Attachment } from '../types/messages'
+import VoiceRecorder from './VoiceRecorder'
 
 interface ChatInputProps {
   onSend: (text: string, attachments?: Attachment[]) => boolean | void
@@ -170,6 +171,10 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
     [addFiles],
   )
 
+  const handleVoiceTranscript = useCallback((transcript: string) => {
+    setText(prev => prev ? prev + ' ' + transcript : transcript)
+  }, [])
+
   return (
     <div
       className={`input-area ${isDragOver ? 'drag-over' : ''}`}
@@ -219,6 +224,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           rows={1}
           disabled={disabled}
         />
+        <VoiceRecorder onTranscript={handleVoiceTranscript} disabled={disabled} />
         <button className="send-btn" onClick={handleSend} disabled={disabled || (!text.trim() && files.length === 0)}>
           Send
         </button>

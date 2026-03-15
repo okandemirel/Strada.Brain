@@ -7,6 +7,8 @@ import {
   helpCommand,
   searchCommand,
   threadCommand,
+  autonomousCommand,
+  modelCommand,
   reloadCommand,
   getDefaultSlashCommands,
   getAllSlashCommands,
@@ -155,6 +157,48 @@ describe("threadCommand", () => {
   });
 });
 
+describe("autonomousCommand", () => {
+  it("should have correct name and description", () => {
+    expect(autonomousCommand.data.name).toBe("autonomous");
+    expect(autonomousCommand.data.description).toContain("autonomous");
+  });
+
+  it("should have required action option", () => {
+    const options = autonomousCommand.data.options;
+    const actionOption = options.find((o) => o.name === "action");
+    expect(actionOption).toBeDefined();
+    expect(actionOption?.required).toBe(true);
+  });
+
+  it("should have optional hours option", () => {
+    const options = autonomousCommand.data.options;
+    const hoursOption = options.find((o) => o.name === "hours");
+    expect(hoursOption).toBeDefined();
+    expect(hoursOption?.required).toBe(false);
+  });
+});
+
+describe("modelCommand", () => {
+  it("should have correct name and description", () => {
+    expect(modelCommand.data.name).toBe("model");
+    expect(modelCommand.data.description).toContain("model");
+  });
+
+  it("should have required action option", () => {
+    const options = modelCommand.data.options;
+    const actionOption = options.find((o) => o.name === "action");
+    expect(actionOption).toBeDefined();
+    expect(actionOption?.required).toBe(true);
+  });
+
+  it("should have optional model option", () => {
+    const options = modelCommand.data.options;
+    const modelOption = options.find((o) => o.name === "model");
+    expect(modelOption).toBeDefined();
+    expect(modelOption?.required).toBe(false);
+  });
+});
+
 describe("reloadCommand", () => {
   it("should have correct name and description", () => {
     expect(reloadCommand.data.name).toBe("reload");
@@ -169,8 +213,8 @@ describe("reloadCommand", () => {
 describe("getDefaultSlashCommands", () => {
   it("should return all non-admin commands", () => {
     const commands = getDefaultSlashCommands();
-    
-    expect(commands).toHaveLength(7);
+
+    expect(commands).toHaveLength(9);
     expect(commands.some((c) => c.data.name === "ask")).toBe(true);
     expect(commands.some((c) => c.data.name === "analyze")).toBe(true);
     expect(commands.some((c) => c.data.name === "generate")).toBe(true);
@@ -178,6 +222,8 @@ describe("getDefaultSlashCommands", () => {
     expect(commands.some((c) => c.data.name === "help")).toBe(true);
     expect(commands.some((c) => c.data.name === "search")).toBe(true);
     expect(commands.some((c) => c.data.name === "thread")).toBe(true);
+    expect(commands.some((c) => c.data.name === "autonomous")).toBe(true);
+    expect(commands.some((c) => c.data.name === "model")).toBe(true);
   });
 
   it("should not include admin commands", () => {
@@ -190,8 +236,8 @@ describe("getDefaultSlashCommands", () => {
 describe("getAllSlashCommands", () => {
   it("should return all commands including admin", () => {
     const commands = getAllSlashCommands();
-    
-    expect(commands.length).toBeGreaterThan(7);
+
+    expect(commands).toHaveLength(10);
     expect(commands.some((c) => c.data.name === "reload")).toBe(true);
   });
 });

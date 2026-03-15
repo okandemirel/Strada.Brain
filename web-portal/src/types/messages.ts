@@ -77,7 +77,24 @@ export interface ReconnectMessage {
   chatId: string
 }
 
-export type OutgoingMessage = SendMessage | ConfirmationResponse | ReconnectMessage
+export interface ProviderSwitchMessage {
+  type: 'provider_switch'
+  provider: string
+  model?: string
+}
+
+export interface AutonomousToggleMessage {
+  type: 'autonomous_toggle'
+  enabled: boolean
+  hours?: number
+}
+
+export type OutgoingMessage =
+  | SendMessage
+  | ConfirmationResponse
+  | ReconnectMessage
+  | ProviderSwitchMessage
+  | AutonomousToggleMessage
 
 /** Attachment for file uploads */
 export interface Attachment {

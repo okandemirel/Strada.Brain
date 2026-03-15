@@ -206,6 +206,63 @@ export const threadCommand: SlashCommand = {
 };
 
 /**
+ * /autonomous command - Toggle autonomous mode
+ */
+export const autonomousCommand: SlashCommand = {
+  data: new SlashCommandBuilder()
+    .setName("autonomous")
+    .setDescription("Toggle autonomous mode - execute tasks without approval")
+    .addStringOption((option) =>
+      option
+        .setName("action")
+        .setDescription("Turn autonomous mode on, off, or check status")
+        .setRequired(true)
+        .addChoices(
+          { name: "On", value: "on" },
+          { name: "Off", value: "off" },
+          { name: "Status", value: "status" }
+        )
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("hours")
+        .setDescription("Duration in hours (1-168)")
+        .setRequired(false)
+        .setMinValue(1)
+        .setMaxValue(168)
+    ),
+  execute: async (_interaction) => {
+    // Handled in DiscordChannel
+    throw new Error("autonomous command should be handled by DiscordChannel");
+  },
+};
+
+/**
+ * /model command - Switch AI model provider
+ */
+export const modelCommand: SlashCommand = {
+  data: new SlashCommandBuilder()
+    .setName("model")
+    .setDescription("Switch AI model provider")
+    .addStringOption((option) =>
+      option
+        .setName("action")
+        .setDescription("List available models, reset to default, or specify a provider name")
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName("model")
+        .setDescription("Specific model name")
+        .setRequired(false)
+    ),
+  execute: async (_interaction) => {
+    // Handled in DiscordChannel
+    throw new Error("model command should be handled by DiscordChannel");
+  },
+};
+
+/**
  * Admin command: /reload - Reload bot configuration
  * Requires Administrator permission
  */
@@ -232,6 +289,8 @@ export function getDefaultSlashCommands(): SlashCommand[] {
     helpCommand,
     searchCommand,
     threadCommand,
+    autonomousCommand,
+    modelCommand,
   ];
 }
 

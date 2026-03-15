@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS patterns (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS migration_markers (
+  key TEXT PRIMARY KEY,
+  completed_at INTEGER NOT NULL,
+  metadata TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at DESC);
@@ -1743,6 +1749,18 @@ export class AgentDBMemory implements IUnifiedMemory {
         "SELECT * FROM patterns WHERE pattern_key = ? ORDER BY confidence DESC",
       ),
     );
+
+    this.sqliteStatements.set(
+      "getMigrationMarker",
+      this.sqliteDb!.prepare("SELECT key FROM migration_markers WHERE key = ?"),
+    );
+
+    this.sqliteStatements.set(
+      "setMigrationMarker",
+      this.sqliteDb!.prepare(
+        "INSERT OR REPLACE INTO migration_markers (key, completed_at, metadata) VALUES (?, ?, ?)",
+      ),
+    );
   }
 
   private closeSqlite(): void {
@@ -2036,6 +2054,200 @@ export class AgentDBMemory implements IUnifiedMemory {
         error: String(error),
       });
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Migration Markers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check whether a migration marker exists by key.
+   */
+  async hasMigrationMarker(key: string): Promise<boolean> {
+    if (!this.sqliteDb) return false;
+    try {
+      const stmt = this.sqliteStatements.get("getMigrationMarker");
+      if (!stmt) return false;
+      const row = stmt.get(key);
+      return row !== undefined;
+    } catch (error) {
+      getLoggerSafe().warn("[AgentDB] Failed to check migration marker", {
+        key,
+        error: String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Set a migration marker, recording completion time and optional metadata.
+   */
+  async setMigrationMarker(key: string, metadata?: Record<string, unknown>): Promise<void> {
+    if (!this.sqliteDb) return;
+    try {
+      const stmt = this.sqliteStatements.get("setMigrationMarker");
+      if (!stmt) return;
+      stmt.run(key, Date.now(), metadata ? JSON.stringify(metadata) : null);
+    } catch (error) {
+      getLoggerSafe().warn("[AgentDB] Failed to set migration marker", {
+        key,
+        error: String(error),
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hash-to-Real Embedding Migration
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Detect whether an embedding was produced by the hash-based fallback
+   * rather than a real neural embedding provider.
+   *
+   * The hash fallback (see generateEmbedding) accumulates charCode/255 per
+   * dimension bucket then L2-normalizes. This produces vectors where every
+   * component is >= 0 (character codes are always positive). Real neural
+   * embeddings almost always contain negative values.
+   *
+   * Secondary heuristic: hash embeddings of any non-trivial text have very
+   * low variance across dimensions because the char-code accumulation
+   * distributes fairly evenly. We check both signals.
+   */
+  private isHashBasedEmbedding(_content: string, embedding: number[]): boolean {
+    if (!embedding || embedding.length === 0) return false;
+
+    // Real neural embeddings from any transformer model contain negative
+    // components. The hash-based fallback (generateEmbedding) accumulates
+    // charCode/255 per dimension bucket then L2-normalizes, producing vectors
+    // where every component is >= 0. If no value is negative, it's hash-based.
+    return !embedding.some((v) => v < -1e-9);
+  }
+
+  /**
+   * Re-embed all hash-based entries using the current embedding provider.
+   *
+   * Idempotent: checks the `re_embed_complete_v1` migration marker and
+   * returns immediately if the migration was already performed.
+   *
+   * Processes entries in batches of 50. Individual failures are logged and
+   * skipped so a single bad entry does not abort the entire migration.
+   */
+  async reEmbedHashEntries(): Promise<{ migrated: number; total: number; skipped: number }> {
+    const MARKER_KEY = "re_embed_complete_v1";
+    const BATCH_SIZE = 50;
+
+    // Idempotency check
+    if (await this.hasMigrationMarker(MARKER_KEY)) {
+      return { migrated: 0, total: 0, skipped: 0 };
+    }
+
+    if (!this.config.embeddingProvider) {
+      getLoggerSafe().warn("[AgentDB] Re-embed skipped — no embedding provider configured");
+      return { migrated: 0, total: 0, skipped: 0 };
+    }
+
+    if (!this.sqliteDb) {
+      getLoggerSafe().warn("[AgentDB] Re-embed skipped — SQLite not available");
+      return { migrated: 0, total: 0, skipped: 0 };
+    }
+
+    // Collect all entries that have embeddings
+    const allEntries = Array.from(this.entries.values()).filter(
+      (e) => e.embedding && e.embedding.length > 0,
+    );
+    const total = allEntries.length;
+
+    getLoggerSafe().info("[AgentDB] Starting hash-to-real embedding migration", {
+      totalEntries: total,
+    });
+
+    let migrated = 0;
+    let skipped = 0;
+
+    // Process in batches
+    for (let batchStart = 0; batchStart < allEntries.length; batchStart += BATCH_SIZE) {
+      const batch = allEntries.slice(batchStart, batchStart + BATCH_SIZE);
+      const entriesToPersist: UnifiedMemoryEntry[] = [];
+
+      for (const entry of batch) {
+        const embeddingArr = entry.embedding as unknown as number[];
+        if (!this.isHashBasedEmbedding(entry.content, embeddingArr)) {
+          skipped++;
+          continue;
+        }
+
+        try {
+          const newEmbedding = await this.config.embeddingProvider(entry.content) as Vector<number>;
+          (entry as unknown as { embedding: Vector<number> }).embedding = newEmbedding;
+
+          // Update HNSW index
+          if (this.hnswStore) {
+            const store = this.hnswStore;
+            await this.writeMutex.withLock(() =>
+              store.upsert([
+                {
+                  id: entry.id as string,
+                  vector: newEmbedding,
+                  chunk: {
+                    id: entry.id as string,
+                    content: entry.content,
+                    contentHash: "",
+                    filePath: (entry.chatId as string) ?? "memory",
+                    indexedAt: entry.createdAt as TimestampMs,
+                    kind: "class" as const,
+                    startLine: 0,
+                    endLine: 0,
+                    language: "typescript",
+                  },
+                  addedAt: entry.createdAt as TimestampMs,
+                  accessCount: entry.accessCount,
+                },
+              ]),
+            );
+          }
+
+          entriesToPersist.push(entry);
+          migrated++;
+        } catch (entryError) {
+          skipped++;
+          getLoggerSafe().warn("[AgentDB] Failed to re-embed entry, skipping", {
+            entryId: entry.id as string,
+            error: String(entryError),
+          });
+        }
+      }
+
+      // Batch-persist updated entries to SQLite in a transaction
+      if (entriesToPersist.length > 0 && this.sqliteDb) {
+        try {
+          const stmt = this.sqliteStatements.get("upsertMemory");
+          if (stmt) {
+            this.sqliteDb.transaction(() => {
+              for (const e of entriesToPersist) {
+                this.upsertEntryRow(stmt, e);
+              }
+            })();
+          }
+        } catch (persistError) {
+          getLoggerSafe().warn("[AgentDB] Failed to persist batch during re-embed", {
+            error: String(persistError),
+          });
+        }
+      }
+
+      getLoggerSafe().info(`[AgentDB] Re-embedding: ${migrated}/${total} entries migrated`);
+    }
+
+    // Mark migration as complete
+    await this.setMigrationMarker(MARKER_KEY, { migrated, total, skipped });
+
+    getLoggerSafe().info("[AgentDB] Hash-to-real embedding migration complete", {
+      migrated,
+      total,
+      skipped,
+    });
+
+    return { migrated, total, skipped };
   }
 
   // ---------------------------------------------------------------------------

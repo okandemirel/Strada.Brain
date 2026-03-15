@@ -734,6 +734,89 @@ body {
 
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
 
+/* ===== Voice Recorder Button ===== */
+.voice-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.voice-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.voice-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.voice-btn.voice-recording {
+  color: var(--error);
+  border-color: var(--error);
+  background: rgba(255, 69, 58, 0.15);
+  animation: voice-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 69, 58, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(255, 69, 58, 0); }
+}
+
+/* ===== Voice Output Button ===== */
+.voice-output-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition: all 0.2s ease;
+}
+
+.voice-output-btn:hover {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.voice-output-btn.voice-speaking {
+  color: var(--accent);
+  animation: voice-speaking-pulse 1s ease-in-out infinite;
+}
+
+@keyframes voice-speaking-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ===== Message Actions (voice output, etc.) ===== */
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.message:hover .message-actions,
+.message-actions:focus-within {
+  opacity: 1;
+}
+
 /* ===== File Previews ===== */
 .file-previews {
   display: flex;
@@ -1296,6 +1379,7 @@ body {
   .input-area { padding: 12px 16px 16px; }
   .send-btn { padding: 10px 16px; }
   .attach-btn { width: 38px; height: 38px; }
+  .voice-btn { width: 38px; height: 38px; }
   .message-image { max-width: 200px; max-height: 160px; }
   .dashboard-view { padding: 16px; }
   .dashboard-header-row { flex-direction: column; align-items: flex-start; gap: 8px; }
@@ -1333,6 +1417,104 @@ body {
 .placeholder-page p {
   font-size: 15px;
   color: var(--text-tertiary);
+}
+
+/* ===== Chat Toolbar ===== */
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ===== Model Selector ===== */
+.model-selector {
+  position: relative;
+}
+
+.model-selector-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.model-selector-trigger:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-color: var(--border-hover);
+}
+
+.model-selector-label {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-selector-chevron {
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.model-selector-chevron.open {
+  transform: rotate(180deg);
+}
+
+.model-selector-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 160px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+
+.model-selector-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.model-selector-option:hover {
+  background: var(--bg-tertiary);
+  color: var(--text);
+}
+
+.model-selector-option.active {
+  color: var(--accent);
+}
+
+.model-selector-check {
+  flex-shrink: 0;
+  color: var(--accent);
 }
 
 /* ===== Syntax Highlighting (GitHub Dark) ===== */

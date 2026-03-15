@@ -1,4 +1,4 @@
-import { PRESETS, EMBEDDING_CAPABLE, PROVIDER_MAP } from '../../types/setup-constants'
+import { PRESETS, EMBEDDING_CAPABLE, EMBEDDING_PROVIDERS, PROVIDER_MAP } from '../../types/setup-constants'
 import type { SaveStatus } from '../../types/setup'
 
 interface ReviewStepProps {
@@ -9,6 +9,7 @@ interface ReviewStepProps {
   channel: string
   language: string
   ragEnabled: boolean
+  embeddingProvider: string
   saveStatus: SaveStatus
   saveError: string | null
   onBack: () => void
@@ -28,6 +29,7 @@ export default function ReviewStep({
   channel,
   language,
   ragEnabled,
+  embeddingProvider,
   saveStatus,
   saveError,
   onBack,
@@ -99,6 +101,15 @@ export default function ReviewStep({
             {ragEnabled && !hasEmbeddingProvider && 'Enabled (no embedding provider)'}
           </span>
         </div>
+
+        {ragEnabled && (
+          <div className="review-item">
+            <span className="review-label">Embedding Provider</span>
+            <span className="review-value">
+              {EMBEDDING_PROVIDERS.find((ep) => ep.id === embeddingProvider)?.name ?? embeddingProvider}
+            </span>
+          </div>
+        )}
 
         <div className="review-item">
           <span className="review-label">Language</span>

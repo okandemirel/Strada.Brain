@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import type { Attachment, ChatMessage as ChatMessageType } from '../types/messages'
+import VoiceOutput from './VoiceOutput'
 
 const REMARK_PLUGINS = [remarkGfm]
 const REHYPE_PLUGINS = [rehypeHighlight]
@@ -56,8 +57,15 @@ function AttachmentGallery({ attachments }: { attachments: Attachment[] }) {
   )
 }
 
+function hasTextContent(text: string): boolean {
+  // Strip markdown code blocks and check if meaningful text remains
+  const stripped = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`]+`/g, '').trim()
+  return stripped.length > 0
+}
+
 function ChatMessageComponent({ message }: ChatMessageProps) {
   const isUser = message.sender === 'user'
+  const showVoiceOutput = !isUser && !message.isStreaming && hasTextContent(message.text)
 
   return (
     <div className={`message ${isUser ? 'user' : 'ai'}`}>
@@ -72,6 +80,11 @@ function ChatMessageComponent({ message }: ChatMessageProps) {
         <AttachmentGallery attachments={message.attachments} />
       )}
       {message.isStreaming && <span className="streaming-cursor" />}
+      {showVoiceOutput && (
+        <div className="message-actions">
+          <VoiceOutput text={message.text} />
+        </div>
+      )}
     </div>
   )
 }

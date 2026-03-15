@@ -83,6 +83,8 @@ export class TelegramChannel implements IChannelAdapter {
       { command: "start", description: "Start Strada Brain" },
       { command: "status", description: "Show project status" },
       { command: "analyze", description: "Analyze project structure" },
+      { command: "autonomous", description: "Toggle autonomous mode (on/off/status)" },
+      { command: "model", description: "Switch AI model provider (list/reset/provider-name)" },
       { command: "help", description: "Show help" },
     ]);
 
@@ -434,6 +436,8 @@ export class TelegramChannel implements IChannelAdapter {
           "Commands:\n" +
           "/status - Show project status\n" +
           "/analyze - Analyze project structure\n" +
+          "/autonomous - Toggle autonomous mode\n" +
+          "/model - Switch AI model provider\n" +
           "/help - Show help",
         { parse_mode: "Markdown" }
       );

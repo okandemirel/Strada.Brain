@@ -22,6 +22,8 @@ export interface UseWebSocketReturn {
   sessionId: string | null
   sendMessage: (text: string, attachments?: Attachment[]) => boolean
   sendConfirmation: (confirmId: string, option: string) => void
+  switchProvider: (provider: string, model?: string) => boolean
+  toggleAutonomous: (enabled: boolean, hours?: number) => boolean
 }
 
 export function useWebSocket(): UseWebSocketReturn {
@@ -246,6 +248,16 @@ export function useWebSocket(): UseWebSocketReturn {
     setConfirmation(null)
   }, [])
 
+  const switchProvider = useCallback((provider: string, model?: string): boolean => {
+    const text = `/model ${provider}${model ? '/' + model : ''}`
+    return sendMessage(text)
+  }, [sendMessage])
+
+  const toggleAutonomous = useCallback((enabled: boolean, hours?: number): boolean => {
+    const text = `/autonomous ${enabled ? 'on' : 'off'}${hours ? ' ' + hours : ''}`
+    return sendMessage(text)
+  }, [sendMessage])
+
   return {
     messages,
     status,
@@ -254,5 +266,7 @@ export function useWebSocket(): UseWebSocketReturn {
     sessionId,
     sendMessage,
     sendConfirmation,
+    switchProvider,
+    toggleAutonomous,
   }
 }

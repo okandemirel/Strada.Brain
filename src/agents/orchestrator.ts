@@ -253,6 +253,7 @@ export class Orchestrator {
     embeddingProvider?: IEmbeddingProvider;
     soulLoader?: SoulLoader;
     dmPolicyConfig?: Partial<DMPolicyConfig>;
+    dmPolicy?: DMPolicy;
     sessionSummarizer?: SessionSummarizer;
     userProfileStore?: UserProfileStore;
   }) {
@@ -274,7 +275,7 @@ export class Orchestrator {
     this.reRetrievalConfig = opts.reRetrievalConfig;
     this.embeddingProvider = opts.embeddingProvider;
     this.soulLoader = opts.soulLoader ?? null;
-    this.dmPolicy = new DMPolicy(opts.channel, opts.dmPolicyConfig);
+    this.dmPolicy = opts.dmPolicy ?? new DMPolicy(opts.channel, opts.dmPolicyConfig);
     this.sessionSummarizer = opts.sessionSummarizer;
     this.userProfileStore = opts.userProfileStore;
 
@@ -521,6 +522,21 @@ export class Orchestrator {
       if (Date.now() - lastTouch > 60_000) {
         this.userProfileStore.touchLastSeen(chatId);
         this.lastPersistTime.set(`touch:${chatId}`, Date.now());
+      }
+    }
+
+    // Load autonomous mode from profile at session start
+    if (this.dmPolicy && this.userProfileStore) {
+      try {
+        const autonomousState = await this.userProfileStore.isAutonomousMode(chatId);
+        if (autonomousState.enabled) {
+          this.dmPolicy.initFromProfile(chatId, {
+            autonomousMode: true,
+            autonomousExpiresAt: autonomousState.expiresAt,
+          });
+        }
+      } catch {
+        // Autonomous mode restoration failure is non-fatal
       }
     }
     // ────────────────────────────────────────────────────────────────────
@@ -895,7 +911,8 @@ export class Orchestrator {
 
   private async processMessage(msg: IncomingMessage): Promise<void> {
     const logger = getLogger();
-    const { chatId, text, userId } = msg;
+    const { chatId, text, userId: msgUserId } = msg;
+    const userId = msgUserId;
 
     logger.info("Processing message", {
       chatId,
@@ -994,6 +1011,21 @@ export class Orchestrator {
       if (Date.now() - lastTouch > 60_000) {
         this.userProfileStore.touchLastSeen(chatId);
         this.lastPersistTime.set(`touch:${chatId}`, Date.now());
+      }
+    }
+
+    // Load autonomous mode from profile at session start
+    if (this.dmPolicy && this.userProfileStore) {
+      try {
+        const autonomousState = await this.userProfileStore.isAutonomousMode(chatId);
+        if (autonomousState.enabled) {
+          this.dmPolicy.initFromProfile(chatId, {
+            autonomousMode: true,
+            autonomousExpiresAt: autonomousState.expiresAt,
+          }, userId);
+        }
+      } catch {
+        // Autonomous mode restoration failure is non-fatal
       }
     }
 

@@ -1,4 +1,4 @@
-import { CHANNELS, LANGUAGES, EMBEDDING_CAPABLE, PROVIDER_MAP } from '../../types/setup-constants'
+import { CHANNELS, LANGUAGES, EMBEDDING_CAPABLE, EMBEDDING_PROVIDERS, PROVIDER_MAP } from '../../types/setup-constants'
 
 interface ChannelRagStepProps {
   channel: string
@@ -9,6 +9,8 @@ interface ChannelRagStepProps {
   setLanguage: (code: string) => void
   ragEnabled: boolean
   setRagEnabled: (enabled: boolean) => void
+  embeddingProvider: string
+  setEmbeddingProvider: (provider: string) => void
   checkedProviders: Set<string>
   onNext: () => void
   onBack: () => void
@@ -23,6 +25,8 @@ export default function ChannelRagStep({
   setLanguage,
   ragEnabled,
   setRagEnabled,
+  embeddingProvider,
+  setEmbeddingProvider,
   checkedProviders,
   onNext,
   onBack,
@@ -107,6 +111,23 @@ export default function ChannelRagStep({
           {ragEnabled && !embeddingProviderName && checkedProviders.size > 0 && '\u26A0 Your selected providers don\'t support embeddings. Go back and add Ollama (free, local) or Gemini to enable RAG code search.'}
           {ragEnabled && !embeddingProviderName && checkedProviders.size === 0 && '\u26A0 RAG enabled \u2014 embedding provider will be auto-detected from your providers.'}
         </p>
+
+        {ragEnabled && (
+          <div className="embedding-provider-select">
+            <label htmlFor="embeddingProvider">Embedding Provider</label>
+            <select
+              id="embeddingProvider"
+              value={embeddingProvider}
+              onChange={(e) => setEmbeddingProvider(e.target.value)}
+            >
+              {EMBEDDING_PROVIDERS.map((ep) => (
+                <option key={ep.id} value={ep.id}>
+                  {ep.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       <div className="step-actions">

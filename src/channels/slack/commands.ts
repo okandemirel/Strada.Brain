@@ -7,6 +7,7 @@ import type { App, AckFn, RespondFn } from "@slack/bolt";
 import type { WebClient } from "@slack/web-api";
 import { getLogger } from "../../utils/logger.js";
 import { createHelpBlocks, createProcessingBlock } from "./blocks.js";
+import type { IncomingMessage } from "../channel.interface.js";
 
 const logger = getLogger();
 
@@ -28,10 +29,16 @@ interface CommandContext {
 
 type CommandHandler = (ctx: CommandContext) => Promise<void>;
 
+type RouteMessageFn = (msg: IncomingMessage) => Promise<void>;
+
 /**
  * Register all slash commands with the Slack app.
  */
-export function registerSlashCommands(app: App, authConfig?: SlashCommandAuthConfig): void {
+export function registerSlashCommands(
+  app: App,
+  authConfig?: SlashCommandAuthConfig,
+  routeMessage?: RouteMessageFn
+): void {
   // /strada-help - Show help information
   app.command("/strada-help", async ({ ack, respond, client, body }) => {
     await handleCommand({
@@ -86,6 +93,34 @@ export function registerSlashCommands(app: App, authConfig?: SlashCommandAuthCon
       triggerId: body.trigger_id,
       text: body.text,
     }, handleGenerateCommand, authConfig);
+  });
+
+  // /strada-autonomous - Toggle autonomous mode
+  app.command("/strada-autonomous", async ({ ack, respond, client, body }) => {
+    await handleCommand({
+      ack,
+      respond,
+      client,
+      userId: body.user_id,
+      channelId: body.channel_id,
+      teamId: body.team_id,
+      triggerId: body.trigger_id,
+      text: body.text,
+    }, (ctx) => handleAutonomousCommand(ctx, routeMessage), authConfig);
+  });
+
+  // /strada-model - Switch AI model provider
+  app.command("/strada-model", async ({ ack, respond, client, body }) => {
+    await handleCommand({
+      ack,
+      respond,
+      client,
+      userId: body.user_id,
+      channelId: body.channel_id,
+      teamId: body.team_id,
+      triggerId: body.trigger_id,
+      text: body.text,
+    }, (ctx) => handleModelCommand(ctx, routeMessage), authConfig);
   });
 
   logger.info("Slash commands registered");
@@ -160,6 +195,8 @@ async function handleHelpCommand(ctx: CommandContext): Promise<void> {
 */strada-ask <question>* - Ask the AI a question
 */strada-analyze <file|project>* - Analyze code or project structure
 */strada-generate <type> <name>* - Generate Strada.Core code
+*/strada-autonomous <action>* - Toggle autonomous mode
+*/strada-model <action>* - Switch AI model provider
 
 *Generation Types:*
 • \`component <Name>\` - Create a Component class
@@ -167,10 +204,22 @@ async function handleHelpCommand(ctx: CommandContext): Promise<void> {
 • \`system <Name>\` - Create a System class
 • \`module <Name>\` - Create a Module structure
 
+*Autonomous Mode:*
+• \`/strada-autonomous on [hours]\` - Enable autonomous mode
+• \`/strada-autonomous off\` - Disable autonomous mode
+• \`/strada-autonomous status\` - Check current status
+
+*Model Selection:*
+• \`/strada-model list\` - List available model providers
+• \`/strada-model <provider>\` - Switch to a specific provider
+• \`/strada-model reset\` - Reset to default model
+
 *Examples:*
 \`/strada-ask How do I create a new enemy system?\`
 \`/strada-analyze Assets/Scripts/PlayerController.cs\`
 \`/strada-generate component PlayerHealth\`
+\`/strada-autonomous on 24\`
+\`/strada-model openai\`
 `;
 
   await ctx.respond({
@@ -282,6 +331,64 @@ Example: \`/strada-generate component PlayerHealth\``,
     blocks: createProcessingBlock(`Generating ${escapeText(type)} \`${escapeText(name)}\`...`),
     response_type: "in_channel",
   });
+}
+
+/**
+ * Handle /strada-autonomous command.
+ * Converts to /autonomous <args> and routes to message handler.
+ */
+async function handleAutonomousCommand(ctx: CommandContext, routeMessage?: RouteMessageFn): Promise<void> {
+  const args = ctx.text.trim();
+
+  await ctx.ack();
+
+  const commandText = `/autonomous${args ? ` ${args}` : ""}`;
+
+  if (routeMessage) {
+    const msg: IncomingMessage = {
+      channelType: "slack",
+      chatId: ctx.channelId,
+      userId: ctx.userId,
+      text: commandText,
+      timestamp: new Date(),
+    };
+
+    await routeMessage(msg);
+  } else {
+    await ctx.respond({
+      blocks: createProcessingBlock(`Processing autonomous command: "${escapeText(args || "status")}"`),
+      response_type: "ephemeral",
+    });
+  }
+}
+
+/**
+ * Handle /strada-model command.
+ * Converts to /model <args> and routes to message handler.
+ */
+async function handleModelCommand(ctx: CommandContext, routeMessage?: RouteMessageFn): Promise<void> {
+  const args = ctx.text.trim();
+
+  await ctx.ack();
+
+  const commandText = `/model${args ? ` ${args}` : ""}`;
+
+  if (routeMessage) {
+    const msg: IncomingMessage = {
+      channelType: "slack",
+      chatId: ctx.channelId,
+      userId: ctx.userId,
+      text: commandText,
+      timestamp: new Date(),
+    };
+
+    await routeMessage(msg);
+  } else {
+    await ctx.respond({
+      blocks: createProcessingBlock(`Processing model command: "${escapeText(args || "list")}"`),
+      response_type: "ephemeral",
+    });
+  }
 }
 
 /**

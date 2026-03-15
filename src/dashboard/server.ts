@@ -133,6 +133,19 @@ interface DashboardSoulLoader {
   getChannelOverrides(): Record<string, string>;
 }
 
+/** Structural interface for provider management used by dashboard /api/providers endpoints */
+interface DashboardProviderManager {
+  listAvailable(): { name: string; configured: boolean; models?: string[] }[];
+  getActiveInfo(chatId: string): { provider: string; model?: string } | null;
+  setPreference(chatId: string, provider: string, model?: string): Promise<void>;
+}
+
+/** Structural interface for user profile store used by dashboard /api/user endpoints */
+interface DashboardUserProfileStore {
+  setAutonomousMode(chatId: string, enabled: boolean, expiresAt?: number): Promise<void>;
+  isAutonomousMode(chatId: string): Promise<{ enabled: boolean; expiresAt?: number; remainingMs?: number }>;
+}
+
 /**
  * Lightweight HTTP dashboard server.
  * No external dependencies — uses Node.js built-in http module.
@@ -221,6 +234,10 @@ export class DashboardServer {
   private soulLoader?: DashboardSoulLoader;
   private configSnapshot?: () => Record<string, unknown>;
 
+  // Provider and user profile services (autonomous mode + provider switching)
+  private providerManager?: DashboardProviderManager;
+  private userProfileStore?: DashboardUserProfileStore;
+
   constructor(
     port: number,
     metrics: MetricsCollector,
@@ -297,11 +314,15 @@ export class DashboardServer {
     orchestratorSessions?: DashboardOrchestratorSessions;
     soulLoader?: DashboardSoulLoader;
     configSnapshot?: () => Record<string, unknown>;
+    providerManager?: DashboardProviderManager;
+    userProfileStore?: DashboardUserProfileStore;
   }): void {
     this.toolRegistry = services.toolRegistry ?? this.toolRegistry;
     this.orchestratorSessions = services.orchestratorSessions ?? this.orchestratorSessions;
     this.soulLoader = services.soulLoader ?? this.soulLoader;
     this.configSnapshot = services.configSnapshot ?? this.configSnapshot;
+    this.providerManager = services.providerManager ?? this.providerManager;
+    this.userProfileStore = services.userProfileStore ?? this.userProfileStore;
   }
 
   /**
@@ -569,98 +590,63 @@ export class DashboardServer {
 
       // POST /api/webhook -- Accept webhook events with dual auth and rate limiting
       if (req.method === "POST" && (url === "/api/webhook" || url.startsWith("/api/webhook?"))) {
-        const MAX_BODY_BYTES = 65_536;
-        let body = "";
-        let bodyBytes = 0;
-        let aborted = false;
-        req.on("data", (chunk: Buffer) => {
-          bodyBytes += chunk.length;
-          if (bodyBytes > MAX_BODY_BYTES) {
-            aborted = true;
-            req.destroy();
-            res.writeHead(413, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Request body too large" }));
+        // Auth check (headers only, no body needed)
+        const headers: Record<string, string | undefined> = {
+          "x-webhook-secret": req.headers["x-webhook-secret"] as string | undefined,
+          "authorization": req.headers["authorization"] as string | undefined,
+        };
+        const authResult = validateWebhookAuth(headers, this.webhookSecret, this.dashboardToken);
+        if (!authResult.valid) {
+          res.writeHead(authResult.status ?? 401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.message }));
+          return;
+        }
+
+        // Rate limit check (per-source by IP)
+        const sourceIp = req.socket.remoteAddress ?? "unknown";
+        if (this.webhookRateLimiter && !this.webhookRateLimiter.isAllowed(Date.now(), sourceIp)) {
+          res.writeHead(429, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Rate limit exceeded" }));
+          return;
+        }
+
+        void this.readJsonBody<{ action?: string; trigger?: string; context?: Record<string, unknown> }>(req, res, 65_536).then((parsed) => {
+          if (!parsed) return;
+          if (!parsed.action) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Missing required field: action" }));
             return;
           }
-          body += chunk.toString();
-        });
-        req.on("end", () => {
-          if (aborted) return;
-          try {
-            // Auth check
-            const headers: Record<string, string | undefined> = {
-              "x-webhook-secret": req.headers["x-webhook-secret"] as string | undefined,
-              "authorization": req.headers["authorization"] as string | undefined,
-            };
-            const authResult = validateWebhookAuth(
-              headers,
-              this.webhookSecret,
-              this.dashboardToken,
-            );
-            if (!authResult.valid) {
-              res.writeHead(authResult.status ?? 401, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: authResult.message }));
-              return;
-            }
 
-            // Rate limit check (per-source by IP)
-            const sourceIp = (req.socket.remoteAddress ?? "unknown");
-            if (this.webhookRateLimiter && !this.webhookRateLimiter.isAllowed(Date.now(), sourceIp)) {
-              res.writeHead(429, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "Rate limit exceeded" }));
-              return;
-            }
-
-            // Parse body
-            const parsed = JSON.parse(body || "{}") as {
-              action?: string;
-              trigger?: string;
-              context?: Record<string, unknown>;
-            };
-            if (!parsed.action) {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "Missing required field: action" }));
-              return;
-            }
-
-            // Find webhook trigger
-            if (!this.webhookTriggers || this.webhookTriggers.size === 0) {
-              res.writeHead(503, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "No webhook triggers registered" }));
-              return;
-            }
-
-            let target: WebhookTrigger | undefined;
-            if (parsed.trigger) {
-              target = this.webhookTriggers.get(parsed.trigger);
-              if (!target) {
-                res.writeHead(404, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: `Webhook trigger '${parsed.trigger}' not found` }));
-                return;
-              }
-            } else {
-              // Use first registered webhook trigger
-              target = this.webhookTriggers.values().next().value as WebhookTrigger | undefined;
-            }
-
-            if (!target) {
-              res.writeHead(503, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "No webhook triggers available" }));
-              return;
-            }
-
-            const source = req.headers["x-webhook-source"] as string | undefined;
-            target.pushEvent(parsed.action, source, parsed.context);
-
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({
-              status: "accepted",
-              triggerId: target.metadata.name,
-            }));
-          } catch {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Invalid JSON body" }));
+          if (!this.webhookTriggers || this.webhookTriggers.size === 0) {
+            res.writeHead(503, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "No webhook triggers registered" }));
+            return;
           }
+
+          let target: WebhookTrigger | undefined;
+          if (parsed.trigger) {
+            target = this.webhookTriggers.get(parsed.trigger);
+            if (!target) {
+              res.writeHead(404, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: `Webhook trigger '${parsed.trigger}' not found` }));
+              return;
+            }
+          } else {
+            target = this.webhookTriggers.values().next().value as WebhookTrigger | undefined;
+          }
+
+          if (!target) {
+            res.writeHead(503, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "No webhook triggers available" }));
+            return;
+          }
+
+          const source = req.headers["x-webhook-source"] as string | undefined;
+          target.pushEvent(parsed.action, source, parsed.context);
+
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "accepted", triggerId: target.metadata.name }));
         });
         return;
       }
@@ -862,6 +848,150 @@ export class DashboardServer {
         return;
       }
 
+      // GET /api/user/autonomous -- Check autonomous mode status
+      if (req.method === "GET" && url.startsWith("/api/user/autonomous")) {
+        if (!this.userProfileStore) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "User profile store not available" }));
+          return;
+        }
+        const params = new URL(url, "http://localhost").searchParams;
+        const chatId = params.get("chatId");
+        if (!chatId) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing required query parameter: chatId" }));
+          return;
+        }
+        void this.userProfileStore.isAutonomousMode(chatId).then((result) => {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        }).catch((err) => {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+        return;
+      }
+
+      // POST /api/user/autonomous -- Set autonomous mode
+      if (req.method === "POST" && url === "/api/user/autonomous") {
+        if (!this.userProfileStore) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "User profile store not available" }));
+          return;
+        }
+        void this.readJsonBody<{ chatId?: string; enabled?: boolean; hours?: number }>(req, res).then((parsed) => {
+          if (!parsed) return;
+          if (!parsed.chatId || typeof parsed.enabled !== "boolean") {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Missing required fields: chatId (string), enabled (boolean)" }));
+            return;
+          }
+          const MIN_HOURS = 1;
+          const MAX_HOURS = 168;
+          if (parsed.hours !== undefined && (typeof parsed.hours !== "number" || parsed.hours < MIN_HOURS || parsed.hours > MAX_HOURS)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: `hours must be between ${MIN_HOURS} and ${MAX_HOURS}` }));
+            return;
+          }
+          if (typeof parsed.chatId === "string" && parsed.chatId.length > 128) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "chatId too long (max 128 chars)" }));
+            return;
+          }
+          const expiresAt = parsed.hours && parsed.hours > 0
+            ? Date.now() + parsed.hours * 3600000
+            : undefined;
+          void this.userProfileStore!.setAutonomousMode(parsed.chatId, parsed.enabled, expiresAt).then(() => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: true, enabled: parsed.enabled, expiresAt: expiresAt ?? null }));
+          }).catch((err) => {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          });
+        });
+        return;
+      }
+
+      // GET /api/providers/available -- List available providers
+      if (req.method === "GET" && (url === "/api/providers/available" || url.startsWith("/api/providers/available?"))) {
+        if (!this.providerManager) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Provider manager not available" }));
+          return;
+        }
+        try {
+          const providers = this.providerManager.listAvailable();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ providers }));
+        } catch (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        }
+        return;
+      }
+
+      // GET /api/providers/active -- Get active provider for a chat
+      if (req.method === "GET" && url.startsWith("/api/providers/active")) {
+        if (!this.providerManager) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Provider manager not available" }));
+          return;
+        }
+        const params = new URL(url, "http://localhost").searchParams;
+        const chatId = params.get("chatId");
+        if (!chatId) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing required query parameter: chatId" }));
+          return;
+        }
+        try {
+          const active = this.providerManager.getActiveInfo(chatId);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ active }));
+        } catch (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        }
+        return;
+      }
+
+      // POST /api/providers/switch -- Switch provider for a chat
+      if (req.method === "POST" && url === "/api/providers/switch") {
+        if (!this.providerManager) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Provider manager not available" }));
+          return;
+        }
+        void this.readJsonBody<{ chatId?: string; provider?: string; model?: string }>(req, res).then((parsed) => {
+          if (!parsed) return;
+          if (!parsed.chatId || !parsed.provider) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Missing required fields: chatId (string), provider (string)" }));
+            return;
+          }
+          if (typeof parsed.chatId === "string" && parsed.chatId.length > 128) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "chatId too long (max 128 chars)" }));
+            return;
+          }
+          // Validate provider name against available providers
+          const available = this.providerManager!.listAvailable();
+          if (!available.some((p: { name: string }) => p.name === parsed.provider)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: `Provider "${parsed.provider}" is not available` }));
+            return;
+          }
+          void this.providerManager!.setPreference(parsed.chatId, parsed.provider, parsed.model).then(() => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: true, provider: parsed.provider, model: parsed.model ?? null }));
+          }).catch((err) => {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          });
+        });
+        return;
+      }
+
       // GET /api/memory -- Memory tier stats and health
       if (url === "/api/memory") {
         const stats = this.getMemoryStats();
@@ -1030,6 +1160,44 @@ export class DashboardServer {
     } catch {
       return { status: "error", detail: "Failed to query channel health" };
     }
+  }
+
+  /**
+   * Read and parse a JSON request body with size limits.
+   * Returns the parsed body or sends an error response and returns null.
+   */
+  private readJsonBody<T>(
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+    maxBytes = 4096,
+  ): Promise<T | null> {
+    return new Promise((resolve) => {
+      let body = "";
+      let bodyBytes = 0;
+      let aborted = false;
+      req.on("data", (chunk: Buffer) => {
+        bodyBytes += chunk.length;
+        if (bodyBytes > maxBytes) {
+          aborted = true;
+          req.destroy();
+          res.writeHead(413, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Request body too large" }));
+          resolve(null);
+          return;
+        }
+        body += chunk.toString();
+      });
+      req.on("end", () => {
+        if (aborted) return;
+        try {
+          resolve(JSON.parse(body || "{}") as T);
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid JSON body" }));
+          resolve(null);
+        }
+      });
+    });
   }
 
   /** Sensitive key name patterns for config masking. */

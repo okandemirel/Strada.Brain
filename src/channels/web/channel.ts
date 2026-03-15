@@ -471,6 +471,50 @@ export class WebChannel
         }
         break;
       }
+
+      case "provider_switch": {
+        const provider = String(data.provider ?? "").trim();
+        if (!provider || !this.handler) break;
+        const model = typeof data.model === "string" ? data.model.trim() : "";
+        const text = `/model ${provider}${model ? "/" + model : ""}`;
+        const msg: IncomingMessage = {
+          channelType: "web",
+          chatId,
+          userId: `web-${chatId}`,
+          text,
+          timestamp: new Date(),
+        };
+        this.handler(msg).catch(() => {
+          this.sendToClient(chatId, {
+            type: "text",
+            text: "Failed to switch provider. Please try again.",
+            messageId: randomUUID(),
+          });
+        });
+        break;
+      }
+
+      case "autonomous_toggle": {
+        const enabled = Boolean(data.enabled);
+        if (!this.handler) break;
+        const hours = typeof data.hours === "number" && data.hours > 0 ? data.hours : undefined;
+        const text = `/autonomous ${enabled ? "on" : "off"}${hours ? " " + hours : ""}`;
+        const msg: IncomingMessage = {
+          channelType: "web",
+          chatId,
+          userId: `web-${chatId}`,
+          text,
+          timestamp: new Date(),
+        };
+        this.handler(msg).catch(() => {
+          this.sendToClient(chatId, {
+            type: "text",
+            text: "Failed to toggle autonomous mode. Please try again.",
+            messageId: randomUUID(),
+          });
+        });
+        break;
+      }
     }
   }
 
@@ -534,7 +578,10 @@ export class WebChannel
       WebChannel.ALLOWED_PROXY_PATHS.has(pathOnly) ||
       pathOnly.startsWith("/api/goals") ||
       pathOnly.startsWith("/api/agent-metrics") ||
-      pathOnly.startsWith("/api/triggers");
+      pathOnly.startsWith("/api/triggers") ||
+      pathOnly === "/api/providers/available" ||
+      pathOnly === "/api/providers/active" ||
+      pathOnly === "/api/user/autonomous";
 
     if (!isAllowed) {
       res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });

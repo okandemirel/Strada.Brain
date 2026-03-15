@@ -10,12 +10,16 @@ import type { TaskCommand, Task, TaskId } from "./types.js";
 import { TaskStatus, ACTIVE_STATUSES } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { ProviderManager } from "../agents/providers/provider-manager.js";
+import type { DMPolicy } from "../security/dm-policy.js";
+import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 
 export class CommandHandler {
   constructor(
     private readonly taskManager: TaskManager,
     private readonly channel: IChannelSender,
     private readonly providerManager?: ProviderManager,
+    private readonly dmPolicy?: DMPolicy,
+    private readonly userProfileStore?: UserProfileStore,
   ) {}
 
   async handle(chatId: string, command: TaskCommand, args: string[]): Promise<void> {
@@ -46,6 +50,9 @@ export class CommandHandler {
         break;
       case "goal":
         await this.handleGoal(chatId, args);
+        break;
+      case "autonomous":
+        await this.handleAutonomous(chatId, args);
         break;
     }
   }
@@ -172,6 +179,12 @@ export class CommandHandler {
       "`/model <provider>/<model>` - Switch provider and model",
       "`/model reset` - Return to system default",
       "",
+      "*Autonomous Mode*",
+      "",
+      "`/autonomous on [hours]` - Enable autonomous mode (default: 24h, max: 168h)",
+      "`/autonomous off` - Disable autonomous mode",
+      "`/autonomous` - Show autonomous mode status",
+      "",
       "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /model listele, /model sıfırla",
       "",
       "Send any other message to start a new background task.",
@@ -277,6 +290,79 @@ export class CommandHandler {
       chatId,
       `Switched to \`${info.providerName}\` (model: \`${info.model}\`)`,
     );
+  }
+
+  private async handleAutonomous(chatId: string, args: string[]): Promise<void> {
+    if (!this.dmPolicy || !this.userProfileStore) {
+      await this.channel.sendText(chatId, "Autonomous mode requires profile store.");
+      return;
+    }
+
+    const subcommand = args[0]?.toLowerCase();
+
+    // status / no args → show current state
+    if (!subcommand || subcommand === "status") {
+      const result = await this.userProfileStore.isAutonomousMode(chatId);
+      if (!result.enabled) {
+        await this.channel.sendText(chatId, "Autonomous mode is currently disabled.");
+        return;
+      }
+
+      if (result.remainingMs !== undefined && result.remainingMs > 0) {
+        const hours = Math.round(result.remainingMs / 3600_000 * 10) / 10;
+        await this.channel.sendText(chatId, `Autonomous mode is enabled. ${hours}h remaining.`);
+      } else if (result.expiresAt !== undefined) {
+        await this.channel.sendText(chatId, "Autonomous mode is enabled (expired, pending refresh).");
+      } else {
+        await this.channel.sendText(chatId, "Autonomous mode is enabled.");
+      }
+      return;
+    }
+
+    // on [hours]
+    if (subcommand === "on") {
+      const DEFAULT_HOURS = 24;
+      const MIN_HOURS = 1;
+      const MAX_HOURS = 168;
+
+      let hours = DEFAULT_HOURS;
+      const hoursArg = args[1];
+      if (hoursArg) {
+        const parsed = Number(hoursArg);
+        if (isNaN(parsed) || parsed < MIN_HOURS || parsed > MAX_HOURS) {
+          await this.channel.sendText(
+            chatId,
+            `Invalid hours. Must be between ${MIN_HOURS} and ${MAX_HOURS}.`,
+          );
+          return;
+        }
+        hours = parsed;
+      }
+
+      const expiresAt = Date.now() + hours * 3600_000;
+      await this.userProfileStore.setAutonomousMode(chatId, true, expiresAt);
+      this.dmPolicy.initFromProfile(chatId, { autonomousMode: true, autonomousExpiresAt: expiresAt });
+
+      await this.channel.sendText(
+        chatId,
+        `Autonomous mode enabled for ${hours} hours. I'll execute tasks without asking for approval.`,
+      );
+      return;
+    }
+
+    // off
+    if (subcommand === "off") {
+      await this.userProfileStore.setAutonomousMode(chatId, false);
+      this.dmPolicy.initFromProfile(chatId, { autonomousMode: false });
+
+      await this.channel.sendText(
+        chatId,
+        "Autonomous mode disabled. I'll ask for approval before sensitive operations.",
+      );
+      return;
+    }
+
+    await this.channel.sendText(chatId, "Usage: /autonomous on [hours] | off | status");
   }
 
   // ─── Formatting ─────────────────────────────────────────────────────────────

@@ -89,6 +89,7 @@ export class DMPolicy {
   private readonly channel: IChannelAdapter;
   private readonly sessionPrefs = new Map<string, SessionApprovalPrefs>();
   private readonly pendingConfirmations = new Map<string, PendingConfirmation>();
+  private readonly autonomousExpiry = new Map<string, number>();
   private confirmationCounter = 0;
 
   constructor(channel: IChannelAdapter, config: Partial<DMPolicyConfig> = {}) {
@@ -103,12 +104,7 @@ export class DMPolicy {
     let prefs = this.sessionPrefs.get(key);
 
     if (!prefs || this.isExpired(prefs)) {
-      prefs = {
-        userId,
-        level: this.config.defaultLevel,
-        smartFileThreshold: this.config.smartFileThreshold,
-        smartLineThreshold: this.config.smartLineThreshold,
-      };
+      prefs = this.buildPrefs(userId, this.config.defaultLevel);
       this.sessionPrefs.set(key, prefs);
     }
 
@@ -123,6 +119,55 @@ export class DMPolicy {
 
   resetSessionPrefs(userId: string, chatId: string): void {
     this.sessionPrefs.delete(`${userId}:${chatId}`);
+  }
+
+  // ─── Autonomous Profile Init ────────────────────────────────────────────────
+
+  initFromProfile(
+    chatId: string,
+    preferences: { autonomousMode?: boolean; autonomousExpiresAt?: number },
+    userId?: string,
+  ): boolean {
+    const key = `${userId ?? chatId}:${chatId}`;
+    if (preferences.autonomousMode) {
+      // If expiry is set and already passed, don't enable
+      if (
+        preferences.autonomousExpiresAt !== undefined &&
+        preferences.autonomousExpiresAt <= Date.now()
+      ) {
+        return false;
+      }
+
+      this.sessionPrefs.set(key, this.buildPrefs(userId ?? chatId, ApprovalLevel.NEVER));
+
+      // Track expiry if provided
+      if (preferences.autonomousExpiresAt !== undefined) {
+        this.autonomousExpiry.set(key, preferences.autonomousExpiresAt);
+      }
+
+      return true;
+    }
+
+    this.sessionPrefs.set(key, this.buildPrefs(userId ?? chatId, ApprovalLevel.SMART));
+    this.autonomousExpiry.delete(key);
+    return false;
+  }
+
+  isAutonomousActive(chatId: string, userId?: string): boolean {
+    const key = `${userId ?? chatId}:${chatId}`;
+    const prefs = this.sessionPrefs.get(key);
+    if (!prefs || prefs.level !== ApprovalLevel.NEVER) {
+      return false;
+    }
+
+    const expiry = this.autonomousExpiry.get(key);
+    if (expiry !== undefined && expiry <= Date.now()) {
+      this.sessionPrefs.set(key, this.buildPrefs(userId ?? chatId, ApprovalLevel.SMART));
+      this.autonomousExpiry.delete(key);
+      return false;
+    }
+
+    return true;
   }
 
   // ─── Approval Logic ────────────────────────────────────────────────────────
@@ -309,6 +354,17 @@ export class DMPolicy {
 
   // ─── Private Helpers ─────────────────────────────────────────────────────────
 
+  /** Build a SessionApprovalPrefs with config defaults for the given level. */
+  private buildPrefs(userId: string, level: ApprovalLevel): SessionApprovalPrefs {
+    return {
+      userId,
+      level,
+      smartFileThreshold: this.config.smartFileThreshold,
+      smartLineThreshold: this.config.smartLineThreshold,
+    };
+  }
+
+
   private isExpired(prefs: SessionApprovalPrefs): boolean {
     return prefs.expiresAt !== undefined && prefs.expiresAt < new Date();
   }
@@ -357,13 +413,14 @@ export class DMPolicy {
   private async sendFullDiff(confirmation: PendingConfirmation): Promise<void> {
     const channelType = this.detectChannelType(confirmation.chatId);
 
-    const fullDiff = confirmation.fileDiff
-      ? formatDiffForChannel(confirmation.fileDiff, channelType, { maxLines: MAX_FULL_DIFF_LINES })
-      : confirmation.batchDiff
-        ? formatBatchDiffForChannel(confirmation.batchDiff, channelType, {
-            maxLines: MAX_FULL_DIFF_LINES,
-          })
-        : "No diff available";
+    let fullDiff: string;
+    if (confirmation.fileDiff) {
+      fullDiff = formatDiffForChannel(confirmation.fileDiff, channelType, { maxLines: MAX_FULL_DIFF_LINES });
+    } else if (confirmation.batchDiff) {
+      fullDiff = formatBatchDiffForChannel(confirmation.batchDiff, channelType, { maxLines: MAX_FULL_DIFF_LINES });
+    } else {
+      fullDiff = "No diff available";
+    }
 
     await this.channel.sendMarkdown(
       confirmation.chatId,

@@ -784,6 +784,54 @@ export class DiscordChannel implements IChannelAdapter {
         break;
       }
 
+      case "autonomous": {
+        const action = interaction.options.getString("action", true);
+        const hours = interaction.options.getInteger("hours");
+
+        await interaction.deferReply();
+
+        const autonomousText = hours
+          ? `/autonomous ${action} ${hours}`
+          : `/autonomous ${action}`;
+
+        const msg: IncomingMessage = {
+          channelType: "discord",
+          chatId: interaction.channelId,
+          userId: interaction.user.id,
+          text: autonomousText,
+          timestamp: new Date(),
+        };
+
+        await this.routeMessage(msg, async (response) => {
+          await interaction.editReply(response);
+        });
+        break;
+      }
+
+      case "model": {
+        const action = interaction.options.getString("action", true);
+        const model = interaction.options.getString("model");
+
+        await interaction.deferReply();
+
+        const modelText = model
+          ? `/model ${action} ${model}`
+          : `/model ${action}`;
+
+        const msg: IncomingMessage = {
+          channelType: "discord",
+          chatId: interaction.channelId,
+          userId: interaction.user.id,
+          text: modelText,
+          timestamp: new Date(),
+        };
+
+        await this.routeMessage(msg, async (response) => {
+          await interaction.editReply(response);
+        });
+        break;
+      }
+
       default:
         await interaction.reply({
           content: "Unknown command",

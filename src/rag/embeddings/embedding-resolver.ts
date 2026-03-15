@@ -132,8 +132,8 @@ export function resolveEmbeddingProvider(config: Config): EmbeddingResolution | 
   // 3. No chain specified -- try all known providers in priority order
   if (chainNames.length === 0) {
     const fallbackOrder = [
-      "openai", "deepseek", "mistral", "together",
-      "fireworks", "qwen", "gemini", "ollama",
+      "gemini", "openai", "deepseek", "mistral",
+      "together", "fireworks", "qwen", "ollama",
     ];
     for (const name of fallbackOrder) {
       const result = createEmbeddingProvider(name, apiKeys, autoOptions);

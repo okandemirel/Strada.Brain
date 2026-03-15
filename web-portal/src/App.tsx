@@ -11,6 +11,7 @@ import LogsPage from './pages/LogsPage'
 import IdentityPage from './pages/IdentityPage'
 import PersonalityPage from './pages/PersonalityPage'
 import MemoryPage from './pages/MemoryPage'
+import SettingsPage from './pages/SettingsPage'
 import SetupWizard from './pages/SetupWizard'
 
 export default function App() {
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="identity" element={<IdentityPage />} />
           <Route path="personality" element={<PersonalityPage />} />
           <Route path="memory" element={<MemoryPage />} />
+          <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<ChatView />} />
         </Route>
       </Routes>

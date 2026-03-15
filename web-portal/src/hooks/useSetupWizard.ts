@@ -14,6 +14,7 @@ export function useSetupWizard() {
   const [channelConfig, setChannelConfig] = useState<Record<string, string>>({})
   const [language, setLanguageState] = useState('en')
   const [ragEnabled, setRagEnabledState] = useState(true)
+  const [embeddingProvider, setEmbeddingProviderState] = useState('auto')
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -142,6 +143,10 @@ export function useSetupWizard() {
     setRagEnabledState(enabled)
   }, [])
 
+  const setEmbeddingProvider = useCallback((provider: string) => {
+    setEmbeddingProviderState(provider)
+  }, [])
+
   const save = useCallback(async () => {
     setSaveStatus('saving')
     setSaveError(null)
@@ -152,6 +157,10 @@ export function useSetupWizard() {
       RAG_ENABLED: ragEnabled ? 'true' : 'false',
       LANGUAGE_PREFERENCE: language,
       _channel: channel,
+    }
+
+    if (embeddingProvider && embeddingProvider !== 'auto') {
+      config.EMBEDDING_PROVIDER = embeddingProvider
     }
 
     if (selectedPreset) {
@@ -235,7 +244,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, language, channel, selectedPreset, checkedProviders, providerKeys, channelConfig])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, channelConfig])
 
   return {
     // State
@@ -250,6 +259,7 @@ export function useSetupWizard() {
     channelConfig,
     language,
     ragEnabled,
+    embeddingProvider,
     saveStatus,
     saveError,
 
@@ -266,6 +276,7 @@ export function useSetupWizard() {
     setChannelConfigField,
     setLanguage,
     setRagEnabled,
+    setEmbeddingProvider,
     save,
     validateCurrentStep,
   }

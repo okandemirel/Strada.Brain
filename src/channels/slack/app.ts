@@ -146,6 +146,10 @@ export class SlackChannel implements IChannelAdapter {
       registerSlashCommands(this.app, {
         allowedWorkspaces: this.config.allowedWorkspaces,
         allowedUserIds: this.config.allowedUserIds,
+      }, async (msg) => {
+        if (this.messageHandler) {
+          await this.messageHandler(msg);
+        }
       });
 
       await this.app.start();

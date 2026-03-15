@@ -216,7 +216,10 @@ export type EnvVarName =
   | "DEPLOY_POST_SCRIPT_PATH"
 
   // Language Preference
-  | "LANGUAGE_PREFERENCE";
+  | "LANGUAGE_PREFERENCE"
+
+  // Autonomous Mode
+  | "AUTONOMOUS_DEFAULT_HOURS";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -496,6 +499,10 @@ export interface Config {
 
   // Deployment (Phase 25)
   readonly deployment: DeploymentConfig;
+
+  // Autonomous Mode
+  /** Default duration in hours for autonomous mode when no duration is specified */
+  readonly autonomousDefaultHours: number;
 }
 
 /** Partial config for updates */
@@ -854,6 +861,9 @@ export const configSchema = z
     deployCooldownMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1440)).default("30"),
     deployNotificationUrgency: z.enum(["low", "medium", "high", "critical"]).default("high"),
     deployPostScriptPath: z.string().optional(),
+
+    // Autonomous Mode
+    autonomousDefaultHours: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(168)).default("24"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -1233,6 +1243,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       notificationUrgency: rawConfig.deployNotificationUrgency,
       postScriptPath: rawConfig.deployPostScriptPath,
     },
+
+    autonomousDefaultHours: rawConfig.autonomousDefaultHours,
   };
 
   return { kind: "valid", value: config };
@@ -1591,6 +1603,8 @@ interface EnvVars {
   agentMaxConcurrent: string | undefined;
   agentIdleTimeoutMs: string | undefined;
   agentMaxMemoryEntries: string | undefined;
+  // Autonomous Mode
+  autonomousDefaultHours: string | undefined;
 }
 
 /**
@@ -1766,6 +1780,8 @@ function loadFromEnv(): EnvVars {
     agentMaxConcurrent: process.env["AGENT_MAX_CONCURRENT"],
     agentIdleTimeoutMs: process.env["AGENT_IDLE_TIMEOUT_MS"],
     agentMaxMemoryEntries: process.env["AGENT_MAX_MEMORY_ENTRIES"],
+    // Autonomous Mode
+    autonomousDefaultHours: process.env["AUTONOMOUS_DEFAULT_HOURS"],
   };
 }
 

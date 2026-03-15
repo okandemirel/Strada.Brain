@@ -68,6 +68,71 @@ describe("detectCommand /goal", () => {
   });
 });
 
+describe("detectCommand /autonomous", () => {
+  it('"/autonomous on" returns autonomous command with on arg', () => {
+    const result = detectCommand("/autonomous on");
+    expect(result).toEqual({
+      type: "command",
+      command: "autonomous",
+      args: ["on"],
+    });
+  });
+
+  it('"/autonomous off" returns autonomous command with off arg', () => {
+    const result = detectCommand("/autonomous off");
+    expect(result).toEqual({
+      type: "command",
+      command: "autonomous",
+      args: ["off"],
+    });
+  });
+
+  it('"/autonomous" with no args returns autonomous command (status)', () => {
+    const result = detectCommand("/autonomous");
+    expect(result).toEqual({
+      type: "command",
+      command: "autonomous",
+      args: [],
+    });
+  });
+
+  it('"/autonomous on 48" returns autonomous command with on and duration args', () => {
+    const result = detectCommand("/autonomous on 48");
+    expect(result).toEqual({
+      type: "command",
+      command: "autonomous",
+      args: ["on", "48"],
+    });
+  });
+
+  it('"/otonom on" returns autonomous command (Turkish alias)', () => {
+    const result = detectCommand("/otonom on");
+    expect(result).toEqual({
+      type: "command",
+      command: "autonomous",
+      args: ["on"],
+    });
+  });
+
+  it('"/autonomy off" returns autonomous command (alias)', () => {
+    const result = detectCommand("/autonomy off");
+    expect(result).toEqual({
+      type: "command",
+      command: "autonomous",
+      args: ["off"],
+    });
+  });
+
+  it('"/otonomi" returns autonomous command (Turkish alias, no args)', () => {
+    const result = detectCommand("/otonomi");
+    expect(result).toEqual({
+      type: "command",
+      command: "autonomous",
+      args: [],
+    });
+  });
+});
+
 describe("detectCommand existing commands still work", () => {
   it("/status returns status command", () => {
     const result = detectCommand("/status");

@@ -28,6 +28,10 @@ const PREFIX_COMMANDS: Record<string, TaskCommand> = {
   "/devam": "resume",
   "/goal": "goal",
   "/hedef": "goal",
+  "/autonomous": "autonomous",
+  "/autonomy": "autonomous",
+  "/otonom": "autonomous",
+  "/otonomi": "autonomous",
 };
 
 // ─── Keyword Patterns (bilingual TR/EN) ──────────────────────────────────────────

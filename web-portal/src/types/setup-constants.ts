@@ -14,7 +14,7 @@ export const PROVIDERS: ProviderDef[] = [
   { id: 'deepseek', name: 'DeepSeek', envKey: 'DEEPSEEK_API_KEY', placeholder: 'sk-...', helpUrl: 'https://platform.deepseek.com' },
   { id: 'kimi', name: 'Kimi', envKey: 'KIMI_API_KEY', placeholder: 'sk-...', helpUrl: 'https://platform.moonshot.cn' },
   { id: 'qwen', name: 'Qwen', envKey: 'QWEN_API_KEY', placeholder: 'sk-...', helpUrl: 'https://dashscope.console.aliyun.com' },
-  { id: 'gemini', name: 'Gemini', envKey: 'GEMINI_API_KEY', placeholder: '...', helpUrl: 'https://aistudio.google.com/apikey' },
+  { id: 'gemini', name: 'Gemini', envKey: 'GEMINI_API_KEY', placeholder: '...', embeddingRecommended: true, helpUrl: 'https://aistudio.google.com/apikey' },
   { id: 'groq', name: 'Groq', envKey: 'GROQ_API_KEY', placeholder: 'gsk_...', helpUrl: 'https://console.groq.com/keys' },
   { id: 'mistral', name: 'Mistral', envKey: 'MISTRAL_API_KEY', placeholder: '...', helpUrl: 'https://console.mistral.ai/api-keys' },
   { id: 'together', name: 'Together', envKey: 'TOGETHER_API_KEY', placeholder: '...', helpUrl: 'https://api.together.xyz/settings/api-keys' },
@@ -79,3 +79,10 @@ export const LANGUAGES = [
 export const EMBEDDING_CAPABLE = new Set([
   'openai', 'mistral', 'together', 'fireworks', 'qwen', 'gemini', 'ollama',
 ])
+
+export const EMBEDDING_PROVIDERS = [
+  { id: 'auto', name: 'Auto (detect from providers)' },
+  { id: 'gemini', name: 'Gemini' },
+  { id: 'openai', name: 'OpenAI' },
+  { id: 'ollama', name: 'Ollama' },
+]

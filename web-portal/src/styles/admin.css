@@ -708,6 +708,173 @@
   line-height: 1.4;
 }
 
+/* ===== Settings — Toggle Switch ===== */
+.settings-toggle {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.settings-toggle:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+
+.settings-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-toggle.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.settings-toggle-knob {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.settings-toggle.on .settings-toggle-knob {
+  transform: translateX(20px);
+}
+
+/* ===== Settings — Number Input ===== */
+.settings-number-input {
+  width: 80px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-family: "SF Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  text-align: center;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.settings-number-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.settings-number-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== Settings — Hint Text ===== */
+.settings-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+
+/* ===== Settings — Badge ===== */
+.settings-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--accent-glow);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+/* ===== Settings — Provider Grid ===== */
+.settings-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.settings-provider-card {
+  position: relative;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.settings-provider-card:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.settings-provider-card:disabled {
+  cursor: default;
+}
+
+.settings-provider-card.active {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.settings-provider-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.settings-provider-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-provider-id {
+  font-size: 11px;
+  font-family: "SF Mono", "SFMono-Regular", Consolas, monospace;
+  color: var(--text-tertiary);
+}
+
+.settings-provider-model {
+  font-size: 11px;
+  font-family: "SF Mono", "SFMono-Regular", Consolas, monospace;
+  color: var(--text-secondary);
+}
+
+.settings-provider-active-tag {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--accent-glow);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 /* ===== Responsive ===== */
 @media (max-width: 768px) {
   .admin-page {
@@ -723,6 +890,10 @@
   }
 
   .profile-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-provider-grid {
     grid-template-columns: 1fr;
   }
 

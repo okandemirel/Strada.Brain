@@ -4,6 +4,7 @@ export interface ProviderDef {
   envKey: string | null
   placeholder: string | null
   recommended?: boolean
+  embeddingRecommended?: boolean
   helpUrl: string
 }
 

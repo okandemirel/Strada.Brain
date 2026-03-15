@@ -28,6 +28,7 @@ const SECTIONS = [
       { to: '/identity', icon: '\uD83E\uDDEC', label: 'Identity' },
       { to: '/personality', icon: '\uD83C\uDFAD', label: 'Personality' },
       { to: '/memory', icon: '\uD83E\uDDE0', label: 'Memory' },
+      { to: '/settings', icon: '\u2699\uFE0F', label: 'Settings' },
     ],
   },
 ]

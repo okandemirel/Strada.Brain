@@ -28,6 +28,7 @@ import { FileVectorStore } from "../rag/vector-store.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 import { resolveEmbeddingProvider, collectApiKeys } from "../rag/embeddings/embedding-resolver.js";
 import { RateLimiter } from "../security/rate-limiter.js";
+import { DMPolicy } from "../security/dm-policy.js";
 import type { DIContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { AppError } from "../common/errors.js";
@@ -454,6 +455,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     }
   }
 
+  // Create a shared DMPolicy instance so both Orchestrator and CommandHandler
+  // use the same approval/confirmation state per session.
+  const dmPolicy = new DMPolicy(channel);
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -478,6 +483,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     reRetrievalConfig: config.reRetrieval,
     embeddingProvider: cachedEmbeddingProvider,
     soulLoader,
+    dmPolicy,
     sessionSummarizer,
     userProfileStore,
   });
@@ -565,7 +571,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   orchestrator.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
 
-  const commandHandler = new CommandHandler(taskManager, channel, providerManager);
+  const commandHandler = new CommandHandler(taskManager, channel, providerManager, dmPolicy, userProfileStore);
   const messageRouter = new MessageRouter(taskManager, commandHandler, channel, startupNotices);
   // ProgressReporter subscribes to taskManager events in constructor
   new ProgressReporter(channel, taskManager);
@@ -1084,7 +1090,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
   }
 
-  // Register extended services for admin pages (tools, sessions, personality, config)
+  // Register extended services for admin pages (tools, sessions, personality, config, providers, user profiles)
   if (dashboard) {
     dashboard.registerExtendedServices({
       toolRegistry: {
@@ -1116,6 +1122,21 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         flatten(config as unknown as Record<string, unknown>);
         return () => flat;
       })(),
+      providerManager: {
+        listAvailable: () => providerManager.listAvailable().map(p => ({
+          name: p.name,
+          configured: true,
+          models: [p.defaultModel],
+        })),
+        getActiveInfo: (chatId: string) => {
+          const info = providerManager.getActiveInfo(chatId);
+          return info ? { provider: info.providerName, model: info.model } : null;
+        },
+        setPreference: async (chatId: string, provider: string, model?: string) => {
+          providerManager.setPreference(chatId, provider, model);
+        },
+      },
+      userProfileStore,
     });
   }
 
@@ -1413,6 +1434,20 @@ export async function initializeMemory(
     }
 
     agentdb.setDecayConfig(config.memory.decay);
+
+    // Fire-and-forget: migrate hash embeddings to real embeddings
+    const agentdbAny = agentdb as unknown as Record<string, unknown>;
+    if (embeddingProvider && typeof agentdbAny.reEmbedHashEntries === "function") {
+      (agentdbAny.reEmbedHashEntries as () => Promise<{ migrated: number; total: number; skipped: number }>)()
+        .then(result => {
+          if (result.migrated > 0 || result.skipped > 0) {
+            logger.info(`[Bootstrap] Re-embedded ${result.migrated}/${result.total} hash entries${result.skipped > 0 ? ` (${result.skipped} skipped)` : ""}`);
+          }
+        })
+        .catch(err => {
+          logger.warn(`[Bootstrap] Re-embed migration failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+    }
 
     return new AgentDBAdapter(agentdb);
   }
