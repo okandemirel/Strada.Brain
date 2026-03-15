@@ -520,14 +520,19 @@ export class DashboardServer {
       // Daemon status endpoint (GET)
       if (url === "/api/daemon" || url.startsWith("/api/daemon?")) {
         if (!this.daemonHeartbeatLoop) {
+          // No daemon running — still return identity if available
+          let fallbackIdentity: IdentityState | null = null;
+          if (this.identityManager) {
+            try { fallbackIdentity = this.identityManager.getState(); } catch { /* non-fatal */ }
+          }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({
             running: false,
             triggers: [],
             budget: { usedUsd: 0, limitUsd: 0, pct: 0 },
             approvalQueue: [],
-            identity: null,
-            capabilityManifest: null,
+            identity: fallbackIdentity,
+            capabilityManifest: this.capabilityManifest ?? null,
             triggerHistory: [],
           }));
           return;

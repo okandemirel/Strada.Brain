@@ -23,6 +23,14 @@ interface ActiveProvider {
   isDefault: boolean
 }
 
+interface DaemonStatus {
+  running: boolean
+  intervalMs?: number
+  triggers: Array<{ name: string; type: string; state: string; circuitState: string; nextRun: string | null }>
+  budget: { usedUsd: number; limitUsd: number; pct: number }
+  approvalQueue: Array<{ id: string; toolName: string; triggerName?: string; status: string }>
+}
+
 interface VoiceSettings {
   inputEnabled: boolean
   outputEnabled: boolean
@@ -104,6 +112,10 @@ export default function SettingsPage() {
   const [modelLoading, setModelLoading] = useState(true)
   const [switching, setSwitching] = useState(false)
 
+  // --- Daemon Mode ---
+  const [daemonStatus, setDaemonStatus] = useState<DaemonStatus | null>(null)
+  const [daemonLoading, setDaemonLoading] = useState(true)
+
   // --- Voice Mode ---
   const [voice, setVoice] = useState<VoiceSettings>(loadVoiceSettings)
   const speechInputAvailable = hasSpeechRecognition()
@@ -136,10 +148,24 @@ export default function SettingsPage() {
     })
   }, [chatId])
 
+  // --- Fetch daemon status ---
+  const fetchDaemon = useCallback(() => {
+    fetchJson<DaemonStatus>('/api/daemon')
+      .then((data) => {
+        setDaemonStatus(data ?? { running: false, triggers: [], budget: { usedUsd: 0, limitUsd: 0, pct: 0 }, approvalQueue: [] })
+        setDaemonLoading(false)
+      })
+      .catch(() => {
+        setDaemonStatus({ running: false, triggers: [], budget: { usedUsd: 0, limitUsd: 0, pct: 0 }, approvalQueue: [] })
+        setDaemonLoading(false)
+      })
+  }, [])
+
   useEffect(() => {
     fetchAutonomous()
     fetchProviders()
-  }, [fetchAutonomous, fetchProviders])
+    fetchDaemon()
+  }, [fetchAutonomous, fetchProviders, fetchDaemon])
 
   // Refresh autonomous remaining time every 30s when active
   useEffect(() => {
@@ -147,6 +173,13 @@ export default function SettingsPage() {
     const interval = setInterval(fetchAutonomous, 30000)
     return () => clearInterval(interval)
   }, [autoStatus?.enabled, fetchAutonomous])
+
+  // Refresh daemon status every 10s when running
+  useEffect(() => {
+    if (!daemonStatus?.running) return
+    const interval = setInterval(fetchDaemon, 10000)
+    return () => clearInterval(interval)
+  }, [daemonStatus?.running, fetchDaemon])
 
   // --- Handlers ---
 
@@ -280,6 +313,106 @@ export default function SettingsPage() {
             <div className="settings-hint">
               When enabled, the agent will operate without asking for confirmation. Duration: 1-168 hours.
             </div>
+          </>
+        )}
+      </div>
+
+      {/* ===== Daemon Mode ===== */}
+      <div className="admin-section">
+        <div className="admin-section-title">Daemon Mode</div>
+
+        {daemonLoading ? (
+          <div className="page-loading" style={{ height: 80 }}>Loading...</div>
+        ) : (
+          <>
+            <div className="admin-stat-row">
+              <span className="admin-stat-label">Daemon</span>
+              <span className="admin-stat-value">
+                <span className={`status-dot-inline ${daemonStatus?.running ? 'ok' : 'off'}`} />{' '}
+                {daemonStatus?.running ? 'Running' : 'Not Running'}
+              </span>
+            </div>
+
+            {daemonStatus?.running ? (
+              <>
+                {/* Budget */}
+                <div className="admin-stat-row">
+                  <span className="admin-stat-label">Budget</span>
+                  <span className="admin-stat-value">
+                    ${daemonStatus.budget.usedUsd.toFixed(2)} / ${daemonStatus.budget.limitUsd.toFixed(2)} used ({daemonStatus.budget.pct}%)
+                  </span>
+                </div>
+                <div className="admin-stat-row">
+                  <span className="admin-stat-label" />
+                  <div style={{ flex: 1, maxWidth: 260 }}>
+                    <div
+                      className="settings-budget-bar"
+                      style={{
+                        height: 6,
+                        borderRadius: 3,
+                        background: 'var(--bg-tertiary)',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${Math.min(daemonStatus.budget.pct, 100)}%`,
+                          height: '100%',
+                          borderRadius: 3,
+                          background: daemonStatus.budget.pct >= 90
+                            ? 'var(--error)'
+                            : daemonStatus.budget.pct >= 70
+                              ? 'var(--warning)'
+                              : 'var(--success)',
+                          transition: 'width 0.3s ease',
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Triggers */}
+                <div className="admin-stat-row">
+                  <span className="admin-stat-label">Triggers</span>
+                  <span className="admin-stat-value">
+                    {daemonStatus.triggers.length} active trigger{daemonStatus.triggers.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+
+                {/* Approval Queue */}
+                {daemonStatus.approvalQueue.length > 0 && (
+                  <div className="admin-stat-row">
+                    <span className="admin-stat-label">Approval Queue</span>
+                    <span className="admin-stat-value" style={{ color: 'var(--warning)' }}>
+                      {daemonStatus.approvalQueue.length} pending approval{daemonStatus.approvalQueue.length !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                )}
+
+                {/* Interval */}
+                {daemonStatus.intervalMs != null && (
+                  <div className="admin-stat-row">
+                    <span className="admin-stat-label">Heartbeat Interval</span>
+                    <span className="admin-stat-value">
+                      {daemonStatus.intervalMs >= 60000
+                        ? `${Math.round(daemonStatus.intervalMs / 60000)}m`
+                        : `${Math.round(daemonStatus.intervalMs / 1000)}s`}
+                    </span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="settings-hint" style={{ marginTop: 8 }}>
+                  Daemon mode enables autonomous background execution with scheduled triggers,
+                  file watchers, and webhooks.
+                </div>
+                <div className="settings-hint" style={{ marginTop: 6 }}>
+                  Start with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>--daemon</code> flag
+                  or set <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>STRADA_DAEMON_DAILY_BUDGET</code> in .env
+                </div>
+              </>
+            )}
           </>
         )}
       </div>
