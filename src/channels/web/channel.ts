@@ -279,14 +279,10 @@ export class WebChannel
       return;
     }
 
-    let filePath: string;
-    if (url === "/" || url === "/index.html") {
-      filePath = join(STATIC_DIR, "index.html");
-    } else {
-      // Use resolve() to normalise the path, which neutralises both ../ and
-      // URL-encoded variants (%2e%2e) that bypass simple regex stripping.
-      // Then assert the result still lives inside STATIC_DIR.
-      const rawSegment = url.split("?")[0]!;
+    const rawSegment = url.split("?")[0]!;
+
+    // Try to serve the exact static file first
+    if (rawSegment !== "/") {
       const candidate = resolve(join(STATIC_DIR, rawSegment));
       const safeRoot = resolve(STATIC_DIR);
       if (!candidate.startsWith(safeRoot + "/") && candidate !== safeRoot) {
@@ -294,14 +290,22 @@ export class WebChannel
         res.end("Forbidden");
         return;
       }
-      filePath = candidate;
+      try {
+        const data = await readFile(candidate);
+        const ext = extname(candidate);
+        const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+        res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": contentType });
+        res.end(data);
+        return;
+      } catch {
+        // File not found — fall through to SPA fallback
+      }
     }
 
+    // SPA fallback: serve index.html for all non-file routes (client-side routing)
     try {
-      const data = await readFile(filePath);
-      const ext = extname(filePath);
-      const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-      res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": contentType });
+      const data = await readFile(join(STATIC_DIR, "index.html"));
+      res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" });
       res.end(data);
     } catch {
       res.writeHead(404, WebChannel.SECURITY_HEADERS);

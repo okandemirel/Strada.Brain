@@ -17,6 +17,10 @@ const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
 };
 
 const KNOWN_LANGUAGES = new Set(["en", "tr", "ja", "ko", "zh", "de", "es", "fr"]);
@@ -54,7 +58,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy":
     "default-src 'self'; " +
     "script-src 'self'; " +
-    "style-src 'self' 'unsafe-inline'; " +
+    "style-src 'self'; " +
     "img-src 'self' data:; " +
     "connect-src 'self'; " +
     "object-src 'none'; " +
@@ -166,15 +170,11 @@ export class SetupWizard {
   }
 
   private async serveStatic(url: string, res: ServerResponse): Promise<void> {
-    let filePath: string;
+    const rawSegment = url.split("?")[0]!;
 
-    // Map routes to setup files
-    if (url === "/" || url === "/index.html" || url === "/setup.html") {
-      filePath = join(STATIC_DIR, "setup.html");
-    } else {
-      // Use resolve() to normalise the path and assert it still lives inside
-      // STATIC_DIR, blocking both ../ and URL-encoded (%2e%2e) traversals.
-      const rawSegment = url.split("?")[0]!;
+    // For known static file extensions, serve directly from STATIC_DIR
+    const ext = extname(rawSegment);
+    if (ext && MIME_TYPES[ext]) {
       const candidate = resolve(join(STATIC_DIR, rawSegment));
       const safeRoot = resolve(STATIC_DIR);
       if (!candidate.startsWith(safeRoot + "/") && candidate !== safeRoot) {
@@ -182,14 +182,22 @@ export class SetupWizard {
         res.end("Forbidden");
         return;
       }
-      filePath = candidate;
+      try {
+        const data = await readFile(candidate);
+        const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+        res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": contentType, "Cache-Control": "no-store" });
+        res.end(data);
+        return;
+      } catch {
+        // Fall through to SPA fallback
+      }
     }
 
+    // SPA fallback: serve index.html for all non-file routes (client-side routing)
+    const indexPath = join(STATIC_DIR, "index.html");
     try {
-      const data = await readFile(filePath);
-      const ext = extname(filePath);
-      const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-      res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": contentType, "Cache-Control": "no-store" });
+      const data = await readFile(indexPath);
+      res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       res.end(data);
     } catch {
       res.writeHead(404, SECURITY_HEADERS);

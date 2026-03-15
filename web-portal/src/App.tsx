@@ -1,105 +1,27 @@
-import { useEffect, useRef, useState } from 'react'
-import Header from './components/Header'
-import ChatMessage from './components/ChatMessage'
-import ChatInput from './components/ChatInput'
-import ConfirmDialog from './components/ConfirmDialog'
-import TypingIndicator from './components/TypingIndicator'
-import EmptyState from './components/EmptyState'
-import SidePanel from './components/SidePanel'
+import { Routes, Route } from 'react-router-dom'
+import AppLayout from './components/layout/AppLayout'
+import ChatView from './components/ChatView'
 import DashboardView from './components/DashboardView'
-import { useWebSocket } from './hooks/useWebSocket'
-import { useTheme } from './hooks/useTheme'
-
-type Tab = 'chat' | 'dashboard'
+import PlaceholderPage from './components/placeholder/PlaceholderPage'
+import SetupWizard from './pages/SetupWizard'
 
 export default function App() {
-  const { messages, status, confirmation, isTyping, sessionId, sendMessage, sendConfirmation } = useWebSocket()
-  const { theme, toggleTheme } = useTheme()
-  const [activeTab, setActiveTab] = useState<Tab>('chat')
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const messagesContainerRef = useRef<HTMLDivElement>(null)
-  const userScrolledUpRef = useRef(false)
-
-  // Track whether the user has scrolled away from the bottom
-  useEffect(() => {
-    const container = messagesContainerRef.current
-    if (!container) return
-
-    const handleScroll = () => {
-      const threshold = 100
-      const atBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight < threshold
-      userScrolledUpRef.current = !atBottom
-    }
-
-    container.addEventListener('scroll', handleScroll)
-    return () => container.removeEventListener('scroll', handleScroll)
-  }, [])
-
-  // Auto-scroll to bottom when new messages arrive (unless the user scrolled up)
-  useEffect(() => {
-    if (!userScrolledUpRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [messages, isTyping])
-
-  const isDisconnected = status !== 'connected'
-
   return (
-    <div className="app">
-      <Header status={status} theme={theme} onToggleTheme={toggleTheme} />
-
-      <div className="tab-bar">
-        <button
-          className={`tab ${activeTab === 'chat' ? 'active' : ''}`}
-          onClick={() => setActiveTab('chat')}
-        >
-          Chat
-        </button>
-        <button
-          className={`tab ${activeTab === 'dashboard' ? 'active' : ''}`}
-          onClick={() => setActiveTab('dashboard')}
-        >
-          Dashboard
-        </button>
-      </div>
-
-      {activeTab === 'chat' ? (
-        <div className="app-body">
-          <div className="chat-area">
-            <div className="messages" ref={messagesContainerRef}>
-              {messages.length === 0 && !isTyping ? (
-                <EmptyState />
-              ) : (
-                <>
-                  {messages.map((msg) => (
-                    <ChatMessage key={msg.id} message={msg} />
-                  ))}
-                  {isTyping && <TypingIndicator />}
-                </>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-
-            {confirmation && (
-              <ConfirmDialog confirmation={confirmation} onRespond={sendConfirmation} />
-            )}
-
-            <ChatInput onSend={sendMessage} disabled={isDisconnected} />
-          </div>
-
-          <SidePanel
-            status={status}
-            messageCount={messages.length}
-            isTyping={isTyping}
-            sessionId={sessionId}
-          />
-        </div>
-      ) : (
-        <div className="app-body">
-          <DashboardView />
-        </div>
-      )}
-    </div>
+    <Routes>
+      <Route path="/setup" element={<SetupWizard />} />
+      <Route element={<AppLayout />}>
+        <Route index element={<ChatView />} />
+        <Route path="dashboard" element={<DashboardView />} />
+        <Route path="config" element={<PlaceholderPage title="Config" />} />
+        <Route path="tools" element={<PlaceholderPage title="Tools" />} />
+        <Route path="channels" element={<PlaceholderPage title="Channels" />} />
+        <Route path="sessions" element={<PlaceholderPage title="Sessions" />} />
+        <Route path="logs" element={<PlaceholderPage title="Logs" />} />
+        <Route path="identity" element={<PlaceholderPage title="Identity" />} />
+        <Route path="personality" element={<PlaceholderPage title="Personality" />} />
+        <Route path="memory" element={<PlaceholderPage title="Memory" />} />
+        <Route path="*" element={<ChatView />} />
+      </Route>
+    </Routes>
   )
 }

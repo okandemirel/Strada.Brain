@@ -68,6 +68,20 @@ interface Session {
   lastActivity: Date;
 }
 
+/** Maps display language names (lowercase) to ISO codes for onboarding. */
+const ONBOARDING_LANG_MAP: Record<string, string> = {
+  english: "en", turkish: "tr", japanese: "ja", korean: "ko",
+  chinese: "zh", german: "de", spanish: "es", french: "fr",
+};
+
+const VALID_STYLES = new Set(["casual", "formal", "minimal"]);
+const VALID_DETAIL_LEVELS = new Set(["brief", "moderate", "detailed"]);
+
+/** Strip markdown control characters from user-supplied display names. */
+function sanitizeDisplayName(raw: string): string {
+  return raw.replace(/[*[\]()#`>!\\<&]/g, "").trim();
+}
+
 /** Default prompt when user sends an image with no text. */
 const DEFAULT_IMAGE_PROMPT = "What is in this image?";
 
@@ -184,6 +198,8 @@ export class Orchestrator {
   private readonly lastPersistTime = new Map<string, number>();
   private readonly sessionSummarizer?: SessionSummarizer;
   private readonly userProfileStore?: UserProfileStore;
+  /** Deterministic onboarding state per chat (tracks which question we're waiting for). */
+  private readonly onboardingState = new Map<string, { step: 'awaiting_name' | 'awaiting_lang' | 'awaiting_style' | 'awaiting_detail'; name?: string; lang?: string; style?: string }>();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -769,6 +785,44 @@ export class Orchestrator {
       channel: msg.channelType,
     });
 
+    // ─── Deterministic onboarding intercept ──────────────────────────────
+    const pendingOnboard = this.onboardingState.get(chatId);
+    if (pendingOnboard) {
+      const answer = text.trim();
+      switch (pendingOnboard.step) {
+        case 'awaiting_name': {
+          const name = sanitizeDisplayName(answer.slice(0, 80));
+          if (name && name !== '__onboarding__') {
+            this.userProfileStore?.upsertProfile(chatId, { displayName: name });
+          }
+          await this.runOnboardingQuestions(chatId, name || undefined);
+          return;
+        }
+        case 'awaiting_lang':
+          pendingOnboard.lang = answer;
+          pendingOnboard.step = 'awaiting_style';
+          await this.askOnboardingQuestion(chatId, pendingOnboard);
+          return;
+        case 'awaiting_style':
+          pendingOnboard.style = answer;
+          pendingOnboard.step = 'awaiting_detail';
+          await this.askOnboardingQuestion(chatId, pendingOnboard);
+          return;
+        case 'awaiting_detail':
+          this.onboardingState.delete(chatId);
+          await this.finalizeOnboarding(chatId, pendingOnboard, answer);
+          return;
+      }
+    }
+
+    // New user detection: no profile yet -> start deterministic onboarding
+    if (this.userProfileStore && !this.userProfileStore.getProfile(chatId)) {
+      this.userProfileStore.upsertProfile(chatId, {});
+      await this.runOnboardingFlow(chatId);
+      return;
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     // Goal tree resume detection (trigger on first message when interrupted trees exist)
     if (this.pendingResumeTrees.length > 0) {
       const resumePrompt = formatResumePrompt(this.pendingResumeTrees);
@@ -846,9 +900,6 @@ export class Orchestrator {
       }
     }, TYPING_INTERVAL_MS);
 
-    // First-run onboarding check (creates minimal profile if needed)
-    this.runOnboarding(chatId);
-
     try {
       await this.runAgentLoop(chatId, session, msg.channelType);
     } catch (error) {
@@ -872,49 +923,129 @@ export class Orchestrator {
   }
 
   /**
-   * First-run onboarding: creates a minimal profile so subsequent messages don't re-trigger.
-   * The actual onboarding questions are driven by the LLM via system prompt directive.
+   * Deterministic onboarding: send welcome message and ask for name.
    */
-  private runOnboarding(chatId: string): void {
-    if (!this.userProfileStore) return;
-    const existing = this.userProfileStore.getProfile(chatId);
-    if (existing) return; // Returning user — skip
-    // Create minimal profile immediately (prevents re-trigger on next message)
-    this.userProfileStore.upsertProfile(chatId, {});
+  private async runOnboardingFlow(chatId: string): Promise<void> {
+    const rich = supportsRichMessaging(this.channel);
+    if (rich) {
+      await this.channel.sendMarkdown(
+        chatId,
+        "**Strada.Brain is online and ready.**\n\nI'm your AI-powered Unity development assistant. Let me get to know you first.",
+      );
+      await this.channel.sendMarkdown(chatId, "What should I call you?");
+    } else {
+      await this.channel.sendText(chatId, "Strada.Brain is online and ready. I'm your AI-powered Unity development assistant. Let me get to know you first.");
+      await this.channel.sendText(chatId, "What should I call you?");
+    }
+    this.onboardingState.set(chatId, { step: 'awaiting_name' });
   }
 
   /**
-   * Parse an ask_user response during onboarding and persist the relevant field.
+   * After name is collected, run through language/style/detail questions via requestConfirmation.
    */
-  private parseOnboardingResponse(chatId: string, input: unknown, response: string): void {
-    const question = ((input as Record<string, unknown>)?.question as string ?? "").toLowerCase();
-    const answer = response.replace(/^User answered:\s*/i, "").trim();
-    if (!answer) return;
+  private async runOnboardingQuestions(chatId: string, name: string | undefined): Promise<void> {
+    const state: { step: 'awaiting_lang'; name?: string; lang?: string; style?: string } = {
+      step: 'awaiting_lang',
+      name,
+    };
+    this.onboardingState.set(chatId, state);
+    await this.askOnboardingQuestion(chatId, state);
+  }
 
-    const updates: Partial<{ displayName: string; language: string; preferences: Record<string, unknown> }> = {};
+  /**
+   * Send the appropriate onboarding question based on current step.
+   */
+  private async askOnboardingQuestion(
+    chatId: string,
+    state: { step: 'awaiting_name' | 'awaiting_lang' | 'awaiting_style' | 'awaiting_detail'; name?: string; lang?: string; style?: string },
+  ): Promise<void> {
+    const { supportsInteractivity } = await import("../channels/channel.interface.js");
+    const interactive = supportsInteractivity(this.channel);
 
-    if (question.includes("name") || question.includes("address") || question.includes("call you")) {
-      // Cap display name length to prevent oversized profile data
-      updates.displayName = answer.slice(0, 80);
-    } else if (question.includes("language") || question.includes("dil")) {
-      const langMap: Record<string, string> = {
-        english: "en", turkish: "tr", "türkçe": "tr",
-        japanese: "ja", korean: "ko", chinese: "zh",
-        german: "de", spanish: "es", french: "fr",
-      };
-      const mapped = langMap[answer.toLowerCase()];
-      if (mapped) updates.language = mapped;
-      // Unknown languages are ignored — don't store raw user input as a language code
-    } else if (question.includes("style") || question.includes("casual") || question.includes("formal")) {
-      const existing = this.userProfileStore!.getProfile(chatId)?.preferences ?? {};
-      updates.preferences = { ...existing, communicationStyle: answer.slice(0, 40).toLowerCase() };
-    } else if (question.includes("detail") || question.includes("explanation")) {
-      const existing = this.userProfileStore!.getProfile(chatId)?.preferences ?? {};
-      updates.preferences = { ...existing, detailLevel: answer.slice(0, 40).toLowerCase() };
+    switch (state.step) {
+      case 'awaiting_lang': {
+        if (!interactive) {
+          await this.channel.sendText(chatId, "Which language do you prefer? (English, Turkish, Japanese, Korean, Chinese, German, Spanish, French)");
+          return;
+        }
+        const answer = await this.channel.requestConfirmation({
+          chatId,
+          question: "Which language do you prefer?",
+          options: ["English", "Turkish", "Japanese", "Korean", "Chinese", "German", "Spanish", "French"],
+        });
+        state.lang = ONBOARDING_LANG_MAP[answer.toLowerCase()] ?? "en";
+        state.step = 'awaiting_style';
+        this.onboardingState.set(chatId, state);
+        await this.askOnboardingQuestion(chatId, state);
+        return;
+      }
+      case 'awaiting_style': {
+        if (!interactive) {
+          await this.channel.sendText(chatId, "Preferred communication style? (Casual, Formal, Minimal)");
+          return;
+        }
+        const answer = await this.channel.requestConfirmation({
+          chatId,
+          question: "Preferred communication style?",
+          options: ["Casual", "Formal", "Minimal"],
+        });
+        state.style = answer.toLowerCase();
+        state.step = 'awaiting_detail';
+        this.onboardingState.set(chatId, state);
+        await this.askOnboardingQuestion(chatId, state);
+        return;
+      }
+      case 'awaiting_detail': {
+        if (!interactive) {
+          await this.channel.sendText(chatId, "How detailed should explanations be? (Brief, Moderate, Detailed)");
+          return;
+        }
+        const answer = await this.channel.requestConfirmation({
+          chatId,
+          question: "How detailed should explanations be?",
+          options: ["Brief", "Moderate", "Detailed"],
+        });
+        this.onboardingState.delete(chatId);
+        await this.finalizeOnboarding(chatId, state, answer);
+        return;
+      }
+    }
+  }
+
+  /**
+   * Finalize onboarding: persist all preferences and send welcome.
+   */
+  private async finalizeOnboarding(
+    chatId: string,
+    state: { name?: string; lang?: string; style?: string },
+    detailAnswer: string,
+  ): Promise<void> {
+    const lang = ONBOARDING_LANG_MAP[state.lang?.toLowerCase() ?? ""] ?? state.lang ?? "en";
+    const rawStyle = (state.style ?? "casual").toLowerCase();
+    const style = VALID_STYLES.has(rawStyle) ? rawStyle : "casual";
+    const rawDetail = detailAnswer.toLowerCase().slice(0, 40);
+    const detail = VALID_DETAIL_LEVELS.has(rawDetail) ? rawDetail : "moderate";
+
+    if (this.userProfileStore) {
+      this.userProfileStore.upsertProfile(chatId, {
+        displayName: state.name,
+        language: lang,
+        preferences: {
+          communicationStyle: style,
+          detailLevel: detail,
+        },
+      });
     }
 
-    if (Object.keys(updates).length === 0) return;
-    this.userProfileStore!.upsertProfile(chatId, updates);
+    const greeting = state.name
+      ? `Great to meet you, ${state.name}! I'm all set up and ready to help with your Unity project.`
+      : "I'm all set up and ready to help with your Unity project.";
+
+    if (supportsRichMessaging(this.channel)) {
+      await this.channel.sendMarkdown(chatId, `**${greeting}**\n\nSend me any question about your project to get started.`);
+    } else {
+      await this.channel.sendText(chatId, `${greeting} Send me any question about your project to get started.`);
+    }
   }
 
   /**
@@ -926,10 +1057,6 @@ export class Orchestrator {
 
     // Load user profile once for the entire agent loop
     const profile = this.userProfileStore?.getProfile(chatId) ?? null;
-
-    // Snapshot onboarding state at loop start — stays true for the entire loop
-    // even after displayName is set by the first ask_user response
-    const isOnboarding = !!(profile && !profile.displayName);
 
     // Per-user persona override (from profile, not global SoulLoader mutation)
     let personaContent: string | undefined;
@@ -1001,17 +1128,6 @@ export class Orchestrator {
       }
     }
 
-    // First-time user onboarding directive
-    if (profile && !profile.displayName) {
-        systemPrompt += `\n\n## First-Time User Onboarding
-This is a new user who hasn't been onboarded yet. Before answering their question, warmly introduce yourself and use the ask_user tool to learn about them:
-1. Ask their name (how to address them)
-2. Ask which language they prefer to communicate in (suggest the current default)
-3. Ask their preferred communication style (casual/formal/minimal - suggest casual as default)
-4. Ask how detailed they want explanations (brief/moderate/detailed)
-After receiving answers, acknowledge them warmly and proceed to answer their original question.
-Be natural and conversational — this should feel like meeting a new colleague, not filling out a form.\n`;
-    }
 
     // ─── Autonomy layer ──────────────────────────────────────────────────
     const errorRecovery = new ErrorRecoveryEngine();
@@ -1345,13 +1461,6 @@ Be natural and conversational — this should feel like meeting a new colleague,
         }
 
         this.emitToolResult(chatId, tc, toolResults[i]!);
-
-        // Persist onboarding answers from ask_user tool results to user profile.
-        // Uses the snapshot flag so all answers in the batch are captured,
-        // even after the first one sets displayName.
-        if (isOnboarding && tc.name === "ask_user" && !tr.isError && this.userProfileStore) {
-          this.parseOnboardingResponse(chatId, tc.input, toolResults[i]!.content);
-        }
       }
 
       // Inject state-aware context (stall detection, budget warnings)
@@ -1783,6 +1892,7 @@ Be natural and conversational — this should feel like meeting a new colleague,
       this.sessions.delete(oldestKey);
       this.sessionLocks.delete(oldestKey);
       this.activeGoalTrees.delete(oldestKey);
+      this.onboardingState.delete(oldestKey);
     }
 
     session = { messages: [], lastActivity: new Date() };

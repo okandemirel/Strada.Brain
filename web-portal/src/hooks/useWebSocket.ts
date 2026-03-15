@@ -90,22 +90,12 @@ export function useWebSocket(): UseWebSocketReturn {
           chatIdRef.current = data.chatId
           setSessionId(data.chatId)
           localStorage.setItem('strada-chatId', data.chatId)
-          // First-run: auto-send greeting to trigger onboarding flow
+          // First-run: send sentinel to trigger deterministic onboarding (no user bubble)
           if (localStorage.getItem('strada-firstRun') === '1') {
             localStorage.removeItem('strada-firstRun')
             setTimeout(() => {
               if (ws.readyState === WebSocket.OPEN) {
-                setMessages((prev) => [
-                  ...prev,
-                  {
-                    id: generateId(),
-                    sender: 'user',
-                    text: 'Hello!',
-                    isMarkdown: false,
-                    timestamp: Date.now(),
-                  },
-                ])
-                ws.send(JSON.stringify({ type: 'message', text: 'Hello!' }))
+                ws.send(JSON.stringify({ type: 'message', text: '__onboarding__' }))
               }
             }, 500)
           }
