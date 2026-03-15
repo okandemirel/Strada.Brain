@@ -292,6 +292,9 @@ function showStep(step) {
     else if (s === step) dot.classList.add("active");
   });
 
+  // Refresh RAG info when entering step 4
+  if (step === 4) updateRagInfo();
+
   // Build review on step 5
   if (step === 5) buildReview();
 }
@@ -633,12 +636,10 @@ async function saveConfig() {
 
     const data = await res.json();
     if (data.success) {
-      status.textContent = "Configuration saved! Restarting...";
+      status.textContent = "Configuration saved! Starting application...";
       status.className = "save-status success";
-      setTimeout(() => {
-        status.textContent = "Reloading...";
-        window.location.reload();
-      }, 3000);
+      // Poll for the new server instead of hard reload (avoids blank page flicker)
+      pollForReady();
     } else {
       status.textContent = data.error || "Save failed.";
       status.className = "save-status error";
@@ -649,4 +650,47 @@ async function saveConfig() {
     status.className = "save-status error";
     btn.disabled = false;
   }
+}
+
+/**
+ * Poll for the new application server to be ready after setup wizard shuts down.
+ * The wizard server closes ~2s after save. The main app takes a few seconds to boot.
+ * We poll every 1.5s until we get a response from the new server, then redirect.
+ */
+function pollForReady() {
+  const status = document.getElementById("saveStatus");
+  let attempts = 0;
+  const maxAttempts = 30; // 45s max wait
+
+  const poll = setInterval(async () => {
+    attempts++;
+    if (attempts > maxAttempts) {
+      clearInterval(poll);
+      status.textContent = "Server is taking too long. Please refresh manually.";
+      status.className = "save-status warning";
+      return;
+    }
+
+    status.textContent = "Waiting for application to start...";
+
+    try {
+      // Poll the main app's health endpoint — only it exposes /health
+      const res = await fetch("/health", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === "ok") {
+          clearInterval(poll);
+          status.textContent = "Application ready! Redirecting...";
+          status.className = "save-status success";
+          setTimeout(() => {
+            // Set first-run flag atomically with the redirect
+            localStorage.setItem("strada-firstRun", "1");
+            window.location.href = "/";
+          }, 500);
+        }
+      }
+    } catch {
+      // Server not ready yet — keep polling
+    }
+  }, 1500);
 }
