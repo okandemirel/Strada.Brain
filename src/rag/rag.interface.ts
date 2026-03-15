@@ -195,6 +195,8 @@ export interface SearchOptions {
   readonly candidateMultiplier?: number;
   /** Hybrid search: weight for vector vs keyword (0-1, 1 = pure vector) */
   readonly vectorWeight?: NormalizedScore;
+  /** Pre-computed query embedding to avoid redundant embedding calls */
+  readonly queryEmbedding?: number[];
 }
 
 /** Hybrid search query */

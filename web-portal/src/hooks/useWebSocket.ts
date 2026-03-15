@@ -8,6 +8,7 @@ import type {
 } from '../types/messages'
 
 const MAX_RECONNECT_DELAY = 30000
+const MAX_RECONNECT_ATTEMPTS = 8
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
@@ -33,6 +34,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const wsRef = useRef<WebSocket | null>(null)
   const chatIdRef = useRef<string | null>(localStorage.getItem('strada-chatId'))
   const reconnectDelayRef = useRef(1000)
+  const reconnectAttemptsRef = useRef(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
 
@@ -51,6 +53,7 @@ export function useWebSocket(): UseWebSocketReturn {
       if (!mountedRef.current) return
       setStatus('connected')
       reconnectDelayRef.current = 1000
+      reconnectAttemptsRef.current = 0
 
       // Attempt reconnect with previous session (skip on first-run to get fresh chatId)
       if (localStorage.getItem('strada-firstRun') !== '1') {
@@ -64,6 +67,28 @@ export function useWebSocket(): UseWebSocketReturn {
     ws.addEventListener('close', () => {
       if (!mountedRef.current) return
       setStatus('disconnected')
+
+      // Fix 6.3: Reset typing indicator on disconnect
+      setIsTyping(false)
+
+      // Fix 6.2: Complete any orphaned streaming messages
+      if (streamsRef.current.size > 0) {
+        const orphanedStreamIds = new Set(streamsRef.current.keys())
+        streamsRef.current.clear()
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.streamId && orphanedStreamIds.has(msg.streamId)
+              ? { ...msg, isStreaming: false }
+              : msg,
+          ),
+        )
+      }
+
+      // Fix 6.5: Cap reconnection attempts to avoid infinite loops
+      reconnectAttemptsRef.current += 1
+      if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
+        return
+      }
 
       // Auto-reconnect with exponential backoff
       reconnectTimerRef.current = setTimeout(() => {

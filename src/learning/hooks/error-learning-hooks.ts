@@ -197,7 +197,7 @@ export class ErrorLearningHooks {
     this.storage.updateInstinct(updatedInstinct);
 
     // Update status if needed
-    this.updateInstinctStatus(instinct);
+    this.updateInstinctStatus(updatedInstinct);
   }
 
   /**
@@ -219,7 +219,7 @@ export class ErrorLearningHooks {
     this.storage.updateInstinct(updatedInstinct);
 
     // Update status if needed
-    this.updateInstinctStatus(instinct);
+    this.updateInstinctStatus(updatedInstinct);
 
     // Record the failure for pattern analysis
     this.pipeline.observeToolUse({

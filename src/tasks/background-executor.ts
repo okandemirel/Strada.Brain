@@ -118,16 +118,31 @@ export class BackgroundExecutor {
    */
   enqueue(task: Task, signal: AbortSignal, onProgress: (message: string) => void): void {
     if (this.queue.length >= BackgroundExecutor.MAX_QUEUE_SIZE) {
-      throw new Error(`Task queue full (max ${BackgroundExecutor.MAX_QUEUE_SIZE}). Try again later.`);
+      // Mark the rejected task as failed so it doesn't become orphaned
+      const logger = getLogger();
+      const errMsg = `Task queue full (max ${BackgroundExecutor.MAX_QUEUE_SIZE}). Try again later.`;
+      logger.error("Task queue overflow", { taskId: task.id, queueSize: this.queue.length });
+      if (this.taskManager) {
+        try { this.taskManager.fail(task.id, errMsg); } catch { /* best-effort cleanup */ }
+      }
+      throw new Error(errMsg);
     }
     this.queue.push({ task, signal, onProgress });
-    this.processQueue();
+    try {
+      this.processQueue();
+    } catch (err) {
+      const logger = getLogger();
+      logger.error("processQueue failed during enqueue", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
    * Process the queue, starting tasks up to the concurrency limit.
    */
   private processQueue(): void {
+    const logger = getLogger();
     while (this.running < this.concurrencyLimit && this.queue.length > 0) {
       const entry = this.queue.shift()!;
 
@@ -137,10 +152,33 @@ export class BackgroundExecutor {
       }
 
       this.running++;
-      this.executeTask(entry).finally(() => {
-        this.running--;
-        this.processQueue();
-      });
+      this.executeTask(entry)
+        .catch((err) => {
+          // Catch any unhandled rejection that escapes executeTask's own try/catch
+          logger.error("Unhandled error in executeTask", {
+            taskId: entry.task.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          // Best-effort: mark task as failed so it doesn't stay orphaned
+          if (this.taskManager) {
+            try {
+              this.taskManager.fail(
+                entry.task.id,
+                err instanceof Error ? err.message : String(err),
+              );
+            } catch { /* task may already be in terminal state */ }
+          }
+        })
+        .finally(() => {
+          this.running--;
+          try {
+            this.processQueue();
+          } catch (err) {
+            logger.error("processQueue failed in finally callback", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        });
     }
   }
 

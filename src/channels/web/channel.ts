@@ -418,19 +418,23 @@ export class WebChannel
         const attachments: Attachment[] = [];
         if (rawAttachments && Array.isArray(rawAttachments)) {
           for (const raw of rawAttachments.slice(0, 5)) { // Max 5 attachments per message
-            if (!raw.name || !raw.mimeType) continue;
+            const mimeType = raw.mimeType || raw.type; // Frontend sends "type", normalize to mimeType
+            if (!raw.name || !mimeType) continue;
             const buf = raw.data ? Buffer.from(raw.data, "base64") : undefined;
             const size = buf?.length ?? raw.size ?? 0;
 
             // Validate before accepting
-            const validation = validateMediaAttachment({ mimeType: raw.mimeType, size, type: raw.type ?? "file" });
+            const attachType = mimeType.startsWith("image/") ? "image"
+              : mimeType.startsWith("video/") ? "video"
+              : mimeType.startsWith("audio/") ? "audio" : "file";
+            const validation = validateMediaAttachment({ mimeType, size, type: attachType });
             if (!validation.valid) continue;
-            if (buf && !validateMagicBytes(buf, raw.mimeType)) continue;
+            if (buf && !validateMagicBytes(buf, mimeType)) continue;
 
             attachments.push({
-              type: (raw.type as Attachment["type"]) ?? "file",
+              type: attachType as Attachment["type"],
               name: raw.name,
-              mimeType: raw.mimeType,
+              mimeType,
               data: buf,
               size,
             });

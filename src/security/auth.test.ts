@@ -171,9 +171,9 @@ describe("AuthManager - Slack", () => {
     expect(auth.isSlackUserAllowed("U999")).toBe(false);
   });
 
-  it("allows all users when no Slack restrictions", () => {
+  it("denies all users when no Slack restrictions configured", () => {
     const auth = new AuthManager([], {});
-    expect(auth.isSlackUserAllowed("any")).toBe(true);
+    expect(auth.isSlackUserAllowed("any")).toBe(false);
   });
 
   it("returns true for allowed Slack workspace", () => {
@@ -191,9 +191,9 @@ describe("AuthManager - Slack", () => {
     expect(auth.isSlackWorkspaceAllowed("T999")).toBe(false);
   });
 
-  it("allows all workspaces when no restrictions", () => {
+  it("denies all workspaces when no restrictions configured", () => {
     const auth = new AuthManager([], {});
-    expect(auth.isSlackWorkspaceAllowed("any")).toBe(true);
+    expect(auth.isSlackWorkspaceAllowed("any")).toBe(false);
   });
 
   it("checks combined Slack authorization", () => {

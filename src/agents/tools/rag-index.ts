@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import type { IRAGPipeline } from "../../rag/rag.interface.js";
 
@@ -48,6 +49,11 @@ export class RAGIndexTool implements ITool {
     filePath: string,
     context: ToolContext
   ): Promise<ToolExecutionResult> {
+    const pathCheck = await validatePath(context.projectPath, filePath);
+    if (!pathCheck.valid) {
+      return { content: `Error: ${pathCheck.error}`, isError: true };
+    }
+
     const absolutePath = resolve(context.projectPath, filePath);
 
     let content: string;

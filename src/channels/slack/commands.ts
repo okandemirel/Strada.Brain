@@ -10,6 +10,11 @@ import { createHelpBlocks, createProcessingBlock } from "./blocks.js";
 
 const logger = getLogger();
 
+interface SlashCommandAuthConfig {
+  allowedWorkspaces?: string[];
+  allowedUserIds?: string[];
+}
+
 interface CommandContext {
   ack: AckFn<string | Record<string, unknown>>;
   respond: RespondFn;
@@ -26,7 +31,7 @@ type CommandHandler = (ctx: CommandContext) => Promise<void>;
 /**
  * Register all slash commands with the Slack app.
  */
-export function registerSlashCommands(app: App): void {
+export function registerSlashCommands(app: App, authConfig?: SlashCommandAuthConfig): void {
   // /strada-help - Show help information
   app.command("/strada-help", async ({ ack, respond, client, body }) => {
     await handleCommand({
@@ -38,7 +43,7 @@ export function registerSlashCommands(app: App): void {
       teamId: body.team_id,
       triggerId: body.trigger_id,
       text: body.text,
-    }, handleHelpCommand);
+    }, handleHelpCommand, authConfig);
   });
 
   // /strada-ask - Ask a question to the AI
@@ -52,7 +57,7 @@ export function registerSlashCommands(app: App): void {
       teamId: body.team_id,
       triggerId: body.trigger_id,
       text: body.text,
-    }, handleAskCommand);
+    }, handleAskCommand, authConfig);
   });
 
   // /strada-analyze - Analyze code or project
@@ -66,7 +71,7 @@ export function registerSlashCommands(app: App): void {
       teamId: body.team_id,
       triggerId: body.trigger_id,
       text: body.text,
-    }, handleAnalyzeCommand);
+    }, handleAnalyzeCommand, authConfig);
   });
 
   // /strada-generate - Generate code (component, system, etc.)
@@ -80,20 +85,49 @@ export function registerSlashCommands(app: App): void {
       teamId: body.team_id,
       triggerId: body.trigger_id,
       text: body.text,
-    }, handleGenerateCommand);
+    }, handleGenerateCommand, authConfig);
   });
 
   logger.info("Slash commands registered");
 }
 
 /**
- * Wrapper for command handling with common error handling.
+ * Wrapper for command handling with auth checks and common error handling.
  */
 async function handleCommand(
   ctx: CommandContext,
-  handler: CommandHandler
+  handler: CommandHandler,
+  authConfig?: SlashCommandAuthConfig
 ): Promise<void> {
   try {
+    // Auth check: verify workspace
+    if (!isValidWorkspace(ctx.teamId, authConfig?.allowedWorkspaces ?? [])) {
+      logger.warn("Slash command from unauthorized workspace", {
+        teamId: ctx.teamId,
+        userId: ctx.userId,
+        command: handler.name,
+      });
+      await ctx.ack({
+        text: "This workspace is not authorized to use Strada Brain.",
+        response_type: "ephemeral",
+      });
+      return;
+    }
+
+    // Auth check: verify user
+    if (!isValidUser(ctx.userId, authConfig?.allowedUserIds ?? [])) {
+      logger.warn("Slash command from unauthorized user", {
+        userId: ctx.userId,
+        teamId: ctx.teamId,
+        command: handler.name,
+      });
+      await ctx.ack({
+        text: "You are not authorized to use Strada Brain.",
+        response_type: "ephemeral",
+      });
+      return;
+    }
+
     await handler(ctx);
   } catch (error) {
     logger.error("Slash command error", { 
@@ -384,20 +418,22 @@ function escapeText(text: string): string {
 
 /**
  * Validate workspace membership.
+ * Deny-by-default: if no workspaces are configured, reject all.
  */
 export function isValidWorkspace(teamId: string, allowedWorkspaces: string[]): boolean {
   if (allowedWorkspaces.length === 0) {
-    return true; // Allow all if no restrictions
+    return false; // Deny all if no allowed list configured (deny-by-default)
   }
   return allowedWorkspaces.includes(teamId);
 }
 
 /**
  * Validate user access.
+ * Deny-by-default: if no users are configured, reject all.
  */
 export function isValidUser(userId: string, allowedUsers: string[]): boolean {
   if (allowedUsers.length === 0) {
-    return true; // Allow all if no restrictions
+    return false; // Deny all if no allowed list configured (deny-by-default)
   }
   return allowedUsers.includes(userId);
 }

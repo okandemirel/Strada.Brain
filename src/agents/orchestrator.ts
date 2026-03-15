@@ -177,8 +177,8 @@ export class Orchestrator {
   private systemPrompt: string;
   private stradaDeps: StradaDepsStatus | undefined;
   private depsSetupComplete: boolean = false;
-  private pendingDepsPrompt: boolean = false;
-  private pendingModulesPrompt: boolean = false;
+  private readonly pendingDepsPrompt = new Map<string, boolean>();
+  private readonly pendingModulesPrompt = new Map<string, boolean>();
   private readonly instinctRetriever: InstinctRetriever | null;
   private readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
   private readonly metricsRecorder: MetricsRecorder | null;
@@ -328,7 +328,7 @@ export class Orchestrator {
    * Build 4-layer context injection for system prompt enrichment.
    * Layers: User Profile, Last Session Summary, Open Tasks/Goals, Semantic Memory.
    */
-  private async buildContextLayers(chatId: string, userMessage: string, profile: import("../memory/unified/user-profile-store.js").UserProfile | null): Promise<{ context: string; contentHashes: string[] }> {
+  private async buildContextLayers(chatId: string, userMessage: string, profile: import("../memory/unified/user-profile-store.js").UserProfile | null, preComputedEmbedding?: number[]): Promise<{ context: string; contentHashes: string[] }> {
     const layers: string[] = [];
     const contentHashes: string[] = [];
 
@@ -371,11 +371,12 @@ export class Orchestrator {
     if (this.memoryManager && userMessage) {
       try {
         const memoriesResult = await this.memoryManager.retrieve({
-          mode: "text",
+          mode: "semantic",
           query: userMessage,
           limit: 5,
           minScore: 0.15,
-        });
+          embedding: preComputedEmbedding,
+        } as import("../memory/memory.interface.js").SemanticRetrievalOptions);
         if (isOk(memoriesResult)) {
           const memories = memoriesResult.value;
           if (memories.length > 0) {
@@ -428,7 +429,7 @@ export class Orchestrator {
     }
 
     // Handle pending modules prompt after core installation
-    if (this.pendingModulesPrompt) {
+    if (this.pendingModulesPrompt.get(chatId)) {
       await this.handleModulesPrompt(msg);
       return;
     }
@@ -436,16 +437,21 @@ export class Orchestrator {
     // Per-session concurrency lock: queue messages for the same chat
     const prev = this.sessionLocks.get(chatId) ?? Promise.resolve();
     const current = prev.then(() => this.processMessage(msg));
-    this.sessionLocks.set(
-      chatId,
-      current.catch((err) => {
-        getLogger().error("Session lock error", {
-          chatId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }),
-    );
-    await current;
+    const tracked = current.catch((err) => {
+      getLogger().error("Session lock error", {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    this.sessionLocks.set(chatId, tracked);
+    try {
+      await current;
+    } finally {
+      // Clean up resolved lock to prevent unbounded map growth
+      if (this.sessionLocks.get(chatId) === tracked) {
+        this.sessionLocks.delete(chatId);
+      }
+    }
   }
 
   /**
@@ -479,14 +485,27 @@ export class Orchestrator {
     let systemPrompt = this.injectSoulPersonality(this.systemPrompt, options.channelType);
 
     const bgInitialContentHashes: string[] = [];
+
+    // Pre-compute embedding once for memory + RAG search (avoids redundant calls)
+    let bgEmbedding: number[] | undefined;
+    if (this.embeddingProvider && prompt) {
+      try {
+        const batch = await this.embeddingProvider.embed([prompt]);
+        bgEmbedding = batch.embeddings[0];
+      } catch {
+        // Embedding failure is non-fatal; downstream calls will embed on demand
+      }
+    }
+
     if (this.memoryManager) {
       try {
         const memoriesResult = await this.memoryManager.retrieve({
-          mode: "text",
+          mode: "semantic",
           query: prompt,
           limit: 3,
           minScore: 0.15,
-        });
+          embedding: bgEmbedding,
+        } as import("../memory/memory.interface.js").SemanticRetrievalOptions);
         if (isOk(memoriesResult)) {
           const memories = memoriesResult.value;
           if (memories.length > 0) {
@@ -501,7 +520,7 @@ export class Orchestrator {
 
       if (this.ragPipeline) {
         try {
-          const ragResults = await this.ragPipeline.search(prompt, { topK: 6, minScore: 0.2 });
+          const ragResults = await this.ragPipeline.search(prompt, { topK: 6, minScore: 0.2, queryEmbedding: bgEmbedding });
           if (ragResults.length > 0) {
             const ragFormatted = this.ragPipeline.formatContext(ragResults);
             systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${ragFormatted}\n<!-- re-retrieval:rag:end -->\n`;
@@ -715,7 +734,7 @@ export class Orchestrator {
     const { chatId } = msg;
     const text = msg.text?.toLowerCase() ?? "";
 
-    if (this.pendingDepsPrompt) {
+    if (this.pendingDepsPrompt.get(chatId)) {
       // User is responding to our install prompt
       if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
         await this.channel.sendText(chatId, "Strada.Core kuruluyor...");
@@ -731,7 +750,7 @@ export class Orchestrator {
           await this.channel.sendText(chatId, "Strada.Core kuruldu! Artık kullanabilirsiniz.");
 
           if (!this.stradaDeps.modulesInstalled) {
-            this.pendingModulesPrompt = true;
+            this.pendingModulesPrompt.set(chatId, true);
             await this.channel.sendText(
               chatId,
               "Strada.Modules da kurulu değil. Kurmamı ister misiniz? (evet/hayır)",
@@ -753,7 +772,7 @@ export class Orchestrator {
     }
 
     // First message — send the install prompt
-    this.pendingDepsPrompt = true;
+    this.pendingDepsPrompt.set(chatId, true);
     await this.channel.sendText(
       chatId,
       "⚠️ Strada.Core projenizde bulunamadı.\n\n" +
@@ -769,7 +788,7 @@ export class Orchestrator {
   private async handleModulesPrompt(msg: IncomingMessage): Promise<void> {
     const { chatId } = msg;
     const text = msg.text?.toLowerCase() ?? "";
-    this.pendingModulesPrompt = false;
+    this.pendingModulesPrompt.delete(chatId);
 
     if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
       await this.channel.sendText(chatId, "Strada.Modules kuruluyor...");
@@ -1102,7 +1121,18 @@ export class Orchestrator {
           : ""
       : "";
 
-    const { context: contextLayers, contentHashes } = await this.buildContextLayers(chatId, queryText, profile);
+    // Pre-compute embedding once for memory search + RAG search (avoids 2 redundant calls)
+    let preComputedEmbedding: number[] | undefined;
+    if (queryText && this.embeddingProvider) {
+      try {
+        const batch = await this.embeddingProvider.embed([queryText]);
+        preComputedEmbedding = batch.embeddings[0];
+      } catch {
+        // Embedding failure is non-fatal; downstream calls will embed on demand
+      }
+    }
+
+    const { context: contextLayers, contentHashes } = await this.buildContextLayers(chatId, queryText, profile, preComputedEmbedding);
     systemPrompt += contextLayers;
     const initialContentHashes: string[] = [...contentHashes];
 
@@ -1114,6 +1144,7 @@ export class Orchestrator {
             const ragResults = await this.ragPipeline.search(queryText, {
               topK: 6,
               minScore: 0.2,
+              queryEmbedding: preComputedEmbedding,
             });
             if (ragResults.length > 0) {
               const ragFormatted = this.ragPipeline.formatContext(ragResults);
@@ -1992,6 +2023,9 @@ export class Orchestrator {
     const now = Date.now();
     for (const [chatId, session] of this.sessions) {
       if (now - session.lastActivity.getTime() > maxAgeMs) {
+        // Skip sessions with active locks — they are currently being processed
+        if (this.sessionLocks.has(chatId)) continue;
+
         // Session-end summarization (fire-and-forget)
         if (this.sessionSummarizer && session.messages.length >= 2) {
           void this.sessionSummarizer.summarizeAndUpdateProfile(chatId, session.messages)
@@ -2003,7 +2037,6 @@ export class Orchestrator {
         void this.persistSessionToMemory(chatId, session.messages.slice(-10), /* force */ true);
         this.lastPersistTime.delete(chatId);
         this.sessions.delete(chatId);
-        this.sessionLocks.delete(chatId);
         this.activeGoalTrees.delete(chatId);
       }
     }

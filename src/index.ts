@@ -144,6 +144,7 @@ program.parse();
 async function startApp(channelType: string, daemonMode = false): Promise<void> {
   const MAX_WIZARD_ATTEMPTS = 3;
   const wizardPort = Number.parseInt(process.env["SETUP_WIZARD_PORT"] ?? "3000", 10) || 3000;
+  let activeWizard: SetupWizard | null = null;
 
   // Try loading config — if invalid and using web channel, launch setup wizard
   let configResult = loadConfigSafe();
@@ -163,7 +164,11 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
         dotenv.config({ override: true });
         resetConfigCache();
         configResult = loadConfigSafe();
-        if (configResult.kind === "ok") break;
+        if (configResult.kind === "ok") {
+          activeWizard = wizard; // Keep wizard alive until app starts on same port
+          break;
+        }
+        await wizard.shutdown();
         console.error(`Configuration invalid: ${configResult.error}`);
       }
       if (configResult.kind === "err") {
@@ -179,6 +184,7 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
       const wizard = new SetupWizard({ port: wizardPort });
       await wizard.start();
       console.log("Setup complete! Validating configuration...");
+      await wizard.shutdown();
       dotenv.config({ override: true });
       resetConfigCache();
       configResult = loadConfigSafe();
@@ -200,6 +206,12 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
         "INVALID_CHANNEL_TYPE",
         400,
       );
+    }
+
+    // Shut down wizard server to free the port for the main app
+    if (activeWizard) {
+      await activeWizard.shutdown();
+      activeWizard = null;
     }
 
     // Create DI container

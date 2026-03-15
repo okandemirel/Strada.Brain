@@ -90,9 +90,17 @@ export class DeployTrigger implements ITrigger {
       return false;
     }
 
-    // Proposal already pending
+    // Proposal already pending -- but check if it expired in the approval queue
     if (this.proposalPending) {
-      return false;
+      const pendingApprovals = this.approvalQueue.getPending();
+      const stillPending = pendingApprovals.some(
+        (entry) => entry.triggerName === "deploy-readiness",
+      );
+      if (stillPending) {
+        return false;
+      }
+      // Proposal expired or was decided without callback -- clean up
+      this.proposalPending = false;
     }
 
     // Cooldown after rejection

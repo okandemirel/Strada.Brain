@@ -76,6 +76,7 @@ export class DiscordChannel implements IChannelAdapter {
     { resolve: (value: string) => void; timeout: ReturnType<typeof setTimeout> }
   >();
   private readonly streamingMessages = new Map<string, StreamingMessageState>();
+  private readonly pendingReplyCallbacks = new Map<string, (response: string) => Promise<void>>();
   private isConnected = false;
   private slashCommands: SlashCommand[] = [];
   
@@ -209,6 +210,7 @@ export class DiscordChannel implements IChannelAdapter {
             const retryAfter = this.extractRetryAfter(error) || RATE_LIMIT_BACKOFF_MS;
             this.rateLimited = true;
             this.rateLimitResetTime = Date.now() + retryAfter;
+            this.rateLimiter.reportRateLimitError(retryAfter);
             getLogger().warn("Discord rate limited", { retryAfter });
             break;
           }
@@ -251,23 +253,25 @@ export class DiscordChannel implements IChannelAdapter {
         await this.sendTypingIndicatorImmediate(msg.chatId);
         msg.resolve(undefined);
         break;
-      case 'thread':
+      case 'thread': {
         const threadId = await this.createThreadImmediate(msg.chatId, msg.threadOptions!.name, {
           autoArchiveDuration: msg.threadOptions!.autoArchiveDuration,
         });
         msg.resolve(threadId);
         break;
-      case 'confirmation':
+      }
+      case 'confirmation': {
         const result = await this.requestConfirmationImmediate(msg.confirmationRequest!);
         msg.resolve(result);
         break;
+      }
     }
   }
 
   private isRateLimitError(error: unknown): boolean {
     if (error && typeof error === 'object') {
-      const code = (error as { code?: number }).code;
-      return code === 429; // Discord rate limit status code
+      const status = (error as { status?: number }).status;
+      return status === 429; // Discord rate limit status code
     }
     return false;
   }
@@ -276,8 +280,8 @@ export class DiscordChannel implements IChannelAdapter {
     if (error && typeof error === 'object') {
       const retryAfter = (error as { retryAfter?: number }).retryAfter;
       if (typeof retryAfter === 'number') {
-        // discord.js v14 gives ms; raw API gives seconds. Heuristic: < 100 means seconds.
-        return retryAfter < 100 ? retryAfter * 1000 : retryAfter;
+        // discord.js v14 already provides retryAfter in milliseconds
+        return retryAfter;
       }
     }
     return null;
@@ -290,6 +294,15 @@ export class DiscordChannel implements IChannelAdapter {
   }
 
   private async sendTextImmediate(chatId: string, text: string): Promise<void> {
+    // If a slash command is awaiting a reply for this channel, route through its callback
+    const replyCallback = this.pendingReplyCallbacks.get(chatId);
+    if (replyCallback) {
+      this.pendingReplyCallbacks.delete(chatId);
+      const truncated = truncateForDiscord(text, 2000);
+      await replyCallback(truncated);
+      return;
+    }
+
     await this.rateLimiter.acquire();
     const channel = await this.client.channels.fetch(chatId);
     if (!channel?.isTextBased()) {
@@ -304,6 +317,16 @@ export class DiscordChannel implements IChannelAdapter {
   }
 
   private async sendMarkdownImmediate(chatId: string, markdown: string): Promise<void> {
+    // If a slash command is awaiting a reply for this channel, route through its callback
+    const replyCallback = this.pendingReplyCallbacks.get(chatId);
+    if (replyCallback) {
+      this.pendingReplyCallbacks.delete(chatId);
+      const formatted = formatToDiscordMarkdown(markdown);
+      const truncated = truncateForDiscord(formatted, 2000);
+      await replyCallback(truncated);
+      return;
+    }
+
     await this.rateLimiter.acquire();
     const channel = await this.client.channels.fetch(chatId);
     if (!channel?.isTextBased()) {
@@ -846,7 +869,18 @@ export class DiscordChannel implements IChannelAdapter {
       return;
     }
 
-    await this.handler(msg);
+    // Register the callback so sendText/sendMarkdown can route the response
+    // back to the slash command interaction instead of sending a new channel message
+    if (replyCallback) {
+      this.pendingReplyCallbacks.set(msg.chatId, replyCallback);
+    }
+
+    try {
+      await this.handler(msg);
+    } finally {
+      // Clean up if the callback was never consumed (e.g. handler error or no response)
+      this.pendingReplyCallbacks.delete(msg.chatId);
+    }
   }
 
   private async registerSlashCommands(): Promise<void> {

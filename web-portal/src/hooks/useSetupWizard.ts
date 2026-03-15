@@ -195,10 +195,11 @@ export function useSetupWizard() {
         throw new Error(body.error ?? `Save failed (${res.status})`)
       }
 
-      // Poll for readiness
+      // Poll for readiness — the wizard server shuts down and the main app
+      // boots on the same port, so expect connection errors during the gap.
       setSaveStatus('polling')
       let attempts = 0
-      const maxAttempts = 30
+      const maxAttempts = 40 // 40 x 2s = 80s total timeout
 
       pollTimerRef.current = setInterval(async () => {
         if (!mountedRef.current) {
@@ -208,6 +209,7 @@ export function useSetupWizard() {
         attempts++
         try {
           const healthRes = await fetch('/health')
+          if (!healthRes.ok) return // non-200, keep polling
           const healthData = await healthRes.json()
           if (healthData.status === 'ok') {
             if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
@@ -219,7 +221,7 @@ export function useSetupWizard() {
             }, 500)
           }
         } catch {
-          // Health check not ready yet, continue polling
+          // Connection refused during server restart — expected, keep polling
         }
 
         if (attempts >= maxAttempts) {
@@ -228,7 +230,7 @@ export function useSetupWizard() {
           setSaveStatus('error')
           setSaveError('Server did not become ready in time. Please refresh and try again.')
         }
-      }, 1500)
+      }, 2000)
     } catch (err) {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')

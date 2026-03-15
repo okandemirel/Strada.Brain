@@ -30,12 +30,12 @@ const BLOCKED_COMMANDS = [
 ] as const;
 
 const DANGEROUS_PIPE_PATTERNS = [
-  /\|\s*sh\b/,
-  /\|\s*bash\b/,
-  /\|\s*zsh\b/,
-  /\|\s*rm\b/,
-  />\s*\/dev\/sd/,
-  />\s*\/dev\/nvme/,
+  /\|\s*sh\b/i,
+  /\|\s*bash\b/i,
+  /\|\s*zsh\b/i,
+  /\|\s*rm\b/i,
+  />\s*\/dev\/sd/i,
+  />\s*\/dev\/nvme/i,
 ];
 
 export class ShellExecTool implements ITool {
@@ -159,7 +159,7 @@ function checkCommandSafety(command: string): { safe: boolean; reason?: string }
   const lower = command.toLowerCase().trim();
 
   for (const blocked of BLOCKED_COMMANDS) {
-    if (lower.includes(blocked.toLowerCase())) {
+    if (lower.includes(blocked)) {
       return { safe: false, reason: `blocked command pattern: ${blocked}` };
     }
   }

@@ -151,6 +151,9 @@ export class MemoryConsolidationEngine {
       CREATE INDEX IF NOT EXISTS idx_consolidation_log_timestamp ON consolidation_log(timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_consolidation_log_status ON consolidation_log(status);
     `);
+
+    // Index on memories.consolidated_into for fast filtering in findClusters
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_consolidated_into ON memories(consolidated_into);");
   }
 
   // ---------------------------------------------------------------------------
@@ -357,16 +360,41 @@ export class MemoryConsolidationEngine {
       );
     })();
 
-    // HNSW cleanup first: remove original vectors, add summary vector
-    // (Must complete before in-memory mutation to avoid inconsistent state on HNSW failure)
-    await this.hnsw.remove(cluster.memberIds);
-    await this.hnsw.upsert([{
-      id: summaryId,
-      vector: summaryEmbedding,
-      chunk: { filePath: "", content: llmResult.summary, kind: "generic", language: "text" },
-      addedAt: now,
-      accessCount: 0,
-    }]);
+    // HNSW cleanup: remove original vectors, add summary vector.
+    // If HNSW fails, roll back the SQLite commit via compensating transaction
+    // to prevent SQLite/HNSW divergence on crash or error.
+    try {
+      await this.hnsw.remove(cluster.memberIds);
+      await this.hnsw.upsert([{
+        id: summaryId,
+        vector: summaryEmbedding,
+        chunk: { filePath: "", content: llmResult.summary, kind: "generic", language: "text" },
+        addedAt: now,
+        accessCount: 0,
+      }]);
+    } catch (hnswError) {
+      this.logger.error("[Consolidation] HNSW update failed, rolling back SQLite commit", {
+        summaryId,
+        memberIds: cluster.memberIds,
+        error: String(hnswError),
+      });
+
+      // Compensating transaction: undo the SQLite changes
+      this.db.transaction(() => {
+        // Unflag soft-deleted originals
+        for (const id of cluster.memberIds) {
+          this.db.prepare(
+            "UPDATE memories SET consolidated_into = NULL, consolidated_at = NULL, value = json_remove(value, '$.consolidated_into', '$.consolidated_at'), updated_at = ? WHERE id = ?",
+          ).run(now, id);
+        }
+        // Remove the summary entry
+        this.db.prepare("DELETE FROM memories WHERE id = ?").run(summaryId);
+        // Mark log entry as failed
+        this.db.prepare("UPDATE consolidation_log SET status = 'failed' WHERE id = ?").run(logId);
+      })();
+
+      throw hnswError;
+    }
 
     // Update in-memory entries only after both SQLite and HNSW succeed
     for (const id of cluster.memberIds) {

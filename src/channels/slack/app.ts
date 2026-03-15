@@ -4,7 +4,7 @@
  * Features: Message queue, rate limiting, retry logic, batch operations
  */
 
-import { App, directMention, type SayFn } from "@slack/bolt";
+import { App, type SayFn } from "@slack/bolt";
 import type { WebClient } from "@slack/web-api";
 import type { KnownBlock } from "@slack/types";
 import type {
@@ -65,6 +65,7 @@ interface QueuedMessage {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   retries: number;
+  retryAfter?: number;
   lastAttempt?: number;
 }
 
@@ -142,7 +143,10 @@ export class SlackChannel implements IChannelAdapter {
       });
 
       this.registerEventHandlers();
-      registerSlashCommands(this.app);
+      registerSlashCommands(this.app, {
+        allowedWorkspaces: this.config.allowedWorkspaces,
+        allowedUserIds: this.config.allowedUserIds,
+      });
 
       await this.app.start();
 
@@ -213,7 +217,11 @@ export class SlackChannel implements IChannelAdapter {
 
   private startQueueProcessor(): void {
     this.queueInterval = setInterval(() => {
-      this.processMessageQueue();
+      this.processMessageQueue().catch((error) => {
+        this.logger.error("Queue processor error", {
+          error: sanitizeError(error),
+        });
+      });
     }, QUEUE_PROCESS_INTERVAL_MS);
   }
 
@@ -256,12 +264,18 @@ export class SlackChannel implements IChannelAdapter {
     this.rateLimited = false;
 
     // Process batch of messages
+    const now = Date.now();
     const batchSize = Math.min(MESSAGE_BATCH_SIZE, this.messageQueue.length);
     const processedIds: string[] = [];
 
     for (let i = 0; i < batchSize; i++) {
       const message = this.messageQueue[i];
       if (!message) break;
+
+      // Skip messages waiting for exponential backoff retry
+      if (message.retryAfter && now < message.retryAfter) {
+        continue;
+      }
 
       try {
         await this.processQueuedMessage(message);
@@ -282,21 +296,13 @@ export class SlackChannel implements IChannelAdapter {
           message.reject(error instanceof Error ? error : new Error(String(error)));
           processedIds.push(message.id);
         } else {
+          // Set retryAfter timestamp with exponential backoff + jitter
           const delay = Math.min(
             RETRY_BASE_DELAY_MS * Math.pow(2, message.retries - 1),
             MAX_RETRY_DELAY_MS,
           );
-
-          // Move to end of queue with delay
-          setTimeout(() => {
-            // Message will be retried in next cycle
-          }, delay);
-          processedIds.push(message.id);
-          const msg = this.messageQueue.splice(i, 1)[0];
-          if (msg) {
-            this.messageQueue.push(msg);
-            i--; // Adjust index
-          }
+          const jitter = Math.random() * delay * 0.1;
+          message.retryAfter = Date.now() + delay + jitter;
         }
       }
     }
@@ -641,9 +647,9 @@ export class SlackChannel implements IChannelAdapter {
       await this.handleIncomingMessage(message as SlackMessageEvent, say);
     });
 
-    this.app.message(directMention as unknown as string, async ({ message, say }) => {
-      await this.handleIncomingMessage(message as SlackMessageEvent, say);
-    });
+    // directMention handler removed — the general message handler above already
+    // processes all messages (including direct mentions), so a separate handler
+    // would cause duplicate processing.
 
     this.app.action(/confirm_.*/, async ({ ack, body, action }) => {
       await ack();
@@ -773,8 +779,8 @@ export class SlackChannel implements IChannelAdapter {
     const incomingMessage: IncomingMessage = {
       channelType: "slack",
       chatId: channelId,
-      userId: userId,
-      text: text,
+      userId,
+      text,
       attachments: attachments.length > 0 ? attachments : undefined,
       replyTo: threadTs,
       timestamp: new Date(Number(message.ts) * 1000),

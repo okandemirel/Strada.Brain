@@ -53,8 +53,8 @@ describe("Slack Commands", () => {
       expect(isValidWorkspace("T789", ["T123", "T456"])).toBe(false);
     });
 
-    it("should allow all when no restrictions", () => {
-      expect(isValidWorkspace("T123", [])).toBe(true);
+    it("should deny all when no restrictions configured", () => {
+      expect(isValidWorkspace("T123", [])).toBe(false);
     });
   });
 
@@ -67,8 +67,8 @@ describe("Slack Commands", () => {
       expect(isValidUser("U789", ["U123", "U456"])).toBe(false);
     });
 
-    it("should allow all when no restrictions", () => {
-      expect(isValidUser("U123", [])).toBe(true);
+    it("should deny all when no restrictions configured", () => {
+      expect(isValidUser("U123", [])).toBe(false);
     });
   });
 });

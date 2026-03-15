@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import type { MetricsCollector } from "./metrics.js";
@@ -143,6 +143,28 @@ interface DashboardSoulLoader {
  *   GET /health     — Health check (liveness)
  *   GET /ready      — Readiness check (deep health)
  */
+
+/**
+ * Timing-safe string comparison to prevent timing attacks on token validation.
+ * Handles different-length strings by comparing against a dummy buffer to avoid
+ * leaking length information.
+ */
+function timingSafeTokenCompare(a: string, b: string): boolean {
+  if (!a || !b) return false;
+
+  const bufA = Buffer.from(a, "utf-8");
+  const bufB = Buffer.from(b, "utf-8");
+
+  if (bufA.length !== bufB.length) {
+    // Compare against a same-length dummy to avoid timing leak on length
+    const dummy = Buffer.alloc(bufA.length);
+    timingSafeEqual(bufA, dummy);
+    return false;
+  }
+
+  return timingSafeEqual(bufA, bufB);
+}
+
 export class DashboardServer {
   private readonly port: number;
   private readonly metrics: MetricsCollector;
@@ -451,7 +473,7 @@ export class DashboardServer {
         }
         const authHeader = req.headers["authorization"] as string | undefined;
         const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
-        if (!token || token !== this.dashboardToken) {
+        if (!token || !timingSafeTokenCompare(token, this.dashboardToken)) {
           res.writeHead(401, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Authentication required" }));
           return;
@@ -734,14 +756,17 @@ export class DashboardServer {
       // POST /api/deployment/check -- Trigger readiness check (Plan 25-03)
       // SECURITY: Requires dashboard token auth (runs test commands via spawn)
       if (url === "/api/deployment/check" && req.method === "POST") {
-        if (this.dashboardToken) {
-          const authHeader = req.headers["authorization"] as string | undefined;
-          const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
-          if (!token || token !== this.dashboardToken) {
-            res.writeHead(401, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Authentication required" }));
-            return;
-          }
+        if (!this.dashboardToken) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Dashboard authentication not configured" }));
+          return;
+        }
+        const authHeader = req.headers["authorization"] as string | undefined;
+        const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
+        if (!token || !timingSafeTokenCompare(token, this.dashboardToken)) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Authentication required" }));
+          return;
         }
         if (!this.readinessChecker) {
           res.writeHead(200, { "Content-Type": "application/json" });
@@ -891,7 +916,15 @@ export class DashboardServer {
 
       if (url === "/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok" }));
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            timestamp: new Date().toISOString(),
+            channel: "dashboard",
+            uptime: process.uptime(),
+            clients: 0,
+          }),
+        );
         return;
       }
 

@@ -138,7 +138,9 @@ export class AgentDBMemory implements IUnifiedMemory {
   private isInitialized = false;
   private searchTimes: number[] = [];
   private tieringTimer: ReturnType<typeof setInterval> | null = null;
+  private tieringParams: { intervalMs: number; promotionThreshold: number; demotionTimeoutDays: number } | null = null;
   private sqliteDb: Database.Database | null = null;
+  private sqliteInitFailed = false;
   private sqliteStatements: Map<string, Database.Statement> = new Map();
   private decayConfig: MemoryDecayConfig | null = null;
   private userProfileStore: UserProfileStore | null = null;
@@ -178,6 +180,12 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       // Initialize SQLite persistence
       this.initSqlite();
+
+      if (this.sqliteInitFailed) {
+        getLoggerSafe().warn(
+          "[AgentDBMemory] Running in degraded mode — SQLite persistence unavailable",
+        );
+      }
 
       // Initialize user profile store (shares SQLite DB)
       if (this.sqliteDb) {
@@ -309,6 +317,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   startAutoTiering(intervalMs: number, promotionThreshold: number, demotionTimeoutDays: number): void {
     if (this.tieringTimer) return;
+    this.tieringParams = { intervalMs, promotionThreshold, demotionTimeoutDays };
     this.tieringTimer = setInterval(
       () => this.autoTieringSweep(promotionThreshold, demotionTimeoutDays)
         .catch(e => getLoggerSafe().error("[AgentDBMemory] Auto-tiering sweep failed", { error: String(e) })),
@@ -1237,6 +1246,10 @@ export class AgentDBMemory implements IUnifiedMemory {
       };
     }
 
+    if (this.sqliteInitFailed) {
+      issues.push("SQLite initialization failed — persistence unavailable");
+    }
+
     if (hnswStats.elementCount === 0 && this.entries.size > 0) {
       issues.push("HNSW index empty but entries exist");
     }
@@ -1326,6 +1339,8 @@ export class AgentDBMemory implements IUnifiedMemory {
       return;
     }
     this.rebuildInProgress = true;
+    const wasTiering = this.tieringTimer !== null;
+    this.stopAutoTiering();
     try {
     getLoggerSafe().info("[AgentDBMemory] Starting HNSW index rebuild with new dimensions", {
       dimensions: this.config.dimensions,
@@ -1427,6 +1442,13 @@ export class AgentDBMemory implements IUnifiedMemory {
     });
     } finally {
       this.rebuildInProgress = false;
+      if (wasTiering && this.tieringParams) {
+        this.startAutoTiering(
+          this.tieringParams.intervalMs,
+          this.tieringParams.promotionThreshold,
+          this.tieringParams.demotionTimeoutDays,
+        );
+      }
     }
   }
 
@@ -1699,6 +1721,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         },
       );
       this.sqliteDb = null;
+      this.sqliteInitFailed = true;
     }
   }
 
@@ -1720,16 +1743,16 @@ export class AgentDBMemory implements IUnifiedMemory {
    * Serialize an embedding vector to a Buffer for SQLite BLOB storage.
    */
   private embeddingToBuffer(embedding: number[] | Vector<number>): Buffer {
-    const float64 = new Float64Array(embedding as number[]);
-    return Buffer.from(float64.buffer);
+    const float32 = new Float32Array(embedding as number[]);
+    return Buffer.from(float32.buffer);
   }
 
   /**
    * Deserialize a Buffer from SQLite BLOB back to a number array.
    */
   private bufferToEmbedding(buf: Buffer): Vector<number> {
-    const float64 = new Float64Array(buf.buffer, buf.byteOffset, buf.byteLength / 8);
-    return Array.from(float64) as Vector<number>;
+    const float32 = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+    return Array.from(float32) as Vector<number>;
   }
 
   /**

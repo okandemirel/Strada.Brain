@@ -107,7 +107,12 @@ export class SetupWizard {
       this.onComplete = resolve;
     });
 
-    // Stop the wizard server
+    // Don't stop the wizard server yet — let the caller (index.ts) stop it
+    // after the main app is ready, so the frontend can keep polling /health.
+  }
+
+  /** Stops the wizard server. Called by the app after bootstrap completes. */
+  async shutdown(): Promise<void> {
     await this.stop();
   }
 
@@ -410,6 +415,14 @@ export class SetupWizard {
     if (config._channel && KNOWN_CHANNELS.has(String(config._channel))) {
       lines.push("", "# Channel", `DEFAULT_CHANNEL=${sanitizeEnvValue(String(config._channel))}`);
     }
+
+    // Write the port so the main app starts on the same port as the wizard
+    lines.push(
+      "",
+      "# Web Channel",
+      `WEB_CHANNEL_PORT=${this.port}`,
+      `DASHBOARD_PORT=${this.port + 1}`,
+    );
 
     // Always add some defaults
     lines.push(

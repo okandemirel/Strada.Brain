@@ -29,6 +29,16 @@ export class CLIChannel implements IChannelAdapter {
       output: process.stdout,
     });
 
+    // Handle stdin EOF (Ctrl+D or piped input ending) to prevent infinite hang
+    this.rl.on("close", () => {
+      if (this.healthy) {
+        console.log("\nStdin closed (EOF). Shutting down CLI...");
+        this.healthy = false;
+        this.rl = null;
+        process.kill(process.pid, "SIGINT");
+      }
+    });
+
     this.healthy = true;
 
     console.log("\n=== Strada Brain CLI ===");

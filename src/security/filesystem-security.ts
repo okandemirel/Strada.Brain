@@ -132,8 +132,9 @@ export class ChrootJail {
     // Resolve within chroot
     const resolved = resolve(this.config.rootPath, normalized);
 
-    // Ensure resolved path is within chroot
-    if (!resolved.startsWith(this.config.rootPath)) {
+    // Ensure resolved path is within chroot (append separator to prevent /app matching /application)
+    const jail = this.config.rootPath.endsWith("/") ? this.config.rootPath : this.config.rootPath + "/";
+    if (resolved !== this.config.rootPath && !resolved.startsWith(jail)) {
       return { valid: false, error: "Path escapes chroot jail" };
     }
 
@@ -141,7 +142,8 @@ export class ChrootJail {
     if (this.config.allowedPaths.length > 0) {
       const inAllowedPath = this.config.allowedPaths.some((allowed) => {
         const allowedResolved = resolve(this.config.rootPath, allowed);
-        return resolved.startsWith(allowedResolved);
+        const allowedJail = allowedResolved.endsWith("/") ? allowedResolved : allowedResolved + "/";
+        return resolved === allowedResolved || resolved.startsWith(allowedJail);
       });
 
       if (!inAllowedPath) {
@@ -279,8 +281,13 @@ export class ChrootJail {
    * Restore from backup
    */
   async restoreFromBackup(backupPath: string, targetPath?: string): Promise<void> {
-    const content = await readFile(backupPath);
-    
+    const pathCheck = this.resolvePath(backupPath);
+    if (!pathCheck.valid) {
+      throw new Error(pathCheck.error);
+    }
+
+    const content = await readFile(pathCheck.resolved!);
+
     const relativePath = targetPath || this.extractOriginalPath(backupPath);
     
     await this.writeFile(relativePath, content, { createBackup: false });

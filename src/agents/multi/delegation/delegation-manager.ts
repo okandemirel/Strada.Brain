@@ -206,9 +206,8 @@ export class DelegationManager {
     effectiveTier: ModelTier;
   } {
     const typeConfig = this.resolveTypeConfig(request.type);
-    this.checkConcurrency(request.parentAgentId);
-    // Reserve concurrency slot atomically after check to prevent TOCTOU race
-    this.incrementConcurrency(request.parentAgentId);
+    // Atomically check + reserve concurrency slot to prevent TOCTOU race
+    this.acquireConcurrencySlot(request.parentAgentId);
 
     const effectiveTier = this.opts.tierRouter.getTypeEffectiveTier(
       request.type,
@@ -432,17 +431,17 @@ export class DelegationManager {
     return typeConfig;
   }
 
-  private checkConcurrency(parentAgentId: string): void {
+  /**
+   * Atomically check concurrency limit and reserve a slot in one operation.
+   * Eliminates the TOCTOU race between the old separate check + increment calls.
+   */
+  private acquireConcurrencySlot(parentAgentId: string): void {
     const current = this.parentConcurrency.get(parentAgentId) ?? 0;
     if (current >= this.opts.config.maxConcurrentPerParent) {
       throw new Error(
         `Max concurrent delegations (${this.opts.config.maxConcurrentPerParent}) exceeded for parent ${parentAgentId}`,
       );
     }
-  }
-
-  private incrementConcurrency(parentAgentId: string): void {
-    const current = this.parentConcurrency.get(parentAgentId) ?? 0;
     this.parentConcurrency.set(parentAgentId, current + 1);
   }
 

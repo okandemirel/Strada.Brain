@@ -7,6 +7,7 @@ vi.mock("node:readline", () => {
     createInterface: vi.fn().mockReturnValue({
       question: vi.fn(),
       close: vi.fn(),
+      on: vi.fn(),
     }),
   };
 });
@@ -28,6 +29,7 @@ describe("CLIChannel", () => {
     vi.mocked(readline.createInterface).mockReturnValue({
       question: vi.fn(),
       close: vi.fn(),
+      on: vi.fn(),
     } as any);
     channel = new CLIChannel();
   });

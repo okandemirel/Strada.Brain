@@ -259,6 +259,12 @@ export class HeartbeatLoop {
           this.budgetExceededEmitted = true;
         }
         break;
+      } else {
+        // Budget recovered -- reset flags so events fire again on next breach
+        if (this.budgetExceededEmitted) {
+          this.budgetExceededEmitted = false;
+          this.budgetWarningEmitted = false;
+        }
       }
 
       // 4. Check warning threshold

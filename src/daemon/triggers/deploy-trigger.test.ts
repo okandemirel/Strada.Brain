@@ -155,6 +155,10 @@ describe("DeployTrigger", () => {
       trigger.setCachedReadiness(createReadyResult());
       trigger.onFired(new Date());
 
+      // Mock getPending to return a matching entry so proposalPending stays true
+      vi.mocked(approvalQueue.getPending).mockReturnValue([
+        { triggerName: "deploy-readiness", id: "approval-1", toolName: "deployment", params: {}, status: "pending" as const, createdAt: Date.now(), expiresAt: Date.now() + 1800000 },
+      ]);
       expect(trigger.shouldFire(new Date())).toBe(false);
     });
 
@@ -219,6 +223,10 @@ describe("DeployTrigger", () => {
       trigger.setCachedReadiness(createReadyResult());
       trigger.onFired(new Date());
 
+      // Mock getPending to return a matching entry so proposalPending stays true
+      vi.mocked(approvalQueue.getPending).mockReturnValue([
+        { triggerName: "deploy-readiness", id: "approval-1", toolName: "deployment", params: {}, status: "pending" as const, createdAt: Date.now(), expiresAt: Date.now() + 1800000 },
+      ]);
       expect(trigger.shouldFire(new Date())).toBe(false);
     });
   });
@@ -299,6 +307,11 @@ describe("DeployTrigger", () => {
     it("clears proposalPending on decision", async () => {
       trigger.setCachedReadiness(createReadyResult());
       trigger.onFired(new Date());
+
+      // Mock getPending to return a matching entry so proposalPending stays true
+      vi.mocked(approvalQueue.getPending).mockReturnValue([
+        { triggerName: "deploy-readiness", id: "approval-1", toolName: "deployment", params: {}, status: "pending" as const, createdAt: Date.now(), expiresAt: Date.now() + 1800000 },
+      ]);
       expect(trigger.shouldFire(new Date())).toBe(false);
 
       await trigger.onApprovalDecided("approved", "proposal-1");

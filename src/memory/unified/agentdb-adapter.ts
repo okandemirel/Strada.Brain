@@ -89,7 +89,9 @@ export class AgentDBAdapter implements IMemoryManager {
         return ok(await this.agentdb.retrieve(query, options));
       }
 
-      return ok(await this.agentdb.retrieveSemantic(query, { limit: options.limit }));
+      // Thread pre-computed embedding to avoid redundant embedding calls
+      const embedding = "embedding" in options ? (options as { embedding?: number[] }).embedding : undefined;
+      return ok(await this.agentdb.retrieveSemantic(query, { limit: options.limit, embedding }));
     } catch (e) {
       return err(e instanceof Error ? e : new Error(String(e)));
     }

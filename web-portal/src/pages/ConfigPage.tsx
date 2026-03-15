@@ -20,7 +20,10 @@ export default function ConfigPage() {
 
   useEffect(() => {
     fetch('/api/config')
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`Config fetch failed (${r.status})`)
+        return r.json()
+      })
       .then(setData)
       .catch(e => setError(e.message))
   }, [])

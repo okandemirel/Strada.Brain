@@ -300,8 +300,8 @@ describe("WhatsAppChannel", () => {
         DisconnectReason: { loggedOut: 401 },
       }));
 
-      // Create a channel with no allowed-number restriction
-      connectedChannel = new WhatsAppChannel(".test-session", []);
+      // Create a channel with the test sender number allowed
+      connectedChannel = new WhatsAppChannel(".test-session", ["chat1"]);
       await connectedChannel.connect();
 
       // Simulate connection open

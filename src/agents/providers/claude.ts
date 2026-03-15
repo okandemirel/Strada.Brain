@@ -103,12 +103,8 @@ export class ClaudeProvider implements IAIProvider {
   async healthCheck(): Promise<boolean> {
     const logger = getLogger();
     try {
-      // Use a minimal API call to verify the key works
-      await this.client.messages.create({
-        model: this.model,
-        max_tokens: 1,
-        messages: [{ role: "user", content: "ping" }],
-      });
+      // List models to verify API key — no tokens consumed
+      await this.client.models.list({ limit: 1 });
       return true;
     } catch (err) {
       logger.warn("Claude health check failed", {

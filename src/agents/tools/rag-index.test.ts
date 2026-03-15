@@ -3,6 +3,10 @@ import { RAGIndexTool } from "./rag-index.js";
 import { createToolContext } from "../../test-helpers.js";
 import type { IRAGPipeline, IndexingStats, RAGSearchResult } from "../../rag/rag.interface.js";
 
+vi.mock("../../security/path-guard.js", () => ({
+  validatePath: vi.fn().mockResolvedValue({ valid: true, fullPath: "/test/project" }),
+}));
+
 vi.mock("node:fs/promises", () => ({
   readFile: vi.fn().mockResolvedValue("public class Foo {}"),
 }));

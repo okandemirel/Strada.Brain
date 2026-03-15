@@ -162,6 +162,9 @@ export class Daemon {
       logger.info(`Daemon received ${signal}`);
       void this.stop().then(() => {
         process.exit(0);
+      }).catch((err) => {
+        logger.error("Error during daemon shutdown", { error: (err as Error).message });
+        process.exit(1);
       });
     };
 

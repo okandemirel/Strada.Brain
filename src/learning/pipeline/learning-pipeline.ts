@@ -563,11 +563,12 @@ export class LearningPipeline {
       proposal.status, proposal.proposedAt
     );
 
-    const updatedInstinct: Instinct = { 
-      ...instinct, 
+    const evolvedInstinctId = createInstinctId();
+    const updatedInstinct: Instinct = {
+      ...instinct,
       status: "evolved",
-      evolvedTo: proposal.id as InstinctId,
-      updatedAt: Date.now() as TimestampMs 
+      evolvedTo: evolvedInstinctId,
+      updatedAt: Date.now() as TimestampMs
     };
     this.storage.updateInstinct(updatedInstinct);
 

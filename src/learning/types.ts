@@ -753,6 +753,7 @@ export function calculateAverageScore(dimensions: VerdictDimensions): Normalized
     dimensions.maintainability,
   ].filter((v): v is NormalizedScore => v !== undefined);
   
+  if (values.length === 0) return 0.5 as NormalizedScore;
   const sum = values.reduce((a, b) => a + b, 0);
   return (sum / values.length) as NormalizedScore;
 }
@@ -765,7 +766,7 @@ export function updateInstinctStats(
   success: boolean,
   executionMs: number
 ): InstinctStats {
-  const total = stats.timesApplied + stats.timesFailed + (success ? 1 : 0) + (success ? 0 : 1);
+  const total = stats.timesApplied + stats.timesFailed + 1;
   const successes = stats.timesApplied + (success ? 1 : 0);
   
   return {

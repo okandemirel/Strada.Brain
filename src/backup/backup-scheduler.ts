@@ -5,7 +5,7 @@
 
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 // Cron-like pattern parser
@@ -372,13 +372,20 @@ export class BackupScheduler {
      */
     private calculateLatestBackupChecksum(): string | undefined {
         try {
-            const { execSync } = require('child_process');
-            const latest = execSync(
-                `ls -t ${this.config.backupDir}/backup_*.tar.gz 2>/dev/null | head -1`
-            ).toString().trim();
-            
-            if (latest) {
-                return execSync(`sha256sum "${latest}" | awk '{print $1}'`).toString().trim();
+            // Find the latest backup file using safe filesystem APIs instead of shell interpolation
+            const files = readdirSync(this.config.backupDir)
+                .filter(f => f.startsWith('backup_') && f.endsWith('.tar.gz'))
+                .map(f => {
+                    const fullPath = join(this.config.backupDir, f);
+                    return { path: fullPath, mtime: statSync(fullPath).mtimeMs };
+                })
+                .sort((a, b) => b.mtime - a.mtime);
+
+            if (files[0]) {
+                const latest = files[0].path;
+                const hash = createHash('sha256');
+                hash.update(readFileSync(latest));
+                return hash.digest('hex');
             }
         } catch {
             // Ignore errors
@@ -457,7 +464,6 @@ export class BackupScheduler {
      */
     async verifyBackup(backupPath: string): Promise<boolean> {
         return new Promise((resolve) => {
-            const { spawn } = require('child_process');
             const tar = spawn('tar', ['-tzf', backupPath]);
             
             tar.on('close', (code: number | null) => {
@@ -485,16 +491,28 @@ export class BackupScheduler {
     
     /**
      * Cleanup old backups
+     * Uses pure Node.js APIs to avoid platform-specific `find` behavior
+     * (BSD find on macOS doesn't reliably support `-print` after `-delete`)
      */
     async cleanupOldBackups(): Promise<number> {
-        const { execSync } = require('child_process');
-        
         try {
-            const result = execSync(
-                `find ${this.config.backupDir} -name "backup_*.tar.gz" -mtime +${this.config.retentionDays} -delete -print | wc -l`
-            ).toString().trim();
-            
-            return parseInt(result, 10) || 0;
+            const retentionMs = this.config.retentionDays * 24 * 60 * 60 * 1000;
+            const cutoff = Date.now() - retentionMs;
+            let deleted = 0;
+
+            const files = readdirSync(this.config.backupDir)
+                .filter(f => f.startsWith('backup_') && f.endsWith('.tar.gz'));
+
+            for (const file of files) {
+                const fullPath = join(this.config.backupDir, file);
+                const stat = statSync(fullPath);
+                if (stat.mtimeMs < cutoff) {
+                    unlinkSync(fullPath);
+                    deleted++;
+                }
+            }
+
+            return deleted;
         } catch {
             return 0;
         }

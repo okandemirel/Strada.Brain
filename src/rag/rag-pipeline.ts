@@ -317,9 +317,14 @@ export class RAGPipeline implements IRAGPipeline {
     const minScore = options?.minScore ?? DEFAULT_MIN_SCORE;
     const candidateMultiplier = options?.candidateMultiplier ?? DEFAULT_CANDIDATE_MULTIPLIER;
 
-    // Embed the query.
-    const embeddingResult = await this.embeddingProvider.embed([query]);
-    const queryVector = embeddingResult.embeddings[0]!;
+    // Use pre-computed embedding if provided, otherwise embed the query.
+    let queryVector: number[];
+    if (options?.queryEmbedding) {
+      queryVector = options.queryEmbedding;
+    } else {
+      const embeddingResult = await this.embeddingProvider.embed([query]);
+      queryVector = embeddingResult.embeddings[0]!;
+    }
 
     // Determine which store to use for search
     const store = this.hnswStore ?? this.vectorStore;

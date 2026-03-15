@@ -7,10 +7,11 @@
 
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { validateUrlWithConfig, DEFAULT_SECURITY_CONFIG } from "../../security/browser-security.js";
+import { validatePath } from "../../security/path-guard.js";
 import { getLogger } from "../../utils/logger.js";
 import { createWriteStream } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -210,7 +211,11 @@ export class HttpClientTool implements ITool {
   // ─── Response Handling ───────────────────────────────────────────────────────
 
   private async handleDownload(response: Response, downloadPath: string, context: ToolContext): Promise<ToolExecutionResult> {
-    const fullPath = join(context.workingDirectory, downloadPath);
+    const pathCheck = await validatePath(context.workingDirectory, downloadPath);
+    if (!pathCheck.valid) {
+      return { content: `Download path rejected: ${pathCheck.error}`, isError: true };
+    }
+    const fullPath = pathCheck.fullPath;
     await mkdir(dirname(fullPath), { recursive: true });
 
     const contentLength = response.headers.get("content-length");

@@ -183,6 +183,21 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
             msg.message.videoMessage?.caption ??
             "";
 
+          // Auth check — deny all if no allowed numbers configured (like Discord's pattern)
+          {
+            const normalized = senderId.replace(/@.*$/, "");
+            if (this.allowedNumbers.size === 0) {
+              logger.warn("WhatsApp: no allowed numbers configured, denying all", { senderId });
+              void this.sendText(chatId, "Unauthorized. Contact the admin.");
+              continue;
+            }
+            if (!this.allowedNumbers.has(normalized)) {
+              logger.warn("WhatsApp: unauthorized number", { senderId });
+              void this.sendText(chatId, "Unauthorized. Contact the admin.");
+              continue;
+            }
+          }
+
           // 4.4 Detect media attachments
           const attachments: Attachment[] = [];
           const mediaEntries: Array<{
@@ -256,16 +271,6 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
 
           // Skip messages with no text and no attachments
           if (!text && attachments.length === 0) continue;
-
-          // Auth check
-          if (this.allowedNumbers.size > 0) {
-            const normalized = senderId.replace(/@.*$/, "");
-            if (!this.allowedNumbers.has(normalized)) {
-              logger.warn("WhatsApp: unauthorized number", { senderId });
-              void this.sendText(chatId, "Unauthorized. Contact the admin.");
-              continue;
-            }
-          }
 
           // 4.3 Rate limit check
           const rateResult = this.rateLimiter.checkMessageRate(senderId);

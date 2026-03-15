@@ -3,9 +3,9 @@ import { formatUptime } from '../utils/format'
 
 interface HealthData {
   status: string
-  channel: string
-  uptime: number
-  clients: number
+  channel?: string
+  uptime?: number
+  clients?: number
 }
 
 interface ChannelInfo {
@@ -25,6 +25,16 @@ const CHANNEL_ICONS: Record<string, string> = {
   cli: '>',
 }
 
+function statusDotClass(ch: ChannelInfo): string {
+  if (!ch.enabled) return 'off'
+  return ch.healthy ? 'ok' : 'warn'
+}
+
+function statusLabel(ch: ChannelInfo): string {
+  if (!ch.enabled) return 'Disabled'
+  return ch.healthy ? 'Active' : 'Degraded'
+}
+
 export default function ChannelsPage() {
   const [channels, setChannels] = useState<ChannelInfo[]>([])
   const [health, setHealth] = useState<HealthData | null>(null)
@@ -42,12 +52,13 @@ export default function ChannelsPage() {
         setChannels(channelsData.channels)
       } else if (healthData) {
         // Synthesize from health endpoint
+        const clientCount = healthData.clients ?? 0
         setChannels([{
           name: healthData.channel || 'web',
           type: healthData.channel || 'web',
           enabled: true,
           healthy: healthData.status === 'ok',
-          detail: `${healthData.clients} client${healthData.clients !== 1 ? 's' : ''} connected`,
+          detail: `${clientCount} client${clientCount !== 1 ? 's' : ''} connected`,
         }])
       }
       setLoading(false)
@@ -83,11 +94,11 @@ export default function ChannelsPage() {
             </div>
             <div className="admin-stat-row">
               <span className="admin-stat-label">Uptime</span>
-              <span className="admin-stat-value">{formatUptime(health.uptime)}</span>
+              <span className="admin-stat-value">{formatUptime(health.uptime ?? 0)}</span>
             </div>
             <div className="admin-stat-row">
               <span className="admin-stat-label">Clients</span>
-              <span className="admin-stat-value">{health.clients}</span>
+              <span className="admin-stat-value">{health.clients ?? 0}</span>
             </div>
           </div>
         </div>
@@ -112,8 +123,8 @@ export default function ChannelsPage() {
                   {ch.detail && <div className="channel-detail">{ch.detail}</div>}
                 </div>
                 <div className={`channel-status ${ch.enabled && ch.healthy ? 'active' : 'inactive'}`}>
-                  <span className={`status-dot-inline ${ch.enabled && ch.healthy ? 'ok' : ch.enabled ? 'warn' : 'off'}`} />
-                  {ch.enabled ? (ch.healthy ? 'Active' : 'Degraded') : 'Disabled'}
+                  <span className={`status-dot-inline ${statusDotClass(ch)}`} />
+                  {statusLabel(ch)}
                 </div>
               </div>
             ))}

@@ -7,6 +7,7 @@ import type {
   ProviderCapabilities,
   IStreamingProvider,
 } from "./provider.interface.js";
+import type { MessageContent } from "./provider-core.interface.js";
 import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
@@ -27,15 +28,42 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     }
     this.providers = providers;
     this.name = `chain(${providers.map((p) => p.name).join("→")})`;
-    // Aggregate capabilities - conservative approach
+    // Aggregate capabilities - use primary provider's limits where sensible
     this.capabilities = {
-      maxTokens: Math.min(...providers.map((p) => p.capabilities.maxTokens)),
+      maxTokens: providers[0]!.capabilities.maxTokens,
       streaming: providers.some((p) => p.capabilities.streaming),
       structuredStreaming: providers.some((p) => p.capabilities.structuredStreaming),
       toolCalling: providers.every((p) => p.capabilities.toolCalling),
       vision: providers.some((p) => p.capabilities.vision),
       systemPrompt: providers.every((p) => p.capabilities.systemPrompt),
     };
+  }
+
+  /**
+   * Strip image content blocks from messages when the target provider
+   * doesn't support vision. Text-only content is preserved as-is.
+   */
+  private stripImages(
+    messages: ConversationMessage[],
+    provider: IAIProvider
+  ): ConversationMessage[] {
+    if (provider.capabilities.vision) return messages;
+
+    return messages.map((msg) => {
+      if (msg.role !== "user" || typeof msg.content === "string") return msg;
+      const filtered = (msg.content as MessageContent[]).filter(
+        (block) => block.type !== "image"
+      );
+      // If all blocks were images, replace with a placeholder so the message isn't empty
+      if (filtered.length === 0) {
+        return { ...msg, content: "[image removed — provider does not support vision]" };
+      }
+      // If only text remains, collapse to plain string for simplicity
+      if (filtered.length === 1 && filtered[0]!.type === "text") {
+        return { ...msg, content: filtered[0]!.text };
+      }
+      return { ...msg, content: filtered };
+    }) as ConversationMessage[];
   }
 
   async chat(
@@ -48,7 +76,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i]!;
       try {
-        const response = await provider.chat(systemPrompt, messages, tools);
+        const safeMessages = this.stripImages(messages, provider);
+        const response = await provider.chat(systemPrompt, safeMessages, tools);
         if (i > 0) {
           logger.info("Fallback provider succeeded", {
             provider: provider.name,
@@ -92,11 +121,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i]!;
       try {
+        const safeMessages = this.stripImages(messages, provider);
         // Use streaming if available, fall back to non-streaming
         if (supportsStreaming(provider)) {
-          return await provider.chatStream(systemPrompt, messages, tools, onChunk);
+          return await provider.chatStream(systemPrompt, safeMessages, tools, onChunk);
         }
-        return await provider.chat(systemPrompt, messages, tools);
+        return await provider.chat(systemPrompt, safeMessages, tools);
       } catch (error) {
         const isLast = i === this.providers.length - 1;
         const errorMsg = error instanceof Error ? error.message : String(error);

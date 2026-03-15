@@ -49,9 +49,13 @@ export class AuthManager {
    * Check if a Slack user is authorized to use the bot.
    */
   isSlackUserAllowed(userId: string): boolean {
-    // If no restrictions set, allow all
+    // If no allowed IDs configured, deny all (least privilege)
     if (this.allowedSlackIds.size === 0) {
-      return true;
+      getLogger().warn("Slack access denied — no allowed user IDs configured", {
+        userId,
+        channel: "slack",
+      });
+      return false;
     }
 
     const allowed = this.allowedSlackIds.has(userId);
@@ -68,9 +72,13 @@ export class AuthManager {
    * Check if a Slack workspace is authorized.
    */
   isSlackWorkspaceAllowed(workspaceId: string): boolean {
-    // If no restrictions set, allow all
+    // If no allowed workspaces configured, deny all (least privilege)
     if (this.allowedSlackWorkspaces.size === 0) {
-      return true;
+      getLogger().warn("Slack workspace denied — no allowed workspaces configured", {
+        workspaceId,
+        channel: "slack",
+      });
+      return false;
     }
 
     const allowed = this.allowedSlackWorkspaces.has(workspaceId);

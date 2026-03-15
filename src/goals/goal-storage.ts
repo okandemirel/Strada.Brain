@@ -182,6 +182,8 @@ export class GoalStorage {
       getInterruptedTrees: `SELECT * FROM goal_trees WHERE status = 'executing' ORDER BY updated_at DESC LIMIT 20`,
       updateTreeStatus: `UPDATE goal_trees SET status = ?, updated_at = ? WHERE root_id = ?`,
       pruneOldTrees: `DELETE FROM goal_trees WHERE status IN ('completed', 'failed') AND updated_at < ?`,
+      setNodeStartedAt: `UPDATE goal_nodes SET started_at = ? WHERE id = ? AND started_at IS NULL`,
+      setNodeCompletedAt: `UPDATE goal_nodes SET completed_at = ? WHERE id = ?`,
     };
 
     for (const [name, sql] of Object.entries(stmts)) {
@@ -269,22 +271,26 @@ export class GoalStorage {
   ): void {
     this.ensureConnection();
     const now = Date.now();
-    this.getStatement("updateNodeStatus").run(
-      status,
-      result ?? null,
-      error ?? null,
-      now,
-      retryCount ?? 0,
-      redecompositionCount ?? 0,
-      nodeId,
-    );
-    // Also update timing columns
-    if (status === "executing") {
-      this.db!.prepare("UPDATE goal_nodes SET started_at = ? WHERE id = ? AND started_at IS NULL").run(now, nodeId);
-    }
-    if (status === "completed" || status === "failed" || status === "skipped") {
-      this.db!.prepare("UPDATE goal_nodes SET completed_at = ? WHERE id = ?").run(now, nodeId);
-    }
+
+    const transaction = this.db!.transaction(() => {
+      this.getStatement("updateNodeStatus").run(
+        status,
+        result ?? null,
+        error ?? null,
+        now,
+        retryCount ?? 0,
+        redecompositionCount ?? 0,
+        nodeId,
+      );
+      // Update timing columns within the same transaction (using cached statements)
+      if (status === "executing") {
+        this.getStatement("setNodeStartedAt").run(now, nodeId);
+      }
+      if (status === "completed" || status === "failed" || status === "skipped") {
+        this.getStatement("setNodeCompletedAt").run(now, nodeId);
+      }
+    });
+    transaction();
   }
 
   /** Get all trees for a given session */
