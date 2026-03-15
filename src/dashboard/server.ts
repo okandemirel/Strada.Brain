@@ -372,6 +372,11 @@ export class DashboardServer {
       res.setHeader("X-XSS-Protection", "1; mode=block");
       res.setHeader("Referrer-Policy", "no-referrer");
 
+      // All /api/* endpoints require dashboard authentication (except /health and /ready)
+      if (url.startsWith("/api/") && this.dashboardToken) {
+        if (!this.requireDashboardAuth(req, res)) return;
+      }
+
       if (url.startsWith("/api/goals")) {
         // Goal tree data endpoint -- graceful degradation when goalStorage is not available
         if (!this.goalStorage) {
@@ -451,10 +456,8 @@ export class DashboardServer {
         return;
       }
 
-      // Daemon approval management endpoints (POST) — requires dashboard auth
+      // Daemon approval management endpoints (POST)
       if (url.startsWith("/api/daemon/approvals/") && req.method === "POST") {
-        if (!this.requireDashboardAuth(req, res)) return;
-
         const match = url.match(/^\/api\/daemon\/approvals\/([^/]+)\/(approve|deny)$/);
         if (!match) {
           res.writeHead(404, { "Content-Type": "application/json" });
@@ -730,9 +733,7 @@ export class DashboardServer {
       }
 
       // POST /api/deployment/check -- Trigger readiness check (Plan 25-03)
-      // SECURITY: Requires dashboard token auth (runs test commands via spawn)
       if (url === "/api/deployment/check" && req.method === "POST") {
-        if (!this.requireDashboardAuth(req, res)) return;
         if (!this.readinessChecker) {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ enabled: false }));
