@@ -197,6 +197,41 @@ export class SoulLoader {
     }
   }
 
+  /**
+   * Read-only profile content retrieval.
+   * Returns the content of a named profile WITHOUT mutating the default cache.
+   * Safe for concurrent multi-user scenarios.
+   */
+  async getProfileContent(profileName: string): Promise<string | null> {
+    // Defense-in-depth: only allow alphanumeric, dash, underscore
+    if (!/^[a-zA-Z0-9_-]+$/.test(profileName)) {
+      getLogger().warn("Profile name rejected — invalid characters", { profileName });
+      return null;
+    }
+
+    if (profileName === "default") {
+      return this.cache.get("default") ?? null;
+    }
+
+    const fileName = `profiles/${profileName}.md`;
+    const validPath = await this.validateFilePath(fileName);
+    if (!validPath) return null;
+
+    try {
+      const content = await readFile(validPath, "utf-8");
+      if (content.length > MAX_SOUL_FILE_SIZE) {
+        getLogger().warn("Profile file rejected — exceeds size limit", {
+          profileName,
+          size: content.length,
+        });
+        return null;
+      }
+      return content.trim();
+    } catch {
+      return null;
+    }
+  }
+
   private async loadFile(key: string, fileName: string): Promise<boolean> {
     const logger = getLogger();
 

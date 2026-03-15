@@ -146,6 +146,72 @@ describe("SoulLoader", () => {
     });
   });
 
+  describe("getProfileContent", () => {
+    it("returns profile content without mutating default cache", async () => {
+      await writeFile(join(testDir, "soul.md"), "default personality");
+      await mkdir(join(testDir, "profiles"), { recursive: true });
+      await writeFile(join(testDir, "profiles", "casual.md"), "casual personality");
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+
+      const defaultBefore = loader.getContent();
+      const result = await loader.getProfileContent("casual");
+
+      expect(result).toBe("casual personality");
+      expect(loader.getContent()).toBe(defaultBefore);
+      expect(loader.getContent()).toBe("default personality");
+    });
+
+    it("returns null for nonexistent profile", async () => {
+      await writeFile(join(testDir, "soul.md"), "default personality");
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+
+      const result = await loader.getProfileContent("nonexistent");
+      expect(result).toBeNull();
+    });
+
+    it("rejects invalid profile names (path traversal)", async () => {
+      await writeFile(join(testDir, "soul.md"), "default personality");
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+
+      expect(await loader.getProfileContent("../../../etc/passwd")).toBeNull();
+      expect(await loader.getProfileContent("foo/../bar")).toBeNull();
+      expect(await loader.getProfileContent("foo/bar")).toBeNull();
+      expect(await loader.getProfileContent("has spaces")).toBeNull();
+      expect(await loader.getProfileContent("has.dots")).toBeNull();
+    });
+
+    it("returns default cache content for 'default' profile name", async () => {
+      await writeFile(join(testDir, "soul.md"), "default personality");
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+
+      const result = await loader.getProfileContent("default");
+      expect(result).toBe("default personality");
+      expect(result).toBe(loader.getContent());
+    });
+
+    it("returns null when default profile requested but cache is empty", async () => {
+      loader = new SoulLoader(testDir);
+      // Don't initialize — cache has no "default" key
+      const result = await loader.getProfileContent("default");
+      expect(result).toBeNull();
+    });
+
+    it("rejects profile files exceeding size limit", async () => {
+      await writeFile(join(testDir, "soul.md"), "default personality");
+      await mkdir(join(testDir, "profiles"), { recursive: true });
+      await writeFile(join(testDir, "profiles", "huge.md"), "x".repeat(11 * 1024));
+      loader = new SoulLoader(testDir);
+      await loader.initialize();
+
+      const result = await loader.getProfileContent("huge");
+      expect(result).toBeNull();
+    });
+  });
+
   describe("file size limit", () => {
     it("rejects files exceeding 10KB", async () => {
       const bigContent = "x".repeat(11 * 1024); // 11KB
