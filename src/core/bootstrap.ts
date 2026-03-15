@@ -1080,6 +1080,41 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
   }
 
+  // Register extended services for admin pages (tools, sessions, personality, config)
+  if (dashboard) {
+    dashboard.registerExtendedServices({
+      toolRegistry: {
+        getAllTools: () => toolRegistry.getAllTools().map(t => {
+          const meta = toolRegistry.getMetadata(t.name);
+          return {
+            name: t.name,
+            description: t.description,
+            type: meta?.category ?? "builtin",
+          };
+        }),
+      },
+      orchestratorSessions: orchestrator,
+      soulLoader,
+      configSnapshot: (() => {
+        // Flatten nested config once at registration time (config is immutable after bootstrap)
+        const flat: Record<string, unknown> = {};
+        const flatten = (obj: Record<string, unknown>, prefix = "") => {
+          for (const [k, v] of Object.entries(obj)) {
+            if (typeof v === "function") continue;
+            const key = prefix ? `${prefix}.${k}` : k;
+            if (v && typeof v === "object" && !Array.isArray(v) && !(v instanceof Date)) {
+              flatten(v as Record<string, unknown>, key);
+            } else {
+              flat[key] = v;
+            }
+          }
+        };
+        flatten(config as unknown as Record<string, unknown>);
+        return () => flat;
+      })(),
+    });
+  }
+
   // Return result with shutdown function
   return {
     orchestrator,

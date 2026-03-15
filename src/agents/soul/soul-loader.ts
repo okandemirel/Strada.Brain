@@ -5,7 +5,7 @@
  * Security: path traversal protection, symlink resolution, file size limits.
  */
 
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, readdir } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
 import { resolve } from "node:path";
 import { getLogger } from "../../utils/logger.js";
@@ -20,9 +20,12 @@ export class SoulLoader {
   private watchers: FSWatcher[] = [];
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private switchInFlight = false;
+  private activeProfileName = "default";
+  private profileNames: string[] = ["default"];
   private readonly basePath: string;
   private readonly soulFile: string;
   private readonly channelOverrides: Map<string, string>;
+  private readonly channelOverridesRecord: Record<string, string>;
 
   constructor(
     projectPath: string,
@@ -36,6 +39,7 @@ export class SoulLoader {
     this.channelOverrides = new Map(
       Object.entries(options?.channelOverrides ?? {}),
     );
+    this.channelOverridesRecord = Object.fromEntries(this.channelOverrides);
   }
 
   /**
@@ -65,10 +69,23 @@ export class SoulLoader {
       }
     }
 
+    // Scan profiles/ directory for available profiles
+    try {
+      const profilesDir = resolve(this.basePath, "profiles");
+      const entries = await readdir(profilesDir, { withFileTypes: true });
+      this.profileNames = [
+        "default",
+        ...entries.filter(e => e.isFile() && e.name.endsWith(".md")).map(e => e.name.replace(/\.md$/, "")),
+      ];
+    } catch {
+      this.profileNames = ["default"];
+    }
+
     logger.info("SoulLoader initialized", {
       defaultFile: this.soulFile,
       overrides: Array.from(this.channelOverrides.keys()),
       loaded: this.cache.size,
+      profiles: this.profileNames.length,
     });
   }
 
@@ -85,6 +102,27 @@ export class SoulLoader {
   }
 
   /**
+   * Get the name of the currently active personality profile.
+   */
+  getActiveProfile(): string {
+    return this.activeProfileName;
+  }
+
+  /**
+   * Get the list of available profile names (includes "default").
+   */
+  getProfiles(): string[] {
+    return [...this.profileNames];
+  }
+
+  /**
+   * Get channel-specific override mappings.
+   */
+  getChannelOverrides(): Record<string, string> {
+    return this.channelOverridesRecord;
+  }
+
+  /**
    * Shutdown — stop file watchers and debounce timers.
    */
   shutdown(): void {
@@ -97,6 +135,8 @@ export class SoulLoader {
     this.watchers = [];
     this.debounceTimers.clear();
     this.cache.clear();
+    this.activeProfileName = "default";
+    this.profileNames = ["default"];
   }
 
   /**
@@ -189,6 +229,7 @@ export class SoulLoader {
           this.cache.delete("default");
         }
       } else {
+        this.activeProfileName = profileName;
         logger.info("Personality profile switched", { profile: profileName });
       }
       return success;

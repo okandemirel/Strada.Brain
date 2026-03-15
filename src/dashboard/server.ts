@@ -768,7 +768,7 @@ export class DashboardServer {
         return;
       }
 
-      // GET /api/tools -- Registered tools list
+      // GET /api/tools -- Registered tools list (bootstrap provides pre-serialized shape)
       if (url === "/api/tools") {
         const tools = this.toolRegistry?.getAllTools() ?? [];
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -779,10 +779,15 @@ export class DashboardServer {
       // GET /api/channels -- Channel status
       if (url === "/api/channels") {
         const ch = this.channel as unknown as Record<string, unknown> | undefined;
+        const name = ch ? String(ch.name ?? "unknown") : "none";
+        const clientCount = (ch?.clients as Map<string, unknown> | undefined)?.size ?? 0;
         const channelInfo = {
-          name: ch ? ch.name ?? "unknown" : "none",
+          name,
+          type: name,
+          enabled: !!this.channel,
           healthy: this.channel?.isHealthy() ?? false,
-          clients: (ch?.clients as Map<string, unknown> | undefined)?.size ?? 0,
+          clients: clientCount,
+          detail: `${clientCount} client${clientCount !== 1 ? "s" : ""} connected`,
         };
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ channels: [channelInfo] }));
@@ -797,9 +802,12 @@ export class DashboardServer {
           return;
         }
         const sessions = this.orchestratorSessions.getSessions();
+        const channelName = this.channel?.name ?? "unknown";
         const list = Array.from(sessions.entries()).map(([chatId, s]) => ({
-          chatId,
-          lastActivity: s.lastActivity,
+          id: chatId,
+          channel: channelName,
+          startedAt: s.lastActivity instanceof Date ? s.lastActivity.getTime() : Number(s.lastActivity),
+          lastActivity: s.lastActivity instanceof Date ? s.lastActivity.getTime() : Number(s.lastActivity),
           messageCount: s.messageCount,
         }));
         res.writeHead(200, { "Content-Type": "application/json" });
