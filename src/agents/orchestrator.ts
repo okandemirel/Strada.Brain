@@ -183,7 +183,7 @@ export class Orchestrator {
   private readonly dmPolicy: DMPolicy;
   private readonly lastPersistTime = new Map<string, number>();
   private readonly sessionSummarizer?: SessionSummarizer;
-  /* userProfileStore is held by sessionSummarizer; accepted in opts for future direct use */
+  private readonly userProfileStore?: UserProfileStore;
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -232,6 +232,7 @@ export class Orchestrator {
     this.soulLoader = opts.soulLoader ?? null;
     this.dmPolicy = new DMPolicy(opts.channel, opts.dmPolicyConfig);
     this.sessionSummarizer = opts.sessionSummarizer;
+    this.userProfileStore = opts.userProfileStore;
 
     // Build tool registry
     this.tools = new Map();
@@ -757,6 +758,9 @@ export class Orchestrator {
       }
     }, TYPING_INTERVAL_MS);
 
+    // First-run onboarding check (creates minimal profile if needed)
+    this.runOnboarding(chatId);
+
     try {
       await this.runAgentLoop(chatId, session, msg.channelType);
     } catch (error) {
@@ -772,6 +776,18 @@ export class Orchestrator {
       // Persist conversation summary (debounced to avoid excessive writes)
       await this.persistSessionToMemory(chatId, session.messages.slice(-10));
     }
+  }
+
+  /**
+   * First-run onboarding: creates a minimal profile so subsequent messages don't re-trigger.
+   * The actual onboarding questions are driven by the LLM via system prompt directive.
+   */
+  private runOnboarding(chatId: string): void {
+    if (!this.userProfileStore) return;
+    const existing = this.userProfileStore.getProfile(chatId);
+    if (existing) return; // Returning user — skip
+    // Create minimal profile immediately (prevents re-trigger on next message)
+    this.userProfileStore.upsertProfile(chatId, {});
   }
 
   /**
@@ -859,6 +875,20 @@ export class Orchestrator {
         }
       } catch {
         // Analysis cache failure is non-fatal
+      }
+    }
+
+    // First-time user onboarding directive
+    if (this.userProfileStore) {
+      const profile = this.userProfileStore.getProfile(chatId);
+      if (profile && !profile.displayName) {
+        systemPrompt += `\n\n## First-Time User Onboarding
+This is a new user who hasn't been onboarded yet. Before answering their question, warmly introduce yourself and use the ask_user tool to learn about them:
+1. Ask their name (how to address them)
+2. Ask their preferred communication style (casual/formal/minimal - suggest casual as default)
+3. Ask how detailed they want explanations (brief/moderate/detailed)
+After receiving answers, acknowledge them warmly and proceed to answer their original question.
+Be natural and conversational — this should feel like meeting a new colleague, not filling out a form.\n`;
       }
     }
 
