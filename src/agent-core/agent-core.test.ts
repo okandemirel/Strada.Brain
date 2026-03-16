@@ -15,7 +15,7 @@ describe("AgentCore", () => {
     const provider = { chat: vi.fn() };
     const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
     const channel = { sendText: vi.fn() };
-    const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 10 }) };
+    const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) }; // 10% used
 
     const core = new AgentCore(engine, scorer, provider as any, taskManager as any, channel as any, budget);
     await core.tick();
@@ -29,7 +29,7 @@ describe("AgentCore", () => {
     const provider = { chat: vi.fn() };
     const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
     const channel = { sendText: vi.fn() };
-    const budget = { getUsage: () => ({ usedUsd: 9.5, limitUsd: 10, pct: 95 }) }; // 95% used
+    const budget = { getUsage: () => ({ usedUsd: 9.5, limitUsd: 10, pct: 0.95 }) }; // 95% used (decimal)
 
     const core = new AgentCore(engine, scorer, provider as any, taskManager as any, channel as any, budget);
     await core.tick();
@@ -38,6 +38,7 @@ describe("AgentCore", () => {
   });
 
   it("skips tick when rate limited", async () => {
+    vi.useFakeTimers();
     const engine = new ObservationEngine();
     engine.register({ name: "test", collect: () => [createObservation("build", "Build failed", { priority: 90 })] });
     const scorer = new PriorityScorer();
@@ -46,15 +47,20 @@ describe("AgentCore", () => {
     };
     const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
     const channel = { sendText: vi.fn() };
-    const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 10 }) };
+    const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) };
 
     const core = new AgentCore(engine, scorer, provider as any, taskManager as any, channel as any, budget, undefined, { minReasoningIntervalMs: 60_000, minObservationPriority: 30, budgetFloorPct: 10 });
 
-    await core.tick(); // First tick — LLM called
+    // Advance past the initial lastReasoningMs guard
+    vi.advanceTimersByTime(61_000);
+
+    await core.tick(); // First tick — LLM called (past rate limit window)
     expect(provider.chat).toHaveBeenCalledTimes(1);
 
     await core.tick(); // Second immediate tick — rate limited
     expect(provider.chat).toHaveBeenCalledTimes(1); // Still 1
+
+    vi.useRealTimers();
   });
 
   it("prevents concurrent ticks", async () => {
@@ -67,8 +73,10 @@ describe("AgentCore", () => {
     const provider = { chat: vi.fn().mockReturnValue(chatPromise) };
     const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
     const channel = { sendText: vi.fn() };
-    const budget = { getUsage: () => ({ usedUsd: 0, limitUsd: 10, pct: 0 }) };
+    const budget = { getUsage: () => ({ usedUsd: 0, limitUsd: 10, pct: 0.0 }) }; // 0% used (decimal)
 
+    // minReasoningIntervalMs: 0 bypasses rate limit, but lastReasoningMs starts at Date.now()
+    // so we need interval=0 to ensure first tick passes
     const core = new AgentCore(engine, scorer, provider as any, taskManager as any, channel as any, budget, undefined, { minReasoningIntervalMs: 0, minObservationPriority: 0, budgetFloorPct: 10 });
 
     const tick1 = core.tick(); // Starts, blocks on LLM
@@ -95,7 +103,7 @@ describe("AgentCore", () => {
     };
     const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
     const channel = { sendText: vi.fn() };
-    const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 10 }) };
+    const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) }; // 10% used (decimal)
 
     const core = new AgentCore(engine, scorer, provider as any, taskManager as any, channel as any, budget, undefined, { minReasoningIntervalMs: 0, minObservationPriority: 0, budgetFloorPct: 10 });
     await core.tick();
@@ -104,6 +112,7 @@ describe("AgentCore", () => {
       "agent-core",
       "daemon",
       "Fix the build error in src/foo.cs",
+      { origin: "daemon" },
     );
   });
 });

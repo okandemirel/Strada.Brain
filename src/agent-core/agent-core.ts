@@ -22,7 +22,7 @@ export class AgentCore {
   static readonly AGENT_CHANNEL_TYPE = "daemon";
 
   private tickInFlight = false;
-  private lastReasoningMs = 0;
+  private lastReasoningMs = Date.now(); // Init to now to prevent immediate LLM call on restart
   private readonly config: AgentCoreConfig;
   private readonly logger = getLogger();
 
@@ -54,7 +54,8 @@ export class AgentCore {
 
       // Budget guard
       const budget = this.budgetTracker.getUsage();
-      if (budget.pct >= (100 - this.config.budgetFloorPct)) {
+      // budget.pct is a 0.0-1.0 decimal fraction from BudgetTracker
+      if (budget.pct >= (1.0 - this.config.budgetFloorPct / 100)) {
         this.logger.debug("AgentCore: skipping tick — budget floor reached", { budgetPct: budget.pct });
         return;
       }
@@ -99,13 +100,18 @@ export class AgentCore {
 
       const prompt = buildReasoningPrompt({
         observations: ranked,
-        budgetRemainingPct: Math.max(0, 100 - budget.pct),
+        budgetRemainingPct: Math.max(0, Math.round((1.0 - budget.pct) * 100)),
         activeTaskCount,
         learnedInsights,
         recentHistory: this.observationEngine.getHistory(5),
       });
 
-      const response = await this.provider.chat(prompt, [], []);
+      // Reasoning prompt goes as user message, not system prompt
+      const response = await this.provider.chat(
+        "You are an autonomous agent that observes the environment and decides what to do.",
+        [{ role: "user" as const, content: prompt }],
+        [],
+      );
       const decision = parseReasoningResponse(response.text);
 
       this.logger.info("AgentCore decision", {
@@ -123,6 +129,7 @@ export class AgentCore {
               AgentCore.AGENT_CHAT_ID,
               AgentCore.AGENT_CHANNEL_TYPE,
               decision.goal,
+              { origin: "daemon" as const },
             );
             // Record action for dedup
             if (ranked[0]) this.priorityScorer.recordAction(ranked[0]);
@@ -167,5 +174,10 @@ export class AgentCore {
   /** Check if a tick is currently in progress */
   isTickInFlight(): boolean {
     return this.tickInFlight;
+  }
+
+  /** Stop the observation engine and clean up resources */
+  stop(): void {
+    this.observationEngine.stop();
   }
 }

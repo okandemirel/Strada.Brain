@@ -143,9 +143,9 @@ function validateDecision(raw: unknown): ActionDecision {
 
   return {
     action: action as ActionDecision["action"],
-    goal: typeof obj.goal === "string" ? obj.goal : undefined,
-    message: typeof obj.message === "string" ? obj.message : undefined,
-    question: typeof obj.question === "string" ? obj.question : undefined,
-    reasoning: typeof obj.reasoning === "string" ? obj.reasoning : "No reasoning provided",
+    goal: typeof obj.goal === "string" ? obj.goal.slice(0, 2000) : undefined,
+    message: typeof obj.message === "string" ? obj.message.slice(0, 2000) : undefined,
+    question: typeof obj.question === "string" ? obj.question.slice(0, 2000) : undefined,
+    reasoning: typeof obj.reasoning === "string" ? obj.reasoning.slice(0, 2000) : "No reasoning provided",
   };
 }
