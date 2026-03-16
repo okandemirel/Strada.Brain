@@ -162,8 +162,16 @@ export class AutoUpdater {
             VERSION_CHECK_TIMEOUT,
           )
         ).trim();
+        // Check if origin/main has commits we don't have (remote is ahead)
+        const behindCount = (
+          await this.spawnWithTimeout(
+            "git",
+            ["rev-list", "--count", `HEAD..origin/main`],
+            VERSION_CHECK_TIMEOUT,
+          )
+        ).trim();
         return {
-          available: localRev !== remoteRev,
+          available: parseInt(behindCount, 10) > 0,
           currentVersion,
           latestVersion: remoteRev.substring(0, 8),
         };
