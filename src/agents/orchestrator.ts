@@ -664,11 +664,14 @@ export class Orchestrator {
     });
     let systemPrompt = builtPrompt;
 
-    // ─── Background task instinct retrieval ────────────────────────────
+    // ─── PAOR State Machine ──────────────────────────────────────────────
+    let bgAgentState = createInitialState(prompt);
+
     if (this.instinctRetriever) {
       try {
         const insightResult = await this.instinctRetriever.getInsightsForTask(prompt);
         if (insightResult.insights.length > 0) {
+          bgAgentState = { ...bgAgentState, learnedInsights: insightResult.insights };
           const insightsText = insightResult.insights.join("\n");
           systemPrompt += `\n\n## Learned Insights\n${insightsText}\n`;
         }
@@ -676,7 +679,9 @@ export class Orchestrator {
         // Non-fatal
       }
     }
-    // ────────────────────────────────────────────────────────────────
+
+    const BG_REFLECT_INTERVAL = 3;
+    // ────────────────────────────────────────────────────────────────────
 
     // ─── Memory Re-retrieval: create refresher for background path ───
     const bgMemoryRefresher = this.createMemoryRefresher(bgInitialContentHashes);
@@ -698,8 +703,27 @@ export class Orchestrator {
           throw new Error("Task cancelled");
         }
 
+        // ─── PAOR: Build phase-aware system prompt ──────────────────────
+        let activePrompt = systemPrompt;
+        switch (bgAgentState.phase) {
+          case AgentPhase.PLANNING:
+            activePrompt += "\n\n" + buildPlanningPrompt(
+              bgAgentState.taskDescription,
+              bgAgentState.learnedInsights,
+              { enableGoalDetection: false }, // Background tasks don't spawn sub-goals
+            );
+            break;
+          case AgentPhase.EXECUTING:
+            activePrompt += buildExecutionContext(bgAgentState);
+            break;
+          case AgentPhase.REPLANNING:
+            activePrompt += "\n\n" + buildReplanningPrompt(bgAgentState);
+            break;
+        }
+        // ────────────────────────────────────────────────────────────────
+
         const response = await provider.chat(
-          systemPrompt,
+          activePrompt,
           session.messages,
           this.toolDefinitions,
         );
@@ -707,6 +731,7 @@ export class Orchestrator {
         logger.debug("Background task LLM response", {
           chatId,
           iteration: bgIteration,
+          phase: bgAgentState.phase,
           stopReason: response.stopReason,
           toolCallCount: response.toolCalls.length,
         });
@@ -714,6 +739,58 @@ export class Orchestrator {
         const bgOutputTokens = response.usage?.outputTokens ?? 0;
         this.metrics?.recordTokenUsage(bgInputTokens, bgOutputTokens, provider.name);
         this.rateLimiter?.recordTokenUsage(bgInputTokens, bgOutputTokens, provider.name);
+
+        // ─── PAOR: Handle REFLECTING phase response ─────────────────────
+        if (bgAgentState.phase === AgentPhase.REFLECTING) {
+          const decision = parseReflectionDecision(response.text);
+
+          if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: bgAgentState.iteration,
+              toolCallCount: bgToolCallCount,
+              hitMaxIterations: false,
+            });
+            await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
+            return response.text || "Task completed without output.";
+          }
+
+          if (decision === "REPLAN") {
+            bgAgentState = {
+              ...bgAgentState,
+              failedApproaches: [...bgAgentState.failedApproaches, extractApproachSummary(bgAgentState)],
+              lastReflection: response.text ?? null,
+              reflectionCount: bgAgentState.reflectionCount + 1,
+            };
+            bgAgentState = transitionPhase(bgAgentState, AgentPhase.REPLANNING);
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: "Please create a new plan." });
+            onProgress("Replanning: current approach needs adjustment");
+            continue;
+          }
+
+          // CONTINUE
+          bgAgentState = {
+            ...bgAgentState,
+            reflectionCount: bgAgentState.reflectionCount + 1,
+            consecutiveErrors: 0,
+          };
+          bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+
+          if (response.toolCalls.length === 0) {
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: "Please continue." });
+            continue;
+          }
+        }
+        // ────────────────────────────────────────────────────────────────
 
         // Final response — return text
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
@@ -733,7 +810,7 @@ export class Orchestrator {
           // ─── Metrics: record success ────────────────────────────────
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
-            iterations: bgIteration + 1,
+            iterations: bgAgentState.iteration,
             toolCallCount: bgToolCallCount,
             hitMaxIterations: false,
           });
@@ -766,6 +843,17 @@ export class Orchestrator {
 
           return response.text || "Task completed without output.";
         }
+
+        // ─── PAOR: Phase transitions ────────────────────────────────────
+        if (bgAgentState.phase === AgentPhase.PLANNING) {
+          bgAgentState = { ...bgAgentState, plan: response.text ?? null };
+          bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+        }
+        if (bgAgentState.phase === AgentPhase.REPLANNING) {
+          bgAgentState = { ...bgAgentState, plan: response.text ?? null };
+          bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+        }
+        // ────────────────────────────────────────────────────────────────
 
         // Handle tool calls
         session.messages.push({
@@ -802,6 +890,37 @@ export class Orchestrator {
         const toolNames = response.toolCalls.map((tc) => tc.name).join(", ");
         onProgress(`Running tools: ${toolNames}`);
 
+        // ─── PAOR: Record step results ──────────────────────────────────
+        for (let i = 0; i < response.toolCalls.length; i++) {
+          const tc = response.toolCalls[i]!;
+          const tr = toolResults[i]!;
+          const stepResult: StepResult = {
+            toolName: tc.name,
+            success: !(tr.isError ?? false),
+            summary: tr.content.slice(0, 200),
+            timestamp: Date.now(),
+          };
+          bgAgentState = {
+            ...bgAgentState,
+            stepResults: [...bgAgentState.stepResults, stepResult],
+            iteration: bgAgentState.iteration + 1,
+            consecutiveErrors: tr.isError ? bgAgentState.consecutiveErrors + 1 : 0,
+          };
+        }
+
+        const hasErrors = toolResults.some(tr => tr.isError);
+        const failedSteps = bgAgentState.stepResults.filter(s => !s.success);
+        const shouldReflect =
+          hasErrors ||
+          (bgAgentState.stepResults.length > 0 && bgAgentState.stepResults.length % BG_REFLECT_INTERVAL === 0) ||
+          shouldForceReplan(failedSteps);
+
+        if (shouldReflect && bgAgentState.phase === AgentPhase.EXECUTING) {
+          bgAgentState = transitionPhase(bgAgentState, AgentPhase.REFLECTING);
+          onProgress("Reflecting on progress...");
+        }
+        // ────────────────────────────────────────────────────────────────
+
         // Add tool results
         const stateCtx = taskPlanner.getStateInjection();
         const contentBlocks: Array<
@@ -810,6 +929,9 @@ export class Orchestrator {
         > = [];
         if (stateCtx) {
           contentBlocks.push({ type: "text" as const, text: stateCtx });
+        }
+        if (bgAgentState.phase === AgentPhase.REFLECTING) {
+          contentBlocks.push({ type: "text" as const, text: buildReflectionPrompt(bgAgentState) });
         }
         for (const tr of toolResults) {
           contentBlocks.push({
@@ -837,6 +959,9 @@ export class Orchestrator {
                 if (refreshed.newRagContext) {
                   systemPrompt = replaceSection(systemPrompt, "re-retrieval:rag", refreshed.newRagContext);
                 }
+                if (refreshed.newInsights?.length) {
+                  bgAgentState = { ...bgAgentState, learnedInsights: refreshed.newInsights };
+                }
               }
             }
           } catch {
@@ -848,8 +973,8 @@ export class Orchestrator {
 
       // ─── Metrics: record max iterations ──────────────────────────────
       this.recordMetricEnd(metricId, {
-        agentPhase: AgentPhase.EXECUTING,
-        iterations: bgIteration,
+        agentPhase: bgAgentState.phase,
+        iterations: bgAgentState.iteration,
         toolCallCount: bgToolCallCount,
         hitMaxIterations: true,
       });
@@ -859,8 +984,8 @@ export class Orchestrator {
     } finally {
       // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
       this.recordMetricEnd(metricId, {
-        agentPhase: AgentPhase.FAILED,
-        iterations: bgIteration,
+        agentPhase: bgAgentState.phase,
+        iterations: bgAgentState.iteration,
         toolCallCount: bgToolCallCount,
         hitMaxIterations: false,
       });

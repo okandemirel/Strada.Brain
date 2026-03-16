@@ -1322,11 +1322,13 @@ describe("Orchestrator", () => {
         ragTopK: 6,
       };
 
-      // Provider gives 3 tool iterations then end_turn
+      // Provider gives 3 tool iterations, then reflection (PAOR triggers after 3 steps),
+      // then end_turn. The reflection response returns **DONE** to complete.
       const chatSpy = vi.fn()
         .mockResolvedValueOnce(createToolResponse("Step 1", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Step 2", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Step 3", "file_read"))
+        .mockResolvedValueOnce(createToolResponse("All steps succeeded.\n**DONE**", undefined))
         .mockResolvedValueOnce(createToolResponse("Task complete", undefined));
       mockProvider.chat = chatSpy;
 
