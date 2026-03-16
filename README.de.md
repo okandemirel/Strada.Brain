@@ -52,18 +52,25 @@ Neu in dieser Version: Strada.Brain verfuegt jetzt ueber einen **Agent Core** --
 ### 1. Installation
 
 ```bash
+# Globale Installation (empfohlen)
+npm install -g strada-brain
+
+# Oder aus dem Quellcode klonen
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
 ```
 
-### 2. Konfiguration
+### 2. Setup
 
 ```bash
-cp .env.example .env
+# Interaktiver Setup-Assistent (Terminal oder Web-Browser)
+strada setup
 ```
 
-Oeffnen Sie `.env` und setzen Sie mindestens:
+Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. Waehlen Sie **Terminal** fuer schnelles Setup oder **Web-Browser** fuer die vollstaendige Konfigurationsflaeche.
+
+Alternativ erstellen Sie `.env` manuell:
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...      # Ihr Claude API-Schluessel
@@ -74,27 +81,37 @@ JWT_SECRET=<generieren mit: openssl rand -hex 64>
 ### 3. Starten
 
 ```bash
-# Web-Kanal (Standard) -- Setup-Assistent oeffnet sich unter localhost:3000
-# Falls keine .env vorhanden ist, leitet der Assistent Sie durch die Ersteinrichtung
-npm start
-
-# Oder explizit mit Web-Kanal
-npm run dev -- start --channel web
+# Mit Standard-Web-Kanal starten
+strada start
 
 # Interaktiver CLI-Modus (schnellster Weg zum Testen)
-npm run dev -- cli
+strada start --channel cli
 
 # Daemon-Modus (24/7 autonomer Betrieb mit proaktiven Ausloesern)
-npm run dev -- daemon --channel web
+strada start --channel web --daemon
 
-# Oder mit anderen Chat-Kanaelen
-npm run dev -- start --channel telegram
-npm run dev -- start --channel discord
-npm run dev -- start --channel slack
-npm run dev -- start --channel whatsapp
+# Andere Chat-Kanaele
+strada start --channel telegram
+strada start --channel discord
+strada start --channel slack
+strada start --channel whatsapp
+
+# Staendiger Supervisor mit automatischem Neustart
+strada supervise --channel web
 ```
 
-### 4. Kommunizieren
+### 4. CLI-Befehle
+
+```bash
+strada setup              # Interaktiver Setup-Assistent
+strada start              # Agent starten
+strada supervise          # Mit Auto-Restart-Supervisor ausfuehren
+strada update             # Auf Updates pruefen und anwenden
+strada update --check     # Auf Updates pruefen ohne anzuwenden
+strada version-info       # Version, Installationsmethode und Update-Status anzeigen
+```
+
+### 5. Kommunizieren
 
 Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Kanal:
 
@@ -106,6 +123,18 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 ```
 
 **Web-Kanal:** Kein Terminal erforderlich -- interagieren Sie ueber das Web-Dashboard unter `localhost:3000`.
+
+### 6. Automatische Updates
+
+Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn der Agent untaeutig ist. Es erkennt die Installationsmethode (npm global, npm lokal oder git clone) und verwendet die entsprechende Update-Strategie.
+
+| Variable | Standard | Beschreibung |
+|----------|----------|-------------|
+| `AUTO_UPDATE_ENABLED` | `true` | Aktiviert/deaktiviert automatische Updates |
+| `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Prueffrequenz (Stunden) |
+| `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minuten Untaetigkeit vor Update-Anwendung |
+| `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` oder `latest` |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | Automatischer Neustart nach Update bei Untaetigkeit |
 
 ---
 
