@@ -52,6 +52,10 @@ Nouveau dans cette version : Strada.Brain int&egrave;gre d&eacute;sormais un **A
 ### 1. Installation
 
 ```bash
+# Installation globale (recommand&eacute;e)
+npm install -g strada-brain
+
+# Ou cloner &agrave; partir du source
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
@@ -60,10 +64,13 @@ npm install
 ### 2. Configuration
 
 ```bash
-cp .env.example .env
+# Assistant de configuration interactif (terminal ou navigateur web)
+strada setup
 ```
 
-Ouvrez `.env` et d&eacute;finissez au minimum :
+L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de fournisseur IA, votre canal par d&eacute;faut et votre langue. Choisissez **Terminal** pour une configuration rapide ou **Navigateur Web** pour l'interface compl&egrave;te.
+
+Alternativement, cr&eacute;ez `.env` manuellement :
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...      # Votre cl&eacute; API Claude
@@ -71,30 +78,40 @@ UNITY_PROJECT_PATH=/path/to/your/UnityProject  # Doit contenir Assets/
 JWT_SECRET=<g&eacute;n&eacute;rer avec : openssl rand -hex 64>
 ```
 
-### 3. Lancement
+### 3. Ex&eacute;cution
 
 ```bash
-# Canal web (d&eacute;faut) - l'assistant de configuration s'ouvre sur localhost:3000
-# Si aucun .env n'existe, l'assistant vous guide &agrave; travers la configuration initiale
-npm start
-
-# Ou explicitement avec le canal web
-npm run dev -- start --channel web
+# D&eacute;marrer avec le canal web par d&eacute;faut
+strada start
 
 # Mode CLI interactif (moyen le plus rapide pour tester)
-npm run dev -- cli
+strada start --channel cli
 
 # Mode daemon (fonctionnement autonome 24/7 avec d&eacute;clencheurs proactifs)
-npm run dev -- daemon --channel web
+strada start --channel web --daemon
 
-# Ou avec d'autres canaux de chat
-npm run dev -- start --channel telegram
-npm run dev -- start --channel discord
-npm run dev -- start --channel slack
-npm run dev -- start --channel whatsapp
+# Autres canaux de chat
+strada start --channel telegram
+strada start --channel discord
+strada start --channel slack
+strada start --channel whatsapp
+
+# Superviseur toujours actif avec red&eacute;marrage automatique
+strada supervise --channel web
 ```
 
-### 4. Communiquez avec l'agent
+### 4. Commandes CLI
+
+```bash
+strada setup              # Assistant de configuration interactif
+strada start              # D&eacute;marrer l'agent
+strada supervise          # Ex&eacute;cuter avec superviseur de red&eacute;marrage automatique
+strada update             # V&eacute;rifier et appliquer les mises &agrave; jour
+strada update --check     # V&eacute;rifier les mises &agrave; jour sans les appliquer
+strada version-info       # Afficher la version, la m&eacute;thode d'installation, l'&eacute;tat de mise &agrave; jour
+```
+
+### 5. Communiquez avec l'agent
 
 Une fois lanc&eacute;, envoyez un message via votre canal configur&eacute; :
 
@@ -106,6 +123,18 @@ Une fois lanc&eacute;, envoyez un message via votre canal configur&eacute; :
 ```
 
 **Canal web :** Pas de terminal n&eacute;cessaire -- interagissez via le tableau de bord web sur `localhost:3000`.
+
+### 6. Mise &agrave; jour Automatique
+
+Strada.Brain v&eacute;rifie automatiquement les mises &agrave; jour quotidiennement et les applique en cas d'inactivit&eacute;. Il d&eacute;tecte sa m&eacute;thode d'installation (npm global, npm local ou git clone) et utilise la strat&eacute;gie de mise &agrave; jour appropri&eacute;e.
+
+| Variable | Par d&eacute;faut | Description |
+|----------|---------|-------------|
+| `AUTO_UPDATE_ENABLED` | `true` | Activer/d&eacute;sactiver la mise &agrave; jour automatique |
+| `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Fr&eacute;quence de v&eacute;rification (heures) |
+| `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutes d'inactivit&eacute; avant d'appliquer la mise &agrave; jour |
+| `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag : `stable` ou `latest` |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | Red&eacute;marrage automatique apr&egrave;s mise &agrave; jour en cas d'inactivit&eacute; |
 
 ---
 
