@@ -69,6 +69,9 @@ export class HeartbeatLoop {
 
   /** Deploy trigger (Phase 25) -- stored for future readiness-check integration */
 
+  /** Agent Core autonomous reasoning loop (Phase 4) */
+  private agentCore?: import("../agent-core/agent-core.js").AgentCore;
+
   constructor(
     private readonly registry: TriggerRegistry,
     private readonly taskManager: TaskManager,
@@ -403,6 +406,12 @@ export class HeartbeatLoop {
       }
     }
 
+    // Agent Core reasoning (Phase 4 — autonomous agent OODA loop)
+    if (this.agentCore) {
+      // AgentCore.tick() has its own tickInFlight guard — safe to call every heartbeat
+      await this.agentCore.tick();
+    }
+
     // Update lastTick
     this.lastTick = now;
   }
@@ -461,6 +470,13 @@ export class HeartbeatLoop {
    */
   setDeployTrigger(_trigger: DeployTriggerContract): void {
     // Stored for future readiness-check integration in tick loop
+  }
+
+  /**
+   * Set the Agent Core for autonomous OODA reasoning each tick (Phase 4).
+   */
+  setAgentCore(core: import("../agent-core/agent-core.js").AgentCore): void {
+    this.agentCore = core;
   }
 
   /**

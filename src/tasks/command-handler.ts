@@ -77,6 +77,9 @@ export class CommandHandler {
       case "daemon":
         await this.handleDaemon(chatId, args);
         break;
+      case "agent":
+        await this.handleAgent(chatId, args);
+        break;
     }
   }
 
@@ -224,7 +227,11 @@ export class CommandHandler {
       "`/daemon stop` - Stop daemon heartbeat loop",
       "`/daemon triggers` - Show active triggers",
       "",
-      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /model listele, /model bilgi, /model sıfırla",
+      "*Agent Core*",
+      "",
+      "`/agent` - Show agent core status",
+      "",
+      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /ajan, /model listele, /model bilgi, /model sıfırla",
       "",
       "Send any other message to start a new background task.",
     ].join("\n");
@@ -657,6 +664,26 @@ export class CommandHandler {
       chatId,
       "Usage: /daemon | /daemon start | /daemon stop | /daemon triggers",
     );
+  }
+
+  private async handleAgent(chatId: string, args: string[]): Promise<void> {
+    const subcommand = args[0]?.toLowerCase();
+
+    if (!subcommand || subcommand === "status") {
+      // Show agent core status
+      await this.channel.sendMarkdown(
+        chatId,
+        "*Agent Core Status*\n\n" +
+        "Agent Core is the autonomous reasoning engine that observes the environment, " +
+        "reasons about what to do, and acts proactively.\n\n" +
+        "The agent activates when daemon mode is running with `/autonomous on`.\n\n" +
+        "Use `/daemon` to check daemon status.\n" +
+        "Use `/autonomous` to check autonomous mode status.",
+      );
+      return;
+    }
+
+    await this.channel.sendText(chatId, "Usage: /agent");
   }
 
   // ─── Formatting ─────────────────────────────────────────────────────────────

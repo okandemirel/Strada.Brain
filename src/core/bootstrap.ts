@@ -733,6 +733,42 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       getSecurityPolicy: () => securityPolicyInstance,
     });
 
+    // Agent Core: autonomous OODA reasoning loop (Phase 4)
+    try {
+      const { AgentCore } = await import("../agent-core/agent-core.js");
+      const { ObservationEngine } = await import("../agent-core/observation-engine.js");
+      const { PriorityScorer } = await import("../agent-core/priority-scorer.js");
+      const { TriggerObserver, UserActivityObserver, GitStateObserver } = await import("../agent-core/observers/index.js");
+
+      const observationEngine = new ObservationEngine();
+
+      // Register observers that wrap existing infrastructure
+      observationEngine.register(new TriggerObserver(triggerRegistry));
+      observationEngine.register(new UserActivityObserver(daemonConfig.heartbeat.intervalMs * 5));
+      observationEngine.register(new GitStateObserver(config.unityProjectPath));
+      // BuildStateObserver needs a SelfVerification reference — skip for now (wired per-task)
+
+      observationEngine.start();
+
+      const priorityScorer = new PriorityScorer(instinctRetriever);
+      const agentCoreInstance = new AgentCore(
+        observationEngine,
+        priorityScorer,
+        providerManager.getProvider(""),
+        taskManager,
+        channel,
+        budgetTrackerInstance,
+        instinctRetriever,
+      );
+
+      heartbeatLoop.setAgentCore(agentCoreInstance);
+      logger.info("Agent Core initialized", { observers: observationEngine.getObserverCount() });
+    } catch (error) {
+      logger.warn("Agent Core initialization failed (non-fatal)", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     // Create NotificationRouter (RPT-03, RPT-04)
     notificationRouterInstance = new NotificationRouter({
       config: config.notification,
