@@ -453,6 +453,31 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {/* ===== Routing ===== */}
+      <div className="admin-section">
+        <div className="admin-section-title">Provider Routing</div>
+        <div className="admin-stat-row">
+          <span className="admin-stat-label">Routing Preset</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {(['budget', 'balanced', 'performance'] as const).map(p => (
+              <button
+                key={p}
+                className={`settings-provider-card ${p === 'balanced' ? 'active' : ''}`}
+                style={{ padding: '6px 14px', fontSize: 13, minWidth: 0 }}
+                disabled
+                title="Configure via /routing command or ROUTING_PRESET env var"
+              >
+                {p.charAt(0).toUpperCase() + p.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="settings-hint">
+          Provider routing automatically selects the best AI provider for each task type.
+          Configure with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>ROUTING_PRESET</code> or <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>/routing preset</code> command.
+        </div>
+      </div>
+
       {/* ===== Model Selection ===== */}
       <div className="admin-section">
         <div className="admin-section-title">Model Selection</div>
