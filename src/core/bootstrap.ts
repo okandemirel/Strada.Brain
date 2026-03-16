@@ -480,6 +480,23 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     // Non-fatal — routing disabled
   }
 
+  // Initialize ConsensusManager + ConfidenceEstimator (before Orchestrator so we can wire them)
+  let consensusManager: import("../agent-core/routing/consensus-manager.js").ConsensusManager | undefined;
+  let confidenceEstimator: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator | undefined;
+  try {
+    const { ConsensusManager } = await import("../agent-core/routing/consensus-manager.js");
+    consensusManager = new ConsensusManager({
+      mode: config.consensus.mode,
+      threshold: config.consensus.threshold,
+      maxProviders: config.consensus.maxProviders,
+    });
+    const { ConfidenceEstimator } = await import("../agent-core/routing/confidence-estimator.js");
+    confidenceEstimator = new ConfidenceEstimator();
+    logger.info("ConsensusManager initialized", { mode: config.consensus.mode });
+  } catch {
+    // Non-fatal — consensus disabled
+  }
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -508,23 +525,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     sessionSummarizer,
     userProfileStore,
     providerRouter,
+    consensusManager,
+    confidenceEstimator,
   });
-
-  // Initialize ConsensusManager
-  let consensusManager: import("../agent-core/routing/consensus-manager.js").ConsensusManager | undefined;
-  try {
-    const { ConsensusManager } = await import("../agent-core/routing/consensus-manager.js");
-    consensusManager = new ConsensusManager({
-      mode: config.consensus.mode,
-      threshold: config.consensus.threshold,
-      maxProviders: config.consensus.maxProviders,
-    });
-    logger.info("ConsensusManager initialized", { mode: config.consensus.mode });
-  } catch {
-    // Non-fatal — consensus disabled
-  }
-  // ConsensusManager will be wired into AgentCore/Orchestrator in Phase 5
-  void consensusManager;
 
   // TODO: Initialize ModelIntelligenceService here for self-updating model data
 

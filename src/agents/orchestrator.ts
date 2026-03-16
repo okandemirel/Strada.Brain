@@ -241,6 +241,10 @@ export class Orchestrator {
   private readonly onboardingState = new Map<string, { step: 'awaiting_name' | 'awaiting_lang' | 'awaiting_style' | 'awaiting_detail'; name?: string; lang?: string; style?: string }>();
   /** Multi-provider routing: selects best provider per task/phase. */
   private readonly providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
+  /** Consensus verification: cross-provider output validation on low confidence. */
+  private readonly consensusManager?: import("../agent-core/routing/consensus-manager.js").ConsensusManager;
+  /** Confidence estimation for consensus gating. */
+  private readonly confidenceEstimator?: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
   private readonly taskClassifier = new TaskClassifier();
 
   constructor(opts: {
@@ -271,6 +275,8 @@ export class Orchestrator {
     sessionSummarizer?: SessionSummarizer;
     userProfileStore?: UserProfileStore;
     providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
+    consensusManager?: import("../agent-core/routing/consensus-manager.js").ConsensusManager;
+    confidenceEstimator?: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -294,6 +300,8 @@ export class Orchestrator {
     this.sessionSummarizer = opts.sessionSummarizer;
     this.userProfileStore = opts.userProfileStore;
     this.providerRouter = opts.providerRouter;
+    this.consensusManager = opts.consensusManager;
+    this.confidenceEstimator = opts.confidenceEstimator;
 
     // Build tool registry
     this.tools = new Map();
@@ -917,6 +925,54 @@ export class Orchestrator {
         // Progress report: summarize tool calls
         const toolNames = response.toolCalls.map((tc) => tc.name).join(", ");
         onProgress(`Running tools: ${toolNames}`);
+
+        // ─── Consensus: verify output with second provider if confidence is low ───
+        if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
+          try {
+            const bgTaskClass = this.taskClassifier.classify(prompt);
+            const bgConfidence = this.confidenceEstimator.estimate({
+              task: bgTaskClass,
+              providerName: currentProvider.name ?? "unknown",
+              agentState: bgAgentState,
+              responseLength: (response.text ?? "").length,
+            });
+
+            const bgAvailableCount = this.providerManager.listAvailable().length;
+            const bgStrategy = this.consensusManager.shouldConsult(bgConfidence, bgTaskClass, bgAvailableCount);
+
+            if (bgStrategy !== "skip" && bgAvailableCount >= 2) {
+              const bgAvailable = this.providerManager.listAvailable();
+              const bgReviewProviderName = bgAvailable.find(p => p.name !== (currentProvider.name ?? ""))?.name;
+              if (bgReviewProviderName) {
+                const bgReviewProvider = this.providerManager.getProviderByName(bgReviewProviderName);
+                if (bgReviewProvider) {
+                  const bgConsensusResult = await this.consensusManager.verify({
+                    originalOutput: {
+                      text: response.text ?? undefined,
+                      toolCalls: response.toolCalls.map(tc => ({ name: tc.name, input: tc.input })),
+                    },
+                    originalProvider: currentProvider.name ?? "unknown",
+                    task: bgTaskClass,
+                    confidence: bgConfidence,
+                    reviewProvider: bgReviewProvider,
+                    prompt,
+                  });
+
+                  if (!bgConsensusResult.agreed) {
+                    logger.warn("Consensus disagreement (background)", {
+                      chatId,
+                      strategy: bgConsensusResult.strategy,
+                      reasoning: bgConsensusResult.reasoning?.slice(0, 200),
+                    });
+                  }
+                }
+              }
+            }
+          } catch {
+            // Consensus failure is non-fatal
+          }
+        }
+        // ────────────────────────────────────────────────────────────────────
 
         // ─── PAOR: Record step results ──────────────────────────────────
         for (let i = 0; i < response.toolCalls.length; i++) {
@@ -1692,6 +1748,50 @@ export class Orchestrator {
         }
         // ────────────────────────────────────────────────────────────────
 
+        // ─── Consensus for text-only responses on critical tasks ──────
+        if (this.consensusManager && this.confidenceEstimator && response.text) {
+          try {
+            const textTaskClass = this.taskClassifier.classify(lastUserMessage);
+            if (textTaskClass.criticality === "critical") {
+              const textConfidence = this.confidenceEstimator.estimate({
+                task: textTaskClass,
+                providerName: currentProvider.name ?? "unknown",
+                agentState,
+                responseLength: response.text.length,
+              });
+              const textAvailableCount = this.providerManager.listAvailable().length;
+              const textStrategy = this.consensusManager.shouldConsult(textConfidence, textTaskClass, textAvailableCount);
+              if (textStrategy !== "skip" && textAvailableCount >= 2) {
+                const textAvailable = this.providerManager.listAvailable();
+                const textReviewName = textAvailable.find(p => p.name !== (currentProvider.name ?? ""))?.name;
+                if (textReviewName) {
+                  const textReviewProvider = this.providerManager.getProviderByName(textReviewName);
+                  if (textReviewProvider) {
+                    const textConsensus = await this.consensusManager.verify({
+                      originalOutput: { text: response.text },
+                      originalProvider: currentProvider.name ?? "unknown",
+                      task: textTaskClass,
+                      confidence: textConfidence,
+                      reviewProvider: textReviewProvider,
+                      prompt: lastUserMessage,
+                    });
+                    if (!textConsensus.agreed) {
+                      logger.warn("Consensus disagreement (text-only, critical)", {
+                        chatId,
+                        strategy: textConsensus.strategy,
+                        reasoning: textConsensus.reasoning?.slice(0, 200),
+                      });
+                    }
+                  }
+                }
+              }
+            }
+          } catch {
+            // Consensus failure is non-fatal
+          }
+        }
+        // ────────────────────────────────────────────────────────────────
+
         if (response.text) {
           session.messages.push({
             role: "assistant",
@@ -1794,6 +1894,54 @@ export class Orchestrator {
 
       // Inject state-aware context (stall detection, budget warnings)
       const stateCtx = taskPlanner.getStateInjection();
+      // ────────────────────────────────────────────────────────────────────
+
+      // ─── Consensus: verify output with second provider if confidence is low ───
+      if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
+        try {
+          const taskClass = this.taskClassifier.classify(lastUserMessage);
+          const confidence = this.confidenceEstimator.estimate({
+            task: taskClass,
+            providerName: currentProvider.name ?? "unknown",
+            agentState,
+            responseLength: (response.text ?? "").length,
+          });
+
+          const availableCount = this.providerManager.listAvailable().length;
+          const strategy = this.consensusManager.shouldConsult(confidence, taskClass, availableCount);
+
+          if (strategy !== "skip" && availableCount >= 2) {
+            const available = this.providerManager.listAvailable();
+            const reviewProviderName = available.find(p => p.name !== (currentProvider.name ?? ""))?.name;
+            if (reviewProviderName) {
+              const reviewProvider = this.providerManager.getProviderByName(reviewProviderName);
+              if (reviewProvider) {
+                const consensusResult = await this.consensusManager.verify({
+                  originalOutput: {
+                    text: response.text ?? undefined,
+                    toolCalls: response.toolCalls.map(tc => ({ name: tc.name, input: tc.input })),
+                  },
+                  originalProvider: currentProvider.name ?? "unknown",
+                  task: taskClass,
+                  confidence,
+                  reviewProvider,
+                  prompt: lastUserMessage,
+                });
+
+                if (!consensusResult.agreed) {
+                  logger.warn("Consensus disagreement", {
+                    chatId,
+                    strategy: consensusResult.strategy,
+                    reasoning: consensusResult.reasoning?.slice(0, 200),
+                  });
+                }
+              }
+            }
+          }
+        } catch {
+          // Consensus failure is non-fatal
+        }
+      }
       // ────────────────────────────────────────────────────────────────────
 
       // ─── PAOR: Record step results ──────────────────────────────────
