@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Unity / Strada.Core Projeleri icin Yapay Zeka Destekli Gelistirme Ajani</strong><br/>
-  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu, onay kapili dagitim alt sistemi ve LLM goruntu destegiyle medya paylasimi ile.
+  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu, onay kapili dagitim alt sistemi, LLM goruntu destegiyle medya paylasimi, SOUL.md uzerinden yapilandirilabilir kisilik sistemi, etkilesimli aciklama araclari, gorev bilinclii dinamik gecis ile akilli coklu saglayici yonlendirme, guven tabanli konsensus dogrulamasi, OODA akil yurutme dongusune sahip otonom Agent Core ve Strada.MCP entegrasyonu ile.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3220%2B-brightgreen?style=flat-square" alt="Testler">
+  <img src="https://img.shields.io/badge/tests-3450%2B-brightgreen?style=flat-square" alt="Testler">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lisans">
 </p>
 
@@ -33,7 +33,9 @@
 
 Strada.Brain, bir sohbet kanali uzerinden konustugunuz bir yapay zeka ajanidir. Ne istediginizi tanimlayarak -- "oyuncu hareketi icin yeni bir ECS sistemi olustur" veya "saglik kullanan tum bilesenleri bul" -- ajanin C# projenizi okumasini, kodu yazmasini, `dotnet build` calistirmasini, hatalari otomatik olarak duzeltmesini ve sonucu size gondermesini saglayabilirsiniz.
 
-Ajan, SQLite + HNSW vektorler ile desteklenen kalici hafizaya sahiptir; gecmis hatalardan hibrit agirlikli guven puanlamasi ile ogrenir; karmasik hedefleri paralel DAG yurutmesine ayristirir; cok aracli zincirleri saga geri alma destekli olarak otomatik sentezler; coklu ajan orkestrasyonu ve gorev delegasyonu ile karmasik isleri boler; bellek konsolidasyonu ile benzer bellekleri birlestirir; onay kapili dagitim alt sistemi ile otonom dagitim yapar; ve proaktif tetikleyicilerle 7/24 daemon olarak calisabilir.
+Ajan, SQLite + HNSW vektorler ile desteklenen kalici hafizaya sahiptir; gecmis hatalardan hibrit agirlikli guven puanlamasi ile ogrenir; karmasik hedefleri paralel DAG yurutmesine ayristirir; cok aracli zincirleri saga geri alma destekli olarak otomatik sentezler; ve proaktif tetikleyicilerle 7/24 daemon olarak calisabilir. Kanal bazinda oturum izolasyonlu coklu ajan orkestrasyonunu, ajan seviyeleri arasi hiyerarsik gorev delegasyonunu, otomatik bellek konsolidasyonunu ve insan-dongu-icinde onay kapilari ile devre kesici korumali dagitim alt sistemini destekler.
+
+Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosya degisiklikleri, git durumu, derleme sonuclari) gozlemleyen, ogrenilmis kaliplari kullanarak oncelikler hakkinda akil yuruten ve proaktif olarak eyleme gecen otonom bir OODA akil yurutme motoru. **Coklu saglayici yonlendirme** sistemi, her gorev tipi (planlama, kod uretimi, hata ayiklama, inceleme) icin yapilandirilabilir on ayarlarla (budget/balanced/performance) en iyi AI saglayiciyi dinamik olarak secer. **Guven tabanli konsensus** sistemi, ajanin guveni dusuk oldugunda otomatik olarak farkli bir saglayicidan ikinci bir gorus alir ve kritik islemlerde hatalari onler. Tum ozellikler duzgun bir sekilde degrade olur -- tek saglayici ile sistem onceki gibi sifir ek yuk ile calisir.
 
 **Bu bir kutuphane veya API degildir.** Calistirdiginiz bagimsiz bir uygulamadir. Sohbet platformunuza baglanir, diskteki Unity projenizi okur ve yapilandirdiginiz sinirlar dahilinde otonom olarak calisir.
 
@@ -170,7 +172,7 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 
 ### Ajan Dongusu Nasil Calisir
 
-1. **Mesaj gelir** -- sohbet kanalindan
+1. **Mesaj gelir** -- sohbet kanalindan (metin, gorseller, video, ses veya belgeler)
 2. **Hafiza getirme** -- AgentDB hibrit aramasi (%70 anlamsal HNSW + %30 TF-IDF) en alakali gecmis konusmalari bulur
 3. **RAG getirme** -- C# kod tabaninizda anlamsal arama (HNSW vektorler, ilk 6 sonuc)
 4. **Icgudu getirme** -- goreve uygun ogrenilmis kaliplari proaktif olarak sorgular (anlamsal + anahtar kelime eslesmesi)
@@ -320,9 +322,42 @@ Otonom dagitim alt sistemi, onay kapisi ve guvenlik mekanizmalari ile dagitim su
 
 ---
 
+### Agent Core (Otonom OODA Dongusu)
+
+Daemon modu aktif oldugunda, Agent Core surekli bir gozle-yonlendir-karar ver-eyle dongusu calistirir:
+
+- **Gozlem**: 6 gozlemciden cevre durumunu toplar (dosya degisiklikleri, git durumu, derleme sonuclari, tetikleyici olaylari, kullanici aktivitesi, test sonuclari)
+- **Yonlendirme**: Ogrenme bilgisi ile oncelik puanlamasi kullanarak gozlemleri degerlendirir (InstinctRetriever entegrasyonlu PriorityScorer)
+- **Karar**: Butce bilincli kisitlama ile LLM akil yurutmesi (30sn minimum aralik, oncelik esigi, butce tabani)
+- **Eylem**: Hedef gonderir, kullaniciyi bilgilendirir veya bekler (ajan "yapilacak bir sey yok" diye karar verebilir)
+
+Guvenlik: tickInFlight korumasi, hiz sinirlamasi, butce tabani (%10) ve DaemonSecurityPolicy zorunlulugu.
+
+### Coklu Saglayici Akilli Yonlendirme
+
+2+ saglayici yapilandirildiginda, Strada.Brain gorevleri otomatik olarak en uygun saglayiciya yonlendirir:
+
+| Gorev Tipi | Yonlendirme Stratejisi |
+|------------|----------------------|
+| Planlama | En genis baglam penceresi (Claude > GPT > Gemini) |
+| Kod Uretimi | Guclu arac cagrisi (Claude > Kimi > OpenAI) |
+| Kod Inceleme | Yurutucu modelden farkli model (cesitlilik yanliligi) |
+| Basit Sorular | En hizli/en ucuz (Groq > Kimi > Ollama) |
+| Hata Ayiklama | Guclu hata analizi |
+
+**On Ayarlar**: `budget` (maliyet optimizeli), `balanced` (varsayilan), `performance` (kalite oncelikli)
+**PAOR Faz Gecisi**: Planlama, yurutme ve yansima fazlari icin farkli saglayicilar.
+**Konsensus**: Dusuk guven durumunda farkli saglayicidan otomatik ikinci gorus.
+
+### Strada.MCP Entegrasyonu
+
+Strada.Brain, [Strada.MCP](https://github.com/okandemirel/Strada.MCP)'yi (76 aracli Unity MCP sunucusu) tespit eder ve ajani mevcut MCP yetenekleri hakkinda bilgilendirir: calisma zamani kontrolu, dosya islemleri, git, .NET derleme, kod analizi ve sahne/prefab yonetimi.
+
+---
+
 ## Daemon Modu
 
-Daemon, kalp atisi gudumlu tetikleyici sistemi ile 7/24 otonom calisma saglar.
+Daemon, kalp atisi gudumlu tetikleyici sistemi ile 7/24 otonom calisma saglar. Daemon modu aktif oldugunda, **Agent Core OODA dongusu** daemon tick'leri icinde calisir, cevrevi gozlemler ve kullanici etkilesimleri arasinda proaktif olarak eyleme gecer. `/autonomous on` komutu artik DaemonSecurityPolicy'ye yayilir ve islem bazinda onay istemleri olmadan tam otonom calismaya olanak tanir.
 
 ```bash
 npm run dev -- daemon --channel web
@@ -473,6 +508,17 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `READ_ONLY_MODE` | `false` | Tum yazma islemlerini engelle |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` veya `debug` |
 
+### Yonlendirme ve Konsensus
+
+| Degisken | Varsayilan | Aciklama |
+|----------|------------|----------|
+| `ROUTING_PRESET` | `balanced` | Yonlendirme on ayari: `budget`, `balanced` veya `performance` |
+| `ROUTING_PHASE_SWITCHING` | `true` | Saglayicilar arasi PAOR faz gecisini etkinlestir |
+| `CONSENSUS_MODE` | `auto` | Konsensus modu: `auto`, `critical-only`, `always` veya `disabled` |
+| `CONSENSUS_THRESHOLD` | `0.5` | Konsensusu tetiklemek icin guven esigi |
+| `CONSENSUS_MAX_PROVIDERS` | `3` | Konsensus icin danisilan maksimum saglayici sayisi |
+| `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | Daemon modu icin gunluk butce (USD) |
+
 ### Hiz Sinirlamasi
 
 | Degisken | Varsayilan | Aciklama |
@@ -556,6 +602,23 @@ Ajan, kategorilere gore duzenlenmis 40'dan fazla yerlesik araca sahiptir:
 | `shell_exec` | Kabuk komutlari calistirma (30sn zaman asimi, tehlikeli komut engelleme listesi) |
 | `code_quality` | Dosya bazinda veya proje bazinda kod kalitesi analizi |
 | `rag_index` | Artimli veya tam proje yeniden indekslemesini tetikleme |
+
+---
+
+## Sohbet Komutlari
+
+Tum sohbet kanallarinda kullanilabilir slash komutlari:
+
+| Komut | Aciklama |
+|-------|----------|
+| `/daemon` | Daemon durumunu goster |
+| `/daemon start` | Daemon kalp atisi dongusunu baslat |
+| `/daemon stop` | Daemon kalp atisi dongusunu durdur |
+| `/daemon triggers` | Aktif tetikleyicileri goster |
+| `/agent` | Agent Core durumunu goster |
+| `/routing` | Yonlendirme durumunu ve on ayarini goster |
+| `/routing preset <ad>` | Yonlendirme on ayarini degistir (budget/balanced/performance) |
+| `/routing info` | Son yonlendirme kararlarini goster |
 
 ---
 
@@ -738,15 +801,18 @@ src/
     autonomy/           # Hata kurtarma, gorev planlama, oz-dogrulama
     context/            # Sistem istemi (Strada.Core bilgi tabani)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + dahasi
-    tools/              # 30+ arac uygulamasi
+    tools/              # 30+ arac uygulamasi (ask_user, show_plan, switch_personality, ...)
+    soul/               # SOUL.md kisilik yukleyici, sicak yeniden yukleme ve kanal bazli gecikmeler ile
     plugins/            # Harici eklenti yukleyici
+  profiles/             # Kisilik profil dosyalari: casual.md, formal.md, minimal.md
   channels/
     telegram/           # Grammy tabanli bot
     discord/            # discord.js bot, slash komutlari ile
     slack/              # Slack Bolt (soket modu) Block Kit ile
     whatsapp/           # Baileys tabanli istemci, oturum yonetimi ile
-    web/                # Express + WebSocket web paneli
+    web/                # Express + WebSocket web kanali
     cli/                # Readline REPL
+  web-portal/           # React + Vite sohbet arayuzu (koyu/acik tema, dosya yukleme, akis, panel sekme, yan panel)
   memory/
     file-memory-manager.ts   # Eski arka uc: JSON + TF-IDF (yedek)
     unified/
@@ -841,6 +907,8 @@ src/
     metrics-storage.ts  # SQLite metrik depolama
     metrics-recorder.ts # Oturum basina metrik yakalama
     metrics-cli.ts      # CLI metrik goruntuleme komutu
+  utils/
+    media-processor.ts  # Medya indirme, dogrulama (MIME/boyut/sihirli bayt), SSRF korumasi
   security/             # Kimlik dogrulama, RBAC, yol korumasi, hiz sinirlamasi, gizli bilgi temizleyici
   intelligence/         # C# ayristirma, proje analizi, kod kalitesi
   dashboard/            # HTTP, WebSocket, Prometheus panelleri

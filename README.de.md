@@ -6,15 +6,13 @@
 
 <p align="center">
   <strong>KI-gesteuerter Entwicklungs-Agent fuer Unity / Strada.Core-Projekte</strong><br/>
-  Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt, Fehler automatisch behebt und aus seinen Fehlern lernt &mdash; und mit einer 24/7-Daemon-Schleife autonom arbeitet.
-  <br/><br/>
-  Jetzt mit Multi-Agent-Orchestrierung, Aufgabendelegation, Ged&auml;chtniskonsolidierung, einem Deployment-Subsystem mit Genehmigungsgates und Medienfreigabe mit LLM-Vision-Unterstuetzung.
+  Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt, Fehler automatisch behebt und aus seinen Fehlern lernt &mdash; und mit einer 24/7-Daemon-Schleife autonom arbeitet. Jetzt mit Multi-Agent-Orchestrierung, Aufgabendelegation, Ged&auml;chtniskonsolidierung, einem Deployment-Subsystem mit Genehmigungsgates, Medienfreigabe mit LLM-Vision-Unterstuetzung, einem konfigurierbaren Persoenlichkeitssystem ueber SOUL.md, interaktiven Klaerungstools, intelligentem Multi-Provider-Routing mit aufgabenbewusstem dynamischem Wechsel, konfidenzbasierter Konsensverifizierung, einem autonomen Agent Core mit OODA-Reasoning-Loop und Strada.MCP-Integration.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3220%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3450%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lizenz">
 </p>
 
@@ -35,7 +33,9 @@
 
 Strada.Brain ist ein KI-Agent, mit dem Sie ueber einen Chat-Kanal kommunizieren. Sie beschreiben, was Sie moechten -- "erstelle ein neues ECS-System fuer Spielerbewegung" oder "finde alle Komponenten, die Health verwenden" -- und der Agent liest Ihr C#-Projekt, schreibt den Code, fuehrt `dotnet build` aus, behebt Fehler automatisch und sendet Ihnen das Ergebnis.
 
-Er verfuegt ueber persistenten Speicher auf Basis von SQLite + HNSW-Vektoren, lernt aus vergangenen Fehlern mittels hybrider gewichteter Konfidenzbewertung, zerlegt komplexe Ziele in parallele DAG-Ausfuehrung, synthetisiert automatisch mehrstufige Tool-Ketten mit Saga-Rollback, orchestriert mehrere Agenten mit Aufgabendelegation, konsolidiert Gedaechtnis mittels HNSW-Clustering, verfuegt ueber ein Deployment-Subsystem mit Genehmigungsgates und kann als 24/7-Daemon mit proaktiven Ausloesern betrieben werden.
+Er verfuegt ueber persistenten Speicher auf Basis von SQLite + HNSW-Vektoren, lernt aus vergangenen Fehlern mittels hybrider gewichteter Konfidenzbewertung, zerlegt komplexe Ziele in parallele DAG-Ausfuehrung, synthetisiert automatisch mehrstufige Tool-Ketten mit Saga-Rollback und kann als 24/7-Daemon mit proaktiven Ausloesern betrieben werden. Er unterstuetzt Multi-Agent-Orchestrierung mit kanalbasierter Sitzungsisolation, hierarchische Aufgabendelegation ueber Agenten-Stufen, automatische Gedaechtniskonsolidierung und ein Deployment-Subsystem mit Human-in-the-Loop-Genehmigungsgates und Circuit-Breaker-Schutz.
+
+Neu in dieser Version: Strada.Brain verfuegt jetzt ueber einen **Agent Core** -- eine autonome OODA-Reasoning-Engine, die die Umgebung beobachtet (Dateiaenderungen, Git-Status, Build-Ergebnisse), mittels gelernter Muster ueber Prioritaeten urteilt und proaktiv handelt. Das **Multi-Provider-Routing**-System waehlt dynamisch den besten KI-Anbieter fuer jeden Aufgabentyp (Planung, Code-Generierung, Debugging, Review) mit konfigurierbaren Presets (budget/balanced/performance). Ein **konfidenzbasiertes Konsenssystem** konsultiert automatisch einen zweiten Anbieter, wenn die Konfidenz des Agenten niedrig ist, und verhindert so Fehler bei kritischen Operationen. Alle Features degradieren graceful -- mit einem einzigen Anbieter funktioniert das System identisch wie zuvor ohne jeglichen Overhead.
 
 **Dies ist keine Bibliothek und keine API.** Es ist eine eigenstaendige Anwendung, die Sie ausfuehren. Sie verbindet sich mit Ihrer Chat-Plattform, liest Ihr Unity-Projekt von der Festplatte und arbeitet autonom innerhalb der von Ihnen konfigurierten Grenzen.
 
@@ -333,9 +333,42 @@ Das Deployment-Subsystem ermoeglicht automatisierte Deployments mit Sicherheitsg
 
 ---
 
+### Agent Core (Autonomer OODA-Loop)
+
+Wenn der Daemon-Modus aktiv ist, fuehrt der Agent Core eine kontinuierliche Beobachten-Orientieren-Entscheiden-Handeln-Schleife aus:
+
+- **Beobachten**: Sammelt den Umgebungsstatus von 6 Beobachtern (Dateiaenderungen, Git-Status, Build-Ergebnisse, Ausloeser-Ereignisse, Benutzeraktivitaet, Testergebnisse)
+- **Orientieren**: Bewertet Beobachtungen mittels lernbasierter Priorisierung (PriorityScorer mit Instinkt-Integration)
+- **Entscheiden**: LLM-Reasoning mit budgetbewusster Drosselung (30s Mindestintervall, Prioritaetsschwelle, Budget-Untergrenze)
+- **Handeln**: Reicht Ziele ein, benachrichtigt den Benutzer oder wartet (der Agent kann entscheiden "nichts zu tun")
+
+Sicherheit: tickInFlight-Schutz, Ratenbegrenzung, Budget-Untergrenze (10%) und DaemonSecurityPolicy-Durchsetzung.
+
+### Multi-Provider Intelligentes Routing
+
+Bei 2+ konfigurierten Anbietern routet Strada.Brain Aufgaben automatisch zum optimalen Anbieter:
+
+| Aufgabentyp | Routing-Strategie |
+|-------------|------------------|
+| Planung | Groesstes Kontextfenster (Claude > GPT > Gemini) |
+| Code-Generierung | Starke Tool-Aufrufe (Claude > Kimi > OpenAI) |
+| Code-Review | Anderes Modell als der Executor (Diversitaets-Bias) |
+| Einfache Fragen | Schnellstes/Guenstigstes (Groq > Kimi > Ollama) |
+| Debugging | Starke Fehleranalyse |
+
+**Presets**: `budget` (kostenoptimiert), `balanced` (Standard), `performance` (Qualitaet zuerst)
+**PAOR-Phasen-Wechsel**: Verschiedene Anbieter fuer Planungs- vs. Ausfuehrungs- vs. Reflexionsphasen.
+**Konsens**: Niedrige Konfidenz → automatische Zweitmeinung von einem anderen Anbieter.
+
+### Strada.MCP-Integration
+
+Strada.Brain erkennt [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (76-Tool Unity MCP-Server) und informiert den Agenten ueber verfuegbare MCP-Faehigkeiten einschliesslich Laufzeitsteuerung, Dateioperationen, Git, .NET-Build, Code-Analyse und Szenen-/Prefab-Verwaltung.
+
+---
+
 ## Daemon-Modus
 
-Der Daemon bietet 24/7-Autonombetrieb mit einem Heartbeat-gesteuerten Ausloesersystem.
+Der Daemon bietet 24/7-Autonombetrieb mit einem Heartbeat-gesteuerten Ausloesersystem. Wenn der Daemon-Modus aktiv ist, laeuft der **Agent Core OODA-Loop** innerhalb der Daemon-Ticks, beobachtet die Umgebung und handelt proaktiv zwischen Benutzerinteraktionen. Der Befehl `/autonomous on` propagiert jetzt an die DaemonSecurityPolicy und ermoeglicht vollatonomen Betrieb ohne Genehmigungsaufforderungen pro Aktion.
 
 ```bash
 npm run dev -- daemon --channel web
@@ -465,7 +498,7 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 |----------|----------|-------------|
 | `RAG_ENABLED` | `true` | Semantische Code-Suche ueber Ihr C#-Projekt aktivieren |
 | `EMBEDDING_PROVIDER` | `auto` | Embedding-Anbieter: `auto`, `openai`, `gemini`, `mistral`, `together`, `fireworks`, `qwen`, `ollama` |
-| `EMBEDDING_DIMENSIONS` | `256` | Embedding-Vektordimensionen (Matryoshka: 256, 512, 768, 1024) |
+| `EMBEDDING_DIMENSIONS` | (Anbieter-Standard) | Ausgabe-Vektordimensionen (Matryoshka: 128-3072 fuer Gemini/OpenAI) |
 | `MEMORY_ENABLED` | `true` | Persistenten Konversationsspeicher aktivieren |
 | `MEMORY_DB_PATH` | `.strada-memory` | Verzeichnis fuer Speicher-Datenbankdateien |
 | `WEB_CHANNEL_PORT` | `3000` | Port fuer Web-Dashboard |
@@ -485,6 +518,17 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | `SOUL_FILE_WHATSAPP` | (nicht gesetzt) | Kanalspezifische Persoenlichkeit fuer WhatsApp |
 | `READ_ONLY_MODE` | `false` | Alle Schreiboperationen blockieren |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` oder `debug` |
+
+### Routing & Konsens
+
+| Variable | Standard | Beschreibung |
+|----------|----------|-------------|
+| `ROUTING_PRESET` | `balanced` | Routing-Preset: `budget`, `balanced` oder `performance` |
+| `ROUTING_PHASE_SWITCHING` | `true` | PAOR-Phasen-Wechsel ueber Anbieter aktivieren |
+| `CONSENSUS_MODE` | `auto` | Konsens-Modus: `auto`, `critical-only`, `always` oder `disabled` |
+| `CONSENSUS_THRESHOLD` | `0.5` | Konfidenzschwelle fuer Konsens-Ausloesung |
+| `CONSENSUS_MAX_PROVIDERS` | `3` | Maximale Anbieter fuer Konsensabfrage |
+| `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | Taegliches Budget (USD) fuer Daemon-Modus |
 
 ### Ratenbegrenzung
 
@@ -572,6 +616,23 @@ Der Agent verfuegt ueber mehr als 40 integrierte Tools, organisiert nach Kategor
 
 ---
 
+## Chat-Befehle
+
+Slash-Befehle, die in allen Chat-Kanaelen verfuegbar sind:
+
+| Befehl | Beschreibung |
+|--------|-------------|
+| `/daemon` | Daemon-Status anzeigen |
+| `/daemon start` | Daemon-Heartbeat-Schleife starten |
+| `/daemon stop` | Daemon-Heartbeat-Schleife stoppen |
+| `/daemon triggers` | Aktive Ausloeser anzeigen |
+| `/agent` | Agent-Core-Status anzeigen |
+| `/routing` | Routing-Status und Preset anzeigen |
+| `/routing preset <name>` | Routing-Preset wechseln (budget/balanced/performance) |
+| `/routing info` | Letzte Routing-Entscheidungen anzeigen |
+
+---
+
 ## RAG-Pipeline
 
 Die RAG-Pipeline (Retrieval-Augmented Generation) indiziert Ihren C#-Quellcode fuer die semantische Suche.
@@ -579,7 +640,7 @@ Die RAG-Pipeline (Retrieval-Augmented Generation) indiziert Ihren C#-Quellcode f
 **Indizierungsablauf:**
 1. Scannt `**/*.cs`-Dateien in Ihrem Unity-Projekt
 2. Zerlegt Code strukturell -- Datei-Header, Klassen, Methoden, Konstruktoren
-3. Generiert Embeddings ueber Gemini Embedding 2.0 (Standard), OpenAI, Mistral, Together, Fireworks, Qwen oder Ollama mit Matryoshka-Dimensionsunterstuetzung (256/512/768/1024)
+3. Generiert Embeddings ueber den konfigurierten Anbieter -- OpenAI (`text-embedding-3-small`), Gemini (`gemini-embedding-2-preview` mit Matryoshka-Dimensionen 128-3072), Mistral, Ollama oder andere. Steuern Sie die Ausgabegroesse mit `EMBEDDING_DIMENSIONS`.
 4. Speichert Vektoren im HNSW-Index fuer schnelle approximative Naechste-Nachbar-Suche
 5. Laeuft automatisch beim Start (im Hintergrund, nicht-blockierend)
 
@@ -751,24 +812,27 @@ src/
     autonomy/           # Fehlerwiederherstellung, Aufgabenplanung, Selbstverifizierung
     context/            # System-Prompt (Strada.Core-Wissensbasis)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq + weitere
-    tools/              # 30+ Tool-Implementierungen
+    tools/              # 30+ Tool-Implementierungen (ask_user, show_plan, switch_personality, ...)
+    soul/               # SOUL.md-Persoenlichkeitslader mit Hot-Reload und kanalspezifischen Overrides
     plugins/            # Externer Plugin-Loader
+  profiles/             # Persoenlichkeitsprofile: casual.md, formal.md, minimal.md
   channels/
     telegram/           # Grammy-basierter Bot
     discord/            # discord.js-Bot mit Slash-Befehlen
     slack/              # Slack Bolt (Socket-Modus) mit Block Kit
     whatsapp/           # Baileys-basierter Client mit Sitzungsverwaltung
-    web/                # Express + WebSocket Web-Dashboard
+    web/                # Express + WebSocket Web-Kanal
     cli/                # Readline-REPL
+  web-portal/           # React + Vite Chat-UI (Dunkel-/Hell-Theme, Datei-Upload, Streaming, Dashboard-Tab, Seitenpanel)
   memory/
     file-memory-manager.ts   # Altes Backend: JSON + TF-IDF (Fallback)
-    consolidation-engine.ts  # Leerlauf-Konsolidierung mit HNSW-Clustering
-    consolidation-types.ts   # Typdefinitionen fuer Konsolidierung
-    decay/                   # Exponentieller Gedaechtnisverfall
     unified/
       agentdb-memory.ts      # Aktives Backend: SQLite + HNSW, 3-stufiges Auto-Tiering
       agentdb-adapter.ts     # IMemoryManager-Adapter fuer AgentDBMemory
       migration.ts           # Legacy FileMemoryManager -> AgentDB-Migration
+      consolidation-engine.ts # Leerlauf-Konsolidierung mit HNSW-Clustering
+      consolidation-types.ts  # Konsolidierungs-Typdefinitionen und -Interfaces
+    decay/                    # Exponentielles Gedaechtnisverfall-System
   rag/
     rag-pipeline.ts     # Index + Suche + Format-Orchestrierung
     chunker.ts          # C#-spezifisches strukturelles Chunking
@@ -854,6 +918,8 @@ src/
     metrics-storage.ts  # SQLite-Metrik-Speicher
     metrics-recorder.ts # Metrik-Erfassung pro Sitzung
     metrics-cli.ts      # CLI-Befehl zur Metrikanzeige
+  utils/
+    media-processor.ts  # Medien-Download, Validierung (MIME/Groesse/Magic Bytes), SSRF-Schutz
   security/             # Auth, RBAC, Pfadschutz, Ratenbegrenzer, Geheimnis-Bereinigung
   intelligence/         # C#-Parsing, Projektanalyse, Code-Qualitaet
   dashboard/            # HTTP-, WebSocket-, Prometheus-Dashboards

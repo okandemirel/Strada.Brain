@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>Agente de Desarrollo con IA para Proyectos Unity / Strada.Core</strong><br/>
-  Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7. Ahora con orquestacion multi-agente, delegacion de tareas, consolidacion de memoria, un subsistema de despliegue con puertas de aprobacion y comparticion de medios con soporte de vision LLM.
+  Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7. Ahora con orquestacion multi-agente, delegacion de tareas, consolidacion de memoria, un subsistema de despliegue con puertas de aprobacion, comparticion de medios con soporte de vision LLM, un sistema de personalidad configurable via SOUL.md, herramientas de aclaracion interactivas, enrutamiento inteligente multi-proveedor con conmutacion dinamica segun tarea, verificacion de consenso basada en confianza, un Agent Core autonomo con bucle de razonamiento OODA e integracion con Strada.MCP.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3220%2B-brightgreen?style=flat-square" alt="Pruebas">
+  <img src="https://img.shields.io/badge/tests-3450%2B-brightgreen?style=flat-square" alt="Pruebas">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Licencia">
 </p>
 
@@ -34,6 +34,8 @@
 Strada.Brain es un agente de IA con el que hablas a traves de un canal de chat. Describes lo que quieres -- "crea un nuevo sistema ECS para movimiento del jugador" o "encuentra todos los componentes que usan health" -- y el agente lee tu proyecto C#, escribe el codigo, ejecuta `dotnet build`, corrige errores automaticamente y te envia el resultado.
 
 Tiene memoria persistente respaldada por SQLite + vectores HNSW, aprende de errores pasados usando puntuacion de confianza hibrida ponderada, descompone objetivos complejos en ejecucion paralela de DAGs, sintetiza automaticamente cadenas de herramientas multiples con saga rollback y puede ejecutarse como un daemon 24/7 con disparadores proactivos. Soporta orquestacion multi-agente con aislamiento de sesion por canal, delegacion jerarquica de tareas entre niveles de agentes, consolidacion automatica de memoria y un subsistema de despliegue con puertas de aprobacion humana y proteccion de disyuntor.
+
+Nuevo en esta version: Strada.Brain ahora incluye un **Agent Core** -- un motor de razonamiento OODA autonomo que observa el entorno (cambios de archivos, estado de git, resultados de compilacion), razona sobre prioridades usando patrones aprendidos y actua proactivamente. El sistema de **enrutamiento multi-proveedor** selecciona dinamicamente el mejor proveedor de IA para cada tipo de tarea (planificacion, generacion de codigo, depuracion, revision) con presets configurables (budget/balanced/performance). Un sistema de **consenso basado en confianza** consulta automaticamente a un segundo proveedor cuando la confianza del agente es baja, previniendo errores en operaciones criticas. Todas las caracteristicas degradan de forma controlada -- con un solo proveedor, el sistema funciona de forma identica a antes sin ninguna sobrecarga.
 
 **Esto no es una biblioteca ni una API.** Es una aplicacion independiente que ejecutas. Se conecta a tu plataforma de chat, lee tu proyecto Unity en disco y opera de forma autonoma dentro de los limites que configures.
 
@@ -362,9 +364,42 @@ Un sistema de despliegue opcional con puertas de aprobacion humana y proteccion 
 
 ---
 
+### Agent Core (Bucle OODA Autonomo)
+
+Cuando el modo daemon esta activo, el Agent Core ejecuta un bucle continuo de observar-orientar-decidir-actuar:
+
+- **Observar**: Recopila el estado del entorno de 6 observadores (cambios de archivos, estado de git, resultados de compilacion, eventos de disparadores, actividad del usuario, resultados de pruebas)
+- **Orientar**: Puntua las observaciones usando prioridad informada por aprendizaje (PriorityScorer con integracion de instintos)
+- **Decidir**: Razonamiento LLM con limitacion consciente del presupuesto (intervalo minimo de 30s, umbral de prioridad, piso de presupuesto)
+- **Actuar**: Envia objetivos, notifica al usuario o espera (el agente puede decidir "nada que hacer")
+
+Seguridad: proteccion tickInFlight, limitacion de tasa, piso de presupuesto (10%) y aplicacion de DaemonSecurityPolicy.
+
+### Enrutamiento Inteligente Multi-Proveedor
+
+Con 2+ proveedores configurados, Strada.Brain enruta automaticamente las tareas al proveedor optimo:
+
+| Tipo de Tarea | Estrategia de Enrutamiento |
+|---------------|---------------------------|
+| Planificacion | Ventana de contexto mas amplia (Claude > GPT > Gemini) |
+| Generacion de Codigo | Fuerte invocacion de herramientas (Claude > Kimi > OpenAI) |
+| Revision de Codigo | Modelo diferente al executor (sesgo de diversidad) |
+| Preguntas Simples | Mas rapido/economico (Groq > Kimi > Ollama) |
+| Depuracion | Fuerte analisis de errores |
+
+**Presets**: `budget` (optimizado en costos), `balanced` (por defecto), `performance` (calidad primero)
+**Cambio de Fase PAOR**: Diferentes proveedores para las fases de planificacion vs ejecucion vs reflexion.
+**Consenso**: Confianza baja → segunda opinion automatica de un proveedor diferente.
+
+### Integracion con Strada.MCP
+
+Strada.Brain detecta [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (servidor MCP Unity de 76 herramientas) e informa al agente sobre las capacidades MCP disponibles, incluyendo control de tiempo de ejecucion, operaciones de archivos, git, compilacion .NET, analisis de codigo y gestion de escenas/prefabs.
+
+---
+
 ## Modo Daemon
 
-El daemon proporciona operacion autonoma 24/7 con un sistema de disparadores impulsado por latidos.
+El daemon proporciona operacion autonoma 24/7 con un sistema de disparadores impulsado por latidos. Cuando el modo daemon esta activo, el **bucle OODA del Agent Core** se ejecuta dentro de los ticks del daemon, observando el entorno y actuando proactivamente entre las interacciones del usuario. El comando `/autonomous on` ahora se propaga a la DaemonSecurityPolicy, habilitando la operacion completamente autonoma sin solicitudes de aprobacion por accion.
 
 ```bash
 npm run dev -- daemon --channel web
@@ -494,7 +529,7 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 |----------|-------------|-------------|
 | `RAG_ENABLED` | `true` | Habilitar busqueda semantica de codigo sobre tu proyecto C# |
 | `EMBEDDING_PROVIDER` | `auto` | Proveedor de embeddings: `auto`, `openai`, `gemini`, `mistral`, `together`, `fireworks`, `qwen`, `ollama` |
-| `EMBEDDING_DIMENSIONS` | `256` | Dimensiones del vector de embedding (soporta dimensiones Matryoshka) |
+| `EMBEDDING_DIMENSIONS` | (proveedor por defecto) | Dimensiones del vector de salida (Matryoshka: 128-3072 para Gemini/OpenAI) |
 | `MEMORY_ENABLED` | `true` | Habilitar memoria persistente de conversaciones |
 | `MEMORY_DB_PATH` | `.strada-memory` | Directorio para archivos de base de datos de memoria |
 | `WEB_CHANNEL_PORT` | `3000` | Puerto del dashboard web |
@@ -514,6 +549,17 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | `SOUL_FILE_WHATSAPP` | (no definido) | Anulacion de personalidad por canal para WhatsApp |
 | `READ_ONLY_MODE` | `false` | Bloquear todas las operaciones de escritura |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info` o `debug` |
+
+### Enrutamiento y Consenso
+
+| Variable | Por Defecto | Descripcion |
+|----------|-------------|-------------|
+| `ROUTING_PRESET` | `balanced` | Preset de enrutamiento: `budget`, `balanced` o `performance` |
+| `ROUTING_PHASE_SWITCHING` | `true` | Habilitar cambio de fases PAOR entre proveedores |
+| `CONSENSUS_MODE` | `auto` | Modo de consenso: `auto`, `critical-only`, `always` o `disabled` |
+| `CONSENSUS_THRESHOLD` | `0.5` | Umbral de confianza para activar consenso |
+| `CONSENSUS_MAX_PROVIDERS` | `3` | Maximo de proveedores a consultar para consenso |
+| `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | Presupuesto diario (USD) para modo daemon |
 
 ### Limitacion de Tasa
 
@@ -598,6 +644,23 @@ El agente tiene mas de 40 herramientas integradas organizadas por categoria:
 | `shell_exec` | Ejecutar comandos shell (timeout 30s, lista de bloqueo de comandos peligrosos) |
 | `code_quality` | Analisis de calidad de codigo por archivo o por proyecto |
 | `rag_index` | Activar re-indexacion incremental o completa del proyecto |
+
+---
+
+## Comandos de Chat
+
+Comandos slash disponibles en todos los canales de chat:
+
+| Comando | Descripcion |
+|---------|-------------|
+| `/daemon` | Mostrar estado del daemon |
+| `/daemon start` | Iniciar bucle de latido del daemon |
+| `/daemon stop` | Detener bucle de latido del daemon |
+| `/daemon triggers` | Mostrar disparadores activos |
+| `/agent` | Mostrar estado del Agent Core |
+| `/routing` | Mostrar estado de enrutamiento y preset |
+| `/routing preset <nombre>` | Cambiar preset de enrutamiento (budget/balanced/performance) |
+| `/routing info` | Mostrar decisiones de enrutamiento recientes |
 
 ---
 
@@ -780,15 +843,18 @@ src/
     autonomy/           # Recuperacion de errores, planificacion de tareas, auto-verificacion
     context/            # System prompt (base de conocimiento Strada.Core)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq + mas
-    tools/              # 30+ implementaciones de herramientas
+    tools/              # 30+ implementaciones de herramientas (ask_user, show_plan, switch_personality, ...)
+    soul/               # Cargador de personalidad SOUL.md con recarga en caliente y anulaciones por canal
     plugins/            # Cargador de plugins externos
+  profiles/             # Archivos de perfiles de personalidad: casual.md, formal.md, minimal.md
   channels/
     telegram/           # Bot basado en Grammy
     discord/            # Bot discord.js con comandos slash
     slack/              # Slack Bolt (modo socket) con Block Kit
     whatsapp/           # Cliente basado en Baileys con gestion de sesiones
-    web/                # Dashboard web Express + WebSocket
+    web/                # Canal web Express + WebSocket
     cli/                # REPL Readline
+  web-portal/           # UI de chat React + Vite (tema oscuro/claro, carga de archivos, streaming, pestana dashboard, panel lateral)
   memory/
     file-memory-manager.ts   # Backend legado: JSON + TF-IDF (respaldo)
     unified/
@@ -883,6 +949,8 @@ src/
     metrics-storage.ts  # Almacenamiento SQLite de metricas
     metrics-recorder.ts # Captura de metricas por sesion
     metrics-cli.ts      # Comando CLI para visualizacion de metricas
+  utils/
+    media-processor.ts  # Descarga de medios, validacion (MIME/tamano/bytes magicos), proteccion SSRF
   security/             # Auth, RBAC, proteccion de rutas, limitador de tasa, sanitizacion de secretos
   intelligence/         # Parsing C#, analisis de proyecto, calidad de codigo
   dashboard/            # Dashboards HTTP, WebSocket, Prometheus
