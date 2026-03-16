@@ -118,6 +118,11 @@ export default function SettingsPage() {
   const [daemonLoading, setDaemonLoading] = useState(true)
   const [daemonToggling, setDaemonToggling] = useState(false)
 
+  // --- Routing Preset ---
+  const [routingPreset, setRoutingPreset] = useState<string>('balanced')
+  const [routingLoading, setRoutingLoading] = useState(true)
+  const [routingSwitching, setRoutingSwitching] = useState(false)
+
   // --- Voice Mode ---
   const [voice, setVoice] = useState<VoiceSettings>(loadVoiceSettings)
   const speechInputAvailable = hasSpeechRecognition()
@@ -150,6 +155,16 @@ export default function SettingsPage() {
     })
   }, [chatId])
 
+  // --- Fetch routing preset ---
+  const fetchRouting = useCallback(() => {
+    fetchJson<{ routing: unknown[]; preset?: string }>('/api/agent-activity')
+      .then((data) => {
+        if (data?.preset) setRoutingPreset(data.preset)
+        setRoutingLoading(false)
+      })
+      .catch(() => setRoutingLoading(false))
+  }, [])
+
   // --- Fetch daemon status ---
   const fetchDaemon = useCallback(() => {
     fetchJson<DaemonStatus>('/api/daemon')
@@ -167,7 +182,8 @@ export default function SettingsPage() {
     fetchAutonomous()
     fetchProviders()
     fetchDaemon()
-  }, [fetchAutonomous, fetchProviders, fetchDaemon])
+    fetchRouting()
+  }, [fetchAutonomous, fetchProviders, fetchDaemon, fetchRouting])
 
   // Refresh autonomous remaining time every 30s when active
   useEffect(() => {
@@ -280,6 +296,26 @@ export default function SettingsPage() {
       return next
     })
   }, [])
+
+  const handlePresetChange = useCallback(async (preset: string) => {
+    if (routingSwitching) return
+    setRoutingSwitching(true)
+
+    try {
+      const res = await fetch('/api/routing/preset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preset }),
+      })
+      if (res.ok) {
+        setRoutingPreset(preset)
+      }
+    } catch {
+      // Silently fail — user can retry
+    } finally {
+      setRoutingSwitching(false)
+    }
+  }, [routingSwitching])
 
   // --- Render ---
 
@@ -456,26 +492,33 @@ export default function SettingsPage() {
       {/* ===== Routing ===== */}
       <div className="admin-section">
         <div className="admin-section-title">Provider Routing</div>
-        <div className="admin-stat-row">
-          <span className="admin-stat-label">Routing Preset</span>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {(['budget', 'balanced', 'performance'] as const).map(p => (
-              <button
-                key={p}
-                className={`settings-provider-card ${p === 'balanced' ? 'active' : ''}`}
-                style={{ padding: '6px 14px', fontSize: 13, minWidth: 0 }}
-                disabled
-                title="Configure via /routing command or ROUTING_PRESET env var"
-              >
-                {p.charAt(0).toUpperCase() + p.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="settings-hint">
-          Provider routing automatically selects the best AI provider for each task type.
-          Configure with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>ROUTING_PRESET</code> or <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>/routing preset</code> command.
-        </div>
+
+        {routingLoading ? (
+          <div className="page-loading" style={{ height: 80 }}>Loading...</div>
+        ) : (
+          <>
+            <div className="admin-stat-row">
+              <span className="admin-stat-label">Routing Preset</span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(['budget', 'balanced', 'performance'] as const).map(p => (
+                  <button
+                    key={p}
+                    className={`settings-provider-card ${p === routingPreset ? 'active' : ''}`}
+                    style={{ padding: '6px 14px', fontSize: 13, minWidth: 0 }}
+                    onClick={() => p !== routingPreset && handlePresetChange(p)}
+                    disabled={routingSwitching || p === routingPreset}
+                  >
+                    {p.charAt(0).toUpperCase() + p.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-hint">
+              Provider routing automatically selects the best AI provider for each task type.
+              Configure with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>ROUTING_PRESET</code> or <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>/routing preset</code> command.
+            </div>
+          </>
+        )}
       </div>
 
       {/* ===== Model Selection ===== */}
