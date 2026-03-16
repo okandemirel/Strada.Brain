@@ -126,6 +126,14 @@ program
     });
   });
 
+program
+  .command("setup")
+  .description("Interactive setup wizard for first-time configuration")
+  .action(async () => {
+    const { runTerminalWizard } = await import("./core/terminal-wizard.js");
+    await runTerminalWizard();
+  });
+
 // Register preset management commands (list, show, set, models)
 registerPresetCommands(program);
 
@@ -179,7 +187,7 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
       }
     } else {
       // Non-web channels: offer setup wizard as a web-based option
-      console.error(`Configuration error: ${configResult.error}`);
+      console.warn(`Config invalid: ${configResult.error}. Run 'strada setup' to configure.`);
       console.log(`\nStarting setup wizard on http://localhost:${wizardPort} — open in your browser to configure.`);
       const wizard = new SetupWizard({ port: wizardPort });
       await wizard.start();
