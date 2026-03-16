@@ -56,6 +56,9 @@ export class KimiProvider extends OpenAIProvider {
     toolCalling: true,
     vision: true,
     systemPrompt: true,
+    contextWindow: 262_000,
+    thinkingSupported: true,
+    specialFeatures: ["coding", "reasoning"],
   };
 
   constructor(

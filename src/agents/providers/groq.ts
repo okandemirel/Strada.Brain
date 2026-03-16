@@ -33,6 +33,9 @@ export class GroqProvider extends OpenAIProvider {
     toolCalling: true,
     vision: false,
     systemPrompt: true,
+    contextWindow: 128_000,
+    thinkingSupported: false,
+    specialFeatures: ["fast_inference"],
   };
 
   constructor(

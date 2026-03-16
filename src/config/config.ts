@@ -219,7 +219,12 @@ export type EnvVarName =
   | "LANGUAGE_PREFERENCE"
 
   // Autonomous Mode
-  | "AUTONOMOUS_DEFAULT_HOURS";
+  | "AUTONOMOUS_DEFAULT_HOURS"
+
+  // Model Intelligence Service
+  | "MODEL_INTELLIGENCE_ENABLED"
+  | "MODEL_INTELLIGENCE_REFRESH_HOURS"
+  | "MODEL_INTELLIGENCE_DB_PATH";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;

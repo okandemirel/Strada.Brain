@@ -179,6 +179,9 @@ export interface ProviderCapabilities {
   readonly toolCalling: boolean;
   readonly vision: boolean;
   readonly systemPrompt: boolean;
+  readonly contextWindow?: number;
+  readonly thinkingSupported?: boolean;
+  readonly specialFeatures?: string[];
 }
 
 /** Provider configuration */

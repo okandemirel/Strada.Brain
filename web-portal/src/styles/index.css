@@ -1590,6 +1590,30 @@ body {
   text-align: center;
 }
 
+.model-selector-badges {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.badge-context {
+  background: rgba(0, 200, 200, 0.15);
+  color: #00cccc;
+}
+
+.badge-thinking {
+  background: rgba(180, 100, 255, 0.15);
+  color: #b464ff;
+}
+
 /* ===== Syntax Highlighting (GitHub Dark) ===== */
 .hljs {
   background: var(--code-bg) !important;

@@ -50,6 +50,9 @@ export class MiniMaxProvider extends OpenAIProvider {
     toolCalling: true,
     vision: false,
     systemPrompt: true,
+    contextWindow: 1_000_000,
+    thinkingSupported: true,
+    specialFeatures: ["reasoning_details"],
   };
 
   constructor(

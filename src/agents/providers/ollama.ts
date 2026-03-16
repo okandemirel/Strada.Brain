@@ -23,6 +23,9 @@ export class OllamaProvider implements IAIProvider {
     toolCalling: true,
     vision: false,
     systemPrompt: true,
+    contextWindow: 8_000,
+    thinkingSupported: false,
+    specialFeatures: ["local_inference", "custom_models"],
   };
   private readonly baseUrl: string;
   private readonly model: string;

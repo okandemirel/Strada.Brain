@@ -24,6 +24,9 @@ export class ClaudeProvider implements IAIProvider {
     toolCalling: true,
     vision: true,
     systemPrompt: true,
+    contextWindow: 1_000_000,
+    thinkingSupported: true,
+    specialFeatures: ["prompt_caching", "adaptive_thinking", "vision", "pdf_input"],
   };
   private readonly client: Anthropic;
   private readonly model: string;
@@ -200,6 +203,12 @@ export class ClaudeProvider implements IAIProvider {
     return result;
   }
 
+  /** Maps Anthropic stop_reason values to internal stop reasons */
+  private static readonly STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
+    tool_use: "tool_use",
+    max_tokens: "max_tokens",
+  };
+
   private parseResponse(response: Anthropic.Message): ProviderResponse {
     let text = "";
     const toolCalls: ToolCall[] = [];
@@ -216,12 +225,8 @@ export class ClaudeProvider implements IAIProvider {
       }
     }
 
-    const STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
-      tool_use: "tool_use",
-      max_tokens: "max_tokens",
-    };
     const stopReason =
-      (response.stop_reason ? STOP_REASON_MAP[response.stop_reason] : undefined) ?? "end_turn";
+      (response.stop_reason ? ClaudeProvider.STOP_REASON_MAP[response.stop_reason] : undefined) ?? "end_turn";
 
     return {
       text,

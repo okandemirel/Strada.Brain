@@ -572,6 +572,9 @@ export class WebChannel
     "/api/personality/profiles",
     "/api/personality/switch",
     "/api/memory",
+    "/api/providers/intelligence",
+    "/api/providers/capabilities",
+    "/api/models/refresh",
   ]);
 
   /** Paths that accept POST or DELETE in addition to GET. */
@@ -599,7 +602,8 @@ export class WebChannel
       pathOnly.startsWith("/api/personality/profiles/") ||
       pathOnly === "/api/providers/available" ||
       pathOnly === "/api/providers/active" ||
-      pathOnly === "/api/user/autonomous";
+      pathOnly === "/api/user/autonomous" ||
+      pathOnly.startsWith("/api/providers/intelligence");
 
     if (!isAllowed) {
       res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
@@ -610,7 +614,8 @@ export class WebChannel
     // Method check: GET always allowed, POST/DELETE only for mutable paths
     const isMutable =
       WebChannel.MUTABLE_PROXY_PATHS.has(pathOnly) ||
-      pathOnly.startsWith("/api/personality/profiles/");
+      pathOnly.startsWith("/api/personality/profiles/") ||
+      pathOnly === "/api/models/refresh";
     if (method !== "GET" && !(isMutable && (method === "POST" || method === "DELETE"))) {
       res.writeHead(405, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Method Not Allowed" }));

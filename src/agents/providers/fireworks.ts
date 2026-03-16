@@ -34,6 +34,9 @@ export class FireworksProvider extends OpenAIProvider {
     toolCalling: true,
     vision: false,
     systemPrompt: true,
+    contextWindow: 1_000_000,
+    thinkingSupported: false,
+    specialFeatures: ["fast_inference", "open_models"],
   };
 
   constructor(

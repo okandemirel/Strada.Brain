@@ -39,6 +39,7 @@ import { MemoryRefresher } from "./memory-refresher.js";
 import type { ReRetrievalConfig } from "../config/config.js";
 import type { IEmbeddingProvider } from "../rag/rag.interface.js";
 import { shouldForceReplan } from "./failure-classifier.js";
+import { buildProviderIntelligence, getRecommendedMaxMessages } from "./providers/provider-knowledge.js";
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
 import { WRITE_OPERATIONS } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
@@ -1036,9 +1037,10 @@ export class Orchestrator {
     const userContent = buildUserContent(text, msg.attachments, supportsVision);
     session.messages.push({ role: "user", content: userContent });
 
-    // Trim old messages to manage context window
+    // Trim old messages to manage context window (provider-aware threshold)
     // Persist trimmed messages to memory before discarding
-    const trimmed = this.trimSession(session, 40);
+    const providerInfo = this.providerManager.getActiveInfo?.(chatId);
+    const trimmed = this.trimSession(session, getRecommendedMaxMessages(providerInfo?.providerName ?? ""));
     if (trimmed.length > 0) {
       await this.persistSessionToMemory(chatId, trimmed, /* force */ true);
     }
@@ -1227,6 +1229,12 @@ export class Orchestrator {
       personaContent = await this.soulLoader.getProfileContent(profile.activePersona) ?? undefined;
     }
     let systemPrompt = this.injectSoulPersonality(this.systemPrompt, channelType, personaContent);
+
+    // Provider intelligence: inject strengths, limitations, and behavioral hints
+    const activeInfo = this.providerManager.getActiveInfo?.(chatId);
+    if (activeInfo) {
+      systemPrompt += buildProviderIntelligence(activeInfo.providerName, activeInfo.model);
+    }
 
     // Language directive
     if (profile?.language && profile.language !== "en") {

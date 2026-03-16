@@ -48,6 +48,9 @@ export class GeminiProvider extends OpenAIProvider {
     toolCalling: true,
     vision: true,
     systemPrompt: true,
+    contextWindow: 1_000_000,
+    thinkingSupported: true,
+    specialFeatures: ["grounding", "thinking_level", "code_execution"],
   };
 
   constructor(

@@ -34,6 +34,9 @@ export class TogetherProvider extends OpenAIProvider {
     toolCalling: true,
     vision: false,
     systemPrompt: true,
+    contextWindow: 1_000_000,
+    thinkingSupported: false,
+    specialFeatures: ["open_models"],
   };
 
   constructor(

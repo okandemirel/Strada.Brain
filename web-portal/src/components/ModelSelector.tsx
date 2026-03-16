@@ -6,6 +6,9 @@ interface ProviderInfo {
   configured: boolean
   models?: string[]
   activeModel?: string
+  contextWindow?: number
+  thinkingSupported?: boolean
+  specialFeatures?: string[]
 }
 
 interface ActiveInfo {
@@ -191,6 +194,12 @@ export default function ModelSelector() {
                   onClick={() => handleProviderClick(p.name, p.models)}
                 >
                   <span className="model-selector-option-name">{p.name}</span>
+                  {p.contextWindow && (
+                    <span className="model-selector-badges">
+                      <span className="badge badge-context">{(p.contextWindow / 1000).toFixed(0)}K</span>
+                      {p.thinkingSupported && <span className="badge badge-thinking">Think</span>}
+                    </span>
+                  )}
                   <span className="model-selector-option-icons">
                     {isActive && (
                       <svg

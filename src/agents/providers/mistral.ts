@@ -21,6 +21,9 @@ export class MistralProvider extends OpenAIProvider {
     toolCalling: true,
     vision: false,
     systemPrompt: true,
+    contextWindow: 262_000,
+    thinkingSupported: false,
+    specialFeatures: ["safe_prompt", "code_generation"],
   };
 
   constructor(

@@ -47,6 +47,9 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     toolCalling: true,
     vision: true,
     systemPrompt: true,
+    contextWindow: 1_050_000,
+    thinkingSupported: false,
+    specialFeatures: ["function_calling", "json_mode"],
   };
   protected readonly apiKey: string;
   protected readonly model: string;

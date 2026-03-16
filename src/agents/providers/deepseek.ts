@@ -4,9 +4,8 @@ import type {
   ToolCall,
   ProviderCapabilities,
 } from "./provider.interface.js";
-import { OpenAIProvider } from "./openai.js";
+import { OpenAIProvider, OPENAI_STOP_REASON_MAP, stripReasoningBlocks } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
-import { stripReasoningBlocks } from "./openai.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
@@ -60,6 +59,9 @@ export class DeepSeekProvider extends OpenAIProvider {
     toolCalling: true,
     vision: false,
     systemPrompt: true,
+    contextWindow: 128_000,
+    thinkingSupported: true,
+    specialFeatures: ["reasoning", "context_caching"],
   };
 
   constructor(
@@ -94,11 +96,7 @@ export class DeepSeekProvider extends OpenAIProvider {
       return { id: tc.id, name: tc.function.name, input };
     });
 
-    const STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
-      tool_calls: "tool_use",
-      length: "max_tokens",
-    };
-    const stopReason = STOP_REASON_MAP[choice.finish_reason] ?? "end_turn";
+    const stopReason = OPENAI_STOP_REASON_MAP[choice.finish_reason] ?? "end_turn";
 
     // Log cache hit stats when available
     const usage = dsData.usage;

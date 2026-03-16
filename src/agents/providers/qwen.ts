@@ -27,6 +27,9 @@ export class QwenProvider extends OpenAIProvider {
     toolCalling: true,
     vision: false,
     systemPrompt: true,
+    contextWindow: 1_000_000,
+    thinkingSupported: false,
+    specialFeatures: ["web_search", "multilingual"],
   };
 
   constructor(

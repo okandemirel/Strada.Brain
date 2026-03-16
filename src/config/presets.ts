@@ -300,9 +300,12 @@ export function listPresets(): Array<{ name: string; label: string; cost: string
   }));
 }
 
+/** Model option entry returned by {@link getProviderModels}. */
+export type ProviderModelOption = (typeof PROVIDER_MODEL_OPTIONS)[keyof typeof PROVIDER_MODEL_OPTIONS][number];
+
 /**
  * Get model options for a specific provider.
  */
-export function getProviderModels(providerName: string) {
+export function getProviderModels(providerName: string): ProviderModelOption[] {
   return PROVIDER_MODEL_OPTIONS[providerName] ?? [];
 }

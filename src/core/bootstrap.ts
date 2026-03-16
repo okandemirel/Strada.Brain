@@ -499,6 +499,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     userProfileStore,
   });
 
+  // TODO: Initialize ModelIntelligenceService here for self-updating model data
+
   // Initialize tool chain synthesis (TOOL-01 through TOOL-05)
   let chainManager: ChainManager | undefined;
   if (config.toolChain.enabled && learningResult.storage) {

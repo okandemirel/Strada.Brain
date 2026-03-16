@@ -182,6 +182,7 @@ export class CommandHandler {
       "`/model list` - List available providers",
       "`/model <provider>` - Switch provider",
       "`/model <provider>/<model>` - Switch provider and model",
+      "`/model info [provider]` - Show provider capabilities",
       "`/model reset` - Return to system default",
       "",
       "*Autonomous Mode*",
@@ -198,7 +199,7 @@ export class CommandHandler {
       "`/persona create <name>` - Create a custom profile",
       "`/persona delete <name>` - Delete a custom profile",
       "",
-      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /model listele, /model sıfırla",
+      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /model listele, /model bilgi, /model sıfırla",
       "",
       "Send any other message to start a new background task.",
     ].join("\n");
@@ -263,6 +264,43 @@ export class CommandHandler {
         chatId,
         `*Available Providers*\n\n${lines.join("\n")}\n\nUsage: \`/model provider\` or \`/model provider/model\``,
       );
+      return;
+    }
+
+    // info / bilgi — show provider capabilities and intelligence
+    if (subcommand === "info" || subcommand === "bilgi") {
+      const providerArg = args[1]?.toLowerCase();
+      const targetProvider = providerArg || this.providerManager.getActiveInfo(chatId)?.providerName;
+
+      if (!targetProvider) {
+        await this.channel.sendText(chatId, "Could not determine current provider.");
+        return;
+      }
+
+      try {
+        const { PROVIDER_KNOWLEDGE, formatContextWindow } = await import("../agents/providers/provider-knowledge.js");
+        const knowledge = PROVIDER_KNOWLEDGE[targetProvider];
+        if (!knowledge) {
+          await this.channel.sendText(chatId, `No intelligence data for provider "${targetProvider}".`);
+          return;
+        }
+
+        const lines = [
+          `*Provider Intelligence: ${knowledge.provider}*`,
+          "",
+          `Context Window: ${formatContextWindow(knowledge.contextWindow)} tokens`,
+          `Max Messages: ${knowledge.maxMessages}`,
+          "",
+          `*Strengths*: ${knowledge.strengths.join(", ")}`,
+          "",
+          `*Limitations*: ${knowledge.limitations.join(", ")}`,
+          "",
+          `*Hints*: ${knowledge.behavioralHints.join(". ")}`,
+        ];
+        await this.channel.sendMarkdown(chatId, lines.join("\n"));
+      } catch {
+        await this.channel.sendText(chatId, "Provider intelligence module not available.");
+      }
       return;
     }
 

@@ -248,6 +248,9 @@ export class DashboardServer {
   private providerManager?: DashboardProviderManager;
   private userProfileStore?: DashboardUserProfileStore;
 
+  /** Timestamp of last /api/models/refresh call (rate limiting). */
+  private _lastModelRefreshMs = 0;
+
   constructor(
     port: number,
     metrics: MetricsCollector,
@@ -1093,6 +1096,11 @@ export class DashboardServer {
           res.end(JSON.stringify({ error: "Missing required query parameter: chatId" }));
           return;
         }
+        if (chatId.length > 128) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "chatId too long (max 128 chars)" }));
+          return;
+        }
         try {
           const active = this.providerManager.getActiveInfo(chatId);
           res.writeHead(200, { "Content-Type": "application/json" });
@@ -1144,6 +1152,87 @@ export class DashboardServer {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
           });
+        });
+        return;
+      }
+
+      // GET /api/providers/intelligence -- Get provider intelligence info
+      if (req.method === "GET" && url.startsWith("/api/providers/intelligence")) {
+        const params = new URL(url, "http://localhost").searchParams;
+        const provider = params.get("provider");
+        if (!provider) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing required query parameter: provider" }));
+          return;
+        }
+        // Validate provider name format to prevent reflection of arbitrary input
+        if (!DashboardServer.PROVIDER_NAME_RE.test(provider)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid provider name format" }));
+          return;
+        }
+        void import("../agents/providers/provider-knowledge.js").then(({ PROVIDER_KNOWLEDGE, buildProviderIntelligence }) => {
+          const knowledge = PROVIDER_KNOWLEDGE[provider];
+          if (!knowledge) {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: `Unknown provider: ${provider}` }));
+            return;
+          }
+          const intelligence = buildProviderIntelligence(provider);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ provider, knowledge, intelligence }));
+        }).catch((err) => {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+        return;
+      }
+
+      // GET /api/providers/capabilities -- Get capabilities for all providers
+      if (req.method === "GET" && url === "/api/providers/capabilities") {
+        void import("../agents/providers/provider-knowledge.js").then(({ PROVIDER_KNOWLEDGE }) => {
+          const capabilities = Object.entries(PROVIDER_KNOWLEDGE).map(([name, k]) => ({
+            name,
+            provider: k.provider,
+            contextWindow: k.contextWindow,
+            maxMessages: k.maxMessages,
+            strengths: k.strengths,
+            limitations: k.limitations,
+          }));
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ capabilities }));
+        }).catch((err) => {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+        return;
+      }
+
+      // POST /api/models/refresh -- Trigger model intelligence refresh
+      // Rate-limited: max 1 refresh per 60 seconds to prevent DoS via repeated DB + external fetch
+      if (req.method === "POST" && url === "/api/models/refresh") {
+        const now = Date.now();
+        if (this._lastModelRefreshMs && now - this._lastModelRefreshMs < 60_000) {
+          const retryAfter = Math.ceil((60_000 - (now - this._lastModelRefreshMs)) / 1000);
+          res.writeHead(429, { "Content-Type": "application/json", "Retry-After": String(retryAfter) });
+          res.end(JSON.stringify({ error: "Rate limit: model refresh allowed once per 60 seconds", retryAfterSeconds: retryAfter }));
+          return;
+        }
+        this._lastModelRefreshMs = now;
+
+        // Dynamic import to avoid circular dependencies and handle missing module
+        void import("../agents/providers/model-intelligence.js").then(({ ModelIntelligenceService }) => {
+          const service = new ModelIntelligenceService();
+          return service.initialize(".strada-memory/model-intelligence.db")
+            .then(() => service.refresh())
+            .then((result) => {
+              service.shutdown();
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ success: true, result }));
+            });
+        }).catch((err) => {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
         });
         return;
       }
@@ -1357,6 +1446,7 @@ export class DashboardServer {
   }
 
   /** Sensitive key name patterns for config masking. */
+  private static readonly PROVIDER_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
   private static readonly SENSITIVE_KEY_RE = /key|token|secret|password|credential|auth|uri|dsn/i;
 
   /**
