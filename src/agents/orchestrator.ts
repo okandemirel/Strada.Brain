@@ -85,6 +85,12 @@ const ONBOARDING_LANG_MAP: Record<string, string> = {
   chinese: "zh", german: "de", spanish: "es", french: "fr",
 };
 
+/** Maps ISO codes to display names for system prompt injection. */
+const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
+  en: "English", tr: "Turkish", ja: "Japanese", ko: "Korean",
+  zh: "Chinese", de: "German", es: "Spanish", fr: "French",
+};
+
 const VALID_STYLES = new Set(["casual", "formal", "minimal"]);
 const VALID_DETAIL_LEVELS = new Set(["brief", "moderate", "detailed"]);
 
@@ -108,10 +114,12 @@ const FIRST_TIME_USER_PROMPT = `\n\n## First-Time User
 This is a new user you haven't met before. In your FIRST response:
 1. Introduce yourself warmly as Strada Brain
 2. Ask their name naturally (e.g., "What should I call you?")
-3. Match their language — if they write in Turkish, respond in Turkish
-4. Still answer their actual question or help with what they asked
+3. Ask about their preferred communication style (casual, formal, or minimal)
+4. Ask how detailed they want explanations to be (brief, moderate, or detailed)
+5. Start with the language from the Language Rule above, but if the user writes in a different language, match their language
+6. Still answer their actual question or help with what they asked
 
-After they tell you their name, remember it for future messages. Don't run through a checklist of questions — just be natural and helpful.\n`;
+After they tell you their name, remember it for future messages. Keep the onboarding conversational — ask these questions naturally, not as a formal checklist.\n`;
 
 /** Strip prompt injection patterns from stored text before injecting into system prompts. */
 function sanitizePromptInjection(text: string): string {
@@ -483,23 +491,25 @@ export class Orchestrator {
   }): Promise<{ systemPrompt: string; initialContentHashes: string[] }> {
     const logger = getLogger();
 
-    // 1. Soul personality injection (with optional persona override)
-    let systemPrompt = this.injectSoulPersonality(this.systemPrompt, params.channelType, params.personaContent);
+    // 1. Language directive — FIRST, highest priority, before personality
+    let langDirective = "";
+    if (params.profile?.language) {
+      const langName = LANGUAGE_DISPLAY_NAMES[params.profile.language] ?? "English";
+      langDirective = `\n## LANGUAGE RULE\nYour current language is ${langName}. Respond in ${langName} unless the user clearly switches to a different language — in that case, follow their lead.\n`;
+    }
 
-    // 2. Autonomous mode directive
+    // 2. Soul personality injection (with optional persona override)
+    let systemPrompt = langDirective + this.injectSoulPersonality(this.systemPrompt, params.channelType, params.personaContent);
+
+    // 3. Autonomous mode directive
     if (this.dmPolicy?.isAutonomousActive(params.chatId)) {
       systemPrompt += AUTONOMOUS_MODE_DIRECTIVE;
     }
 
-    // 3. Provider intelligence: inject strengths, limitations, and behavioral hints
+    // 4. Provider intelligence: inject strengths, limitations, and behavioral hints
     const activeInfo = this.providerManager.getActiveInfo?.(params.chatId);
     if (activeInfo) {
       systemPrompt += buildProviderIntelligence(activeInfo.providerName, activeInfo.model);
-    }
-
-    // 4. Language directive
-    if (params.profile?.language && params.profile.language !== "en") {
-      systemPrompt += `\nIMPORTANT: Communicate with the user in ${params.profile.language}.\n`;
     }
 
     // 5. Context layers (user profile, session summary, open tasks, semantic memory)
@@ -642,11 +652,12 @@ export class Orchestrator {
     // Instead of a hardcoded Q&A flow, inject onboarding instructions into
     // the system prompt. The LLM naturally introduces itself, asks the user's
     // name in conversation, and we extract preferences from the response.
-    const profile = this.userProfileStore?.getProfile(chatId) ?? null;
+    let profile = this.userProfileStore?.getProfile(chatId) ?? null;
     if (this.userProfileStore && !profile) {
-      // Create profile immediately so subsequent messages skip this block
-      this.userProfileStore.upsertProfile(chatId, {});
-      logger.info("New user detected, injecting onboarding context", { chatId });
+      const configLang = process.env["LANGUAGE_PREFERENCE"] ?? "en";
+      this.userProfileStore.upsertProfile(chatId, { language: configLang });
+      profile = this.userProfileStore.getProfile(chatId) ?? null;
+      logger.info("New user detected, injecting onboarding context", { chatId, language: configLang });
     }
 
     // Touch user profile (debounced)
@@ -1508,7 +1519,7 @@ export class Orchestrator {
       channelType,
       prompt: queryText,
       personaContent,
-      isUserTask: false, // Interactive path uses separate onboarding flow
+      isUserTask: false, // processMessage is currently unused — all channels route through background tasks
       profile,
       preComputedEmbedding,
     });
