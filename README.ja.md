@@ -52,6 +52,10 @@ Strada.Brain はチャットチャネルを通じて対話する AI エージェ
 ### 1. インストール
 
 ```bash
+# グローバルインストール（推奨）
+npm install -g strada-brain
+
+# またはソースから クローン
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
@@ -60,10 +64,13 @@ npm install
 ### 2. 設定
 
 ```bash
-cp .env.example .env
+# インタラクティブセットアップウィザード（ターミナルまたは Web ブラウザ）
+strada setup
 ```
 
-`.env` を開き、最低限以下を設定してください：
+ウィザードでは、Unity プロジェクトパス、AI プロバイダー API キー、デフォルトチャネル、言語が尋ねられます。**ターミナル** を選択すれば迅速なセットアップが、**Web ブラウザ** を選択すれば完全な設定 UI が表示されます。
+
+または、`.env` を手動で作成します：
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...      # Claude API キー
@@ -74,27 +81,37 @@ JWT_SECRET=<生成方法: openssl rand -hex 64>
 ### 3. 実行
 
 ```bash
-# Web チャネル（デフォルト）- セットアップウィザードが localhost:3000 で開く
-# .env が存在しない場合、ウィザードが初期セットアップをガイド
-npm start
-
-# または明示的に Web チャネルで実行
-npm run dev -- start --channel web
+# デフォルト Web チャネルで起動
+strada start
 
 # インタラクティブ CLI モード（最も手軽なテスト方法）
-npm run dev -- cli
+strada start --channel cli
 
 # デーモンモード（プロアクティブトリガー付き 24 時間 365 日自律動作）
-npm run dev -- daemon --channel web
+strada start --channel web --daemon
 
-# または他のチャットチャネル経由で
-npm run dev -- start --channel telegram
-npm run dev -- start --channel discord
-npm run dev -- start --channel slack
-npm run dev -- start --channel whatsapp
+# その他のチャットチャネル
+strada start --channel telegram
+strada start --channel discord
+strada start --channel slack
+strada start --channel whatsapp
+
+# 自動再起動スーパーバイザー付きで常時実行
+strada supervise --channel web
 ```
 
-### 4. 対話する
+### 4. CLI コマンド
+
+```bash
+strada setup              # インタラクティブセットアップウィザード
+strada start              # エージェントを起動
+strada supervise          # 自動再起動スーパーバイザー付きで実行
+strada update             # 更新を確認して適用
+strada update --check     # 適用せずに更新を確認
+strada version-info       # バージョン、インストール方法、更新ステータスを表示
+```
+
+### 5. 対話する
 
 実行後、設定したチャネルからメッセージを送信します：
 
@@ -106,6 +123,18 @@ npm run dev -- start --channel whatsapp
 ```
 
 **Web チャネル：** ターミナルは不要です -- `localhost:3000` の Web ダッシュボードを通じて操作します。
+
+### 6. 自動更新
+
+Strada.Brain は毎日自動的に更新をチェックし、アイドル時に適用します。インストール方法（npm グローバル、npm ローカル、または git クローン）を検出し、適切な更新戦略を使用します。
+
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `AUTO_UPDATE_ENABLED` | `true` | 自動更新を有効化/無効化 |
+| `AUTO_UPDATE_INTERVAL_HOURS` | `24` | チェック頻度（時間） |
+| `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | 更新を適用するまでのアイドル時間（分） |
+| `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag：`stable` または `latest` |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | アイドル時に更新後自動再起動 |
 
 ---
 
