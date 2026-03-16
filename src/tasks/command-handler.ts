@@ -14,6 +14,15 @@ import type { DMPolicy } from "../security/dm-policy.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "../agents/soul/index.js";
 
+/** Structural interface for HeartbeatLoop to avoid circular dependency */
+interface HeartbeatLoopRef {
+  start(): void;
+  stop(): void;
+  isRunning(): boolean;
+  getDaemonStatus(): { running: boolean; intervalMs: number; triggerCount: number; lastTick: Date | null };
+  getSecurityPolicy?(): { setAutonomousOverride(enabled: boolean, expiresAt?: number): void } | undefined;
+}
+
 export class CommandHandler {
   constructor(
     private readonly taskManager: TaskManager,
@@ -22,7 +31,13 @@ export class CommandHandler {
     private readonly dmPolicy?: DMPolicy,
     private readonly userProfileStore?: UserProfileStore,
     private readonly soulLoader?: SoulLoader,
+    private heartbeatLoopRef?: HeartbeatLoopRef,
   ) {}
+
+  /** Set HeartbeatLoop reference for daemon control (set after construction due to init order) */
+  setHeartbeatLoop(loop: HeartbeatLoopRef): void {
+    this.heartbeatLoopRef = loop;
+  }
 
   async handle(chatId: string, command: TaskCommand, args: string[]): Promise<void> {
     switch (command) {
@@ -58,6 +73,9 @@ export class CommandHandler {
         break;
       case "persona":
         await this.handlePersona(chatId, args);
+        break;
+      case "daemon":
+        await this.handleDaemon(chatId, args);
         break;
     }
   }
@@ -198,6 +216,13 @@ export class CommandHandler {
       "`/persona switch <name>` - Switch to a profile",
       "`/persona create <name>` - Create a custom profile",
       "`/persona delete <name>` - Delete a custom profile",
+      "",
+      "*Daemon Mode*",
+      "",
+      "`/daemon` - Show daemon status",
+      "`/daemon start` - Start daemon heartbeat loop",
+      "`/daemon stop` - Stop daemon heartbeat loop",
+      "`/daemon triggers` - Show active triggers",
       "",
       "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /model listele, /model bilgi, /model sıfırla",
       "",
@@ -393,6 +418,8 @@ export class CommandHandler {
       const expiresAt = Date.now() + hours * 3600_000;
       await this.userProfileStore.setAutonomousMode(chatId, true, expiresAt);
       this.dmPolicy.initFromProfile(chatId, { autonomousMode: true, autonomousExpiresAt: expiresAt });
+      // Propagate autonomous mode to daemon security policy (with expiry for auto-revocation)
+      this.heartbeatLoopRef?.getSecurityPolicy?.()?.setAutonomousOverride(true, expiresAt);
 
       await this.channel.sendText(
         chatId,
@@ -405,6 +432,8 @@ export class CommandHandler {
     if (subcommand === "off") {
       await this.userProfileStore.setAutonomousMode(chatId, false);
       this.dmPolicy.initFromProfile(chatId, { autonomousMode: false });
+      // Propagate autonomous mode off to daemon security policy
+      this.heartbeatLoopRef?.getSecurityPolicy?.()?.setAutonomousOverride(false);
 
       await this.channel.sendText(
         chatId,
@@ -551,6 +580,82 @@ export class CommandHandler {
     await this.channel.sendText(
       chatId,
       "Usage: /persona | /persona list | /persona switch <name> | /persona create <name> | /persona delete <name>",
+    );
+  }
+
+  private async handleDaemon(chatId: string, args: string[]): Promise<void> {
+    const subcommand = args[0]?.toLowerCase();
+
+    // status / no args → show current state
+    if (!subcommand || subcommand === "status") {
+      if (!this.heartbeatLoopRef) {
+        await this.channel.sendText(chatId, "Daemon mode is not available. Start with --daemon flag.");
+        return;
+      }
+      const running = this.heartbeatLoopRef.isRunning();
+      const status = this.heartbeatLoopRef.getDaemonStatus();
+      await this.channel.sendMarkdown(
+        chatId,
+        `*Daemon Status*\n\n` +
+        `Status: ${running ? "Running" : "Stopped"}\n` +
+        `Triggers: ${status.triggerCount}\n` +
+        (status.intervalMs ? `Interval: ${Math.round(status.intervalMs / 1000)}s` : ""),
+      );
+      return;
+    }
+
+    // start
+    if (subcommand === "start") {
+      if (!this.heartbeatLoopRef) {
+        await this.channel.sendText(chatId, "Daemon mode is not available. Start with --daemon flag.");
+        return;
+      }
+      if (this.heartbeatLoopRef.isRunning()) {
+        await this.channel.sendText(chatId, "Daemon is already running.");
+        return;
+      }
+      this.heartbeatLoopRef.start();
+      await this.channel.sendText(chatId, "Daemon started.");
+      return;
+    }
+
+    // stop
+    if (subcommand === "stop") {
+      if (!this.heartbeatLoopRef) {
+        await this.channel.sendText(chatId, "Daemon mode is not available.");
+        return;
+      }
+      if (!this.heartbeatLoopRef.isRunning()) {
+        await this.channel.sendText(chatId, "Daemon is already stopped.");
+        return;
+      }
+      this.heartbeatLoopRef.stop();
+      await this.channel.sendText(chatId, "Daemon stopped.");
+      return;
+    }
+
+    // triggers
+    if (subcommand === "triggers") {
+      if (!this.heartbeatLoopRef) {
+        await this.channel.sendText(chatId, "Daemon mode is not available.");
+        return;
+      }
+      // Trigger list is exposed through getDaemonStatus
+      const status = this.heartbeatLoopRef.getDaemonStatus();
+      if (!status.running) {
+        await this.channel.sendText(chatId, "Daemon is not running. No active triggers.");
+        return;
+      }
+      await this.channel.sendMarkdown(
+        chatId,
+        `*Daemon Triggers*\n\n${status.triggerCount} trigger(s) registered.\nUse the dashboard for detailed trigger info.`,
+      );
+      return;
+    }
+
+    await this.channel.sendText(
+      chatId,
+      "Usage: /daemon | /daemon start | /daemon stop | /daemon triggers",
     );
   }
 

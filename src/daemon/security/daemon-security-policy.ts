@@ -28,6 +28,8 @@ export class DaemonSecurityPolicy {
   private readonly metadataLookup: MetadataLookup;
   private readonly approvalQueue: ApprovalQueue;
   private readonly autoApproveList: Set<string>;
+  private autonomousOverride = false;
+  private autonomousExpiresAt?: number;
 
   /** Dangerous tools that always require approval, even if auto-approved */
   private static readonly ALWAYS_QUEUE_TOOLS = new Set([
@@ -54,6 +56,16 @@ export class DaemonSecurityPolicy {
   }
 
   /**
+   * Enable or disable autonomous override.
+   * When enabled, all tools are allowed immediately (bypasses ALWAYS_QUEUE_TOOLS).
+   * Expiry ensures override auto-reverts even if /autonomous off is never called.
+   */
+  setAutonomousOverride(enabled: boolean, expiresAt?: number): void {
+    this.autonomousOverride = enabled;
+    this.autonomousExpiresAt = enabled ? expiresAt : undefined;
+  }
+
+  /**
    * Check whether a tool should be allowed to execute immediately or
    * queued for human approval.
    *
@@ -65,6 +77,17 @@ export class DaemonSecurityPolicy {
    * 5. Everything else -> 'queue'
    */
   checkPermission(toolName: string): PermissionResult {
+    // Autonomous override: skip all permission checks when user has granted full autonomy
+    if (this.autonomousOverride) {
+      // Auto-revoke if expiry has passed
+      if (this.autonomousExpiresAt !== undefined && this.autonomousExpiresAt <= Date.now()) {
+        this.autonomousOverride = false;
+        this.autonomousExpiresAt = undefined;
+      } else {
+        return "allow";
+      }
+    }
+
     // File-write tools always require approval, even if auto-approved
     if (DaemonSecurityPolicy.ALWAYS_QUEUE_TOOLS.has(toolName)) {
       return "queue";

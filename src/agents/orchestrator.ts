@@ -62,6 +62,14 @@ const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
+const AUTONOMOUS_MODE_DIRECTIVE = `\n\n## AUTONOMOUS MODE ACTIVE
+You are operating in AUTONOMOUS MODE. The user has explicitly granted you full autonomy.
+- Execute ALL operations directly without asking for confirmation
+- Do NOT use ask_user tool for permission/confirmation questions
+- Do NOT use show_plan tool to wait for approval — execute immediately
+- Only use ask_user when you genuinely cannot determine user intent (missing critical info)
+- Proceed confidently with your best judgment on all write operations
+- Budget and safety limits are still enforced automatically\n`;
 const API_KEY_PATTERN =
   /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+|AKIA[0-9A-Z]{16}|-----BEGIN\s(?:RSA\s)?PRIVATE\sKEY-----|mongodb(?:\+srv)?:\/\/[^\s]+@)[a-zA-Z0-9_\-.]{10,}/gi;
 
@@ -561,6 +569,11 @@ export class Orchestrator {
     } else if (isUserTask) {
       // Only inject onboarding for direct user messages, not background/daemon tasks
       systemPrompt += FIRST_TIME_USER_PROMPT;
+    }
+
+    // Inject autonomous mode directive for background tasks
+    if (this.dmPolicy?.isAutonomousActive(chatId)) {
+      systemPrompt += AUTONOMOUS_MODE_DIRECTIVE;
     }
 
     const bgInitialContentHashes: string[] = [];
@@ -1229,6 +1242,11 @@ export class Orchestrator {
       personaContent = await this.soulLoader.getProfileContent(profile.activePersona) ?? undefined;
     }
     let systemPrompt = this.injectSoulPersonality(this.systemPrompt, channelType, personaContent);
+
+    // Inject autonomous mode directive into system prompt
+    if (this.dmPolicy?.isAutonomousActive(chatId)) {
+      systemPrompt += AUTONOMOUS_MODE_DIRECTIVE;
+    }
 
     // Provider intelligence: inject strengths, limitations, and behavioral hints
     const activeInfo = this.providerManager.getActiveInfo?.(chatId);
@@ -1907,6 +1925,22 @@ export class Orchestrator {
     };
 
     for (const tc of toolCalls) {
+      // Autonomous mode: auto-resolve ask_user and show_plan tools
+      if ((tc.name === "ask_user" || tc.name === "show_plan") &&
+          this.dmPolicy?.isAutonomousActive(chatId)) {
+        let autoResponse: string;
+        if (tc.name === "ask_user") {
+          const recommended = tc.input["recommended"] as string | undefined;
+          const options = tc.input["options"] as string[] | undefined;
+          const choice = recommended ?? options?.[0] ?? "Continue";
+          autoResponse = `User answered: ${choice} (auto-approved — autonomous mode)`;
+        } else {
+          autoResponse = "Plan approved by user. Proceed with execution. (auto-approved — autonomous mode)";
+        }
+        results.push({ toolCallId: tc.id, content: autoResponse, isError: false });
+        continue;
+      }
+
       const tool = this.tools.get(tc.name);
       if (!tool) {
         results.push({

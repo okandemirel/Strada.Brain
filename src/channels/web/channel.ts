@@ -575,6 +575,8 @@ export class WebChannel
     "/api/providers/intelligence",
     "/api/providers/capabilities",
     "/api/models/refresh",
+    "/api/daemon/start",
+    "/api/daemon/stop",
   ]);
 
   /** Paths that accept POST or DELETE in addition to GET. */
@@ -583,6 +585,8 @@ export class WebChannel
     "/api/personality/switch",
     "/api/user/autonomous",
     "/api/providers/switch",
+    "/api/daemon/start",
+    "/api/daemon/stop",
   ]);
 
   /**

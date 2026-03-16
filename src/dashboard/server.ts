@@ -530,6 +530,36 @@ export class DashboardServer {
         return;
       }
 
+      // Daemon start/stop endpoints (POST)
+      if ((url === "/api/daemon/start" || url === "/api/daemon/stop") && req.method === "POST") {
+        if (!this.daemonHeartbeatLoop) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Daemon not configured. Start with --daemon flag." }));
+          return;
+        }
+
+        if (url === "/api/daemon/start") {
+          if (this.daemonHeartbeatLoop.isRunning()) {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ status: "already_running" }));
+            return;
+          }
+          this.daemonHeartbeatLoop.start();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "started" }));
+        } else {
+          if (!this.daemonHeartbeatLoop.isRunning()) {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ status: "already_stopped" }));
+            return;
+          }
+          this.daemonHeartbeatLoop.stop();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "stopped" }));
+        }
+        return;
+      }
+
       // Daemon status endpoint (GET)
       if (url === "/api/daemon" || url.startsWith("/api/daemon?")) {
         if (!this.daemonHeartbeatLoop) {

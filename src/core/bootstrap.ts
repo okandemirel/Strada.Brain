@@ -585,6 +585,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   taskManager.recoverOnStartup();
 
   const commandHandler = new CommandHandler(taskManager, channel, providerManager, dmPolicy, userProfileStore, soulLoader);
+  // HeartbeatLoop wired to CommandHandler below after daemon init (late binding)
   const messageRouter = new MessageRouter(taskManager, commandHandler, channel, startupNotices);
   // ProgressReporter subscribes to taskManager events in constructor
   new ProgressReporter(channel, taskManager);
@@ -722,6 +723,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
     // Start heartbeat (HeartbeatLoop.start() logs startup details)
     heartbeatLoop.start();
+
+    // Wire heartbeat loop to command handler for /daemon commands and autonomous propagation
+    commandHandler.setHeartbeatLoop({
+      start: () => heartbeatLoop!.start(),
+      stop: () => heartbeatLoop!.stop(),
+      isRunning: () => heartbeatLoop!.isRunning(),
+      getDaemonStatus: () => heartbeatLoop!.getDaemonStatus(),
+      getSecurityPolicy: () => securityPolicyInstance,
+    });
 
     // Create NotificationRouter (RPT-03, RPT-04)
     notificationRouterInstance = new NotificationRouter({

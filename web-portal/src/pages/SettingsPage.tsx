@@ -115,6 +115,7 @@ export default function SettingsPage() {
   // --- Daemon Mode ---
   const [daemonStatus, setDaemonStatus] = useState<DaemonStatus | null>(null)
   const [daemonLoading, setDaemonLoading] = useState(true)
+  const [daemonToggling, setDaemonToggling] = useState(false)
 
   // --- Voice Mode ---
   const [voice, setVoice] = useState<VoiceSettings>(loadVoiceSettings)
@@ -213,6 +214,29 @@ export default function SettingsPage() {
       setAutoDuration(val)
     }
   }, [])
+
+  const handleDaemonToggle = useCallback(async () => {
+    if (daemonToggling || !daemonStatus) return
+    setDaemonToggling(true)
+
+    const endpoint = daemonStatus.running ? '/api/daemon/stop' : '/api/daemon/start'
+    try {
+      const res = await fetch(endpoint, { method: 'POST' })
+      if (res.ok) {
+        // Re-fetch status after a short delay
+        setTimeout(() => {
+          fetchDaemon()
+          setDaemonToggling(false)
+        }, 1000)
+      } else {
+        fetchDaemon()
+        setDaemonToggling(false)
+      }
+    } catch {
+      fetchDaemon()
+      setDaemonToggling(false)
+    }
+  }, [daemonToggling, daemonStatus, fetchDaemon])
 
   const handleProviderSwitch = useCallback((providerName: string) => {
     if (switching) return
@@ -327,9 +351,19 @@ export default function SettingsPage() {
           <>
             <div className="admin-stat-row">
               <span className="admin-stat-label">Daemon</span>
-              <span className="admin-stat-value">
-                <span className={`status-dot-inline ${daemonStatus?.running ? 'ok' : 'off'}`} />{' '}
-                {daemonStatus?.running ? 'Running' : 'Not Running'}
+              <span className="admin-stat-value" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span>
+                  <span className={`status-dot-inline ${daemonStatus?.running ? 'ok' : 'off'}`} />{' '}
+                  {daemonStatus?.running ? 'Running' : 'Not Running'}
+                </span>
+                <button
+                  className={`settings-toggle ${daemonStatus?.running ? 'on' : 'off'}`}
+                  onClick={handleDaemonToggle}
+                  disabled={daemonToggling}
+                  aria-label={daemonStatus?.running ? 'Stop daemon' : 'Start daemon'}
+                >
+                  <span className="settings-toggle-knob" />
+                </button>
               </span>
             </div>
 
