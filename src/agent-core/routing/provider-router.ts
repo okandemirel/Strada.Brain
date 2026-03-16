@@ -122,10 +122,7 @@ export class ProviderRouter {
    * Returns null when no TierRouter is wired, allowing callers to fall back.
    */
   resolveForTier(tier: string): { name: string; model: string } | null {
-    if (this.tierRouter) {
-      return this.tierRouter.resolveProviderConfig(tier);
-    }
-    return null;
+    return this.tierRouter?.resolveProviderConfig(tier) ?? null;
   }
 
   /**

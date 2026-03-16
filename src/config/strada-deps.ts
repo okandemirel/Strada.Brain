@@ -85,9 +85,9 @@ export function checkStradaDeps(unityProjectPath: string): StradaDepsStatus {
 
   return {
     coreInstalled: corePath !== null || coreInManifest,
-    corePath: corePath,
+    corePath,
     modulesInstalled: modulesPath !== null || modulesInManifest,
-    modulesPath: modulesPath,
+    modulesPath,
     mcpInstalled: mcp.installed,
     mcpPath: mcp.path,
     mcpVersion: mcp.version,
@@ -146,7 +146,7 @@ function detectStradaMcp(): { installed: boolean; path: string | null; version: 
     const which = execFileSync("which", ["strada-mcp"], {
       encoding: "utf-8",
       timeout: 3000,
-    }).trim();
+    }).trim().replace(/[\r\n]/g, "");
     if (which) {
       // Try to resolve the package root from the binary path
       const binDir = dirname(which);

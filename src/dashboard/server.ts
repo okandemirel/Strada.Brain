@@ -143,6 +143,9 @@ const SYSTEM_PROFILES = new Set(["default", "casual", "formal", "minimal"]);
 /** Regex for valid profile names: alphanumeric, dashes, underscores. */
 const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
+/** Valid routing preset names. */
+const VALID_ROUTING_PRESETS = new Set(["budget", "balanced", "performance"]);
+
 /** Structural interface for ProviderRouter methods used by dashboard /api/agent-activity endpoint */
 interface DashboardProviderRouter {
   getRecentDecisions(n: number): Array<{ provider: string; reason: string; task: { type: string; complexity: string; criticality: string }; timestamp: number }>;
@@ -1321,8 +1324,7 @@ export class DashboardServer {
         void this.readJsonBody<{ preset?: string }>(req, res).then((parsed) => {
           if (!parsed) return;
           const preset = typeof parsed.preset === "string" ? parsed.preset.trim() : "";
-          const VALID_PRESETS = new Set(["budget", "balanced", "performance"]);
-          if (!VALID_PRESETS.has(preset)) {
+          if (!VALID_ROUTING_PRESETS.has(preset)) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "Invalid preset. Must be one of: budget, balanced, performance" }));
             return;
