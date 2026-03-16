@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Agent Core**: Autonomous OODA reasoning loop (observe → orient → decide → act) with 6 environment observers (file-watch, git, build, trigger, user-activity, test-result), PriorityScorer with learning integration, budget-safe LLM reasoning with 3-layer throttling
+- **Multi-Provider Routing**: Task-aware dynamic provider selection with TaskClassifier (heuristic), ProviderRouter with configurable presets (budget/balanced/performance), PAOR phase switching across providers
+- **Confidence-Based Consensus**: ConfidenceEstimator (heuristic scoring from PAOR state) + ConsensusManager (review/re-execute strategies, fail-safe on errors)
+- **Autonomous Agent Overhaul**: 3-layer autonomous bypass (system prompt injection, ask_user/show_plan tool auto-resolve, DaemonSecurityPolicy override with time-based expiry)
+- **PAOR Unification**: Removed TaskPlanner conflicting PLANNING_PROMPT, background tasks now use full PAOR (reflect/replan), extracted shared buildSystemPromptWithContext()
+- **Strada.MCP Detection**: Automatic detection of sibling Strada.MCP installation with system prompt awareness (76 tools)
+- **TierRouter Facade**: ProviderRouter wraps TierRouter as internal sub-component for delegation compatibility
+- `/daemon` command (start/stop/status/triggers) with Turkish `/arka-plan`
+- `/agent` command for Agent Core status with Turkish `/ajan`
+- `/routing` command (status/preset/info) with Turkish `/yonlendirme`
+- Web daemon toggle with configured/not-configured state detection
+- Interactive routing preset selector in SettingsPage
+- `/api/daemon/start`, `/api/daemon/stop` POST endpoints
+- `/api/agent-activity` GET endpoint for routing decisions
+- `/api/routing/preset` POST endpoint for runtime preset switching
+- AgentNotifier for proactive user notifications
+- TestResultObserver for test execution monitoring
 - `sync:check` documentation across root READMEs and contributor guidance
 - Local Unity fixture documentation for real Strada/Unity generator validation
 - Media sharing pipeline: all channels now receive and forward image/video/audio/document attachments
@@ -31,6 +48,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Collapsible side panel in web portal with agent status and session info
 
 ### Security
+- DaemonSecurityPolicy autonomous override now includes time-based expiry (auto-revokes)
+- Consensus fail-safe: null LLM response treated as non-approval for destructive operations
+- MCP path newline sanitization prevents prompt injection via malicious symlinks
+- `/api/providers/switch` added to proxy allowlist (was silently returning 403)
+- TOCTOU safety in strada-deps.ts filesystem checks
+- LLM response fields capped at 2000 characters in consensus
+- Budget pct scale corrected (0.0-1.0 decimal, not 0-100 percentage)
 - SSRF protection on all media download URLs (private IP blocklist, redirect rejection)
 - Media validation enforced across all channels: MIME allowlist, per-type size limits, magic bytes
 - Telegram bot token sanitized from download URL logs
@@ -40,6 +64,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Discord image attachments now downloaded and magic-bytes validated
 
 ### Fixed
+- TaskPlanner PLANNING_PROMPT conflict with PAOR state machine resolved
+- Background tasks now use PAOR reflection and replanning (were using flat loop)
+- Daemon toggle UX: shows "Not Configured" vs "Stopped" vs "Running"
+- Provider routing cost/speed scores clamped to prevent negative values
+- Reasoning prompt correctly passed as user message (was system prompt)
+- Goal submissions from AgentCore include origin:"daemon" for security policy
 - trimSession now preserves tool_call/tool_result pairs (prevents Kimi API 400 errors)
 - Conversation persistence after every message exchange (agent remembers across sessions)
 - Task progress spam suppressed — user sees only final results

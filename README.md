@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>AI-Powered Development Agent for Unity / Strada.Core Projects</strong><br/>
-  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, and interactive clarification tools.
+  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, and interactive clarification tools, intelligent multi-provider routing with task-aware dynamic switching, confidence-based consensus verification, an autonomous Agent Core with OODA reasoning loop, and Strada.MCP integration.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-3220%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3450%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
@@ -34,6 +34,8 @@
 Strada.Brain is an AI agent you talk to through a chat channel. You describe what you want -- "create a new ECS system for player movement" or "find all components that use health" -- and the agent reads your C# project, writes the code, runs `dotnet build`, fixes errors automatically, and sends you the result.
 
 It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using hybrid weighted confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, and a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection.
+
+New in this release: Strada.Brain now features an **Agent Core** -- an autonomous OODA reasoning engine that observes the environment (file changes, git state, build results), reasons about priorities using learned patterns, and takes action proactively. The **multi-provider routing** system dynamically selects the best AI provider for each task type (planning, code generation, debugging, review) with configurable presets (budget/balanced/performance). A **confidence-based consensus** system automatically consults a second provider when the agent's confidence is low, preventing errors on critical operations. All features gracefully degrade -- with a single provider, the system works identically to before with zero overhead.
 
 **This is not a library or an API.** It is a standalone application you run. It connects to your chat platform, reads your Unity project on disk, and operates autonomously within the boundaries you configure.
 
@@ -361,9 +363,42 @@ An opt-in deployment system with human-in-the-loop approval gates and circuit br
 
 ---
 
+### Agent Core (Autonomous OODA Loop)
+
+When daemon mode is active, the Agent Core runs a continuous observe-orient-decide-act loop:
+
+- **Observe**: Collects environment state from 6 observers (file changes, git status, build results, trigger events, user activity, test results)
+- **Orient**: Scores observations using learning-informed priority (PriorityScorer with instinct integration)
+- **Decide**: LLM reasoning with budget-aware throttling (30s minimum interval, priority threshold, budget floor)
+- **Act**: Submits goals, notifies user, or waits (agent can decide "nothing to do")
+
+Safety: tickInFlight guard, rate limiting, budget floor (10%), and DaemonSecurityPolicy enforcement.
+
+### Multi-Provider Intelligent Routing
+
+With 2+ providers configured, Strada.Brain automatically routes tasks to the optimal provider:
+
+| Task Type | Routing Strategy |
+|-----------|-----------------|
+| Planning | Widest context window (Claude > GPT > Gemini) |
+| Code Generation | Strong tool calling (Claude > Kimi > OpenAI) |
+| Code Review | Different model than executor (diversity bias) |
+| Simple Questions | Fastest/cheapest (Groq > Kimi > Ollama) |
+| Debugging | Strong error analysis |
+
+**Presets**: `budget` (cost-optimized), `balanced` (default), `performance` (quality-first)
+**PAOR Phase Switching**: Different providers for planning vs execution vs reflection phases.
+**Consensus**: Low confidence → automatic second opinion from different provider.
+
+### Strada.MCP Integration
+
+Strada.Brain detects [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (76-tool Unity MCP server) and informs the agent about available MCP capabilities including runtime control, file operations, git, .NET build, code analysis, and scene/prefab management.
+
+---
+
 ## Daemon Mode
 
-The daemon provides 24/7 autonomous operation with a heartbeat-driven trigger system.
+The daemon provides 24/7 autonomous operation with a heartbeat-driven trigger system. When daemon mode is active, the **Agent Core OODA loop** runs within daemon ticks, observing the environment and proactively taking action between user interactions. The `/autonomous on` command now propagates to the DaemonSecurityPolicy, enabling fully autonomous operation without per-action approval prompts.
 
 ```bash
 npm run dev -- daemon --channel web
@@ -514,6 +549,17 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `READ_ONLY_MODE` | `false` | Block all write operations |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` |
 
+### Routing & Consensus
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROUTING_PRESET` | `balanced` | Routing preset: `budget`, `balanced`, or `performance` |
+| `ROUTING_PHASE_SWITCHING` | `true` | Enable PAOR phase switching across providers |
+| `CONSENSUS_MODE` | `auto` | Consensus mode: `auto`, `critical-only`, `always`, or `disabled` |
+| `CONSENSUS_THRESHOLD` | `0.5` | Confidence threshold for triggering consensus |
+| `CONSENSUS_MAX_PROVIDERS` | `3` | Maximum providers to consult for consensus |
+| `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | Daily budget (USD) for daemon mode |
+
 ### Rate Limiting
 
 | Variable | Default | Description |
@@ -597,6 +643,23 @@ The agent has 40+ built-in tools organized by category:
 | `shell_exec` | Execute shell commands (30s timeout, dangerous command blocklist) |
 | `code_quality` | Per-file or per-project code quality analysis |
 | `rag_index` | Trigger incremental or full project re-indexing |
+
+---
+
+## Chat Commands
+
+Slash commands available in all chat channels:
+
+| Command | Description |
+|---------|-------------|
+| `/daemon` | Show daemon status |
+| `/daemon start` | Start daemon heartbeat loop |
+| `/daemon stop` | Stop daemon heartbeat loop |
+| `/daemon triggers` | Show active triggers |
+| `/agent` | Show Agent Core status |
+| `/routing` | Show routing status and preset |
+| `/routing preset <name>` | Switch routing preset (budget/balanced/performance) |
+| `/routing info` | Show recent routing decisions |
 
 ---
 
