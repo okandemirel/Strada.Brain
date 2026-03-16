@@ -148,13 +148,8 @@ export class AutoUpdater {
           ["fetch", "origin", "main"],
           VERSION_CHECK_TIMEOUT,
         );
-        const localRev = (
-          await this.spawnWithTimeout(
-            "git",
-            ["rev-parse", "HEAD"],
-            VERSION_CHECK_TIMEOUT,
-          )
-        ).trim();
+        // Ensure local ref is resolved (side-effect: validates git state)
+        await this.spawnWithTimeout("git", ["rev-parse", "HEAD"], VERSION_CHECK_TIMEOUT);
         const remoteRev = (
           await this.spawnWithTimeout(
             "git",

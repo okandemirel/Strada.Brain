@@ -24,6 +24,7 @@ const MAX_CACHED_PROVIDERS = 50;
 export class ProviderManager {
   private readonly preferences: ProviderPreferenceStore;
   private readonly providerCache = new LRUCache<string, IAIProvider>(MAX_CACHED_PROVIDERS);
+  private ollamaVerified = false;
 
   constructor(
     private readonly defaultProvider: IAIProvider,
@@ -155,7 +156,9 @@ export class ProviderManager {
       available.push({ name: "claude", label: "Anthropic Claude", defaultModel: this.modelOverrides?.["claude"] ?? "claude-sonnet-4-6-20250514" });
     }
 
-    available.push({ name: "ollama", label: "Ollama (Local)", defaultModel: this.modelOverrides?.["ollama"] ?? "llama3.3" });
+    if (this.ollamaVerified) {
+      available.push({ name: "ollama", label: "Ollama (Local)", defaultModel: this.modelOverrides?.["ollama"] ?? "llama3.3" });
+    }
 
     for (const [name, preset] of Object.entries(PROVIDER_PRESETS)) {
       if (this.isAvailable(name)) {
@@ -171,11 +174,16 @@ export class ProviderManager {
   }
 
   isAvailable(providerName: string): boolean {
-    if (providerName === "ollama") return true;
+    if (providerName === "ollama") return this.ollamaVerified;
     if (providerName === "claude" || providerName === "anthropic") {
       return !!(this.apiKeys["claude"] || this.apiKeys["anthropic"]);
     }
     return !!this.apiKeys[providerName];
+  }
+
+  /** Mark Ollama as verified-reachable (called by bootstrap after health check). */
+  setOllamaVerified(verified: boolean): void {
+    this.ollamaVerified = verified;
   }
 
   shutdown(): void {
