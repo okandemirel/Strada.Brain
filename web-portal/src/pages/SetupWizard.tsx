@@ -66,6 +66,12 @@ export default function SetupWizard() {
             embeddingProvider={wiz.embeddingProvider}
             setEmbeddingProvider={wiz.setEmbeddingProvider}
             checkedProviders={wiz.checkedProviders}
+            daemonEnabled={wiz.daemonEnabled}
+            setDaemonEnabled={wiz.setDaemonEnabled}
+            autonomyHours={wiz.autonomyHours}
+            setAutonomyHours={wiz.setAutonomyHours}
+            daemonBudget={wiz.daemonBudget}
+            setDaemonBudget={wiz.setDaemonBudget}
             onNext={wiz.nextStep}
             onBack={wiz.prevStep}
           />
@@ -81,6 +87,9 @@ export default function SetupWizard() {
             language={wiz.language}
             ragEnabled={wiz.ragEnabled}
             embeddingProvider={wiz.embeddingProvider}
+            daemonEnabled={wiz.daemonEnabled}
+            daemonBudget={wiz.daemonBudget}
+            autonomyHours={wiz.autonomyHours}
             saveStatus={wiz.saveStatus}
             saveError={wiz.saveError}
             onBack={wiz.prevStep}

@@ -10,6 +10,9 @@ interface ReviewStepProps {
   language: string
   ragEnabled: boolean
   embeddingProvider: string
+  daemonEnabled: boolean
+  daemonBudget: number
+  autonomyHours: number
   saveStatus: SaveStatus
   saveError: string | null
   onBack: () => void
@@ -30,6 +33,9 @@ export default function ReviewStep({
   language,
   ragEnabled,
   embeddingProvider,
+  daemonEnabled,
+  daemonBudget,
+  autonomyHours,
   saveStatus,
   saveError,
   onBack,
@@ -114,6 +120,16 @@ export default function ReviewStep({
         <div className="review-item">
           <span className="review-label">Language</span>
           <span className="review-value">{language}</span>
+        </div>
+
+        <div className="review-item">
+          <span className="review-label">Daemon Mode</span>
+          <span className="review-value">{daemonEnabled ? `Enabled ($${daemonBudget.toFixed(2)}/day)` : 'Disabled'}</span>
+        </div>
+
+        <div className="review-item">
+          <span className="review-label">Autonomy Hours</span>
+          <span className="review-value">{autonomyHours}h</span>
         </div>
       </div>
 

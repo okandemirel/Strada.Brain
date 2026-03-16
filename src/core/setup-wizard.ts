@@ -424,6 +424,31 @@ export class SetupWizard {
       `DASHBOARD_PORT=${this.port + 1}`,
     );
 
+    // Daemon mode
+    if (config.STRADA_DAEMON_ENABLED === "true") {
+      const budget = Number(config.STRADA_DAEMON_DAILY_BUDGET);
+      const safeBudget = Number.isFinite(budget) && budget >= 0.5 && budget <= 10 ? budget : 1.0;
+      lines.push(
+        "",
+        "# Daemon Mode",
+        "STRADA_DAEMON_ENABLED=true",
+        `STRADA_DAEMON_DAILY_BUDGET=${safeBudget}`,
+        "STRADA_DAEMON_HEARTBEAT_INTERVAL=30000",
+      );
+    }
+
+    // Autonomy
+    if (config.AUTONOMOUS_DEFAULT_HOURS) {
+      const hours = Number(config.AUTONOMOUS_DEFAULT_HOURS);
+      if (Number.isFinite(hours) && hours >= 1 && hours <= 168) {
+        lines.push(
+          "",
+          "# Autonomy",
+          `AUTONOMOUS_DEFAULT_HOURS=${hours}`,
+        );
+      }
+    }
+
     // Always add some defaults
     lines.push(
       "",

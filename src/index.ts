@@ -289,11 +289,12 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
     const container = createContainer();
 
     // Bootstrap the application
+    const effectiveDaemonMode = daemonMode || process.env["STRADA_DAEMON_ENABLED"] === "true";
     const app = await bootstrap({
       channelType,
       config,
       container,
-      daemonMode,
+      daemonMode: effectiveDaemonMode,
     });
 
     // Store bootstrap result for daemon CLI context access

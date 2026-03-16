@@ -12,6 +12,12 @@ interface ChannelRagStepProps {
   embeddingProvider: string
   setEmbeddingProvider: (provider: string) => void
   checkedProviders: Set<string>
+  daemonEnabled: boolean
+  setDaemonEnabled: (enabled: boolean) => void
+  autonomyHours: number
+  setAutonomyHours: (hours: number) => void
+  daemonBudget: number
+  setDaemonBudget: (budget: number) => void
   onNext: () => void
   onBack: () => void
 }
@@ -28,6 +34,12 @@ export default function ChannelRagStep({
   embeddingProvider,
   setEmbeddingProvider,
   checkedProviders,
+  daemonEnabled,
+  setDaemonEnabled,
+  autonomyHours,
+  setAutonomyHours,
+  daemonBudget,
+  setDaemonBudget,
   onNext,
   onBack,
 }: ChannelRagStepProps) {
@@ -128,6 +140,68 @@ export default function ChannelRagStep({
             </select>
           </div>
         )}
+      </div>
+
+      <div className="rag-toggle">
+        <h3 className="section-label">Daemon Mode</h3>
+        <label className="toggle-switch">
+          <input
+            type="checkbox"
+            checked={daemonEnabled}
+            onChange={(e) => setDaemonEnabled(e.target.checked)}
+          />
+          <span className="toggle-slider" />
+          <span className="toggle-label">
+            {daemonEnabled ? 'Enabled' : 'Disabled'}
+          </span>
+        </label>
+        <p className={`rag-info${!daemonEnabled ? ' warning' : ''}`}>
+          {daemonEnabled
+            ? 'Daemon mode active \u2014 background monitoring with triggers, scheduled tasks, and proactive assistance.'
+            : 'Enable background monitoring with triggers, scheduled tasks, and proactive assistance.'}
+        </p>
+        {daemonEnabled && (
+          <div className="autonomy-slider-container">
+            <label className="autonomy-budget-label">Daily Budget</label>
+            <input
+              type="range"
+              min={0.5}
+              max={10}
+              step={0.5}
+              value={daemonBudget}
+              onChange={(e) => setDaemonBudget(Number(e.target.value))}
+              className="autonomy-range"
+            />
+            <div className="autonomy-labels">
+              <span>$0.50</span>
+              <span className="autonomy-value">${daemonBudget.toFixed(2)}</span>
+              <span>$10.00</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="rag-toggle">
+        <h3 className="section-label">Autonomy</h3>
+        <p className="rag-info">
+          How long the agent can operate autonomously before requiring user check-in.
+        </p>
+        <div className="autonomy-slider-container">
+          <input
+            type="range"
+            min={1}
+            max={168}
+            step={1}
+            value={autonomyHours}
+            onChange={(e) => setAutonomyHours(Number(e.target.value))}
+            className="autonomy-range"
+          />
+          <div className="autonomy-labels">
+            <span>1h</span>
+            <span className="autonomy-value">{autonomyHours}h</span>
+            <span>168h</span>
+          </div>
+        </div>
       </div>
 
       <div className="step-actions">

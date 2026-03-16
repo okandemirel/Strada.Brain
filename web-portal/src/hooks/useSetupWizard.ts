@@ -15,6 +15,9 @@ export function useSetupWizard() {
   const [language, setLanguageState] = useState('en')
   const [ragEnabled, setRagEnabledState] = useState(true)
   const [embeddingProvider, setEmbeddingProviderState] = useState('auto')
+  const [daemonEnabled, setDaemonEnabledState] = useState(false)
+  const [autonomyHours, setAutonomyHoursState] = useState(4)
+  const [daemonBudget, setDaemonBudgetState] = useState(1.0)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -147,6 +150,18 @@ export function useSetupWizard() {
     setEmbeddingProviderState(provider)
   }, [])
 
+  const setDaemonEnabled = useCallback((enabled: boolean) => {
+    setDaemonEnabledState(enabled)
+  }, [])
+
+  const setAutonomyHours = useCallback((hours: number) => {
+    setAutonomyHoursState(hours)
+  }, [])
+
+  const setDaemonBudget = useCallback((budget: number) => {
+    setDaemonBudgetState(budget)
+  }, [])
+
   const save = useCallback(async () => {
     setSaveStatus('saving')
     setSaveError(null)
@@ -166,6 +181,12 @@ export function useSetupWizard() {
     if (selectedPreset) {
       config.SYSTEM_PRESET = selectedPreset
     }
+
+    if (daemonEnabled) {
+      config.STRADA_DAEMON_ENABLED = 'true'
+      config.STRADA_DAEMON_DAILY_BUDGET = String(daemonBudget)
+    }
+    config.AUTONOMOUS_DEFAULT_HOURS = String(autonomyHours)
 
     // Build PROVIDER_CHAIN from checked providers
     const chain = Array.from(checkedProviders)
@@ -244,7 +265,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, channelConfig])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, channelConfig, daemonEnabled, autonomyHours, daemonBudget])
 
   return {
     // State
@@ -260,6 +281,9 @@ export function useSetupWizard() {
     language,
     ragEnabled,
     embeddingProvider,
+    daemonEnabled,
+    autonomyHours,
+    daemonBudget,
     saveStatus,
     saveError,
 
@@ -277,6 +301,9 @@ export function useSetupWizard() {
     setLanguage,
     setRagEnabled,
     setEmbeddingProvider,
+    setDaemonEnabled,
+    setAutonomyHours,
+    setDaemonBudget,
     save,
     validateCurrentStep,
   }
