@@ -474,8 +474,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let providerRouter: import("../agent-core/routing/provider-router.js").ProviderRouter | undefined;
   try {
     const { ProviderRouter } = await import("../agent-core/routing/provider-router.js");
-    providerRouter = new ProviderRouter(providerManager, "balanced");
-    logger.info("ProviderRouter initialized", { preset: "balanced" });
+    providerRouter = new ProviderRouter(providerManager, config.routing.preset);
+    logger.info("ProviderRouter initialized", { preset: config.routing.preset });
   } catch {
     // Non-fatal — routing disabled
   }
@@ -509,6 +509,22 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     userProfileStore,
     providerRouter,
   });
+
+  // Initialize ConsensusManager
+  let consensusManager: import("../agent-core/routing/consensus-manager.js").ConsensusManager | undefined;
+  try {
+    const { ConsensusManager } = await import("../agent-core/routing/consensus-manager.js");
+    consensusManager = new ConsensusManager({
+      mode: config.consensus.mode,
+      threshold: config.consensus.threshold,
+      maxProviders: config.consensus.maxProviders,
+    });
+    logger.info("ConsensusManager initialized", { mode: config.consensus.mode });
+  } catch {
+    // Non-fatal — consensus disabled
+  }
+  // ConsensusManager will be wired into AgentCore/Orchestrator in Phase 5
+  void consensusManager;
 
   // TODO: Initialize ModelIntelligenceService here for self-updating model data
 
@@ -596,6 +612,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   taskManager.recoverOnStartup();
 
   const commandHandler = new CommandHandler(taskManager, channel, providerManager, dmPolicy, userProfileStore, soulLoader);
+  // Wire providerRouter to command handler for /routing command
+  if (providerRouter) {
+    commandHandler.setProviderRouter(providerRouter);
+  }
   // HeartbeatLoop wired to CommandHandler below after daemon init (late binding)
   const messageRouter = new MessageRouter(taskManager, commandHandler, channel, startupNotices);
   // ProgressReporter subscribes to taskManager events in constructor

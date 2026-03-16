@@ -224,7 +224,16 @@ export type EnvVarName =
   // Model Intelligence Service
   | "MODEL_INTELLIGENCE_ENABLED"
   | "MODEL_INTELLIGENCE_REFRESH_HOURS"
-  | "MODEL_INTELLIGENCE_DB_PATH";
+  | "MODEL_INTELLIGENCE_DB_PATH"
+
+  // Provider Routing
+  | "ROUTING_PRESET"
+  | "ROUTING_PHASE_SWITCHING"
+
+  // Consensus
+  | "CONSENSUS_MODE"
+  | "CONSENSUS_THRESHOLD"
+  | "CONSENSUS_MAX_PROVIDERS";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -508,6 +517,19 @@ export interface Config {
   // Autonomous Mode
   /** Default duration in hours for autonomous mode when no duration is specified */
   readonly autonomousDefaultHours: number;
+
+  // Provider Routing
+  readonly routing: {
+    readonly preset: "budget" | "balanced" | "performance";
+    readonly phaseSwitching: boolean;
+  };
+
+  // Consensus
+  readonly consensus: {
+    readonly mode: "auto" | "critical-only" | "always" | "disabled";
+    readonly threshold: number;
+    readonly maxProviders: number;
+  };
 }
 
 /** Partial config for updates */
@@ -869,6 +891,15 @@ export const configSchema = z
 
     // Autonomous Mode
     autonomousDefaultHours: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(168)).default("24"),
+
+    // Provider Routing
+    routingPreset: z.enum(["budget", "balanced", "performance"]).default("balanced"),
+    routingPhaseSwitching: boolFromString(true),
+
+    // Consensus
+    consensusMode: z.enum(["auto", "critical-only", "always", "disabled"]).default("auto"),
+    consensusThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0).max(1)).default("0.5"),
+    consensusMaxProviders: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(5)).default("3"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -1250,6 +1281,17 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     autonomousDefaultHours: rawConfig.autonomousDefaultHours,
+
+    routing: {
+      preset: rawConfig.routingPreset,
+      phaseSwitching: rawConfig.routingPhaseSwitching,
+    },
+
+    consensus: {
+      mode: rawConfig.consensusMode,
+      threshold: rawConfig.consensusThreshold,
+      maxProviders: rawConfig.consensusMaxProviders,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -1610,6 +1652,13 @@ interface EnvVars {
   agentMaxMemoryEntries: string | undefined;
   // Autonomous Mode
   autonomousDefaultHours: string | undefined;
+  // Provider Routing
+  routingPreset: string | undefined;
+  routingPhaseSwitching: string | undefined;
+  // Consensus
+  consensusMode: string | undefined;
+  consensusThreshold: string | undefined;
+  consensusMaxProviders: string | undefined;
 }
 
 /**
@@ -1787,6 +1836,13 @@ function loadFromEnv(): EnvVars {
     agentMaxMemoryEntries: process.env["AGENT_MAX_MEMORY_ENTRIES"],
     // Autonomous Mode
     autonomousDefaultHours: process.env["AUTONOMOUS_DEFAULT_HOURS"],
+    // Provider Routing
+    routingPreset: process.env["ROUTING_PRESET"],
+    routingPhaseSwitching: process.env["ROUTING_PHASE_SWITCHING"],
+    // Consensus
+    consensusMode: process.env["CONSENSUS_MODE"],
+    consensusThreshold: process.env["CONSENSUS_THRESHOLD"],
+    consensusMaxProviders: process.env["CONSENSUS_MAX_PROVIDERS"],
   };
 }
 
