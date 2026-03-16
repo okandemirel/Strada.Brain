@@ -39,7 +39,9 @@ export class FileWatchObserver implements Observer {
     if (byType.unlink > 0) parts.push(`${byType.unlink} deleted`);
 
     const summary = `File changes: ${parts.join(", ")}`;
-    const priority = byType.unlink > 0 ? 70 : byType.change > 0 ? 50 : 30;
+    let priority = 30;
+    if (byType.unlink > 0) priority = 70;
+    else if (byType.change > 0) priority = 50;
 
     return [
       createObservation("file-watch", summary, {

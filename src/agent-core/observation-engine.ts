@@ -76,13 +76,10 @@ export class ObservationEngine {
     // Sort by priority descending
     deduped.sort((a, b) => b.priority - a.priority);
 
-    // Add to history
-    for (const obs of deduped) {
-      this.history.push(obs);
-    }
-    // Trim history
-    while (this.history.length > MAX_HISTORY) {
-      this.history.shift();
+    // Add to history and trim excess
+    this.history.push(...deduped);
+    if (this.history.length > MAX_HISTORY) {
+      this.history.splice(0, this.history.length - MAX_HISTORY);
     }
 
     return deduped;

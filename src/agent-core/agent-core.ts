@@ -14,18 +14,8 @@ import { getLogger } from "../utils/logger.js";
 import { ObservationEngine } from "./observation-engine.js";
 import { PriorityScorer } from "./priority-scorer.js";
 import { buildReasoningPrompt, parseReasoningResponse } from "./reasoning-prompt.js";
-import type { AgentCoreConfig } from "./agent-core-types.js";
+import type { AgentCoreConfig, BudgetTrackerRef, InstinctRetrieverRef } from "./agent-core-types.js";
 import { DEFAULT_AGENT_CORE_CONFIG } from "./agent-core-types.js";
-
-/** Structural interface for BudgetTracker */
-interface BudgetTrackerRef {
-  getUsage(cap?: number): { usedUsd: number; limitUsd: number | undefined; pct: number };
-}
-
-/** Structural interface for InstinctRetriever */
-interface InstinctRetrieverRef {
-  getInsightsForTask(taskDescription: string): Promise<{ insights: string[]; matchedInstinctIds: string[] }>;
-}
 
 export class AgentCore {
   static readonly AGENT_CHAT_ID = "agent-core";
@@ -109,7 +99,7 @@ export class AgentCore {
 
       const prompt = buildReasoningPrompt({
         observations: ranked,
-        budgetRemainingPct: Math.max(0, 100 - (budget.pct ?? 0)),
+        budgetRemainingPct: Math.max(0, 100 - budget.pct),
         activeTaskCount,
         learnedInsights,
         recentHistory: this.observationEngine.getHistory(5),

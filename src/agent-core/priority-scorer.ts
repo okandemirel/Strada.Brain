@@ -6,11 +6,7 @@
  */
 
 import type { AgentObservation } from "./observation-types.js";
-
-/** Structural interface for InstinctRetriever */
-interface InstinctRetrieverRef {
-  getInsightsForTask(taskDescription: string): Promise<{ insights: string[]; matchedInstinctIds: string[] }>;
-}
+import type { InstinctRetrieverRef } from "./agent-core-types.js";
 
 export class PriorityScorer {
   private readonly recentActionHashes = new Map<string, number>(); // hash -> timestamp

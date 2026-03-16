@@ -7,7 +7,9 @@
  */
 
 import type { AgentObservation } from "./observation-types.js";
-import type { ActionDecision } from "./agent-core-types.js";
+import type { ActionDecision, ActionType } from "./agent-core-types.js";
+
+const VALID_ACTIONS: readonly ActionType[] = ["execute", "wait", "notify", "escalate"];
 
 /**
  * Build the reasoning prompt from observations and context.
@@ -135,7 +137,7 @@ function validateDecision(raw: unknown): ActionDecision {
   const obj = raw as Record<string, unknown>;
   const action = String(obj.action ?? "wait");
 
-  if (!["execute", "wait", "notify", "escalate"].includes(action)) {
+  if (!VALID_ACTIONS.includes(action as ActionType)) {
     return { action: "wait", reasoning: `Unknown action: ${action}` };
   }
 
