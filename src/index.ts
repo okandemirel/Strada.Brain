@@ -134,6 +134,69 @@ program
     await runTerminalWizard();
   });
 
+program
+  .command("update")
+  .description("Check for and apply updates")
+  .option("--check", "Only check for updates, do not apply")
+  .action(async (opts) => {
+    const { AutoUpdater } = await import("./core/auto-updater.js");
+    const { ChannelActivityRegistry } = await import("./core/channel-activity-registry.js");
+
+    const configResult = loadConfigSafe();
+    const autoUpdateConfig = configResult.kind === "ok"
+      ? { autoUpdate: configResult.value.autoUpdate }
+      : { autoUpdate: { enabled: true, intervalHours: 24, idleTimeoutMin: 5, channel: "stable" as const, notify: false, autoRestart: false } };
+
+    const updater = new AutoUpdater(autoUpdateConfig, new ChannelActivityRegistry(), { hasRunningTasks: () => false });
+    const result = await updater.checkForUpdate();
+
+    if (!result.available) {
+      console.log(`✅ Strada Brain is up to date (v${result.currentVersion}).`);
+      return;
+    }
+
+    console.log(`🔄 Update available: v${result.currentVersion} → v${result.latestVersion}`);
+    if (opts.check) return;
+
+    console.log("Updating...");
+    try {
+      await updater.performUpdate();
+      console.log("✅ Updated successfully! Please restart with `strada start`.");
+    } catch (err) {
+      console.error(`❌ Update failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("version-info")
+  .description("Show version and update status")
+  .action(async () => {
+    const { AutoUpdater } = await import("./core/auto-updater.js");
+    const { ChannelActivityRegistry } = await import("./core/channel-activity-registry.js");
+
+    const configResult = loadConfigSafe();
+    const autoUpdateConfig = configResult.kind === "ok"
+      ? { autoUpdate: configResult.value.autoUpdate }
+      : { autoUpdate: { enabled: true, intervalHours: 24, idleTimeoutMin: 5, channel: "stable" as const, notify: false, autoRestart: false } };
+
+    const updater = new AutoUpdater(autoUpdateConfig, new ChannelActivityRegistry(), { hasRunningTasks: () => false });
+    const currentVersion = updater.getCurrentVersion();
+    const method = updater.detectInstallMethod();
+
+    console.log(`Strada Brain v${currentVersion}`);
+    console.log(`Install method: ${method}`);
+    console.log(`Update channel: ${autoUpdateConfig.autoUpdate.channel}`);
+
+    try {
+      const result = await updater.checkForUpdate();
+      if (result.available) console.log(`Update available: v${result.latestVersion}`);
+      else console.log("Up to date.");
+    } catch {
+      console.log("Could not check for updates.");
+    }
+  });
+
 // Register preset management commands (list, show, set, models)
 registerPresetCommands(program);
 

@@ -101,6 +101,10 @@ import type { ITrigger } from "../daemon/daemon-types.js";
 import { NotificationRouter } from "../daemon/reporting/notification-router.js";
 import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 
+// Auto-update imports
+import { ChannelActivityRegistry } from "./channel-activity-registry.js";
+import { AutoUpdater } from "./auto-updater.js";
+
 // Task system imports
 import {
   TaskStorage,
@@ -132,6 +136,8 @@ export interface BootstrapResult {
   heartbeatLoop?: HeartbeatLoop;
   daemonContext?: import("../daemon/daemon-cli.js").DaemonContext;
   agentManager?: AgentManagerType;
+  activityRegistry?: ChannelActivityRegistry;
+  autoUpdater?: AutoUpdater;
 }
 
 /**
@@ -223,6 +229,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   ]);
   const providerManager = providerInit.manager;
   const startupNotices = [...providerInit.notices];
+  const activityRegistry = new ChannelActivityRegistry();
   if (embeddingResult.notice) {
     startupNotices.push(embeddingResult.notice);
   }
@@ -620,6 +627,20 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   backgroundExecutor.setTaskManager(taskManager);
   orchestrator.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
+
+  // Initialize auto-updater (if enabled)
+  let autoUpdater: AutoUpdater | undefined;
+  if (config.autoUpdate.enabled) {
+    autoUpdater = new AutoUpdater(config, activityRegistry, backgroundExecutor);
+    autoUpdater.setNotifyFn((msg: string) => {
+      const chats = activityRegistry.getActiveChatIds();
+      for (const { chatId } of chats) {
+        channel.sendMarkdown(chatId, msg).catch(() => {});
+      }
+    });
+    await autoUpdater.init();
+    autoUpdater.scheduleChecks();
+  }
 
   const commandHandler = new CommandHandler(taskManager, channel, providerManager, dmPolicy, userProfileStore, soulLoader);
   // Wire providerRouter to command handler for /routing command
@@ -1152,6 +1173,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
     // Multi-agent mode: route through AgentManager (AGENT-06)
     channel.onMessage(async (msg) => {
+      activityRegistry.recordActivity(channelType, msg.chatId);
       // Interrupt consolidation on user activity (MEM-13)
       heartbeatLoop?.onUserActivity();
       if (identityManager) {
@@ -1172,7 +1194,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
   } else {
     // v2.0 single-agent mode: unchanged path (AGENT-07)
-    wireMessageHandler(channel, messageRouter, orchestrator, learningResult.taskPlanner, learningResult.pipeline, identityManager, heartbeatLoop);
+    wireMessageHandler(channel, messageRouter, orchestrator, learningResult.taskPlanner, learningResult.pipeline, identityManager, heartbeatLoop, activityRegistry, channelType);
   }
 
   // Setup cleanup
@@ -1283,6 +1305,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     heartbeatLoop,
     daemonContext,
     agentManager,
+    activityRegistry,
+    autoUpdater,
     shutdown: createShutdownHandler({
       dashboard,
       ragPipeline,
@@ -1306,6 +1330,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       delegationManager,
       stoppableServers,
       soulLoader,
+      autoUpdater,
     }),
   };
 }
@@ -1491,6 +1516,21 @@ export async function initializeAIProvider(
     config.providerModels,
     config.memory.dbPath,
   );
+
+  // Verify Ollama reachability before marking it available for routing
+  const ollamaBaseUrl = process.env["OLLAMA_BASE_URL"] ?? "http://localhost:11434";
+  try {
+    const ollamaRes = await fetch(`${ollamaBaseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (ollamaRes.ok) {
+      providerManager.setOllamaVerified(true);
+      logger.info("Ollama verified as reachable");
+    }
+  } catch {
+    logger.debug("Ollama not reachable, excluding from routing");
+  }
+
   logger.info("ProviderManager initialized with per-chat switching support");
 
   return {
@@ -2100,8 +2140,13 @@ function wireMessageHandler(
   learningPipeline: LearningPipeline | undefined,
   identityManager?: IdentityStateManager,
   heartbeatLoopRef?: HeartbeatLoop,
+  activityRegistryRef?: ChannelActivityRegistry,
+  channelTypeName?: string,
 ): void {
   channel.onMessage(async (msg) => {
+    if (activityRegistryRef && channelTypeName) {
+      activityRegistryRef.recordActivity(channelTypeName, msg.chatId);
+    }
     // Interrupt consolidation on user activity (MEM-13)
     heartbeatLoopRef?.onUserActivity();
     // Track activity and messages for identity persistence
@@ -2162,6 +2207,7 @@ interface ShutdownOptions {
   delegationManager?: DelegationManagerType;
   stoppableServers?: Array<{ stop(): Promise<void> | void }>;
   soulLoader?: SoulLoader;
+  autoUpdater?: AutoUpdater;
 }
 
 function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
@@ -2176,6 +2222,11 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
       logger.info("Shutting down Strada Brain...");
 
       clearInterval(cleanupInterval);
+
+      // Stop auto-updater timers
+      if (options.autoUpdater) {
+        options.autoUpdater.shutdown();
+      }
 
       // Stop soul file watchers
       if (options.soulLoader) {
