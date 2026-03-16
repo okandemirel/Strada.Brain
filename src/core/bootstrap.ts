@@ -1116,7 +1116,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         triggerRegistry.register(deployTriggerInstance);
 
         // Wire into heartbeat for readiness checks
-        heartbeatLoop.setDeployTrigger(deployTriggerInstance);
+        const activeHeartbeatLoop = heartbeatLoop;
+        activeHeartbeatLoop.setDeployTrigger(deployTriggerInstance);
+        taskManager.on("task:completed", (taskId) => {
+          activeHeartbeatLoop.onTaskSettled(taskId);
+        });
+        taskManager.on("task:failed", (taskId) => {
+          activeHeartbeatLoop.onTaskSettled(taskId);
+        });
 
         // Store in DaemonContext for CLI/dashboard access
         daemonContext!.deploymentExecutor = deploymentExecutorInstance;

@@ -199,20 +199,23 @@ export function useDashboard(): UseDashboardReturn {
   useEffect(() => {
     mountedRef.current = true
     const controller = new AbortController()
-
-    // Initial fetch
-    fetchAll(controller.signal)
+    const initialFetchTimer = setTimeout(() => {
+      if (mountedRef.current) {
+        void fetchAll(controller.signal)
+      }
+    }, 0)
 
     // Polling
     const interval = setInterval(() => {
       if (mountedRef.current) {
-        fetchAll(controller.signal)
+        void fetchAll(controller.signal)
       }
     }, POLL_INTERVAL)
 
     return () => {
       mountedRef.current = false
       controller.abort()
+      clearTimeout(initialFetchTimer)
       clearInterval(interval)
     }
   }, [fetchAll])

@@ -14,6 +14,11 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 }
 
+function readStoredChatId(): string | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem('strada-chatId')
+}
+
 export interface UseWebSocketReturn {
   messages: ChatMessage[]
   status: ConnectionStatus
@@ -31,14 +36,15 @@ export function useWebSocket(): UseWebSocketReturn {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null)
   const [isTyping, setIsTyping] = useState(false)
-  const [sessionId, setSessionId] = useState<string | null>(localStorage.getItem('strada-chatId'))
+  const [sessionId, setSessionId] = useState<string | null>(() => readStoredChatId())
 
   const wsRef = useRef<WebSocket | null>(null)
-  const chatIdRef = useRef<string | null>(localStorage.getItem('strada-chatId'))
+  const chatIdRef = useRef<string | null>(readStoredChatId())
   const reconnectDelayRef = useRef(1000)
   const reconnectAttemptsRef = useRef(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
+  const connectRef = useRef<(() => void) | null>(null)
 
   // Use a ref for the streaming map so updates to it don't trigger re-renders
   // on their own -- we update `messages` state explicitly when streams change.
@@ -96,7 +102,7 @@ export function useWebSocket(): UseWebSocketReturn {
       reconnectTimerRef.current = setTimeout(() => {
         if (!mountedRef.current) return
         setStatus('reconnecting')
-        connect()
+        connectRef.current?.()
       }, reconnectDelayRef.current)
       reconnectDelayRef.current = Math.min(
         reconnectDelayRef.current * 2,
@@ -180,11 +186,13 @@ export function useWebSocket(): UseWebSocketReturn {
         case 'stream_end':
           streamsRef.current.delete(data.streamId)
           setMessages((prev) =>
-            prev.map((msg) =>
-              msg.streamId === data.streamId
-                ? { ...msg, text: data.text, isStreaming: false }
-                : msg,
-            ),
+            data.text
+              ? prev.map((msg) =>
+                  msg.streamId === data.streamId
+                    ? { ...msg, text: data.text, isStreaming: false }
+                    : msg,
+                )
+              : prev.filter((msg) => msg.streamId !== data.streamId),
           )
           break
 
@@ -201,8 +209,12 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [])
 
   useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
+
+  useEffect(() => {
     mountedRef.current = true
-    connect()
+    connectRef.current?.()
 
     return () => {
       mountedRef.current = false

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { useWS } from '../contexts/WebSocketContext'
+import { useWS } from '../hooks/useWS'
 import ChatMessage from './ChatMessage'
 import ChatInput from './ChatInput'
 import ConfirmDialog from './ConfirmDialog'

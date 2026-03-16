@@ -42,13 +42,25 @@ function makeTrigger(
 }
 
 function makeTaskManager() {
-  const tasks = new Map<string, { id: string; status: string }>();
+  const tasks = new Map<string, { id: string; status: string; origin: string }>();
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
   let taskCounter = 0;
   return {
     submit: vi.fn((_chatId: string, _channelType: string, _prompt: string, _options?: { origin?: string }) => {
       const id = `task_${++taskCounter}` as TaskId;
-      const task = { id, chatId: _chatId, channelType: _channelType, title: _prompt.slice(0, 80), status: "pending", prompt: _prompt, progress: [], createdAt: Date.now(), updatedAt: Date.now() };
-      tasks.set(id, { id, status: "pending" });
+      const task = {
+        id,
+        chatId: _chatId,
+        channelType: _channelType,
+        title: _prompt.slice(0, 80),
+        status: "pending",
+        prompt: _prompt,
+        progress: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        origin: _options?.origin ?? "user",
+      };
+      tasks.set(id, { id, status: "pending", origin: task.origin });
       return task;
     }),
     getStatus: vi.fn((taskId: string) => {
@@ -60,8 +72,22 @@ function makeTaskManager() {
       const t = tasks.get(taskId);
       if (t) t.status = status;
     },
-    on: vi.fn(),
-    emit: vi.fn(),
+    _setTaskOrigin: (taskId: string, origin: string) => {
+      const t = tasks.get(taskId);
+      if (t) {
+        (t as { origin: string }).origin = origin;
+      }
+    },
+    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      const eventListeners = listeners.get(event) ?? [];
+      eventListeners.push(handler);
+      listeners.set(event, eventListeners);
+    }),
+    emit: vi.fn((event: string, ...args: unknown[]) => {
+      for (const handler of listeners.get(event) ?? []) {
+        handler(...args);
+      }
+    }),
   };
 }
 
@@ -583,6 +609,65 @@ describe("HeartbeatLoop", () => {
   it("getCircuitBreaker returns undefined for unknown trigger", () => {
     loop.start();
     expect(loop.getCircuitBreaker("nonexistent")).toBeUndefined();
+  });
+
+  // =========================================================================
+  // Deployment readiness integration
+  // =========================================================================
+
+  it("refreshes deployment readiness when a user task settles", async () => {
+    const deployTrigger = {
+      triggerReadinessCheck: vi.fn().mockResolvedValue({ ready: true }),
+    };
+    const task = taskManager.submit("chat-1", "web", "ship it");
+    taskManager._setTaskStatus(task.id, "completed");
+
+    loop.setDeployTrigger(deployTrigger);
+    loop.start();
+    loop.onTaskSettled(task.id);
+    await Promise.resolve();
+
+    expect(deployTrigger.triggerReadinessCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh deployment readiness for daemon-origin tasks", async () => {
+    const deployTrigger = {
+      triggerReadinessCheck: vi.fn().mockResolvedValue({ ready: true }),
+    };
+    const task = taskManager.submit("daemon", "daemon", "daemon task", { origin: "daemon" });
+    taskManager._setTaskStatus(task.id, "completed");
+
+    loop.setDeployTrigger(deployTrigger);
+    loop.start();
+    loop.onTaskSettled(task.id);
+    await Promise.resolve();
+
+    expect(deployTrigger.triggerReadinessCheck).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates concurrent deployment readiness refreshes", async () => {
+    let resolveReadiness: (() => void) | undefined;
+    const deployTrigger = {
+      triggerReadinessCheck: vi.fn().mockImplementation(
+        () => new Promise<{ ready: boolean }>((resolve) => {
+          resolveReadiness = () => resolve({ ready: false });
+        }),
+      ),
+    };
+    const task = taskManager.submit("chat-1", "web", "first");
+    const secondTask = taskManager.submit("chat-1", "web", "second");
+    taskManager._setTaskStatus(task.id, "completed");
+    taskManager._setTaskStatus(secondTask.id, "completed");
+
+    loop.setDeployTrigger(deployTrigger);
+    loop.start();
+    loop.onTaskSettled(task.id);
+    loop.onTaskSettled(secondTask.id);
+
+    expect(deployTrigger.triggerReadinessCheck).toHaveBeenCalledTimes(1);
+
+    resolveReadiness?.();
+    await Promise.resolve();
   });
 
   // =========================================================================

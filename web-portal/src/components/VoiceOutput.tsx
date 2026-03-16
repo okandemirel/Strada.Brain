@@ -6,14 +6,8 @@ interface VoiceOutputProps {
 
 export default function VoiceOutput({ text }: VoiceOutputProps) {
   const [isSpeaking, setIsSpeaking] = useState(false)
-  const [supported, setSupported] = useState(true)
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
-
-  useEffect(() => {
-    if (!window.speechSynthesis) {
-      setSupported(false)
-    }
-  }, [])
+  const supported = typeof window !== 'undefined' && typeof window.speechSynthesis !== 'undefined'
 
   // Cancel speech on unmount
   useEffect(() => {

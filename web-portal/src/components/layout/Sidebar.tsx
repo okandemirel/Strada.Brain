@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { useWS } from '../../contexts/WebSocketContext'
+import { useWS } from '../../hooks/useWS'
 import { useTheme } from '../../hooks/useTheme'
 import { useSidebar } from '../../hooks/useSidebar'
 import '../../styles/sidebar.css'

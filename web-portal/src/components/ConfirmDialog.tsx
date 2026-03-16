@@ -31,6 +31,10 @@ function parsePlanSteps(question: string): { title: string; steps: string[] } {
 }
 
 export default function ConfirmDialog({ confirmation, onRespond }: ConfirmDialogProps) {
+  return <ConfirmDialogBody key={confirmation.confirmId} confirmation={confirmation} onRespond={onRespond} />
+}
+
+function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
   const firstBtnRef = useRef<HTMLButtonElement>(null)
   const [modifyText, setModifyText] = useState('')
   const [showModifyInput, setShowModifyInput] = useState(false)
@@ -58,12 +62,6 @@ export default function ConfirmDialog({ confirmation, onRespond }: ConfirmDialog
       modifyInputRef.current?.focus()
     }
   }, [showModifyInput])
-
-  // Reset modify state when confirmation changes
-  useEffect(() => {
-    setShowModifyInput(false)
-    setModifyText('')
-  }, [confirmation.confirmId])
 
   const handleOptionClick = useCallback(
     (option: string) => {

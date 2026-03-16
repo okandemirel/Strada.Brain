@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useWS } from '../contexts/WebSocketContext'
+import { useWS } from '../hooks/useWS'
 
 interface ProviderInfo {
   name: string

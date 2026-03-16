@@ -59,6 +59,7 @@ npm install -g strada-brain
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
+npm install --prefix web-portal
 ```
 
 ### 2. Yapilandirma
@@ -389,7 +390,7 @@ Strada.Brain, [Strada.MCP](https://github.com/okandemirel/Strada.MCP)'yi (76 ara
 Daemon, kalp atisi gudumlu tetikleyici sistemi ile 7/24 otonom calisma saglar. Daemon modu aktif oldugunda, **Agent Core OODA dongusu** daemon tick'leri icinde calisir, cevrevi gozlemler ve kullanici etkilesimleri arasinda proaktif olarak eyleme gecer. `/autonomous on` komutu artik DaemonSecurityPolicy'ye yayilir ve islem bazinda onay istemleri olmadan tam otonom calismaya olanak tanir.
 
 ```bash
-npm run dev -- daemon --channel web
+npm run dev -- start --channel web --daemon
 ```
 
 **HeartbeatLoop:**
@@ -402,7 +403,7 @@ npm run dev -- daemon --channel web
 - **Dosya izleme** -- yapilandirilmis yollardaki dosya sistemi degisikliklerini izler
 - **Kontrol listesi** -- kontrol listesi ogeleri vadesi geldiginde tetiklenir
 - **Webhook** -- gelen isteklerde gorev tetikleyen HTTP POST uc noktasi
-- **Deploy** -- dagitim kosullari karsilandiginda tetiklenir (onay kapisi gerektirir)
+- **Deploy** -- yenilenen readiness kontrolu proje hazir oldugunu dogruladiginda dagitim onerir (onay kapisi gerektirir)
 
 **Dayaniklilik:**
 - **Devre kesiciler** -- ustel geri cekilme soguma sureli, yeniden baslatmalar arasinda kalici, tetikleyici bazinda
@@ -641,7 +642,7 @@ Tum sohbet kanallarinda kullanilabilir slash komutlari:
 | Komut | Aciklama |
 |-------|----------|
 | `/daemon` | Daemon durumunu goster |
-| `/daemon start` | Daemon kalp atisi dongusunu baslat |
+| `/daemon start` | Daemon kalp atisi dongusunu baslat (`--daemon` ile baslatildiysa) |
 | `/daemon stop` | Daemon kalp atisi dongusunu durdur |
 | `/daemon triggers` | Aktif tetikleyicileri goster |
 | `/agent` | Agent Core durumunu goster |
@@ -766,10 +767,10 @@ docker-compose up -d
 
 ```bash
 # Kalp atisi dongusu ve proaktif tetikleyicilerle 7/24 otonom calisma
-node dist/index.js daemon --channel web
+node dist/index.js start --channel web --daemon
 
 # Ustel geri cekilme ile cokme durumunda otomatik yeniden baslatma (1sn - 60sn, 10 yeniden baslatmaya kadar)
-node dist/index.js daemon --channel telegram
+node dist/index.js supervise --channel telegram
 ```
 
 ### Uretim Kontrol Listesi
@@ -799,6 +800,7 @@ npm run sync:check -- --core-path /path/to/Strada.Core  # Strada.Core API drift 
 npm run test:file-build-flow     # Opt-in local .NET entegrasyon akisi
 npm run test:unity-fixture       # Opt-in local Unity fixture derleme/test akisi
 npm run test:hnsw-perf           # Opt-in HNSW benchmark / recall suiti
+npm run test:portal              # Web portal smoke testleri
 npm run typecheck                # TypeScript tip kontrolu
 npm run lint                     # ESLint
 ```
@@ -839,7 +841,7 @@ src/
     discord/            # discord.js bot, slash komutlari ile
     slack/              # Slack Bolt (soket modu) Block Kit ile
     whatsapp/           # Baileys tabanli istemci, oturum yonetimi ile
-    web/                # Express + WebSocket web kanali
+    web/                # Yerel HTTP + WebSocket web kanali
     cli/                # Readline REPL
   web-portal/           # React + Vite sohbet arayuzu (koyu/acik tema, dosya yukleme, akis, panel sekme, yan panel)
   memory/

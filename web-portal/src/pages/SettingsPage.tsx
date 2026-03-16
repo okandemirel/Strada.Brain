@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useWS } from '../contexts/WebSocketContext'
+import { useWS } from '../hooks/useWS'
 
 // ---------------------------------------------------------------------------
 // Types

@@ -46,7 +46,7 @@ interface ConsolidationEngineContract {
 
 /** Deploy trigger interface -- only the subset HeartbeatLoop uses */
 interface DeployTriggerContract {
-  triggerReadinessCheck(): Promise<unknown>;
+  triggerReadinessCheck(): Promise<{ ready: boolean }>;
 }
 
 export class HeartbeatLoop {
@@ -67,7 +67,9 @@ export class HeartbeatLoop {
   private consolidationRunning = false;
   private lastUserActivity = Date.now();
 
-  /** Deploy trigger (Phase 25) -- stored for future readiness-check integration */
+  /** Deploy trigger (Phase 25) -- refreshed when user tasks settle */
+  private deployTrigger?: DeployTriggerContract;
+  private deployReadinessCheckInFlight?: Promise<void>;
 
   /** Agent Core autonomous reasoning loop (Phase 4) */
   private agentCore?: import("../agent-core/agent-core.js").AgentCore;
@@ -468,8 +470,41 @@ export class HeartbeatLoop {
   /**
    * Set the deploy trigger for readiness checks after task/goal completion (Phase 25).
    */
-  setDeployTrigger(_trigger: DeployTriggerContract): void {
-    // Stored for future readiness-check integration in tick loop
+  setDeployTrigger(trigger: DeployTriggerContract): void {
+    this.deployTrigger = trigger;
+  }
+
+  /**
+   * Refresh deployment readiness after a non-daemon task settles.
+   * The cached readiness is then evaluated on the next heartbeat tick.
+   */
+  onTaskSettled(taskId: TaskId): void {
+    if (!this.running || !this.deployTrigger || this.deployReadinessCheckInFlight) {
+      return;
+    }
+
+    const task = this.taskManager.getStatus(taskId);
+    if (!task || task.origin === "daemon") {
+      return;
+    }
+
+    this.deployReadinessCheckInFlight = this.deployTrigger
+      .triggerReadinessCheck()
+      .then((result) => {
+        this.logger.debug("Deployment readiness refreshed after task settlement", {
+          taskId,
+          ready: result.ready,
+        });
+      })
+      .catch((error: unknown) => {
+        this.logger.warn("Deployment readiness check failed", {
+          taskId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.deployReadinessCheckInFlight = undefined;
+      });
   }
 
   /**

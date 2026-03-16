@@ -31,14 +31,8 @@ function getSpeechRecognition(): SpeechRecognitionConstructor | null {
 
 export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderProps) {
   const [isRecording, setIsRecording] = useState(false)
-  const [supported, setSupported] = useState(true)
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
-
-  useEffect(() => {
-    if (!getSpeechRecognition()) {
-      setSupported(false)
-    }
-  }, [])
+  const supported = typeof window !== 'undefined' && getSpeechRecognition() !== null
 
   // Cleanup on unmount
   useEffect(() => {

@@ -26,9 +26,15 @@ jobs:
         with:
           node-version: 20
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web-portal/package-lock.json
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install portal dependencies
+        run: npm ci --prefix web-portal
 
       - name: Clone Strada.Core reference
         run: git clone --depth 1 https://github.com/okandemirel/Strada.Core.git /tmp/Strada.Core-ci
@@ -39,7 +45,16 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Lint
+        run: npm run lint
+
       - name: Test
         env:
           CI: "1"
         run: npm test
+
+      - name: Portal Tests
+        run: npm run test:portal
+
+      - name: Build
+        run: npm run build

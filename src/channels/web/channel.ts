@@ -11,9 +11,11 @@ import {
   type IncomingMessage as HttpReq,
   type ServerResponse,
 } from "node:http";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, extname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin } from "../../security/origin-validation.js";
 import { validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
@@ -54,7 +56,16 @@ const MIME_TYPES: Record<string, string> = {
   ".ico": "image/x-icon",
 };
 
-const STATIC_DIR = new URL("static/", import.meta.url).pathname;
+const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
+const PACKAGED_STATIC_DIR = fileURLToPath(new URL("static/", import.meta.url));
+const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../../web-portal/dist");
+
+function resolveStaticDir(): string {
+  if (existsSync(SOURCE_BUILD_STATIC_DIR)) {
+    return SOURCE_BUILD_STATIC_DIR;
+  }
+  return PACKAGED_STATIC_DIR;
+}
 
 /** Rate limit: max messages per window. */
 const WS_RATE_LIMIT = 20;
@@ -74,6 +85,7 @@ export class WebChannel
   private pendingConfirmations = new Map<string, PendingConfirmation>();
   /** Recently disconnected chatIds eligible for reconnect (5 min TTL) */
   private recentlyDisconnected = new Map<string, number>();
+  private readonly staticDir = resolveStaticDir();
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
@@ -285,8 +297,8 @@ export class WebChannel
 
     // Try to serve the exact static file first
     if (rawSegment !== "/") {
-      const candidate = resolve(join(STATIC_DIR, rawSegment));
-      const safeRoot = resolve(STATIC_DIR);
+      const candidate = resolve(join(this.staticDir, rawSegment));
+      const safeRoot = resolve(this.staticDir);
       if (!candidate.startsWith(safeRoot + "/") && candidate !== safeRoot) {
         res.writeHead(403, WebChannel.SECURITY_HEADERS);
         res.end("Forbidden");
@@ -306,7 +318,7 @@ export class WebChannel
 
     // SPA fallback: serve index.html for all non-file routes (client-side routing)
     try {
-      const data = await readFile(join(STATIC_DIR, "index.html"));
+      const data = await readFile(join(this.staticDir, "index.html"));
       res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" });
       res.end(data);
     } catch {

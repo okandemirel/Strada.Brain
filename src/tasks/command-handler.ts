@@ -205,8 +205,6 @@ export class CommandHandler {
       "`/cancel [id]` - Cancel a running task",
       "`/tasks` - List recent tasks",
       "`/detail <id>` - Show full task details",
-      "`/pause [id]` - Pause a running task",
-      "`/resume [id]` - Resume a paused task",
       "`/help` - Show this help",
       "",
       "*Goal Commands*",
@@ -241,7 +239,7 @@ export class CommandHandler {
       "*Daemon Mode*",
       "",
       "`/daemon` - Show daemon status",
-      "`/daemon start` - Start daemon heartbeat loop",
+      "`/daemon start` - Start daemon heartbeat loop (requires startup with --daemon)",
       "`/daemon stop` - Stop daemon heartbeat loop",
       "`/daemon triggers` - Show active triggers",
       "",
@@ -686,7 +684,7 @@ export class CommandHandler {
 
     await this.channel.sendText(
       chatId,
-      "Usage: /daemon | /daemon start | /daemon stop | /daemon triggers",
+      "Usage: /daemon | /daemon start | /daemon stop | /daemon triggers (daemon-capable startup required)",
     );
   }
 

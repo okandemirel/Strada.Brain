@@ -59,6 +59,7 @@ npm install -g strada-brain
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
+npm install --prefix web-portal
 ```
 
 ### 2. Setup
@@ -430,7 +431,7 @@ Strada.Brain detects [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (76
 The daemon provides 24/7 autonomous operation with a heartbeat-driven trigger system. When daemon mode is active, the **Agent Core OODA loop** runs within daemon ticks, observing the environment and proactively taking action between user interactions. The `/autonomous on` command now propagates to the DaemonSecurityPolicy, enabling fully autonomous operation without per-action approval prompts.
 
 ```bash
-npm run dev -- daemon --channel web
+npm run dev -- start --channel web --daemon
 ```
 
 **HeartbeatLoop:**
@@ -443,7 +444,7 @@ npm run dev -- daemon --channel web
 - **File watch** -- monitors file system changes in configured paths
 - **Checklist** -- fires when checklist items become due
 - **Webhook** -- HTTP POST endpoint triggers tasks on incoming requests
-- **Deploy** -- fires when deployment conditions are met (requires approval gate)
+- **Deploy** -- proposes deployment after a refreshed readiness check confirms the project is ready (requires approval gate)
 
 **Resilience:**
 - **Circuit breakers** -- per-trigger with exponential backoff cooldown, persisted across restarts
@@ -682,7 +683,7 @@ Slash commands available in all chat channels:
 | Command | Description |
 |---------|-------------|
 | `/daemon` | Show daemon status |
-| `/daemon start` | Start daemon heartbeat loop |
+| `/daemon start` | Start daemon heartbeat loop (when the app was started with `--daemon`) |
 | `/daemon stop` | Stop daemon heartbeat loop |
 | `/daemon triggers` | Show active triggers |
 | `/agent` | Show Agent Core status |
@@ -807,10 +808,10 @@ The `docker-compose.yml` includes the application, monitoring stack, and nginx r
 
 ```bash
 # 24/7 autonomous operation with heartbeat loop and proactive triggers
-node dist/index.js daemon --channel web
+node dist/index.js start --channel web --daemon
 
 # Auto-restarts on crash with exponential backoff (1s to 60s, up to 10 restarts)
-node dist/index.js daemon --channel telegram
+node dist/index.js supervise --channel telegram
 ```
 
 ### Production Checklist
@@ -840,6 +841,7 @@ npm run sync:check -- --core-path /path/to/Strada.Core  # Validate Strada.Core A
 npm run test:file-build-flow     # Opt-in local .NET integration flow
 npm run test:unity-fixture       # Opt-in local Unity fixture compile/test flow
 npm run test:hnsw-perf           # Opt-in HNSW benchmark / recall suite
+npm run test:portal              # Web portal smoke tests
 npm run typecheck                # TypeScript type checking
 npm run lint                     # ESLint
 ```
@@ -880,7 +882,7 @@ src/
     discord/            # discord.js bot with slash commands
     slack/              # Slack Bolt (socket mode) with Block Kit
     whatsapp/           # Baileys-based client with session management
-    web/                # Express + WebSocket web channel
+    web/                # Local HTTP + WebSocket web channel
     cli/                # Readline REPL
   web-portal/           # React + Vite chat UI (dark/light theme, file upload, streaming, dashboard tab, side panel)
   memory/
