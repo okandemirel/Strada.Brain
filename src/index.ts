@@ -35,7 +35,7 @@ setupGlobalErrorHandlers(
 const program = new Command();
 
 program
-  .name("strada-brain")
+  .name("strada")
   .description("AI-powered Unity development assistant for Strada.Core projects")
   .version("0.1.0");
 

@@ -4,6 +4,10 @@
   "description": "AI-powered Unity development assistant for Strada.Core framework projects",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "strada": "./dist/index.js",
+    "strada-brain": "./dist/index.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "npm run build:portal && tsc && rm -rf dist/channels/web/static && cp -r src/channels/web/static dist/channels/web/static",
