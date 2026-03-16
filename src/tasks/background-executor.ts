@@ -111,6 +111,13 @@ export class BackgroundExecutor {
     this.taskManager = manager;
   }
 
+  /**
+   * Returns true if any tasks are currently running or queued.
+   */
+  hasRunningTasks(): boolean {
+    return this.running > 0 || this.queue.length > 0;
+  }
+
   private static readonly MAX_QUEUE_SIZE = 100;
 
   /**
