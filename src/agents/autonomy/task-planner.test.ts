@@ -194,14 +194,6 @@ describe("TaskPlanner", () => {
     });
   });
 
-  describe("Planning Prompt", () => {
-    it("should return planning prompt", () => {
-      const prompt = planner.getPlanningPrompt();
-      expect(prompt).toContain("Autonomous Execution Protocol");
-      expect(prompt).toContain("PLAN → ACT → VERIFY → RESPOND");
-    });
-  });
-
   describe("Trajectory Tracking", () => {
     it("should record steps during task", () => {
       planner.startTask({

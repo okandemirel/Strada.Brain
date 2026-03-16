@@ -658,7 +658,6 @@ export class Orchestrator {
     const errorRecovery = new ErrorRecoveryEngine();
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
-    systemPrompt += taskPlanner.getPlanningPrompt();
     let verificationRequested = false;
 
     let bgIteration = 0;
@@ -1333,7 +1332,6 @@ export class Orchestrator {
     const errorRecovery = new ErrorRecoveryEngine();
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
-    systemPrompt += taskPlanner.getPlanningPrompt();
     let verificationRequested = false;
     // ────────────────────────────────────────────────────────────────────
 
