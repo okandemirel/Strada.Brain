@@ -37,6 +37,32 @@ npm run dev -- cli
 - Use descriptive names: `calculateUserDiscount` over `calcDisc`.
 - All new modules should export from an `index.ts` barrel file.
 
+## Architecture Overview
+
+Strada.Brain is organized into these key modules:
+
+| Module | Path | Description |
+|--------|------|-------------|
+| **Agent Core** | `src/agent-core/` | Autonomous OODA loop, observation engine, multi-provider routing, consensus |
+| **Orchestrator** | `src/agents/orchestrator.ts` | PAOR state machine, LLM interaction, tool execution |
+| **Providers** | `src/agents/providers/` | 12+ AI provider implementations with fallback chain |
+| **Daemon** | `src/daemon/` | HeartbeatLoop, triggers, budget tracking, security policy |
+| **Goals** | `src/goals/` | DAG decomposition, wave-based parallel execution |
+| **Learning** | `src/learning/` | Event-driven pipeline, instinct lifecycle, chain synthesis |
+| **Memory** | `src/memory/` | AgentDB (SQLite + HNSW), session persistence |
+| **Tasks** | `src/tasks/` | Task management, background execution, command handling |
+| **Config** | `src/config/` | Zod-validated config with 90+ env vars |
+| **Channels** | `src/channels/` | Web, Telegram, Discord, Slack, WhatsApp, CLI |
+| **Web Portal** | `web-portal/` | React + Vite dashboard (separate package.json) |
+
+### Key Design Patterns
+
+- **PAOR State Machine**: All task execution (interactive AND background) uses Plan → Act → Observe → Reflect cycle
+- **Structural Interfaces**: Components use duck-typed interfaces (not concrete imports) to avoid circular dependencies
+- **Graceful Degradation**: All optional features (routing, consensus, MCP, embeddings) work with zero config and fail silently
+- **Event-Driven Learning**: `TypedEventBus` connects tool execution → learning pipeline → instinct formation
+- **Provider Agnostic**: `ConversationMessage[]` is the shared contract — providers normalize internally
+
 ## Pull Request Process
 
 1. Create a feature branch from `main`:
@@ -57,6 +83,45 @@ npm run dev -- cli
 4. Commit with a clear message describing the change.
 5. Push and open a pull request against `main`.
 6. A maintainer will review your PR. Address any feedback, then it will be merged.
+
+## Adding a New Provider
+
+1. Create `src/agents/providers/my-provider.ts` implementing `IAIProvider`
+2. Add to `src/agents/providers/provider-registry.ts` factory
+3. Add metadata to `src/agents/providers/provider-knowledge.ts` (strengths, context window, cost tier)
+4. Add cost/speed tiers to `src/agent-core/routing/provider-router.ts`
+5. Run tests: `npx vitest run src/agents/providers/`
+
+## Adding a New Observer
+
+1. Create `src/agent-core/observers/my-observer.ts` implementing `Observer` interface
+2. Export from `src/agent-core/observers/index.ts`
+3. Register in `src/core/bootstrap.ts` (inside daemon mode block)
+4. Add tests to `src/agent-core/observers/observers.test.ts`
+
+## Running Tests
+
+```bash
+# Full suite (3450+ tests)
+npm test
+
+# Specific module
+npx vitest run src/agent-core/
+npx vitest run src/agents/
+npx vitest run src/daemon/
+
+# Watch mode
+npx vitest --watch
+```
+
+## Web Portal Development
+
+```bash
+cd web-portal
+npm install
+npm run dev     # Development server with HMR
+npm run build   # Production build → src/channels/web/static/
+```
 
 ## Testing
 
