@@ -436,6 +436,96 @@ export class Orchestrator {
   }
 
   /**
+   * Build a complete system prompt with all context layers.
+   * Shared by both runAgentLoop (interactive) and runBackgroundTask (background).
+   */
+  private async buildSystemPromptWithContext(params: {
+    chatId: string;
+    channelType?: string;
+    prompt: string;
+    personaContent?: string;
+    isUserTask: boolean;
+    profile: { displayName?: string; language: string; activePersona: string; preferences: unknown; contextSummary?: string } | null;
+    preComputedEmbedding?: number[];
+  }): Promise<{ systemPrompt: string; initialContentHashes: string[] }> {
+    const logger = getLogger();
+
+    // 1. Soul personality injection (with optional persona override)
+    let systemPrompt = this.injectSoulPersonality(this.systemPrompt, params.channelType, params.personaContent);
+
+    // 2. Autonomous mode directive
+    if (this.dmPolicy?.isAutonomousActive(params.chatId)) {
+      systemPrompt += AUTONOMOUS_MODE_DIRECTIVE;
+    }
+
+    // 3. Provider intelligence: inject strengths, limitations, and behavioral hints
+    const activeInfo = this.providerManager.getActiveInfo?.(params.chatId);
+    if (activeInfo) {
+      systemPrompt += buildProviderIntelligence(activeInfo.providerName, activeInfo.model);
+    }
+
+    // 4. Language directive
+    if (params.profile?.language && params.profile.language !== "en") {
+      systemPrompt += `\nIMPORTANT: Communicate with the user in ${params.profile.language}.\n`;
+    }
+
+    // 5. Context layers (user profile, session summary, open tasks, semantic memory)
+    const { context: contextLayers, contentHashes } = await this.buildContextLayers(
+      params.chatId,
+      params.prompt,
+      params.profile as import("../memory/unified/user-profile-store.js").UserProfile | null,
+      params.preComputedEmbedding,
+    );
+    systemPrompt += contextLayers;
+    const initialContentHashes: string[] = [...contentHashes];
+
+    // 6. First-time user prompt (only for direct user tasks without a known profile)
+    if (params.isUserTask && (!params.profile || !params.profile.displayName)) {
+      systemPrompt += FIRST_TIME_USER_PROMPT;
+    }
+
+    // 7. RAG injection
+    if (this.ragPipeline && params.prompt) {
+      try {
+        const ragResults = await this.ragPipeline.search(params.prompt, {
+          topK: 6,
+          minScore: 0.2,
+          queryEmbedding: params.preComputedEmbedding,
+        });
+        if (ragResults.length > 0) {
+          const ragFormatted = this.ragPipeline.formatContext(ragResults);
+          systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${ragFormatted}\n<!-- re-retrieval:rag:end -->\n`;
+          for (const r of ragResults) initialContentHashes.push(r.chunk.content);
+          logger.debug("Injected RAG context", {
+            chatId: params.chatId,
+            resultCount: ragResults.length,
+            topScore: ragResults[0]!.finalScore.toFixed(3),
+          });
+        }
+      } catch {
+        // RAG failure is non-fatal
+      }
+    }
+
+    // 8. Analysis cache injection
+    if (this.memoryManager) {
+      try {
+        const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
+        if (isOk(analysisResult)) {
+          const analysisOpt = analysisResult.value;
+          if (isSome(analysisOpt)) {
+            systemPrompt += buildAnalysisSummary(analysisOpt.value);
+          }
+        }
+      } catch {
+        // Analysis cache failure is non-fatal
+      }
+    }
+
+    return { systemPrompt, initialContentHashes };
+  }
+
+  /**
    * Public accessor for active sessions (used by dashboard /api/sessions).
    */
   getSessions(): Map<string, { lastActivity: Date; messageCount: number }> {
@@ -551,33 +641,6 @@ export class Orchestrator {
     }
     // ────────────────────────────────────────────────────────────────────
 
-    // Build system prompt with memory/RAG context
-    let systemPrompt = this.injectSoulPersonality(this.systemPrompt, options.channelType);
-
-    // Inject user profile context (onboarding only for user-originated tasks, not daemon/goal subtasks)
-    const isUserTask = !options.parentMetricId;
-    if (profile && profile.displayName) {
-      // Returning user — inject their preferences
-      const profileParts = buildProfileParts(profile);
-      systemPrompt += `\n\n## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${profileParts.join("\n")}\n`;
-      if (profile.contextSummary) {
-        systemPrompt += `\n## Previous Session\nReference this context naturally when relevant.\n${sanitizePromptInjection(profile.contextSummary)}\n`;
-      }
-      if (profile.language && profile.language !== "en") {
-        systemPrompt += `\nIMPORTANT: Communicate with the user in ${profile.language}.\n`;
-      }
-    } else if (isUserTask) {
-      // Only inject onboarding for direct user messages, not background/daemon tasks
-      systemPrompt += FIRST_TIME_USER_PROMPT;
-    }
-
-    // Inject autonomous mode directive for background tasks
-    if (this.dmPolicy?.isAutonomousActive(chatId)) {
-      systemPrompt += AUTONOMOUS_MODE_DIRECTIVE;
-    }
-
-    const bgInitialContentHashes: string[] = [];
-
     // Pre-compute embedding once for memory + RAG search (avoids redundant calls)
     let bgEmbedding: number[] | undefined;
     if (this.embeddingProvider && prompt) {
@@ -589,52 +652,17 @@ export class Orchestrator {
       }
     }
 
-    if (this.memoryManager) {
-      try {
-        const memoriesResult = await this.memoryManager.retrieve({
-          mode: "semantic",
-          query: prompt,
-          limit: 3,
-          minScore: 0.15,
-          embedding: bgEmbedding,
-        } as import("../memory/memory.interface.js").SemanticRetrievalOptions);
-        if (isOk(memoriesResult)) {
-          const memories = memoriesResult.value;
-          if (memories.length > 0) {
-            const memoryContext = memories.map((m) => m.entry.content).join("\n---\n");
-            systemPrompt += `\n\n<!-- re-retrieval:memory:start -->\n## Relevant Memory\n${memoryContext}\n<!-- re-retrieval:memory:end -->\n`;
-            for (const m of memories) bgInitialContentHashes.push(m.entry.content);
-          }
-        }
-      } catch {
-        // Memory retrieval failure is non-fatal
-      }
-
-      if (this.ragPipeline) {
-        try {
-          const ragResults = await this.ragPipeline.search(prompt, { topK: 6, minScore: 0.2, queryEmbedding: bgEmbedding });
-          if (ragResults.length > 0) {
-            const ragFormatted = this.ragPipeline.formatContext(ragResults);
-            systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${ragFormatted}\n<!-- re-retrieval:rag:end -->\n`;
-            for (const r of ragResults) bgInitialContentHashes.push(r.chunk.content);
-          }
-        } catch {
-          // RAG failure is non-fatal
-        }
-      }
-
-      try {
-        const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
-        if (isOk(analysisResult)) {
-          const analysisOpt = analysisResult.value;
-          if (isSome(analysisOpt)) {
-            systemPrompt += buildAnalysisSummary(analysisOpt.value);
-          }
-        }
-      } catch {
-        // Non-fatal
-      }
-    }
+    // Build system prompt with all context layers (DRY: shared with runAgentLoop)
+    const isUserTask = !options.parentMetricId;
+    const { systemPrompt: builtPrompt, initialContentHashes: bgInitialContentHashes } = await this.buildSystemPromptWithContext({
+      chatId,
+      channelType: options.channelType,
+      prompt,
+      isUserTask,
+      profile,
+      preComputedEmbedding: bgEmbedding,
+    });
+    let systemPrompt = builtPrompt;
 
     // ─── Background task instinct retrieval ────────────────────────────
     if (this.instinctRetriever) {
@@ -1240,25 +1268,8 @@ export class Orchestrator {
     if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
       personaContent = await this.soulLoader.getProfileContent(profile.activePersona) ?? undefined;
     }
-    let systemPrompt = this.injectSoulPersonality(this.systemPrompt, channelType, personaContent);
 
-    // Inject autonomous mode directive into system prompt
-    if (this.dmPolicy?.isAutonomousActive(chatId)) {
-      systemPrompt += AUTONOMOUS_MODE_DIRECTIVE;
-    }
-
-    // Provider intelligence: inject strengths, limitations, and behavioral hints
-    const activeInfo = this.providerManager.getActiveInfo?.(chatId);
-    if (activeInfo) {
-      systemPrompt += buildProviderIntelligence(activeInfo.providerName, activeInfo.model);
-    }
-
-    // Language directive
-    if (profile?.language && profile.language !== "en") {
-      systemPrompt += `\nIMPORTANT: Communicate with the user in ${profile.language}.\n`;
-    }
-
-    // 4-layer context injection (user profile, session summary, open tasks, semantic memory)
+    // Extract query text from last user message for embedding + context
     const lastUserMsg = [...session.messages].reverse().find((m) => m.role === "user" && m.content);
     const queryText = lastUserMsg
       ? typeof lastUserMsg.content === "string"
@@ -1282,51 +1293,17 @@ export class Orchestrator {
       }
     }
 
-    const { context: contextLayers, contentHashes } = await this.buildContextLayers(chatId, queryText, profile, preComputedEmbedding);
-    systemPrompt += contextLayers;
-    const initialContentHashes: string[] = [...contentHashes];
-
-    if (session.messages.length > 0) {
-      if (lastUserMsg && queryText) {
-        // Inject RAG code context
-        if (this.ragPipeline && queryText) {
-          try {
-            const ragResults = await this.ragPipeline.search(queryText, {
-              topK: 6,
-              minScore: 0.2,
-              queryEmbedding: preComputedEmbedding,
-            });
-            if (ragResults.length > 0) {
-              const ragFormatted = this.ragPipeline.formatContext(ragResults);
-              systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${ragFormatted}\n<!-- re-retrieval:rag:end -->\n`;
-              for (const r of ragResults) initialContentHashes.push(r.chunk.content);
-              logger.debug("Injected RAG context", {
-                chatId,
-                resultCount: ragResults.length,
-                topScore: ragResults[0]!.finalScore.toFixed(3),
-              });
-            }
-          } catch {
-            // RAG failure is non-fatal
-          }
-        }
-      }
-
-      // Inject cached analysis summary into system prompt
-      if (this.memoryManager) {
-        try {
-          const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
-          if (isOk(analysisResult)) {
-            const analysisOpt = analysisResult.value;
-            if (isSome(analysisOpt)) {
-              systemPrompt += buildAnalysisSummary(analysisOpt.value);
-            }
-          }
-        } catch {
-          // Analysis cache failure is non-fatal
-        }
-      }
-    }
+    // Build system prompt with all context layers (DRY: shared with runBackgroundTask)
+    const { systemPrompt: builtSystemPrompt, initialContentHashes } = await this.buildSystemPromptWithContext({
+      chatId,
+      channelType,
+      prompt: queryText,
+      personaContent,
+      isUserTask: false, // Interactive path uses separate onboarding flow
+      profile,
+      preComputedEmbedding,
+    });
+    let systemPrompt = builtSystemPrompt;
 
     // ─── Autonomy layer ──────────────────────────────────────────────────
     const errorRecovery = new ErrorRecoveryEngine();
