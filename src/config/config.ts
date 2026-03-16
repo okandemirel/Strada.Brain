@@ -233,7 +233,15 @@ export type EnvVarName =
   // Consensus
   | "CONSENSUS_MODE"
   | "CONSENSUS_THRESHOLD"
-  | "CONSENSUS_MAX_PROVIDERS";
+  | "CONSENSUS_MAX_PROVIDERS"
+
+  // Auto-Update
+  | "AUTO_UPDATE_ENABLED"
+  | "AUTO_UPDATE_INTERVAL_HOURS"
+  | "AUTO_UPDATE_IDLE_TIMEOUT_MIN"
+  | "AUTO_UPDATE_CHANNEL"
+  | "AUTO_UPDATE_NOTIFY"
+  | "AUTO_UPDATE_AUTO_RESTART";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -529,6 +537,16 @@ export interface Config {
     readonly mode: "auto" | "critical-only" | "always" | "disabled";
     readonly threshold: number;
     readonly maxProviders: number;
+  };
+
+  // Auto-Update
+  readonly autoUpdate: {
+    readonly enabled: boolean;
+    readonly intervalHours: number;
+    readonly idleTimeoutMin: number;
+    readonly channel: "stable" | "latest";
+    readonly notify: boolean;
+    readonly autoRestart: boolean;
   };
 }
 
@@ -900,6 +918,14 @@ export const configSchema = z
     consensusMode: z.enum(["auto", "critical-only", "always", "disabled"]).default("auto"),
     consensusThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0).max(1)).default("0.5"),
     consensusMaxProviders: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(5)).default("3"),
+
+    // Auto-Update
+    autoUpdateEnabled: boolFromString(true),
+    autoUpdateIntervalHours: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().positive()).default("24"),
+    autoUpdateIdleTimeoutMin: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().positive()).default("5"),
+    autoUpdateChannel: z.enum(["stable", "latest"]).default("stable"),
+    autoUpdateNotify: boolFromString(true),
+    autoUpdateAutoRestart: boolFromString(true),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -1292,6 +1318,15 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       threshold: rawConfig.consensusThreshold,
       maxProviders: rawConfig.consensusMaxProviders,
     },
+
+    autoUpdate: {
+      enabled: rawConfig.autoUpdateEnabled,
+      intervalHours: rawConfig.autoUpdateIntervalHours,
+      idleTimeoutMin: rawConfig.autoUpdateIdleTimeoutMin,
+      channel: rawConfig.autoUpdateChannel,
+      notify: rawConfig.autoUpdateNotify,
+      autoRestart: rawConfig.autoUpdateAutoRestart,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -1659,6 +1694,13 @@ interface EnvVars {
   consensusMode: string | undefined;
   consensusThreshold: string | undefined;
   consensusMaxProviders: string | undefined;
+  // Auto-Update
+  autoUpdateEnabled: string | undefined;
+  autoUpdateIntervalHours: string | undefined;
+  autoUpdateIdleTimeoutMin: string | undefined;
+  autoUpdateChannel: string | undefined;
+  autoUpdateNotify: string | undefined;
+  autoUpdateAutoRestart: string | undefined;
 }
 
 /**
@@ -1843,6 +1885,13 @@ function loadFromEnv(): EnvVars {
     consensusMode: process.env["CONSENSUS_MODE"],
     consensusThreshold: process.env["CONSENSUS_THRESHOLD"],
     consensusMaxProviders: process.env["CONSENSUS_MAX_PROVIDERS"],
+    // Auto-Update
+    autoUpdateEnabled: process.env["AUTO_UPDATE_ENABLED"],
+    autoUpdateIntervalHours: process.env["AUTO_UPDATE_INTERVAL_HOURS"],
+    autoUpdateIdleTimeoutMin: process.env["AUTO_UPDATE_IDLE_TIMEOUT_MIN"],
+    autoUpdateChannel: process.env["AUTO_UPDATE_CHANNEL"],
+    autoUpdateNotify: process.env["AUTO_UPDATE_NOTIFY"],
+    autoUpdateAutoRestart: process.env["AUTO_UPDATE_AUTO_RESTART"],
   };
 }
 
