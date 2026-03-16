@@ -14,6 +14,8 @@ interface ChannelRagStepProps {
   checkedProviders: Set<string>
   daemonEnabled: boolean
   setDaemonEnabled: (enabled: boolean) => void
+  autonomyEnabled: boolean
+  setAutonomyEnabled: (enabled: boolean) => void
   autonomyHours: number
   setAutonomyHours: (hours: number) => void
   daemonBudget: number
@@ -36,6 +38,8 @@ export default function ChannelRagStep({
   checkedProviders,
   daemonEnabled,
   setDaemonEnabled,
+  autonomyEnabled,
+  setAutonomyEnabled,
   autonomyHours,
   setAutonomyHours,
   daemonBudget,
@@ -183,25 +187,41 @@ export default function ChannelRagStep({
 
       <div className="rag-toggle">
         <h3 className="section-label">Autonomy</h3>
-        <p className="rag-info">
-          How long the agent can operate autonomously before requiring user check-in.
-        </p>
-        <div className="autonomy-slider-container">
+        <label className="toggle-switch">
           <input
-            type="range"
-            min={1}
-            max={168}
-            step={1}
-            value={autonomyHours}
-            onChange={(e) => setAutonomyHours(Number(e.target.value))}
-            className="autonomy-range"
+            type="checkbox"
+            checked={autonomyEnabled}
+            onChange={(e) => setAutonomyEnabled(e.target.checked)}
           />
-          <div className="autonomy-labels">
-            <span>1h</span>
-            <span className="autonomy-value">{autonomyHours}h</span>
-            <span>168h</span>
+          <span className="toggle-slider" />
+          <span className="toggle-label">
+            {autonomyEnabled ? 'Enabled' : 'Disabled'}
+          </span>
+        </label>
+        <p className={`rag-info${!autonomyEnabled ? ' warning' : ''}`}>
+          {autonomyEnabled
+            ? 'Autonomous mode active \u2014 the agent can execute operations without asking for confirmation.'
+            : 'Enable autonomous mode to let the agent operate without requiring confirmation for each action.'}
+        </p>
+        {autonomyEnabled && (
+          <div className="autonomy-slider-container">
+            <label className="autonomy-budget-label">Duration</label>
+            <input
+              type="range"
+              min={1}
+              max={168}
+              step={1}
+              value={autonomyHours}
+              onChange={(e) => setAutonomyHours(Number(e.target.value))}
+              className="autonomy-range"
+            />
+            <div className="autonomy-labels">
+              <span>1h</span>
+              <span className="autonomy-value">{autonomyHours}h</span>
+              <span>168h</span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <div className="step-actions">

@@ -16,6 +16,7 @@ export function useSetupWizard() {
   const [ragEnabled, setRagEnabledState] = useState(true)
   const [embeddingProvider, setEmbeddingProviderState] = useState('auto')
   const [daemonEnabled, setDaemonEnabledState] = useState(false)
+  const [autonomyEnabled, setAutonomyEnabledState] = useState(false)
   const [autonomyHours, setAutonomyHoursState] = useState(4)
   const [daemonBudget, setDaemonBudgetState] = useState(1.0)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
@@ -154,6 +155,10 @@ export function useSetupWizard() {
     setDaemonEnabledState(enabled)
   }, [])
 
+  const setAutonomyEnabled = useCallback((enabled: boolean) => {
+    setAutonomyEnabledState(enabled)
+  }, [])
+
   const setAutonomyHours = useCallback((hours: number) => {
     setAutonomyHoursState(hours)
   }, [])
@@ -186,7 +191,9 @@ export function useSetupWizard() {
       config.STRADA_DAEMON_ENABLED = 'true'
       config.STRADA_DAEMON_DAILY_BUDGET = String(daemonBudget)
     }
-    config.AUTONOMOUS_DEFAULT_HOURS = String(autonomyHours)
+    if (autonomyEnabled) {
+      config.AUTONOMOUS_DEFAULT_HOURS = String(autonomyHours)
+    }
 
     // Build PROVIDER_CHAIN from checked providers
     const chain = Array.from(checkedProviders)
@@ -265,7 +272,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, channelConfig, daemonEnabled, autonomyHours, daemonBudget])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget])
 
   return {
     // State
@@ -282,6 +289,7 @@ export function useSetupWizard() {
     ragEnabled,
     embeddingProvider,
     daemonEnabled,
+    autonomyEnabled,
     autonomyHours,
     daemonBudget,
     saveStatus,
@@ -302,6 +310,7 @@ export function useSetupWizard() {
     setRagEnabled,
     setEmbeddingProvider,
     setDaemonEnabled,
+    setAutonomyEnabled,
     setAutonomyHours,
     setDaemonBudget,
     save,

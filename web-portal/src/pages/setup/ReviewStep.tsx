@@ -12,6 +12,7 @@ interface ReviewStepProps {
   embeddingProvider: string
   daemonEnabled: boolean
   daemonBudget: number
+  autonomyEnabled: boolean
   autonomyHours: number
   saveStatus: SaveStatus
   saveError: string | null
@@ -35,6 +36,7 @@ export default function ReviewStep({
   embeddingProvider,
   daemonEnabled,
   daemonBudget,
+  autonomyEnabled,
   autonomyHours,
   saveStatus,
   saveError,
@@ -128,8 +130,8 @@ export default function ReviewStep({
         </div>
 
         <div className="review-item">
-          <span className="review-label">Autonomy Hours</span>
-          <span className="review-value">{autonomyHours}h</span>
+          <span className="review-label">Autonomy</span>
+          <span className="review-value">{autonomyEnabled ? `Enabled (${autonomyHours}h)` : 'Disabled'}</span>
         </div>
       </div>
 

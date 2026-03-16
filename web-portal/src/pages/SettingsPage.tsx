@@ -201,15 +201,30 @@ export default function SettingsPage() {
 
   // --- Handlers ---
 
-  const handleAutoToggle = useCallback(() => {
+  const handleAutoToggle = useCallback(async () => {
     if (autoToggling) return
     const nextEnabled = !autoStatus?.enabled
     setAutoToggling(true)
 
-    const sent = toggleAutonomous(nextEnabled, nextEnabled ? autoDuration : undefined)
-    if (!sent) {
-      setAutoToggling(false)
-      return
+    // Try HTTP first (works without active WS), fall back to WS command
+    try {
+      const res = await fetch('/api/user/autonomous', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId,
+          enabled: nextEnabled,
+          hours: nextEnabled ? autoDuration : undefined,
+        }),
+      })
+      if (!res.ok) throw new Error('HTTP failed')
+    } catch {
+      // Fallback to WS command
+      const sent = toggleAutonomous(nextEnabled, nextEnabled ? autoDuration : undefined)
+      if (!sent) {
+        setAutoToggling(false)
+        return
+      }
     }
 
     // Optimistically update, then re-fetch after a short delay
@@ -223,7 +238,7 @@ export default function SettingsPage() {
       fetchAutonomous()
       setAutoToggling(false)
     }, 1500)
-  }, [autoStatus?.enabled, autoDuration, autoToggling, toggleAutonomous, fetchAutonomous])
+  }, [autoStatus?.enabled, autoDuration, autoToggling, chatId, toggleAutonomous, fetchAutonomous])
 
   const handleDurationChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value, 10)
@@ -398,7 +413,7 @@ export default function SettingsPage() {
                   onClick={handleDaemonToggle}
                   disabled={daemonToggling || !daemonStatus?.configured}
                   aria-label={daemonStatus?.running ? 'Stop daemon' : 'Start daemon'}
-                  title={!daemonStatus?.configured ? 'Start with --daemon flag to enable' : undefined}
+                  title={!daemonStatus?.configured ? 'Enable Daemon Mode in Setup Wizard or start with --daemon flag' : undefined}
                 >
                   <span className="settings-toggle-knob" />
                 </button>
@@ -480,8 +495,7 @@ export default function SettingsPage() {
                   file watchers, and webhooks.
                 </div>
                 <div className="settings-hint" style={{ marginTop: 6 }}>
-                  Start with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>--daemon</code> flag
-                  or set <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>STRADA_DAEMON_DAILY_BUDGET</code> in .env
+                  Enable Daemon Mode in the Setup Wizard or start with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>--daemon</code> flag.
                 </div>
               </>
             )}
