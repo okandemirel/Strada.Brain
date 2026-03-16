@@ -205,20 +205,29 @@ export class ConsensusManager {
       };
     }
 
-    // Both text responses — check for directional agreement
-    // Simple heuristic: if both responses are > 50 chars, assume agreement
-    // (Deep semantic comparison would require another LLM call)
-    return {
-      agreed: true,
-      strategy: "re-execute",
-      originalProvider: params.originalProvider,
-      reviewProvider: params.reviewProvider.name ?? "unknown",
-      reasoning: "Both providers produced similar output type",
-    };
+    // Both text responses — use review strategy as fallback for actual comparison
+    // Re-execute without comparison is unreliable, so ask the second provider
+    // to review the first provider's output instead of blindly agreeing
+    const originalText = params.originalOutput.text ?? "";
+    const secondText = response.text ?? "";
+
+    // If both are very short or empty — no meaningful comparison possible
+    if (originalText.length < 20 && secondText.length < 20) {
+      return {
+        agreed: true,
+        strategy: "re-execute",
+        originalProvider: params.originalProvider,
+        reviewProvider: params.reviewProvider.name ?? "unknown",
+        reasoning: "Both responses too short for meaningful comparison",
+      };
+    }
+
+    // Fall back to review strategy for actual verification
+    return this.reviewStrategy(params);
   }
 
   private parseApproval(text: string | null | undefined): boolean {
-    if (!text) return true; // Default to approval on parse failure
+    if (!text) return false; // Empty/null response from reviewer = not approved (fail-safe)
     try {
       const match = text.match(/\{[\s\S]*"approved"[\s\S]*\}/);
       if (match) {

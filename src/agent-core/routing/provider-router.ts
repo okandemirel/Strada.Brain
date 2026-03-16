@@ -207,7 +207,7 @@ export class ProviderRouter {
   /** Inverse cost: cheaper → higher score (0..1). */
   private costScore(name: string): number {
     const tier = COST_TIER[name] ?? 3;
-    return 1 - tier / MAX_COST_TIER;
+    return Math.max(0, 1 - tier / MAX_COST_TIER);
   }
 
   /** Capability: context window size (normalized) + keyword match bonus. */
@@ -242,7 +242,7 @@ export class ProviderRouter {
   /** Inverse speed tier: faster → higher score (0..1). */
   private speedScore(name: string): number {
     const tier = SPEED_TIER[name] ?? 3;
-    return 1 - tier / MAX_SPEED_TIER;
+    return Math.max(0, 1 - tier / MAX_SPEED_TIER);
   }
 
   /** Diversity: bonus for using a different provider than the last one. */
