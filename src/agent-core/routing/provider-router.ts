@@ -25,6 +25,17 @@ export interface ProviderManagerRef {
 }
 
 /* ------------------------------------------------------------------ */
+/*  TierRouter structural interface (facade — avoids hard coupling)   */
+/* ------------------------------------------------------------------ */
+
+/** Structural reference to TierRouter for delegation escalation compatibility */
+export interface TierRouterRef {
+  resolveProviderConfig(tier: string): { name: string; model: string };
+  getEscalationTier(tier: string): string | null;
+  getTypeEffectiveTier(type: string, defaultTier: string): string;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Cost & Speed tiers (0 = cheapest/fastest)                         */
 /* ------------------------------------------------------------------ */
 
@@ -87,12 +98,50 @@ export class ProviderRouter {
   private readonly decisions: RoutingDecision[] = [];
   private lastExecutingProvider: string | undefined;
 
+  /** Optional TierRouter for delegation escalation compatibility */
+  private tierRouter?: TierRouterRef;
+
   constructor(
     private readonly providerManager: ProviderManagerRef,
     preset: RoutingPreset = "balanced",
   ) {
     this.weights = ROUTING_PRESETS[preset];
     this.presetName = preset;
+  }
+
+  /**
+   * Attach a TierRouter instance for delegation-aware tier resolution.
+   * Non-breaking: DelegationManager still uses TierRouter directly.
+   */
+  setTierRouter(router: TierRouterRef): void {
+    this.tierRouter = router;
+  }
+
+  /**
+   * Resolve provider for a delegation tier (delegates to TierRouter if available).
+   * Returns null when no TierRouter is wired, allowing callers to fall back.
+   */
+  resolveForTier(tier: string): { name: string; model: string } | null {
+    if (this.tierRouter) {
+      return this.tierRouter.resolveProviderConfig(tier);
+    }
+    return null;
+  }
+
+  /**
+   * Get the next-higher escalation tier (delegates to TierRouter).
+   * Returns null when no TierRouter is wired or tier is at the top of the chain.
+   */
+  getEscalationTier(tier: string): string | null {
+    return this.tierRouter?.getEscalationTier(tier) ?? null;
+  }
+
+  /**
+   * Get the effective tier for a delegation type, considering overrides.
+   * Returns the defaultTier when no TierRouter is wired.
+   */
+  getTypeEffectiveTier(type: string, defaultTier: string): string {
+    return this.tierRouter?.getTypeEffectiveTier(type, defaultTier) ?? defaultTier;
   }
 
   /**
