@@ -7,8 +7,9 @@
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { execFile } from "node:child_process";
+import { join, dirname } from "node:path";
+import { execFile, execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { ok, err } from "../types/index.js";
 import type { Result } from "../types/index.js";
 
@@ -17,6 +18,9 @@ export interface StradaDepsStatus {
   readonly corePath: string | null;
   readonly modulesInstalled: boolean;
   readonly modulesPath: string | null;
+  readonly mcpInstalled: boolean;
+  readonly mcpPath: string | null;
+  readonly mcpVersion: string | null;
   readonly warnings: string[];
 }
 
@@ -44,11 +48,15 @@ export function checkStradaDeps(unityProjectPath: string): StradaDepsStatus {
 
   if (!existsSync(packagesDir) || !statSync(packagesDir).isDirectory()) {
     warnings.push("Packages/ directory not found in Unity project");
+    const mcp = detectStradaMcp();
     return {
       coreInstalled: false,
       corePath: null,
       modulesInstalled: false,
       modulesPath: null,
+      mcpInstalled: mcp.installed,
+      mcpPath: mcp.path,
+      mcpVersion: mcp.version,
       warnings,
     };
   }
@@ -72,11 +80,17 @@ export function checkStradaDeps(unityProjectPath: string): StradaDepsStatus {
     );
   }
 
+  // Detect Strada.MCP (Node.js tool, not a Unity package)
+  const mcp = detectStradaMcp();
+
   return {
     coreInstalled: corePath !== null || coreInManifest,
     corePath: corePath,
     modulesInstalled: modulesPath !== null || modulesInManifest,
     modulesPath: modulesPath,
+    mcpInstalled: mcp.installed,
+    mcpPath: mcp.path,
+    mcpVersion: mcp.version,
     warnings,
   };
 }
@@ -111,6 +125,57 @@ export async function installStradaDep(
       },
     );
   });
+}
+
+/**
+ * Detect Strada.MCP installation.
+ * Checks: 1) sibling directory ../Strada.MCP relative to project root
+ *         2) global npm install via `which strada-mcp`
+ */
+function detectStradaMcp(): { installed: boolean; path: string | null; version: string | null } {
+  // 1. Check sibling directory relative to Strada.Brain project root
+  const brainRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const siblingPath = join(brainRoot, "..", "Strada.MCP");
+  if (existsSync(siblingPath) && existsSync(join(siblingPath, "package.json"))) {
+    const version = readPackageVersion(join(siblingPath, "package.json"));
+    return { installed: true, path: siblingPath, version };
+  }
+
+  // 2. Check global npm install
+  try {
+    const which = execFileSync("which", ["strada-mcp"], {
+      encoding: "utf-8",
+      timeout: 3000,
+    }).trim();
+    if (which) {
+      // Try to resolve the package root from the binary path
+      const binDir = dirname(which);
+      // Global npm bins are typically in <prefix>/bin, package in <prefix>/lib/node_modules/strada-mcp
+      const globalPkgPath = join(binDir, "..", "lib", "node_modules", "strada-mcp");
+      const globalPkgJson = join(globalPkgPath, "package.json");
+      if (existsSync(globalPkgJson)) {
+        const version = readPackageVersion(globalPkgJson);
+        return { installed: true, path: globalPkgPath, version };
+      }
+      // Fallback: binary found but can't resolve package root
+      return { installed: true, path: which, version: null };
+    }
+  } catch {
+    // `which` failed — strada-mcp not on PATH
+  }
+
+  return { installed: false, path: null, version: null };
+}
+
+/** Read the "version" field from a package.json file. */
+function readPackageVersion(packageJsonPath: string): string | null {
+  try {
+    const content = readFileSync(packageJsonPath, "utf-8");
+    const parsed = JSON.parse(content) as { version?: string };
+    return parsed.version ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function findPackage(packagesDir: string, names: readonly string[]): string | null {

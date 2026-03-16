@@ -378,11 +378,27 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
   lines.push(
     `- strada.modules: ${status.modulesInstalled ? "INSTALLED (" + status.modulesPath + ")" : "NOT INSTALLED"}`,
   );
+  if (status.mcpInstalled) {
+    lines.push(
+      `- strada.mcp: INSTALLED${status.mcpVersion ? ` (v${status.mcpVersion})` : ""} (${status.mcpPath})`,
+    );
+  } else {
+    lines.push("- strada.mcp: NOT INSTALLED");
+  }
   if (!status.coreInstalled) {
     lines.push("\nWARNING: Strada.Core is not installed. Limited assistance available.");
   }
   if (!status.modulesInstalled) {
     lines.push("\nNote: Strada.Modules is not available. Do not reference Strada.Modules APIs.");
+  }
+  if (status.mcpInstalled) {
+    lines.push(
+      `\n### Strada.MCP`,
+      `Strada.MCP is installed${status.mcpVersion ? ` (v${status.mcpVersion})` : ""} at ${status.mcpPath}.`,
+      `It provides 76 MCP tools for Unity development: runtime control, file operations, git,`,
+      `.NET build, code analysis, scene/prefab management, and RAG-powered semantic search.`,
+      `The user can connect it to Claude Desktop, Cursor, or VS Code for direct Unity Editor control.`,
+    );
   }
   return lines.join("\n") + "\n";
 }
