@@ -1150,6 +1150,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           configured: true,
           models: [p.defaultModel],
         })),
+        listAvailableWithModels: async () => {
+          const results = await providerManager.listAvailableWithModels();
+          return results.map(p => ({
+            name: p.name,
+            configured: true,
+            models: p.models,
+            activeModel: p.defaultModel,
+          }));
+        },
         getActiveInfo: (chatId: string) => {
           const info = providerManager.getActiveInfo(chatId);
           return info ? { provider: info.providerName, model: info.model } : null;

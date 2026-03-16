@@ -93,6 +93,20 @@ export class OllamaProvider implements IAIProvider {
     }
   }
 
+  async listModels(): Promise<string[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/tags`, {
+        method: "GET",
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) return [this.model];
+      const data = (await response.json()) as { models?: Array<{ name: string }> };
+      return (data.models || []).map((m) => m.name).sort();
+    } catch {
+      return [this.model];
+    }
+  }
+
   private buildMessages(systemPrompt: string, messages: ConversationMessage[]): OllamaMessage[] {
     const result: OllamaMessage[] = [{ role: "system", content: systemPrompt }];
 

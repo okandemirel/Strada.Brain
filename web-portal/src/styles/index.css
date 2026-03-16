@@ -1457,7 +1457,7 @@ body {
 }
 
 .model-selector-label {
-  max-width: 120px;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1475,7 +1475,9 @@ body {
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  min-width: 160px;
+  min-width: 200px;
+  max-height: 360px;
+  overflow-y: auto;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1515,6 +1517,77 @@ body {
 .model-selector-check {
   flex-shrink: 0;
   color: var(--accent);
+}
+
+.model-selector-option-icons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.model-selector-expand {
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+  opacity: 0.5;
+}
+
+.model-selector-expand.open {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+
+.model-selector-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.model-selector-models {
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  margin-left: 12px;
+  margin-bottom: 2px;
+}
+
+.model-selector-model {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 10px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.model-selector-model:hover {
+  background: var(--bg-tertiary);
+  color: var(--text);
+}
+
+.model-selector-model.active {
+  color: var(--accent);
+}
+
+.model-selector-model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.model-selector-loading {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  text-align: center;
 }
 
 /* ===== Syntax Highlighting (GitHub Dark) ===== */

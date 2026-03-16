@@ -95,6 +95,58 @@ export class ProviderManager {
     getLogger().info("Provider preference cleared", { chatId });
   }
 
+  async listAvailableWithModels(): Promise<
+    Array<{ name: string; label: string; defaultModel: string; models: string[] }>
+  > {
+    const available = this.listAvailable();
+    const AGGREGATE_TIMEOUT = 8_000;
+    const settled = await Promise.race([
+      Promise.allSettled(
+        available.map(async (p) => {
+          let models = [p.defaultModel];
+          try {
+            const provider = this.getProviderByName(p.name);
+            if (provider?.listModels) {
+              models = await provider.listModels();
+            }
+          } catch {
+            // Fallback to default model
+          }
+          return { ...p, models };
+        }),
+      ),
+      new Promise<PromiseSettledResult<{ name: string; label: string; defaultModel: string; models: string[] }>[]>(
+        (resolve) => setTimeout(() => resolve(available.map((p) => ({
+          status: "fulfilled" as const,
+          value: { ...p, models: [p.defaultModel] },
+        }))), AGGREGATE_TIMEOUT),
+      ),
+    ]);
+    return settled.map((r) => r.status === "fulfilled" ? r.value : { name: "", label: "", defaultModel: "", models: [] }).filter(r => r.name);
+  }
+
+  /**
+   * Get a provider instance by name (for model listing).
+   * Returns null if provider cannot be created.
+   */
+  private getProviderByName(name: string): IAIProvider | null {
+    const cacheKey = `__listing__:${name}`;
+    const cached = this.providerCache.get(cacheKey);
+    if (cached) return cached;
+
+    try {
+      const provider = createProvider({
+        name,
+        apiKey: this.apiKeys[name],
+        model: this.modelOverrides?.[name],
+      });
+      this.providerCache.set(cacheKey, provider);
+      return provider;
+    } catch {
+      return null;
+    }
+  }
+
   listAvailable(): Array<{ name: string; label: string; defaultModel: string }> {
     const available: Array<{ name: string; label: string; defaultModel: string }> = [];
 

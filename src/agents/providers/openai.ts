@@ -347,6 +347,21 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
   }
 
+  async listModels(): Promise<string[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/models`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) return [this.model];
+      const data = (await response.json()) as { data?: Array<{ id: string }> };
+      return (data.data || []).map((m) => m.id).sort();
+    } catch {
+      return [this.model];
+    }
+  }
+
   /**
    * Fetch with exponential backoff retry for transient errors (429, 5xx).
    */

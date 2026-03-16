@@ -629,17 +629,22 @@ export class WebChannel
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
 
-      // For POST/DELETE, forward the request body
+      // Forward auth header if present (so dashboard token works through proxy)
+      const proxyHeaders: Record<string, string> = { "Accept": "application/json" };
+      const authHeader = req.headers["authorization"];
+      if (authHeader) proxyHeaders["Authorization"] = Array.isArray(authHeader) ? authHeader[0]! : authHeader;
+
       const fetchOpts: RequestInit = {
         method,
         signal: controller.signal,
-        headers: { "Accept": "application/json" },
+        headers: proxyHeaders,
       };
       if (method === "POST" || method === "DELETE") {
-        fetchOpts.headers = { "Accept": "application/json", "Content-Type": "application/json" };
+        fetchOpts.headers = { ...proxyHeaders, "Content-Type": "application/json" };
         const bodyChunks: Buffer[] = [];
         let bodySize = 0;
         const PROXY_BODY_LIMIT = 64 * 1024; // 64KB
+        let bodyReadAborted = false;
         await new Promise<void>((resolve, reject) => {
           req.on("data", (chunk: Buffer) => {
             bodySize += chunk.length;
@@ -653,10 +658,12 @@ export class WebChannel
           req.on("end", () => resolve());
           req.on("error", reject);
         }).catch(() => {
+          bodyReadAborted = true;
+          clearTimeout(timeout);
           res.writeHead(413, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Request body too large" }));
-          return;
         });
+        if (bodyReadAborted) return;
         if (bodyChunks.length > 0) {
           fetchOpts.body = Buffer.concat(bodyChunks).toString();
         }

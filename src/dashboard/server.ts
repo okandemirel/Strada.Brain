@@ -145,6 +145,7 @@ const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 /** Structural interface for provider management used by dashboard /api/providers endpoints */
 interface DashboardProviderManager {
   listAvailable(): { name: string; configured: boolean; models?: string[] }[];
+  listAvailableWithModels?(): Promise<{ name: string; configured: boolean; models: string[]; activeModel: string }[]>;
   getActiveInfo(chatId: string): { provider: string; model?: string } | null;
   setPreference(chatId: string, provider: string, model?: string): Promise<void>;
 }
@@ -1047,6 +1048,7 @@ export class DashboardServer {
       }
 
       // GET /api/providers/available -- List available providers
+      // Optional: ?withModels=true to include per-provider model lists (async, calls provider APIs)
       if (req.method === "GET" && (url === "/api/providers/available" || url.startsWith("/api/providers/available?"))) {
         if (!this.providerManager) {
           res.writeHead(501, { "Content-Type": "application/json" });
@@ -1054,9 +1056,22 @@ export class DashboardServer {
           return;
         }
         try {
-          const providers = this.providerManager.listAvailable();
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ providers }));
+          const params = new URL(url, "http://localhost").searchParams;
+          const withModels = params.get("withModels") === "true";
+
+          if (withModels && this.providerManager.listAvailableWithModels) {
+            void this.providerManager.listAvailableWithModels().then((providers) => {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ providers }));
+            }).catch((err) => {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+            });
+          } else {
+            const providers = this.providerManager.listAvailable();
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ providers }));
+          }
         } catch (err) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
@@ -1106,6 +1121,13 @@ export class DashboardServer {
           if (typeof parsed.chatId === "string" && parsed.chatId.length > 128) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "chatId too long (max 128 chars)" }));
+            return;
+          }
+          // Validate model name format
+          const MODEL_NAME_RE = /^[a-zA-Z0-9._:\-/]{1,128}$/;
+          if (parsed.model && !MODEL_NAME_RE.test(parsed.model)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid model name" }));
             return;
           }
           // Validate provider name against available providers

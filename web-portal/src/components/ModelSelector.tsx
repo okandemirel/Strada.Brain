@@ -5,6 +5,7 @@ interface ProviderInfo {
   name: string
   configured: boolean
   models?: string[]
+  activeModel?: string
 }
 
 interface ActiveInfo {
@@ -18,9 +19,13 @@ export default function ModelSelector() {
   const [active, setActive] = useState<ActiveInfo | null>(null)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [modelsLoaded, setModelsLoaded] = useState(false)
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const modelsCacheRef = useRef<ProviderInfo[] | null>(null)
 
-  // Fetch available providers and active provider
+  // Fetch available providers (lightweight, no model listing)
   const fetchProviders = useCallback(async () => {
     try {
       const chatId = sessionId || 'default'
@@ -47,9 +52,36 @@ export default function ModelSelector() {
     }
   }, [sessionId])
 
+  // Fetch models lazily (on first dropdown open)
+  const fetchModels = useCallback(async () => {
+    if (modelsLoaded || modelsLoading || modelsCacheRef.current) return
+    setModelsLoading(true)
+    try {
+      const res = await fetch('/api/providers/available?withModels=true')
+      if (res.ok) {
+        const data = await res.json()
+        const enriched = (data.providers as ProviderInfo[]).filter((p) => p.configured)
+        modelsCacheRef.current = enriched
+        setProviders(enriched)
+        setModelsLoaded(true)
+      }
+    } catch {
+      // Keep existing provider data without model details
+    } finally {
+      setModelsLoading(false)
+    }
+  }, [modelsLoaded, modelsLoading])
+
   useEffect(() => {
     fetchProviders()
   }, [fetchProviders])
+
+  // When dropdown opens, lazily fetch models
+  useEffect(() => {
+    if (open && !modelsLoaded) {
+      fetchModels()
+    }
+  }, [open, modelsLoaded, fetchModels])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -58,6 +90,7 @@ export default function ModelSelector() {
     const handleClick = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false)
+        setExpandedProvider(null)
       }
     }
 
@@ -70,18 +103,38 @@ export default function ModelSelector() {
     if (!open) return
 
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') {
+        setOpen(false)
+        setExpandedProvider(null)
+      }
     }
 
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
   }, [open])
 
-  const handleSelect = useCallback(
-    (providerName: string) => {
+  const handleProviderClick = useCallback(
+    (providerName: string, models?: string[]) => {
+      // If provider has multiple models, toggle expand to show sub-list
+      if (models && models.length > 1) {
+        setExpandedProvider((prev) => (prev === providerName ? null : providerName))
+        return
+      }
+      // Single model or no model list — switch directly
       switchProvider(providerName)
       setActive({ provider: providerName })
       setOpen(false)
+      setExpandedProvider(null)
+    },
+    [switchProvider],
+  )
+
+  const handleModelSelect = useCallback(
+    (providerName: string, model: string) => {
+      switchProvider(providerName, model)
+      setActive({ provider: providerName, model })
+      setOpen(false)
+      setExpandedProvider(null)
     },
     [switchProvider],
   )
@@ -99,7 +152,10 @@ export default function ModelSelector() {
     <div className="model-selector" ref={containerRef}>
       <button
         className="model-selector-trigger"
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => {
+          setOpen((prev) => !prev)
+          if (open) setExpandedProvider(null)
+        }}
         title="Switch AI provider"
       >
         <span className="model-selector-label">{displayLabel}</span>
@@ -120,31 +176,90 @@ export default function ModelSelector() {
 
       {open && (
         <div className="model-selector-dropdown">
+          {modelsLoading && (
+            <div className="model-selector-loading">Loading models...</div>
+          )}
           {providers.map((p) => {
             const isActive = active?.provider === p.name
+            const isExpanded = expandedProvider === p.name
+            const hasMultipleModels = p.models && p.models.length > 1
+
             return (
-              <button
-                key={p.name}
-                className={`model-selector-option ${isActive ? 'active' : ''}`}
-                onClick={() => handleSelect(p.name)}
-              >
-                <span className="model-selector-option-name">{p.name}</span>
-                {isActive && (
-                  <svg
-                    className="model-selector-check"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 14 14"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M3 7.5L5.5 10L11 4" />
-                  </svg>
+              <div key={p.name} className="model-selector-group">
+                <button
+                  className={`model-selector-option ${isActive ? 'active' : ''}`}
+                  onClick={() => handleProviderClick(p.name, p.models)}
+                >
+                  <span className="model-selector-option-name">{p.name}</span>
+                  <span className="model-selector-option-icons">
+                    {isActive && (
+                      <svg
+                        className="model-selector-check"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 14 14"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M3 7.5L5.5 10L11 4" />
+                      </svg>
+                    )}
+                    {hasMultipleModels && (
+                      <svg
+                        className={`model-selector-expand ${isExpanded ? 'open' : ''}`}
+                        width="10"
+                        height="10"
+                        viewBox="0 0 10 10"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M2.5 4L5 6.5L7.5 4" />
+                      </svg>
+                    )}
+                  </span>
+                </button>
+
+                {isExpanded && hasMultipleModels && (
+                  <div className="model-selector-models">
+                    {p.models!.map((model) => {
+                      const isModelActive =
+                        isActive && active?.model === model
+                      return (
+                        <button
+                          key={model}
+                          className={`model-selector-model ${isModelActive ? 'active' : ''}`}
+                          onClick={() => handleModelSelect(p.name, model)}
+                        >
+                          <span className="model-selector-model-name">
+                            {model}
+                          </span>
+                          {isModelActive && (
+                            <svg
+                              className="model-selector-check"
+                              width="12"
+                              height="12"
+                              viewBox="0 0 14 14"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M3 7.5L5.5 10L11 4" />
+                            </svg>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
                 )}
-              </button>
+              </div>
             )
           })}
         </div>

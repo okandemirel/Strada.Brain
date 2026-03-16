@@ -249,7 +249,9 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [])
 
   const switchProvider = useCallback((provider: string, model?: string): boolean => {
-    const text = `/model ${provider}${model ? '/' + model : ''}`
+    const safeProvider = provider.replace(/[^a-zA-Z0-9._-]/g, '')
+    const safeModel = model?.replace(/[^a-zA-Z0-9._:-]/g, '')
+    const text = `/model ${safeProvider}${safeModel ? '/' + safeModel : ''}`
     return sendMessage(text)
   }, [sendMessage])
 

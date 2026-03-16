@@ -34,6 +34,9 @@ export interface IAIProvider {
 
   /** Optional health check to verify API connectivity on startup */
   healthCheck?(): Promise<boolean>;
+
+  /** Optional method to list available models from the provider's API */
+  listModels?(): Promise<string[]>;
 }
 
 /**

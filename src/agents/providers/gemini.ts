@@ -224,6 +224,22 @@ export class GeminiProvider extends OpenAIProvider {
     };
   }
 
+  override async listModels(): Promise<string[]> {
+    try {
+      // Gemini uses an OpenAI-compatible endpoint — try the API first
+      const models = await super.listModels();
+      if (models.length > 1) return models;
+    } catch {
+      // Fall through to static list
+    }
+    return [
+      "gemini-3-flash-preview",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.0-flash",
+    ];
+  }
+
   /**
    * Override to echo back extra_content (thought_signature) from providerMetadata
    * on assistant tool_calls messages. Gemini 2.5+/3.x requires this or returns 400.

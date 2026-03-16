@@ -114,6 +114,24 @@ export class ClaudeProvider implements IAIProvider {
     }
   }
 
+  async listModels(): Promise<string[]> {
+    try {
+      const page = await this.client.models.list({ limit: 100 }, { signal: AbortSignal.timeout(10_000) });
+      const models = page.data.map((m) => m.id).sort();
+      return models.length > 0 ? models : this.fallbackModels();
+    } catch {
+      return this.fallbackModels();
+    }
+  }
+
+  private fallbackModels(): string[] {
+    return [
+      "claude-sonnet-4-6-20250514",
+      "claude-opus-4-20250514",
+      "claude-haiku-4-5-20251001",
+    ];
+  }
+
   private buildMessages(messages: ConversationMessage[]): Anthropic.MessageParam[] {
     const result: Anthropic.MessageParam[] = [];
 
