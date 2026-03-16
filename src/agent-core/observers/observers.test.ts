@@ -4,6 +4,7 @@ import { UserActivityObserver } from "./user-activity-observer.js";
 import { BuildStateObserver } from "./build-state-observer.js";
 import { GitStateObserver } from "./git-state-observer.js";
 import { FileWatchObserver } from "./file-watch-observer.js";
+import { TestResultObserver } from "./test-result-observer.js";
 
 describe("TriggerObserver", () => {
   it("reports fired triggers", () => {
@@ -152,5 +153,44 @@ describe("FileWatchObserver", () => {
 
     const obs = observer.collect();
     expect(obs[0]!.priority).toBe(70);
+  });
+});
+
+describe("TestResultObserver", () => {
+  it("reports test failures", () => {
+    const observer = new TestResultObserver();
+    observer.pushResult({ passed: 10, failed: 2, skipped: 1, duration: 5000, timestamp: Date.now(), failedTests: ["test_a", "test_b"] });
+
+    const obs = observer.collect();
+    expect(obs).toHaveLength(1);
+    expect(obs[0]!.priority).toBe(80);
+    expect(obs[0]!.summary).toContain("2 test(s) failed");
+  });
+
+  it("reports all tests passed with low priority", () => {
+    const observer = new TestResultObserver();
+    observer.pushResult({ passed: 50, failed: 0, skipped: 3, duration: 10000, timestamp: Date.now() });
+
+    const obs = observer.collect();
+    expect(obs).toHaveLength(1);
+    expect(obs[0]!.priority).toBe(5);
+    expect(obs[0]!.actionable).toBe(false);
+  });
+
+  it("only reports once per result", () => {
+    const observer = new TestResultObserver();
+    observer.pushResult({ passed: 10, failed: 1, skipped: 0, duration: 3000, timestamp: Date.now() });
+
+    expect(observer.collect()).toHaveLength(1);
+    expect(observer.collect()).toHaveLength(0); // Already reported
+  });
+
+  it("reports again after new result pushed", () => {
+    const observer = new TestResultObserver();
+    observer.pushResult({ passed: 10, failed: 1, skipped: 0, duration: 3000, timestamp: Date.now() });
+    observer.collect();
+
+    observer.pushResult({ passed: 11, failed: 0, skipped: 0, duration: 3000, timestamp: Date.now() });
+    expect(observer.collect()).toHaveLength(1);
   });
 });

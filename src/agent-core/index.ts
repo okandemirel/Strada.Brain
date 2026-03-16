@@ -10,3 +10,4 @@ export { PriorityScorer } from "./priority-scorer.js";
 export { buildReasoningPrompt, parseReasoningResponse } from "./reasoning-prompt.js";
 export type { ActionDecision, ActionType, AgentCoreConfig } from "./agent-core-types.js";
 export { DEFAULT_AGENT_CORE_CONFIG } from "./agent-core-types.js";
+export { AgentNotifier } from "./agent-notifier.js";
