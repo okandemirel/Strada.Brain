@@ -25,6 +25,7 @@ interface ActiveProvider {
 
 interface DaemonStatus {
   running: boolean
+  configured?: boolean
   intervalMs?: number
   triggers: Array<{ name: string; type: string; state: string; circuitState: string; nextRun: string | null }>
   budget: { usedUsd: number; limitUsd: number; pct: number }
@@ -354,13 +355,14 @@ export default function SettingsPage() {
               <span className="admin-stat-value" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span>
                   <span className={`status-dot-inline ${daemonStatus?.running ? 'ok' : 'off'}`} />{' '}
-                  {daemonStatus?.running ? 'Running' : 'Not Running'}
+                  {daemonStatus?.running ? 'Running' : daemonStatus?.configured ? 'Stopped' : 'Not Configured'}
                 </span>
                 <button
                   className={`settings-toggle ${daemonStatus?.running ? 'on' : 'off'}`}
                   onClick={handleDaemonToggle}
-                  disabled={daemonToggling}
+                  disabled={daemonToggling || !daemonStatus?.configured}
                   aria-label={daemonStatus?.running ? 'Stop daemon' : 'Start daemon'}
+                  title={!daemonStatus?.configured ? 'Start with --daemon flag to enable' : undefined}
                 >
                   <span className="settings-toggle-knob" />
                 </button>

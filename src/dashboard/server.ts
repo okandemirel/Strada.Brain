@@ -571,6 +571,7 @@ export class DashboardServer {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({
             running: false,
+            configured: false,
             triggers: [],
             budget: { usedUsd: 0, limitUsd: 0, pct: 0 },
             approvalQueue: [],
@@ -614,6 +615,7 @@ export class DashboardServer {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           running: status.running,
+          configured: true,
           intervalMs: status.intervalMs,
           triggers: triggerList,
           budget: {
