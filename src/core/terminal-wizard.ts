@@ -72,7 +72,7 @@ export function validateUnityPath(inputPath: string): ValidationResult {
  * of extra lines into the .env file, then trims whitespace.
  */
 export function sanitizeEnvValue(value: string): string {
-  return String(value).replace(/[\r\n]/g, "").trim();
+  return String(value).replace(/[\r\n"]/g, "").trim();
 }
 
 /**
@@ -100,18 +100,18 @@ export function generateEnvContent(answers: WizardAnswers): string {
     "",
   ];
 
-  lines.push(`UNITY_PROJECT_PATH=${sanitizeEnvValue(answers.unityProjectPath)}`);
+  lines.push(`UNITY_PROJECT_PATH="${sanitizeEnvValue(answers.unityProjectPath)}"`);
   lines.push("");
 
-  const provider = answers.provider;
-  if (provider === "claude") {
-    lines.push(`ANTHROPIC_API_KEY=${sanitizeEnvValue(answers.apiKey)}`);
+  const sanitizedKey = sanitizeEnvValue(answers.apiKey);
+  if (answers.provider === "claude") {
+    lines.push(`ANTHROPIC_API_KEY="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=claude");
-  } else if (provider === "openai") {
-    lines.push(`OPENAI_API_KEY=${sanitizeEnvValue(answers.apiKey)}`);
+  } else if (answers.provider === "openai") {
+    lines.push(`OPENAI_API_KEY="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=openai");
-  } else if (provider === "gemini") {
-    lines.push(`GEMINI_API_KEY=${sanitizeEnvValue(answers.apiKey)}`);
+  } else if (answers.provider === "gemini") {
+    lines.push(`GEMINI_API_KEY="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=gemini");
     lines.push("RAG_EMBEDDING_PROVIDER=gemini");
   }
@@ -157,18 +157,15 @@ async function askWithRetry(
  * Attempt to open a URL in the user's default browser.
  * Fails silently if no browser can be launched.
  */
+function getBrowserCommand(url: string): [string, string[]] {
+  if (process.platform === "darwin") return ["open", [url]];
+  if (process.platform === "win32") return ["cmd", ["/c", "start", '""', url]];
+  return ["xdg-open", [url]];
+}
+
 function openBrowser(url: string): void {
-  const platform = process.platform;
-
-  let proc;
-  if (platform === "darwin") {
-    proc = spawn("open", [url], { stdio: "ignore", detached: true });
-  } else if (platform === "win32") {
-    proc = spawn("cmd", ["/c", "start", url], { stdio: "ignore", detached: true });
-  } else {
-    proc = spawn("xdg-open", [url], { stdio: "ignore", detached: true });
-  }
-
+  const [cmd, args] = getBrowserCommand(url);
+  const proc = spawn(cmd, args, { stdio: "ignore", detached: true });
   proc.on("error", () => {
     console.log(`\n  Could not open browser automatically.`);
     console.log(`  Please open: ${url}\n`);
@@ -261,7 +258,7 @@ export async function runTerminalWizard(): Promise<void> {
       language,
     });
 
-    fs.writeFileSync(envPath, envContent, "utf-8");
+    fs.writeFileSync(envPath, envContent, { encoding: "utf-8", mode: 0o600 });
 
     console.log(`\n\u2705 .env created! Run \`strada start\` to begin.\n`);
     rl.close();

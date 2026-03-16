@@ -60,8 +60,8 @@ describe("TerminalWizard", () => {
         channel: "web",
         language: "en",
       });
-      expect(content).toContain("UNITY_PROJECT_PATH=/Users/test/MyGame");
-      expect(content).toContain("ANTHROPIC_API_KEY=sk-test-123");
+      expect(content).toContain('UNITY_PROJECT_PATH="/Users/test/MyGame"');
+      expect(content).toContain('ANTHROPIC_API_KEY="sk-test-123"');
       expect(content).toContain("DEFAULT_CHANNEL=web");
       expect(content).toContain("LANGUAGE_PREFERENCE=en");
       expect(content).toContain("STREAMING_ENABLED=true");
@@ -76,7 +76,7 @@ describe("TerminalWizard", () => {
         channel: "web",
         language: "en",
       });
-      expect(content).toContain("OPENAI_API_KEY=sk-proj-abc123");
+      expect(content).toContain('OPENAI_API_KEY="sk-proj-abc123"');
     });
 
     it("should detect Gemini key format", async () => {
@@ -88,7 +88,7 @@ describe("TerminalWizard", () => {
         channel: "web",
         language: "en",
       });
-      expect(content).toContain("GEMINI_API_KEY=AIza-test");
+      expect(content).toContain('GEMINI_API_KEY="AIza-test"');
     });
   });
 
