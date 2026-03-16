@@ -104,4 +104,18 @@ describe("Auto-Update Config", () => {
     const config = loadConfig();
     expect(config.autoUpdate.autoRestart).toBe(false);
   });
+
+  it("should default AUTO_UPDATE_NOTIFY to true", () => {
+    process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
+    process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
+    const config = loadConfig();
+    expect(config.autoUpdate.notify).toBe(true);
+  });
+
+  it("should default AUTO_UPDATE_AUTO_RESTART to true", () => {
+    process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
+    process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
+    const config = loadConfig();
+    expect(config.autoUpdate.autoRestart).toBe(true);
+  });
 });
