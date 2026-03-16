@@ -56,6 +56,7 @@ import type { SoulLoader } from "./soul/index.js";
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
+import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -240,6 +241,7 @@ export class Orchestrator {
   private readonly onboardingState = new Map<string, { step: 'awaiting_name' | 'awaiting_lang' | 'awaiting_style' | 'awaiting_detail'; name?: string; lang?: string; style?: string }>();
   /** Multi-provider routing: selects best provider per task/phase. */
   private readonly providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
+  private readonly taskClassifier = new TaskClassifier();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -314,6 +316,25 @@ export class Orchestrator {
       buildCapabilityManifest() +
       (opts.getIdentityState ? buildIdentitySection(opts.getIdentityState()) : "") +
       (opts.crashRecoveryContext ? buildCrashNotificationSection(opts.crashRecoveryContext) : "");
+  }
+
+  /**
+   * Resolve the best provider for a prompt using multi-provider routing.
+   * Returns the routed provider or the given fallback if routing is unavailable.
+   */
+  private resolveRoutedProvider(prompt: string, phase: string | undefined, fallback: IAIProvider): IAIProvider {
+    if (!this.providerRouter) return fallback;
+    try {
+      const taskClass = this.taskClassifier.classify(prompt);
+      const routed = this.providerRouter.resolve(taskClass, phase);
+      if (routed) {
+        const resolved = this.providerManager.getProviderByName(routed.provider);
+        if (resolved) return resolved;
+      }
+    } catch {
+      // Routing failure is non-fatal — use fallback provider
+    }
+    return fallback;
   }
 
   /**
@@ -727,19 +748,7 @@ export class Orchestrator {
         // ────────────────────────────────────────────────────────────────
 
         // Phase-aware provider routing (multi-provider orchestration)
-        if (this.providerRouter) {
-          try {
-            const { TaskClassifier } = await import("../agent-core/routing/task-classifier.js");
-            const taskClass = new TaskClassifier().classify(prompt);
-            const routed = this.providerRouter.resolve(taskClass, bgAgentState.phase);
-            if (routed) {
-              const resolved = this.providerManager.getProviderByName(routed.provider);
-              if (resolved) currentProvider = resolved;
-            }
-          } catch {
-            // Routing failure is non-fatal — use default provider
-          }
-        }
+        currentProvider = this.resolveRoutedProvider(prompt, bgAgentState.phase, currentProvider);
 
         const response = await currentProvider.chat(
           activePrompt,
@@ -1518,19 +1527,7 @@ export class Orchestrator {
       // ────────────────────────────────────────────────────────────────
 
       // Phase-aware provider routing (multi-provider orchestration)
-      if (this.providerRouter) {
-        try {
-          const { TaskClassifier } = await import("../agent-core/routing/task-classifier.js");
-          const taskClass = new TaskClassifier().classify(lastUserMessage);
-          const routed = this.providerRouter.resolve(taskClass, agentState.phase);
-          if (routed) {
-            const resolved = this.providerManager.getProviderByName(routed.provider);
-            if (resolved) currentProvider = resolved;
-          }
-        } catch {
-          // Routing failure is non-fatal — use default provider
-        }
-      }
+      currentProvider = this.resolveRoutedProvider(lastUserMessage, agentState.phase, currentProvider);
 
       let response;
       if (canStream) {

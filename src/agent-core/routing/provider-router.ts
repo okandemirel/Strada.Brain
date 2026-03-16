@@ -83,6 +83,7 @@ const CAPABILITY_KEYWORDS: Record<string, string[]> = {
 
 export class ProviderRouter {
   private weights: RoutingWeights;
+  private presetName: string;
   private readonly decisions: RoutingDecision[] = [];
   private lastExecutingProvider: string | undefined;
 
@@ -91,6 +92,7 @@ export class ProviderRouter {
     preset: RoutingPreset = "balanced",
   ) {
     this.weights = ROUTING_PRESETS[preset];
+    this.presetName = preset;
   }
 
   /**
@@ -135,7 +137,7 @@ export class ProviderRouter {
       if (score > bestScore) {
         bestScore = score;
         bestProvider = entry.name;
-        bestReason = this.buildReason(entry.name, task, weights);
+        bestReason = this.buildReason(task, weights);
       }
     }
 
@@ -163,24 +165,14 @@ export class ProviderRouter {
    */
   setPreset(preset: RoutingPreset): void {
     this.weights = ROUTING_PRESETS[preset];
+    this.presetName = preset;
   }
 
   /**
    * Get the current preset name (for diagnostics / /routing command).
    */
   getPreset(): string {
-    // Reverse-lookup: find which preset matches current weights
-    for (const [name, weights] of Object.entries(ROUTING_PRESETS)) {
-      if (
-        weights.costWeight === this.weights.costWeight &&
-        weights.capabilityWeight === this.weights.capabilityWeight &&
-        weights.speedWeight === this.weights.speedWeight &&
-        weights.diversityWeight === this.weights.diversityWeight
-      ) {
-        return name;
-      }
-    }
-    return "custom";
+    return this.presetName;
   }
 
   /**
@@ -260,7 +252,6 @@ export class ProviderRouter {
   }
 
   private buildReason(
-    _name: string,
     task: TaskClassification,
     weights: RoutingWeights,
   ): string {
@@ -276,7 +267,7 @@ export class ProviderRouter {
   private recordDecision(decision: RoutingDecision): void {
     this.decisions.push(decision);
     if (this.decisions.length > MAX_DECISIONS) {
-      this.decisions.splice(0, this.decisions.length - MAX_DECISIONS);
+      this.decisions.shift();
     }
   }
 }
