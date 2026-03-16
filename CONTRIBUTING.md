@@ -51,6 +51,8 @@ Strada.Brain is organized into these key modules:
 | **Learning** | `src/learning/` | Event-driven pipeline, instinct lifecycle, chain synthesis |
 | **Memory** | `src/memory/` | AgentDB (SQLite + HNSW), session persistence |
 | **Tasks** | `src/tasks/` | Task management, background execution, command handling |
+| **Auto-Update** | `src/core/auto-updater.ts` | Self-updating system with 3-way install detection, lockfile, idle-aware restart |
+| **Setup Wizard** | `src/core/terminal-wizard.ts` | Interactive terminal/web setup for first-time configuration |
 | **Config** | `src/config/` | Zod-validated config with 90+ env vars |
 | **Channels** | `src/channels/` | Web, Telegram, Discord, Slack, WhatsApp, CLI |
 | **Web Portal** | `web-portal/` | React + Vite dashboard (separate package.json) |

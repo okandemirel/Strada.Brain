@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **CLI Setup Wizard**: `strada setup` command with interactive terminal-based quick setup or web browser full setup. Asks for Unity project path, API key, channel, and language. Writes `.env` with owner-only permissions (0o600)
+- **Auto-Update System**: Automatic version detection and self-updating for npm (global/local) and git installations. Checks daily, applies updates during idle periods. Configurable via `AUTO_UPDATE_*` env vars
+- **CLI Commands**: `strada update` (manual update), `strada update --check` (check only), `strada version-info` (version + install method + update status), `strada setup` (setup wizard)
+- **Global CLI Install**: `npm install -g strada-brain` registers `strada` and `strada-brain` commands via bin field
+- **ChannelActivityRegistry**: Per-channel activity tracking for idle detection and cross-channel notification delivery
+- **BackgroundExecutor.hasRunningTasks()**: Public method for checking if background tasks are running or queued
 - **Agent Core**: Autonomous OODA reasoning loop (observe → orient → decide → act) with 6 environment observers (file-watch, git, build, trigger, user-activity, test-result), PriorityScorer with learning integration, budget-safe LLM reasoning with 3-layer throttling
 - **Multi-Provider Routing**: Task-aware dynamic provider selection with TaskClassifier (heuristic), ProviderRouter with configurable presets (budget/balanced/performance), PAOR phase switching across providers
 - **Confidence-Based Consensus**: ConfidenceEstimator (heuristic scoring from PAOR state) + ConsensusManager (review/re-execute strategies, fail-safe on errors)

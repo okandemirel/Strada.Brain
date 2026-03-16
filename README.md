@@ -52,18 +52,25 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 ### 1. Install
 
 ```bash
+# Global install (recommended)
+npm install -g strada-brain
+
+# Or clone from source
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
 ```
 
-### 2. Configure
+### 2. Setup
 
 ```bash
-cp .env.example .env
+# Interactive setup wizard (terminal or web browser)
+strada setup
 ```
 
-Open `.env` and set at minimum:
+The wizard asks for your Unity project path, AI provider API key, default channel, and language. Choose **Terminal** for quick setup or **Web Browser** for the full configuration UI.
+
+Alternatively, create `.env` manually:
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...      # Your Claude API key
@@ -74,24 +81,34 @@ JWT_SECRET=<generate with: openssl rand -hex 64>
 ### 3. Run
 
 ```bash
-# Web channel (default) - setup wizard opens at localhost:3000
-# If no .env exists, the wizard guides you through initial setup
-npm start
-
-# Or explicitly with web channel
-npm run dev -- start --channel web
+# Start with default web channel
+strada start
 
 # Interactive CLI mode (fastest way to test)
-npm run dev -- cli
+strada start --channel cli
 
 # Daemon mode (24/7 autonomous operation with proactive triggers)
-npm run dev -- daemon --channel web
+strada start --channel web --daemon
 
-# Or with other chat channels
-npm run dev -- start --channel telegram
-npm run dev -- start --channel discord
-npm run dev -- start --channel slack
-npm run dev -- start --channel whatsapp
+# Other chat channels
+strada start --channel telegram
+strada start --channel discord
+strada start --channel slack
+strada start --channel whatsapp
+
+# Always-on supervisor with auto-restart
+strada supervise --channel web
+```
+
+### 4. CLI Commands
+
+```bash
+strada setup              # Interactive setup wizard
+strada start              # Start the agent
+strada supervise          # Run with auto-restart supervisor
+strada update             # Check and apply updates
+strada update --check     # Check for updates without applying
+strada version-info       # Show version, install method, update status
 ```
 
 ### 4. Talk to It
@@ -106,6 +123,18 @@ Once running, send a message through your configured channel:
 ```
 
 **Web channel:** No terminal needed -- interact through the web dashboard at `localhost:3000`.
+
+### 5. Auto-Update
+
+Strada.Brain automatically checks for updates daily and applies them when idle. It detects its installation method (npm global, npm local, or git clone) and uses the appropriate update strategy.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AUTO_UPDATE_ENABLED` | `true` | Enable/disable auto-update |
+| `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Check frequency (hours) |
+| `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutes idle before applying update |
+| `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` or `latest` |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | Auto-restart after update when idle |
 
 ---
 
