@@ -223,6 +223,64 @@ describe("Orchestrator", () => {
     expect(toolResultBlock?.content).toContain("Operation cancelled");
   });
 
+  it("filters blocked tools from the model and returns a read-only stub for blocked calls", async () => {
+    const readOnlyOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: true,
+      requireConfirmation: true,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_write", input: { path: "output.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 50, outputTokens: 30 },
+      })
+      .mockResolvedValueOnce({
+        text: "Blocked.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 100, outputTokens: 60 },
+      });
+
+    const promise = readOnlyOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat1",
+      userId: "user1",
+      text: "Try to write a file",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const firstCallArgs = mockProvider.chat.mock.calls[0]!;
+    const firstPrompt = firstCallArgs[0] as string;
+    const firstToolDefs = firstCallArgs[2] as Array<{ name: string }>;
+    expect(firstPrompt).toContain("READ-ONLY MODE ACTIVE");
+    expect(firstToolDefs.map((tool) => tool.name)).toEqual(["file_read"]);
+
+    expect(writeTool.execute).not.toHaveBeenCalled();
+
+    const secondCallArgs = mockProvider.chat.mock.calls[1]!;
+    const messages = secondCallArgs[1] as any[];
+    const toolResultMsg = messages.find((m: any) =>
+      m.role === "user" && Array.isArray(m.content)
+    );
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) =>
+      c.type === "tool_result"
+    );
+    expect(toolResultBlock?.content).toContain("disabled in read-only mode");
+    expect(toolResultBlock?.is_error).toBe(true);
+  });
+
   it("returns error result for unknown tool", async () => {
     const toolResponse: ProviderResponse = {
       text: "",
@@ -1750,15 +1808,10 @@ describe("Orchestrator", () => {
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      // chatStream was attempted
-      expect(streamingProvider.chatStream).toHaveBeenCalled();
-      // Streaming message was started and finalized with error
-      expect(streamingChannel.startStreamingMessage).toHaveBeenCalled();
-      expect(streamingChannel.finalizeStreamingMessage).toHaveBeenCalledWith(
-        "paor-e2e-stream-err",
-        "stream-id-1",
-        expect.stringContaining("Streaming error"),
-      );
+      // Agent loop uses batch mode (chat) — no streaming to avoid showing intermediate iterations
+      expect(streamingProvider.chat).toHaveBeenCalled();
+      // Fallback text sent via sendMarkdown
+      expect(streamingChannel.sendMarkdown).toHaveBeenCalledWith("paor-e2e-stream-err", "Fallback");
     });
   });
 });

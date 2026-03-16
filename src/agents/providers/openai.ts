@@ -128,6 +128,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     );
 
     let text = "";
+    let reasoning = "";
     const toolCallAccumulator = new Map<number, { id: string; name: string; arguments: string }>();
     let finishReason = "stop";
     let inputTokens = 0;
@@ -154,17 +155,24 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         buffer = lines.pop()!;
 
         for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
+          // Accept both "data: " (OpenAI) and "data:" (Kimi) SSE formats
+          if (!line.startsWith("data:")) continue;
+          const data = (line.startsWith("data: ") ? line.slice(6) : line.slice(5)).trim();
           if (data === "[DONE]") continue;
 
           try {
             const chunk = JSON.parse(data) as StreamSSEChunk;
             const delta = chunk.choices?.[0]?.delta;
 
-            if (delta?.content) {
-              text += delta.content;
-              onChunk(delta.content);
+            const streamText = this.extractStreamText(delta);
+            if (streamText) {
+              text += streamText;
+              onChunk(streamText);
+            }
+
+            const streamReasoning = this.extractStreamReasoning(delta as Record<string, unknown>);
+            if (streamReasoning) {
+              reasoning += streamReasoning;
             }
 
             if (delta?.tool_calls) {
@@ -199,14 +207,18 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.values())
       .filter((tc) => tc.id)
-      .map((tc: any) => {
+      .map((tc: any, idx: number) => {
         let input: import("../../types/index.js").JsonObject;
         try {
           input = JSON.parse(tc.arguments) as import("../../types/index.js").JsonObject;
         } catch {
           input = { _rawArguments: tc.arguments };
         }
-        return { id: tc.id, name: tc.name, input };
+        // Attach accumulated reasoning to first tool call (for providers like Kimi K2.5)
+        const providerMetadata = idx === 0 && reasoning ? { reasoning_content: reasoning } : undefined;
+        return providerMetadata
+          ? { id: tc.id, name: tc.name, input, providerMetadata }
+          : { id: tc.id, name: tc.name, input };
       });
 
     const stopReason = OPENAI_STOP_REASON_MAP[finishReason] ?? "end_turn";
@@ -312,6 +324,24 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.apiKey}`,
     };
+  }
+
+  /**
+   * Extract text from a streaming SSE delta object.
+   * Subclasses can override to handle provider-specific fields.
+   */
+  protected extractStreamText(delta: Record<string, unknown> | undefined): string | undefined {
+    return (delta?.content as string) || undefined;
+  }
+
+  /**
+   * Extract reasoning/thinking content from a streaming SSE delta.
+   * Accumulated separately from user-visible text and attached to tool calls.
+   * Override in subclasses for providers with thinking mode (e.g., Kimi K2.5).
+   */
+  protected extractStreamReasoning(delta: Record<string, unknown> | undefined): string | undefined {
+    void delta; // unused in base — subclasses override
+    return undefined;
   }
 
   protected buildRequestBody(
@@ -454,6 +484,7 @@ interface StreamSSEChunk {
   choices?: Array<{
     delta?: {
       content?: string;
+      reasoning_content?: string;
       tool_calls?: Array<{
         index?: number;
         id?: string;

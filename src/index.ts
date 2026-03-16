@@ -13,6 +13,7 @@ import { createLogger } from "./utils/logger.js";
 import { Daemon } from "./gateway/daemon.js";
 import { bootstrap } from "./core/bootstrap.js";
 import { createContainer } from "./core/di-container.js";
+import { shouldEnableDaemonMode } from "./core/daemon-mode.js";
 import { SetupWizard } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
 import { CHANNEL_DEFAULTS, type SupportedChannelType } from "./common/constants.js";
@@ -289,7 +290,7 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
     const container = createContainer();
 
     // Bootstrap the application
-    const effectiveDaemonMode = daemonMode || process.env["STRADA_DAEMON_ENABLED"] === "true";
+    const effectiveDaemonMode = shouldEnableDaemonMode(channelType, daemonMode);
     const app = await bootstrap({
       channelType,
       config,

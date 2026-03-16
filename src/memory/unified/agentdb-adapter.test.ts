@@ -30,6 +30,7 @@ function createMockAgentDB(): {
     : AgentDBMemory[K];
 } {
   return {
+    cachedAnalysis: null,
     initialize: vi.fn(),
     shutdown: vi.fn(),
     retrieve: vi.fn(),
@@ -57,6 +58,7 @@ function createMockAgentDB(): {
     rebuildIndex: vi.fn(),
     getIndexHealth: vi.fn(),
     optimizeIndex: vi.fn(),
+    persistEntry: vi.fn(),
   } as unknown as ReturnType<typeof createMockAgentDB>;
 }
 
@@ -202,8 +204,17 @@ describe("AgentDBAdapter", () => {
       const options = { mode: "text" as const, query: "hello", limit: 5, minScore: 0.1 as NormalizedScore };
       const result = await adapter.retrieve(options);
 
-      expect(result).toEqual({ kind: "ok", value: mockResults });
-      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("hello", { limit: 5 });
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.value).toHaveLength(1);
+        expect(result.value[0].entry).toEqual(expect.objectContaining({
+          id: "mem_1",
+          type: "conversation",
+          content: "hello",
+          userMessage: "hello",
+        }));
+      }
+      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("hello", { limit: 10, embedding: undefined });
       expect(mockDb.retrieve).not.toHaveBeenCalled();
     });
 
@@ -219,9 +230,50 @@ describe("AgentDBAdapter", () => {
       const options = { mode: "semantic" as const, query: "relevant topic", limit: 10 };
       const result = await adapter.retrieve(options);
 
-      expect(result).toEqual({ kind: "ok", value: mockResults });
-      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("relevant topic", { limit: 10 });
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.value[0].entry).toEqual(expect.objectContaining({
+          id: "mem_2",
+          type: "note",
+          content: "relevant",
+          source: "user",
+        }));
+      }
+      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("relevant topic", { limit: 20, embedding: undefined });
       expect(mockDb.retrieve).not.toHaveBeenCalled();
+    });
+
+    it("routes hybrid-mode query to agentdb.retrieveHybrid()", async () => {
+      const mockResults: RetrievalResult[] = [
+        {
+          entry: { id: "mem_hybrid" as MemoryId, type: "note", content: "hybrid result" } as unknown as MemoryEntry,
+          score: 0.82 as NormalizedScore,
+        },
+      ];
+      (mockDb.retrieveHybrid as ReturnType<typeof vi.fn>).mockResolvedValue(mockResults);
+
+      const options = {
+        mode: "hybrid" as const,
+        query: "hybrid query",
+        limit: 4,
+        semanticWeight: 0.6 as NormalizedScore,
+      };
+      const result = await adapter.retrieve(options);
+
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.value[0].entry).toEqual(expect.objectContaining({
+          id: "mem_hybrid",
+          type: "note",
+          content: "hybrid result",
+          source: "user",
+        }));
+      }
+      expect(mockDb.retrieveHybrid).toHaveBeenCalledWith("hybrid query", {
+        limit: 8,
+        semanticWeight: 0.6,
+      });
+      expect(mockDb.retrieveSemantic).not.toHaveBeenCalled();
     });
 
     it("falls back to agentdb.retrieve() when query is empty", async () => {
@@ -239,14 +291,17 @@ describe("AgentDBAdapter", () => {
     // Chat/type modes keep existing TF-IDF behavior
     // -----------------------------------------------------------------------
 
-    it("keeps existing TF-IDF behavior for chat mode", async () => {
-      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    it("returns recent chat entries for chat mode without a query", async () => {
+      (mockDb.getByTier as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
 
       const options = { mode: "chat" as const, chatId: "chat_1" as ChatId };
       const result = await adapter.retrieve(options);
 
       expect(result).toEqual({ kind: "ok", value: [] });
-      expect(mockDb.retrieve).toHaveBeenCalledWith("", options);
+      expect(mockDb.retrieve).not.toHaveBeenCalled();
       expect(mockDb.retrieveSemantic).not.toHaveBeenCalled();
     });
 
@@ -277,8 +332,8 @@ describe("AgentDBAdapter", () => {
       }
     });
 
-    it("returns err() when agentdb.retrieve throws (TF-IDF path)", async () => {
-      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("retrieval failed"));
+    it("returns err() when chat-mode history lookup fails", async () => {
+      (mockDb.getByTier as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("retrieval failed"));
 
       const options = { mode: "chat" as const, chatId: "chat_1" as ChatId };
       const result = await adapter.retrieve(options);
@@ -306,8 +361,16 @@ describe("AgentDBAdapter", () => {
 
       const result = await adapter.retrieveSemantic("semantic query", { limit: 3 });
 
-      expect(result).toEqual({ kind: "ok", value: mockResults });
-      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("semantic query", { limit: 3 });
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.value[0].entry).toEqual(expect.objectContaining({
+          id: "mem_3",
+          type: "note",
+          content: "semantic result",
+          source: "user",
+        }));
+      }
+      expect(mockDb.retrieveSemantic).toHaveBeenCalledWith("semantic query", { limit: 6 });
     });
 
     it("returns err() when agentdb.retrieveSemantic() throws", async () => {
@@ -373,45 +436,56 @@ describe("AgentDBAdapter", () => {
   // =========================================================================
 
   describe("storeConversation()", () => {
-    it("translates options to agentdb params and wraps entry.id in ok()", async () => {
+    it("stores conversation metadata through agentdb.storeEntry() and wraps entry.id in ok()", async () => {
       const mockEntry = {
         id: "mem_123" as MemoryId,
         type: "conversation",
         content: "test summary",
       } as unknown as MemoryEntry;
-      (mockDb.storeConversation as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntry);
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "ok", value: mockEntry });
 
       const chatId = "chat_1" as ChatId;
-      const result = await adapter.storeConversation(chatId, "test summary", { tags: ["a", "b"] });
+      const result = await adapter.storeConversation(chatId, "test summary", {
+        tags: ["a", "b"],
+        importance: "high",
+        turnNumber: 7,
+        userMessage: "user says hi",
+        assistantMessage: "assistant says hi",
+      });
 
       expect(result).toEqual({ kind: "ok", value: "mem_123" });
-      expect(mockDb.storeConversation).toHaveBeenCalledWith(
+      expect(mockDb.storeEntry).toHaveBeenCalledWith(expect.objectContaining({
+        type: "conversation",
+        content: "test summary",
         chatId,
-        "test summary",
-        ["a", "b"],
-        MemoryTier.Working,
-        { userMessage: undefined, assistantMessage: undefined },
-      );
+        tier: MemoryTier.Working,
+        importance: "high",
+        tags: ["a", "b", "conversation"],
+        metadata: {
+          userMessage: "user says hi",
+          assistantMessage: "assistant says hi",
+          turnNumber: 7,
+        },
+      }));
     });
 
     it("handles missing options", async () => {
       const mockEntry = { id: "mem_456" as MemoryId } as unknown as MemoryEntry;
-      (mockDb.storeConversation as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntry);
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "ok", value: mockEntry });
 
       const result = await adapter.storeConversation("chat_2" as ChatId, "summary");
 
       expect(result).toEqual({ kind: "ok", value: "mem_456" });
-      expect(mockDb.storeConversation).toHaveBeenCalledWith(
-        "chat_2",
-        "summary",
-        undefined,
-        MemoryTier.Working,
-        { userMessage: undefined, assistantMessage: undefined },
-      );
+      expect(mockDb.storeEntry).toHaveBeenCalledWith(expect.objectContaining({
+        type: "conversation",
+        content: "summary",
+        chatId: "chat_2",
+        importance: "medium",
+      }));
     });
 
-    it("returns err() when storeConversation throws", async () => {
-      (mockDb.storeConversation as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("store failed"));
+    it("returns err() when storeEntry throws", async () => {
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("store failed"));
 
       const result = await adapter.storeConversation("chat_1" as ChatId, "summary");
 
@@ -540,7 +614,7 @@ describe("AgentDBAdapter", () => {
   // =========================================================================
 
   describe("getChatHistory()", () => {
-    it("delegates to agentdb.getChatHistory() and maps entries to ConversationMemoryEntry", async () => {
+    it("collects conversation entries across tiers and maps them to ConversationMemoryEntry", async () => {
       const chatId = "chat_42" as ChatId;
       const mockEntries: MemoryEntry[] = [
         {
@@ -569,7 +643,10 @@ describe("AgentDBAdapter", () => {
           chatId,
         } as unknown as MemoryEntry,
       ];
-      (mockDb.getChatHistory as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntries);
+      (mockDb.getByTier as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockEntries)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
 
       const result = await adapter.getChatHistory(chatId, { limit: 10 });
 
@@ -578,11 +655,10 @@ describe("AgentDBAdapter", () => {
         expect(result.value).toHaveLength(2);
         expect(result.value[0].type).toBe("conversation");
         expect(result.value[0].chatId).toBe(chatId);
-        expect(result.value[0].userMessage).toBe("How do I deploy?");
-        // When no userMessage in metadata, falls back to content
-        expect(result.value[1].userMessage).toBe("Follow-up question");
+        expect(result.value[0].userMessage).toBe("Follow-up question");
+        expect(result.value[1].userMessage).toBe("How do I deploy?");
       }
-      expect(mockDb.getChatHistory).toHaveBeenCalledWith(chatId, 10);
+      expect(mockDb.getByTier).toHaveBeenCalledTimes(3);
     });
 
     it("filters out non-conversation entries", async () => {
@@ -598,6 +674,7 @@ describe("AgentDBAdapter", () => {
           importance: "medium",
           archived: false,
           metadata: {},
+          chatId,
         } as unknown as MemoryEntry,
         {
           id: "mem_201" as MemoryId,
@@ -611,7 +688,10 @@ describe("AgentDBAdapter", () => {
           metadata: {},
         } as unknown as MemoryEntry,
       ];
-      (mockDb.getChatHistory as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntries);
+      (mockDb.getByTier as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockEntries)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
 
       const result = await adapter.getChatHistory(chatId);
 
@@ -623,7 +703,10 @@ describe("AgentDBAdapter", () => {
     });
 
     it("returns empty array when no entries exist", async () => {
-      (mockDb.getChatHistory as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (mockDb.getByTier as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
 
       const result = await adapter.getChatHistory("chat_empty" as ChatId);
 
@@ -633,8 +716,8 @@ describe("AgentDBAdapter", () => {
       }
     });
 
-    it("returns err() when getChatHistory throws", async () => {
-      (mockDb.getChatHistory as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("db error"));
+    it("returns err() when tier retrieval throws", async () => {
+      (mockDb.getByTier as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("db error"));
 
       const result = await adapter.getChatHistory("chat_1" as ChatId);
 
@@ -650,18 +733,33 @@ describe("AgentDBAdapter", () => {
   // =========================================================================
 
   describe("storeNote()", () => {
-    it("delegates to agentdb.storeNote() and returns entry.id wrapped in ok()", async () => {
+    it("stores note metadata through agentdb.storeEntry() and returns entry.id wrapped in ok()", async () => {
       const mockEntry = {
         id: "mem_note_1" as MemoryId,
         type: "note",
         content: "important note",
       } as unknown as MemoryEntry;
-      (mockDb.storeNote as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntry);
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "ok", value: mockEntry });
 
-      const result = await adapter.storeNote("important note", { tags: ["deploy", "config"] });
+      const result = await adapter.storeNote("important note", {
+        tags: ["deploy", "config"],
+        title: "Deploy note",
+        source: "user",
+        metadata: { area: "deploy" },
+      });
 
       expect(result).toEqual({ kind: "ok", value: "mem_note_1" });
-      expect(mockDb.storeNote).toHaveBeenCalledWith("important note", ["deploy", "config"]);
+      expect(mockDb.storeEntry).toHaveBeenCalledWith(expect.objectContaining({
+        type: "note",
+        content: "important note",
+        tags: ["deploy", "config", "note"],
+        tier: MemoryTier.Persistent,
+        metadata: {
+          area: "deploy",
+          title: "Deploy note",
+          source: "user",
+        },
+      }));
     });
 
     it("passes undefined tags when options is omitted", async () => {
@@ -670,16 +768,20 @@ describe("AgentDBAdapter", () => {
         type: "note",
         content: "bare note",
       } as unknown as MemoryEntry;
-      (mockDb.storeNote as ReturnType<typeof vi.fn>).mockResolvedValue(mockEntry);
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "ok", value: mockEntry });
 
       const result = await adapter.storeNote("bare note");
 
       expect(result).toEqual({ kind: "ok", value: "mem_note_2" });
-      expect(mockDb.storeNote).toHaveBeenCalledWith("bare note", undefined);
+      expect(mockDb.storeEntry).toHaveBeenCalledWith(expect.objectContaining({
+        type: "note",
+        content: "bare note",
+        tags: ["note"],
+      }));
     });
 
-    it("returns err() when storeNote throws", async () => {
-      (mockDb.storeNote as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("storage failed"));
+    it("returns err() when storeEntry throws", async () => {
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("storage failed"));
 
       const result = await adapter.storeNote("note content");
 
@@ -690,7 +792,7 @@ describe("AgentDBAdapter", () => {
     });
 
     it("wraps non-Error throws in Error", async () => {
-      (mockDb.storeNote as ReturnType<typeof vi.fn>).mockRejectedValue("string error");
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockRejectedValue("string error");
 
       const result = await adapter.storeNote("note content");
 
@@ -742,27 +844,40 @@ describe("AgentDBAdapter", () => {
       expect(mockDb.retrieve).toHaveBeenCalledWith("test query", {
         mode: "chat",
         chatId,
-        limit: 5,
+        limit: 10,
         query: "test query",
       });
     });
 
-    it("uses empty string query when no query option is provided", async () => {
+    it("returns most recent chat entries when no query option is provided", async () => {
       const chatId = "chat_51" as ChatId;
-      (mockDb.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (mockDb.getByTier as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce([
+          {
+            id: "mem_recent" as MemoryId,
+            type: "conversation",
+            content: "latest message",
+            createdAt: 1700000002000 as TimestampMs,
+            accessCount: 0,
+            tags: [],
+            importance: "medium",
+            archived: false,
+            metadata: {},
+            chatId,
+          } as unknown as MemoryEntry,
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
 
       const result = await adapter.retrieveFromChat(chatId);
 
       expect(result.kind).toBe("ok");
       if (result.kind === "ok") {
-        expect(result.value).toEqual([]);
+        expect(result.value).toHaveLength(1);
+        expect(result.value[0].entry.id).toBe("mem_recent");
+        expect(result.value[0].score).toBe(1);
       }
-      expect(mockDb.retrieve).toHaveBeenCalledWith("", {
-        mode: "chat",
-        chatId,
-        limit: undefined,
-        query: "",
-      });
+      expect(mockDb.retrieve).not.toHaveBeenCalled();
     });
 
     it("returns err() when retrieve throws", async () => {
@@ -778,38 +893,169 @@ describe("AgentDBAdapter", () => {
   });
 
   // =========================================================================
-  // Remaining stub methods
+  // Operational adapter methods
   // =========================================================================
 
-  describe("stub methods", () => {
-    it("storeError returns ok with a stub MemoryId", async () => {
-      const result = await adapter.storeError(new Error("test"), { category: "test" });
+  describe("operational adapter methods", () => {
+    it("storeError persists structured error metadata via storeEntry", async () => {
+      (mockDb.storeEntry as ReturnType<typeof vi.fn>).mockResolvedValue({
+        kind: "ok",
+        value: { id: "mem_err" as MemoryId, type: "error", content: "boom" } as unknown as MemoryEntry,
+      });
 
-      expect(result.kind).toBe("ok");
+      const result = await adapter.storeError(new Error("boom"), {
+        category: "runtime",
+        location: "worker.ts:10",
+        chatId: "chat_err" as ChatId,
+      }, {
+        tags: ["agent"],
+        metadata: { severity: "high" },
+      });
+
+      expect(result).toEqual({ kind: "ok", value: "mem_err" });
+      expect(mockDb.storeEntry).toHaveBeenCalledWith(expect.objectContaining({
+        type: "error",
+        content: "boom",
+        tier: MemoryTier.Persistent,
+        chatId: "chat_err",
+        tags: ["agent", "error", "runtime"],
+        metadata: expect.objectContaining({
+          severity: "high",
+          errorCategory: "runtime",
+          errorCode: "Error",
+          location: "worker.ts:10",
+          resolved: false,
+        }),
+      }));
     });
 
-    it("getEntry delegates to agentdb.getById", async () => {
-      const result = await adapter.getEntry("mem_1" as MemoryId);
-      // getById returns none when entry not found
-      expect(result.kind).toBe("ok");
+    it("resolveError marks persisted error entries as resolved", async () => {
+      const errorEntry = {
+        id: "mem_err_2" as MemoryId,
+        type: "error",
+        content: "failure",
+        createdAt: 1700000000000 as TimestampMs,
+        accessCount: 0,
+        tags: [],
+        importance: "high",
+        archived: false,
+        metadata: { resolved: false },
+      } as unknown as MemoryEntry;
+      (mockDb.getById as ReturnType<typeof vi.fn>).mockResolvedValue({
+        kind: "ok",
+        value: { kind: "some", value: errorEntry },
+      });
+
+      const result = await adapter.resolveError("mem_err_2" as MemoryId, "patched");
+
+      expect(result).toEqual({ kind: "ok", value: undefined });
+      expect(mockDb.persistEntry).toHaveBeenCalledWith(expect.objectContaining({
+        id: "mem_err_2",
+        metadata: expect.objectContaining({
+          resolved: true,
+          resolution: "patched",
+        }),
+        resolution: "patched",
+        resolved: true,
+      }));
     });
 
-    it("deleteEntry returns ok(false)", async () => {
+    it("retrievePaginated slices processed retrieval results", async () => {
+      (mockDb.retrieveSemantic as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          entry: { id: "mem_1" as MemoryId, type: "note", content: "one" } as unknown as MemoryEntry,
+          score: 0.9 as NormalizedScore,
+        },
+        {
+          entry: { id: "mem_2" as MemoryId, type: "note", content: "two" } as unknown as MemoryEntry,
+          score: 0.8 as NormalizedScore,
+        },
+        {
+          entry: { id: "mem_3" as MemoryId, type: "note", content: "three" } as unknown as MemoryEntry,
+          score: 0.7 as NormalizedScore,
+        },
+      ]);
+
+      const result = await adapter.retrievePaginated(
+        { mode: "text", query: "note", limit: 10 },
+        { page: 2, pageSize: 1 },
+      );
+
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.value.results).toHaveLength(1);
+        expect(result.value.results[0].entry.id).toBe("mem_2");
+        expect(result.value.totalCount).toBe(3);
+        expect(result.value.hasMore).toBe(true);
+        expect(result.value.nextCursor).toBe("3");
+      }
+    });
+
+    it("archives old entries and persists the archive flag", async () => {
+      const oldEntry = {
+        id: "mem_old" as MemoryId,
+        type: "note",
+        content: "old",
+        createdAt: 1000 as TimestampMs,
+        accessCount: 0,
+        tags: [],
+        importance: "low",
+        archived: false,
+        metadata: {},
+      } as unknown as MemoryEntry;
+      const freshEntry = {
+        id: "mem_new" as MemoryId,
+        type: "note",
+        content: "new",
+        createdAt: 5000 as TimestampMs,
+        accessCount: 0,
+        tags: [],
+        importance: "low",
+        archived: false,
+        metadata: {},
+      } as unknown as MemoryEntry;
+      (mockDb.getByTier as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce([oldEntry, freshEntry])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      const result = await adapter.archiveOldEntries(3000 as TimestampMs);
+
+      expect(result).toEqual({ kind: "ok", value: 1 });
+      expect(mockDb.persistEntry).toHaveBeenCalledWith(expect.objectContaining({
+        id: "mem_old",
+        archived: true,
+      }));
+    });
+
+    it("deleteEntry delegates to agentdb.delete()", async () => {
+      (mockDb.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "ok", value: true });
+
       const result = await adapter.deleteEntry("mem_1" as MemoryId);
 
-      expect(result).toEqual({ kind: "ok", value: false });
+      expect(result).toEqual({ kind: "ok", value: true });
+      expect(mockDb.delete).toHaveBeenCalledWith("mem_1");
     });
 
-    it("invalidateAnalysis returns ok()", async () => {
+    it("invalidateAnalysis clears matching cached analysis state", async () => {
+      mockDb.cachedAnalysis = {
+        projectPath: "/path",
+        analysis: { projectName: "demo", analyzedAt: new Date() } as unknown as StradaProjectAnalysis,
+      };
+
       const result = await adapter.invalidateAnalysis("/path");
 
       expect(result).toEqual({ kind: "ok", value: undefined });
+      expect(mockDb.cachedAnalysis).toBeNull();
     });
 
-    it("compact returns ok with freedBytes", async () => {
+    it("compact delegates to agentdb.compact()", async () => {
+      (mockDb.compact as ReturnType<typeof vi.fn>).mockResolvedValue({ freedBytes: 512 });
+
       const result = await adapter.compact();
 
-      expect(result.kind).toBe("ok");
+      expect(result).toEqual({ kind: "ok", value: { freedBytes: 512 } });
+      expect(mockDb.compact).toHaveBeenCalledOnce();
     });
   });
 });

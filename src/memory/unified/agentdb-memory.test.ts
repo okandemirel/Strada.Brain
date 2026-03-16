@@ -160,6 +160,57 @@ describe("AgentDBMemory", () => {
     });
   });
 
+  describe("HNSW recovery", () => {
+    it("rebuilds persisted HNSW state from SQLite when reopened with a larger capacity", async () => {
+      const reopenDir = mkdtempSync(join(tmpdir(), "agentdb-reopen-test-"));
+
+      const initialMemory = new AgentDBMemory({
+        dbPath: reopenDir,
+        dimensions: 128,
+        maxEntriesPerTier: {
+          [MemoryTier.Working]: 0,
+          [MemoryTier.Ephemeral]: 0,
+          [MemoryTier.Persistent]: 1,
+        },
+        hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+        quantizationType: "none",
+        cacheSize: 100,
+        enableAutoTiering: true,
+        ephemeralTtlMs: 60_000,
+      });
+      await initialMemory.initialize();
+      await initialMemory.storeNote("Seed note", ["seed"]);
+      await initialMemory.shutdown();
+
+      const reopenedMemory = new AgentDBMemory({
+        dbPath: reopenDir,
+        dimensions: 128,
+        maxEntriesPerTier: {
+          [MemoryTier.Working]: 10,
+          [MemoryTier.Ephemeral]: 10,
+          [MemoryTier.Persistent]: 10,
+        },
+        hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+        quantizationType: "none",
+        cacheSize: 100,
+        enableAutoTiering: true,
+        ephemeralTtlMs: 60_000,
+      });
+      await reopenedMemory.initialize();
+
+      try {
+        await expect(reopenedMemory.storeNote("Follow-up note", ["follow-up"])).resolves.toBeDefined();
+
+        const stats = reopenedMemory.getStats();
+        expect(stats.totalEntries).toBe(2);
+        expect(stats.hnswStats?.currentCount).toBe(2);
+      } finally {
+        await reopenedMemory.shutdown();
+        rmSync(reopenDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // reEmbedHashEntries
   // ---------------------------------------------------------------------------

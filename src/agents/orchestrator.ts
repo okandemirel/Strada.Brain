@@ -43,6 +43,11 @@ import { buildProviderIntelligence, getRecommendedMaxMessages } from "./provider
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
 import { WRITE_OPERATIONS } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
+import {
+  checkReadOnlyBlock,
+  createReadOnlyToolStub,
+  getReadOnlySystemPrompt,
+} from "../security/read-only-guard.js";
 import type { BackgroundTaskOptions } from "../tasks/types.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
@@ -304,12 +309,7 @@ export class Orchestrator {
     this.tools = new Map();
     this.toolDefinitions = [];
     for (const tool of opts.tools) {
-      this.tools.set(tool.name, tool);
-      this.toolDefinitions.push({
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.inputSchema as import("../types/index.js").JsonObject,
-      });
+      this.registerTool(tool);
     }
 
     this.stradaDeps = opts.stradaDeps;
@@ -319,6 +319,7 @@ export class Orchestrator {
       buildProjectContext(this.projectPath) +
       buildDepsContext(opts.stradaDeps) +
       buildCapabilityManifest() +
+      (this.readOnly ? getReadOnlySystemPrompt() : "") +
       (opts.getIdentityState ? buildIdentitySection(opts.getIdentityState()) : "") +
       (opts.crashRecoveryContext ? buildCrashNotificationSection(opts.crashRecoveryContext) : "");
   }
@@ -347,19 +348,7 @@ export class Orchestrator {
    * Used by chain synthesis to make composite tools available to the LLM.
    */
   addTool(tool: ITool): void {
-    this.tools.set(tool.name, tool);
-    // Update or append toolDefinitions
-    const existingIdx = this.toolDefinitions.findIndex(td => td.name === tool.name);
-    const def = {
-      name: tool.name,
-      description: tool.description,
-      input_schema: tool.inputSchema as import("../types/index.js").JsonObject,
-    };
-    if (existingIdx >= 0) {
-      this.toolDefinitions[existingIdx] = def;
-    } else {
-      this.toolDefinitions.push(def);
-    }
+    this.registerTool(tool);
   }
 
   /**
@@ -948,7 +937,10 @@ export class Orchestrator {
                   const bgConsensusResult = await this.consensusManager.verify({
                     originalOutput: {
                       text: response.text ?? undefined,
-                      toolCalls: response.toolCalls.map(tc => ({ name: tc.name, input: tc.input })),
+                      toolCalls: response.toolCalls.map((tc: ToolCall) => ({
+                        name: tc.name,
+                        input: tc.input,
+                      })),
                     },
                     originalProvider: currentProvider.name ?? "unknown",
                     task: bgTaskClass,
@@ -1323,6 +1315,7 @@ export class Orchestrator {
     }
 
     // Build system prompt with all context layers (DRY: shared with runBackgroundTask)
+    logger.debug("Building system prompt", { chatId });
     const { systemPrompt: builtSystemPrompt, initialContentHashes } = await this.buildSystemPromptWithContext({
       chatId,
       channelType,
@@ -1374,6 +1367,7 @@ export class Orchestrator {
     const REFLECT_INTERVAL = 3;
     // ────────────────────────────────────────────────────────────────────
 
+    logger.debug("System prompt built", { chatId, promptLength: systemPrompt.length });
     const canStream =
       this.streamingEnabled &&
       "chatStream" in currentProvider &&
@@ -1405,12 +1399,16 @@ export class Orchestrator {
       // Phase-aware provider routing (multi-provider orchestration)
       currentProvider = this.resolveRoutedProvider(lastUserMessage, agentState.phase, currentProvider);
 
+      logger.debug("Calling LLM", { chatId, canStream, provider: currentProvider.name, iteration });
       let response;
       if (canStream) {
-        response = await this.streamResponse(chatId, activePrompt, session, currentProvider);
+        // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
+        // but don't create visible messages. User sees only the final response via sendMarkdown.
+        response = await this.silentStream(chatId, activePrompt, session, currentProvider);
       } else {
         response = await currentProvider.chat(activePrompt, session.messages, this.toolDefinitions);
       }
+      logger.debug("LLM responded", { chatId, hasText: !!response.text, textLen: response.text?.length ?? 0, toolCalls: response.toolCalls.length });
 
       const inputTokens = response.usage?.inputTokens ?? 0;
       const outputTokens = response.usage?.outputTokens ?? 0;
@@ -1433,7 +1431,7 @@ export class Orchestrator {
         if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
-            if (!canStream) await this.channel.sendMarkdown(chatId, response.text);
+            await this.channel.sendMarkdown(chatId, response.text);
           }
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
@@ -1617,10 +1615,20 @@ export class Orchestrator {
             role: "assistant",
             content: response.text,
           });
-          // Only send via sendMarkdown if we didn't stream
-          if (!canStream || response.toolCalls.length > 0) {
-            await this.channel.sendMarkdown(chatId, response.text);
-          }
+          await this.channel.sendMarkdown(chatId, response.text);
+        } else {
+          // LLM returned empty response — send fallback to user
+          const lang = process.env["LANGUAGE_PREFERENCE"] ?? "en";
+          const fallback = lang === "tr" ? "Bir yanıt oluşturamadım. Sorunuzu yeniden ifade edebilir misiniz?"
+            : lang === "ja" ? "応答を生成できませんでした。質問を言い換えていただけますか？"
+            : lang === "ko" ? "응답을 생성할 수 없었습니다. 질문을 다시 표현해 주시겠어요?"
+            : lang === "zh" ? "我无法生成回复。您能重新表述您的问题吗？"
+            : lang === "de" ? "Ich konnte keine Antwort generieren. Könnten Sie Ihre Frage umformulieren?"
+            : lang === "es" ? "No pude generar una respuesta. ¿Podría reformular su pregunta?"
+            : lang === "fr" ? "Je n'ai pas pu générer de réponse. Pourriez-vous reformuler votre question ?"
+            : "I wasn't able to generate a response. Could you rephrase your question?";
+          logger.warn("LLM returned empty response", { chatId, canStream, provider: currentProvider.name });
+          await this.channel.sendMarkdown(chatId, fallback);
         }
         // ─── Metrics: record end_turn ───────────────────────────────
         this.recordMetricEnd(metricId, {
@@ -1674,10 +1682,8 @@ export class Orchestrator {
         tool_calls: response.toolCalls,
       });
 
-      // If there's intermediate text and we didn't stream, send it
-      if (response.text && !canStream) {
-        await this.channel.sendMarkdown(chatId, response.text);
-      }
+      // Intermediate text is stored in session for LLM context but NOT sent to user.
+      // User only sees the final response (end_turn without tool calls).
 
       // Execute all tool calls
       const toolResults = await this.executeToolCalls(chatId, response.toolCalls);
@@ -1739,7 +1745,10 @@ export class Orchestrator {
                 const consensusResult = await this.consensusManager.verify({
                   originalOutput: {
                     text: response.text ?? undefined,
-                    toolCalls: response.toolCalls.map(tc => ({ name: tc.name, input: tc.input })),
+                    toolCalls: response.toolCalls.map((tc: ToolCall) => ({
+                      name: tc.name,
+                      input: tc.input,
+                    })),
                   },
                   originalProvider: currentProvider.name ?? "unknown",
                   task: taskClass,
@@ -1894,9 +1903,64 @@ export class Orchestrator {
   }
 
   /**
+   * Silent streaming: uses the provider's streaming API internally (SSE parsing,
+   * timeout, reasoning_content) but does NOT create visible messages for the user.
+   * Returns the full ProviderResponse. Used by runAgentLoop to avoid showing
+   * intermediate iterations while keeping streaming reliability.
+   */
+  private readonly silentStream = async (
+    chatId: string,
+    systemPrompt: string,
+    session: Session,
+    provider: IAIProvider,
+  ): Promise<ProviderResponse> => {
+    const streamTimeout = 120_000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), streamTimeout);
+    try {
+      const streamPromise = (provider as IStreamingProvider).chatStream(
+        systemPrompt,
+        session.messages,
+        this.toolDefinitions,
+        () => {}, // no-op: don't send chunks to user
+      );
+      const response = await Promise.race([
+        streamPromise,
+        new Promise<never>((_, reject) => {
+          controller.signal.addEventListener("abort", () =>
+            reject(new Error("Streaming response timed out")),
+          { once: true });
+        }),
+      ]);
+      clearTimeout(timer);
+      return response;
+    } catch (err) {
+      clearTimeout(timer);
+      const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
+      getLogger().error("Silent stream error", { chatId, error: errMsg });
+      try {
+        return await provider.chat(systemPrompt, session.messages, this.toolDefinitions);
+      } catch (fallbackErr) {
+        getLogger().error("Silent stream fallback chat failed", {
+          chatId,
+          error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+        });
+      }
+      return {
+        text: "",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      };
+    }
+  };
+
+  /**
    * Stream a response from the LLM to the channel in real-time.
    * Sends text chunks as they arrive, then returns the final ProviderResponse.
+   * Reserved for runBackgroundTask visible streaming.
    */
+  // @ts-expect-error Reserved for background task streaming
   private async streamResponse(
     chatId: string,
     systemPrompt: string,
@@ -1992,7 +2056,7 @@ export class Orchestrator {
     }
 
     // Finalize the streamed message
-    if (streamId && accumulated) {
+    if (streamId) {
       await (
         channel as {
           finalizeStreamingMessage?: (
@@ -2037,6 +2101,12 @@ export class Orchestrator {
           autoResponse = "Plan approved by user. Proceed with execution. (auto-approved — autonomous mode)";
         }
         results.push({ toolCallId: tc.id, content: autoResponse, isError: false });
+        continue;
+      }
+
+      const readOnlyCheck = checkReadOnlyBlock(tc.name, this.readOnly);
+      if (!readOnlyCheck.allowed) {
+        results.push(createReadOnlyToolStub(tc.name, tc.id));
         continue;
       }
 
@@ -2114,6 +2184,26 @@ export class Orchestrator {
 
   private isWriteOperation(toolName: string): boolean {
     return WRITE_OPERATIONS.has(toolName);
+  }
+
+  private registerTool(tool: ITool): void {
+    const readOnlyCheck = checkReadOnlyBlock(tool.name, this.readOnly);
+    if (!readOnlyCheck.allowed) {
+      return;
+    }
+
+    this.tools.set(tool.name, tool);
+    const def = {
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.inputSchema as import("../types/index.js").JsonObject,
+    };
+    const existingIdx = this.toolDefinitions.findIndex(td => td.name === tool.name);
+    if (existingIdx >= 0) {
+      this.toolDefinitions[existingIdx] = def;
+    } else {
+      this.toolDefinitions.push(def);
+    }
   }
 
   private async requestWriteConfirmation(

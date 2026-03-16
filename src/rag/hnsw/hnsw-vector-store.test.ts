@@ -7,7 +7,7 @@ beforeAll(() => {
 });
 
 import { join } from "node:path";
-import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { HNSWVectorStore, createHNSWVectorStore } from "./hnsw-vector-store.js";
 import type { VectorEntry, CodeChunk } from "../rag.interface.js";
@@ -301,6 +301,63 @@ describe("HNSWVectorStore", () => {
 
       await newStore.shutdown();
     });
+
+    it("resizes loaded indexes before accepting new inserts", async () => {
+      const limitedDir = join(tempDir, "limited-index");
+      const limitedStore = await createHNSWVectorStore(limitedDir, {
+        dimensions,
+        maxElements: 1,
+        M: 8,
+        efConstruction: 50,
+        efSearch: 32,
+        metric: "cosine",
+        quantization: "none",
+      });
+
+      await limitedStore.upsert([
+        {
+          id: "seed",
+          vector: createRandomVector(dimensions),
+          chunk: createMockChunk("seed", "seed content"),
+          addedAt: Date.now(),
+          accessCount: 0,
+        },
+      ]);
+      await limitedStore.shutdown();
+
+      const metadataPath = join(limitedDir, "metadata.json");
+      const metadata = JSON.parse(readFileSync(metadataPath, "utf-8")) as {
+        config: { maxElements: number };
+      };
+      metadata.config.maxElements = 8;
+      writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
+
+      const reloadedStore = new HNSWVectorStore(limitedDir, {
+        dimensions,
+        maxElements: 8,
+        M: 8,
+        efConstruction: 50,
+        efSearch: 32,
+        metric: "cosine",
+        quantization: "none",
+      });
+
+      await reloadedStore.initialize();
+      await expect(
+        reloadedStore.upsert([
+          {
+            id: "next",
+            vector: createRandomVector(dimensions),
+            chunk: createMockChunk("next", "next content"),
+            addedAt: Date.now(),
+            accessCount: 0,
+          },
+        ]),
+      ).resolves.toBeUndefined();
+      expect(reloadedStore.count()).toBe(2);
+
+      await reloadedStore.shutdown();
+    });
   });
 
   describe("statistics", () => {
@@ -422,5 +479,4 @@ describe("HNSWVectorStore", () => {
     });
   });
 });
-
 

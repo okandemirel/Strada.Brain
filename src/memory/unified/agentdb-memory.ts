@@ -668,7 +668,23 @@ export class AgentDBMemory implements IUnifiedMemory {
           createdAt: Date.now(),
           accessCount: 0,
         });
-        await this.writeMutex.withLock(() => store.upsert([vectorEntry]));
+        try {
+          await this.writeMutex.withLock(() => store.upsert([vectorEntry]));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes("exceeds the specified limit") || message.includes("Index capacity exceeded")) {
+            getLoggerSafe().warn(
+              "[AgentDBMemory] HNSW index capacity mismatch detected, rebuilding index",
+              { error: message, entryId: id as string },
+            );
+            const rebuildResult = await this.rebuildIndex();
+            if (rebuildResult.kind === "err") {
+              return err(rebuildResult.error);
+            }
+          } else {
+            throw error;
+          }
+        }
       } else if (this.hnswStore && embedding.length !== this.config.dimensions) {
         getLoggerSafe().warn(
           `[AgentDB] Skipping entry with mismatched dimensions (got ${embedding.length}, expected ${this.config.dimensions})`,
@@ -1233,12 +1249,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
       // Clear and re-add (mutex-serialized to prevent interleaved writes)
       const store = this.hnswStore;
-      await this.writeMutex.withLock(async () => {
-        for (const entry of entries) {
-          await store.remove([entry.id as string]);
-        }
-        await store.upsertBatch(vectorEntries);
-      });
+      await this.writeMutex.withLock(() => store.replaceAll(vectorEntries));
 
       getLoggerSafe().info("[AgentDBMemory] Index rebuild complete", { count: entries.length });
       return ok(undefined);
@@ -2020,13 +2031,11 @@ export class AgentDBMemory implements IUnifiedMemory {
             "These entries remain in SQLite and will be re-embedded when an embedding provider is available.",
           );
         }
-        if (vectors.length > 0) {
-          const store = this.hnswStore;
-          await this.writeMutex.withLock(() => store.upsert(vectors));
-          getLoggerSafe().info("[AgentDBMemory] Rebuilt HNSW index from SQLite", {
-            count: vectors.length,
-          });
-        }
+        const store = this.hnswStore;
+        await this.writeMutex.withLock(() => store.replaceAll(vectors));
+        getLoggerSafe().info("[AgentDBMemory] Rebuilt HNSW index from SQLite", {
+          count: vectors.length,
+        });
       }
 
       getLoggerSafe().info("[AgentDBMemory] Loaded entries from SQLite", { loaded, skipped });

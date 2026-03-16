@@ -65,6 +65,8 @@ export interface IHNSWVectorStore extends IVectorStore {
   getHNSWStats(): HNSWStats;
   /** Add multiple vectors in a batch (more efficient) */
   upsertBatch(entries: VectorEntry[]): Promise<void>;
+  /** Replace the entire index with the provided entries */
+  replaceAll(entries: VectorEntry[]): Promise<void>;
   /** Search with filter predicate */
   searchFiltered(
     queryVector: number[],
@@ -164,13 +166,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
           await this.migrateFromLegacy(this.storePath);
         } else {
           // Initialize new index
-          this.hnswIndex.initIndex(
-            this.config.maxElements,
-            this.config.M,
-            this.config.efConstruction,
-            this.config.seed ?? 42,
-          );
-          this.hnswIndex.setEf(this.config.efSearch);
+          this.recreateIndex(this.config.maxElements);
 
           getLoggerSafe().info("[HNSWVectorStore] Initialized new index", {
             dimensions: this.config.dimensions,
@@ -294,6 +290,18 @@ export class HNSWVectorStore implements IHNSWVectorStore {
         const index = this.nextIndex - entries.length + i;
         this.quantizedVectors.set(index, quantized[i]!);
       }
+    }
+  }
+
+  async replaceAll(entries: VectorEntry[]): Promise<void> {
+    if (!this.isInitialized) {
+      throw new Error("HNSWVectorStore not initialized");
+    }
+
+    const requiredCapacity = Math.max(this.config.maxElements, entries.length || 1);
+    this.recreateIndex(requiredCapacity);
+    if (entries.length > 0) {
+      await this.upsertBatch(entries);
     }
   }
 
@@ -556,8 +564,16 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
     // Load metadata
     const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
-    const incomingDimensions = this.config.dimensions;
-    this.config = { ...metadata.config, dimensions: incomingDimensions };
+    const configuredAtRuntime = this.config;
+    this.config = {
+      ...metadata.config,
+      ...configuredAtRuntime,
+      dimensions: configuredAtRuntime.dimensions,
+      maxElements: Math.max(
+        configuredAtRuntime.maxElements,
+        Number(metadata.config?.maxElements ?? 0),
+      ),
+    };
     this.nextIndex = metadata.nextIndex;
     this.chunks = new Map(metadata.chunks);
     this.idToIndex = new Map(metadata.idToIndex);
@@ -576,6 +592,15 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     this.hnswIndex = new HierarchicalNSW(spaceName, this.config.dimensions);
     await this.hnswIndex.readIndex(indexPath);
     this.hnswIndex.setEf(this.config.efSearch);
+    this.hnswIndex.resizeIndex(this.config.maxElements);
+
+    if (this.chunks.size === 0 && this.nextIndex > 0) {
+      getLoggerSafe().warn(
+        "[HNSWVectorStore] Loaded stale empty index metadata, recreating empty index",
+        { nextIndex: this.nextIndex, maxElements: this.config.maxElements },
+      );
+      this.recreateIndex(this.config.maxElements);
+    }
 
     getLoggerSafe().info("[HNSWVectorStore] Loaded index from disk", {
       elements: this.chunks.size,
@@ -705,6 +730,28 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     const norm = Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0));
     if (norm === 0) return vector;
     return vector.map((v) => v / norm);
+  }
+
+  private recreateIndex(requiredCapacity: number): void {
+    const normalizedCapacity = Math.max(requiredCapacity, 1);
+    this.config = { ...this.config, maxElements: normalizedCapacity };
+
+    const spaceName = this.config.metric === "cosine" ? "ip" : this.config.metric;
+    this.hnswIndex = new HierarchicalNSW(spaceName, this.config.dimensions);
+    this.hnswIndex.initIndex(
+      normalizedCapacity,
+      this.config.M,
+      this.config.efConstruction,
+      this.config.seed ?? 42,
+    );
+    this.hnswIndex.setEf(this.config.efSearch);
+
+    this.chunks = new Map();
+    this.idToIndex = new Map();
+    this.indexToId = new Map();
+    this.deletedIndices = new Set();
+    this.quantizedVectors = new Map();
+    this.nextIndex = 0;
   }
 }
 

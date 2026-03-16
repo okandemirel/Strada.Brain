@@ -119,6 +119,20 @@ export class KimiProvider extends OpenAIProvider {
    * Override to attach reasoning_content on assistant tool call messages.
    * Kimi K2.5 requires this when thinking mode is active. Omit if empty (Kimi rejects empty string).
    */
+  /**
+   * Kimi K2.5: only stream content to user, NOT reasoning_content (internal thinking).
+   */
+  protected override extractStreamText(delta: Record<string, unknown> | undefined): string | undefined {
+    return (delta?.content as string) || undefined;
+  }
+
+  /**
+   * Kimi K2.5: accumulate reasoning_content separately for tool call echo.
+   */
+  protected override extractStreamReasoning(delta: Record<string, unknown> | undefined): string | undefined {
+    return (delta?.reasoning_content as string) || undefined;
+  }
+
   protected override buildAssistantToolCallMessage(msg: AssistantMessage): OpenAIMessage {
     const reasoning = msg.tool_calls
       ?.find(tc => tc.providerMetadata?.reasoning_content)
