@@ -38,6 +38,8 @@ const PREFIX_COMMANDS: Record<string, TaskCommand> = {
   "/arka-plan": "daemon",
   "/agent": "agent",
   "/ajan": "agent",
+  "/routing": "routing",
+  "/yonlendirme": "routing",
 };
 
 // ─── Keyword Patterns (bilingual TR/EN) ──────────────────────────────────────────

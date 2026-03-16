@@ -166,6 +166,24 @@ export class ProviderRouter {
   }
 
   /**
+   * Get the current preset name (for diagnostics / /routing command).
+   */
+  getPreset(): string {
+    // Reverse-lookup: find which preset matches current weights
+    for (const [name, weights] of Object.entries(ROUTING_PRESETS)) {
+      if (
+        weights.costWeight === this.weights.costWeight &&
+        weights.capabilityWeight === this.weights.capabilityWeight &&
+        weights.speedWeight === this.weights.speedWeight &&
+        weights.diversityWeight === this.weights.diversityWeight
+      ) {
+        return name;
+      }
+    }
+    return "custom";
+  }
+
+  /**
    * Get the current preset weights (for testing / diagnostics).
    */
   getWeights(): RoutingWeights {

@@ -13,6 +13,14 @@ import type { ProviderManager } from "../agents/providers/provider-manager.js";
 import type { DMPolicy } from "../security/dm-policy.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "../agents/soul/index.js";
+import type { RoutingDecision } from "../agent-core/routing/routing-types.js";
+
+/** Structural interface for ProviderRouter to avoid circular dependency */
+interface ProviderRouterRef {
+  getPreset(): string;
+  setPreset(p: string): void;
+  getRecentDecisions(n: number): RoutingDecision[];
+}
 
 /** Structural interface for HeartbeatLoop to avoid circular dependency */
 interface HeartbeatLoopRef {
@@ -24,6 +32,8 @@ interface HeartbeatLoopRef {
 }
 
 export class CommandHandler {
+  private providerRouter?: ProviderRouterRef;
+
   constructor(
     private readonly taskManager: TaskManager,
     private readonly channel: IChannelSender,
@@ -37,6 +47,11 @@ export class CommandHandler {
   /** Set HeartbeatLoop reference for daemon control (set after construction due to init order) */
   setHeartbeatLoop(loop: HeartbeatLoopRef): void {
     this.heartbeatLoopRef = loop;
+  }
+
+  /** Set ProviderRouter reference for /routing command (set after construction due to init order) */
+  setProviderRouter(router: ProviderRouterRef): void {
+    this.providerRouter = router;
   }
 
   async handle(chatId: string, command: TaskCommand, args: string[]): Promise<void> {
@@ -79,6 +94,9 @@ export class CommandHandler {
         break;
       case "agent":
         await this.handleAgent(chatId, args);
+        break;
+      case "routing":
+        await this.handleRouting(chatId, args);
         break;
     }
   }
@@ -231,7 +249,13 @@ export class CommandHandler {
       "",
       "`/agent` - Show agent core status",
       "",
-      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /ajan, /model listele, /model bilgi, /model sıfırla",
+      "*Routing*",
+      "",
+      "`/routing` - Show routing status",
+      "`/routing preset <name>` - Switch routing preset (budget/balanced/performance)",
+      "`/routing info` - Show recent routing decisions",
+      "",
+      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /ajan, /yonlendirme, /model listele, /model bilgi, /model sıfırla",
       "",
       "Send any other message to start a new background task.",
     ].join("\n");
@@ -684,6 +708,53 @@ export class CommandHandler {
     }
 
     await this.channel.sendText(chatId, "Usage: /agent");
+  }
+
+  private async handleRouting(chatId: string, args: string[]): Promise<void> {
+    const subcommand = args[0]?.toLowerCase();
+
+    // No args → show status
+    if (!subcommand || subcommand === "status") {
+      const preset = this.providerRouter?.getPreset?.() ?? "balanced";
+      const available = this.providerManager?.listAvailable() ?? [];
+      await this.channel.sendMarkdown(
+        chatId,
+        `*Routing Status*\n\n` +
+        `Preset: \`${preset}\`\n` +
+        `Available Providers: ${available.length}\n` +
+        `Phase Switching: ${available.length > 1 ? "Enabled" : "N/A (single provider)"}\n\n` +
+        `Use \`/routing preset <budget|balanced|performance>\` to change.`,
+      );
+      return;
+    }
+
+    // preset <name>
+    if (subcommand === "preset") {
+      const preset = args[1]?.toLowerCase();
+      if (!preset || !["budget", "balanced", "performance"].includes(preset)) {
+        await this.channel.sendText(chatId, "Usage: /routing preset <budget|balanced|performance>");
+        return;
+      }
+      this.providerRouter?.setPreset?.(preset as "budget" | "balanced" | "performance");
+      await this.channel.sendText(chatId, `Routing preset changed to: ${preset}`);
+      return;
+    }
+
+    // info → recent decisions
+    if (subcommand === "info") {
+      const decisions = this.providerRouter?.getRecentDecisions?.(10) ?? [];
+      if (decisions.length === 0) {
+        await this.channel.sendText(chatId, "No routing decisions recorded yet.");
+        return;
+      }
+      const lines = decisions.map(d =>
+        `\`${d.task.type}\` → \`${d.provider}\` (${d.reason})`
+      );
+      await this.channel.sendMarkdown(chatId, `*Recent Routing Decisions*\n\n${lines.join("\n")}`);
+      return;
+    }
+
+    await this.channel.sendText(chatId, "Usage: /routing | /routing preset <name> | /routing info");
   }
 
   // ─── Formatting ─────────────────────────────────────────────────────────────
