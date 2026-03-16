@@ -238,6 +238,8 @@ export class Orchestrator {
   private readonly userProfileStore?: UserProfileStore;
   /** Deterministic onboarding state per chat (tracks which question we're waiting for). */
   private readonly onboardingState = new Map<string, { step: 'awaiting_name' | 'awaiting_lang' | 'awaiting_style' | 'awaiting_detail'; name?: string; lang?: string; style?: string }>();
+  /** Multi-provider routing: selects best provider per task/phase. */
+  private readonly providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -266,6 +268,7 @@ export class Orchestrator {
     dmPolicy?: DMPolicy;
     sessionSummarizer?: SessionSummarizer;
     userProfileStore?: UserProfileStore;
+    providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -288,6 +291,7 @@ export class Orchestrator {
     this.dmPolicy = opts.dmPolicy ?? new DMPolicy(opts.channel, opts.dmPolicyConfig);
     this.sessionSummarizer = opts.sessionSummarizer;
     this.userProfileStore = opts.userProfileStore;
+    this.providerRouter = opts.providerRouter;
 
     // Build tool registry
     this.tools = new Map();
@@ -585,7 +589,7 @@ export class Orchestrator {
   async runBackgroundTask(prompt: string, options: BackgroundTaskOptions): Promise<string> {
     const logger = getLogger();
     const { signal, onProgress, chatId } = options;
-    const provider = this.providerManager.getProvider(chatId);
+    let currentProvider = this.providerManager.getProvider(chatId);
 
     // ─── Metrics: start recording ────────────────────────────────────
     const taskType = options.parentMetricId ? "subtask" as const : "background" as const;
@@ -598,7 +602,7 @@ export class Orchestrator {
     // ────────────────────────────────────────────────────────────────
 
     // Build user content with vision support if attachments present
-    const supportsVision = provider.capabilities.vision;
+    const supportsVision = currentProvider.capabilities.vision;
     const userContent = buildUserContent(prompt || DEFAULT_IMAGE_PROMPT, options.attachments, supportsVision);
     const session: Session = {
       messages: [{ role: "user", content: userContent }],
@@ -722,7 +726,22 @@ export class Orchestrator {
         }
         // ────────────────────────────────────────────────────────────────
 
-        const response = await provider.chat(
+        // Phase-aware provider routing (multi-provider orchestration)
+        if (this.providerRouter) {
+          try {
+            const { TaskClassifier } = await import("../agent-core/routing/task-classifier.js");
+            const taskClass = new TaskClassifier().classify(prompt);
+            const routed = this.providerRouter.resolve(taskClass, bgAgentState.phase);
+            if (routed) {
+              const resolved = this.providerManager.getProviderByName(routed.provider);
+              if (resolved) currentProvider = resolved;
+            }
+          } catch {
+            // Routing failure is non-fatal — use default provider
+          }
+        }
+
+        const response = await currentProvider.chat(
           activePrompt,
           session.messages,
           this.toolDefinitions,
@@ -737,8 +756,8 @@ export class Orchestrator {
         });
         const bgInputTokens = response.usage?.inputTokens ?? 0;
         const bgOutputTokens = response.usage?.outputTokens ?? 0;
-        this.metrics?.recordTokenUsage(bgInputTokens, bgOutputTokens, provider.name);
-        this.rateLimiter?.recordTokenUsage(bgInputTokens, bgOutputTokens, provider.name);
+        this.metrics?.recordTokenUsage(bgInputTokens, bgOutputTokens, currentProvider.name);
+        this.rateLimiter?.recordTokenUsage(bgInputTokens, bgOutputTokens, currentProvider.name);
 
         // ─── PAOR: Handle REFLECTING phase response ─────────────────────
         if (bgAgentState.phase === AgentPhase.REFLECTING) {
@@ -1383,7 +1402,7 @@ export class Orchestrator {
    */
   private async runAgentLoop(chatId: string, session: Session, channelType?: string): Promise<void> {
     const logger = getLogger();
-    const provider = this.providerManager.getProvider(chatId);
+    let currentProvider = this.providerManager.getProvider(chatId);
 
     // Load user profile once for the entire agent loop
     const profile = this.userProfileStore?.getProfile(chatId) ?? null;
@@ -1472,8 +1491,8 @@ export class Orchestrator {
 
     const canStream =
       this.streamingEnabled &&
-      "chatStream" in provider &&
-      typeof provider.chatStream === "function" &&
+      "chatStream" in currentProvider &&
+      typeof currentProvider.chatStream === "function" &&
       "startStreamingMessage" in this.channel &&
       typeof this.channel.startStreamingMessage === "function";
 
@@ -1498,11 +1517,26 @@ export class Orchestrator {
       }
       // ────────────────────────────────────────────────────────────────
 
+      // Phase-aware provider routing (multi-provider orchestration)
+      if (this.providerRouter) {
+        try {
+          const { TaskClassifier } = await import("../agent-core/routing/task-classifier.js");
+          const taskClass = new TaskClassifier().classify(lastUserMessage);
+          const routed = this.providerRouter.resolve(taskClass, agentState.phase);
+          if (routed) {
+            const resolved = this.providerManager.getProviderByName(routed.provider);
+            if (resolved) currentProvider = resolved;
+          }
+        } catch {
+          // Routing failure is non-fatal — use default provider
+        }
+      }
+
       let response;
       if (canStream) {
-        response = await this.streamResponse(chatId, activePrompt, session, provider);
+        response = await this.streamResponse(chatId, activePrompt, session, currentProvider);
       } else {
-        response = await provider.chat(activePrompt, session.messages, this.toolDefinitions);
+        response = await currentProvider.chat(activePrompt, session.messages, this.toolDefinitions);
       }
 
       const inputTokens = response.usage?.inputTokens ?? 0;
@@ -1516,8 +1550,8 @@ export class Orchestrator {
         outputTokens,
         streamed: canStream,
       });
-      this.metrics?.recordTokenUsage(inputTokens, outputTokens, provider.name);
-      this.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, provider.name);
+      this.metrics?.recordTokenUsage(inputTokens, outputTokens, currentProvider.name);
+      this.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, currentProvider.name);
 
       // ─── PAOR: Handle REFLECTING phase response ─────────────────────
       if (agentState.phase === AgentPhase.REFLECTING) {

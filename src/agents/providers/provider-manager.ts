@@ -126,10 +126,11 @@ export class ProviderManager {
   }
 
   /**
-   * Get a provider instance by name (for model listing).
+   * Get a provider instance by name. Used by ProviderRouter to
+   * materialize a routing decision into an IAIProvider.
    * Returns null if provider cannot be created.
    */
-  private getProviderByName(name: string): IAIProvider | null {
+  getProviderByName(name: string): IAIProvider | null {
     const cacheKey = `__listing__:${name}`;
     const cached = this.providerCache.get(cacheKey);
     if (cached) return cached;

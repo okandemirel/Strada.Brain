@@ -470,6 +470,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // use the same approval/confirmation state per session.
   const dmPolicy = new DMPolicy(channel);
 
+  // Multi-provider routing (if 2+ providers available)
+  let providerRouter: import("../agent-core/routing/provider-router.js").ProviderRouter | undefined;
+  try {
+    const { ProviderRouter } = await import("../agent-core/routing/provider-router.js");
+    providerRouter = new ProviderRouter(providerManager, "balanced");
+    logger.info("ProviderRouter initialized", { preset: "balanced" });
+  } catch {
+    // Non-fatal — routing disabled
+  }
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -497,6 +507,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     dmPolicy,
     sessionSummarizer,
     userProfileStore,
+    providerRouter,
   });
 
   // TODO: Initialize ModelIntelligenceService here for self-updating model data
