@@ -16,6 +16,8 @@ import { PriorityScorer } from "./priority-scorer.js";
 import { buildReasoningPrompt, parseReasoningResponse } from "./reasoning-prompt.js";
 import type { AgentCoreConfig, BudgetTrackerRef, InstinctRetrieverRef } from "./agent-core-types.js";
 import { DEFAULT_AGENT_CORE_CONFIG } from "./agent-core-types.js";
+import type { ProviderRouter } from "./routing/provider-router.js";
+import { TaskClassifier } from "./routing/task-classifier.js";
 
 export class AgentCore {
   static readonly AGENT_CHAT_ID = "agent-core";
@@ -25,6 +27,11 @@ export class AgentCore {
   private lastReasoningMs = Date.now(); // Init to now to prevent immediate LLM call on restart
   private readonly config: AgentCoreConfig;
   private readonly logger = getLogger();
+  /** Multi-provider routing: selects best provider per task. */
+  private readonly providerRouter?: ProviderRouter;
+  private readonly taskClassifier = new TaskClassifier();
+  /** ProviderManager reference — needed to materialize routing decisions. */
+  private readonly providerManagerRef?: { getProviderByName(name: string): IAIProvider | null };
 
   constructor(
     private readonly observationEngine: ObservationEngine,
@@ -35,8 +42,12 @@ export class AgentCore {
     private readonly budgetTracker: BudgetTrackerRef,
     private readonly instinctRetriever?: InstinctRetrieverRef,
     config?: Partial<AgentCoreConfig>,
+    providerRouter?: ProviderRouter,
+    providerManagerRef?: { getProviderByName(name: string): IAIProvider | null },
   ) {
     this.config = { ...DEFAULT_AGENT_CORE_CONFIG, ...config };
+    this.providerRouter = providerRouter;
+    this.providerManagerRef = providerManagerRef;
   }
 
   /**
@@ -106,8 +117,23 @@ export class AgentCore {
         recentHistory: this.observationEngine.getHistory(5),
       });
 
+      // Task-aware provider routing
+      let activeProvider: IAIProvider = this.provider;
+      if (this.providerRouter && this.providerManagerRef && ranked.length > 0) {
+        try {
+          const taskClass = this.taskClassifier.classify(ranked[0]!.summary);
+          const routed = this.providerRouter.resolve(taskClass);
+          if (routed) {
+            const resolved = this.providerManagerRef.getProviderByName(routed.provider);
+            if (resolved) activeProvider = resolved;
+          }
+        } catch {
+          // Non-fatal — use default provider
+        }
+      }
+
       // Reasoning prompt goes as user message, not system prompt
-      const response = await this.provider.chat(
+      const response = await activeProvider.chat(
         "You are an autonomous agent that observes the environment and decides what to do.",
         [{ role: "user" as const, content: prompt }],
         [],

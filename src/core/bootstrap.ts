@@ -770,6 +770,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         channel,
         budgetTrackerInstance,
         instinctRetriever,
+        undefined, // config — use defaults
+        providerRouter,
+        providerRouter ? providerManager : undefined,
       );
 
       heartbeatLoop.setAgentCore(agentCoreInstance);
