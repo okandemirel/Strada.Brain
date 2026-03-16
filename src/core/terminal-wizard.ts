@@ -183,9 +183,12 @@ function openBrowser(url: string): void {
 export async function runTerminalWizard(): Promise<void> {
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
+  let intentionalClose = false;
   rl.on("close", () => {
-    console.log("\n\nSetup cancelled.");
-    process.exit(0);
+    if (!intentionalClose) {
+      console.log("\n\nSetup cancelled.");
+      process.exit(0);
+    }
   });
 
   try {
@@ -199,6 +202,7 @@ export async function runTerminalWizard(): Promise<void> {
     const method = await rl.question("  Choose [1/2] (default: 1): ");
 
     if (method.trim() === "2") {
+      intentionalClose = true;
       rl.close();
       const port = process.env["SETUP_WIZARD_PORT"]
         ? parseInt(process.env["SETUP_WIZARD_PORT"], 10)
@@ -245,6 +249,7 @@ export async function runTerminalWizard(): Promise<void> {
       const overwrite = await rl.question("\n\u26A0 .env already exists. Overwrite? [y/N]: ");
       if (overwrite.trim().toLowerCase() !== "y") {
         console.log("\nSetup cancelled. Existing .env preserved.");
+        intentionalClose = true;
         rl.close();
         return;
       }
@@ -261,8 +266,10 @@ export async function runTerminalWizard(): Promise<void> {
     fs.writeFileSync(envPath, envContent, { encoding: "utf-8", mode: 0o600 });
 
     console.log(`\n\u2705 .env created! Run \`strada start\` to begin.\n`);
+    intentionalClose = true;
     rl.close();
   } catch (err) {
+    intentionalClose = true;
     rl.close();
     if ((err as Error).message === "Maximum retries exceeded.") {
       console.error("\nToo many invalid attempts. Please try again.");
