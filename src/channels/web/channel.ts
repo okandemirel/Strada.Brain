@@ -574,6 +574,7 @@ export class WebChannel
     "/api/memory",
     "/api/providers/intelligence",
     "/api/providers/capabilities",
+    "/api/providers/switch",
     "/api/models/refresh",
     "/api/daemon/start",
     "/api/daemon/stop",

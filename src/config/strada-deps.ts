@@ -46,7 +46,9 @@ export function checkStradaDeps(unityProjectPath: string): StradaDepsStatus {
   const warnings: string[] = [];
   const packagesDir = join(unityProjectPath, "Packages");
 
-  if (!existsSync(packagesDir) || !statSync(packagesDir).isDirectory()) {
+  let packagesExists = false;
+  try { packagesExists = existsSync(packagesDir) && statSync(packagesDir).isDirectory(); } catch { /* TOCTOU safe */ }
+  if (!packagesExists) {
     warnings.push("Packages/ directory not found in Unity project");
     const mcp = detectStradaMcp();
     return {
@@ -181,9 +183,11 @@ function readPackageVersion(packageJsonPath: string): string | null {
 function findPackage(packagesDir: string, names: readonly string[]): string | null {
   for (const name of names) {
     const candidate = join(packagesDir, name);
-    if (existsSync(candidate) && statSync(candidate).isDirectory()) {
-      return candidate;
-    }
+    try {
+      if (existsSync(candidate) && statSync(candidate).isDirectory()) {
+        return candidate;
+      }
+    } catch { /* TOCTOU: directory removed between existsSync and statSync */ }
   }
   return null;
 }
