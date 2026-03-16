@@ -160,6 +160,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     logger.warn(warning);
   }
 
+  // Log Strada.MCP status
+  if (stradaDeps.mcpInstalled) {
+    logger.info("Strada.MCP found", { path: stradaDeps.mcpPath, version: stradaDeps.mcpVersion });
+  } else {
+    logger.info("Strada.MCP not found (optional — install for MCP server capabilities)");
+  }
+
   // Drift validation: compare Brain's API knowledge against Core source (fire-and-forget)
   if (stradaDeps.coreInstalled && stradaDeps.corePath) {
     const corePath = stradaDeps.corePath;
@@ -944,6 +951,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           createDelegationTools(delegationTypes, delegationManager!, parentAgentId, depth, config.delegation.maxDepth),
         );
 
+        // Wire TierRouter into ProviderRouter as facade sub-component
+        if (providerRouter) {
+          providerRouter.setTierRouter(tierRouter);
+        }
+
         // Store in DaemonContext for CLI/dashboard access
         daemonContext!.delegationManager = delegationManager;
         daemonContext!.delegationLog = delegationLog;
@@ -1253,7 +1265,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         },
       },
       userProfileStore,
+      stradaDeps,
     });
+  }
+
+  // Wire provider router to dashboard for /api/agent-activity and /api/routing/preset
+  if (dashboard && providerRouter) {
+    dashboard.setProviderRouter(providerRouter);
   }
 
   // Return result with shutdown function

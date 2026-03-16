@@ -31,6 +31,7 @@ import {
   DEFAULT_RESILIENCE_CONFIG,
 } from "../learning/chains/chain-types.js";
 import type { ChainResilienceConfig } from "../learning/chains/chain-types.js";
+import type { StradaDepsStatus } from "../config/strada-deps.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -142,6 +143,13 @@ const SYSTEM_PROFILES = new Set(["default", "casual", "formal", "minimal"]);
 /** Regex for valid profile names: alphanumeric, dashes, underscores. */
 const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
+/** Structural interface for ProviderRouter methods used by dashboard /api/agent-activity endpoint */
+interface DashboardProviderRouter {
+  getRecentDecisions(n: number): Array<{ provider: string; reason: string; task: { type: string; complexity: string; criticality: string }; timestamp: number }>;
+  getPreset(): string;
+  setPreset(preset: "budget" | "balanced" | "performance"): void;
+}
+
 /** Structural interface for provider management used by dashboard /api/providers endpoints */
 interface DashboardProviderManager {
   listAvailable(): { name: string; configured: boolean; models?: string[] }[];
@@ -238,6 +246,9 @@ export class DashboardServer {
   private deploymentExecutor?: DashboardDeploymentExecutor;
   private readinessChecker?: DashboardReadinessChecker;
 
+  // Strada dependency status
+  private stradaDeps?: StradaDepsStatus;
+
   // Extended dashboard services (new endpoints)
   private toolRegistry?: DashboardToolRegistry;
   private orchestratorSessions?: DashboardOrchestratorSessions;
@@ -247,6 +258,9 @@ export class DashboardServer {
   // Provider and user profile services (autonomous mode + provider switching)
   private providerManager?: DashboardProviderManager;
   private userProfileStore?: DashboardUserProfileStore;
+
+  // Provider router for agent activity / routing decisions
+  private providerRouter?: DashboardProviderRouter;
 
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
@@ -329,6 +343,7 @@ export class DashboardServer {
     configSnapshot?: () => Record<string, unknown>;
     providerManager?: DashboardProviderManager;
     userProfileStore?: DashboardUserProfileStore;
+    stradaDeps?: StradaDepsStatus;
   }): void {
     this.toolRegistry = services.toolRegistry ?? this.toolRegistry;
     this.orchestratorSessions = services.orchestratorSessions ?? this.orchestratorSessions;
@@ -336,6 +351,15 @@ export class DashboardServer {
     this.configSnapshot = services.configSnapshot ?? this.configSnapshot;
     this.providerManager = services.providerManager ?? this.providerManager;
     this.userProfileStore = services.userProfileStore ?? this.userProfileStore;
+    this.stradaDeps = services.stradaDeps ?? this.stradaDeps;
+  }
+
+  /**
+   * Register provider router for /api/agent-activity and /api/routing/preset endpoints.
+   * Call after ProviderRouter is initialized.
+   */
+  setProviderRouter(router: DashboardProviderRouter): void {
+    this.providerRouter = router;
   }
 
   /**
@@ -874,8 +898,17 @@ export class DashboardServer {
             lastActivityTs: Date.now(),
           };
         }
+        const deps = this.stradaDeps ? {
+          coreInstalled: this.stradaDeps.coreInstalled,
+          corePath: this.stradaDeps.corePath,
+          modulesInstalled: this.stradaDeps.modulesInstalled,
+          modulesPath: this.stradaDeps.modulesPath,
+          mcpInstalled: this.stradaDeps.mcpInstalled,
+          mcpPath: this.stradaDeps.mcpPath,
+          mcpVersion: this.stradaDeps.mcpVersion,
+        } : null;
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ identity }));
+        res.end(JSON.stringify({ identity, deps }));
         return;
       }
 
@@ -1265,6 +1298,38 @@ export class DashboardServer {
         }).catch((err) => {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+        return;
+      }
+
+      // GET /api/agent-activity -- Recent routing decisions and agent activity
+      if (req.method === "GET" && (url === "/api/agent-activity" || url.startsWith("/api/agent-activity?"))) {
+        const routingDecisions = this.providerRouter?.getRecentDecisions(20) ?? [];
+        const preset = this.providerRouter?.getPreset() ?? "balanced";
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ routing: routingDecisions, preset }));
+        return;
+      }
+
+      // POST /api/routing/preset -- Change routing preset at runtime
+      if (req.method === "POST" && url === "/api/routing/preset") {
+        if (!this.providerRouter) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Provider router not available" }));
+          return;
+        }
+        void this.readJsonBody<{ preset?: string }>(req, res).then((parsed) => {
+          if (!parsed) return;
+          const preset = typeof parsed.preset === "string" ? parsed.preset.trim() : "";
+          const VALID_PRESETS = new Set(["budget", "balanced", "performance"]);
+          if (!VALID_PRESETS.has(preset)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid preset. Must be one of: budget, balanced, performance" }));
+            return;
+          }
+          this.providerRouter!.setPreset(preset as "budget" | "balanced" | "performance");
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true, preset }));
         });
         return;
       }
