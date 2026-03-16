@@ -20,6 +20,15 @@ export function buildPlanningPrompt(
     "",
     "Provide a clear, step-by-step PLAN with numbered steps.",
     "Each step should be a concrete, actionable item.",
+    "",
+    "### Verification Protocol",
+    "- After editing compilable files (.cs, .csproj, .sln), run dotnet_build to verify.",
+    "- After bug fixes, run dotnet_test to confirm the fix.",
+    "- NEVER declare done without verifying compilation succeeds.",
+    "",
+    "### Error Recovery Order",
+    "- When build/test fails, fix in dependency order: missing types → undefined symbols → type mismatches → logic errors.",
+    "- After each fix, rebuild to verify. If stuck after 3 attempts, try a fundamentally different approach.",
   ];
 
   if (learnedInsights && learnedInsights.length > 0) {
