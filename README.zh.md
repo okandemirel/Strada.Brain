@@ -52,18 +52,25 @@ Strada.Brain 是一个通过聊天频道与您对话的 AI 代理。您描述您
 ### 1. 安装
 
 ```bash
+# 全局安装（推荐）
+npm install -g strada-brain
+
+# 或从源代码克隆
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
 ```
 
-### 2. 配置
+### 2. 设置
 
 ```bash
-cp .env.example .env
+# 交互式设置向导（终端或 Web 浏览器）
+strada setup
 ```
 
-打开 `.env` 文件，至少设置以下内容：
+向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。选择**终端**进行快速设置，或选择 **Web 浏览器**进行完整配置 UI。
+
+或者，手动创建 `.env`：
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...      # 您的 Claude API 密钥
@@ -74,27 +81,37 @@ JWT_SECRET=<使用以下命令生成: openssl rand -hex 64>
 ### 3. 运行
 
 ```bash
-# Web 频道（默认）- 设置向导在 localhost:3000 打开
-# 如果不存在 .env 文件，向导将指导您完成初始设置
-npm start
-
-# 或显式使用 Web 频道
-npm run dev -- start --channel web
+# 使用默认 Web 频道启动
+strada start
 
 # 交互式 CLI 模式（最快的测试方式）
-npm run dev -- cli
+strada start --channel cli
 
 # 守护进程模式（24/7 自主运行，支持主动触发器）
-npm run dev -- daemon --channel web
+strada start --channel web --daemon
 
-# 或通过其他聊天频道
-npm run dev -- start --channel telegram
-npm run dev -- start --channel discord
-npm run dev -- start --channel slack
-npm run dev -- start --channel whatsapp
+# 其他聊天频道
+strada start --channel telegram
+strada start --channel discord
+strada start --channel slack
+strada start --channel whatsapp
+
+# 带自动重启的始终监督
+strada supervise --channel web
 ```
 
-### 4. 与它对话
+### 4. CLI 命令
+
+```bash
+strada setup              # 交互式设置向导
+strada start              # 启动代理
+strada supervise          # 带自动重启的监督
+strada update             # 检查并应用更新
+strada update --check     # 检查更新而不应用
+strada version-info       # 显示版本、安装方法、更新状态
+```
+
+### 5. 与它对话
 
 运行后，通过您配置的频道发送消息：
 
@@ -106,6 +123,18 @@ npm run dev -- start --channel whatsapp
 ```
 
 **Web 频道：** 无需终端——通过 `localhost:3000` 的 Web 仪表板进行交互。
+
+### 6. 自动更新
+
+Strada.Brain 每天自动检查更新，在空闲时应用更新。它会检测安装方法（npm 全局、npm 本地或 git 克隆）并使用相应的更新策略。
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `AUTO_UPDATE_ENABLED` | `true` | 启用/禁用自动更新 |
+| `AUTO_UPDATE_INTERVAL_HOURS` | `24` | 检查频率（小时） |
+| `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | 应用更新前的空闲分钟数 |
+| `AUTO_UPDATE_CHANNEL` | `stable` | npm 分发标签：`stable` 或 `latest` |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | 空闲时更新后自动重启 |
 
 ---
 
