@@ -52,6 +52,10 @@ Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosy
 ### 1. Kurulum
 
 ```bash
+# Global kurulum (onerilen)
+npm install -g strada-brain
+
+# Veya kaynaktan klonlayın
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
@@ -60,10 +64,13 @@ npm install
 ### 2. Yapilandirma
 
 ```bash
-cp .env.example .env
+# Etkilesimli kurulum sihirbazi (terminal veya web tarayicisi)
+strada setup
 ```
 
-`.env` dosyasini acin ve en azindan asagidakileri ayarlayin:
+Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. Hizli kurulum icin **Terminal** secin veya tam ayarlar UI'si icin **Web Tarayicisi** secin.
+
+Alternatif olarak, `.env` dosyasini manuel olarak olusturun:
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...      # Claude API anahtariniz
@@ -74,27 +81,37 @@ JWT_SECRET=<su sekilde olusturun: openssl rand -hex 64>
 ### 3. Calistirma
 
 ```bash
-# Web kanali (varsayilan) - kurulum sihirbazi localhost:3000 adresinde acilir
-# .env dosyasi yoksa, sihirbaz sizi ilk kurulumda yonlendirir
-npm start
-
-# Veya web kanali ile acikca
-npm run dev -- start --channel web
+# Varsayilan web kanali ile baslatin
+strada start
 
 # Etkilesimli CLI modu (test etmenin en hizli yolu)
-npm run dev -- cli
+strada start --channel cli
 
 # Daemon modu (proaktif tetikleyicilerle 7/24 otonom calisma)
-npm run dev -- daemon --channel web
+strada start --channel web --daemon
 
-# Veya diger sohbet kanallari ile
-npm run dev -- start --channel telegram
-npm run dev -- start --channel discord
-npm run dev -- start --channel slack
-npm run dev -- start --channel whatsapp
+# Diger sohbet kanallari ile
+strada start --channel telegram
+strada start --channel discord
+strada start --channel slack
+strada start --channel whatsapp
+
+# Otomatik yeniden baslatma destekli her zaman acik denetcisi
+strada supervise --channel web
 ```
 
-### 4. Konusmaya Baslayin
+### 4. CLI Komutlari
+
+```bash
+strada setup              # Etkilesimli kurulum sihirbazi
+strada start              # Ajani baslat
+strada supervise          # Otomatik yeniden baslatma destegi ile calistir
+strada update             # Guncellemeleri kontrol et ve uygula
+strada update --check     # Guncellemeleri kontrol et (uygula)
+strada version-info       # Surum, kurulum yontemi ve guncelleme durumunu goster
+```
+
+### 5. Konusmaya Baslayin
 
 Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 
@@ -106,6 +123,18 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 ```
 
 **Web kanali:** Terminal gerekmez -- `localhost:3000` adresindeki web paneli uzerinden etkilesim kurun.
+
+### 6. Oto-Guncelleme
+
+Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugunda uygular. Kurulum yontemini (npm global, npm yerel veya git klonu) tespit eder ve uygun guncelleme stratejisini kullanir.
+
+| Degisken | Varsayilan | Aciklama |
+|----------|---------|-------------|
+| `AUTO_UPDATE_ENABLED` | `true` | Oto-guncellemeyi etkinlestir/devre disi birak |
+| `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Kontrol sikliği (saatler) |
+| `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Guncellemeleri uygulamadan onceki bekleme suresi (dakikalar) |
+| `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` veya `latest` |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | Guncelleme sonrasi acil oldugunda otomatik yeniden baslat |
 
 ---
 
