@@ -46,7 +46,7 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 ### Prerequisites
 
 - **Node.js 20+** and npm
-- An **Anthropic API key** (Claude) -- other providers are optional
+- At least one supported AI provider configured (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), or an `ollama`-only `PROVIDER_CHAIN`
 - A **Unity project** with Strada.Core framework (the path you give the agent)
 
 ### 1. Install
@@ -74,7 +74,7 @@ The wizard asks for your Unity project path, AI provider API key, default channe
 Alternatively, create `.env` manually:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...      # Your Claude API key
+ANTHROPIC_API_KEY=sk-ant-...      # Or use another supported provider key instead
 UNITY_PROJECT_PATH=/path/to/your/UnityProject  # Must contain Assets/
 JWT_SECRET=<generate with: openssl rand -hex 64>
 ```
@@ -135,6 +135,7 @@ Strada.Brain automatically checks for updates daily and applies them when idle. 
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Check frequency (hours) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutes idle before applying update |
 | `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` or `latest` |
+| `AUTO_UPDATE_NOTIFY` | `true` | Send update notifications when checks or installs occur |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Auto-restart after update when idle |
 
 ---
@@ -315,7 +316,7 @@ Multiple agent instances can run concurrently with per-channel session isolation
 **AgentManager:**
 - Creates and manages agent instances per channel/session
 - Session isolation ensures agents on different channels do not interfere with each other
-- Configurable via `MULTI_AGENT_ENABLED` (opt-in, disabled by default -- identical to single-agent behavior when off)
+- Enabled by default; set `MULTI_AGENT_ENABLED=false` to keep the legacy single-agent path
 
 **AgentBudgetTracker:**
 - Per-agent token and cost tracking with configurable budget limits
@@ -325,7 +326,7 @@ Multiple agent instances can run concurrently with per-channel session isolation
 **AgentRegistry:**
 - Central registry of all active agent instances
 - Supports health checks and graceful shutdown
-- Multi-agent is fully opt-in: when disabled, the system operates identically to v2.0
+- When disabled, the system operates identically to the legacy single-agent path
 
 ---
 
@@ -560,6 +561,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `MATRIX_USER_ID` | Bot user ID |
 | `MATRIX_ALLOWED_USER_IDS` | Optional comma-separated Matrix user IDs allowed to talk to the bot |
 | `MATRIX_ALLOWED_ROOM_IDS` | Optional comma-separated Matrix room IDs allowed to deliver messages |
+| `MATRIX_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound Matrix traffic without user/room allowlists |
 
 **IRC:**
 | Variable | Description |
@@ -568,6 +570,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `IRC_NICK` | Bot nick |
 | `IRC_CHANNELS` | Comma-separated channels to join |
 | `IRC_ALLOWED_USERS` | Optional comma-separated IRC nicknames allowed to trigger the bot |
+| `IRC_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound IRC traffic without a user allowlist |
 
 **Teams:**
 | Variable | Description |
@@ -575,6 +578,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `TEAMS_APP_ID` | Microsoft Teams app ID |
 | `TEAMS_APP_PASSWORD` | Microsoft Teams app password |
 | `TEAMS_ALLOWED_USER_IDS` | Optional comma-separated Teams user IDs allowed to message the bot |
+| `TEAMS_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound Teams traffic without a user allowlist |
 
 ### Features
 
@@ -585,7 +589,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `EMBEDDING_DIMENSIONS` | (provider default) | Output vector dimensions (Matryoshka: 128-3072 for Gemini/OpenAI) |
 | `MEMORY_ENABLED` | `true` | Enable persistent conversation memory |
 | `MEMORY_DB_PATH` | `.strada-memory` | Directory for memory database files |
-| `WEB_CHANNEL_PORT` | `3000` | Web dashboard port |
+| `WEB_CHANNEL_PORT` | `3000` | Web channel UI port |
 | `DASHBOARD_ENABLED` | `false` | Enable HTTP monitoring dashboard |
 | `DASHBOARD_PORT` | `3100` | Dashboard server port |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Enable WebSocket real-time dashboard |
@@ -595,7 +599,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | Max time to wait for a streaming response to start before treating it as stalled |
 | `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | Max gap between streaming chunks before treating an in-progress response as stalled |
 | `ENABLE_PROMETHEUS` | `false` | Enable Prometheus metrics endpoint (port 9090) |
-| `MULTI_AGENT_ENABLED` | `false` | Enable multi-agent orchestration |
+| `MULTI_AGENT_ENABLED` | `true` | Enable multi-agent orchestration; set to `false` for legacy single-agent mode |
 | `TASK_MAX_CONCURRENT` | `3` | Maximum number of background tasks that can run at once across distinct conversations |
 | `TASK_MESSAGE_BURST_WINDOW_MS` | `350` | Time window for merging rapid consecutive user messages into one ordered task |
 | `TASK_MESSAGE_BURST_MAX_MESSAGES` | `8` | Maximum consecutive messages to merge into a single task burst |
@@ -771,6 +775,9 @@ All channels implement edit-in-place streaming. The agent's response appears pro
 - **Discord**: Deny-all by default. Must set `ALLOWED_DISCORD_USER_IDS` or `ALLOWED_DISCORD_ROLE_IDS`.
 - **Slack**: **Open by default.** If `ALLOWED_SLACK_USER_IDS` is empty, any Slack user can access the bot. Set the allowlist for production.
 - **WhatsApp**: Uses `WHATSAPP_ALLOWED_NUMBERS` allowlist checked locally in the adapter.
+- **Matrix**: Deny-all by default. Set allowlists or `MATRIX_ALLOW_OPEN_ACCESS=true`.
+- **IRC**: Deny-all by default. Set `IRC_ALLOWED_USERS` or `IRC_ALLOW_OPEN_ACCESS=true`.
+- **Teams**: Deny-all by default. Set `TEAMS_ALLOWED_USER_IDS` or `TEAMS_ALLOW_OPEN_ACCESS=true`.
 
 ---
 

@@ -30,18 +30,21 @@ The `Config` type groups settings into nested sub-configs:
 
 | Sub-config | Interface | Key env vars |
 |------------|-----------|-------------|
-| AI providers | top-level fields | `ANTHROPIC_API_KEY` (required), `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, etc. |
+| AI providers | top-level fields | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, etc. At least one key is required unless `PROVIDER_CHAIN` only uses local providers such as `ollama`. |
 | `telegram` | `TelegramConfig` | `TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_IDS` |
 | `discord` | `DiscordConfig` | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` |
 | `slack` | `SlackConfig` | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APP_TOKEN`, `SLACK_SOCKET_MODE` |
 | `security` | `SecurityConfig` | `REQUIRE_EDIT_CONFIRMATION` (default true), `READ_ONLY_MODE` (default false) |
 | `dashboard` | `DashboardConfig` | `DASHBOARD_ENABLED`, `DASHBOARD_PORT` (default 3100) |
-| `websocketDashboard` | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100), `WEBSOCKET_DASHBOARD_AUTH_TOKEN`, `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` |
+| `websocketDashboard` | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100), `WEBSOCKET_DASHBOARD_AUTH_TOKEN`, `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` (`WEBSOCKET_DASHBOARD_AUTH_TOKEN` also protects dashboard APIs when present) |
 | `prometheus` | `PrometheusConfig` | `ENABLE_PROMETHEUS`, `PROMETHEUS_PORT` (default 9090) |
 | `memory` | `MemoryConfig` | `MEMORY_ENABLED` (default true), `MEMORY_DB_PATH` (default `.strada-memory`) |
-| `rag` | `RAGConfig` | `RAG_ENABLED` (default true), `EMBEDDING_PROVIDER` (default `openai`), `RAG_CONTEXT_MAX_TOKENS` (default 4000, range 500..16000) |
+| `rag` | `RAGConfig` | `RAG_ENABLED` (default true), `EMBEDDING_PROVIDER` (default `auto`), `RAG_CONTEXT_MAX_TOKENS` (default 4000, range 500..16000) |
 | `rateLimit` | `RateLimitConfig` | `RATE_LIMIT_ENABLED`, `RATE_LIMIT_MESSAGES_PER_MINUTE`, `RATE_LIMIT_DAILY_BUDGET_USD`, etc. |
 | `web` | Web config | `WEB_CHANNEL_PORT` (default 3000) |
+| `agent` | `AgentConfig` | `MULTI_AGENT_ENABLED` (default true), `AGENT_DEFAULT_BUDGET_USD`, `AGENT_MAX_CONCURRENT`, `AGENT_IDLE_TIMEOUT_MS`, `AGENT_MAX_MEMORY_ENTRIES` |
+| `delegation` | `DelegationConfig` | `TASK_DELEGATION_ENABLED` (default false), `AGENT_MAX_DELEGATION_DEPTH`, `AGENT_MAX_CONCURRENT_DELEGATIONS`, `DELEGATION_TIER_LOCAL`, `DELEGATION_TIER_CHEAP`, `DELEGATION_TIER_STANDARD`, `DELEGATION_TIER_PREMIUM`, `DELEGATION_VERBOSITY`, `DELEGATION_TYPES`, `DELEGATION_MAX_ITERATIONS_PER_TYPE` |
+| `autoUpdate` | auto-update config | `AUTO_UPDATE_ENABLED`, `AUTO_UPDATE_INTERVAL_HOURS`, `AUTO_UPDATE_IDLE_TIMEOUT_MIN`, `AUTO_UPDATE_CHANNEL`, `AUTO_UPDATE_NOTIFY`, `AUTO_UPDATE_AUTO_RESTART` |
 
 - `PROVIDER_CHAIN` - comma-separated provider names for fallback ordering
 - `PLUGIN_DIRS` - comma-separated directory paths for plugin loading
@@ -51,7 +54,7 @@ The `Config` type groups settings into nested sub-configs:
 ### Validation Helpers
 
 - `validateProjectPath(path)` resolves symlinks via `realpathSync`, checks `isDirectory()`, returns `Result<string, string>`
-- `hasRequiredApiKeys(config)` checks for `ANTHROPIC_API_KEY` presence
+- `hasRequiredApiKeys(config)` checks that at least one usable provider is configured, or that every provider named in `PROVIDER_CHAIN` has its required key
 - `checkChannelConfig(config, channelType)` validates channel-specific requirements:
   - Telegram: requires bot token and non-empty allowed user IDs
   - Discord: requires bot token
