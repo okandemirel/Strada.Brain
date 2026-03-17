@@ -2,7 +2,7 @@
  * Slack Channel exports for Strada Brain.
  */
 
-export { SlackChannel, createSlackChannelFromEnv } from "./app.js";
+export { SlackChannel } from "./app.js";
 export {
   createHelpBlocks,
   createConfirmationBlocks,

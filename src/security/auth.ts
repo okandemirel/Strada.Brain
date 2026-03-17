@@ -18,20 +18,6 @@ function warnUnauthorized(channel: string, details: Record<string, unknown>): vo
   });
 }
 
-function parseEnvNumberList(name: string): number[] {
-  return process.env[name]
-    ?.split(",")
-    .map((value) => parseInt(value.trim(), 10))
-    .filter((value) => !isNaN(value)) ?? [];
-}
-
-function parseEnvStringList(name: string): string[] {
-  return process.env[name]
-    ?.split(",")
-    .map((value) => value.trim())
-    .filter(Boolean) ?? [];
-}
-
 /**
  * Authentication and authorization for Strada Brain.
  * Controls who can access the bot and what they can do.
@@ -228,22 +214,4 @@ export class AuthManager {
   getAllowedDiscordRoleIds(): string[] {
     return Array.from(this.allowedDiscordRoleIds);
   }
-}
-
-/**
- * Create an AuthManager from environment variables.
- */
-export function createAuthManagerFromEnv(): AuthManager {
-  const telegramIds = parseEnvNumberList("ALLOWED_TELEGRAM_USER_IDS");
-  const slackIds = parseEnvStringList("ALLOWED_SLACK_USER_IDS");
-  const slackWorkspaces = parseEnvStringList("ALLOWED_SLACK_WORKSPACES");
-  const discordUserIds = new Set(parseEnvStringList("ALLOWED_DISCORD_USER_IDS"));
-  const discordRoleIds = new Set(parseEnvStringList("ALLOWED_DISCORD_ROLE_IDS"));
-
-  return new AuthManager(telegramIds, {
-    allowedSlackIds: slackIds,
-    allowedSlackWorkspaces: slackWorkspaces,
-    allowedDiscordIds: discordUserIds,
-    allowedDiscordRoles: discordRoleIds,
-  });
 }

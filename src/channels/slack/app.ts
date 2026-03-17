@@ -866,39 +866,3 @@ export class SlackChannel implements IChannelAdapter {
     }, 30000);
   }
 }
-
-export function createSlackChannelFromEnv(): SlackChannel | null {
-  const botToken = process.env["SLACK_BOT_TOKEN"];
-  const signingSecret = process.env["SLACK_SIGNING_SECRET"];
-  const appToken = process.env["SLACK_APP_TOKEN"];
-  const socketMode = process.env["SLACK_SOCKET_MODE"] === "true";
-
-  if (!botToken || !signingSecret) {
-    getLogger().warn("Slack configuration incomplete", {
-      hasBotToken: !!botToken,
-      hasSigningSecret: !!signingSecret,
-    });
-    return null;
-  }
-
-  const allowedWorkspaces =
-    process.env["ALLOWED_SLACK_WORKSPACES"]
-      ?.split(",")
-      .map((s) => s.trim())
-      .filter(Boolean) ?? [];
-
-  const allowedUserIds =
-    process.env["ALLOWED_SLACK_USER_IDS"]
-      ?.split(",")
-      .map((s) => s.trim())
-      .filter(Boolean) ?? [];
-
-  return new SlackChannel({
-    botToken,
-    signingSecret,
-    appToken,
-    socketMode,
-    allowedWorkspaces,
-    allowedUserIds,
-  });
-}

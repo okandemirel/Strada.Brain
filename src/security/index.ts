@@ -9,7 +9,7 @@
 // =============================================================================
 
 // Authentication
-export { AuthManager, createAuthManagerFromEnv } from "./auth.js";
+export { AuthManager } from "./auth.js";
 export {
   HardenedAuthManager,
   JwtManager,

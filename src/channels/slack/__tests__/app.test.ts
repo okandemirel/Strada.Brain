@@ -687,35 +687,3 @@ describe("SlackChannel file extraction", () => {
     expect(incoming.attachments[0].name).toBe("valid.png");
   });
 });
-
-describe("createSlackChannelFromEnv", () => {
-  const originalEnv = process.env;
-
-  beforeEach(() => {
-    process.env = { ...originalEnv };
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
-  });
-
-  it("should return null when config is incomplete", async () => {
-    delete process.env["SLACK_BOT_TOKEN"];
-    delete process.env["SLACK_SIGNING_SECRET"];
-
-    const { createSlackChannelFromEnv } = await import("../app.js");
-    const channel = createSlackChannelFromEnv();
-    expect(channel).toBeNull();
-  });
-
-  it("should create channel from env vars", async () => {
-    process.env["SLACK_BOT_TOKEN"] = "xoxb-test";
-    process.env["SLACK_SIGNING_SECRET"] = "test-secret";
-    process.env["SLACK_APP_TOKEN"] = "xapp-test";
-    process.env["SLACK_SOCKET_MODE"] = "true";
-
-    const { createSlackChannelFromEnv } = await import("../app.js");
-    const channel = createSlackChannelFromEnv();
-    expect(channel).toBeInstanceOf(SlackChannel);
-  });
-});
