@@ -36,7 +36,7 @@ import { AgentPhase, createInitialState, transitionPhase, type AgentState, type 
 import { buildPlanningPrompt, buildReflectionPrompt, buildReplanningPrompt, buildExecutionContext } from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import { MemoryRefresher } from "./memory-refresher.js";
-import type { ReRetrievalConfig } from "../config/config.js";
+import type { ReRetrievalConfig, StradaDependencyConfig } from "../config/config.js";
 import type { IEmbeddingProvider } from "../rag/rag.interface.js";
 import { shouldForceReplan } from "./failure-classifier.js";
 import { buildProviderIntelligence, getRecommendedMaxMessages } from "./providers/provider-knowledge.js";
@@ -438,6 +438,7 @@ export class Orchestrator {
   private readonly getIdentityState?: () => IdentityState;
   private readonly crashRecoveryContext?: CrashRecoveryContext;
   private stradaDeps: StradaDepsStatus | undefined;
+  private readonly stradaConfig?: Partial<StradaDependencyConfig>;
   private depsSetupComplete: boolean = false;
   private readonly pendingDepsPrompt = new Map<string, boolean>();
   private readonly pendingModulesPrompt = new Map<string, boolean>();
@@ -482,6 +483,7 @@ export class Orchestrator {
     rateLimiter?: RateLimiter;
     streamingEnabled?: boolean;
     stradaDeps?: StradaDepsStatus;
+    stradaConfig?: Partial<StradaDependencyConfig>;
     instinctRetriever?: InstinctRetriever;
     eventEmitter?: IEventEmitter<LearningEventMap>;
     metricsRecorder?: MetricsRecorder;
@@ -511,6 +513,7 @@ export class Orchestrator {
     this.ragPipeline = opts.ragPipeline;
     this.rateLimiter = opts.rateLimiter;
     this.streamingEnabled = opts.streamingEnabled ?? false;
+    this.stradaConfig = opts.stradaConfig;
     this.instinctRetriever = opts.instinctRetriever ?? null;
     this.eventEmitter = opts.eventEmitter ?? null;
     this.metricsRecorder = opts.metricsRecorder ?? null;
@@ -1334,9 +1337,9 @@ export class Orchestrator {
       // User is responding to our install prompt
       if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
         await this.channel.sendText(chatId, "Strada.Core kuruluyor...");
-        const result = await installStradaDep(this.projectPath, "core");
+        const result = await installStradaDep(this.projectPath, "core", this.stradaConfig);
         if (result.kind === "ok") {
-          this.stradaDeps = checkStradaDeps(this.projectPath);
+          this.stradaDeps = checkStradaDeps(this.projectPath, this.stradaConfig);
           this.rebuildBaseSystemPrompt();
           this.depsSetupComplete = true;
           await this.channel.sendText(chatId, "Strada.Core kuruldu! Artık kullanabilirsiniz.");
@@ -1384,9 +1387,9 @@ export class Orchestrator {
 
     if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
       await this.channel.sendText(chatId, "Strada.Modules kuruluyor...");
-      const result = await installStradaDep(this.projectPath, "modules");
+      const result = await installStradaDep(this.projectPath, "modules", this.stradaConfig);
       if (result.kind === "ok") {
-        this.stradaDeps = checkStradaDeps(this.projectPath);
+        this.stradaDeps = checkStradaDeps(this.projectPath, this.stradaConfig);
         this.rebuildBaseSystemPrompt();
         await this.channel.sendText(chatId, "Strada.Modules kuruldu!");
       } else {

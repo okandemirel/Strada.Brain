@@ -75,6 +75,9 @@ export type EnvVarName =
   | "REQUIRE_EDIT_CONFIRMATION"
   | "READ_ONLY_MODE"
   | "UNITY_PROJECT_PATH"
+  | "STRADA_CORE_REPO_URL"
+  | "STRADA_MODULES_REPO_URL"
+  | "STRADA_MCP_PATH"
   | "DASHBOARD_ENABLED"
   | "DASHBOARD_PORT"
   | "ENABLE_WEBSOCKET_DASHBOARD"
@@ -473,6 +476,17 @@ export interface TaskConfig {
   readonly messageBurstMaxMessages: number;
 }
 
+/** Strada dependency configuration */
+export interface StradaDependencyConfig {
+  readonly coreRepoUrl: string;
+  readonly modulesRepoUrl: string;
+  readonly mcpPath?: string;
+}
+
+export const DEFAULT_STRADA_CORE_REPO_URL = "https://github.com/okandemirel/Strada.Core.git";
+export const DEFAULT_STRADA_MODULES_REPO_URL =
+  "https://github.com/okandemirel/Strada.Modules.git";
+
 // =============================================================================
 // MAIN CONFIG TYPE
 // =============================================================================
@@ -513,6 +527,7 @@ export interface Config {
 
   // Project
   readonly unityProjectPath: string;
+  readonly strada: StradaDependencyConfig;
 
   // Dashboard
   readonly dashboard: DashboardConfig;
@@ -734,6 +749,9 @@ export const configSchema = z
 
     // Project
     unityProjectPath: z.string().min(1, "UNITY_PROJECT_PATH is required"),
+    stradaCoreRepoUrl: z.string().url().default(DEFAULT_STRADA_CORE_REPO_URL),
+    stradaModulesRepoUrl: z.string().url().default(DEFAULT_STRADA_MODULES_REPO_URL),
+    stradaMcpPath: z.string().min(1).optional(),
 
     // Dashboard
     dashboardEnabled: boolFromString(false),
@@ -1196,6 +1214,11 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     unityProjectPath: rawConfig.unityProjectPath,
+    strada: {
+      coreRepoUrl: rawConfig.stradaCoreRepoUrl,
+      modulesRepoUrl: rawConfig.stradaModulesRepoUrl,
+      mcpPath: rawConfig.stradaMcpPath,
+    },
 
     dashboard: {
       enabled: rawConfig.dashboardEnabled,
@@ -1701,6 +1724,9 @@ interface EnvVars {
   requireEditConfirmation: string | undefined;
   readOnlyMode: string | undefined;
   unityProjectPath: string | undefined;
+  stradaCoreRepoUrl: string | undefined;
+  stradaModulesRepoUrl: string | undefined;
+  stradaMcpPath: string | undefined;
   dashboardEnabled: string | undefined;
   dashboardPort: string | undefined;
   websocketDashboardEnabled: string | undefined;
@@ -1926,6 +1952,9 @@ function loadFromEnv(): EnvVars {
     requireEditConfirmation: process.env["REQUIRE_EDIT_CONFIRMATION"],
     readOnlyMode: process.env["READ_ONLY_MODE"],
     unityProjectPath: process.env["UNITY_PROJECT_PATH"],
+    stradaCoreRepoUrl: process.env["STRADA_CORE_REPO_URL"],
+    stradaModulesRepoUrl: process.env["STRADA_MODULES_REPO_URL"],
+    stradaMcpPath: process.env["STRADA_MCP_PATH"],
     dashboardEnabled: process.env["DASHBOARD_ENABLED"],
     dashboardPort: process.env["DASHBOARD_PORT"],
     websocketDashboardEnabled: process.env["ENABLE_WEBSOCKET_DASHBOARD"],

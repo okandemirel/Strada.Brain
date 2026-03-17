@@ -61,6 +61,9 @@ describe("loadConfig", () => {
     delete process.env["REQUIRE_EDIT_CONFIRMATION"];
     delete process.env["READ_ONLY_MODE"];
     delete process.env["UNITY_PROJECT_PATH"];
+    delete process.env["STRADA_CORE_REPO_URL"];
+    delete process.env["STRADA_MODULES_REPO_URL"];
+    delete process.env["STRADA_MCP_PATH"];
     delete process.env["LOG_LEVEL"];
     delete process.env["LOG_FILE"];
     // Clear unified memory env vars
@@ -126,6 +129,9 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.anthropicApiKey).toBe("sk-test-key-123");
     expect(config.unityProjectPath).toBe("/test/project");
+    expect(config.strada.coreRepoUrl).toBe("https://github.com/okandemirel/Strada.Core.git");
+    expect(config.strada.modulesRepoUrl).toBe("https://github.com/okandemirel/Strada.Modules.git");
+    expect(config.strada.mcpPath).toBeUndefined();
   });
 
   it("throws when ANTHROPIC_API_KEY is missing", () => {
@@ -183,6 +189,22 @@ describe("loadConfig", () => {
     expect(config.delegation.types).toHaveLength(1);
     expect(config.delegation.types[0]?.name).toBe("analysis");
     expect(config.delegation.types[0]?.maxIterations).toBe(7);
+  });
+
+  it("loads Strada dependency config into structured runtime config", () => {
+    setEnv({
+      STRADA_CORE_REPO_URL: "https://example.com/core.git",
+      STRADA_MODULES_REPO_URL: "https://example.com/modules.git",
+      STRADA_MCP_PATH: "/opt/strada-mcp",
+    });
+
+    const config = loadConfig();
+
+    expect(config.strada).toEqual({
+      coreRepoUrl: "https://example.com/core.git",
+      modulesRepoUrl: "https://example.com/modules.git",
+      mcpPath: "/opt/strada-mcp",
+    });
   });
 
   it("loads task routing env vars into runtime config", () => {

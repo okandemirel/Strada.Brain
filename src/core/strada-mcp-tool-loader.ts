@@ -137,7 +137,7 @@ async function importFirstAvailable<T>(paths: string[]): Promise<T> {
 }
 
 export async function loadInstalledStradaMcpTools(config: Config): Promise<StradaMcpToolLoadResult | null> {
-  const install = detectStradaMcp();
+  const install = detectStradaMcp(config.strada);
   if (!install.installed || !install.path) {
     return null;
   }

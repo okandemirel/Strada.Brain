@@ -155,7 +155,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   });
 
   // Check Strada framework dependencies
-  const stradaDeps = checkStradaDeps(config.unityProjectPath);
+  const stradaDeps = checkStradaDeps(config.unityProjectPath, config.strada);
   if (!stradaDeps.coreInstalled) {
     logger.warn("Strada.Core not found in project Packages/", {
       projectPath: config.unityProjectPath,
@@ -527,6 +527,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     rateLimiter,
     streamingEnabled: config.streamingEnabled,
     stradaDeps,
+    stradaConfig: config.strada,
     instinctRetriever,
     eventEmitter: learningResult.eventBus,
     metricsRecorder,
@@ -919,6 +920,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         rateLimiter,
         streamingEnabled: config.streamingEnabled,
         stradaDeps,
+        stradaConfig: config.strada,
         instinctRetriever,
         metricsRecorder,
         goalDecomposer,
@@ -990,6 +992,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           projectPath: config.unityProjectPath,
           readOnly: config.security.readOnlyMode,
           stradaDeps,
+          stradaConfig: config.strada,
           parentTools: toolRegistry.getAllTools(),
           apiKeys: collectApiKeys(config),
         });

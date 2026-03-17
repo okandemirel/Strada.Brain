@@ -54,10 +54,6 @@ eg==
 `);
 
 describe("SecureWebSocketManager", () => {
-  afterEach(() => {
-    delete process.env["WEBSOCKET_AUTH_TOKEN"];
-  });
-
   it("rejects invalid non-empty auth tokens", () => {
     const manager = new SecureWebSocketManager({
       requireSecure: false,
@@ -93,16 +89,16 @@ describe("SecureWebSocketManager", () => {
     expect(result.connectionId).toBeTruthy();
   });
 
-  it("falls back to WEBSOCKET_AUTH_TOKEN when no custom validator is configured", () => {
-    process.env["WEBSOCKET_AUTH_TOKEN"] = "env-token";
+  it("falls back to a configured authToken when no custom validator is configured", () => {
     const manager = new SecureWebSocketManager({
       requireSecure: false,
+      authToken: "configured-token",
     });
 
     const result = manager.validateConnection({
       secure: true,
       headers: {
-        authorization: "Bearer env-token",
+        authorization: "Bearer configured-token",
       },
     });
 

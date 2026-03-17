@@ -28,7 +28,7 @@ import type { InstinctRetriever } from "../../agents/instinct-retriever.js";
 import type { MetricsRecorder } from "../../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../../goals/goal-decomposer.js";
 import type { IdentityState } from "../../identity/identity-state.js";
-import type { ReRetrievalConfig } from "../../config/config.js";
+import type { ReRetrievalConfig, StradaDependencyConfig } from "../../config/config.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
 import type { DMPolicy } from "../../security/dm-policy.js";
@@ -82,6 +82,7 @@ export interface AgentManagerOptions {
   readonly rateLimiter?: RateLimiter;
   readonly streamingEnabled: boolean;
   readonly stradaDeps: StradaDepsStatus;
+  readonly stradaConfig?: Partial<StradaDependencyConfig>;
   readonly instinctRetriever?: InstinctRetriever;
   readonly metricsRecorder?: MetricsRecorder;
   readonly goalDecomposer?: GoalDecomposer;
@@ -523,6 +524,7 @@ export class AgentManager {
       rateLimiter: this.opts.rateLimiter,
       streamingEnabled: this.opts.streamingEnabled,
       stradaDeps: this.opts.stradaDeps,
+      stradaConfig: this.opts.stradaConfig,
       instinctRetriever: this.opts.instinctRetriever,
       eventEmitter: this.eventBus,
       metricsRecorder: this.opts.metricsRecorder,

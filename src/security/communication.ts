@@ -96,6 +96,8 @@ export interface WebSocketSecurityConfig {
   pingInterval: number;
   /** Require authentication token */
   requireAuth: boolean;
+  /** Static auth token when a custom validator is not provided */
+  authToken?: string;
   /** Validate authentication tokens for new connections */
   authTokenValidator?: (token: string, request: WebSocketConnectionRequest) => boolean;
 }
@@ -638,7 +640,7 @@ export class SecureWebSocketManager {
       return this.config.authTokenValidator(token, request);
     }
 
-    const expectedToken = process.env["WEBSOCKET_AUTH_TOKEN"];
+    const expectedToken = this.config.authToken;
     if (!expectedToken) {
       this.logger.error("WebSocket authentication is required but no validator is configured");
       return false;

@@ -424,7 +424,7 @@ With 2+ providers configured, Strada.Brain automatically routes tasks to the opt
 
 ### Strada.MCP Integration
 
-Strada.Brain detects an installed [Strada.MCP](https://github.com/okandemirel/Strada.MCP), verifies the package root, and loads its tools into the main toolchain as first-class Brain tools. When available locally, Strada.Core and Strada.MCP are also treated as authoritative knowledge sources.
+Strada.Brain detects an installed [Strada.MCP](https://github.com/okandemirel/Strada.MCP), verifies the package root, and loads its tools into the main toolchain as first-class Brain tools. Detection can be pinned with `STRADA_MCP_PATH`, while missing Strada.Core / Strada.Modules installs use the explicit `STRADA_CORE_REPO_URL` and `STRADA_MODULES_REPO_URL` config values instead of hidden env fallbacks. When available locally, Strada.Core and Strada.MCP are also treated as authoritative knowledge sources.
 
 ---
 

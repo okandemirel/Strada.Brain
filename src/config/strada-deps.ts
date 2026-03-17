@@ -12,6 +12,11 @@ import { execFile, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ok, err } from "../types/index.js";
 import type { Result } from "../types/index.js";
+import {
+  DEFAULT_STRADA_CORE_REPO_URL,
+  DEFAULT_STRADA_MODULES_REPO_URL,
+  type StradaDependencyConfig,
+} from "./config.js";
 
 export interface StradaDepsStatus {
   readonly coreInstalled: boolean;
@@ -32,31 +37,49 @@ export interface StradaMcpInstall {
 
 const CORE_NAMES = ["strada.core", "com.strada.core", "Strada.Core"] as const;
 const MODULES_NAMES = ["strada.modules", "com.strada.modules", "Strada.Modules"] as const;
-
-const REPO_URLS = {
-  core: process.env["STRADA_CORE_REPO_URL"] || "https://github.com/okandemirel/Strada.Core.git",
-  modules:
-    process.env["STRADA_MODULES_REPO_URL"] || "https://github.com/okandemirel/Strada.Modules.git",
-} as const;
+const STRADA_MCP_PACKAGE_NAME = "strada-mcp";
+const DEFAULT_STRADA_DEPENDENCY_CONFIG: StradaDependencyConfig = {
+  coreRepoUrl: DEFAULT_STRADA_CORE_REPO_URL,
+  modulesRepoUrl: DEFAULT_STRADA_MODULES_REPO_URL,
+};
 
 const TARGET_PATHS = {
   core: "Packages/strada.core",
   modules: "Packages/strada.modules",
 } as const;
 
+function resolveStradaDependencyConfig(
+  config?: Partial<StradaDependencyConfig>,
+): StradaDependencyConfig {
+  const mcpPath = config?.mcpPath?.trim();
+  return {
+    coreRepoUrl: config?.coreRepoUrl ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.coreRepoUrl,
+    modulesRepoUrl: config?.modulesRepoUrl ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.modulesRepoUrl,
+    ...(mcpPath ? { mcpPath } : {}),
+  };
+}
+
 /**
  * Check if Strada dependencies are installed in the Unity project.
  * Never throws — returns a status object.
  */
-export function checkStradaDeps(unityProjectPath: string): StradaDepsStatus {
+export function checkStradaDeps(
+  unityProjectPath: string,
+  config?: Partial<StradaDependencyConfig>,
+): StradaDepsStatus {
+  const resolvedConfig = resolveStradaDependencyConfig(config);
   const warnings: string[] = [];
   const packagesDir = join(unityProjectPath, "Packages");
+  const configuredMcpPath = resolvedConfig.mcpPath;
 
   let packagesExists = false;
   try { packagesExists = existsSync(packagesDir) && statSync(packagesDir).isDirectory(); } catch { /* TOCTOU safe */ }
   if (!packagesExists) {
     warnings.push("Packages/ directory not found in Unity project");
-    const mcp = detectStradaMcp();
+    if (configuredMcpPath && !readStradaMcpInstall(configuredMcpPath)) {
+      warnings.push("Configured STRADA_MCP_PATH is not a valid Strada.MCP package root");
+    }
+    const mcp = detectStradaMcp(resolvedConfig);
     return {
       coreInstalled: false,
       corePath: null,
@@ -89,7 +112,10 @@ export function checkStradaDeps(unityProjectPath: string): StradaDepsStatus {
   }
 
   // Detect Strada.MCP (Node.js tool, not a Unity package)
-  const mcp = detectStradaMcp();
+  if (configuredMcpPath && !readStradaMcpInstall(configuredMcpPath)) {
+    warnings.push("Configured STRADA_MCP_PATH is not a valid Strada.MCP package root");
+  }
+  const mcp = detectStradaMcp(resolvedConfig);
 
   return {
     coreInstalled: corePath !== null || coreInManifest,
@@ -110,12 +136,14 @@ export function checkStradaDeps(unityProjectPath: string): StradaDepsStatus {
 export async function installStradaDep(
   unityProjectPath: string,
   pkg: "core" | "modules",
+  config?: Partial<StradaDependencyConfig>,
 ): Promise<Result<string, string>> {
   if (!isGitRepo(unityProjectPath)) {
     return err("Project is not a git repository. Cannot add submodule.");
   }
 
-  const repoUrl = REPO_URLS[pkg];
+  const resolvedConfig = resolveStradaDependencyConfig(config);
+  const repoUrl = pkg === "core" ? resolvedConfig.coreRepoUrl : resolvedConfig.modulesRepoUrl;
   const targetPath = TARGET_PATHS[pkg];
   const fullTargetPath = join(unityProjectPath, targetPath);
 
@@ -137,16 +165,25 @@ export async function installStradaDep(
 
 /**
  * Detect Strada.MCP installation.
- * Checks: 1) sibling directory ../Strada.MCP relative to project root
- *         2) global npm install via `which strada-mcp`
+ * Checks: 1) configured STRADA_MCP_PATH
+ *         2) sibling directory ../Strada.MCP relative to project root
+ *         3) global npm install via `which strada-mcp`
  */
-export function detectStradaMcp(): StradaMcpInstall {
+export function detectStradaMcp(config?: Partial<StradaDependencyConfig>): StradaMcpInstall {
+  const resolvedConfig = resolveStradaDependencyConfig(config);
+  if (resolvedConfig.mcpPath) {
+    const configuredInstall = readStradaMcpInstall(resolvedConfig.mcpPath);
+    if (configuredInstall) {
+      return configuredInstall;
+    }
+  }
+
   // 1. Check sibling directory relative to Strada.Brain project root
   const brainRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   const siblingPath = join(brainRoot, "..", "Strada.MCP");
-  if (existsSync(siblingPath) && existsSync(join(siblingPath, "package.json"))) {
-    const version = readPackageVersion(join(siblingPath, "package.json"));
-    return { installed: true, path: siblingPath, version };
+  const siblingInstall = readStradaMcpInstall(siblingPath);
+  if (siblingInstall) {
+    return siblingInstall;
   }
 
   // 2. Check global npm install
@@ -156,17 +193,12 @@ export function detectStradaMcp(): StradaMcpInstall {
       timeout: 3000,
     }).trim().replace(/[\r\n]/g, "");
     if (which) {
-      // Try to resolve the package root from the binary path
       const binDir = dirname(which);
-      // Global npm bins are typically in <prefix>/bin, package in <prefix>/lib/node_modules/strada-mcp
       const globalPkgPath = join(binDir, "..", "lib", "node_modules", "strada-mcp");
-      const globalPkgJson = join(globalPkgPath, "package.json");
-      if (existsSync(globalPkgJson)) {
-        const version = readPackageVersion(globalPkgJson);
-        return { installed: true, path: globalPkgPath, version };
+      const globalInstall = readStradaMcpInstall(globalPkgPath);
+      if (globalInstall) {
+        return globalInstall;
       }
-      // Fallback: binary found but can't resolve package root
-      return { installed: true, path: which, version: null };
     }
   } catch {
     // `which` failed — strada-mcp not on PATH
@@ -175,12 +207,24 @@ export function detectStradaMcp(): StradaMcpInstall {
   return { installed: false, path: null, version: null };
 }
 
-/** Read the "version" field from a package.json file. */
-function readPackageVersion(packageJsonPath: string): string | null {
+function readStradaMcpInstall(candidatePath: string): StradaMcpInstall | null {
+  const packageJsonPath = join(candidatePath, "package.json");
+  const metadata = readPackageMetadata(packageJsonPath);
+  if (!metadata || metadata.name !== STRADA_MCP_PACKAGE_NAME) {
+    return null;
+  }
+
+  return {
+    installed: true,
+    path: candidatePath,
+    version: metadata.version ?? null,
+  };
+}
+
+function readPackageMetadata(packageJsonPath: string): { name?: string; version?: string } | null {
   try {
     const content = readFileSync(packageJsonPath, "utf-8");
-    const parsed = JSON.parse(content) as { version?: string };
-    return parsed.version ?? null;
+    return JSON.parse(content) as { name?: string; version?: string };
   } catch {
     return null;
   }

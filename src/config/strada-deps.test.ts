@@ -4,6 +4,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { checkStradaDeps, installStradaDep } from "./strada-deps.js";
 
+const TEST_STRADA_CONFIG = {
+  coreRepoUrl: "https://example.com/Strada.Core.git",
+  modulesRepoUrl: "https://example.com/Strada.Modules.git",
+};
+
 describe("checkStradaDeps", () => {
   let testDir: string;
 
@@ -92,6 +97,42 @@ describe("checkStradaDeps", () => {
     mkdirSync(join(testDir, "Packages", "strada.core"), { recursive: true });
     const result = checkStradaDeps(testDir);
     expect(result.warnings.some((w) => w.includes("Strada.Modules"))).toBe(true);
+  });
+
+  it("detects Strada.MCP from configured path", () => {
+    const mcpDir = join(testDir, "custom-mcp");
+    mkdirSync(mcpDir, { recursive: true });
+    writeFileSync(
+      join(mcpDir, "package.json"),
+      JSON.stringify({ name: "strada-mcp", version: "1.2.3" }),
+    );
+
+    const result = checkStradaDeps(testDir, {
+      ...TEST_STRADA_CONFIG,
+      mcpPath: mcpDir,
+    });
+
+    expect(result.mcpInstalled).toBe(true);
+    expect(result.mcpPath).toBe(mcpDir);
+    expect(result.mcpVersion).toBe("1.2.3");
+  });
+
+  it("warns when configured STRADA_MCP_PATH is invalid", () => {
+    const invalidMcpDir = join(testDir, "invalid-mcp");
+    mkdirSync(invalidMcpDir, { recursive: true });
+    writeFileSync(
+      join(invalidMcpDir, "package.json"),
+      JSON.stringify({ name: "not-strada-mcp", version: "1.0.0" }),
+    );
+
+    const result = checkStradaDeps(testDir, {
+      ...TEST_STRADA_CONFIG,
+      mcpPath: invalidMcpDir,
+    });
+
+    expect(result.warnings).toContain(
+      "Configured STRADA_MCP_PATH is not a valid Strada.MCP package root",
+    );
   });
 });
 

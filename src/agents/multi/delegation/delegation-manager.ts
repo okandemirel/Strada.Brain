@@ -20,6 +20,7 @@ import type { ITool } from "../../tools/tool.interface.js";
 import type { AgentBudgetTracker } from "../agent-budget-tracker.js";
 import type { AgentId } from "../agent-types.js";
 import type { StradaDepsStatus } from "../../../config/strada-deps.js";
+import type { StradaDependencyConfig } from "../../../config/config.js";
 import type {
   DelegationConfig,
   DelegationRequest,
@@ -47,6 +48,7 @@ export interface DelegationManagerOptions {
   readonly projectPath: string;
   readonly readOnly: boolean;
   readonly stradaDeps: StradaDepsStatus;
+  readonly stradaConfig?: Partial<StradaDependencyConfig>;
   readonly parentTools: ITool[];
   readonly apiKeys: Record<string, string | undefined>;
 }
@@ -322,6 +324,7 @@ export class DelegationManager {
         requireConfirmation: false,
         streamingEnabled: false,
         stradaDeps: this.opts.stradaDeps,
+        stradaConfig: this.opts.stradaConfig,
       });
 
       const message: IncomingMessage = {
