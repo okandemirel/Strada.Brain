@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildCapabilityManifest, buildIdentitySection, buildCrashNotificationSection } from "./strada-knowledge.js";
+import {
+  buildCapabilityManifest,
+  buildIdentitySection,
+  buildCrashNotificationSection,
+  buildProjectContext,
+} from "./strada-knowledge.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { makeIdentityState, makeGoalTree } from "../../test-helpers.js";
 
@@ -148,5 +153,16 @@ describe("buildCrashNotificationSection", () => {
 
     expect(result).toContain("3 goal tree(s)");
     expect(result).toContain("resume or discard");
+  });
+});
+
+describe("buildProjectContext", () => {
+  it("anchors exact file facts to the active project root", () => {
+    const result = buildProjectContext("/projects/MyGame");
+
+    expect(result).toContain("Project path: /projects/MyGame");
+    expect(result).toContain("verify by reading/searching the file");
+    expect(result).toContain("does not exist");
+    expect(result).toContain("multiple files could match");
   });
 });

@@ -286,14 +286,17 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
           // Check if this is a confirmation response
           const pending = this.pendingConfirmations.get(chatId);
           if (pending && text) {
-            clearTimeout(pending.timer);
             const idx = parseInt(text, 10) - 1;
             if (idx >= 0 && idx < pending.options.length) {
+              clearTimeout(pending.timer);
+              this.pendingConfirmations.delete(chatId);
               pending.resolve(pending.options[idx]!);
             } else {
-              pending.resolve(pending.options[0]!);
+              await this.sendText(
+                chatId,
+                `Invalid choice. Reply with a number between 1 and ${pending.options.length}.`,
+              );
             }
-            this.pendingConfirmations.delete(chatId);
             continue;
           }
 
@@ -604,11 +607,17 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
     await this.sendText(req.chatId, message);
 
     return new Promise<string>((resolve) => {
+      const previous = this.pendingConfirmations.get(req.chatId);
+      if (previous) {
+        clearTimeout(previous.timer);
+        previous.resolve("timeout");
+      }
+
       // Timeout after 2 minutes
       const timer = setTimeout(() => {
         if (this.pendingConfirmations.has(req.chatId)) {
           this.pendingConfirmations.delete(req.chatId);
-          resolve(req.options[0]!);
+          resolve("timeout");
         }
       }, 120_000);
 

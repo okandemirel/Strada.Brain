@@ -113,7 +113,7 @@ export function generateEnvContent(answers: WizardAnswers): string {
   } else if (answers.provider === "gemini") {
     lines.push(`GEMINI_API_KEY="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=gemini");
-    lines.push("RAG_EMBEDDING_PROVIDER=gemini");
+    lines.push("EMBEDDING_PROVIDER=gemini");
   }
   lines.push("");
 
@@ -127,7 +127,7 @@ export function generateEnvContent(answers: WizardAnswers): string {
   lines.push("MULTI_AGENT_ENABLED=true");
   lines.push("LOG_LEVEL=info");
   lines.push("WEB_CHANNEL_PORT=3000");
-  lines.push("DASHBOARD_PORT=3001");
+  lines.push("DASHBOARD_PORT=3100");
   lines.push("");
 
   return lines.join("\n") + "\n";

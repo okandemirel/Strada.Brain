@@ -109,12 +109,12 @@ export class ConsensusManager {
       this.logger.error("Consensus verification failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      // On failure, trust the original output (fail-open)
+      // Fail closed: a broken review path must not silently approve.
       return {
-        agreed: true,
+        agreed: false,
         strategy,
         originalProvider: params.originalProvider,
-        reasoning: "Consensus failed — trusting original output",
+        reasoning: "Consensus failed — manual review required",
       };
     }
   }
@@ -242,6 +242,6 @@ export class ConsensusManager {
     if (lower.includes("not approved") || lower.includes("rejected") || lower.includes('"approved": false') || lower.includes('"approved":false')) {
       return false;
     }
-    return true; // Default to approved
+    return false; // Default to not approved (fail-safe)
   }
 }

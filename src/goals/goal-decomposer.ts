@@ -282,6 +282,7 @@ export class GoalDecomposer {
     taskDescription: string,
   ): GoalTree {
     const rootId = generateGoalNodeId();
+    const childId = generateGoalNodeId();
     const now = Date.now();
 
     const nodes = new Map<GoalNodeId, GoalNode>();
@@ -295,11 +296,22 @@ export class GoalDecomposer {
       createdAt: now,
       updatedAt: now,
     });
+    nodes.set(childId, {
+      id: childId,
+      parentId: rootId,
+      task: taskDescription,
+      dependsOn: [],
+      depth: 1,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    });
 
     return {
       rootId,
       sessionId,
       taskDescription,
+      planSummary: "Fallback single-step execution",
       nodes,
       createdAt: now,
     };

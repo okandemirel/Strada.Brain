@@ -65,6 +65,13 @@ interface QueueEntry {
   onProgress: (message: string) => void;
 }
 
+interface DecomposedExecutionResult {
+  output: string;
+  success: boolean;
+  error?: string;
+  aborted: boolean;
+}
+
 export interface BackgroundExecutorOptions {
   orchestrator: Orchestrator;
   concurrencyLimit?: number;
@@ -199,6 +206,7 @@ export class BackgroundExecutor {
   private async executeTask(entry: QueueEntry): Promise<void> {
     const { task, signal, onProgress } = entry;
     const logger = getLogger();
+    const taskOrchestrator = task.orchestrator ?? this.orchestrator;
 
     if (!this.taskManager) {
       logger.error("TaskManager not set on BackgroundExecutor");
@@ -214,7 +222,11 @@ export class BackgroundExecutor {
       if (task.goalTree) {
         const result = await this.executeDecomposed(task, signal, onProgress, task.goalTree);
         if (signal.aborted) return;
-        this.taskManager.complete(task.id, result);
+        if (!result.success) {
+          this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
+          return;
+        }
+        this.taskManager.complete(task.id, result.output);
         return;
       }
 
@@ -222,11 +234,15 @@ export class BackgroundExecutor {
       if (this.decomposer?.shouldDecompose(task.prompt)) {
         const result = await this.executeDecomposed(task, signal, onProgress);
         if (signal.aborted) return;
-        this.taskManager.complete(task.id, result);
+        if (!result.success) {
+          this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
+          return;
+        }
+        this.taskManager.complete(task.id, result.output);
         return;
       }
 
-      const result = await this.orchestrator.runBackgroundTask(task.prompt, {
+      const result = await taskOrchestrator.runBackgroundTask(task.prompt, {
         signal,
         onProgress,
         chatId: task.chatId,
@@ -275,9 +291,10 @@ export class BackgroundExecutor {
     signal: AbortSignal,
     onProgress: (message: string) => void,
     preBuiltTree?: GoalTree,
-  ): Promise<string> {
+  ): Promise<DecomposedExecutionResult> {
     const logger = getLogger();
     const startTime = Date.now();
+    const taskOrchestrator = task.orchestrator ?? this.orchestrator;
 
     // Use pre-built tree if provided, otherwise decompose
     const goalTree = preBuiltTree ?? await this.decomposer!.decomposeProactive(task.chatId, task.prompt);
@@ -313,7 +330,7 @@ export class BackgroundExecutor {
 
     // Node executor: delegates to orchestrator.runBackgroundTask
     const nodeExecutor = async (node: GoalNode, nodeSignal: AbortSignal): Promise<string> => {
-      return this.orchestrator.runBackgroundTask(node.task, {
+      return taskOrchestrator.runBackgroundTask(node.task, {
         signal: nodeSignal,
         onProgress: (msg: string) => onProgress(`[${node.task}] ${msg}`),
         chatId: task.chatId,
@@ -614,11 +631,19 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
     }
 
     // Combine results
-    if (result.results.length === 0) return "";
-    return result.results
+    const output = result.results
       .filter(r => r.result)
       .map(r => `## Sub-goal: ${r.task}\n\n${r.result}`)
       .join("\n\n---\n\n");
+
+    return {
+      output,
+      success: !hasFailed,
+      error: hasFailed
+        ? (result.aborted ? "Goal aborted" : `${result.failureCount} sub-goal(s) failed`)
+        : undefined,
+      aborted: result.aborted,
+    };
   }
 
   private buildUsageRecorder(task: Task): ((usage: { provider: string; inputTokens: number; outputTokens: number }) => void) | undefined {

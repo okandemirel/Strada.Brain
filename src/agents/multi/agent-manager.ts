@@ -96,6 +96,11 @@ interface LiveAgent {
   memory: AgentDBMemory;
 }
 
+type BackgroundTaskSubmitter = (
+  msg: IncomingMessage,
+  agent: AgentInstance,
+) => Promise<void> | void;
+
 // =============================================================================
 // AGENT MANAGER
 // =============================================================================
@@ -121,6 +126,9 @@ export class AgentManager {
 
   /** Optional command handler for intercepting prefix commands before LLM routing */
   private commandHandler?: CommandHandler;
+
+  /** Optional submitter for routing plain messages into background task execution */
+  private backgroundTaskSubmitter?: BackgroundTaskSubmitter;
 
   constructor(opts: AgentManagerOptions) {
     this.config = opts.config;
@@ -157,6 +165,11 @@ export class AgentManager {
   /** Set the command handler so prefix commands bypass the LLM pipeline */
   setCommandHandler(handler: CommandHandler): void {
     this.commandHandler = handler;
+  }
+
+  /** Route non-command messages into the background task system instead of interactive LLM turns. */
+  setBackgroundTaskSubmitter(submitter: BackgroundTaskSubmitter): void {
+    this.backgroundTaskSubmitter = submitter;
   }
 
   // ===========================================================================
@@ -206,6 +219,12 @@ export class AgentManager {
     const now = Date.now();
     this.registry.updateLastActivity(liveAgent.instance.id, now);
     liveAgent.instance = { ...liveAgent.instance, lastActivity: now };
+
+    if (this.backgroundTaskSubmitter) {
+      await this.backgroundTaskSubmitter(msg, liveAgent.instance);
+      this.syncMemoryCount(liveAgent);
+      return;
+    }
 
     // Route through agent's orchestrator
     try {
@@ -299,6 +318,11 @@ export class AgentManager {
   /** Get agent instance by id (from registry) */
   getAgent(id: AgentId): AgentInstance | undefined {
     return this.registry.getById(id);
+  }
+
+  /** Get the live orchestrator for an in-memory agent. */
+  getLiveOrchestrator(id: AgentId): Orchestrator | undefined {
+    return this.findLiveAgentById(id)?.orchestrator;
   }
 
   /** Get all agent instances (from registry) */

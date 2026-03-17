@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import Database from "better-sqlite3";
 import { LearningStorage } from "./learning-storage.ts";
 import type { Instinct, Trajectory, Observation, ErrorPattern } from "../types.ts";
 import { randomUUID } from "node:crypto";
@@ -635,6 +636,104 @@ describe("LearningStorage", () => {
       // Should be DESC order -- newest first
       expect(results[0]?.createdAt).toBeGreaterThanOrEqual(results[1]?.createdAt ?? 0);
       expect(results[1]?.createdAt).toBeGreaterThanOrEqual(results[2]?.createdAt ?? 0);
+    });
+  });
+
+  describe("Migrations", () => {
+    it("preserves trajectory_instincts links while recreating instincts constraints", () => {
+      const legacyPath = join(tempDir, "legacy-learning.db");
+      const legacyDb = new Database(legacyPath);
+
+      legacyDb.exec(`
+        CREATE TABLE instincts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization')),
+          status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved')),
+          confidence REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
+          trigger_pattern TEXT NOT NULL,
+          action TEXT NOT NULL,
+          context_conditions TEXT NOT NULL,
+          stats TEXT NOT NULL,
+          embedding TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          evolved_to TEXT
+        );
+
+        CREATE TABLE trajectories (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          task_description TEXT NOT NULL,
+          steps TEXT NOT NULL,
+          outcome TEXT NOT NULL,
+          applied_instinct_ids TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          processed INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE trajectory_instincts (
+          trajectory_id TEXT NOT NULL,
+          instinct_id TEXT NOT NULL,
+          PRIMARY KEY (trajectory_id, instinct_id),
+          FOREIGN KEY (trajectory_id) REFERENCES trajectories(id) ON DELETE CASCADE,
+          FOREIGN KEY (instinct_id) REFERENCES instincts(id) ON DELETE CASCADE
+        ) WITHOUT ROWID;
+      `);
+
+      legacyDb.prepare(`
+        INSERT INTO instincts (
+          id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "instinct-1",
+        "Legacy instinct",
+        "error_fix",
+        "active",
+        0.7,
+        "legacy",
+        "fix",
+        "[]",
+        '{"timesSuggested":1,"timesApplied":1,"timesFailed":0,"successRate":1}',
+        null,
+        100,
+        100,
+        null,
+      );
+
+      legacyDb.prepare(`
+        INSERT INTO trajectories (
+          id, session_id, task_description, steps, outcome, applied_instinct_ids, created_at, processed
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "trajectory-1",
+        "session-1",
+        "Legacy task",
+        "[]",
+        '{"success":true,"totalSteps":0,"hadErrors":false,"errorCount":0,"durationMs":1}',
+        '["instinct-1"]',
+        100,
+        0,
+      );
+
+      legacyDb.prepare(
+        "INSERT INTO trajectory_instincts (trajectory_id, instinct_id) VALUES (?, ?)",
+      ).run("trajectory-1", "instinct-1");
+      legacyDb.close();
+
+      const migratedStorage = new LearningStorage(legacyPath);
+      migratedStorage.initialize();
+
+      const migratedDb = migratedStorage.getDatabase()!;
+      const link = migratedDb.prepare(
+        "SELECT COUNT(*) AS count FROM trajectory_instincts WHERE trajectory_id = ? AND instinct_id = ?",
+      ).get("trajectory-1", "instinct-1") as { count: number };
+
+      expect(link.count).toBe(1);
+      expect(migratedStorage.getTrajectory("trajectory-1")?.appliedInstinctIds).toEqual(["instinct-1"]);
+      expect(migratedStorage.getInstinct("instinct-1")?.name).toBe("Legacy instinct");
+
+      migratedStorage.close();
     });
   });
 });

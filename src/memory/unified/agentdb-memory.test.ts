@@ -469,5 +469,63 @@ describe("AgentDBMemory", () => {
         rmSync(providerDir, { recursive: true, force: true });
       }
     });
+
+    it("should not set the migration marker when SQLite persistence fails", async () => {
+      const providerDir = mkdtempSync(join(tmpdir(), "agentdb-persist-fail-test-"));
+
+      const memoryNoProvider = new AgentDBMemory({
+        dbPath: providerDir,
+        dimensions: 128,
+        maxEntriesPerTier: {
+          [MemoryTier.Working]: 10,
+          [MemoryTier.Ephemeral]: 50,
+          [MemoryTier.Persistent]: 100,
+        },
+        hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+        quantizationType: "none",
+        cacheSize: 100,
+        enableAutoTiering: true,
+        ephemeralTtlMs: 60_000,
+      });
+      await memoryNoProvider.initialize();
+      await memoryNoProvider.storeNote("Entry that will fail to persist", ["test"]);
+      await memoryNoProvider.shutdown();
+
+      const memoryWithProvider = new AgentDBMemory({
+        dbPath: providerDir,
+        dimensions: 128,
+        maxEntriesPerTier: {
+          [MemoryTier.Working]: 10,
+          [MemoryTier.Ephemeral]: 50,
+          [MemoryTier.Persistent]: 100,
+        },
+        hnswParams: { efConstruction: 50, M: 8, efSearch: 32 },
+        quantizationType: "none",
+        cacheSize: 100,
+        enableAutoTiering: true,
+        ephemeralTtlMs: 60_000,
+        embeddingProvider: async () =>
+          new Array(128).fill(0).map((_, i) => (i % 2 === 0 ? 0.05 : -0.05)),
+      });
+      await memoryWithProvider.initialize();
+
+      try {
+        const sqliteDb = (memoryWithProvider as unknown as {
+          sqliteDb: { transaction: (fn: () => void) => () => void };
+        }).sqliteDb;
+        sqliteDb.transaction = vi.fn(() => () => {
+          throw new Error("disk full");
+        });
+
+        const result = await memoryWithProvider.reEmbedHashEntries();
+
+        expect(result.migrated).toBe(0);
+        expect(result.skipped).toBeGreaterThan(0);
+        expect(await memoryWithProvider.hasMigrationMarker("re_embed_complete_v1")).toBe(false);
+      } finally {
+        await memoryWithProvider.shutdown();
+        rmSync(providerDir, { recursive: true, force: true });
+      }
+    });
   });
 });

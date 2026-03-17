@@ -8,7 +8,7 @@
 
 import { join } from "node:path";
 import type { IAIProvider } from "./provider.interface.js";
-import { createProvider, PROVIDER_PRESETS } from "./provider-registry.js";
+import { buildProviderChain, PROVIDER_PRESETS } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import { getLogger } from "../../utils/logger.js";
 import { LRUCache } from "../../common/lru-cache.js";
@@ -31,6 +31,7 @@ export class ProviderManager {
     private readonly apiKeys: Record<string, string | undefined>,
     private readonly modelOverrides?: Record<string, string>,
     preferencesDbPath?: string,
+    private readonly defaultProviderOrder: readonly string[] = [],
   ) {
     const dbPath = preferencesDbPath ?? join(process.cwd(), ".strada-memory");
     this.preferences = new ProviderPreferenceStore(
@@ -43,29 +44,72 @@ export class ProviderManager {
     const pref = this.preferences.get(chatId);
     if (!pref) return this.defaultProvider;
 
-    const cacheKey = pref.model
-      ? `${pref.providerName}:${pref.model}`
-      : pref.providerName;
+    const provider = this.buildResilientProvider(pref.providerName, pref.model);
+    if (provider) {
+      return provider;
+    }
 
+    getLogger().warn("Failed to create preferred provider, using default", {
+      chatId,
+      provider: pref.providerName,
+      model: pref.model,
+    });
+    return this.defaultProvider;
+  }
+
+  private buildResilientProvider(primaryName: string, model?: string): IAIProvider | null {
+    const order = this.buildFallbackOrder(primaryName);
+    if (order.length === 0) {
+      return null;
+    }
+    if (order.length === this.defaultProviderOrder.length &&
+        order.every((name, index) => name === this.defaultProviderOrder[index]) &&
+        !model) {
+      return this.defaultProvider;
+    }
+
+    const cacheKey = this.buildCacheKey(order, primaryName, model);
     const cached = this.providerCache.get(cacheKey);
     if (cached) return cached;
 
     try {
-      const provider = createProvider({
-        name: pref.providerName,
-        apiKey: this.apiKeys[pref.providerName],
-        model: pref.model ?? this.modelOverrides?.[pref.providerName],
+      const provider = buildProviderChain(order, this.apiKeys, {
+        models: model ? { ...this.modelOverrides, [primaryName]: model } : this.modelOverrides,
       });
       this.providerCache.set(cacheKey, provider);
       return provider;
     } catch (error) {
       getLogger().warn("Failed to create preferred provider, using default", {
-        chatId,
-        provider: pref.providerName,
+        provider: primaryName,
+        model,
         error: error instanceof Error ? error.message : String(error),
       });
-      return this.defaultProvider;
+      return null;
     }
+  }
+
+  private buildFallbackOrder(primaryName: string): string[] {
+    const normalizedPrimary = primaryName.trim().toLowerCase();
+    const seen = new Set<string>();
+    const order: string[] = [];
+
+    if (normalizedPrimary) {
+      seen.add(normalizedPrimary);
+      order.push(normalizedPrimary);
+    }
+
+    for (const name of this.defaultProviderOrder) {
+      const normalized = name.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      order.push(normalized);
+    }
+
+    return order;
+  }
+
+  private buildCacheKey(order: readonly string[], primaryName: string, model?: string): string {
+    return `chain:${order.join(">")}:${primaryName}:${model ?? "(default)"}`;
   }
 
   getActiveInfo(chatId: string): ProviderActiveInfo {
@@ -132,21 +176,7 @@ export class ProviderManager {
    * Returns null if provider cannot be created.
    */
   getProviderByName(name: string): IAIProvider | null {
-    const cacheKey = `__listing__:${name}`;
-    const cached = this.providerCache.get(cacheKey);
-    if (cached) return cached;
-
-    try {
-      const provider = createProvider({
-        name,
-        apiKey: this.apiKeys[name],
-        model: this.modelOverrides?.[name],
-      });
-      this.providerCache.set(cacheKey, provider);
-      return provider;
-    } catch {
-      return null;
-    }
+    return this.buildResilientProvider(name);
   }
 
   listAvailable(): Array<{ name: string; label: string; defaultModel: string }> {

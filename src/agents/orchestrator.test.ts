@@ -1,9 +1,11 @@
 import { Orchestrator } from "./orchestrator.js";
+import Database from "better-sqlite3";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import type { IEventEmitter, LearningEventMap, ToolResultEvent } from "../core/event-bus.js";
 import { ShowPlanTool } from "./tools/show-plan.js";
 import { AskUserTool } from "./tools/ask-user.js";
 import { DMPolicy } from "../security/dm-policy.js";
+import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
@@ -117,6 +119,63 @@ describe("Orchestrator", () => {
 
     expect(mockProvider.chat).toHaveBeenCalledTimes(1);
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat1", "Hello!");
+  });
+
+  it("captures an interactive user's name and injects it into later prompts", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const profileOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Nice to meet you, Alice.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Your name is Alice.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const firstMessage = profileOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-profile",
+      userId: "user1",
+      text: "My name is Alice",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await firstMessage;
+
+    expect(userProfileStore.getProfile("chat-profile")?.displayName).toBe("Alice");
+
+    const secondMessage = profileOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-profile",
+      userId: "user1",
+      text: "What is my name?",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await secondMessage;
+
+    expect(mockProvider.chat.mock.calls[1]?.[0]).toContain("Name: Alice");
+    db.close();
   });
 
   it("executes tool calls and loops back to provider", async () => {
@@ -1528,6 +1587,7 @@ describe("Orchestrator", () => {
       expect(mockRecorder.endTask).toHaveBeenCalledWith(
         "metric_test_001",
         expect.objectContaining({
+          agentPhase: "complete",
           hitMaxIterations: false,
         }),
       );
@@ -1580,7 +1640,108 @@ describe("Orchestrator", () => {
 
       // The finally block should ensure endTask is called (idempotent)
       expect(mockRecorder.startTask).toHaveBeenCalled();
-      expect(mockRecorder.endTask).toHaveBeenCalled();
+      expect(mockRecorder.endTask).toHaveBeenCalledWith(
+        "metric_test_001",
+        expect.objectContaining({
+          agentPhase: "failed",
+          hitMaxIterations: false,
+        }),
+      );
+    });
+  });
+
+  describe("Streaming timeout behavior", () => {
+    const initialTimeoutEnv = process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"];
+    const stallTimeoutEnv = process.env["LLM_STREAM_STALL_TIMEOUT_MS"];
+
+    afterEach(() => {
+      if (initialTimeoutEnv === undefined) {
+        delete process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"];
+      } else {
+        process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"] = initialTimeoutEnv;
+      }
+      if (stallTimeoutEnv === undefined) {
+        delete process.env["LLM_STREAM_STALL_TIMEOUT_MS"];
+      } else {
+        process.env["LLM_STREAM_STALL_TIMEOUT_MS"] = stallTimeoutEnv;
+      }
+    });
+
+    it("keeps silent streaming alive while progress continues", async () => {
+      process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"] = "50";
+      process.env["LLM_STREAM_STALL_TIMEOUT_MS"] = "50";
+
+      const streamedResponse: ProviderResponse = {
+        text: "stream complete",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      };
+      const streamingProvider = {
+        name: "streaming",
+        capabilities: {
+          maxTokens: 4096,
+          streaming: true,
+          structuredStreaming: false,
+          toolCalling: true,
+          vision: false,
+          systemPrompt: true,
+        },
+        chat: vi.fn(),
+        chatStream: vi.fn((_system: string, _messages: unknown[], _tools: unknown[], onChunk: (chunk: string) => void) =>
+          new Promise<ProviderResponse>((resolve) => {
+            setTimeout(() => onChunk("a"), 40);
+            setTimeout(() => onChunk("b"), 80);
+            setTimeout(() => resolve(streamedResponse), 120);
+          })),
+      };
+
+      const promise = (orch as any).silentStream(
+        "stream-chat",
+        "system",
+        { messages: [], lastActivity: new Date() },
+        streamingProvider,
+      );
+
+      await vi.advanceTimersByTimeAsync(130);
+      await expect(promise).resolves.toEqual(streamedResponse);
+      expect(streamingProvider.chat).not.toHaveBeenCalled();
+    });
+
+    it("falls back when the stream never starts", async () => {
+      process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"] = "50";
+      process.env["LLM_STREAM_STALL_TIMEOUT_MS"] = "50";
+
+      const fallbackResponse: ProviderResponse = {
+        text: "fallback complete",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      };
+      const streamingProvider = {
+        name: "streaming",
+        capabilities: {
+          maxTokens: 4096,
+          streaming: true,
+          structuredStreaming: false,
+          toolCalling: true,
+          vision: false,
+          systemPrompt: true,
+        },
+        chat: vi.fn().mockResolvedValue(fallbackResponse),
+        chatStream: vi.fn(() => new Promise<ProviderResponse>(() => {})),
+      };
+
+      const promise = (orch as any).silentStream(
+        "stream-chat",
+        "system",
+        { messages: [], lastActivity: new Date() },
+        streamingProvider,
+      );
+
+      await vi.advanceTimersByTimeAsync(60);
+      await expect(promise).resolves.toEqual(fallbackResponse);
+      expect(streamingProvider.chat).toHaveBeenCalledTimes(1);
     });
   });
 

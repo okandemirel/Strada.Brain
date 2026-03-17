@@ -151,7 +151,7 @@ describe("ConsensusManager", () => {
     expect(userMsg).toContain("/src/old.cs");
   });
 
-  it("verify returns agreed:true on review failure (fail-open)", async () => {
+  it("verify returns agreed:false on review failure (fail-safe)", async () => {
     const mockReview = {
       name: "groq",
       chat: vi.fn().mockRejectedValue(new Error("Provider down")),
@@ -167,7 +167,31 @@ describe("ConsensusManager", () => {
       prompt: "Generate code",
     });
 
-    expect(result.agreed).toBe(true); // Fail-open
+    expect(result.agreed).toBe(false);
     expect(result.reasoning).toContain("failed");
+  });
+
+  it("treats malformed reviewer output as not approved", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: "uncertain - needs manual review",
+        toolCalls: [],
+        stopReason: "end_turn",
+      }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Some output" },
+      originalProvider: "claude",
+      task: { type: "destructive-operation", complexity: "simple", criticality: "critical" },
+      confidence: 0.3,
+      reviewProvider: mockReview as any,
+      prompt: "Delete the file",
+    });
+
+    expect(result.agreed).toBe(false);
+    expect(result.strategy).toBe("review");
   });
 });

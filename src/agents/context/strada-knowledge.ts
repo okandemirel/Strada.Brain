@@ -315,7 +315,14 @@ export function buildCrashNotificationSection(context: CrashRecoveryContext): st
  * Build a project-specific context section to append to the system prompt.
  */
 export function buildProjectContext(projectPath: string): string {
-  return `\n## Current Project\nProject path: ${projectPath}\n`;
+  return `
+## Current Project
+Project path: ${projectPath}
+- Treat this path as the active project root unless the user explicitly switches projects.
+- For exact file facts (for example version numbers, package names, ports, line counts, env keys), verify by reading/searching the file instead of inferring from nearby files.
+- If the exact file/path does not exist, say that clearly instead of guessing from the closest match.
+- If multiple files could match the request, say that and disambiguate before stating a precise fact.
+`;
 }
 
 /**

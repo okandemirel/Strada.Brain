@@ -563,12 +563,19 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `MEMORY_DB_PATH` | `.strada-memory` | Directory for memory database files |
 | `WEB_CHANNEL_PORT` | `3000` | Web dashboard port |
 | `DASHBOARD_ENABLED` | `false` | Enable HTTP monitoring dashboard |
-| `DASHBOARD_PORT` | `3001` | Dashboard server port |
+| `DASHBOARD_PORT` | `3100` | Dashboard server port |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Enable WebSocket real-time dashboard |
+| `WEBSOCKET_DASHBOARD_PORT` | `3100` | WebSocket dashboard server port |
+| `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | (unset) | Optional bearer token for dashboard API proxy and WebSocket dashboard auth |
+| `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | (unset) | Comma-separated extra allowed origins for the WebSocket dashboard |
+| `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | Max time to wait for a streaming response to start before treating it as stalled |
+| `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | Max gap between streaming chunks before treating an in-progress response as stalled |
 | `ENABLE_PROMETHEUS` | `false` | Enable Prometheus metrics endpoint (port 9090) |
 | `MULTI_AGENT_ENABLED` | `false` | Enable multi-agent orchestration |
-| `DELEGATION_ENABLED` | `false` | Enable task delegation between agents |
-| `DELEGATION_MAX_DEPTH` | `2` | Maximum delegation chain depth |
+| `TASK_DELEGATION_ENABLED` | `false` | Enable task delegation between agents |
+| `AGENT_MAX_DELEGATION_DEPTH` | `2` | Maximum delegation chain depth |
+| `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | Maximum concurrent delegations per parent agent |
+| `DELEGATION_VERBOSITY` | `normal` | Delegation logging verbosity: `quiet`, `normal`, or `verbose` |
 | `DEPLOYMENT_ENABLED` | `false` | Enable deployment subsystem |
 | `SOUL_FILE` | `soul.md` | Path to the agent personality file (SOUL.md); hot-reloaded on change |
 | `SOUL_FILE_WEB` | (unset) | Per-channel personality override for the web channel |
@@ -777,7 +784,7 @@ All tool results are capped at 8192 characters and scrubbed for API key patterns
 ## Dashboard and Monitoring
 
 ### HTTP Dashboard (`DASHBOARD_ENABLED=true`)
-Accessible at `http://localhost:3001` (localhost only). Shows: uptime, message count, token usage, active sessions, tool usage table, security stats. Auto-refreshes every 3 seconds.
+Accessible at `http://localhost:3100` (localhost only by default). Shows: uptime, message count, token usage, active sessions, tool usage table, security stats. Auto-refreshes every 3 seconds.
 
 ### Health Endpoints
 - `GET /health` -- Liveness probe (`{"status":"ok"}`)
@@ -787,7 +794,7 @@ Accessible at `http://localhost:3001` (localhost only). Shows: uptime, message c
 Metrics at `http://localhost:9090/metrics`. Counters for messages, tool calls, tokens. Histograms for request duration, tool duration, LLM latency. Default Node.js metrics (CPU, heap, GC, event loop).
 
 ### WebSocket Dashboard (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-Real-time metrics pushed every second. Supports authenticated connections and remote commands (plugin reload, cache clear, log retrieval). Daemon events (trigger fires, budget warnings, goal progress) are broadcast over WebSocket.
+Real-time metrics are pushed every second. Supports optional token authentication, heartbeat monitoring, and app-registered command handlers or notifications. If `WEBSOCKET_DASHBOARD_AUTH_TOKEN` is set, use the web channel UI or provide a bearer token when accessing protected dashboard APIs.
 
 ### Metrics System
 `MetricsStorage` (SQLite) records task completion rate, iteration counts, tool usage, and pattern reuse. `MetricsRecorder` captures metrics per-session. `metrics` CLI command displays historical metrics.

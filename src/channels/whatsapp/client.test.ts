@@ -201,6 +201,21 @@ describe("WhatsAppChannel", () => {
 
       confirmPromise.catch(() => {});
     });
+
+    it("should resolve timeout instead of auto-selecting the first option", async () => {
+      vi.useFakeTimers();
+      channel.sendText = vi.fn().mockResolvedValue(undefined);
+
+      const confirmPromise = channel.requestConfirmation({
+        chatId: "chat1",
+        question: "Deploy?",
+        options: ["Yes", "No"],
+      });
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(confirmPromise).resolves.toBe("timeout");
+      vi.useRealTimers();
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -498,6 +513,45 @@ describe("WhatsAppChannel", () => {
       expect(incoming.attachments).toHaveLength(1);
       expect(incoming.attachments[0].url).toBe("https://example.com/photo.jpg");
       expect(incoming.attachments[0].data).toBeUndefined();
+    });
+
+    it("should keep confirmation pending on invalid numeric reply", async () => {
+      vi.useFakeTimers();
+      connectedChannel.sendText = vi.fn().mockResolvedValue(undefined);
+
+      let resolved: string | undefined;
+      const confirmPromise = connectedChannel.requestConfirmation({
+        chatId: "chat1@s.whatsapp.net",
+        question: "Confirm?",
+        options: ["Yes", "No"],
+      });
+      void confirmPromise.then((value) => {
+        resolved = value;
+      });
+      await Promise.resolve();
+
+      const upsert = {
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", fromMe: false },
+            message: { conversation: "9" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+      await Promise.resolve();
+
+      expect(resolved).toBeUndefined();
+      expect(connectedChannel.sendText).toHaveBeenCalledWith(
+        "chat1@s.whatsapp.net",
+        "Invalid choice. Reply with a number between 1 and 2.",
+      );
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(confirmPromise).resolves.toBe("timeout");
+      vi.useRealTimers();
     });
   });
 });

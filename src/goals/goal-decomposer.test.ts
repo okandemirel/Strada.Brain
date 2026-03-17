@@ -187,7 +187,7 @@ describe("GoalDecomposer", () => {
       expect(maxNodeDepth).toBeLessThanOrEqual(2);
     });
 
-    it("retries once on invalid LLM output, falls back to single-node tree on second failure", async () => {
+    it("retries once on invalid LLM output, falls back to a single executable child on second failure", async () => {
       const provider = createMockProvider([
         "invalid json garbage",
         "still invalid {{{",
@@ -196,11 +196,13 @@ describe("GoalDecomposer", () => {
       const decomposer = new GoalDecomposer(provider, 3);
       const tree = await decomposer.decomposeProactive("test-session", "Some complex task with multiple steps");
 
-      // Should fall back to single-node tree (root only)
-      expect(tree.nodes.size).toBe(1);
+      // Should fall back to root + one executable child
+      expect(tree.nodes.size).toBe(2);
       const root = tree.nodes.get(tree.rootId);
       expect(root).toBeDefined();
       expect(root!.depth).toBe(0);
+      const childNodes = Array.from(tree.nodes.values()).filter((node) => node.depth === 1);
+      expect(childNodes).toHaveLength(1);
     });
 
     it("calls LLM recursively for depth-2 nodes flagged with needsFurtherDecomposition", async () => {
@@ -321,14 +323,17 @@ describe("GoalDecomposer", () => {
   // ===========================================================================
 
   describe("fallback behavior", () => {
-    it("with no provider falls back to single-node tree", async () => {
+    it("with no provider falls back to a single executable child node", async () => {
       const decomposer = new GoalDecomposer(undefined, 3);
       const tree = await decomposer.decomposeProactive("test-session", "Build a complex system");
 
-      expect(tree.nodes.size).toBe(1);
+      expect(tree.nodes.size).toBe(2);
       const root = tree.nodes.get(tree.rootId);
       expect(root).toBeDefined();
       expect(root!.task).toBe("Build a complex system");
+      const childNodes = Array.from(tree.nodes.values()).filter((node) => node.depth === 1);
+      expect(childNodes).toHaveLength(1);
+      expect(childNodes[0]?.task).toBe("Build a complex system");
     });
 
     it("cycle in LLM output is detected and falls back to flat sequential list", async () => {
@@ -352,8 +357,10 @@ describe("GoalDecomposer", () => {
       const decomposer = new GoalDecomposer(provider, 3);
       const tree = await decomposer.decomposeProactive("test-session", "Complex task needing steps and validation");
 
-      // Should fall back to single-node tree since both attempts had cycles
-      expect(tree.nodes.size).toBe(1);
+      // Should fall back to a single executable child node since both attempts had cycles
+      expect(tree.nodes.size).toBe(2);
+      const childNodes = Array.from(tree.nodes.values()).filter((node) => node.depth === 1);
+      expect(childNodes).toHaveLength(1);
     });
   });
 });

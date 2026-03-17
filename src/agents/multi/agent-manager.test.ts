@@ -247,6 +247,25 @@ describe("AgentManager", () => {
       const callArgs = mockConstructor.mock.calls[0][0];
       expect(callArgs.dbPath).toContain("agents/");
     });
+
+    it("submits plain messages to the background task system when configured", async () => {
+      const submitter = vi.fn();
+      manager.setBackgroundTaskSubmitter(submitter);
+
+      const response = await manager.routeMessage(makeMsg({ text: "Handle this in background" }));
+
+      expect(response).toBeUndefined();
+      expect(submitter).toHaveBeenCalledOnce();
+      expect(submitter).toHaveBeenCalledWith(
+        expect.objectContaining({ chatId: "chat-1", text: "Handle this in background" }),
+        expect.objectContaining({ key: resolveAgentKey("web", "chat-1") }),
+      );
+
+      const { Orchestrator } = await import("../orchestrator.js");
+      const mockConstructor = Orchestrator as unknown as Mock;
+      const orchestratorInstance = mockConstructor.mock.results[0]?.value;
+      expect(orchestratorInstance.handleMessage).not.toHaveBeenCalled();
+    });
   });
 
   // ===========================================================================

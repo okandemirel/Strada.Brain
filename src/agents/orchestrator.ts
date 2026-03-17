@@ -68,6 +68,8 @@ const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
+const DEFAULT_STREAM_INITIAL_TIMEOUT_MS = 10 * 60 * 1000; // Allow long tasks to begin
+const DEFAULT_STREAM_STALL_TIMEOUT_MS = 2 * 60 * 1000; // Abort only when progress stops
 const AUTONOMOUS_MODE_DIRECTIVE = `\n\n## AUTONOMOUS MODE ACTIVE
 You are operating in AUTONOMOUS MODE. The user has explicitly granted you full autonomy.
 - Execute ALL operations directly without asking for confirmation
@@ -135,6 +137,51 @@ const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
 /** Strip markdown control characters from user-supplied display names. */
 function sanitizeDisplayName(raw: string): string {
   return raw.replace(/[*[\]()#`>!\\<&\r\n]/g, "").trim();
+}
+
+const NAME_INTRO_RE = /(?:ben\s+|i'm\s+|my name is\s+|ad[ıi]m\s+|bana\s+)([\p{L}]+)/iu;
+
+function parsePositiveTimeout(rawValue: string | undefined, fallbackMs: number): number {
+  const parsed = Number.parseInt(rawValue ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
+}
+
+function createStreamingProgressTimeout(initialTimeoutMs: number, stallTimeoutMs: number): {
+  markProgress: () => void;
+  timeoutPromise: Promise<never>;
+  clear: () => void;
+} {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let sawProgress = false;
+  let rejectTimeout: ((error: Error) => void) | undefined;
+
+  const armTimeout = () => {
+    if (timeoutId) clearTimeout(timeoutId);
+    const timeoutMs = sawProgress ? stallTimeoutMs : initialTimeoutMs;
+    timeoutId = setTimeout(() => {
+      const message = sawProgress
+        ? `Streaming stalled after ${stallTimeoutMs}ms without progress`
+        : `Streaming did not start within ${initialTimeoutMs}ms`;
+      rejectTimeout?.(new Error(message));
+    }, timeoutMs);
+  };
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+  });
+
+  armTimeout();
+
+  return {
+    markProgress: () => {
+      sawProgress = true;
+      armTimeout();
+    },
+    timeoutPromise,
+    clear: () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    },
+  };
 }
 
 /** Build a list of profile attribute lines for system prompt injection. */
@@ -893,27 +940,7 @@ export class Orchestrator {
           // Persist background task conversation to memory
           await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
 
-          // Natural onboarding: extract user's name from conversation if profile is empty
-          if (this.userProfileStore) {
-            const latestProfile = this.userProfileStore.getProfile(chatId);
-            if (latestProfile && !latestProfile.displayName && prompt) {
-              // Detect language from user's message
-              const langFromMsg = this.detectLanguageFromText(prompt);
-              const updates: Record<string, unknown> = {};
-              if (langFromMsg) updates.language = langFromMsg;
-              // Try name extraction: "Ben X", "I'm X", "My name is X", "Adım X"
-              const NAME_INTRO_RE = /(?:ben\s+|i'm\s+|my name is\s+|ad[ıi]m\s+|bana\s+)([\p{L}]+)/iu;
-              const trimmed = prompt.trim();
-              const isSingleWord = trimmed.split(/\s+/).length <= 2 && /^[\p{L}]{2,20}$/u.test(trimmed);
-              const nameMatch = trimmed.match(NAME_INTRO_RE) ?? (isSingleWord ? [, trimmed] : null);
-              if (nameMatch?.[1]) {
-                updates.displayName = sanitizeDisplayName(nameMatch[1]);
-              }
-              if (Object.keys(updates).length > 0) {
-                this.userProfileStore.upsertProfile(chatId, updates);
-              }
-            }
-          }
+          this.maybeUpdateUserProfileFromPrompt(chatId, prompt);
 
           return response.text || "Task completed without output.";
         }
@@ -1111,6 +1138,9 @@ export class Orchestrator {
       // ────────────────────────────────────────────────────────────────
 
       return "Task reached maximum iterations. The work done so far has been saved.";
+    } catch (error) {
+      bgAgentState = transitionPhase(bgAgentState, AgentPhase.FAILED);
+      throw error;
     } finally {
       // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
       this.recordMetricEnd(metricId, {
@@ -1692,11 +1722,12 @@ export class Orchestrator {
         }
         // ─── Metrics: record end_turn ───────────────────────────────
         this.recordMetricEnd(metricId, {
-          agentPhase: agentState.phase,
+          agentPhase: AgentPhase.COMPLETE,
           iterations: agentState.iteration,
           toolCallCount: agentState.stepResults.length,
           hitMaxIterations: false,
         });
+        this.maybeUpdateUserProfileFromPrompt(chatId, lastUserMessage);
         // ──────────────────────────────────────────────────────────
         return;
       }
@@ -1941,6 +1972,9 @@ export class Orchestrator {
       "I've reached the maximum number of steps for this request. " +
         "Please send a follow-up message to continue.",
     );
+    } catch (error) {
+      agentState = transitionPhase(agentState, AgentPhase.FAILED);
+      throw error;
     } finally {
       // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
       this.recordMetricEnd(metricId, {
@@ -1979,28 +2013,33 @@ export class Orchestrator {
     session: Session,
     provider: IAIProvider,
   ): Promise<ProviderResponse> => {
-    const streamTimeout = 120_000;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), streamTimeout);
+    const timeoutGuard = createStreamingProgressTimeout(
+      parsePositiveTimeout(
+        process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"],
+        DEFAULT_STREAM_INITIAL_TIMEOUT_MS,
+      ),
+      parsePositiveTimeout(
+        process.env["LLM_STREAM_STALL_TIMEOUT_MS"],
+        DEFAULT_STREAM_STALL_TIMEOUT_MS,
+      ),
+    );
     try {
       const streamPromise = (provider as IStreamingProvider).chatStream(
         systemPrompt,
         session.messages,
         this.toolDefinitions,
-        () => {}, // no-op: don't send chunks to user
+        () => {
+          timeoutGuard.markProgress();
+        },
       );
       const response = await Promise.race([
         streamPromise,
-        new Promise<never>((_, reject) => {
-          controller.signal.addEventListener("abort", () =>
-            reject(new Error("Streaming response timed out")),
-          { once: true });
-        }),
+        timeoutGuard.timeoutPromise,
       ]);
-      clearTimeout(timer);
+      timeoutGuard.clear();
       return response;
     } catch (err) {
-      clearTimeout(timer);
+      timeoutGuard.clear();
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
       try {
@@ -2070,31 +2109,37 @@ export class Orchestrator {
       ).startStreamingMessage?.(chatId)) ?? undefined;
 
     let response: ProviderResponse;
-    const streamTimeout = 120_000; // 120s timeout
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), streamTimeout);
+    const timeoutGuard = createStreamingProgressTimeout(
+      parsePositiveTimeout(
+        process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"],
+        DEFAULT_STREAM_INITIAL_TIMEOUT_MS,
+      ),
+      parsePositiveTimeout(
+        process.env["LLM_STREAM_STALL_TIMEOUT_MS"],
+        DEFAULT_STREAM_STALL_TIMEOUT_MS,
+      ),
+    );
     try {
 
       const streamPromise = (provider as IStreamingProvider).chatStream(
         systemPrompt,
         session.messages,
         this.toolDefinitions,
-        onChunk,
+        (chunk) => {
+          timeoutGuard.markProgress();
+          onChunk(chunk);
+        },
       );
 
       // Race against abort signal
       response = await Promise.race([
         streamPromise,
-        new Promise<never>((_, reject) => {
-          controller.signal.addEventListener("abort", () =>
-            reject(new Error("Streaming response timed out")),
-          { once: true });
-        }),
+        timeoutGuard.timeoutPromise,
       ]);
 
-      clearTimeout(timer);
+      timeoutGuard.clear();
     } catch (streamError) {
-      clearTimeout(timer);
+      timeoutGuard.clear();
       const errMsg = streamError instanceof Error ? streamError.message : "Unknown streaming error";
       getLogger().error("Streaming error", { chatId, error: errMsg });
       accumulated = `[Streaming error: ${errMsg}]`;
@@ -2913,6 +2958,37 @@ export class Orchestrator {
     // French
     if (/[àâæçéèêëïîôœùûüÿ]/.test(text) || /\b(bonjour|projet|aide)\b/.test(lower)) return "fr";
     return null; // Default: don't override, keep "en"
+  }
+
+  private maybeUpdateUserProfileFromPrompt(chatId: string, prompt: string): void {
+    if (!this.userProfileStore || !prompt.trim()) {
+      return;
+    }
+
+    const latestProfile = this.userProfileStore.getProfile(chatId);
+    if (!latestProfile) {
+      return;
+    }
+
+    const updates: Record<string, unknown> = {};
+    const langFromMsg = this.detectLanguageFromText(prompt);
+    if (langFromMsg) {
+      updates["language"] = langFromMsg;
+    }
+
+    if (!latestProfile.displayName) {
+      const trimmed = prompt.trim();
+      const isSingleWord = trimmed.split(/\s+/).length <= 2 && /^[\p{L}]{2,20}$/u.test(trimmed);
+      const nameMatch = trimmed.match(NAME_INTRO_RE) ?? (isSingleWord ? [, trimmed] : null);
+      const displayName = nameMatch?.[1] ? sanitizeDisplayName(nameMatch[1]) : "";
+      if (displayName) {
+        updates["displayName"] = displayName;
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      this.userProfileStore.upsertProfile(chatId, updates);
+    }
   }
 
   private emitToolResult(chatId: string, tc: { name: string; input: unknown }, tr: { content: string; isError?: boolean }): void {

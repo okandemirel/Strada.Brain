@@ -3,6 +3,8 @@ import type { SaveStatus } from '../types/setup'
 import { PRESETS, PROVIDER_MAP, CHANNELS } from '../types/setup-constants'
 
 export function useSetupWizard() {
+  const [setupAvailability, setSetupAvailability] = useState<'checking' | 'available' | 'unavailable'>('checking')
+  const [setupUnavailableReason, setSetupUnavailableReason] = useState<string | null>(null)
   const [step, setStep] = useState(1)
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null)
   const [checkedProviders, setCheckedProviders] = useState<Set<string>>(new Set(['claude']))
@@ -30,12 +32,29 @@ export function useSetupWizard() {
   useEffect(() => {
     mountedRef.current = true
     fetch('/api/setup/csrf')
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`Setup wizard unavailable (${res.status})`)
+        }
+        return await res.json()
+      })
       .then((data) => {
-        csrfTokenRef.current = data.token ?? ''
+        const token = typeof data.token === 'string' ? data.token : ''
+        if (!token) {
+          throw new Error('Setup wizard did not provide a CSRF token')
+        }
+        csrfTokenRef.current = token
+        if (mountedRef.current) {
+          setSetupAvailability('available')
+          setSetupUnavailableReason(null)
+        }
       })
       .catch(() => {
-        // CSRF fetch failure is non-fatal; save() will fail if token is missing
+        if (!mountedRef.current) return
+        setSetupAvailability('unavailable')
+        setSetupUnavailableReason(
+          'Setup wizard is only available before initial configuration. Run `strada setup` if you need to reconfigure this instance.',
+        )
       })
 
     return () => {
@@ -276,6 +295,8 @@ export function useSetupWizard() {
 
   return {
     // State
+    setupAvailability,
+    setupUnavailableReason,
     step,
     selectedPreset,
     checkedProviders,

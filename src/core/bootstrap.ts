@@ -927,6 +927,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       daemonContext!.agentManager = agentManager;
       daemonContext!.agentBudgetTracker = agentBudgetTrackerInstance;
 
+      if (options.daemonMode) {
+        agentManager.setBackgroundTaskSubmitter((msg, agent) => {
+          taskManager.submit(msg.chatId, msg.channelType, msg.text, {
+            attachments: msg.attachments,
+            orchestrator: agentManager!.getLiveOrchestrator(agent.id),
+          });
+        });
+      }
+
       logger.info("Multi-agent system initialized", {
         maxConcurrent: config.agent.maxConcurrent,
         defaultBudget: config.agent.defaultBudgetUsd,
@@ -1086,6 +1095,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     if (config.deployment.enabled) {
       try {
         const { DeployTrigger } = await import("../daemon/triggers/deploy-trigger.js");
+        const { registerDeployApprovalBridge } = await import("../daemon/triggers/deploy-approval-bridge.js");
         const { ReadinessChecker } = await import("../daemon/deployment/readiness-checker.js");
         const { DeploymentExecutor } = await import("../daemon/deployment/deployment-executor.js");
         const { CircuitBreaker: DeployCircuitBreaker } = await import("../daemon/resilience/circuit-breaker.js");
@@ -1124,6 +1134,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         // Wire into heartbeat for readiness checks
         const activeHeartbeatLoop = heartbeatLoop;
         activeHeartbeatLoop.setDeployTrigger(deployTriggerInstance);
+        registerDeployApprovalBridge(
+          daemonEventBus!,
+          approvalQueueInstance,
+          deployTriggerInstance,
+          logger,
+        );
         taskManager.on("task:completed", (taskId) => {
           activeHeartbeatLoop.onTaskSettled(taskId);
         });
@@ -1447,6 +1463,7 @@ export async function initializeAIProvider(
   const notices: string[] = [];
 
   let defaultProvider: IAIProvider;
+  let defaultProviderOrder: string[] = [];
 
   // 1) Explicit provider chain
   if (config.providerChain) {
@@ -1463,6 +1480,7 @@ export async function initializeAIProvider(
     }
 
     if (usableNames.length > 0) {
+      defaultProviderOrder = usableNames;
       defaultProvider = buildProviderChain(usableNames, apiKeys, {
         models: config.providerModels,
       });
@@ -1484,6 +1502,7 @@ export async function initializeAIProvider(
         fallbackChain: detectedNames,
       });
 
+      defaultProviderOrder = detectedNames;
       defaultProvider = buildProviderChain(detectedNames, apiKeys, {
         models: config.providerModels,
       });
@@ -1492,6 +1511,7 @@ export async function initializeAIProvider(
   }
   // 2) Anthropic key present — use ClaudeProvider directly
   else if (config.anthropicApiKey) {
+    defaultProviderOrder = ["claude"];
     defaultProvider = new ClaudeProvider(config.anthropicApiKey);
     logger.info("AI provider initialized", { name: defaultProvider.name });
   }
@@ -1508,6 +1528,7 @@ export async function initializeAIProvider(
       );
     }
 
+    defaultProviderOrder = detectedNames;
     defaultProvider = buildProviderChain(detectedNames, apiKeys, {
       models: config.providerModels,
     });
@@ -1529,6 +1550,7 @@ export async function initializeAIProvider(
     apiKeys,
     config.providerModels,
     config.memory.dbPath,
+    defaultProviderOrder,
   );
 
   // Verify Ollama reachability before marking it available for routing
@@ -2039,7 +2061,9 @@ async function initializeChannel(
     }
 
     case "web":
-      return new WebChannel(config.web.port, config.dashboard.port);
+      return new WebChannel(config.web.port, config.dashboard.port, {
+        dashboardAuthToken: config.websocketDashboard.authToken,
+      });
 
     case "matrix": {
       const { MatrixChannel } = await import("../channels/matrix/channel.js");

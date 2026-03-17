@@ -642,12 +642,13 @@ describe("HardenedAuthManager", () => {
   });
 
   describe("registerUser", () => {
-    it("should register a new user successfully", async () => {
+    it("should register a privileged user when explicit approval is provided", async () => {
       const result = await auth.registerUser(
         "alice",
         "alice@example.com",
         "strong-password-123",
         "developer",
+        { allowPrivilegedRoleAssignment: true },
       );
 
       expect(result.success).toBe(true);
@@ -655,6 +656,18 @@ describe("HardenedAuthManager", () => {
       expect(result.user!.username).toBe("alice");
       expect(result.user!.role).toBe("developer");
       expect(result.user!.passwordHash).toBeDefined();
+    });
+
+    it("should reject privileged role assignment without explicit approval", async () => {
+      const result = await auth.registerUser(
+        "elevated",
+        "elevated@example.com",
+        "strong-password-123",
+        "admin",
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Privileged role assignment requires explicit approval");
     });
 
     it("should reject a password shorter than minimum length", async () => {
@@ -703,7 +716,13 @@ describe("HardenedAuthManager", () => {
 
   describe("authenticate", () => {
     beforeEach(async () => {
-      await auth.registerUser("testuser", "test@example.com", "correct-password", "developer");
+      await auth.registerUser(
+        "testuser",
+        "test@example.com",
+        "correct-password",
+        "developer",
+        { allowPrivilegedRoleAssignment: true },
+      );
     });
 
     it("should authenticate with correct credentials", async () => {
@@ -792,6 +811,7 @@ describe("HardenedAuthManager", () => {
         "totp@example.com",
         "correct-password",
         "developer",
+        { allowPrivilegedRoleAssignment: true },
       );
       const enabled = auth.enableMfa(reg.user!.id);
 
@@ -826,6 +846,7 @@ describe("HardenedAuthManager", () => {
         "totp-fail@example.com",
         "correct-password",
         "developer",
+        { allowPrivilegedRoleAssignment: true },
       );
       auth.enableMfa(reg.user!.id);
 
@@ -850,7 +871,13 @@ describe("HardenedAuthManager", () => {
 
   describe("hasPermission (method)", () => {
     it("should return true when user has the permission", async () => {
-      const reg = await auth.registerUser("dev", "dev@example.com", "password-12345", "developer");
+      const reg = await auth.registerUser(
+        "dev",
+        "dev@example.com",
+        "password-12345",
+        "developer",
+        { allowPrivilegedRoleAssignment: true },
+      );
       const user = reg.user!;
 
       expect(auth.hasPermission(user, "system:read")).toBe(true);
@@ -876,6 +903,7 @@ describe("HardenedAuthManager", () => {
         "admin@example.com",
         "password-12345",
         "superadmin",
+        { allowPrivilegedRoleAssignment: true },
       );
       const user = reg.user!;
 
@@ -887,7 +915,13 @@ describe("HardenedAuthManager", () => {
 
   describe("logout", () => {
     it("should logout a session", async () => {
-      await auth.registerUser("logoutuser", "logout@example.com", "correct-password", "developer");
+      await auth.registerUser(
+        "logoutuser",
+        "logout@example.com",
+        "correct-password",
+        "developer",
+        { allowPrivilegedRoleAssignment: true },
+      );
       const authResult = await auth.authenticate(
         "logoutuser",
         "correct-password",
@@ -913,6 +947,7 @@ describe("HardenedAuthManager", () => {
         "mfa@example.com",
         "password-12345",
         "developer",
+        { allowPrivilegedRoleAssignment: true },
       );
       const result = auth.enableMfa(reg.user!.id);
 

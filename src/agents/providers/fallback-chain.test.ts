@@ -77,4 +77,26 @@ describe("FallbackChainProvider", () => {
 
     expect(p1.chat).toHaveBeenCalledWith("system-prompt", msgs, tools);
   });
+
+  it("reports healthy when a fallback provider passes healthCheck", async () => {
+    const p1 = createMockProvider();
+    const p2 = createMockProvider();
+    p1.healthCheck = vi.fn().mockResolvedValue(false);
+    p2.healthCheck = vi.fn().mockResolvedValue(true);
+
+    const chain = new FallbackChainProvider([p1, p2]);
+
+    await expect(chain.healthCheck()).resolves.toBe(true);
+  });
+
+  it("falls back to a later provider for listModels", async () => {
+    const p1 = createMockProvider();
+    const p2 = createMockProvider();
+    p1.listModels = vi.fn().mockRejectedValue(new Error("provider offline"));
+    p2.listModels = vi.fn().mockResolvedValue(["kimi-for-coding"]);
+
+    const chain = new FallbackChainProvider([p1, p2]);
+
+    await expect(chain.listModels()).resolves.toEqual(["kimi-for-coding"]);
+  });
 });

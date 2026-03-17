@@ -3,6 +3,7 @@
 export interface ConnectedMessage {
   type: 'connected'
   chatId: string
+  reconnectToken: string
 }
 
 export interface TextMessage {
@@ -75,6 +76,7 @@ export interface ConfirmationResponse {
 export interface ReconnectMessage {
   type: 'reconnect'
   chatId: string
+  reconnectToken: string
 }
 
 export interface ProviderSwitchMessage {

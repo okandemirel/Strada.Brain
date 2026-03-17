@@ -122,6 +122,8 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect(mockTaskManager.complete).toHaveBeenCalled();
     }, { timeout: 5000 });
 
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
+
     // Decomposer.decomposeProactive should NOT have been called
     expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
   });
@@ -156,6 +158,8 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect(mockTaskManager.complete).toHaveBeenCalled();
     }, { timeout: 5000 });
 
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
+
     // Decomposer.decomposeProactive SHOULD have been called
     expect(mockDecomposer.decomposeProactive).toHaveBeenCalled();
   });
@@ -187,6 +191,8 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     await vi.waitFor(() => {
       expect(mockTaskManager.complete).toHaveBeenCalled();
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
 
     // GoalStorage.upsertTree should have been called with the goalTree
     expect(mockGoalStorage.upsertTree).toHaveBeenCalledWith(
@@ -222,6 +228,8 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     await vi.waitFor(() => {
       expect(mockTaskManager.complete).toHaveBeenCalled();
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
 
     // Should have emitted goal:started event
     expect(mockDaemonEventBus.emit).toHaveBeenCalledWith(
@@ -261,6 +269,8 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     await vi.waitFor(() => {
       expect(mockTaskManager.complete).toHaveBeenCalled();
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
 
     // Should have emitted goal:complete event
     expect(mockDaemonEventBus.emit).toHaveBeenCalledWith(
@@ -313,6 +323,8 @@ describe("BackgroundExecutor - daemon budget tracking", () => {
     await vi.waitFor(() => {
       expect(mockTaskManager.complete).toHaveBeenCalled();
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
 
     expect(budgetTracker.recordCost).toHaveBeenCalledWith(
       expect.any(Number),
@@ -372,8 +384,13 @@ describe("BackgroundExecutor - goal:failed event emission (INT-02)", () => {
     executor.enqueue(task, ac.signal, onProgress);
 
     await vi.waitFor(() => {
-      expect(mockTaskManager.complete).toHaveBeenCalled();
+      expect(mockTaskManager.fail).toHaveBeenCalledWith(
+        task.id,
+        expect.stringContaining("sub-goal(s) failed"),
+      );
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
 
     // Should have emitted goal:failed (not goal:complete)
     expect(mockDaemonEventBus.emit).toHaveBeenCalledWith(
@@ -448,6 +465,8 @@ describe("BackgroundExecutor - goal:failed event emission (INT-02)", () => {
         }),
       );
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
   });
 });
 
@@ -620,8 +639,13 @@ describe("BackgroundExecutor - Re-decomposition (Plan 16-03)", () => {
     executor.enqueue(task, new AbortController().signal, onProgress);
 
     await vi.waitFor(() => {
-      expect(mockTaskManager.complete).toHaveBeenCalled();
+      expect(mockTaskManager.fail).toHaveBeenCalledWith(
+        task.id,
+        expect.stringContaining("sub-goal(s) failed"),
+      );
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
 
     // Should have emitted goal:retry
     expect(mockLearningBus.emit).toHaveBeenCalledWith(
@@ -669,8 +693,13 @@ describe("BackgroundExecutor - Re-decomposition (Plan 16-03)", () => {
     executor.enqueue(task, new AbortController().signal, onProgress);
 
     await vi.waitFor(() => {
-      expect(mockTaskManager.complete).toHaveBeenCalled();
+      expect(mockTaskManager.fail).toHaveBeenCalledWith(
+        task.id,
+        expect.stringContaining("sub-goal(s) failed"),
+      );
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
 
     // decomposeReactive should NOT have been called (limit exceeded)
     expect(mockDecomposer.decomposeReactive).not.toBeDefined();
@@ -714,8 +743,13 @@ describe("BackgroundExecutor - Re-decomposition (Plan 16-03)", () => {
     executor.enqueue(task, new AbortController().signal, onProgress);
 
     await vi.waitFor(() => {
-      expect(mockTaskManager.complete).toHaveBeenCalled();
+      expect(mockTaskManager.fail).toHaveBeenCalledWith(
+        task.id,
+        expect.stringContaining("sub-goal(s) failed"),
+      );
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
 
     // Verify context includes key info
     if (mockDecomposer.decomposeReactive.mock.calls.length > 0) {
@@ -798,8 +832,10 @@ describe("BackgroundExecutor - Enhanced Escalation (Plan 16-03)", () => {
     executor.enqueue(task, new AbortController().signal, onProgress);
 
     await vi.waitFor(() => {
-      expect(mockTaskManager.complete).toHaveBeenCalled();
+      expect(mockTaskManager.fail).toHaveBeenCalledWith(task.id, "Goal aborted");
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
 
     // Verify 4 options were presented
     expect(mockChannel.requestConfirmation).toHaveBeenCalledWith(
@@ -842,8 +878,10 @@ describe("BackgroundExecutor - Enhanced Escalation (Plan 16-03)", () => {
     executor.enqueue(task, new AbortController().signal, onProgress);
 
     await vi.waitFor(() => {
-      expect(mockTaskManager.complete).toHaveBeenCalled();
+      expect(mockTaskManager.fail).toHaveBeenCalledWith(task.id, "Goal aborted");
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
 
     // Should have reported failure via progress (no requestConfirmation)
     const hasFailureReport = progressMessages.some(m => m.includes("Failure budget exceeded") || m.includes("Aborting"));
@@ -908,8 +946,10 @@ describe("BackgroundExecutor - Enhanced Escalation (Plan 16-03)", () => {
     await vi.advanceTimersByTimeAsync(65_000);
 
     await vi.waitFor(() => {
-      expect(mockTaskManager.complete).toHaveBeenCalled();
+      expect(mockTaskManager.fail).toHaveBeenCalledWith(task.id, "Goal aborted");
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
 
     // Should have sent auto-abort notification
     expect(mockChannel.sendText).toHaveBeenCalledWith(
@@ -977,8 +1017,13 @@ describe("BackgroundExecutor - Enhanced Escalation (Plan 16-03)", () => {
     executor.enqueue(task, new AbortController().signal, vi.fn());
 
     await vi.waitFor(() => {
-      expect(mockTaskManager.complete).toHaveBeenCalled();
+      expect(mockTaskManager.fail).toHaveBeenCalledWith(
+        task.id,
+        expect.stringContaining("sub-goal(s) failed"),
+      );
     }, { timeout: 5000 });
+
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
 
     // requestConfirmation called only once (alwaysContinue skips subsequent calls)
     expect(mockChannel.requestConfirmation).toHaveBeenCalledTimes(1);

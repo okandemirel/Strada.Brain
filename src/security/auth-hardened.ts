@@ -91,6 +91,10 @@ export interface MfaVerifyResult {
   remainingAttempts?: number;
 }
 
+export interface RegisterUserOptions {
+  allowPrivilegedRoleAssignment?: boolean;
+}
+
 // =============================================================================
 // PERMISSION MATRIX
 // =============================================================================
@@ -121,6 +125,8 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   viewer: ["system:read", "files:read", "config:read"],
   service: ["system:read", "files:read", "config:read"],
 };
+
+const SELF_REGISTERABLE_ROLES = new Set<UserRole>(["viewer"]);
 
 // =============================================================================
 // CONFIGURATION
@@ -770,6 +776,7 @@ export class HardenedAuthManager {
     email: string,
     password: string,
     role: UserRole = "viewer",
+    options: RegisterUserOptions = {},
   ): Promise<{ success: boolean; user?: User; error?: string }> {
     // Validate password
     if (password.length < this.config.passwordMinLength) {
@@ -786,6 +793,18 @@ export class HardenedAuthManager {
 
     if (existingUser) {
       return { success: false, error: "User already exists" };
+    }
+
+    if (!SELF_REGISTERABLE_ROLES.has(role) && !options.allowPrivilegedRoleAssignment) {
+      this.logger.warn("Rejected privileged role assignment during registration", {
+        username,
+        email,
+        requestedRole: role,
+      });
+      return {
+        success: false,
+        error: "Privileged role assignment requires explicit approval",
+      };
     }
 
     // Create user

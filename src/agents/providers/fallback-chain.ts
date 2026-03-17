@@ -113,6 +113,39 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     }, messages);
   }
 
+  async healthCheck(): Promise<boolean> {
+    for (const provider of this.providers) {
+      if (!provider.healthCheck) {
+        return true;
+      }
+      try {
+        if (await provider.healthCheck()) {
+          return true;
+        }
+      } catch {
+        // Try the next provider in the chain.
+      }
+    }
+    return false;
+  }
+
+  async listModels(): Promise<string[]> {
+    for (const provider of this.providers) {
+      if (!provider.listModels) {
+        continue;
+      }
+      try {
+        const models = await provider.listModels();
+        if (models.length > 0) {
+          return models;
+        }
+      } catch {
+        // Try the next provider in the chain.
+      }
+    }
+    return [];
+  }
+
   /**
    * Try each provider in order, falling back on transient errors.
    * Non-retryable errors (400, auth) are re-thrown immediately.

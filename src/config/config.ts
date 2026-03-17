@@ -1685,6 +1685,17 @@ interface EnvVars {
   agentMaxConcurrent: string | undefined;
   agentIdleTimeoutMs: string | undefined;
   agentMaxMemoryEntries: string | undefined;
+  // Task Delegation (Phase 24)
+  taskDelegationEnabled: string | undefined;
+  agentMaxDelegationDepth: string | undefined;
+  agentMaxConcurrentDelegations: string | undefined;
+  delegationTierLocal: string | undefined;
+  delegationTierCheap: string | undefined;
+  delegationTierStandard: string | undefined;
+  delegationTierPremium: string | undefined;
+  delegationVerbosity: string | undefined;
+  delegationTypes: string | undefined;
+  delegationMaxIterationsPerType: string | undefined;
   // Autonomous Mode
   autonomousDefaultHours: string | undefined;
   // Provider Routing
@@ -1876,6 +1887,17 @@ function loadFromEnv(): EnvVars {
     agentMaxConcurrent: process.env["AGENT_MAX_CONCURRENT"],
     agentIdleTimeoutMs: process.env["AGENT_IDLE_TIMEOUT_MS"],
     agentMaxMemoryEntries: process.env["AGENT_MAX_MEMORY_ENTRIES"],
+    // Task Delegation (Phase 24)
+    taskDelegationEnabled: process.env["TASK_DELEGATION_ENABLED"],
+    agentMaxDelegationDepth: process.env["AGENT_MAX_DELEGATION_DEPTH"],
+    agentMaxConcurrentDelegations: process.env["AGENT_MAX_CONCURRENT_DELEGATIONS"],
+    delegationTierLocal: process.env["DELEGATION_TIER_LOCAL"],
+    delegationTierCheap: process.env["DELEGATION_TIER_CHEAP"],
+    delegationTierStandard: process.env["DELEGATION_TIER_STANDARD"],
+    delegationTierPremium: process.env["DELEGATION_TIER_PREMIUM"],
+    delegationVerbosity: process.env["DELEGATION_VERBOSITY"],
+    delegationTypes: process.env["DELEGATION_TYPES"],
+    delegationMaxIterationsPerType: process.env["DELEGATION_MAX_ITERATIONS_PER_TYPE"],
     // Autonomous Mode
     autonomousDefaultHours: process.env["AUTONOMOUS_DEFAULT_HOURS"],
     // Provider Routing

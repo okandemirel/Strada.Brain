@@ -77,9 +77,12 @@ const ENCRYPTION_CONFIG = {
   ivLength: 16,
   authTagLength: 16,
   saltLength: 32,
-  iterations: 100000,
-  currentVersion: 1,
+  // Node's scrypt requires N to be a power of two.
+  iterations: 16384,
+  currentVersion: 2,
 };
+
+const MASTER_KEY_CONTEXT_SALT = Buffer.from("strada-brain:key-manager:v1", "utf8");
 
 // =============================================================================
 // KEY MANAGER
@@ -114,7 +117,7 @@ export class KeyManager {
    * Initialize with a master key
    */
   private initializeWithMasterKey(masterKey: string): void {
-    const keyData = this.deriveKey(masterKey, randomBytes(ENCRYPTION_CONFIG.saltLength));
+    const keyData = this.deriveKey(masterKey, MASTER_KEY_CONTEXT_SALT);
     
     const dek: DataEncryptionKey = {
       id: this.generateKeyId(),
@@ -305,18 +308,13 @@ export class EncryptionService {
    * Encrypt data with AES-256-GCM
    */
   encrypt(plaintext: Buffer | string, keyId?: string): EncryptedData {
-    const key = keyId 
-      ? this.keyManager.getKey(keyId)?.key 
-      : this.keyManager.getCurrentKey()?.key;
-
-    if (!key) {
-      throw new Error("No encryption key available");
-    }
+    const key = this.resolveBaseKey(keyId);
 
     const iv = randomBytes(ENCRYPTION_CONFIG.ivLength);
     const salt = randomBytes(ENCRYPTION_CONFIG.saltLength);
+    const cipherKey = this.deriveCipherKey(key, salt);
 
-    const cipher = createCipheriv(ENCRYPTION_CONFIG.algorithm, key, iv) as CipherGCM;
+    const cipher = createCipheriv(ENCRYPTION_CONFIG.algorithm, cipherKey, iv) as CipherGCM;
 
     const plaintextBuffer = Buffer.isBuffer(plaintext) 
       ? plaintext 
@@ -342,28 +340,21 @@ export class EncryptionService {
    * Decrypt data
    */
   decrypt(encryptedData: EncryptedData, keyId?: string): Buffer {
-    const key = keyId 
-      ? this.keyManager.getKey(keyId)?.key 
-      : this.keyManager.getCurrentKey()?.key;
-
-    if (!key) {
-      throw new Error("Decryption key not found");
-    }
-
-    const decipher = createDecipheriv(
-      ENCRYPTION_CONFIG.algorithm,
-      key,
-      encryptedData.iv
-    ) as DecipherGCM;
-
-    decipher.setAuthTag(encryptedData.authTag);
+    const key = this.resolveBaseKey(keyId);
 
     try {
-      return Buffer.concat([
-        decipher.update(encryptedData.ciphertext),
-        decipher.final(),
-      ]);
+      const cipherKey = encryptedData.version >= 2
+        ? this.deriveCipherKey(key, encryptedData.salt)
+        : key;
+      return this.decryptWithCipherKey(cipherKey, encryptedData);
     } catch (error) {
+      if (encryptedData.version >= 2) {
+        try {
+          return this.decryptWithCipherKey(key, encryptedData);
+        } catch {
+          // Fall through to the standard tamper-safe error below.
+        }
+      }
       this.logger.error("Decryption failed - possible tampering", { error });
       throw new Error("Decryption failed - data may have been tampered with");
     }
@@ -446,6 +437,38 @@ export class EncryptionService {
       "authTag" in value &&
       "version" in value
     );
+  }
+
+  private resolveBaseKey(keyId?: string): Buffer {
+    const key = keyId
+      ? this.keyManager.getKey(keyId)?.key
+      : this.keyManager.getCurrentKey()?.key;
+
+    if (!key) {
+      throw new Error("No encryption key available");
+    }
+
+    return key;
+  }
+
+  private deriveCipherKey(baseKey: Buffer, salt: Buffer): Buffer {
+    return scryptSync(baseKey, salt, ENCRYPTION_CONFIG.keyLength, {
+      N: ENCRYPTION_CONFIG.iterations,
+    });
+  }
+
+  private decryptWithCipherKey(cipherKey: Buffer, encryptedData: EncryptedData): Buffer {
+    const decipher = createDecipheriv(
+      ENCRYPTION_CONFIG.algorithm,
+      cipherKey,
+      encryptedData.iv
+    ) as DecipherGCM;
+
+    decipher.setAuthTag(encryptedData.authTag);
+    return Buffer.concat([
+      decipher.update(encryptedData.ciphertext),
+      decipher.final(),
+    ]);
   }
 }
 
@@ -644,10 +667,13 @@ export function encryptEnvValue(value: string, encryptionKey?: string): string {
     throw new Error("Encryption key not available");
   }
 
-  const keyManager = new KeyManager();
-  const encryption = new EncryptionService(keyManager);
-  
-  return JSON.stringify(encryption.encryptToString(value));
+  const keyManager = new KeyManager(key);
+  try {
+    const encryption = new EncryptionService(keyManager);
+    return JSON.stringify(encryption.encryptToString(value));
+  } finally {
+    keyManager.destroy();
+  }
 }
 
 /**
@@ -659,10 +685,13 @@ export function decryptEnvValue(encryptedValue: string, encryptionKey?: string):
     throw new Error("Encryption key not available");
   }
 
-  const keyManager = new KeyManager();
-  const encryption = new EncryptionService(keyManager);
-  
-  return encryption.decryptFromString(JSON.parse(encryptedValue));
+  const keyManager = new KeyManager(key);
+  try {
+    const encryption = new EncryptionService(keyManager);
+    return encryption.decryptFromString(JSON.parse(encryptedValue));
+  } finally {
+    keyManager.destroy();
+  }
 }
 
 // =============================================================================

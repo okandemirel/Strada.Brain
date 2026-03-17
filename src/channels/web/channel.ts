@@ -14,7 +14,7 @@ import {
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, extname, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin } from "../../security/origin-validation.js";
@@ -35,15 +35,25 @@ type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 interface WsClient {
   ws: WebSocket;
   chatId: string;
+  reconnectToken: string;
   /** Message count in current rate-limit window. */
   msgCount: number;
   /** Timestamp (ms) when current rate-limit window started. */
   windowStart: number;
 }
 
+interface RecentlyDisconnectedSession {
+  disconnectedAt: number;
+  reconnectToken: string;
+}
+
 interface PendingConfirmation {
   resolve: (value: string) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+interface WebChannelOptions {
+  dashboardAuthToken?: string;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -84,7 +94,7 @@ export class WebChannel
   private clients = new Map<string, WsClient>();
   private pendingConfirmations = new Map<string, PendingConfirmation>();
   /** Recently disconnected chatIds eligible for reconnect (5 min TTL) */
-  private recentlyDisconnected = new Map<string, number>();
+  private recentlyDisconnected = new Map<string, RecentlyDisconnectedSession>();
   private readonly staticDir = resolveStaticDir();
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -93,6 +103,7 @@ export class WebChannel
   constructor(
     private readonly port: number = 3000,
     private readonly dashboardPort: number = 3100,
+    private readonly options: WebChannelOptions = {},
   ) {}
 
   onMessage(handler: MessageHandler): void {
@@ -124,8 +135,8 @@ export class WebChannel
     // Periodically prune expired entries from the reconnect map
     this._reconnectCleanupInterval = setInterval(() => {
       const now = Date.now();
-      for (const [id, ts] of this.recentlyDisconnected) {
-        if (now - ts > WebChannel.RECONNECT_TTL_MS) {
+      for (const [id, session] of this.recentlyDisconnected) {
+        if (now - session.disconnectedAt > WebChannel.RECONNECT_TTL_MS) {
           this.recentlyDisconnected.delete(id);
         }
       }
@@ -339,34 +350,46 @@ export class WebChannel
   private handleWsConnection(ws: WebSocket): void {
     let chatId: string = randomUUID();
     let assignedId = false;
+    let reconnectToken = this.generateReconnectToken();
 
-    const client: WsClient = { ws, chatId, msgCount: 0, windowStart: Date.now() };
+    const client: WsClient = { ws, chatId, reconnectToken, msgCount: 0, windowStart: Date.now() };
     this.clients.set(chatId, client);
 
     // Send welcome with chatId
-    this.sendJson(ws, { type: "connected", chatId });
+    this.sendJson(ws, { type: "connected", chatId, reconnectToken });
 
     ws.on("message", (raw) => {
       try {
         const data = JSON.parse(raw.toString()) as Record<string, unknown>;
 
         // Handle reconnect: reuse old chatId if recently disconnected
-        if (!assignedId && data.type === "reconnect" && typeof data.chatId === "string") {
+        if (
+          !assignedId &&
+          data.type === "reconnect" &&
+          typeof data.chatId === "string" &&
+          typeof data.reconnectToken === "string"
+        ) {
           const oldId = data.chatId;
+          const presentedToken = data.reconnectToken;
           // Validate UUID format to prevent arbitrary string injection
           if (WebChannel.UUID_RE.test(oldId)) {
-            const disconnectedAt = this.recentlyDisconnected.get(oldId);
-            const withinTtl = disconnectedAt && (Date.now() - disconnectedAt) < WebChannel.RECONNECT_TTL_MS;
+            const disconnectedSession = this.recentlyDisconnected.get(oldId);
+            const withinTtl = disconnectedSession && (Date.now() - disconnectedSession.disconnectedAt) < WebChannel.RECONNECT_TTL_MS;
             const existing = this.clients.get(oldId);
-            if (withinTtl && (!existing || existing.ws.readyState !== 1)) {
+            const validReconnectToken = disconnectedSession
+              ? this.safeTokenEquals(presentedToken, disconnectedSession.reconnectToken)
+              : false;
+            if (withinTtl && validReconnectToken && (!existing || existing.ws.readyState !== 1)) {
               // Remove stale entry and remap
               if (existing) this.clients.delete(oldId);
               this.recentlyDisconnected.delete(oldId);
               this.clients.delete(chatId);
               chatId = oldId;
+              reconnectToken = this.generateReconnectToken();
               client.chatId = oldId;
+              client.reconnectToken = reconnectToken;
               this.clients.set(chatId, client);
-              this.sendJson(ws, { type: "connected", chatId });
+              this.sendJson(ws, { type: "connected", chatId, reconnectToken });
             }
           }
           assignedId = true;
@@ -385,7 +408,10 @@ export class WebChannel
       if (current && current.ws === ws) {
         this.clients.delete(chatId);
         // Allow reconnect within TTL window
-        this.recentlyDisconnected.set(chatId, Date.now());
+        this.recentlyDisconnected.set(chatId, {
+          disconnectedAt: Date.now(),
+          reconnectToken: current.reconnectToken,
+        });
       }
     });
 
@@ -393,7 +419,10 @@ export class WebChannel
       const current = this.clients.get(chatId);
       if (current && current.ws === ws) {
         this.clients.delete(chatId);
-        this.recentlyDisconnected.set(chatId, Date.now());
+        this.recentlyDisconnected.set(chatId, {
+          disconnectedAt: Date.now(),
+          reconnectToken: current.reconnectToken,
+        });
       }
     });
   }
@@ -569,6 +598,19 @@ export class WebChannel
     }
   }
 
+  private generateReconnectToken(): string {
+    return randomBytes(32).toString("base64url");
+  }
+
+  private safeTokenEquals(left: string, right: string): boolean {
+    const leftBuffer = Buffer.from(left);
+    const rightBuffer = Buffer.from(right);
+    if (leftBuffer.length !== rightBuffer.length) {
+      return false;
+    }
+    return timingSafeEqual(leftBuffer, rightBuffer);
+  }
+
   /** Allowlisted dashboard API paths for proxy forwarding. */
   private static readonly ALLOWED_PROXY_PATHS = new Set([
     "/api/metrics",
@@ -610,6 +652,26 @@ export class WebChannel
     "/api/routing/preset",
   ]);
 
+  private getSingleHeader(
+    header: string | string[] | undefined,
+  ): string | undefined {
+    return Array.isArray(header) ? header[0] : header;
+  }
+
+  private isTrustedMutableProxyRequest(req: HttpReq): boolean {
+    const origin = this.getSingleHeader(req.headers.origin);
+    if (origin !== undefined) {
+      return isAllowedOrigin(origin);
+    }
+
+    const referer = this.getSingleHeader(req.headers.referer);
+    if (referer !== undefined) {
+      return isAllowedOrigin(referer);
+    }
+
+    return this.getSingleHeader(req.headers.authorization) !== undefined;
+  }
+
   /**
    * Proxy /api/* requests to the dashboard server (same-origin solution).
    * GET is allowed for all allowlisted paths; POST/DELETE only for mutable paths.
@@ -647,6 +709,12 @@ export class WebChannel
       return;
     }
 
+    if (method !== "GET" && !this.isTrustedMutableProxyRequest(req)) {
+      res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden" }));
+      return;
+    }
+
     try {
       // Defense-in-depth: validate constructed URL points to expected target
       const target = new URL(url, `http://127.0.0.1:${this.dashboardPort}`);
@@ -666,8 +734,12 @@ export class WebChannel
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
       };
-      const authHeader = req.headers["authorization"];
-      if (authHeader) proxyHeaders["Authorization"] = Array.isArray(authHeader) ? authHeader[0]! : authHeader;
+      const authHeader = this.getSingleHeader(req.headers.authorization);
+      if (authHeader) {
+        proxyHeaders["Authorization"] = authHeader;
+      } else if (this.options.dashboardAuthToken) {
+        proxyHeaders["Authorization"] = `Bearer ${this.options.dashboardAuthToken}`;
+      }
 
       const fetchOpts: RequestInit = {
         method,

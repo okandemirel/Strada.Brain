@@ -14,6 +14,7 @@ import type { BackgroundExecutor } from "./background-executor.js";
 import { getLogger } from "../utils/logger.js";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
+import type { Orchestrator } from "../agents/orchestrator.js";
 
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
@@ -40,6 +41,7 @@ export class TaskManager extends EventEmitter {
       triggerName?: string;
       goalTree?: GoalTree;
       attachments?: import("../channels/channel.interface.js").Attachment[];
+      orchestrator?: Orchestrator;
     },
   ): Task {
     const logger = getLogger();
@@ -59,6 +61,7 @@ export class TaskManager extends EventEmitter {
       triggerName: options?.triggerName,
       goalTree: options?.goalTree,
       attachments: options?.attachments,
+      orchestrator: options?.orchestrator,
     };
 
     this.storage.save(task);

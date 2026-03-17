@@ -386,15 +386,20 @@ export class LearningStorage {
           bayesian_alpha REAL DEFAULT 1.0,
           bayesian_beta REAL DEFAULT 1.0,
           cooling_started_at INTEGER,
-          cooling_failures INTEGER DEFAULT 0
+          cooling_failures INTEGER DEFAULT 0,
+          origin_session_id TEXT,
+          origin_boot_count INTEGER,
+          cross_session_hit_count INTEGER DEFAULT 0,
+          migrated_at INTEGER
         )
       `);
 
       // Copy data from old table
       this.db.exec(`
-        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures)
+        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
         SELECT id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to,
-               COALESCE(bayesian_alpha, 1.0), COALESCE(bayesian_beta, 1.0), cooling_started_at, COALESCE(cooling_failures, 0)
+               COALESCE(bayesian_alpha, 1.0), COALESCE(bayesian_beta, 1.0), cooling_started_at, COALESCE(cooling_failures, 0),
+               origin_session_id, origin_boot_count, COALESCE(cross_session_hit_count, 0), migrated_at
         FROM instincts_old
       `);
 
@@ -402,17 +407,7 @@ export class LearningStorage {
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_instincts_status_confidence ON instincts(status, confidence DESC)");
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_instincts_type_status ON instincts(type, status)");
 
-      // Recreate junction table with foreign key reference
-      this.db.exec("DROP TABLE IF EXISTS trajectory_instincts");
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS trajectory_instincts (
-          trajectory_id TEXT NOT NULL,
-          instinct_id TEXT NOT NULL,
-          PRIMARY KEY (trajectory_id, instinct_id),
-          FOREIGN KEY (trajectory_id) REFERENCES trajectories(id) ON DELETE CASCADE,
-          FOREIGN KEY (instinct_id) REFERENCES instincts(id) ON DELETE CASCADE
-        ) WITHOUT ROWID
-      `);
+      this.recreateTrajectoryInstinctsPreservingData();
 
       // Drop old table
       this.db.exec("DROP TABLE instincts_old");
@@ -473,14 +468,19 @@ export class LearningStorage {
           bayesian_alpha REAL DEFAULT 1.0,
           bayesian_beta REAL DEFAULT 1.0,
           cooling_started_at INTEGER,
-          cooling_failures INTEGER DEFAULT 0
+          cooling_failures INTEGER DEFAULT 0,
+          origin_session_id TEXT,
+          origin_boot_count INTEGER,
+          cross_session_hit_count INTEGER DEFAULT 0,
+          migrated_at INTEGER
         )
       `).run();
 
       this.db!.prepare(`
-        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures)
+        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
         SELECT id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to,
-               COALESCE(bayesian_alpha, 1.0), COALESCE(bayesian_beta, 1.0), cooling_started_at, COALESCE(cooling_failures, 0)
+               COALESCE(bayesian_alpha, 1.0), COALESCE(bayesian_beta, 1.0), cooling_started_at, COALESCE(cooling_failures, 0),
+               origin_session_id, origin_boot_count, COALESCE(cross_session_hit_count, 0), migrated_at
         FROM instincts_old
       `).run();
 
@@ -488,17 +488,7 @@ export class LearningStorage {
       this.db!.prepare("CREATE INDEX IF NOT EXISTS idx_instincts_status_confidence ON instincts(status, confidence DESC)").run();
       this.db!.prepare("CREATE INDEX IF NOT EXISTS idx_instincts_type_status ON instincts(type, status)").run();
 
-      // Recreate junction table with foreign key reference
-      this.db!.prepare("DROP TABLE IF EXISTS trajectory_instincts").run();
-      this.db!.prepare(`
-        CREATE TABLE IF NOT EXISTS trajectory_instincts (
-          trajectory_id TEXT NOT NULL,
-          instinct_id TEXT NOT NULL,
-          PRIMARY KEY (trajectory_id, instinct_id),
-          FOREIGN KEY (trajectory_id) REFERENCES trajectories(id) ON DELETE CASCADE,
-          FOREIGN KEY (instinct_id) REFERENCES instincts(id) ON DELETE CASCADE
-        ) WITHOUT ROWID
-      `).run();
+      this.recreateTrajectoryInstinctsPreservingData();
 
       this.db!.prepare("DROP TABLE instincts_old").run();
     });
@@ -509,6 +499,38 @@ export class LearningStorage {
       this.db.pragma("legacy_alter_table = OFF");
       this.db.pragma("foreign_keys = ON");
     }
+  }
+
+  private recreateTrajectoryInstinctsPreservingData(): void {
+    if (!this.db) return;
+
+    this.db.exec(`
+      DROP TABLE IF EXISTS temp.trajectory_instincts_backup;
+      CREATE TEMP TABLE trajectory_instincts_backup AS
+      SELECT trajectory_id, instinct_id
+      FROM trajectory_instincts;
+    `);
+
+    this.db.exec(`
+      DROP TABLE IF EXISTS trajectory_instincts;
+      CREATE TABLE trajectory_instincts (
+        trajectory_id TEXT NOT NULL,
+        instinct_id TEXT NOT NULL,
+        PRIMARY KEY (trajectory_id, instinct_id),
+        FOREIGN KEY (trajectory_id) REFERENCES trajectories(id) ON DELETE CASCADE,
+        FOREIGN KEY (instinct_id) REFERENCES instincts(id) ON DELETE CASCADE
+      ) WITHOUT ROWID;
+    `);
+
+    this.db.exec(`
+      INSERT OR IGNORE INTO trajectory_instincts (trajectory_id, instinct_id)
+      SELECT backup.trajectory_id, backup.instinct_id
+      FROM trajectory_instincts_backup AS backup
+      INNER JOIN trajectories ON trajectories.id = backup.trajectory_id
+      INNER JOIN instincts ON instincts.id = backup.instinct_id;
+
+      DROP TABLE IF EXISTS temp.trajectory_instincts_backup;
+    `);
   }
 
   /** Get the underlying database instance (for migration runner access) */

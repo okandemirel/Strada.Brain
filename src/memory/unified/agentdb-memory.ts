@@ -2204,11 +2204,15 @@ export class AgentDBMemory implements IUnifiedMemory {
 
     let migrated = 0;
     let skipped = 0;
+    let hadPersistFailure = false;
 
     // Process in batches
     for (let batchStart = 0; batchStart < allEntries.length; batchStart += BATCH_SIZE) {
       const batch = allEntries.slice(batchStart, batchStart + BATCH_SIZE);
-      const entriesToPersist: UnifiedMemoryEntry[] = [];
+      const entriesToPersist: Array<{
+        entry: UnifiedMemoryEntry;
+        newEmbedding: Vector<number>;
+      }> = [];
 
       for (const entry of batch) {
         const embeddingArr = entry.embedding as unknown as number[];
@@ -2219,36 +2223,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
         try {
           const newEmbedding = await this.config.embeddingProvider(entry.content) as Vector<number>;
-          (entry as unknown as { embedding: Vector<number> }).embedding = newEmbedding;
-
-          // Update HNSW index
-          if (this.hnswStore) {
-            const store = this.hnswStore;
-            await this.writeMutex.withLock(() =>
-              store.upsert([
-                {
-                  id: entry.id as string,
-                  vector: newEmbedding,
-                  chunk: {
-                    id: entry.id as string,
-                    content: entry.content,
-                    contentHash: "",
-                    filePath: (entry.chatId as string) ?? "memory",
-                    indexedAt: entry.createdAt as TimestampMs,
-                    kind: "class" as const,
-                    startLine: 0,
-                    endLine: 0,
-                    language: "typescript",
-                  },
-                  addedAt: entry.createdAt as TimestampMs,
-                  accessCount: entry.accessCount,
-                },
-              ]),
-            );
-          }
-
-          entriesToPersist.push(entry);
-          migrated++;
+          entriesToPersist.push({ entry, newEmbedding });
         } catch (entryError) {
           skipped++;
           getLoggerSafe().warn("[AgentDB] Failed to re-embed entry, skipping", {
@@ -2264,23 +2239,80 @@ export class AgentDBMemory implements IUnifiedMemory {
           const stmt = this.sqliteStatements.get("upsertMemory");
           if (stmt) {
             this.sqliteDb.transaction(() => {
-              for (const e of entriesToPersist) {
-                this.upsertEntryRow(stmt, e);
+              for (const { entry, newEmbedding } of entriesToPersist) {
+                this.upsertEntryRow(
+                  stmt,
+                  {
+                    ...entry,
+                    embedding: newEmbedding,
+                  } as UnifiedMemoryEntry,
+                );
               }
             })();
+          } else {
+            throw new Error("upsertMemory statement unavailable");
           }
         } catch (persistError) {
+          hadPersistFailure = true;
+          skipped += entriesToPersist.length;
           getLoggerSafe().warn("[AgentDB] Failed to persist batch during re-embed", {
             error: String(persistError),
+            batchSize: entriesToPersist.length,
           });
+          continue;
         }
+
+        for (const { entry, newEmbedding } of entriesToPersist) {
+          (entry as unknown as { embedding: Vector<number> }).embedding = newEmbedding;
+        }
+
+        if (this.hnswStore) {
+          const store = this.hnswStore;
+          try {
+            await this.writeMutex.withLock(() =>
+              store.upsert(
+                entriesToPersist.map(({ entry, newEmbedding }) => ({
+                  id: entry.id as string,
+                  vector: newEmbedding,
+                  chunk: {
+                    id: entry.id as string,
+                    content: entry.content,
+                    contentHash: "",
+                    filePath: (entry.chatId as string) ?? "memory",
+                    indexedAt: entry.createdAt as TimestampMs,
+                    kind: "class" as const,
+                    startLine: 0,
+                    endLine: 0,
+                    language: "typescript",
+                  },
+                  addedAt: entry.createdAt as TimestampMs,
+                  accessCount: entry.accessCount,
+                })),
+              ),
+            );
+          } catch (indexError) {
+            getLoggerSafe().warn("[AgentDB] Failed to update HNSW during re-embed", {
+              error: String(indexError),
+              batchSize: entriesToPersist.length,
+            });
+          }
+        }
+
+        migrated += entriesToPersist.length;
       }
 
       getLoggerSafe().info(`[AgentDB] Re-embedding: ${migrated}/${total} entries migrated`);
     }
 
-    // Mark migration as complete
-    await this.setMigrationMarker(MARKER_KEY, { migrated, total, skipped });
+    if (!hadPersistFailure) {
+      await this.setMigrationMarker(MARKER_KEY, { migrated, total, skipped });
+    } else {
+      getLoggerSafe().warn("[AgentDB] Re-embed finished with persistence failures; migration marker not set", {
+        migrated,
+        total,
+        skipped,
+      });
+    }
 
     getLoggerSafe().info("[AgentDB] Hash-to-real embedding migration complete", {
       migrated,

@@ -19,6 +19,11 @@ function readStoredChatId(): string | null {
   return window.localStorage.getItem('strada-chatId')
 }
 
+function readStoredReconnectToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem('strada-reconnectToken')
+}
+
 export interface UseWebSocketReturn {
   messages: ChatMessage[]
   status: ConnectionStatus
@@ -40,6 +45,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
   const wsRef = useRef<WebSocket | null>(null)
   const chatIdRef = useRef<string | null>(readStoredChatId())
+  const reconnectTokenRef = useRef<string | null>(readStoredReconnectToken())
   const reconnectDelayRef = useRef(1000)
   const reconnectAttemptsRef = useRef(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -66,8 +72,9 @@ export function useWebSocket(): UseWebSocketReturn {
       // Attempt reconnect with previous session (skip on first-run to get fresh chatId)
       if (localStorage.getItem('strada-firstRun') !== '1') {
         const savedChatId = localStorage.getItem('strada-chatId')
-        if (savedChatId) {
-          ws.send(JSON.stringify({ type: 'reconnect', chatId: savedChatId }))
+        const savedReconnectToken = localStorage.getItem('strada-reconnectToken')
+        if (savedChatId && savedReconnectToken) {
+          ws.send(JSON.stringify({ type: 'reconnect', chatId: savedChatId, reconnectToken: savedReconnectToken }))
         }
       }
     })
@@ -123,8 +130,10 @@ export function useWebSocket(): UseWebSocketReturn {
       switch (data.type) {
         case 'connected':
           chatIdRef.current = data.chatId
+          reconnectTokenRef.current = data.reconnectToken
           setSessionId(data.chatId)
           localStorage.setItem('strada-chatId', data.chatId)
+          localStorage.setItem('strada-reconnectToken', data.reconnectToken)
           // First-run: send sentinel to trigger deterministic onboarding (no user bubble)
           if (localStorage.getItem('strada-firstRun') === '1') {
             localStorage.removeItem('strada-firstRun')

@@ -18,6 +18,25 @@ export default function SetupWizard() {
     wiz.setProjectPath(selected)
   }
 
+  if (wiz.setupAvailability !== 'available') {
+    return (
+      <div className="setup-container">
+        <div className="setup-card">
+          <h1>
+            {wiz.setupAvailability === 'checking'
+              ? 'Checking setup availability...'
+              : 'Setup Wizard Unavailable'}
+          </h1>
+          <p>
+            {wiz.setupAvailability === 'checking'
+              ? 'Verifying whether this instance is still in first-run setup mode.'
+              : wiz.setupUnavailableReason}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="setup-container">
       <div className="setup-card">

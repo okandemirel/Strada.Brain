@@ -86,6 +86,17 @@ describe("loadConfig", () => {
     delete process.env["CHAIN_PARALLEL_ENABLED"];
     delete process.env["CHAIN_MAX_PARALLEL_BRANCHES"];
     delete process.env["CHAIN_COMPENSATION_TIMEOUT_MS"];
+    // Clear task delegation env vars
+    delete process.env["TASK_DELEGATION_ENABLED"];
+    delete process.env["AGENT_MAX_DELEGATION_DEPTH"];
+    delete process.env["AGENT_MAX_CONCURRENT_DELEGATIONS"];
+    delete process.env["DELEGATION_TIER_LOCAL"];
+    delete process.env["DELEGATION_TIER_CHEAP"];
+    delete process.env["DELEGATION_TIER_STANDARD"];
+    delete process.env["DELEGATION_TIER_PREMIUM"];
+    delete process.env["DELEGATION_VERBOSITY"];
+    delete process.env["DELEGATION_TYPES"];
+    delete process.env["DELEGATION_MAX_ITERATIONS_PER_TYPE"];
   });
 
   it("loads valid configuration", () => {
@@ -117,6 +128,39 @@ describe("loadConfig", () => {
     setEnv({ TELEGRAM_BOT_TOKEN: "bot-token-123" });
     const config = loadConfig();
     expect(config.telegram.botToken).toBe("bot-token-123");
+  });
+
+  it("loads task delegation env vars into runtime config", () => {
+    setEnv({
+      TASK_DELEGATION_ENABLED: "true",
+      AGENT_MAX_DELEGATION_DEPTH: "4",
+      AGENT_MAX_CONCURRENT_DELEGATIONS: "5",
+      DELEGATION_TIER_LOCAL: "ollama:llama3.3",
+      DELEGATION_TIER_CHEAP: "deepseek:deepseek-chat",
+      DELEGATION_TIER_STANDARD: "claude:claude-sonnet-4-6-20250514",
+      DELEGATION_TIER_PREMIUM: "claude:claude-opus-4-6-20250514",
+      DELEGATION_VERBOSITY: "verbose",
+      DELEGATION_TYPES: JSON.stringify([
+        {
+          name: "analysis",
+          tier: "cheap",
+          timeoutMs: 30000,
+          maxIterations: 7,
+        },
+      ]),
+      DELEGATION_MAX_ITERATIONS_PER_TYPE: "7",
+    });
+
+    const config = loadConfig();
+
+    expect(config.delegation.enabled).toBe(true);
+    expect(config.delegation.maxDepth).toBe(4);
+    expect(config.delegation.maxConcurrentPerParent).toBe(5);
+    expect(config.delegation.tiers.cheap).toBe("deepseek:deepseek-chat");
+    expect(config.delegation.verbosity).toBe("verbose");
+    expect(config.delegation.types).toHaveLength(1);
+    expect(config.delegation.types[0]?.name).toBe("analysis");
+    expect(config.delegation.types[0]?.maxIterations).toBe(7);
   });
 
   it("parses CSV user IDs correctly", () => {

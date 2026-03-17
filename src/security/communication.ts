@@ -11,7 +11,7 @@
 
 import { type SecureServerOptions } from "node:http2";
 import { readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual, X509Certificate } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
 
 // =============================================================================
@@ -75,6 +75,12 @@ export interface SecureConnectionResult {
   pinned?: boolean;
 }
 
+export interface WebSocketConnectionRequest {
+  secure: boolean;
+  origin?: string;
+  headers: Record<string, string | string[]>;
+}
+
 export interface WebSocketSecurityConfig {
   /** Require secure WebSocket (wss://) */
   requireSecure: boolean;
@@ -90,6 +96,8 @@ export interface WebSocketSecurityConfig {
   pingInterval: number;
   /** Require authentication token */
   requireAuth: boolean;
+  /** Validate authentication tokens for new connections */
+  authTokenValidator?: (token: string, request: WebSocketConnectionRequest) => boolean;
 }
 
 // =============================================================================
@@ -419,11 +427,7 @@ export class SecureWebSocketManager {
    * Validate WebSocket connection request
    */
   validateConnection(
-    request: {
-      secure: boolean;
-      origin?: string;
-      headers: Record<string, string | string[]>;
-    },
+    request: WebSocketConnectionRequest,
     authToken?: string
   ): { allowed: boolean; error?: string; connectionId?: string } {
     // Check secure connection requirement
@@ -446,11 +450,20 @@ export class SecureWebSocketManager {
       }
     }
 
+    const resolvedAuthToken = authToken ?? this.extractAuthToken(request.headers);
+
     // Validate authentication
-    if (this.config.requireAuth && !authToken) {
+    if (this.config.requireAuth && !resolvedAuthToken) {
       return {
         allowed: false,
         error: "Authentication required",
+      };
+    }
+
+    if (this.config.requireAuth && resolvedAuthToken && !this.verifyAuthToken(resolvedAuthToken, request)) {
+      return {
+        allowed: false,
+        error: "Invalid authentication token",
       };
     }
 
@@ -462,7 +475,7 @@ export class SecureWebSocketManager {
       lastActivity: Date.now(),
       messageCount: 0,
       rateLimitWindow: Date.now(),
-      isAuthenticated: !!authToken,
+      isAuthenticated: !!resolvedAuthToken,
     });
 
     this.logger.info("WebSocket connection validated", { connectionId });
@@ -606,6 +619,33 @@ export class SecureWebSocketManager {
   private generateConnectionId(): string {
     return `${Date.now()}-${randomBytes(8).toString("hex")}`;
   }
+
+  private extractAuthToken(headers: Record<string, string | string[]>): string | undefined {
+    const rawHeader = headers["authorization"] ?? headers["Authorization"];
+    const value = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+
+    if (!value) {
+      return undefined;
+    }
+
+    const bearerMatch = value.match(/^Bearer\s+(.+)$/i);
+    const token = bearerMatch?.[1] ?? value;
+    return token.trim() || undefined;
+  }
+
+  private verifyAuthToken(token: string, request: WebSocketConnectionRequest): boolean {
+    if (this.config.authTokenValidator) {
+      return this.config.authTokenValidator(token, request);
+    }
+
+    const expectedToken = process.env["WEBSOCKET_AUTH_TOKEN"];
+    if (!expectedToken) {
+      this.logger.error("WebSocket authentication is required but no validator is configured");
+      return false;
+    }
+
+    return compareTokens(token, expectedToken);
+  }
 }
 
 interface WebSocketConnection {
@@ -647,53 +687,96 @@ export function validateCertificateChain(
     return { valid: false, error: "Empty certificate chain" };
   }
 
-  // Simplified validation - in production use proper X509 chain validation
-  for (let i = 0; i < certs.length - 1; i++) {
-    const cert = certs[i];
-    const issuer = certs[i + 1];
-    
-    if (!cert || !issuer) {
-      return {
-        valid: false,
-        error: `Certificate ${i} not found in chain`,
-      };
+  if (trustedCAs.length === 0) {
+    return { valid: false, error: "No trusted CA certificates configured" };
+  }
+
+  const parsedChain = certs.map((cert, index) => {
+    try {
+      return new X509Certificate(cert);
+    } catch {
+      throw new Error(`Certificate ${index} is not a valid X.509 certificate`);
     }
-    
-    if (!verifyCertSignature(cert, issuer)) {
-      return {
-        valid: false,
-        error: `Certificate ${i} signature verification failed`,
-      };
+  });
+
+  const parsedTrustedCAs = trustedCAs.map((ca, index) => {
+    try {
+      return new X509Certificate(ca);
+    } catch {
+      throw new Error(`Trusted CA ${index} is not a valid X.509 certificate`);
     }
-  }
+  });
 
-  // Verify root against trusted CAs
-  const rootCert = certs[certs.length - 1];
-  if (!rootCert) {
-    return { valid: false, error: "Empty certificate chain" };
-  }
-  const isTrusted = trustedCAs.some((ca) => 
-    createHash("sha256").update(ca).digest("hex") === 
-    createHash("sha256").update(rootCert).digest("hex")
-  );
+  try {
+    // Simplified validation - in production use proper policy/path validation
+    for (let i = 0; i < parsedChain.length - 1; i++) {
+      const cert = parsedChain[i];
+      const issuer = parsedChain[i + 1];
+      
+      if (!cert || !issuer) {
+        return {
+          valid: false,
+          error: `Certificate ${i} not found in chain`,
+        };
+      }
+      
+      if (!cert.checkIssued(issuer)) {
+        return {
+          valid: false,
+          error: `Certificate ${i} issuer does not match next certificate in chain`,
+        };
+      }
 
-  if (!isTrusted) {
-    return { valid: false, error: "Root certificate not trusted" };
-  }
+      if (!verifyCertSignature(cert.raw, issuer.raw)) {
+        return {
+          valid: false,
+          error: `Certificate ${i} signature verification failed`,
+        };
+      }
+    }
 
-  return { valid: true };
+    // Verify root against trusted CAs
+    const rootCert = parsedChain[parsedChain.length - 1];
+    if (!rootCert) {
+      return { valid: false, error: "Empty certificate chain" };
+    }
+
+    if (!rootCert.ca) {
+      return { valid: false, error: "Root certificate is not a certificate authority" };
+    }
+
+    if (!rootCert.verify(rootCert.publicKey)) {
+      return { valid: false, error: "Root certificate signature verification failed" };
+    }
+
+    const isTrusted = parsedTrustedCAs.some((ca) => ca.fingerprint256 === rootCert.fingerprint256);
+
+    if (!isTrusted) {
+      return { valid: false, error: "Root certificate not trusted" };
+    }
+
+    return { valid: true };
+  } catch (error) {
+    return {
+      valid: false,
+      error: error instanceof Error ? error.message : "Certificate chain validation failed",
+    };
+  }
 }
 
-function verifyCertSignature(_cert: Buffer, _issuerCert: Buffer): boolean {
-  // Simplified - in production use proper X509 signature verification
-  return true;
+function verifyCertSignature(cert: Buffer, issuerCert: Buffer): boolean {
+  try {
+    const certificate = new X509Certificate(cert);
+    const issuer = new X509Certificate(issuerCert);
+    return certificate.verify(issuer.publicKey);
+  } catch {
+    return false;
+  }
 }
 
 // =============================================================================
 // UTILITY FUNCTIONS
 // =============================================================================
-
-import { randomBytes } from "node:crypto";
 
 /**
  * Generate a secure random token
@@ -720,9 +803,6 @@ export function compareTokens(token1: string, token2: string): boolean {
   
   return timingSafeEqual(buf1, buf2);
 }
-
-// Re-import timingSafeEqual
-import { timingSafeEqual } from "node:crypto";
 
 // =============================================================================
 // EXPORTS

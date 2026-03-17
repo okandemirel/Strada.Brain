@@ -13,7 +13,7 @@ export interface HealthData {
   clients: number
 }
 
-/** Metrics snapshot from dashboard server (port 3001) */
+/** Metrics snapshot from dashboard server (port 3100 by default) */
 export interface MetricsData {
   uptime: number
   totalMessages: number

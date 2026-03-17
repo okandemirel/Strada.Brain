@@ -8,6 +8,7 @@
 import { randomBytes } from "node:crypto";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
+import type { Orchestrator } from "../agents/orchestrator.js";
 
 // ─── Task Identity ──────────────────────────────────────────────────────────────
 
@@ -77,6 +78,8 @@ export interface Task {
   goalTree?: GoalTree;
   /** Attachments forwarded from the incoming message (images, files) */
   attachments?: import("../channels/channel.interface.js").Attachment[];
+  /** Optional agent-specific orchestrator for queued execution paths. */
+  orchestrator?: Orchestrator;
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────────
