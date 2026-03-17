@@ -322,4 +322,14 @@ describe("webhookAuth", () => {
     );
     expect(result.valid).toBe(false);
   });
+
+  it("empty dashboard bearer token is rejected safely", () => {
+    const result = validateWebhookAuth(
+      { authorization: "Bearer " },
+      undefined,
+      "dash-token",
+    );
+    expect(result.valid).toBe(false);
+    expect(result.status).toBe(401);
+  });
 });

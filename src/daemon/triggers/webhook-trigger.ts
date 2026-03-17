@@ -292,18 +292,14 @@ export function validateWebhookAuth(
  * Handles different-length strings by padding the shorter one.
  */
 function timingSafeCompare(a: string, b: string): boolean {
-  if (!a || !b) return false;
-
   const bufA = Buffer.from(a, "utf-8");
   const bufB = Buffer.from(b, "utf-8");
+  const paddedLength = Math.max(bufA.length, bufB.length, 1);
+  const paddedA = Buffer.alloc(paddedLength);
+  const paddedB = Buffer.alloc(paddedLength);
+  bufA.copy(paddedA);
+  bufB.copy(paddedB);
 
-  // timingSafeEqual requires same length buffers
-  if (bufA.length !== bufB.length) {
-    // Compare against a same-length dummy to avoid timing leak on length
-    const dummy = Buffer.alloc(bufA.length);
-    timingSafeEqual(bufA, dummy);
-    return false;
-  }
-
-  return timingSafeEqual(bufA, bufB);
+  const equal = timingSafeEqual(paddedA, paddedB);
+  return equal && bufA.length === bufB.length && bufA.length > 0;
 }

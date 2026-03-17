@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
+import { isAllowedOrigin } from "../security/origin-validation.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { IMemoryManager, MemoryHealth } from "../memory/memory.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
@@ -461,9 +462,23 @@ export class DashboardServer {
         }
       }
 
-      // All /api/* endpoints require dashboard authentication (except /health and /ready)
-      if (url.startsWith("/api/") && this.dashboardToken) {
+      const isDashboardApi = url.startsWith("/api/");
+      const isMutableDashboardApi =
+        isDashboardApi &&
+        req.method !== "GET" &&
+        req.method !== "HEAD" &&
+        req.method !== "OPTIONS" &&
+        !url.startsWith("/api/webhook");
+
+      // Token-enabled dashboard APIs always require bearer auth.
+      if (isDashboardApi && this.dashboardToken) {
         if (!this.requireDashboardAuth(req, res)) return;
+      }
+
+      // Without a dashboard token, mutating dashboard APIs still require a trusted
+      // same-origin browser request so local CSRF cannot drive daemon actions.
+      if (isMutableDashboardApi && !this.dashboardToken) {
+        if (!this.requireTrustedDashboardMutation(req, res)) return;
       }
 
       if (url.startsWith("/api/goals")) {
@@ -1460,6 +1475,37 @@ export class DashboardServer {
       return false;
     }
     return true;
+  }
+
+  private getSingleHeader(
+    header: string | string[] | undefined,
+  ): string | undefined {
+    return Array.isArray(header) ? header[0] : header;
+  }
+
+  private requireTrustedDashboardMutation(
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+  ): boolean {
+    const origin = this.getSingleHeader(req.headers.origin);
+    if (origin !== undefined) {
+      if (isAllowedOrigin(origin)) return true;
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden" }));
+      return false;
+    }
+
+    const referer = this.getSingleHeader(req.headers.referer);
+    if (referer !== undefined) {
+      if (isAllowedOrigin(referer)) return true;
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden" }));
+      return false;
+    }
+
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Trusted same-origin request required" }));
+    return false;
   }
 
   /**

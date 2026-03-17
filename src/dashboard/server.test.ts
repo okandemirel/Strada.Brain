@@ -102,6 +102,57 @@ describe("DashboardServer", () => {
     expect(res.status).toBe(404);
   });
 
+  it("allows tokenless mutable dashboard requests from trusted origins", () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+
+    const req = {
+      headers: {
+        origin: "http://localhost:3000",
+      },
+    } as unknown as import("node:http").IncomingMessage;
+    const res = {
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    } as unknown as import("node:http").ServerResponse;
+
+    const allowed = (server as unknown as {
+      requireTrustedDashboardMutation: (
+        req: import("node:http").IncomingMessage,
+        res: import("node:http").ServerResponse,
+      ) => boolean;
+    }).requireTrustedDashboardMutation(req, res);
+
+    expect(allowed).toBe(true);
+    expect((res.writeHead as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+  });
+
+  it("rejects tokenless mutable dashboard requests without trusted origin metadata", () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+
+    const req = {
+      headers: {},
+    } as unknown as import("node:http").IncomingMessage;
+    const res = {
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    } as unknown as import("node:http").ServerResponse;
+
+    const allowed = (server as unknown as {
+      requireTrustedDashboardMutation: (
+        req: import("node:http").IncomingMessage,
+        res: import("node:http").ServerResponse,
+      ) => boolean;
+    }).requireTrustedDashboardMutation(req, res);
+
+    expect(allowed).toBe(false);
+    expect((res.writeHead as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      403,
+      { "Content-Type": "application/json" },
+    );
+  });
+
   it("returns trigger objects compatible with dashboard view contracts", async () => {
     const metrics = new MetricsCollector();
     server = new DashboardServer(0, metrics, () => undefined);
