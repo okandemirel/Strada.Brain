@@ -1007,7 +1007,7 @@ export class Orchestrator {
           const decision = parseReflectionDecision(response.text);
 
           if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-            const completionGate = getCompletionGatePrompt(bgAgentState, selfVerification);
+            const completionGate = getCompletionGatePrompt(bgAgentState, selfVerification, response.text);
             if (completionGate) {
               bgAgentState = {
                 ...bgAgentState,
@@ -1062,6 +1062,20 @@ export class Orchestrator {
           bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
 
           if (response.toolCalls.length === 0) {
+            if (shouldSurfaceTerminalFailureFromReflection(response)) {
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: bgAgentState.iteration,
+                toolCallCount: bgToolCallCount,
+                hitMaxIterations: false,
+              });
+              await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
+              return response.text || "Task completed without output.";
+            }
+
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
@@ -1073,7 +1087,7 @@ export class Orchestrator {
 
         // Final response — return text
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-          const completionGate = getCompletionGatePrompt(bgAgentState, selfVerification);
+          const completionGate = getCompletionGatePrompt(bgAgentState, selfVerification, response.text);
           if (completionGate) {
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
@@ -1675,7 +1689,7 @@ export class Orchestrator {
         const decision = parseReflectionDecision(response.text);
 
         if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-          const completionGate = getCompletionGatePrompt(agentState, selfVerification);
+          const completionGate = getCompletionGatePrompt(agentState, selfVerification, response.text);
           if (completionGate) {
             agentState = {
               ...agentState,
@@ -1767,6 +1781,20 @@ export class Orchestrator {
         agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
 
         if (response.toolCalls.length === 0) {
+          if (shouldSurfaceTerminalFailureFromReflection(response)) {
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+              await this.channel.sendMarkdown(chatId, response.text);
+            }
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
+            });
+            return;
+          }
+
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
           }
@@ -1817,7 +1845,7 @@ export class Orchestrator {
       // (streaming already sent it, so skip for streamed end_turn)
       if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
         // ─── Verification gate: catch unverified exits ──────────────────
-        const completionGate = getCompletionGatePrompt(agentState, selfVerification);
+        const completionGate = getCompletionGatePrompt(agentState, selfVerification, response.text);
         if (completionGate) {
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
@@ -3345,14 +3373,18 @@ function parseReflectionDecision(text: string | null | undefined): ReflectionDec
   return "CONTINUE";
 }
 
-function getCompletionGatePrompt(state: AgentState, selfVerification: SelfVerification): string | null {
+function getCompletionGatePrompt(
+  state: AgentState,
+  selfVerification: SelfVerification,
+  responseText?: string | null,
+): string | null {
   if (selfVerification.needsVerification()) {
     return selfVerification.getPrompt();
   }
-  return buildUnresolvedFailurePrompt(state);
+  return buildUnresolvedFailurePrompt(state, responseText);
 }
 
-function buildUnresolvedFailurePrompt(state: AgentState): string | null {
+function buildUnresolvedFailurePrompt(state: AgentState, responseText?: string | null): string | null {
   const lastFailureIndex = findLastFailureIndex(state.stepResults);
   if (lastFailureIndex === -1) {
     return null;
@@ -3360,6 +3392,10 @@ function buildUnresolvedFailurePrompt(state: AgentState): string | null {
 
   const stepsAfterLastFailure = state.stepResults.slice(lastFailureIndex + 1);
   if (stepsAfterLastFailure.some(isCleanVerificationStep)) {
+    return null;
+  }
+
+  if (isTerminalFailureReport(responseText)) {
     return null;
   }
 
@@ -3373,6 +3409,65 @@ function buildUnresolvedFailurePrompt(state: AgentState): string | null {
     "[UNRESOLVED FAILURES] Recent failures are still open:\n" +
     recentFailures +
     "\nDo not declare the task done yet. Return to the failing path, apply the remaining fix, run the relevant verification command/tool, and finish only after a clean result."
+  );
+}
+
+function isTerminalFailureReport(text: string | null | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+
+  const normalized = text.toLowerCase();
+  const failurePatterns = [
+    /\bfailed\b/,
+    /\bfailure\b/,
+    /\berror\b/,
+    /\btimed out\b/,
+    /\btimeout\b/,
+    /\bmanual\b/,
+    /\bintervention\b/,
+    /\bunable\b/,
+    /\bcannot\b/,
+    /\bcan'?t\b/,
+    /\bcould not\b/,
+    /\bcouldn'?t\b/,
+    /\brequires?\b/,
+    /\bblocked\b/,
+    /\bcorrupted\b/,
+    /\bnot found\b/,
+    /\bmissing\b/,
+  ];
+  const successPatterns = [
+    /\bfixed\b/,
+    /\bresolved\b/,
+    /\bsuccessful\b/,
+    /\bsucceeded\b/,
+    /\bcompleted\b/,
+    /\bcomplete\b/,
+    /\bverified clean\b/,
+    /\ball set\b/,
+  ];
+  const continuationPatterns = [
+    /^\s*\*{0,2}\s*continue\b/,
+    /\blet me\b/,
+    /\bi(?:'ll| will)\b/,
+    /\banaly[sz]e\b/,
+    /\binvestigat(?:e|ing)\b/,
+    /\btry again\b/,
+    /\breplan\b/,
+  ];
+
+  const mentionsFailure = failurePatterns.some((pattern) => pattern.test(normalized));
+  const claimsSuccess = successPatterns.some((pattern) => pattern.test(normalized));
+  const keepsWorking = continuationPatterns.some((pattern) => pattern.test(normalized));
+  return mentionsFailure && !claimsSuccess && !keepsWorking;
+}
+
+function shouldSurfaceTerminalFailureFromReflection(response: ProviderResponse): boolean {
+  return (
+    response.stopReason === "end_turn" &&
+    response.toolCalls.length === 0 &&
+    isTerminalFailureReport(response.text)
   );
 }
 

@@ -1824,6 +1824,177 @@ describe("Orchestrator", () => {
       expect(gateMessage).toBeDefined();
       expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("paor-done-gate", "Verified clean.");
     });
+
+    it("allows terminal failure reports to reach the user when the task remains unresolved", async () => {
+      const buildTool = createMockTool("dotnet_build");
+      buildTool.execute = vi.fn().mockResolvedValue({
+        content: "Build timed out after 2 minutes",
+        isError: true,
+      });
+
+      const orchWithBuild = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [buildTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce({
+          text: "Attempting build",
+          toolCalls: [{ id: "tc-build-1", name: "dotnet_build", input: {} }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "**CONTINUE**",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "This error requires manual intervention because the build timed out repeatedly.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
+
+      mockProvider.chat = chatSpy;
+
+      const promise = orchWithBuild.handleMessage({
+        channelType: "cli",
+        chatId: "paor-terminal-failure",
+        userId: "user1",
+        text: "Build the project",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(chatSpy).toHaveBeenCalledTimes(3);
+      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+        "paor-terminal-failure",
+        "This error requires manual intervention because the build timed out repeatedly.",
+      );
+    });
+
+    it("surfaces terminal failure reports directly from reflection when no decision marker is present", async () => {
+      const readFailureTool = createMockTool("file_read");
+      readFailureTool.execute = vi.fn().mockResolvedValue({
+        content: "File not found",
+        isError: true,
+      });
+
+      const orchWithReadFailure = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readFailureTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce({
+          text: "Let me read that file.",
+          toolCalls: [{ id: "tc-read-1", name: "file_read", input: { path: "Assets/Scripts/Missing.cs" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "I couldn't find that file. Please check the path.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
+
+      mockProvider.chat = chatSpy;
+
+      const promise = orchWithReadFailure.handleMessage({
+        channelType: "cli",
+        chatId: "reflection-terminal-failure",
+        userId: "user1",
+        text: "Read Missing.cs",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(chatSpy).toHaveBeenCalledTimes(2);
+      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+        "reflection-terminal-failure",
+        "I couldn't find that file. Please check the path.",
+      );
+    });
+
+    it("keeps working when the reflection text still says the agent will analyze further", async () => {
+      const buildTool = createMockTool("dotnet_build");
+      buildTool.execute = vi.fn().mockResolvedValue({
+        content: "Build failed with unrecoverable project corruption",
+        isError: true,
+      });
+
+      const orchWithBuild = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [buildTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce({
+          text: "Attempting build",
+          toolCalls: [{ id: "tc-build-ongoing-1", name: "dotnet_build", input: {} }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "CONTINUE — the build failed, let me analyze the situation.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "This error requires manual intervention. The project file is corrupted and needs to be restored from version control or recreated.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
+
+      mockProvider.chat = chatSpy;
+
+      const promise = orchWithBuild.handleMessage({
+        channelType: "cli",
+        chatId: "reflection-ongoing-analysis",
+        userId: "user1",
+        text: "Fix the corrupted project",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(chatSpy).toHaveBeenCalledTimes(3);
+      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+        "reflection-ongoing-analysis",
+        "This error requires manual intervention. The project file is corrupted and needs to be restored from version control or recreated.",
+      );
+    });
   });
 
   describe("MetricsRecorder Integration", () => {
