@@ -552,6 +552,30 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `WHATSAPP_SESSION_PATH` | Directory for session files (default: `.whatsapp-session`) |
 | `WHATSAPP_ALLOWED_NUMBERS` | Comma-separated phone numbers |
 
+**Matrix:**
+| Variable | Description |
+|----------|-------------|
+| `MATRIX_HOMESERVER` | Matrix homeserver URL |
+| `MATRIX_ACCESS_TOKEN` | Bot access token |
+| `MATRIX_USER_ID` | Bot user ID |
+| `MATRIX_ALLOWED_USER_IDS` | Optional comma-separated Matrix user IDs allowed to talk to the bot |
+| `MATRIX_ALLOWED_ROOM_IDS` | Optional comma-separated Matrix room IDs allowed to deliver messages |
+
+**IRC:**
+| Variable | Description |
+|----------|-------------|
+| `IRC_SERVER` | IRC server hostname |
+| `IRC_NICK` | Bot nick |
+| `IRC_CHANNELS` | Comma-separated channels to join |
+| `IRC_ALLOWED_USERS` | Optional comma-separated IRC nicknames allowed to trigger the bot |
+
+**Teams:**
+| Variable | Description |
+|----------|-------------|
+| `TEAMS_APP_ID` | Microsoft Teams app ID |
+| `TEAMS_APP_PASSWORD` | Microsoft Teams app password |
+| `TEAMS_ALLOWED_USER_IDS` | Optional comma-separated Teams user IDs allowed to message the bot |
+
 ### Features
 
 | Variable | Default | Description |

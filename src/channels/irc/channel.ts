@@ -2,7 +2,7 @@
  * IRC Channel - Internet Relay Chat adapter
  *
  * Requires: irc (npm install irc)
- * Config: IRC_SERVER, IRC_NICK, IRC_CHANNELS (comma-separated)
+ * Config: IRC_SERVER, IRC_NICK, IRC_CHANNELS (comma-separated), IRC_ALLOWED_USERS
  */
 
 import type { IChannelAdapter } from "../channel.interface.js";
@@ -22,6 +22,7 @@ export class IRCChannel implements IChannelAdapter {
     private readonly server: string,
     private readonly nick: string,
     private readonly channels: string[],
+    private readonly allowedUsers: readonly string[] = [],
   ) {}
 
   onMessage(handler: MessageHandler): void {
@@ -47,6 +48,7 @@ export class IRCChannel implements IChannelAdapter {
       const isMention = text.startsWith(`${this.nick}:`);
 
       if (!isDirectMessage && !isMention) return;
+      if (!this.isAllowedInboundUser(from)) return;
 
       const cleanText = (isMention ? text.slice(this.nick.length + 1).trim() : text).slice(0, 4096);
       const chatId = isDirectMessage ? from : to;
@@ -103,6 +105,10 @@ export class IRCChannel implements IChannelAdapter {
       .replace(/`{3}[\s\S]*?`{3}/g, "[code block]")
       .replace(/`(.*?)`/g, "$1");
     await this.sendText(chatId, plain);
+  }
+
+  private isAllowedInboundUser(userId: string): boolean {
+    return this.allowedUsers.length === 0 || this.allowedUsers.includes(userId);
   }
 }
 

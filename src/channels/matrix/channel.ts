@@ -2,7 +2,8 @@
  * Matrix Channel - Decentralized chat via Matrix protocol
  *
  * Requires: matrix-js-sdk (npm install matrix-js-sdk)
- * Config: MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, MATRIX_USER_ID
+ * Config: MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, MATRIX_USER_ID,
+ *         MATRIX_ALLOWED_USER_IDS, MATRIX_ALLOWED_ROOM_IDS
  */
 
 import type {
@@ -25,6 +26,8 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
     private readonly homeserver: string,
     private readonly accessToken: string,
     private readonly userId: string,
+    private readonly allowedUserIds: readonly string[] = [],
+    private readonly allowedRoomIds: readonly string[] = [],
   ) {}
 
   onMessage(handler: MessageHandler): void {
@@ -47,15 +50,18 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
 
     client.on("Room.timeline", (event: MatrixEvent) => {
       if (event.getType() !== "m.room.message") return;
-      if (event.getSender() === this.userId) return;
+      const sender = event.getSender();
+      const roomId = event.getRoomId();
+      if (sender === this.userId) return;
+      if (!this.isAllowedInboundMessage(sender, roomId)) return;
 
       const content = event.getContent();
       if (content.msgtype !== "m.text") return;
 
       const msg: IncomingMessage = {
         channelType: "matrix",
-        chatId: event.getRoomId(),
-        userId: event.getSender(),
+        chatId: roomId,
+        userId: sender,
         text: content.body,
         timestamp: new Date(event.getTs()),
       };
@@ -103,6 +109,12 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
 
   async sendAttachment(chatId: string, attachment: Attachment): Promise<void> {
     await this.sendText(chatId, `[Attachment: ${attachment.name}]`);
+  }
+
+  private isAllowedInboundMessage(userId: string, roomId: string): boolean {
+    const userAllowed = this.allowedUserIds.length === 0 || this.allowedUserIds.includes(userId);
+    const roomAllowed = this.allowedRoomIds.length === 0 || this.allowedRoomIds.includes(roomId);
+    return userAllowed && roomAllowed;
   }
 }
 

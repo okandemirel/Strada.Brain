@@ -2080,13 +2080,21 @@ async function initializeChannel(
       const homeserver = process.env["MATRIX_HOMESERVER"];
       const accessToken = process.env["MATRIX_ACCESS_TOKEN"];
       const matrixUserId = process.env["MATRIX_USER_ID"];
+      const allowedUserIds = (process.env["MATRIX_ALLOWED_USER_IDS"] ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const allowedRoomIds = (process.env["MATRIX_ALLOWED_ROOM_IDS"] ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
       if (!homeserver || !accessToken || !matrixUserId) {
         throw new AppError(
           "MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID are required for Matrix channel",
           "MISSING_MATRIX_CONFIG",
         );
       }
-      return new MatrixChannel(homeserver, accessToken, matrixUserId);
+      return new MatrixChannel(homeserver, accessToken, matrixUserId, allowedUserIds, allowedRoomIds);
     }
 
     case "irc": {
@@ -2094,23 +2102,31 @@ async function initializeChannel(
       const ircServer = process.env["IRC_SERVER"];
       const ircNick = process.env["IRC_NICK"] ?? "strada-brain";
       const ircChannels = (process.env["IRC_CHANNELS"] ?? "").split(",").filter(Boolean);
+      const allowedUsers = (process.env["IRC_ALLOWED_USERS"] ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
       if (!ircServer) {
         throw new AppError("IRC_SERVER is required for IRC channel", "MISSING_IRC_CONFIG");
       }
-      return new IRCChannel(ircServer, ircNick, ircChannels);
+      return new IRCChannel(ircServer, ircNick, ircChannels, allowedUsers);
     }
 
     case "teams": {
       const { TeamsChannel } = await import("../channels/teams/channel.js");
       const teamsAppId = process.env["TEAMS_APP_ID"];
       const teamsAppPassword = process.env["TEAMS_APP_PASSWORD"];
+      const allowedUserIds = (process.env["TEAMS_ALLOWED_USER_IDS"] ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
       if (!teamsAppId || !teamsAppPassword) {
         throw new AppError(
           "TEAMS_APP_ID and TEAMS_APP_PASSWORD are required for Teams channel",
           "MISSING_TEAMS_CONFIG",
         );
       }
-      return new TeamsChannel(teamsAppId, teamsAppPassword);
+      return new TeamsChannel(teamsAppId, teamsAppPassword, 3978, allowedUserIds);
     }
 
     case "telegram":

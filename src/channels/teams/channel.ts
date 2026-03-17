@@ -2,7 +2,7 @@
  * Microsoft Teams Channel - Bot Framework adapter
  *
  * Requires: botframework-connector, botbuilder (npm install botbuilder)
- * Config: TEAMS_APP_ID, TEAMS_APP_PASSWORD
+ * Config: TEAMS_APP_ID, TEAMS_APP_PASSWORD, TEAMS_ALLOWED_USER_IDS
  */
 
 import type { IChannelAdapter } from "../channel.interface.js";
@@ -23,6 +23,8 @@ export class TeamsChannel implements IChannelAdapter {
     private readonly appId: string,
     private readonly appPassword: string,
     private readonly port: number = 3978,
+    private readonly allowedUserIds: readonly string[] = [],
+    private readonly listenHost: string = "127.0.0.1",
   ) {}
 
   onMessage(handler: MessageHandler): void {
@@ -49,6 +51,10 @@ export class TeamsChannel implements IChannelAdapter {
       if (req.method === "POST" && req.url === "/api/messages") {
         await (this.adapter as BotAdapterLike).process(req, res, async (context: TurnContextLike) => {
           if (context.activity.type === "message" && context.activity.text) {
+            if (!this.isAllowedInboundUser(context.activity.from.id)) {
+              return;
+            }
+
             const msg: IncomingMessage = {
               channelType: "teams",
               chatId: context.activity.conversation.id,
@@ -67,11 +73,11 @@ export class TeamsChannel implements IChannelAdapter {
     });
 
     await new Promise<void>((resolve) => {
-      this.server!.listen(this.port, () => resolve());
+      this.server!.listen(this.port, this.listenHost, () => resolve());
     });
 
     this.healthy = true;
-    logger.info("Teams channel listening", { port: this.port });
+    logger.info("Teams channel listening", { port: this.port, host: this.listenHost });
   }
 
   async disconnect(): Promise<void> {
@@ -97,6 +103,10 @@ export class TeamsChannel implements IChannelAdapter {
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {
     await this.sendText(chatId, markdown);
+  }
+
+  private isAllowedInboundUser(userId: string): boolean {
+    return this.allowedUserIds.length === 0 || this.allowedUserIds.includes(userId);
   }
 }
 
