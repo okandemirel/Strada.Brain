@@ -1,6 +1,9 @@
 import { Orchestrator } from "./orchestrator.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import type { IEventEmitter, LearningEventMap, ToolResultEvent } from "../core/event-bus.js";
+import { ShowPlanTool } from "./tools/show-plan.js";
+import { AskUserTool } from "./tools/ask-user.js";
+import { DMPolicy } from "../security/dm-policy.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
@@ -62,6 +65,14 @@ function createMockTool(name: string, isWrite = false) {
     inputSchema: { type: "object", properties: {} },
     execute: vi.fn().mockResolvedValue({ content: `${name} result` }),
   };
+}
+
+function getToolResultBlock(callArgs: any[] | undefined): any {
+  const messages = (callArgs?.[1] as any[]) ?? [];
+  const toolResultMsg = messages.find((m: any) =>
+    m.role === "user" && Array.isArray(m.content)
+  );
+  return toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
 }
 
 describe("Orchestrator", () => {
@@ -278,6 +289,299 @@ describe("Orchestrator", () => {
       c.type === "tool_result"
     );
     expect(toolResultBlock?.content).toContain("disabled in read-only mode");
+    expect(toolResultBlock?.is_error).toBe(true);
+  });
+
+  it("self-reviews and auto-approves strong plans in autonomous mode", async () => {
+    const dmPolicy = new DMPolicy(mockChannel as any);
+    dmPolicy.initFromProfile("auto-plan", { autonomousMode: true });
+
+    const autoPlanOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [new ShowPlanTool()],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      dmPolicy,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-plan",
+          name: "show_plan",
+          input: {
+            summary: "Inspect the failing workflow and land the minimal verified fix",
+            steps: [
+              "Read the failing workflow output and inspect the related implementation files",
+              "Apply the minimal code change needed to remove the regression",
+              "Run the relevant verification command and confirm the fix holds",
+            ],
+            reasoning: "This keeps the change small and verified before completion.",
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Proceeding.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const promise = autoPlanOrch.handleMessage({
+      channelType: "cli",
+      chatId: "auto-plan",
+      userId: "user1",
+      text: "Handle this task autonomously",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
+    const toolResultBlock = getToolResultBlock(mockProvider.chat.mock.calls[1]);
+    expect(toolResultBlock?.content).toContain("Autonomous plan review passed");
+    expect(toolResultBlock?.content).toContain("Proceed without waiting for user approval");
+    expect(toolResultBlock?.is_error).toBe(false);
+  });
+
+  it("rejects weak plans in autonomous mode and asks the agent to revise them", async () => {
+    const dmPolicy = new DMPolicy(mockChannel as any);
+    dmPolicy.initFromProfile("auto-plan-reject", { autonomousMode: true });
+
+    const autoPlanOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [new ShowPlanTool()],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      dmPolicy,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-plan-reject",
+          name: "show_plan",
+          input: {
+            summary: "Do stuff",
+            steps: ["TODO", "Wait for approval"],
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Reworking the plan.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const promise = autoPlanOrch.handleMessage({
+      channelType: "cli",
+      chatId: "auto-plan-reject",
+      userId: "user1",
+      text: "Handle this task autonomously",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
+    const toolResultBlock = getToolResultBlock(mockProvider.chat.mock.calls[1]);
+    expect(toolResultBlock?.content).toContain("Autonomous plan review rejected");
+    expect(toolResultBlock?.content).toContain("Revise the plan with concrete, executable, non-interactive steps");
+    expect(toolResultBlock?.is_error).toBe(false);
+  });
+
+  it("resolves confirmation-like ask_user calls during background execution without waiting", async () => {
+    const backgroundOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [new AskUserTool()],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-ask-bg",
+          name: "ask_user",
+          input: {
+            question: "Should I proceed with the verified implementation?",
+            options: ["Proceed", "Cancel"],
+            recommended: "Proceed",
+            context: "The implementation is ready and the relevant checks passed.",
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const abortController = new AbortController();
+    await backgroundOrch.runBackgroundTask("Apply the verified fix", {
+      chatId: "bg-ask-review",
+      channelType: "cli",
+      signal: abortController.signal,
+      onProgress: vi.fn(),
+    });
+
+    expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
+    const toolResultBlock = getToolResultBlock(mockProvider.chat.mock.calls[1]);
+    expect(toolResultBlock?.content).toContain("Autonomous question review (background mode)");
+    expect(toolResultBlock?.content).toContain("Selected \"Proceed\"");
+    expect(toolResultBlock?.is_error).toBe(false);
+  });
+
+  it("auto-approves safe write operations during background execution without waiting", async () => {
+    const shellTool = createMockTool("shell_exec", true);
+    const backgroundOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [shellTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-shell-bg",
+          name: "shell_exec",
+          input: {
+            command: "npm test",
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          reason: "Running the test suite is directly aligned with the task and bounded.",
+          taskAligned: true,
+          bounded: true,
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      })
+      .mockResolvedValueOnce({
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const abortController = new AbortController();
+    await backgroundOrch.runBackgroundTask("Run the test suite", {
+      chatId: "bg-safe-shell",
+      channelType: "cli",
+      signal: abortController.signal,
+      onProgress: vi.fn(),
+    });
+
+    expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
+    expect(mockProvider.chat.mock.calls[1]?.[0]).toContain("shell safety arbiter");
+    expect(shellTool.execute).toHaveBeenCalledWith(
+      { command: "npm test" },
+      expect.objectContaining({ chatId: "bg-safe-shell" }),
+    );
+  });
+
+  it("rejects shell commands that the orchestrator review marks as unrelated", async () => {
+    const shellTool = createMockTool("shell_exec", true);
+    const backgroundOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [shellTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-shell-bg-reject",
+          name: "shell_exec",
+          input: {
+            command: "cat ~/.ssh/config",
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "reject",
+          reason: "The command is unrelated to the requested coding task and probes sensitive host data.",
+          taskAligned: false,
+          bounded: false,
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      })
+      .mockResolvedValueOnce({
+        text: "Adjusted.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const abortController = new AbortController();
+    await backgroundOrch.runBackgroundTask("Clean the workspace", {
+      chatId: "bg-danger-shell",
+      channelType: "cli",
+      signal: abortController.signal,
+      onProgress: vi.fn(),
+    });
+
+    expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
+    expect(shellTool.execute).not.toHaveBeenCalled();
+    const toolResultBlock = getToolResultBlock(mockProvider.chat.mock.calls[2]);
+    expect(toolResultBlock?.content).toContain("Self-managed write review rejected (background mode)");
+    expect(toolResultBlock?.content).toContain("unrelated to the requested coding task");
     expect(toolResultBlock?.is_error).toBe(true);
   });
 

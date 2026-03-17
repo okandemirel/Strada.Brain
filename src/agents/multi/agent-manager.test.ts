@@ -22,6 +22,10 @@ import { TypedEventBus } from "../../core/event-bus.js";
 import type { LearningEventMap } from "../../core/event-bus.js";
 import type { IncomingMessage } from "../../channels/channel-messages.interface.js";
 import { DaemonStorage } from "../../daemon/daemon-storage.js";
+import type { TaskUsageEvent } from "../../tasks/types.js";
+
+let mockUsageEvent: TaskUsageEvent | null = null;
+let mockMemoryTotalEntries = 0;
 
 // =============================================================================
 // MOCKS
@@ -32,8 +36,13 @@ import { DaemonStorage } from "../../daemon/daemon-storage.js";
 // We mock it to return a string for test verification of correct routing
 vi.mock("../orchestrator.js", () => {
   return {
-    Orchestrator: vi.fn().mockImplementation(() => ({
-      handleMessage: vi.fn().mockResolvedValue("mock response"),
+    Orchestrator: vi.fn().mockImplementation((opts?: { onUsage?: (usage: TaskUsageEvent) => void }) => ({
+      handleMessage: vi.fn().mockImplementation(async () => {
+        if (mockUsageEvent) {
+          opts?.onUsage?.(mockUsageEvent);
+        }
+        return "mock response";
+      }),
       cleanupSessions: vi.fn(),
       setTaskManager: vi.fn(),
     })),
@@ -48,6 +57,7 @@ vi.mock("../../memory/unified/agentdb-memory.js", () => {
       shutdown: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
       close: vi.fn().mockResolvedValue(undefined),
       getUserProfileStore: vi.fn().mockReturnValue(null),
+      getStats: vi.fn(() => ({ totalEntries: mockMemoryTotalEntries })),
     })),
   };
 });
@@ -127,6 +137,8 @@ describe("AgentManager", () => {
   let daemonStorage: DaemonStorage;
 
   beforeEach(() => {
+    mockUsageEvent = null;
+    mockMemoryTotalEntries = 0;
     // Real in-memory SQLite for registry
     db = new Database(":memory:");
     registry = new AgentRegistry(db);
@@ -242,6 +254,16 @@ describe("AgentManager", () => {
   // ===========================================================================
 
   describe("budget enforcement", () => {
+    it("records per-agent usage from orchestrator token callbacks", async () => {
+      mockUsageEvent = { provider: "claude", inputTokens: 100_000, outputTokens: 50_000 };
+
+      await manager.routeMessage(makeMsg());
+
+      const agents = manager.getAllAgents();
+      const usage = budgetTracker.getAgentUsage(agents[0].id, agents[0].budgetCapUsd);
+      expect(usage.usedUsd).toBeGreaterThan(0);
+    });
+
     it("rejects message when agent budget is exceeded", async () => {
       // First message creates the agent
       await manager.routeMessage(makeMsg());
@@ -677,6 +699,18 @@ describe("AgentManager", () => {
       expect(agents2[0].lastActivity).toBeGreaterThan(firstActivity);
 
       vi.useRealTimers();
+    });
+  });
+
+  describe("memory count tracking", () => {
+    it("syncs memoryEntryCount back into the registry after message handling", async () => {
+      mockMemoryTotalEntries = 12;
+
+      await manager.routeMessage(makeMsg());
+
+      const agent = manager.getAllAgents()[0];
+      expect(agent.memoryEntryCount).toBe(12);
+      expect(manager.getAgent(agent.id)?.memoryEntryCount).toBe(12);
     });
   });
 

@@ -262,6 +262,11 @@ export class WebChannel
       "base-uri 'none'; " +
       "frame-ancestors 'none';",
   };
+  private static readonly NO_CACHE_HEADERS: Record<string, string> = {
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+  };
 
   private async handleHttp(req: HttpReq, res: ServerResponse): Promise<void> {
     const url = req.url ?? "/";
@@ -652,10 +657,15 @@ export class WebChannel
       }
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+      const timeoutMs = method === "GET" ? 15_000 : 20_000;
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
       // Forward auth header if present (so dashboard token works through proxy)
-      const proxyHeaders: Record<string, string> = { "Accept": "application/json" };
+      const proxyHeaders: Record<string, string> = {
+        "Accept": "application/json",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+      };
       const authHeader = req.headers["authorization"];
       if (authHeader) proxyHeaders["Authorization"] = Array.isArray(authHeader) ? authHeader[0]! : authHeader;
 
@@ -663,6 +673,7 @@ export class WebChannel
         method,
         signal: controller.signal,
         headers: proxyHeaders,
+        cache: "no-store",
       };
       if (method === "POST" || method === "DELETE") {
         fetchOpts.headers = { ...proxyHeaders, "Content-Type": "application/json" };
@@ -700,11 +711,16 @@ export class WebChannel
       const body = await response.text();
       res.writeHead(response.status, {
         ...WebChannel.SECURITY_HEADERS,
+        ...WebChannel.NO_CACHE_HEADERS,
         "Content-Type": response.headers.get("content-type") ?? "application/json",
       });
       res.end(body);
     } catch {
-      res.writeHead(503, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.writeHead(503, {
+        ...WebChannel.SECURITY_HEADERS,
+        ...WebChannel.NO_CACHE_HEADERS,
+        "Content-Type": "application/json",
+      });
       res.end(JSON.stringify({ error: "Dashboard API unavailable", hint: "Set DASHBOARD_ENABLED=true" }));
     }
   }

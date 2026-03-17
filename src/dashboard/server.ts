@@ -145,6 +145,11 @@ const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
 /** Valid routing preset names. */
 const VALID_ROUTING_PRESETS = new Set(["budget", "balanced", "performance"]);
+const NO_CACHE_HEADERS: Record<string, string> = {
+  "Cache-Control": "no-store, no-cache, must-revalidate",
+  "Pragma": "no-cache",
+  "Expires": "0",
+};
 
 /** Structural interface for ProviderRouter methods used by dashboard /api/agent-activity endpoint */
 interface DashboardProviderRouter {
@@ -432,6 +437,11 @@ export class DashboardServer {
       res.setHeader("X-Frame-Options", "DENY");
       res.setHeader("X-XSS-Protection", "1; mode=block");
       res.setHeader("Referrer-Policy", "no-referrer");
+      if (url.startsWith("/api/") || url === "/health" || url === "/ready") {
+        for (const [key, value] of Object.entries(NO_CACHE_HEADERS)) {
+          res.setHeader(key, value);
+        }
+      }
 
       // All /api/* endpoints require dashboard authentication (except /health and /ready)
       if (url.startsWith("/api/") && this.dashboardToken) {

@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { formatUptime } from '../utils/format'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
+import { fetchJson } from '../utils/api'
 
 interface IdentityState {
   agentName: string
@@ -36,6 +38,10 @@ function formatDate(ts: string): string {
   }
 }
 
+function toPercent(pct: number): number {
+  return pct * 100
+}
+
 export default function IdentityPage() {
   const [daemon, setDaemon] = useState<DaemonData | null>(null)
   const [uptime, setUptime] = useState<number>(0)
@@ -44,11 +50,14 @@ export default function IdentityPage() {
 
   const fetchData = useCallback(() => {
     Promise.all([
-      fetch('/api/daemon').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('/api/metrics').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetchJson<DaemonData>('/api/daemon'),
+      fetchJson<{ uptime: number }>('/api/metrics'),
     ]).then(([daemonData, metricsData]: [DaemonData | null, { uptime: number } | null]) => {
       if (daemonData) setDaemon(daemonData)
       if (metricsData?.uptime) setUptime(metricsData.uptime / 1000)
+      if (daemonData || metricsData) {
+        setError(null)
+      }
       if (!daemonData && !metricsData) setError('Could not reach the server')
       setLoading(false)
     }).catch(e => {
@@ -57,16 +66,13 @@ export default function IdentityPage() {
     })
   }, [])
 
-  useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 15000)
-    return () => clearInterval(interval)
-  }, [fetchData])
+  useAutoRefresh(fetchData, { intervalMs: 15000 })
 
   if (loading) return <div className="page-loading">Loading identity...</div>
   if (error && !daemon) return <div className="page-error">Error: {error}</div>
 
   const identity = daemon?.identity
+  const daemonBudgetPercent = daemon ? toPercent(daemon.budget.pct) : 0
 
   return (
     <div className="admin-page">
@@ -145,7 +151,7 @@ export default function IdentityPage() {
             {daemon.budget.limitUsd > 0 && (
               <div className="admin-stat-row" style={{ flex: 1, minWidth: '150px' }}>
                 <span className="admin-stat-label">Budget %</span>
-                <span className="admin-stat-value">{daemon.budget.pct.toFixed(1)}%</span>
+                <span className="admin-stat-value">{daemonBudgetPercent.toFixed(1)}%</span>
               </div>
             )}
           </div>
@@ -153,8 +159,8 @@ export default function IdentityPage() {
           {daemon.budget.limitUsd > 0 && (
             <div className="admin-progress-bar" style={{ marginBottom: '20px' }}>
               <div
-                className={`admin-progress-fill ${daemon.budget.pct > 90 ? 'error' : daemon.budget.pct > 70 ? 'warn' : ''}`}
-                style={{ width: `${Math.min(daemon.budget.pct, 100)}%` }}
+                className={`admin-progress-fill ${daemonBudgetPercent > 90 ? 'error' : daemonBudgetPercent > 70 ? 'warn' : ''}`}
+                style={{ width: `${Math.min(daemonBudgetPercent, 100)}%` }}
               />
             </div>
           )}

@@ -1,8 +1,17 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
+import { fetchJson } from '../utils/api'
 
 interface MemoryMetrics {
   totalEntries: number
   hasAnalysisCache: boolean
+  entriesByTier?: Record<string, number>
+  health?: {
+    healthy?: boolean
+    issues?: string[]
+    indexHealth?: string
+    storageUsagePercent?: number
+  } | null
 }
 
 interface ConsolidationData {
@@ -42,17 +51,20 @@ export default function MemoryPage() {
 
   const fetchData = useCallback(() => {
     Promise.all([
-      fetch('/api/metrics').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('/api/consolidation').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('/api/maintenance').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetchJson<{ memory: MemoryMetrics | null }>('/api/memory'),
+      fetchJson<ConsolidationData>('/api/consolidation'),
+      fetchJson<MaintenanceData>('/api/maintenance'),
     ]).then(([metricsData, consData, maintData]: [
-      { memoryStats: MemoryMetrics | null } | null,
+      { memory: MemoryMetrics | null } | null,
       ConsolidationData | null,
       MaintenanceData | null,
     ]) => {
-      if (metricsData?.memoryStats) setMemoryStats(metricsData.memoryStats)
+      if (metricsData?.memory) setMemoryStats(metricsData.memory)
       if (consData) setConsolidation(consData)
       if (maintData) setMaintenance(maintData)
+      if (metricsData || consData || maintData) {
+        setError(null)
+      }
       if (!metricsData && !consData && !maintData) {
         setError('Could not reach memory endpoints')
       }
@@ -63,11 +75,7 @@ export default function MemoryPage() {
     })
   }, [])
 
-  useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 15000)
-    return () => clearInterval(interval)
-  }, [fetchData])
+  useAutoRefresh(fetchData, { intervalMs: 15000 })
 
   if (loading) return <div className="page-loading">Loading memory data...</div>
   if (error && !memoryStats && !consolidation) return <div className="page-error">Error: {error}</div>
@@ -81,6 +89,15 @@ export default function MemoryPage() {
         count: data.total,
         pending: data.pending,
         clustered: data.clustered,
+      })
+    }
+  } else if (memoryStats?.entriesByTier) {
+    for (const [name, count] of Object.entries(memoryStats.entriesByTier)) {
+      tiers.push({
+        name,
+        count,
+        pending: 0,
+        clustered: 0,
       })
     }
   }
@@ -118,6 +135,15 @@ export default function MemoryPage() {
               </span>
             </div>
           )}
+          {memoryStats?.health && (
+            <div className="admin-stat-row" style={{ flex: 1, minWidth: '150px' }}>
+              <span className="admin-stat-label">Memory Health</span>
+              <span className="admin-stat-value">
+                <span className={`status-dot-inline ${memoryStats.health.healthy ? 'ok' : 'warn'}`} />{' '}
+                {memoryStats.health.indexHealth ?? (memoryStats.health.healthy ? 'Healthy' : 'Degraded')}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -143,6 +169,29 @@ export default function MemoryPage() {
               <span className="memory-tier-count">{tier.count.toLocaleString()}</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {memoryStats?.health && (
+        <div className="admin-section">
+          <div className="admin-section-title">Index Health</div>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            {memoryStats.health.storageUsagePercent !== undefined && (
+              <div className="admin-stat-row" style={{ flex: 1, minWidth: '150px' }}>
+                <span className="admin-stat-label">Storage Usage</span>
+                <span className="admin-stat-value">{memoryStats.health.storageUsagePercent}%</span>
+              </div>
+            )}
+            <div className="admin-stat-row" style={{ flex: 1, minWidth: '150px' }}>
+              <span className="admin-stat-label">Issues</span>
+              <span className="admin-stat-value">{memoryStats.health.issues?.length ?? 0}</span>
+            </div>
+          </div>
+          {memoryStats.health.issues && memoryStats.health.issues.length > 0 && (
+            <div style={{ marginTop: '12px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+              {memoryStats.health.issues.join(' • ')}
+            </div>
+          )}
         </div>
       )}
 

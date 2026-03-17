@@ -257,7 +257,7 @@ export default function DashboardView() {
               <MetricCard
                 title="Budget Used"
                 value={`$${agents.globalBudget.usedUsd.toFixed(2)}`}
-                subtitle={`${agents.globalBudget.pct.toFixed(0)}% of limit`}
+                subtitle={`${(agents.globalBudget.pct * 100).toFixed(0)}% of limit`}
               />
             )}
           </div>

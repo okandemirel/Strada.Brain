@@ -64,7 +64,7 @@ function buildTestGoalTree(): GoalTree {
   };
 }
 
-function createTestTask(goalTree?: GoalTree): Task {
+function createTestTask(goalTree?: GoalTree, overrides: Partial<Task> = {}): Task {
   return {
     id: "task_test123" as any,
     chatId: "chat1",
@@ -76,6 +76,7 @@ function createTestTask(goalTree?: GoalTree): Task {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     goalTree,
+    ...overrides,
   };
 }
 
@@ -268,6 +269,58 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
         rootId: goalTree.rootId,
         taskDescription: "Root task",
         timestamp: expect.any(Number),
+      }),
+    );
+  });
+});
+
+describe("BackgroundExecutor - daemon budget tracking", () => {
+  it("records cost for daemon-origin tasks from background usage callbacks", async () => {
+    const mockOrch = createMockOrchestrator();
+    mockOrch.runBackgroundTask.mockImplementation(async (_prompt: string, opts?: { onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void }) => {
+      opts?.onUsage?.({
+        provider: "claude",
+        inputTokens: 100_000,
+        outputTokens: 50_000,
+      });
+      return "task done";
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const budgetTracker = {
+      recordCost: vi.fn(),
+    };
+    executor.setDaemonBudgetTracker(budgetTracker as any);
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(
+      createTestTask(undefined, { origin: "daemon", triggerName: "nightly-review" }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    expect(budgetTracker.recordCost).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.objectContaining({
+        model: "claude",
+        tokensIn: 100_000,
+        tokensOut: 50_000,
+        triggerName: "nightly-review",
       }),
     );
   });

@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { formatUptime } from '../utils/format'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
+import { fetchJson } from '../utils/api'
 
 interface HealthData {
   status: string
@@ -43,10 +45,13 @@ export default function ChannelsPage() {
 
   const fetchData = useCallback(() => {
     Promise.all([
-      fetch('/api/channels').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('/health').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetchJson<{ channels: ChannelInfo[] }>('/api/channels'),
+      fetchJson<HealthData>('/health'),
     ]).then(([channelsData, healthData]: [{ channels: ChannelInfo[] } | null, HealthData | null]) => {
       if (healthData) setHealth(healthData)
+      if (channelsData || healthData) {
+        setError(null)
+      }
 
       if (channelsData?.channels) {
         setChannels(channelsData.channels)
@@ -68,11 +73,7 @@ export default function ChannelsPage() {
     })
   }, [])
 
-  useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 10000)
-    return () => clearInterval(interval)
-  }, [fetchData])
+  useAutoRefresh(fetchData, { intervalMs: 10000 })
 
   if (error) return <div className="page-error">Error: {error}</div>
   if (loading) return <div className="page-loading">Loading channels...</div>

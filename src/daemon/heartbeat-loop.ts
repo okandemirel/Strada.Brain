@@ -339,7 +339,7 @@ export class HeartbeatLoop {
             "daemon",
             "daemon",
             trigger.metadata.description,
-            { origin: "daemon" },
+            { origin: "daemon", triggerName: name },
           );
 
           // Record dedup fire

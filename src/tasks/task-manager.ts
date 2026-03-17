@@ -35,7 +35,12 @@ export class TaskManager extends EventEmitter {
     chatId: string,
     channelType: string,
     prompt: string,
-    options?: { origin?: TaskOrigin; goalTree?: GoalTree; attachments?: import("../channels/channel.interface.js").Attachment[] },
+    options?: {
+      origin?: TaskOrigin;
+      triggerName?: string;
+      goalTree?: GoalTree;
+      attachments?: import("../channels/channel.interface.js").Attachment[];
+    },
   ): Task {
     const logger = getLogger();
     const now = Date.now();
@@ -51,6 +56,7 @@ export class TaskManager extends EventEmitter {
       createdAt: now,
       updatedAt: now,
       origin: options?.origin ?? "user",
+      triggerName: options?.triggerName,
       goalTree: options?.goalTree,
       attachments: options?.attachments,
     };

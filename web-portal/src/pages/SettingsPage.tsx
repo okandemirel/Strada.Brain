@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { useWS } from '../hooks/useWS'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
+import { fetchJson } from '../utils/api'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -83,14 +85,8 @@ function formatRemaining(ms: number): string {
   return `${minutes}m remaining`
 }
 
-async function fetchJson<T>(url: string): Promise<T | null> {
-  try {
-    const res = await fetch(url)
-    if (!res.ok) return null
-    return (await res.json()) as T
-  } catch {
-    return null
-  }
+function toPercent(pct: number): number {
+  return pct * 100
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +123,7 @@ export default function SettingsPage() {
   const [voice, setVoice] = useState<VoiceSettings>(loadVoiceSettings)
   const speechInputAvailable = hasSpeechRecognition()
   const speechOutputAvailable = hasSpeechSynthesis()
+  const daemonBudgetPercent = daemonStatus ? toPercent(daemonStatus.budget.pct) : 0
 
   // --- Fetch autonomous status ---
   const fetchAutonomous = useCallback(() => {
@@ -178,26 +175,10 @@ export default function SettingsPage() {
       })
   }, [])
 
-  useEffect(() => {
-    fetchAutonomous()
-    fetchProviders()
-    fetchDaemon()
-    fetchRouting()
-  }, [fetchAutonomous, fetchProviders, fetchDaemon, fetchRouting])
-
-  // Refresh autonomous remaining time every 30s when active
-  useEffect(() => {
-    if (!autoStatus?.enabled) return
-    const interval = setInterval(fetchAutonomous, 30000)
-    return () => clearInterval(interval)
-  }, [autoStatus?.enabled, fetchAutonomous])
-
-  // Refresh daemon status every 10s when running
-  useEffect(() => {
-    if (!daemonStatus?.running) return
-    const interval = setInterval(fetchDaemon, 10000)
-    return () => clearInterval(interval)
-  }, [daemonStatus?.running, fetchDaemon])
+  useAutoRefresh(fetchAutonomous, { intervalMs: 30000 })
+  useAutoRefresh(fetchProviders, { intervalMs: 30000 })
+  useAutoRefresh(fetchDaemon, { intervalMs: 10000 })
+  useAutoRefresh(fetchRouting, { intervalMs: 30000 })
 
   // --- Handlers ---
 
@@ -426,7 +407,7 @@ export default function SettingsPage() {
                 <div className="admin-stat-row">
                   <span className="admin-stat-label">Budget</span>
                   <span className="admin-stat-value">
-                    ${daemonStatus.budget.usedUsd.toFixed(2)} / ${daemonStatus.budget.limitUsd.toFixed(2)} used ({daemonStatus.budget.pct}%)
+                    ${daemonStatus.budget.usedUsd.toFixed(2)} / ${daemonStatus.budget.limitUsd.toFixed(2)} used ({daemonBudgetPercent.toFixed(1)}%)
                   </span>
                 </div>
                 <div className="admin-stat-row">
@@ -443,12 +424,12 @@ export default function SettingsPage() {
                     >
                       <div
                         style={{
-                          width: `${Math.min(daemonStatus.budget.pct, 100)}%`,
+                          width: `${Math.min(daemonBudgetPercent, 100)}%`,
                           height: '100%',
                           borderRadius: 3,
-                          background: daemonStatus.budget.pct >= 90
+                          background: daemonBudgetPercent >= 90
                             ? 'var(--error)'
-                            : daemonStatus.budget.pct >= 70
+                            : daemonBudgetPercent >= 70
                               ? 'var(--warning)'
                               : 'var(--success)',
                           transition: 'width 0.3s ease',

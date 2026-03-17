@@ -31,6 +31,7 @@ import type { IdentityState } from "../../identity/identity-state.js";
 import type { ReRetrievalConfig } from "../../config/config.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
+import { estimateCost } from "../../security/rate-limiter.js";
 import { Orchestrator } from "../orchestrator.js";
 import { AgentDBMemory } from "../../memory/unified/agentdb-memory.js";
 import { AgentRegistry } from "./agent-registry.js";
@@ -207,7 +208,11 @@ export class AgentManager {
     liveAgent.instance = { ...liveAgent.instance, lastActivity: now };
 
     // Route through agent's orchestrator
-    return liveAgent.orchestrator.handleMessage(msg);
+    try {
+      return await liveAgent.orchestrator.handleMessage(msg);
+    } finally {
+      this.syncMemoryCount(liveAgent);
+    }
   }
 
   // ===========================================================================
@@ -406,6 +411,7 @@ export class AgentManager {
     // Build live agent
     const liveAgent: LiveAgent = { instance, orchestrator, memory };
     this.agents.set(key, liveAgent);
+    this.syncMemoryCount(liveAgent);
 
     this.eventBus.emit("agent:created", this.buildLifecycleEvent(instance));
 
@@ -418,6 +424,7 @@ export class AgentManager {
 
     const liveAgent: LiveAgent = { instance: persisted, orchestrator, memory };
     this.agents.set(persisted.key, liveAgent);
+    this.syncMemoryCount(liveAgent);
 
     return liveAgent;
   }
@@ -469,6 +476,17 @@ export class AgentManager {
       embeddingProvider: this.opts.embeddingProvider,
       userProfileStore: profileStore,
       soulLoader: this.opts.soulLoader,
+      onUsage: (usage) => {
+        const costUsd = estimateCost(usage.inputTokens, usage.outputTokens, usage.provider);
+        if (costUsd <= 0) {
+          return;
+        }
+        this.budgetTracker.recordCost(agentId, costUsd, {
+          model: usage.provider,
+          tokensIn: usage.inputTokens,
+          tokensOut: usage.outputTokens,
+        });
+      },
     });
 
     // Inject delegation tools if factory is available (Phase 24)
@@ -550,5 +568,15 @@ export class AgentManager {
       chatId: instance.chatId,
       timestamp: Date.now(),
     };
+  }
+
+  private syncMemoryCount(liveAgent: LiveAgent): void {
+    const totalEntries = liveAgent.memory.getStats().totalEntries;
+    if (liveAgent.instance.memoryEntryCount === totalEntries) {
+      return;
+    }
+
+    this.registry.updateMemoryCount(liveAgent.instance.id, totalEntries);
+    liveAgent.instance = { ...liveAgent.instance, memoryEntryCount: totalEntries };
   }
 }

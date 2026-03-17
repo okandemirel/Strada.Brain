@@ -7,7 +7,7 @@ import type {
   IStreamingProvider,
 } from "./providers/provider.interface.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
-import type { ITool, ToolContext } from "./tools/tool.interface.js";
+import type { ITool, ToolContext, ToolExecutionResult } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage, Attachment } from "../channels/channel.interface.js";
 import { supportsRichMessaging } from "../channels/channel.interface.js";
 import { isVisionCompatible, toBase64ImageSource } from "../utils/media-processor.js";
@@ -48,7 +48,7 @@ import {
   createReadOnlyToolStub,
   getReadOnlySystemPrompt,
 } from "../security/read-only-guard.js";
-import type { BackgroundTaskOptions } from "../tasks/types.js";
+import type { BackgroundTaskOptions, TaskUsageEvent } from "../tasks/types.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
@@ -73,15 +73,57 @@ You are operating in AUTONOMOUS MODE. The user has explicitly granted you full a
 - Execute ALL operations directly without asking for confirmation
 - Do NOT use ask_user tool for permission/confirmation questions
 - Do NOT use show_plan tool to wait for approval — execute immediately
+- If you use show_plan internally, make it concrete and execution-ready; strong plans are self-reviewed and auto-approved
 - Only use ask_user when you genuinely cannot determine user intent (missing critical info)
+- If you use ask_user anyway, prefer decision-ready options because the system may resolve the choice autonomously
 - Proceed confidently with your best judgment on all write operations
 - Budget and safety limits are still enforced automatically\n`;
 const API_KEY_PATTERN =
   /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+|AKIA[0-9A-Z]{16}|-----BEGIN\s(?:RSA\s)?PRIVATE\sKEY-----|mongodb(?:\+srv)?:\/\/[^\s]+@)[a-zA-Z0-9_\-.]{10,}/gi;
+const PLAN_PLACEHOLDER_PATTERN = /\b(todo|tbd|placeholder|fixme|fill in|coming soon|later)\b/i;
+const PLAN_WAIT_PATTERN = /\b(wait for|wait on|ask user|user approval|get approval|request approval|confirm with user|before proceeding)\b/i;
+const PLAN_EXECUTABLE_PATTERN = /\b(analy(?:se|ze)|inspect|read|search|trace|reproduce|implement|update|edit|write|refactor|run|test|verify|compare|document|review|check|measure|create|remove|rename|build|deploy)\b/i;
+const PERMISSION_QUESTION_PATTERN = /\b(approve|approval|permission|okay|ok(?:ay)? to|should i|may i|can i|do you want me to|confirm|proceed|continue|go ahead|allowed)\b/i;
+const AUTO_APPROVE_OPTION_PATTERN = /\b(approve|approved|continue|proceed|yes|ok|okay|go ahead|accept)\b/i;
+const AUTO_REJECT_OPTION_PATTERN = /\b(reject|deny|cancel|stop|no)\b/i;
+const SAFE_SHELL_FALLBACK_PATTERN =
+  /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck)\b)|npx\s+(?:vitest|eslint|tsc)\b|git\s+(?:status|diff|log|show|branch|rev-parse)\b|(?:rg|ls|pwd|cat|head|tail|find|sed|wc|stat)\b|(?:vitest|eslint|tsc)\b)/i;
+const SHELL_REVIEW_SYSTEM_PROMPT = `You are the shell safety arbiter for an autonomous coding agent.
+Decide whether the proposed shell command should execute automatically.
+
+Approve only when BOTH are true:
+1. The command is clearly aligned with the stated task.
+2. The command is bounded and normal for software work (build, test, lint, inspect, status, search, diff).
+
+Reject when the command is unrelated, broad, destructive, secret-seeking, privilege-escalating, remote-code-executing, or otherwise unsafe.
+
+Return JSON only:
+{"decision":"approve"|"reject","reason":"short reason","taskAligned":true|false,"bounded":true|false}`;
 
 interface Session {
   messages: ConversationMessage[];
   lastActivity: Date;
+}
+
+type ToolExecutionMode = "interactive" | "background";
+
+interface ToolExecutionOptions {
+  mode?: ToolExecutionMode;
+  taskPrompt?: string;
+  sessionMessages?: ConversationMessage[];
+  onUsage?: (usage: TaskUsageEvent) => void;
+}
+
+interface SelfManagedWriteReview {
+  approved: boolean;
+  reason?: string;
+}
+
+interface ShellCommandReviewDecision {
+  decision?: "approve" | "reject";
+  reason?: string;
+  taskAligned?: boolean;
+  bounded?: boolean;
 }
 
 /** Maps ISO codes to display names for system prompt injection. */
@@ -248,6 +290,7 @@ export class Orchestrator {
   /** Confidence estimation for consensus gating. */
   private readonly confidenceEstimator?: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
   private readonly taskClassifier = new TaskClassifier();
+  private readonly onUsage?: (usage: TaskUsageEvent) => void;
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -279,6 +322,7 @@ export class Orchestrator {
     providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
     consensusManager?: import("../agent-core/routing/consensus-manager.js").ConsensusManager;
     confidenceEstimator?: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
+    onUsage?: (usage: TaskUsageEvent) => void;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -304,6 +348,7 @@ export class Orchestrator {
     this.providerRouter = opts.providerRouter;
     this.consensusManager = opts.consensusManager;
     this.confidenceEstimator = opts.confidenceEstimator;
+    this.onUsage = opts.onUsage;
 
     // Build tool registry
     this.tools = new Map();
@@ -763,6 +808,11 @@ export class Orchestrator {
         const bgOutputTokens = response.usage?.outputTokens ?? 0;
         this.metrics?.recordTokenUsage(bgInputTokens, bgOutputTokens, currentProvider.name);
         this.rateLimiter?.recordTokenUsage(bgInputTokens, bgOutputTokens, currentProvider.name);
+        (options.onUsage ?? this.onUsage)?.({
+          provider: currentProvider.name,
+          inputTokens: bgInputTokens,
+          outputTokens: bgOutputTokens,
+        });
 
         // ─── PAOR: Handle REFLECTING phase response ─────────────────────
         if (bgAgentState.phase === AgentPhase.REFLECTING) {
@@ -886,7 +936,12 @@ export class Orchestrator {
           tool_calls: response.toolCalls,
         });
 
-        const toolResults = await this.executeToolCalls(chatId, response.toolCalls);
+        const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
+          mode: "background",
+          taskPrompt: prompt,
+          sessionMessages: session.messages,
+          onUsage: options.onUsage ?? this.onUsage,
+        });
         bgToolCallCount += response.toolCalls.length;
 
         // Autonomy tracking
@@ -1423,6 +1478,11 @@ export class Orchestrator {
       });
       this.metrics?.recordTokenUsage(inputTokens, outputTokens, currentProvider.name);
       this.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, currentProvider.name);
+      this.onUsage?.({
+        provider: currentProvider.name,
+        inputTokens,
+        outputTokens,
+      });
 
       // ─── PAOR: Handle REFLECTING phase response ─────────────────────
       if (agentState.phase === AgentPhase.REFLECTING) {
@@ -1686,7 +1746,12 @@ export class Orchestrator {
       // User only sees the final response (end_turn without tool calls).
 
       // Execute all tool calls
-      const toolResults = await this.executeToolCalls(chatId, response.toolCalls);
+      const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
+        mode: "interactive",
+        taskPrompt: lastUserMessage,
+        sessionMessages: session.messages,
+        onUsage: this.onUsage,
+      });
 
       // ─── Autonomy: track + analyze results ─────────────────────────────
       for (let i = 0; i < response.toolCalls.length; i++) {
@@ -2074,9 +2139,368 @@ export class Orchestrator {
   /**
    * Execute tool calls, handling confirmations for write operations.
    */
-  private async executeToolCalls(chatId: string, toolCalls: ToolCall[]): Promise<ToolResult[]> {
+  private isSelfManagedInteractiveMode(chatId: string, mode: ToolExecutionMode): boolean {
+    return mode === "background" || this.dmPolicy.isAutonomousActive(chatId);
+  }
+
+  private normalizeInteractiveText(value: unknown): string {
+    return String(value ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  private pickAutonomousChoice(options: string[], recommended?: string): string {
+    const normalizedRecommended = recommended?.trim().toLowerCase();
+    if (normalizedRecommended) {
+      const recommendedMatch = options.find((option) => option.toLowerCase() === normalizedRecommended);
+      if (recommendedMatch) {
+        return recommendedMatch;
+      }
+    }
+
+    const preferred = options.find((option) => AUTO_APPROVE_OPTION_PATTERN.test(option));
+    if (preferred) {
+      return preferred;
+    }
+
+    const fallback = options.find((option) => !AUTO_REJECT_OPTION_PATTERN.test(option));
+    return fallback ?? options[0] ?? "Continue";
+  }
+
+  private reviewAutonomousPlan(input: Record<string, unknown>, mode: ToolExecutionMode): ToolExecutionResult {
+    const summary = this.normalizeInteractiveText(input["summary"]);
+    const reasoning = this.normalizeInteractiveText(input["reasoning"]);
+    const steps = Array.isArray(input["steps"])
+      ? input["steps"]
+        .map((step) => this.normalizeInteractiveText(step))
+        .filter((step) => step.length > 0)
+      : [];
+    const issues: string[] = [];
+    const combinedText = [summary, reasoning, ...steps].filter((text) => text.length > 0);
+    const duplicatedStepCount = new Set(steps.map((step) => step.toLowerCase())).size;
+
+    if (summary.length < 12) {
+      issues.push("summary is too vague");
+    }
+    if (steps.length === 0) {
+      issues.push("steps are missing");
+    }
+    if (steps.some((step) => step.length < 8)) {
+      issues.push("one or more steps are too short to execute");
+    }
+    if (combinedText.some((text) => PLAN_PLACEHOLDER_PATTERN.test(text))) {
+      issues.push("plan contains placeholder language");
+    }
+    if (combinedText.some((text) => PLAN_WAIT_PATTERN.test(text))) {
+      issues.push("plan still waits for user approval");
+    }
+    if (steps.length > 0 && duplicatedStepCount !== steps.length) {
+      issues.push("steps repeat instead of progressing");
+    }
+    if (steps.length > 0 && !steps.some((step) => PLAN_EXECUTABLE_PATTERN.test(step))) {
+      issues.push("steps are not concrete enough");
+    }
+
+    if (issues.length > 0) {
+      return {
+        content:
+          `Autonomous plan review rejected (${mode} mode): ${issues.join("; ")}. ` +
+          "Revise the plan with concrete, executable, non-interactive steps and continue without waiting for user approval.",
+        isError: false,
+      };
+    }
+
+    return {
+      content:
+        `Autonomous plan review passed (${mode} mode). The ${steps.length}-step plan is concrete, ` +
+        "non-interactive, and executable. Proceed without waiting for user approval.",
+      isError: false,
+    };
+  }
+
+  private reviewAutonomousQuestion(input: Record<string, unknown>, mode: ToolExecutionMode): ToolExecutionResult {
+    const question = this.normalizeInteractiveText(input["question"]);
+    const context = this.normalizeInteractiveText(input["context"]);
+    const options = Array.isArray(input["options"])
+      ? input["options"]
+        .map((option) => this.normalizeInteractiveText(option))
+        .filter((option) => option.length > 0)
+      : [];
+    const recommended = this.normalizeInteractiveText(input["recommended"]);
+    const combinedText = [question, context, ...options].join(" ");
+    const looksLikePermissionGate =
+      PERMISSION_QUESTION_PATTERN.test(combinedText) ||
+      (options.some((option) => AUTO_APPROVE_OPTION_PATTERN.test(option)) &&
+        options.some((option) => AUTO_REJECT_OPTION_PATTERN.test(option)));
+
+    if (!question) {
+      return {
+        content:
+          `Autonomous question review rejected (${mode} mode): question is missing. ` +
+          "Do not wait for user input. Make the safest reasonable assumption from the task context and continue.",
+        isError: false,
+      };
+    }
+
+    if (options.length > 0) {
+      const choice = this.pickAutonomousChoice(options, recommended);
+      const rationale = looksLikePermissionGate
+        ? "this is a permission/confirmation gate, not a true blocker"
+        : "no interactive user is available in this execution mode";
+      return {
+        content:
+          `Autonomous question review (${mode} mode): ${rationale}. ` +
+          `Selected "${choice}" and approved continued execution.`,
+        isError: false,
+      };
+    }
+
+    return {
+      content:
+        `Autonomous question review (${mode} mode): no interactive user is available. ` +
+        "Make the safest reasonable assumption, state it briefly, and continue without waiting.",
+      isError: false,
+    };
+  }
+
+  private resolveInteractiveToolCall(
+    chatId: string,
+    toolCall: ToolCall,
+    mode: ToolExecutionMode,
+  ): ToolResult | null {
+    if (!this.isSelfManagedInteractiveMode(chatId, mode)) {
+      return null;
+    }
+
+    if (toolCall.name === "show_plan") {
+      const review = this.reviewAutonomousPlan(toolCall.input, mode);
+      return { toolCallId: toolCall.id, content: review.content, isError: review.isError };
+    }
+
+    if (toolCall.name === "ask_user") {
+      const review = this.reviewAutonomousQuestion(toolCall.input, mode);
+      return { toolCallId: toolCall.id, content: review.content, isError: review.isError };
+    }
+
+    return null;
+  }
+
+  private reviewSelfManagedWriteOperation(
+    chatId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    mode: ToolExecutionMode,
+    options: ToolExecutionOptions,
+  ): Promise<SelfManagedWriteReview> | SelfManagedWriteReview {
+    switch (toolName) {
+      case "shell_exec": {
+        const command = this.normalizeInteractiveText(input["command"]);
+        if (!command) {
+          return { approved: false, reason: "shell command is missing" };
+        }
+        if (isDestructiveOperation(toolName, input)) {
+          return { approved: false, reason: "shell command looks destructive" };
+        }
+        return this.reviewShellCommandWithProvider(chatId, command, mode, options, input);
+      }
+      case "file_rename": {
+        const oldPath = this.normalizeInteractiveText(input["old_path"]);
+        const newPath = this.normalizeInteractiveText(input["new_path"]);
+        if (!oldPath || !newPath) {
+          return { approved: false, reason: "rename operation is missing a source or destination path" };
+        }
+        return { approved: true };
+      }
+      case "git_commit": {
+        const message = this.normalizeInteractiveText(input["message"]);
+        if (message.length < 3) {
+          return { approved: false, reason: "git commit message is too short" };
+        }
+        return { approved: true };
+      }
+      case "file_write":
+      case "file_create":
+      case "file_edit":
+      case "file_delete":
+      case "file_delete_directory": {
+        const path = this.normalizeInteractiveText(input["path"]);
+        if (!path) {
+          return { approved: false, reason: "target path is missing" };
+        }
+        return { approved: true };
+      }
+      default:
+        return { approved: true };
+    }
+  }
+
+  private extractConversationText(content: string | MessageContent[]): string {
+    if (typeof content === "string") {
+      return content;
+    }
+
+    return content
+      .map((block) => {
+        switch (block.type) {
+          case "text":
+            return block.text;
+          case "tool_result":
+            return block.content;
+          case "tool_use":
+            return `${block.name}(${JSON.stringify(block.input)})`;
+          default:
+            return "";
+        }
+      })
+      .filter((part) => part.length > 0)
+      .join(" ");
+  }
+
+  private summarizeMessagesForShellReview(messages?: ConversationMessage[]): string {
+    if (!messages || messages.length === 0) {
+      return "";
+    }
+
+    return messages
+      .slice(-4)
+      .map((message) => {
+        const text = this.extractConversationText(message.content).replace(/\s+/g, " ").trim();
+        if (!text) {
+          return "";
+        }
+        return `${message.role}: ${text.slice(0, 220)}`;
+      })
+      .filter((line) => line.length > 0)
+      .join("\n");
+  }
+
+  private parseShellReviewDecision(text: string): ShellCommandReviewDecision | null {
+    const trimmed = text.trim();
+    const candidates = [
+      trimmed,
+      trimmed.replace(/^```json\s*/i, "").replace(/```$/i, "").trim(),
+    ];
+    const braceStart = trimmed.indexOf("{");
+    const braceEnd = trimmed.lastIndexOf("}");
+    if (braceStart >= 0 && braceEnd > braceStart) {
+      candidates.push(trimmed.slice(braceStart, braceEnd + 1));
+    }
+
+    for (const candidate of candidates) {
+      if (!candidate) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(candidate) as ShellCommandReviewDecision;
+        if (parsed && typeof parsed === "object") {
+          return parsed;
+        }
+      } catch {
+        // Try next candidate.
+      }
+    }
+
+    return null;
+  }
+
+  private recordAuxiliaryUsage(
+    provider: string,
+    usage: ProviderResponse["usage"] | undefined,
+    sink?: (usage: TaskUsageEvent) => void,
+  ): void {
+    if (!usage) {
+      return;
+    }
+
+    this.metrics?.recordTokenUsage(usage.inputTokens, usage.outputTokens, provider);
+    this.rateLimiter?.recordTokenUsage(usage.inputTokens, usage.outputTokens, provider);
+    sink?.({
+      provider,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+    });
+  }
+
+  private isSafeShellFallback(command: string): boolean {
+    const normalized = command.replace(/\s+/g, " ").trim();
+    if (!normalized || /[|;&]/.test(normalized)) {
+      return false;
+    }
+    return SAFE_SHELL_FALLBACK_PATTERN.test(normalized);
+  }
+
+  private async reviewShellCommandWithProvider(
+    chatId: string,
+    command: string,
+    mode: ToolExecutionMode,
+    options: ToolExecutionOptions,
+    input: Record<string, unknown>,
+  ): Promise<SelfManagedWriteReview> {
+    const provider = this.providerManager.getProvider(chatId);
+    const taskPrompt = this.normalizeInteractiveText(options.taskPrompt);
+    const recentContext = this.summarizeMessagesForShellReview(options.sessionMessages);
+    const workingDirectory = this.normalizeInteractiveText(input["working_directory"]) || ".";
+    const timeoutMs = Number(input["timeout_ms"] ?? 30000);
+
+    try {
+      const response = await provider.chat(
+        SHELL_REVIEW_SYSTEM_PROMPT,
+        [{
+          role: "user",
+          content:
+            `Mode: ${mode}\n` +
+            `Task: ${taskPrompt || "(not provided)"}\n` +
+            `Working directory: ${workingDirectory}\n` +
+            `Timeout ms: ${Number.isFinite(timeoutMs) ? timeoutMs : 30000}\n` +
+            `Recent context:\n${recentContext || "(none)"}\n\n` +
+            `Command:\n${command}`,
+        }],
+        [],
+      );
+
+      this.recordAuxiliaryUsage(provider.name, response.usage, options.onUsage ?? this.onUsage);
+      const decision = this.parseShellReviewDecision(response.text);
+
+      if (decision?.decision === "approve" && decision.taskAligned !== false && decision.bounded !== false) {
+        return { approved: true, reason: decision.reason };
+      }
+
+      if (decision?.decision === "reject" || decision?.taskAligned === false || decision?.bounded === false) {
+        return { approved: false, reason: decision.reason || "shell review rejected the command" };
+      }
+    } catch {
+      // Fall back to local bounded-command heuristics below.
+    }
+
+    if (this.isSafeShellFallback(command)) {
+      return { approved: true, reason: "shell review fallback approved a bounded development command" };
+    }
+
+    return { approved: false, reason: "shell review was inconclusive for this command" };
+  }
+
+  private buildSelfManagedWriteRejection(
+    toolCallId: string,
+    toolName: string,
+    mode: ToolExecutionMode,
+    reason: string,
+  ): ToolResult {
+    return {
+      toolCallId,
+      content:
+        `Self-managed write review rejected (${mode} mode) for '${toolName}': ${reason}. ` +
+        "Choose a safer bounded operation and continue without waiting for user approval.",
+      isError: true,
+    };
+  }
+
+  private async executeToolCalls(
+    chatId: string,
+    toolCalls: ToolCall[],
+    options: ToolExecutionOptions = {},
+  ): Promise<ToolResult[]> {
     const logger = getLogger();
     const results: ToolResult[] = [];
+    const mode = options.mode ?? "interactive";
 
     const toolContext: ToolContext & { soulLoader?: SoulLoader | null } = {
       projectPath: this.projectPath,
@@ -2088,19 +2512,9 @@ export class Orchestrator {
     };
 
     for (const tc of toolCalls) {
-      // Autonomous mode: auto-resolve ask_user and show_plan tools
-      if ((tc.name === "ask_user" || tc.name === "show_plan") &&
-          this.dmPolicy?.isAutonomousActive(chatId)) {
-        let autoResponse: string;
-        if (tc.name === "ask_user") {
-          const recommended = tc.input["recommended"] as string | undefined;
-          const options = tc.input["options"] as string[] | undefined;
-          const choice = recommended ?? options?.[0] ?? "Continue";
-          autoResponse = `User answered: ${choice} (auto-approved — autonomous mode)`;
-        } else {
-          autoResponse = "Plan approved by user. Proceed with execution. (auto-approved — autonomous mode)";
-        }
-        results.push({ toolCallId: tc.id, content: autoResponse, isError: false });
+      const interactiveResolution = this.resolveInteractiveToolCall(chatId, tc, mode);
+      if (interactiveResolution) {
+        results.push(interactiveResolution);
         continue;
       }
 
@@ -2128,29 +2542,44 @@ export class Orchestrator {
 
       // Confirmation flow via DMPolicy for write operations
       if (this.requireConfirmation && this.isWriteOperation(tc.name)) {
-        const destructive = isDestructiveOperation(tc.name, tc.input);
-        // Note: userId not available in executeToolCalls context; chatId used as userId fallback
-        const prefs = this.dmPolicy.getSessionPrefs(chatId, chatId);
-        const stubDiff = {
-          path: String(tc.input["path"] ?? ""),
-          content: "",
-          stats: { additions: 0, deletions: 0, modifications: 0, totalChanges: 1, hunks: 1 },
-          oldPath: "",
-          newPath: String(tc.input["path"] ?? ""),
-          diff: "",
-          isNew: false,
-          isDeleted: false,
-          isRename: false,
-        };
-        if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
-          const confirmed = await this.requestWriteConfirmation(chatId, tc.name, tc.input);
-          if (!confirmed) {
-            results.push({
-              toolCallId: tc.id,
-              content: "Operation cancelled by user.",
-              isError: false,
-            });
+        if (this.isSelfManagedInteractiveMode(chatId, mode)) {
+          const review = await this.reviewSelfManagedWriteOperation(chatId, tc.name, tc.input, mode, options);
+          if (!review.approved) {
+            results.push(
+              this.buildSelfManagedWriteRejection(
+                tc.id,
+                tc.name,
+                mode,
+                review.reason ?? "operation did not pass local safety review",
+              ),
+            );
             continue;
+          }
+        } else {
+          const destructive = isDestructiveOperation(tc.name, tc.input);
+          // Note: userId not available in executeToolCalls context; chatId used as userId fallback
+          const prefs = this.dmPolicy.getSessionPrefs(chatId, chatId);
+          const stubDiff = {
+            path: String(tc.input["path"] ?? ""),
+            content: "",
+            stats: { additions: 0, deletions: 0, modifications: 0, totalChanges: 1, hunks: 1 },
+            oldPath: "",
+            newPath: String(tc.input["path"] ?? ""),
+            diff: "",
+            isNew: false,
+            isDeleted: false,
+            isRename: false,
+          };
+          if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
+            const confirmed = await this.requestWriteConfirmation(chatId, tc.name, tc.input);
+            if (!confirmed) {
+              results.push({
+                toolCallId: tc.id,
+                content: "Operation cancelled by user.",
+                isError: false,
+              });
+              continue;
+            }
           }
         }
       }

@@ -627,6 +627,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   backgroundExecutor.setTaskManager(taskManager);
   orchestrator.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
+  if (identityManager) {
+    taskManager.on("task:created", () => {
+      identityManager.incrementTasks();
+    });
+  }
 
   // Initialize auto-updater (if enabled)
   let autoUpdater: AutoUpdater | undefined;
@@ -674,6 +679,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       // Create subsystems
       const triggerRegistry = new TriggerRegistry();
       const budgetTrackerInstance = new BudgetTracker(daemonStorage, daemonConfig.budget);
+      backgroundExecutor.setDaemonBudgetTracker(budgetTrackerInstance);
       const approvalQueueInstance = new ApprovalQueue(
         daemonStorage,
         daemonConfig.security.approvalTimeoutMin,
@@ -1186,6 +1192,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       if (identityManager) {
         identityManager.recordActivity();
         identityManager.incrementMessages();
+        identityManager.incrementTasks();
       }
       if (learningResult.taskPlanner) {
         learningResult.taskPlanner.startTask({

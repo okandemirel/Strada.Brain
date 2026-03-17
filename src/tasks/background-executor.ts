@@ -37,6 +37,8 @@ import { supportsInteractivity } from "../channels/channel.interface.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import type { GoalConfig } from "../config/config.js";
+import { estimateCost } from "../security/rate-limiter.js";
+import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import { getLogger } from "../utils/logger.js";
 
 const LLM_TIMEOUT_MS = 10_000;
@@ -90,6 +92,7 @@ export class BackgroundExecutor {
   private readonly daemonEventBus?: IEventEmitter<DaemonEventMap>;
   private readonly goalConfig?: GoalConfig;
   private readonly learningEventBus?: IEventEmitter<LearningEventMap>;
+  private daemonBudgetTracker?: BudgetTracker;
 
   constructor(opts: BackgroundExecutorOptions) {
     this.orchestrator = opts.orchestrator;
@@ -109,6 +112,10 @@ export class BackgroundExecutor {
    */
   setTaskManager(manager: TaskManager): void {
     this.taskManager = manager;
+  }
+
+  setDaemonBudgetTracker(tracker: BudgetTracker): void {
+    this.daemonBudgetTracker = tracker;
   }
 
   /**
@@ -225,6 +232,7 @@ export class BackgroundExecutor {
         chatId: task.chatId,
         channelType: task.channelType,
         attachments: task.attachments,
+        onUsage: this.buildUsageRecorder(task),
       });
 
       if (signal.aborted) {
@@ -310,6 +318,7 @@ export class BackgroundExecutor {
         onProgress: (msg: string) => onProgress(`[${node.task}] ${msg}`),
         chatId: task.chatId,
         channelType: task.channelType,
+        onUsage: this.buildUsageRecorder(task),
       });
     };
 
@@ -610,5 +619,24 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
       .filter(r => r.result)
       .map(r => `## Sub-goal: ${r.task}\n\n${r.result}`)
       .join("\n\n---\n\n");
+  }
+
+  private buildUsageRecorder(task: Task): ((usage: { provider: string; inputTokens: number; outputTokens: number }) => void) | undefined {
+    if (task.origin !== "daemon" || !this.daemonBudgetTracker) {
+      return undefined;
+    }
+
+    return (usage) => {
+      const costUsd = estimateCost(usage.inputTokens, usage.outputTokens, usage.provider);
+      if (costUsd <= 0) {
+        return;
+      }
+      this.daemonBudgetTracker?.recordCost(costUsd, {
+        model: usage.provider,
+        tokensIn: usage.inputTokens,
+        tokensOut: usage.outputTokens,
+        triggerName: task.triggerName,
+      });
+    };
   }
 }

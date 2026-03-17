@@ -71,6 +71,8 @@ export interface Task {
   parentId?: TaskId;
   /** Origin of the task -- 'user' for interactive, 'daemon' for daemon-initiated */
   origin?: TaskOrigin;
+  /** Trigger name when spawned by daemon heartbeat. */
+  triggerName?: string;
   /** Pre-decomposed goal tree for goal tasks (passed from Orchestrator to BackgroundExecutor) */
   goalTree?: GoalTree;
   /** Attachments forwarded from the incoming message (images, files) */
@@ -105,4 +107,12 @@ export interface BackgroundTaskOptions {
   attachments?: import("../channels/channel.interface.js").Attachment[];
   /** Parent metric ID for subtask tracking (passed from BackgroundExecutor for decomposed tasks) */
   parentMetricId?: string;
+  /** Optional usage callback for recording provider/token consumption. */
+  onUsage?: (usage: TaskUsageEvent) => void;
+}
+
+export interface TaskUsageEvent {
+  provider: string;
+  inputTokens: number;
+  outputTokens: number;
 }

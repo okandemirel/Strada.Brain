@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
+import { fetchJson } from '../utils/api'
 
 interface LogEntry {
   timestamp: string
@@ -37,14 +39,14 @@ export default function LogsPage() {
   const containerRef = useRef<HTMLDivElement>(null)
 
   const fetchLogs = useCallback(() => {
-    fetch('/api/logs')
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then((data: { logs: LogEntry[] } | LogEntry[]) => {
+    fetchJson<{ logs: LogEntry[] } | LogEntry[]>('/api/logs')
+      .then((data) => {
+        if (!data) {
+          throw new Error('Logs endpoint unavailable')
+        }
         const entries = Array.isArray(data) ? data : data.logs ?? []
         setLogs(entries)
+        setError(null)
         setLoading(false)
       })
       .catch(e => {
@@ -54,11 +56,7 @@ export default function LogsPage() {
       })
   }, [])
 
-  useEffect(() => {
-    fetchLogs()
-    const interval = setInterval(fetchLogs, 5000)
-    return () => clearInterval(interval)
-  }, [fetchLogs])
+  useAutoRefresh(fetchLogs, { intervalMs: 5000 })
 
   useEffect(() => {
     if (autoScroll && containerRef.current) {

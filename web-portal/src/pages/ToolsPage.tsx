@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useCallback } from 'react'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
+import { fetchJson } from '../utils/api'
 
 interface ToolInfo {
   name: string
@@ -22,10 +24,10 @@ export default function ToolsPage() {
   const [filter, setFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState<string>('all')
 
-  useEffect(() => {
+  const fetchData = useCallback(() => {
     Promise.all([
-      fetch('/api/tools').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('/api/metrics').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetchJson<ToolsData>('/api/tools'),
+      fetchJson<Record<string, unknown>>('/api/metrics'),
     ]).then(([toolsData, metricsData]: [ToolsData | null, Record<string, unknown> | null]) => {
       if (toolsData?.tools) {
         setTools(toolsData.tools)
@@ -44,12 +46,17 @@ export default function ToolsPage() {
           setTools(synth)
         }
       }
+      if (toolsData || metricsData) {
+        setError(null)
+      }
       setLoading(false)
     }).catch(e => {
       setError(e.message)
       setLoading(false)
     })
   }, [])
+
+  useAutoRefresh(fetchData, { intervalMs: 10000 })
 
   if (error) return <div className="page-error">Error: {error}</div>
   if (loading) return <div className="page-loading">Loading tools...</div>

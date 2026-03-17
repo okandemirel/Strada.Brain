@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useAutoRefresh } from './useAutoRefresh'
+import { fetchJson } from '../utils/api'
 
 const POLL_INTERVAL = 5000
 
@@ -123,16 +125,6 @@ export interface UseDashboardReturn {
 // Dashboard API is proxied through the web channel on the same origin (/api/*)
 // No cross-origin fetch needed — web channel forwards to dashboard server internally
 
-async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T | null> {
-  try {
-    const res = await fetch(url, { signal })
-    if (!res.ok) return null
-    return await res.json() as T
-  } catch {
-    return null
-  }
-}
-
 export function useDashboard(): UseDashboardReturn {
   const [data, setData] = useState<DashboardData>({
     health: null,
@@ -150,17 +142,17 @@ export function useDashboard(): UseDashboardReturn {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const mountedRef = useRef(true)
 
-  const fetchAll = useCallback(async (signal?: AbortSignal) => {
+  const fetchAll = useCallback(async () => {
     try {
       // All endpoints on same origin — web channel proxies /api/* to dashboard server
-      const healthPromise = fetchJson<HealthData>('/health', signal)
-      const metricsPromise = fetchJson<MetricsData>('/api/metrics', signal)
-      const triggersPromise = fetchJson<TriggerData[]>('/api/triggers', signal)
-      const agentsPromise = fetchJson<AgentsData>('/api/agents', signal)
-      const delegationsPromise = fetchJson<DelegationsData>('/api/delegations', signal)
-      const consolidationPromise = fetchJson<ConsolidationData>('/api/consolidation', signal)
-      const deploymentPromise = fetchJson<DeploymentData>('/api/deployment', signal)
-      const maintenancePromise = fetchJson<MaintenanceData>('/api/maintenance', signal)
+      const healthPromise = fetchJson<HealthData>('/health')
+      const metricsPromise = fetchJson<MetricsData>('/api/metrics')
+      const triggersPromise = fetchJson<TriggerData[]>('/api/triggers')
+      const agentsPromise = fetchJson<AgentsData>('/api/agents')
+      const delegationsPromise = fetchJson<DelegationsData>('/api/delegations')
+      const consolidationPromise = fetchJson<ConsolidationData>('/api/consolidation')
+      const deploymentPromise = fetchJson<DeploymentData>('/api/deployment')
+      const maintenancePromise = fetchJson<MaintenanceData>('/api/maintenance')
 
       const [
         health, metrics, triggers,
@@ -198,27 +190,12 @@ export function useDashboard(): UseDashboardReturn {
 
   useEffect(() => {
     mountedRef.current = true
-    const controller = new AbortController()
-    const initialFetchTimer = setTimeout(() => {
-      if (mountedRef.current) {
-        void fetchAll(controller.signal)
-      }
-    }, 0)
-
-    // Polling
-    const interval = setInterval(() => {
-      if (mountedRef.current) {
-        void fetchAll(controller.signal)
-      }
-    }, POLL_INTERVAL)
-
     return () => {
       mountedRef.current = false
-      controller.abort()
-      clearTimeout(initialFetchTimer)
-      clearInterval(interval)
     }
-  }, [fetchAll])
+  }, [])
+
+  useAutoRefresh(() => fetchAll(), { intervalMs: POLL_INTERVAL })
 
   return { data, loading, error, dashboardEnabled, lastUpdated }
 }

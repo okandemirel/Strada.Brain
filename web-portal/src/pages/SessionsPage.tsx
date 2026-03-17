@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { formatTimeAgo } from '../utils/format'
+import { useAutoRefresh } from '../hooks/useAutoRefresh'
+import { fetchJson } from '../utils/api'
 
 interface SessionInfo {
   id: string
@@ -41,15 +43,18 @@ export default function SessionsPage() {
 
   const fetchData = useCallback(() => {
     Promise.all([
-      fetch('/api/sessions').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('/api/metrics').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('/api/agents').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetchJson<{ sessions: SessionInfo[] }>('/api/sessions'),
+      fetchJson<MetricsData>('/api/metrics'),
+      fetchJson<AgentsData>('/api/agents'),
     ]).then(([sessionsData, metricsData, agentsData]: [
       { sessions: SessionInfo[] } | null,
       MetricsData | null,
       AgentsData | null,
     ]) => {
       if (metricsData) setMetrics(metricsData)
+      if (sessionsData || metricsData || agentsData) {
+        setError(null)
+      }
 
       if (sessionsData?.sessions) {
         setSessions(sessionsData.sessions)
@@ -71,11 +76,7 @@ export default function SessionsPage() {
     })
   }, [])
 
-  useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 10000)
-    return () => clearInterval(interval)
-  }, [fetchData])
+  useAutoRefresh(fetchData, { intervalMs: 10000 })
 
   if (error) return <div className="page-error">Error: {error}</div>
   if (loading) return <div className="page-loading">Loading sessions...</div>
