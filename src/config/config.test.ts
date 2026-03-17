@@ -39,6 +39,25 @@ describe("loadConfig", () => {
     delete process.env["ANTHROPIC_API_KEY"];
     delete process.env["TELEGRAM_BOT_TOKEN"];
     delete process.env["ALLOWED_TELEGRAM_USER_IDS"];
+    delete process.env["ALLOWED_DISCORD_USER_IDS"];
+    delete process.env["ALLOWED_DISCORD_ROLE_IDS"];
+    delete process.env["WHATSAPP_SESSION_PATH"];
+    delete process.env["WHATSAPP_ALLOWED_NUMBERS"];
+    delete process.env["MATRIX_HOMESERVER"];
+    delete process.env["MATRIX_ACCESS_TOKEN"];
+    delete process.env["MATRIX_USER_ID"];
+    delete process.env["MATRIX_ALLOWED_USER_IDS"];
+    delete process.env["MATRIX_ALLOWED_ROOM_IDS"];
+    delete process.env["MATRIX_ALLOW_OPEN_ACCESS"];
+    delete process.env["IRC_SERVER"];
+    delete process.env["IRC_NICK"];
+    delete process.env["IRC_CHANNELS"];
+    delete process.env["IRC_ALLOWED_USERS"];
+    delete process.env["IRC_ALLOW_OPEN_ACCESS"];
+    delete process.env["TEAMS_APP_ID"];
+    delete process.env["TEAMS_APP_PASSWORD"];
+    delete process.env["TEAMS_ALLOWED_USER_IDS"];
+    delete process.env["TEAMS_ALLOW_OPEN_ACCESS"];
     delete process.env["REQUIRE_EDIT_CONFIRMATION"];
     delete process.env["READ_ONLY_MODE"];
     delete process.env["UNITY_PROJECT_PATH"];
@@ -186,6 +205,60 @@ describe("loadConfig", () => {
     setEnv({ ALLOWED_TELEGRAM_USER_IDS: "1,2,3" });
     const config = loadConfig();
     expect(config.telegram.allowedUserIds).toEqual([1, 2, 3]);
+  });
+
+  it("loads channel auth configuration into structured runtime config", () => {
+    setEnv({
+      ALLOWED_DISCORD_USER_IDS: "user-1,user-2",
+      ALLOWED_DISCORD_ROLE_IDS: "role-1,role-2",
+      WHATSAPP_SESSION_PATH: ".whatsapp-test",
+      WHATSAPP_ALLOWED_NUMBERS: "905551112233,905554445566",
+      MATRIX_HOMESERVER: "https://matrix.example.com",
+      MATRIX_ACCESS_TOKEN: "matrix-token",
+      MATRIX_USER_ID: "@strada:example.com",
+      MATRIX_ALLOWED_USER_IDS: "@alice:example.com,@bob:example.com",
+      MATRIX_ALLOWED_ROOM_IDS: "!room1:example.com,!room2:example.com",
+      MATRIX_ALLOW_OPEN_ACCESS: "true",
+      IRC_SERVER: "irc.example.com",
+      IRC_NICK: "strada-test",
+      IRC_CHANNELS: "#brain,#ops",
+      IRC_ALLOWED_USERS: "alice,bob",
+      IRC_ALLOW_OPEN_ACCESS: "true",
+      TEAMS_APP_ID: "teams-app-id",
+      TEAMS_APP_PASSWORD: "teams-app-password",
+      TEAMS_ALLOWED_USER_IDS: "user-a,user-b",
+      TEAMS_ALLOW_OPEN_ACCESS: "true",
+    });
+
+    const config = loadConfig();
+
+    expect(config.discord.allowedUserIds).toEqual(["user-1", "user-2"]);
+    expect(config.discord.allowedRoleIds).toEqual(["role-1", "role-2"]);
+    expect(config.whatsapp).toEqual({
+      sessionPath: ".whatsapp-test",
+      allowedNumbers: ["905551112233", "905554445566"],
+    });
+    expect(config.matrix).toEqual({
+      homeserver: "https://matrix.example.com",
+      accessToken: "matrix-token",
+      userId: "@strada:example.com",
+      allowedUserIds: ["@alice:example.com", "@bob:example.com"],
+      allowedRoomIds: ["!room1:example.com", "!room2:example.com"],
+      allowOpenAccess: true,
+    });
+    expect(config.irc).toEqual({
+      server: "irc.example.com",
+      nick: "strada-test",
+      channels: ["#brain", "#ops"],
+      allowedUsers: ["alice", "bob"],
+      allowOpenAccess: true,
+    });
+    expect(config.teams).toEqual({
+      appId: "teams-app-id",
+      appPassword: "teams-app-password",
+      allowedUserIds: ["user-a", "user-b"],
+      allowOpenAccess: true,
+    });
   });
 
   it("applies default values", () => {

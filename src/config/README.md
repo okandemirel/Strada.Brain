@@ -32,8 +32,12 @@ The `Config` type groups settings into nested sub-configs:
 |------------|-----------|-------------|
 | AI providers | top-level fields | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, etc. At least one key is required unless `PROVIDER_CHAIN` only uses local providers such as `ollama`. |
 | `telegram` | `TelegramConfig` | `TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_IDS` |
-| `discord` | `DiscordConfig` | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` |
+| `discord` | `DiscordConfig` | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `ALLOWED_DISCORD_USER_IDS`, `ALLOWED_DISCORD_ROLE_IDS` |
 | `slack` | `SlackConfig` | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APP_TOKEN`, `SLACK_SOCKET_MODE` |
+| `whatsapp` | `WhatsAppConfig` | `WHATSAPP_SESSION_PATH`, `WHATSAPP_ALLOWED_NUMBERS` |
+| `matrix` | `MatrixConfig` | `MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, `MATRIX_USER_ID`, `MATRIX_ALLOWED_USER_IDS`, `MATRIX_ALLOWED_ROOM_IDS`, `MATRIX_ALLOW_OPEN_ACCESS` |
+| `irc` | `IRCConfig` | `IRC_SERVER`, `IRC_NICK`, `IRC_CHANNELS`, `IRC_ALLOWED_USERS`, `IRC_ALLOW_OPEN_ACCESS` |
+| `teams` | `TeamsConfig` | `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `TEAMS_ALLOWED_USER_IDS`, `TEAMS_ALLOW_OPEN_ACCESS` |
 | `security` | `SecurityConfig` | `REQUIRE_EDIT_CONFIRMATION` (default true), `READ_ONLY_MODE` (default false) |
 | `dashboard` | `DashboardConfig` | `DASHBOARD_ENABLED`, `DASHBOARD_PORT` (default 3100) |
 | `websocketDashboard` | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100), `WEBSOCKET_DASHBOARD_AUTH_TOKEN`, `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` (`WEBSOCKET_DASHBOARD_AUTH_TOKEN` also protects dashboard APIs when present) |
@@ -58,8 +62,12 @@ The `Config` type groups settings into nested sub-configs:
 - `hasRequiredApiKeys(config)` checks that at least one usable provider is configured, or that every provider named in `PROVIDER_CHAIN` has its required key
 - `checkChannelConfig(config, channelType)` validates channel-specific requirements:
   - Telegram: requires bot token and non-empty allowed user IDs
-  - Discord: requires bot token
+  - Discord: requires bot token and either user or role allowlists
   - Slack: requires bot token; requires signing secret when not in socket mode
+  - WhatsApp: requires a session path (defaults to `.whatsapp-session`)
+  - Matrix: requires homeserver, access token, and user ID
+  - IRC: requires server
+  - Teams: requires app ID and app password
   - CLI: no requirements
   - Web: no requirements
 

@@ -46,12 +46,31 @@ export type EnvVarName =
   | "TELEGRAM_BOT_TOKEN"
   | "DISCORD_BOT_TOKEN"
   | "DISCORD_GUILD_ID"
+  | "ALLOWED_DISCORD_USER_IDS"
+  | "ALLOWED_DISCORD_ROLE_IDS"
   | "SLACK_BOT_TOKEN"
   | "SLACK_SIGNING_SECRET"
   | "SLACK_APP_TOKEN"
   | "SLACK_SOCKET_MODE"
   | "ALLOWED_SLACK_WORKSPACES"
   | "ALLOWED_SLACK_USER_IDS"
+  | "WHATSAPP_SESSION_PATH"
+  | "WHATSAPP_ALLOWED_NUMBERS"
+  | "MATRIX_HOMESERVER"
+  | "MATRIX_ACCESS_TOKEN"
+  | "MATRIX_USER_ID"
+  | "MATRIX_ALLOWED_USER_IDS"
+  | "MATRIX_ALLOWED_ROOM_IDS"
+  | "MATRIX_ALLOW_OPEN_ACCESS"
+  | "IRC_SERVER"
+  | "IRC_NICK"
+  | "IRC_CHANNELS"
+  | "IRC_ALLOWED_USERS"
+  | "IRC_ALLOW_OPEN_ACCESS"
+  | "TEAMS_APP_ID"
+  | "TEAMS_APP_PASSWORD"
+  | "TEAMS_ALLOWED_USER_IDS"
+  | "TEAMS_ALLOW_OPEN_ACCESS"
   | "ALLOWED_TELEGRAM_USER_IDS"
   | "REQUIRE_EDIT_CONFIRMATION"
   | "READ_ONLY_MODE"
@@ -398,12 +417,47 @@ export interface SlackConfig {
 export interface DiscordConfig {
   readonly botToken?: string;
   readonly guildId?: string;
+  readonly allowedUserIds: string[];
+  readonly allowedRoleIds: string[];
 }
 
 /** Telegram configuration */
 export interface TelegramConfig {
   readonly botToken?: string;
   readonly allowedUserIds: number[];
+}
+
+/** WhatsApp configuration */
+export interface WhatsAppConfig {
+  readonly sessionPath: string;
+  readonly allowedNumbers: string[];
+}
+
+/** Matrix configuration */
+export interface MatrixConfig {
+  readonly homeserver?: string;
+  readonly accessToken?: string;
+  readonly userId?: string;
+  readonly allowedUserIds: string[];
+  readonly allowedRoomIds: string[];
+  readonly allowOpenAccess: boolean;
+}
+
+/** IRC configuration */
+export interface IRCConfig {
+  readonly server?: string;
+  readonly nick: string;
+  readonly channels: string[];
+  readonly allowedUsers: string[];
+  readonly allowOpenAccess: boolean;
+}
+
+/** Teams configuration */
+export interface TeamsConfig {
+  readonly appId?: string;
+  readonly appPassword?: string;
+  readonly allowedUserIds: string[];
+  readonly allowOpenAccess: boolean;
 }
 
 /** Security configuration */
@@ -446,6 +500,10 @@ export interface Config {
   readonly telegram: TelegramConfig;
   readonly discord: DiscordConfig;
   readonly slack: SlackConfig;
+  readonly whatsapp: WhatsAppConfig;
+  readonly matrix: MatrixConfig;
+  readonly irc: IRCConfig;
+  readonly teams: TeamsConfig;
 
   // Security
   readonly security: SecurityConfig;
@@ -634,6 +692,8 @@ export const configSchema = z
     // Discord
     discordBotToken: z.string().optional(),
     discordGuildId: z.string().optional(),
+    allowedDiscordUserIds: commaSeparatedList,
+    allowedDiscordRoleIds: commaSeparatedList,
 
     // Slack
     slackBotToken: z.string().optional(),
@@ -642,6 +702,31 @@ export const configSchema = z
     slackSocketMode: boolFromString(true),
     allowedSlackWorkspaces: commaSeparatedList,
     allowedSlackUserIds: commaSeparatedList,
+
+    // WhatsApp
+    whatsappSessionPath: z.string().default(".whatsapp-session"),
+    whatsappAllowedNumbers: commaSeparatedList,
+
+    // Matrix
+    matrixHomeserver: z.string().optional(),
+    matrixAccessToken: z.string().optional(),
+    matrixUserId: z.string().optional(),
+    matrixAllowedUserIds: commaSeparatedList,
+    matrixAllowedRoomIds: commaSeparatedList,
+    matrixAllowOpenAccess: boolFromString(false),
+
+    // IRC
+    ircServer: z.string().optional(),
+    ircNick: z.string().default("strada-brain"),
+    ircChannels: commaSeparatedList,
+    ircAllowedUsers: commaSeparatedList,
+    ircAllowOpenAccess: boolFromString(false),
+
+    // Teams
+    teamsAppId: z.string().optional(),
+    teamsAppPassword: z.string().optional(),
+    teamsAllowedUserIds: commaSeparatedList,
+    teamsAllowOpenAccess: boolFromString(false),
 
     // Security
     requireEditConfirmation: boolFromString(true),
@@ -1057,6 +1142,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     discord: {
       botToken: rawConfig.discordBotToken,
       guildId: rawConfig.discordGuildId,
+      allowedUserIds: rawConfig.allowedDiscordUserIds ?? [],
+      allowedRoleIds: rawConfig.allowedDiscordRoleIds ?? [],
     },
 
     slack: {
@@ -1066,6 +1153,35 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       socketMode: rawConfig.slackSocketMode,
       allowedWorkspaces: rawConfig.allowedSlackWorkspaces,
       allowedUserIds: rawConfig.allowedSlackUserIds,
+    },
+
+    whatsapp: {
+      sessionPath: rawConfig.whatsappSessionPath,
+      allowedNumbers: rawConfig.whatsappAllowedNumbers ?? [],
+    },
+
+    matrix: {
+      homeserver: rawConfig.matrixHomeserver,
+      accessToken: rawConfig.matrixAccessToken,
+      userId: rawConfig.matrixUserId,
+      allowedUserIds: rawConfig.matrixAllowedUserIds ?? [],
+      allowedRoomIds: rawConfig.matrixAllowedRoomIds ?? [],
+      allowOpenAccess: rawConfig.matrixAllowOpenAccess,
+    },
+
+    irc: {
+      server: rawConfig.ircServer,
+      nick: rawConfig.ircNick,
+      channels: rawConfig.ircChannels ?? [],
+      allowedUsers: rawConfig.ircAllowedUsers ?? [],
+      allowOpenAccess: rawConfig.ircAllowOpenAccess,
+    },
+
+    teams: {
+      appId: rawConfig.teamsAppId,
+      appPassword: rawConfig.teamsAppPassword,
+      allowedUserIds: rawConfig.teamsAllowedUserIds ?? [],
+      allowOpenAccess: rawConfig.teamsAllowOpenAccess,
     },
 
     security: {
@@ -1557,12 +1673,31 @@ interface EnvVars {
   allowedTelegramUserIds: string | undefined;
   discordBotToken: string | undefined;
   discordGuildId: string | undefined;
+  allowedDiscordUserIds: string | undefined;
+  allowedDiscordRoleIds: string | undefined;
   slackBotToken: string | undefined;
   slackSigningSecret: string | undefined;
   slackAppToken: string | undefined;
   slackSocketMode: string | undefined;
   allowedSlackWorkspaces: string | undefined;
   allowedSlackUserIds: string | undefined;
+  whatsappSessionPath: string | undefined;
+  whatsappAllowedNumbers: string | undefined;
+  matrixHomeserver: string | undefined;
+  matrixAccessToken: string | undefined;
+  matrixUserId: string | undefined;
+  matrixAllowedUserIds: string | undefined;
+  matrixAllowedRoomIds: string | undefined;
+  matrixAllowOpenAccess: string | undefined;
+  ircServer: string | undefined;
+  ircNick: string | undefined;
+  ircChannels: string | undefined;
+  ircAllowedUsers: string | undefined;
+  ircAllowOpenAccess: string | undefined;
+  teamsAppId: string | undefined;
+  teamsAppPassword: string | undefined;
+  teamsAllowedUserIds: string | undefined;
+  teamsAllowOpenAccess: string | undefined;
   requireEditConfirmation: string | undefined;
   readOnlyMode: string | undefined;
   unityProjectPath: string | undefined;
@@ -1763,12 +1898,31 @@ function loadFromEnv(): EnvVars {
     allowedTelegramUserIds: process.env["ALLOWED_TELEGRAM_USER_IDS"],
     discordBotToken: process.env["DISCORD_BOT_TOKEN"],
     discordGuildId: process.env["DISCORD_GUILD_ID"],
+    allowedDiscordUserIds: process.env["ALLOWED_DISCORD_USER_IDS"],
+    allowedDiscordRoleIds: process.env["ALLOWED_DISCORD_ROLE_IDS"],
     slackBotToken: process.env["SLACK_BOT_TOKEN"],
     slackSigningSecret: process.env["SLACK_SIGNING_SECRET"],
     slackAppToken: process.env["SLACK_APP_TOKEN"],
     slackSocketMode: process.env["SLACK_SOCKET_MODE"],
     allowedSlackWorkspaces: process.env["ALLOWED_SLACK_WORKSPACES"],
     allowedSlackUserIds: process.env["ALLOWED_SLACK_USER_IDS"],
+    whatsappSessionPath: process.env["WHATSAPP_SESSION_PATH"],
+    whatsappAllowedNumbers: process.env["WHATSAPP_ALLOWED_NUMBERS"],
+    matrixHomeserver: process.env["MATRIX_HOMESERVER"],
+    matrixAccessToken: process.env["MATRIX_ACCESS_TOKEN"],
+    matrixUserId: process.env["MATRIX_USER_ID"],
+    matrixAllowedUserIds: process.env["MATRIX_ALLOWED_USER_IDS"],
+    matrixAllowedRoomIds: process.env["MATRIX_ALLOWED_ROOM_IDS"],
+    matrixAllowOpenAccess: process.env["MATRIX_ALLOW_OPEN_ACCESS"],
+    ircServer: process.env["IRC_SERVER"],
+    ircNick: process.env["IRC_NICK"],
+    ircChannels: process.env["IRC_CHANNELS"],
+    ircAllowedUsers: process.env["IRC_ALLOWED_USERS"],
+    ircAllowOpenAccess: process.env["IRC_ALLOW_OPEN_ACCESS"],
+    teamsAppId: process.env["TEAMS_APP_ID"],
+    teamsAppPassword: process.env["TEAMS_APP_PASSWORD"],
+    teamsAllowedUserIds: process.env["TEAMS_ALLOWED_USER_IDS"],
+    teamsAllowOpenAccess: process.env["TEAMS_ALLOW_OPEN_ACCESS"],
     requireEditConfirmation: process.env["REQUIRE_EDIT_CONFIRMATION"],
     readOnlyMode: process.env["READ_ONLY_MODE"],
     unityProjectPath: process.env["UNITY_PROJECT_PATH"],
@@ -2100,7 +2254,7 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
  */
 export function checkChannelConfig(
   config: Config,
-  channelType: "telegram" | "discord" | "slack" | "cli" | "web",
+  channelType: "telegram" | "discord" | "slack" | "whatsapp" | "matrix" | "irc" | "teams" | "cli" | "web",
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
@@ -2118,6 +2272,9 @@ export function checkChannelConfig(
       if (!config.discord.botToken) {
         errors.push("DISCORD_BOT_TOKEN is required");
       }
+      if (config.discord.allowedUserIds.length === 0 && config.discord.allowedRoleIds.length === 0) {
+        errors.push("ALLOWED_DISCORD_USER_IDS or ALLOWED_DISCORD_ROLE_IDS must be set");
+      }
       break;
 
     case "slack":
@@ -2126,6 +2283,30 @@ export function checkChannelConfig(
       }
       if (!config.slack.socketMode && !config.slack.signingSecret) {
         errors.push("SLACK_SIGNING_SECRET is required when not using socket mode");
+      }
+      break;
+
+    case "whatsapp":
+      if (!config.whatsapp.sessionPath) {
+        errors.push("WHATSAPP_SESSION_PATH is required");
+      }
+      break;
+
+    case "matrix":
+      if (!config.matrix.homeserver || !config.matrix.accessToken || !config.matrix.userId) {
+        errors.push("MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID are required");
+      }
+      break;
+
+    case "irc":
+      if (!config.irc.server) {
+        errors.push("IRC_SERVER is required");
+      }
+      break;
+
+    case "teams":
+      if (!config.teams.appId || !config.teams.appPassword) {
+        errors.push("TEAMS_APP_ID and TEAMS_APP_PASSWORD are required");
       }
       break;
 
@@ -2162,6 +2343,10 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     telegram: { ...base.telegram, ...partial.telegram },
     discord: { ...base.discord, ...partial.discord },
     slack: { ...base.slack, ...partial.slack },
+    whatsapp: { ...base.whatsapp, ...partial.whatsapp },
+    matrix: { ...base.matrix, ...partial.matrix },
+    irc: { ...base.irc, ...partial.irc },
+    teams: { ...base.teams, ...partial.teams },
     security: { ...base.security, ...partial.security },
     dashboard: { ...base.dashboard, ...partial.dashboard },
     websocketDashboard: { ...base.websocketDashboard, ...partial.websocketDashboard },
