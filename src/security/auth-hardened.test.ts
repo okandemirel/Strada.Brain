@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { createHmac } from "node:crypto";
 
 // Set JWT_SECRET before importing to avoid the guard
 beforeAll(() => {
@@ -21,6 +22,7 @@ import {
 } from "./auth-hardened.js";
 
 const TEST_JWT_SECRET = "test-secret-minimum-length-for-jwt-signing-purposes";
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 // Mock logger to suppress output during tests
 vi.mock("../utils/logger.js", () => ({
@@ -59,6 +61,43 @@ function makeSuperadmin(overrides: Partial<User> = {}): User {
     permissions: getRolePermissions("superadmin"),
     ...overrides,
   });
+}
+
+function decodeBase32(secret: string): Buffer {
+  const normalized = secret.replace(/[\s=-]/g, "").toUpperCase();
+  let bits = 0;
+  let value = 0;
+  const bytes: number[] = [];
+
+  for (const char of normalized) {
+    const idx = BASE32_ALPHABET.indexOf(char);
+    if (idx < 0) {
+      throw new Error(`Invalid base32 char: ${char}`);
+    }
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+
+  return Buffer.from(bytes);
+}
+
+function generateTotp(secret: string, timestampMs: number): string {
+  const secretBytes = decodeBase32(secret);
+  const counter = Math.floor(timestampMs / 1000 / 30);
+  const counterBuffer = Buffer.alloc(8);
+  counterBuffer.writeBigUInt64BE(BigInt(counter));
+  const digest = createHmac("sha1", secretBytes).update(counterBuffer).digest();
+  const offset = digest[digest.length - 1]! & 0x0f;
+  const binary =
+    ((digest[offset]! & 0x7f) << 24) |
+    ((digest[offset + 1]! & 0xff) << 16) |
+    ((digest[offset + 2]! & 0xff) << 8) |
+    (digest[offset + 3]! & 0xff);
+  return String(binary % 1_000_000).padStart(6, "0");
 }
 
 // =============================================================================
@@ -404,7 +443,7 @@ describe("MfaManager", () => {
     const userId = "user-rate-limit";
     mfa.generateBackupCodes(userId);
 
-    // Make 5 failed attempts (TOTP not implemented, treated as failures)
+    // Make 5 failed attempts
     for (let i = 0; i < 5; i++) {
       mfa.verifyMfa(userId, "secret", "INVALID!");
     }
@@ -424,14 +463,32 @@ describe("MfaManager", () => {
     expect(result.remainingAttempts).toBe(4); // 5 max - 1 attempt = 4
   });
 
-  it("should reject TOTP codes when TOTP is not implemented", () => {
-    const result = mfa.verifyMfa("user-totp", "secret", "123456");
-    expect(result.success).toBe(false);
-    expect(result.error).toBe("Invalid code");
+  it("should verify a valid TOTP code", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-17T12:00:00Z"));
+
+    const secret = mfa.generateSecret();
+    const code = generateTotp(secret, Date.now());
+    const result = mfa.verifyMfa("user-totp", secret, code);
+
+    expect(result.success).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("should accept a TOTP code within the allowed clock skew window", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-17T12:00:30Z"));
+
+    const secret = mfa.generateSecret();
+    const previousWindowCode = generateTotp(secret, Date.now() - 30_000);
+    const result = mfa.verifyMfa("user-totp-window", secret, previousWindowCode);
+
+    expect(result.success).toBe(true);
+    vi.useRealTimers();
   });
 
   it("should reject invalid code format", () => {
-    const result = mfa.verifyMfa("user-totp", "secret", "abc");
+    const result = mfa.verifyMfa("user-totp", mfa.generateSecret(), "abc");
     expect(result.success).toBe(false);
   });
 });
@@ -724,6 +781,70 @@ describe("HardenedAuthManager", () => {
       // User's failedLoginAttempts should be reset
       const user = auth.getUser(result.user!.id);
       expect(user!.failedLoginAttempts).toBe(0);
+    });
+
+    it("requires MFA for enabled users and completes authentication with a valid TOTP", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-17T12:00:00Z"));
+
+      const reg = await auth.registerUser(
+        "totp-user",
+        "totp@example.com",
+        "correct-password",
+        "developer",
+      );
+      const enabled = auth.enableMfa(reg.user!.id);
+
+      const firstStep = await auth.authenticate(
+        "totp-user",
+        "correct-password",
+        "127.0.0.1",
+        "TestAgent",
+      );
+
+      expect(firstStep.success).toBe(false);
+      expect(firstStep.requiresMfa).toBe(true);
+      expect(firstStep.mfaToken).toBeTruthy();
+
+      const code = generateTotp(enabled.secret!, Date.now());
+      const completed = auth.verifyMfaAndAuthenticate(
+        firstStep.mfaToken!,
+        code,
+        "127.0.0.1",
+        "TestAgent",
+      );
+
+      expect(completed.success).toBe(true);
+      expect(completed.session).toBeDefined();
+      expect(completed.tokens?.accessToken).toBeTruthy();
+      vi.useRealTimers();
+    });
+
+    it("rejects MFA completion when the TOTP code is wrong", async () => {
+      const reg = await auth.registerUser(
+        "totp-fail-user",
+        "totp-fail@example.com",
+        "correct-password",
+        "developer",
+      );
+      auth.enableMfa(reg.user!.id);
+
+      const firstStep = await auth.authenticate(
+        "totp-fail-user",
+        "correct-password",
+        "127.0.0.1",
+        "TestAgent",
+      );
+
+      const completed = auth.verifyMfaAndAuthenticate(
+        firstStep.mfaToken!,
+        "000000",
+        "127.0.0.1",
+        "TestAgent",
+      );
+
+      expect(completed.success).toBe(false);
+      expect(completed.error).toBe("Invalid code");
     });
   });
 

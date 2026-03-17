@@ -153,6 +153,80 @@ const DEFAULT_CONFIG: AuthConfig = {
   passwordMinLength: 12,
 };
 
+const TOTP_STEP_SECONDS = 30;
+const TOTP_WINDOW_STEPS = 1;
+const TOTP_DIGITS = 6;
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+function encodeBase32(buffer: Buffer): string {
+  let bits = 0;
+  let value = 0;
+  let output = "";
+
+  for (const byte of buffer) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+
+  if (bits > 0) {
+    output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  }
+
+  return output;
+}
+
+function decodeBase32(secret: string): Buffer | null {
+  const normalized = secret.replace(/[\s=-]/g, "").toUpperCase();
+  if (!normalized || /[^A-Z2-7]/.test(normalized)) {
+    return null;
+  }
+
+  let bits = 0;
+  let value = 0;
+  const bytes: number[] = [];
+
+  for (const char of normalized) {
+    const idx = BASE32_ALPHABET.indexOf(char);
+    if (idx < 0) {
+      return null;
+    }
+    value = (value << 5) | idx;
+    bits += 5;
+
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+
+  return Buffer.from(bytes);
+}
+
+function generateTotpCode(secret: string, timestampMs: number): string | null {
+  const secretBytes = decodeBase32(secret);
+  if (!secretBytes || secretBytes.length === 0) {
+    return null;
+  }
+
+  const counter = Math.floor(timestampMs / 1000 / TOTP_STEP_SECONDS);
+  const counterBuffer = Buffer.alloc(8);
+  counterBuffer.writeBigUInt64BE(BigInt(counter));
+
+  const digest = createHmac("sha1", secretBytes).update(counterBuffer).digest();
+  const offset = digest[digest.length - 1]! & 0x0f;
+  const binary =
+    ((digest[offset]! & 0x7f) << 24) |
+    ((digest[offset + 1]! & 0xff) << 16) |
+    ((digest[offset + 2]! & 0xff) << 8) |
+    (digest[offset + 3]! & 0xff);
+
+  return String(binary % (10 ** TOTP_DIGITS)).padStart(TOTP_DIGITS, "0");
+}
+
 // =============================================================================
 // PASSWORD HASHING (Argon2-like with crypto)
 // =============================================================================
@@ -328,10 +402,10 @@ export class MfaManager {
   private readonly windowMs = 5 * 60 * 1000; // 5 minutes
 
   /**
-   * Generate TOTP secret (simplified - use speakeasy in production)
+   * Generate a base32 TOTP secret compatible with authenticator apps.
    */
   generateSecret(): string {
-    return randomBytes(20).toString("base64url");
+    return encodeBase32(randomBytes(20));
   }
 
   /**
@@ -347,13 +421,30 @@ export class MfaManager {
   }
 
   /**
-   * Verify TOTP code (simplified implementation)
-   * In production, use speakeasy or otplib
+   * Verify a 6-digit TOTP code using RFC 6238 semantics with a small clock skew window.
    */
-  verifyTotp(_secret: string, _code: string): boolean {
-    throw new Error(
-      "TOTP verification not implemented. Install 'otplib' for production TOTP support.",
-    );
+  verifyTotp(secret: string, code: string): boolean {
+    const normalizedCode = code.trim();
+    if (!/^\d{6}$/.test(normalizedCode)) {
+      return false;
+    }
+
+    const candidate = Buffer.from(normalizedCode, "utf8");
+    const now = Date.now();
+
+    for (let stepOffset = -TOTP_WINDOW_STEPS; stepOffset <= TOTP_WINDOW_STEPS; stepOffset++) {
+      const generated = generateTotpCode(secret, now + stepOffset * TOTP_STEP_SECONDS * 1000);
+      if (!generated) {
+        return false;
+      }
+
+      const expected = Buffer.from(generated, "utf8");
+      if (expected.length === candidate.length && timingSafeEqual(expected, candidate)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -380,13 +471,7 @@ export class MfaManager {
       return { success: true };
     }
 
-    // Verify TOTP — may throw if not implemented
-    let isValid = false;
-    try {
-      isValid = this.verifyTotp(secret, code);
-    } catch {
-      // TOTP not implemented — treat as failed attempt
-    }
+    const isValid = this.verifyTotp(secret, code);
 
     if (!isValid) {
       const currentAttempts = attempts || { count: 0, resetTime: now + this.windowMs };
