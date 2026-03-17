@@ -88,6 +88,7 @@ const PLAN_EXECUTABLE_PATTERN = /\b(analy(?:se|ze)|inspect|read|search|trace|rep
 const PERMISSION_QUESTION_PATTERN = /\b(approve|approval|permission|okay|ok(?:ay)? to|should i|may i|can i|do you want me to|confirm|proceed|continue|go ahead|allowed)\b/i;
 const AUTO_APPROVE_OPTION_PATTERN = /\b(approve|approved|continue|proceed|yes|ok|okay|go ahead|accept)\b/i;
 const AUTO_REJECT_OPTION_PATTERN = /\b(reject|deny|cancel|stop|no)\b/i;
+const NATURAL_LANGUAGE_AUTONOMOUS_HOURS = 24;
 const SAFE_SHELL_FALLBACK_PATTERN =
   /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck)\b)|npx\s+(?:vitest|eslint|tsc)\b|git\s+(?:status|diff|log|show|branch|rev-parse)\b|(?:rg|ls|pwd|cat|head|tail|find|sed|wc|stat)\b|(?:vitest|eslint|tsc)\b)/i;
 const SHELL_REVIEW_SYSTEM_PROMPT = `You are the shell safety arbiter for an autonomous coding agent.
@@ -140,7 +141,116 @@ function sanitizeDisplayName(raw: string): string {
   return raw.replace(/[*[\]()#`>!\\<&\r\n]/g, "").trim();
 }
 
-const NAME_INTRO_RE = /(?:ben\s+|i'm\s+|my name is\s+|ad[ıi]m\s+|bana\s+)([\p{L}]+)/iu;
+const NAME_INTRO_RE = /(?:ben\s+|i(?:'|’)m\s+|my name is\s+|ad[ıi]m\s+)([\p{L}]+)/iu;
+const EXPLICIT_USER_NAME_RE = /(?:benim\s+ad[ıi]m|ad[ıi]m|my\s+name\s+is|i(?:'|’)m|call\s+me)\s+(?:şu|su|as)?\s*["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})/iu;
+const USER_ADDRESS_NAME_RE = /(?:bana|beni)\s+["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})["”]?\s+(?:de|diye\s+(?:çağır|cagir|hitap\s+et)|call\s+me)/iu;
+const ASSISTANT_NAME_RE = /(?:bundan\s+sonra\s+)?(?:senin\s+)?(?:ad[ıi]n|ismin|your\s+name\s+(?:should\s+be|is)|call\s+yourself)\s*(?:şu|su|as)?\s*(?:olsun|olacak|be|is|:|-)?\s*["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})/iu;
+const RESPONSE_FORMAT_CUSTOM_RE =
+  /(?:(?:şu|su|this|following)\s+format(?:ta)?(?:\s+(?:cevap\s+ver|reply|respond))?|(?:cevap|yanıt|reply|respond)(?:ların|ler?n)?\s*(?:şöyle|like\s+this|in\s+this\s+format))(?:\s+ol(?:sun|malı|acak))?\s*[:\-]?\s*(.+)$/iu;
+const AUTONOMY_ENABLE_RE =
+  /(?:\b(?:autonom|otonom|autonomous)\b.*\b(?:çalış|calis|aç|ac|aktif|etkin|enable|turn\s+on|work|ilerle)\b|\b(?:onay|approval)\b.*\b(?:sormadan|istemeden|without\s+asking|without\s+approval)\b|\b(?:tam\s+yetki|full\s+autonomy|full\s+authority)\b)/iu;
+const AUTONOMY_DISABLE_RE =
+  /(?:\b(?:autonom|otonom|autonomous)\b.*\b(?:kapat|kapa|disable|turn\s+off|devre\s+dışı|devre\s+disi|çalışma|calisma)\b|\b(?:onay|approval)\b.*\b(?:sor|iste|ask\s+first|require)\b)/iu;
+const ULTRATHINK_ENABLE_RE =
+  /(?:\bultrathink\b|\bultra\s+think\b|\bdeep(?:er)?\s+think(?:ing)?\b|\bderin\s+düş(?:ün|un)\b|\bçok\s+derin\s+düş(?:ün|un)\b)/iu;
+const ULTRATHINK_DISABLE_RE =
+  /(?:\bultrathink\b|\bultra\s+think\b).*\b(?:kapat|kapa|disable|turn\s+off|off|devre\s+dışı|devre\s+disi)\b/iu;
+
+interface NaturalLanguageDirectiveUpdates {
+  language?: string;
+  displayName?: string;
+  preferences?: Record<string, unknown>;
+  autonomousMode?: {
+    enabled: boolean;
+    expiresAt?: number;
+  };
+}
+
+function sanitizePreferenceText(raw: string, maxLength = 160): string {
+  return raw
+    .replace(API_KEY_PATTERN, "[REDACTED]")
+    .replace(/[*[\]()#`>!\\<&]/g, " ")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function trimDirectiveTail(raw: string): string {
+  const firstLine = raw.split(/[\r\n]/u, 1)[0] ?? "";
+  const firstSentence = firstLine.split(/[.!?]/u, 1)[0] ?? firstLine;
+  const firstClause = firstSentence.split(/\s+(?:ve|and|ama|but|lütfen|please|çünkü|because)\b/iu, 1)[0] ?? firstSentence;
+  return firstClause
+    .replace(/["“”'`]+/g, "")
+    .replace(/[.,!?;:]+$/g, "")
+    .replace(/\b(?:olsun|olacak|be|is)$/iu, "")
+    .trim();
+}
+
+function getStringPreference(preferences: Record<string, unknown>, key: string, maxLength = 160): string | undefined {
+  const value = preferences[key];
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const sanitized = sanitizePreferenceText(value, maxLength);
+  return sanitized.length > 0 ? sanitized : undefined;
+}
+
+function getBooleanPreference(preferences: Record<string, unknown>, key: string): boolean | undefined {
+  const value = preferences[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function detectVerbosityPreference(text: string): string | undefined {
+  const responseIntent = /\b(cevap|yanıt|yaz|reply|respond|answer|açıkla|acikla|anlat|explain)\b/iu.test(text);
+  if (/\b(kısa|kisa|brief|concise|short)\b/iu.test(text) && /\b(cevap|yanıt|yaz|reply|respond|answer|açıkla|acikla)\b/iu.test(text)) {
+    return "brief";
+  }
+  if (responseIntent && /\b(detaylı|detayli|ayrıntılı|ayrintili|thorough|detailed|long-form|deep-dive)\b/iu.test(text)) {
+    return "detailed";
+  }
+  if (responseIntent && /\b(orta|normal|balanced|moderate)\b/iu.test(text)) {
+    return "moderate";
+  }
+  return undefined;
+}
+
+function detectCommunicationStylePreference(text: string): string | undefined {
+  const styleIntent = /\b(cevap|yanıt|reply|respond|answer|üslup|uslup|ton|tone|style)\b/iu.test(text);
+  if (!styleIntent) return undefined;
+  if (/\b(resmi|formal)\b/iu.test(text)) return "formal";
+  if (/\b(samimi|gündelik|gundelik|casual|friendly)\b/iu.test(text)) return "casual";
+  if (/\b(minimal|yalın|yalin|plain|minimalist)\b/iu.test(text)) return "minimal";
+  return undefined;
+}
+
+function detectResponseFormatPreference(text: string): { format?: string; instruction?: string } {
+  const customMatch = text.match(RESPONSE_FORMAT_CUSTOM_RE);
+  const instruction = customMatch?.[1]
+    ? sanitizePreferenceText(customMatch[1].split(/[.!?]/u, 1)[0] ?? customMatch[1], 220)
+    : undefined;
+  const formatIntent = /\b(cevap|yanıt|reply|respond|answer|format)\b/iu.test(text) || Boolean(instruction);
+
+  if (formatIntent && /\bjson\b/iu.test(text)) {
+    return { format: "json", instruction };
+  }
+  if (formatIntent && /\b(madde\s+madde|bullet\s+points?|bullets?)\b/iu.test(text)) {
+    return { format: "bullet points", instruction };
+  }
+  if (formatIntent && /\b(tablo|table)\b/iu.test(text)) {
+    return { format: "table", instruction };
+  }
+  if (formatIntent && /\b(tek\s+paragraf|single\s+paragraph)\b/iu.test(text)) {
+    return { format: "single paragraph", instruction };
+  }
+
+  if (instruction) {
+    return { instruction };
+  }
+
+  return {};
+}
 
 function parsePositiveTimeout(rawValue: string | undefined, fallbackMs: number): number {
   const parsed = Number.parseInt(rawValue ?? "", 10);
@@ -188,17 +298,29 @@ function createStreamingProgressTimeout(initialTimeoutMs: number, stallTimeoutMs
 /** Build a list of profile attribute lines for system prompt injection. */
 function buildProfileParts(profile: { displayName?: string; language: string; activePersona: string; preferences: unknown }): string[] {
   const parts: string[] = [];
+  const preferences = profile.preferences as Record<string, unknown>;
   if (profile.displayName) parts.push(`Name: ${profile.displayName}`);
   parts.push(`Language: ${profile.language}`);
   if (profile.activePersona !== "default") parts.push(`Communication Style: ${profile.activePersona}`);
-  const verbosity = (profile.preferences as Record<string, unknown>).verbosity;
-  if (verbosity) parts.push(`Detail Level: ${String(verbosity)}`);
+  const assistantName = getStringPreference(preferences, "assistantName", 80);
+  if (assistantName) parts.push(`Assistant Identity: When referring to yourself, use the name "${assistantName}".`);
+  const communicationStyle = getStringPreference(preferences, "communicationStyle", 60);
+  if (communicationStyle) parts.push(`Reply Style: ${communicationStyle}`);
+  const verbosity = getStringPreference(preferences, "verbosity", 40);
+  if (verbosity) parts.push(`Detail Level: ${verbosity}`);
+  const responseFormat = getStringPreference(preferences, "responseFormat", 80);
+  if (responseFormat) parts.push(`Response Format Preference: ${responseFormat}`);
+  const responseFormatInstruction = getStringPreference(preferences, "responseFormatInstruction", 220);
+  if (responseFormatInstruction) parts.push(`Response Format Instruction: ${responseFormatInstruction}`);
+  if (getBooleanPreference(preferences, "ultrathinkMode") === true) {
+    parts.push("Reasoning Mode: Use extra-careful, multi-step internal reasoning before answering.");
+  }
   return parts;
 }
 
 const FIRST_TIME_USER_PROMPT = `\n\n## First-Time User
 This is a new user you haven't met before. In your FIRST response:
-1. Introduce yourself warmly as Strada Brain
+1. Introduce yourself warmly as Strada Brain unless the user's saved preferences explicitly renamed you
 2. Ask their name naturally (e.g., "What should I call you?")
 3. Ask about their preferred communication style (casual, formal, or minimal)
 4. Ask how detailed they want explanations to be (brief, moderate, or detailed)
@@ -553,6 +675,7 @@ export class Orchestrator {
    */
   private async buildSystemPromptWithContext(params: {
     chatId: string;
+    userId?: string;
     channelType?: string;
     prompt: string;
     personaContent?: string;
@@ -572,7 +695,7 @@ export class Orchestrator {
     let systemPrompt = langDirective + this.injectSoulPersonality(this.systemPrompt, params.channelType, params.personaContent);
 
     // 3. Autonomous mode directive
-    if (this.dmPolicy?.isAutonomousActive(params.chatId)) {
+    if (this.dmPolicy?.isAutonomousActive(params.chatId, params.userId)) {
       systemPrompt += AUTONOMOUS_MODE_DIRECTIVE;
     }
 
@@ -738,6 +861,9 @@ export class Orchestrator {
         this.lastPersistTime.set(`touch:${chatId}`, Date.now());
       }
     }
+
+    await this.maybeUpdateUserProfileFromPrompt(chatId, prompt);
+    profile = this.userProfileStore?.getProfile(chatId) ?? profile;
 
     // Load autonomous mode from profile at session start
     if (this.dmPolicy && this.userProfileStore) {
@@ -940,8 +1066,6 @@ export class Orchestrator {
 
           // Persist background task conversation to memory
           await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
-
-          this.maybeUpdateUserProfileFromPrompt(chatId, prompt);
 
           return response.text || "Task completed without output.";
         }
@@ -1316,6 +1440,8 @@ export class Orchestrator {
       }
     }
 
+    await this.maybeUpdateUserProfileFromPrompt(chatId, text, userId);
+
     // Add user message (with vision blocks if applicable)
     const provider = this.providerManager.getProvider(chatId);
     const supportsVision = provider.capabilities.vision;
@@ -1409,6 +1535,7 @@ export class Orchestrator {
     logger.debug("Building system prompt", { chatId });
     const { systemPrompt: builtSystemPrompt, initialContentHashes } = await this.buildSystemPromptWithContext({
       chatId,
+      userId,
       channelType,
       prompt: queryText,
       personaContent,
@@ -1733,7 +1860,6 @@ export class Orchestrator {
           toolCallCount: agentState.stepResults.length,
           hitMaxIterations: false,
         });
-        this.maybeUpdateUserProfileFromPrompt(chatId, lastUserMessage);
         // ──────────────────────────────────────────────────────────
         return;
       }
@@ -2191,8 +2317,8 @@ export class Orchestrator {
   /**
    * Execute tool calls, handling confirmations for write operations.
    */
-  private isSelfManagedInteractiveMode(chatId: string, mode: ToolExecutionMode): boolean {
-    return mode === "background" || this.dmPolicy.isAutonomousActive(chatId);
+  private isSelfManagedInteractiveMode(chatId: string, mode: ToolExecutionMode, userId?: string): boolean {
+    return mode === "background" || this.dmPolicy.isAutonomousActive(chatId, userId);
   }
 
   private normalizeInteractiveText(value: unknown): string {
@@ -2317,8 +2443,9 @@ export class Orchestrator {
     chatId: string,
     toolCall: ToolCall,
     mode: ToolExecutionMode,
+    userId?: string,
   ): ToolResult | null {
-    if (!this.isSelfManagedInteractiveMode(chatId, mode)) {
+    if (!this.isSelfManagedInteractiveMode(chatId, mode, userId)) {
       return null;
     }
 
@@ -2565,7 +2692,7 @@ export class Orchestrator {
     };
 
     for (const tc of toolCalls) {
-      const interactiveResolution = this.resolveInteractiveToolCall(chatId, tc, mode);
+      const interactiveResolution = this.resolveInteractiveToolCall(chatId, tc, mode, options.userId);
       if (interactiveResolution) {
         results.push(interactiveResolution);
         continue;
@@ -2595,7 +2722,7 @@ export class Orchestrator {
 
       // Confirmation flow via DMPolicy for write operations
       if (this.requireConfirmation && this.isWriteOperation(tc.name)) {
-        if (this.isSelfManagedInteractiveMode(chatId, mode)) {
+        if (this.isSelfManagedInteractiveMode(chatId, mode, options.userId)) {
           const review = await this.reviewSelfManagedWriteOperation(chatId, tc.name, tc.input, mode, options);
           if (!review.approved) {
             results.push(
@@ -2610,8 +2737,8 @@ export class Orchestrator {
           }
         } else {
           const destructive = isDestructiveOperation(tc.name, tc.input);
-          // Note: userId not available in executeToolCalls context; chatId used as userId fallback
-          const prefs = this.dmPolicy.getSessionPrefs(chatId, chatId);
+          const sessionUserId = options.userId ?? chatId;
+          const prefs = this.dmPolicy.getSessionPrefs(sessionUserId, chatId);
           const stubDiff = {
             path: String(tc.input["path"] ?? ""),
             content: "",
@@ -2971,34 +3098,122 @@ export class Orchestrator {
     return null; // Default: don't override, keep "en"
   }
 
-  private maybeUpdateUserProfileFromPrompt(chatId: string, prompt: string): void {
+  private extractNaturalLanguageDirectiveUpdates(
+    latestProfile: { displayName?: string; preferences: Record<string, unknown> } | null,
+    prompt: string,
+  ): NaturalLanguageDirectiveUpdates {
+    const updates: NaturalLanguageDirectiveUpdates = {};
+    const trimmed = prompt.trim();
+
+    const langFromMsg = this.detectLanguageFromText(prompt);
+    if (langFromMsg) {
+      updates.language = langFromMsg;
+    }
+
+    const isSingleWord = trimmed.split(/\s+/).length <= 2 && /^[\p{L}]{2,20}$/u.test(trimmed);
+    const nameMatch = trimmed.match(EXPLICIT_USER_NAME_RE)
+      ?? trimmed.match(USER_ADDRESS_NAME_RE)
+      ?? trimmed.match(NAME_INTRO_RE)
+      ?? (isSingleWord ? [, trimmed] : null);
+    const displayName = nameMatch?.[1] ? sanitizeDisplayName(trimDirectiveTail(nameMatch[1])) : "";
+    if (displayName && (!latestProfile?.displayName || trimmed.match(EXPLICIT_USER_NAME_RE))) {
+      updates.displayName = displayName;
+    }
+
+    const preferenceUpdates: Record<string, unknown> = {};
+
+    const assistantNameMatch = trimmed.match(ASSISTANT_NAME_RE);
+    const assistantName = assistantNameMatch?.[1]
+      ? sanitizeDisplayName(trimDirectiveTail(assistantNameMatch[1])).slice(0, 40)
+      : "";
+    if (assistantName) {
+      preferenceUpdates.assistantName = assistantName;
+    }
+
+    const verbosity = detectVerbosityPreference(trimmed);
+    if (verbosity) {
+      preferenceUpdates.verbosity = verbosity;
+    }
+
+    const communicationStyle = detectCommunicationStylePreference(trimmed);
+    if (communicationStyle) {
+      preferenceUpdates.communicationStyle = communicationStyle;
+    }
+
+    const responseFormat = detectResponseFormatPreference(trimmed);
+    if (responseFormat.format) {
+      preferenceUpdates.responseFormat = responseFormat.format;
+    }
+    if (responseFormat.instruction) {
+      preferenceUpdates.responseFormatInstruction = responseFormat.instruction;
+    }
+
+    if (ULTRATHINK_DISABLE_RE.test(trimmed)) {
+      preferenceUpdates.ultrathinkMode = false;
+    } else if (ULTRATHINK_ENABLE_RE.test(trimmed)) {
+      preferenceUpdates.ultrathinkMode = true;
+    }
+
+    const fromNowOnMatch = trimmed.match(/(?:bundan\s+sonra|from\s+now\s+on|her\s+zaman|always)\s+(.+)$/iu);
+    const directiveTail = fromNowOnMatch?.[1]
+      ? sanitizePreferenceText(fromNowOnMatch[1].split(/[.!?]/u, 1)[0] ?? fromNowOnMatch[1], 220)
+      : undefined;
+    if (!responseFormat.instruction && directiveTail && /\b(cevap|yanıt|reply|respond|format|style|üslup|uslup|ton|tone|json|bullet|madde|tablo|table)\b/iu.test(directiveTail)) {
+      preferenceUpdates.responseFormatInstruction = directiveTail;
+    }
+
+    if (AUTONOMY_DISABLE_RE.test(trimmed)) {
+      updates.autonomousMode = { enabled: false };
+    } else if (AUTONOMY_ENABLE_RE.test(trimmed)) {
+      updates.autonomousMode = {
+        enabled: true,
+        expiresAt: Date.now() + NATURAL_LANGUAGE_AUTONOMOUS_HOURS * 3600_000,
+      };
+    }
+
+    if (Object.keys(preferenceUpdates).length > 0) {
+      updates.preferences = {
+        ...(latestProfile?.preferences ?? {}),
+        ...preferenceUpdates,
+      };
+    }
+
+    return updates;
+  }
+
+  private async maybeUpdateUserProfileFromPrompt(chatId: string, prompt: string, userId?: string): Promise<void> {
     if (!this.userProfileStore || !prompt.trim()) {
       return;
     }
 
     const latestProfile = this.userProfileStore.getProfile(chatId);
-    if (!latestProfile) {
-      return;
+    const updates = this.extractNaturalLanguageDirectiveUpdates(latestProfile, prompt);
+    const profileUpdates: Record<string, unknown> = {};
+
+    if (updates.language) {
+      profileUpdates["language"] = updates.language;
+    }
+    if (updates.displayName) {
+      profileUpdates["displayName"] = updates.displayName;
+    }
+    if (updates.preferences) {
+      profileUpdates["preferences"] = updates.preferences;
     }
 
-    const updates: Record<string, unknown> = {};
-    const langFromMsg = this.detectLanguageFromText(prompt);
-    if (langFromMsg) {
-      updates["language"] = langFromMsg;
+    if (Object.keys(profileUpdates).length > 0) {
+      this.userProfileStore.upsertProfile(chatId, profileUpdates);
     }
 
-    if (!latestProfile.displayName) {
-      const trimmed = prompt.trim();
-      const isSingleWord = trimmed.split(/\s+/).length <= 2 && /^[\p{L}]{2,20}$/u.test(trimmed);
-      const nameMatch = trimmed.match(NAME_INTRO_RE) ?? (isSingleWord ? [, trimmed] : null);
-      const displayName = nameMatch?.[1] ? sanitizeDisplayName(nameMatch[1]) : "";
-      if (displayName) {
-        updates["displayName"] = displayName;
-      }
-    }
-
-    if (Object.keys(updates).length > 0) {
-      this.userProfileStore.upsertProfile(chatId, updates);
+    if (updates.autonomousMode) {
+      await this.userProfileStore.setAutonomousMode(
+        chatId,
+        updates.autonomousMode.enabled,
+        updates.autonomousMode.expiresAt,
+      );
+      this.dmPolicy?.initFromProfile(chatId, {
+        autonomousMode: updates.autonomousMode.enabled,
+        autonomousExpiresAt: updates.autonomousMode.expiresAt,
+      }, userId);
     }
   }
 

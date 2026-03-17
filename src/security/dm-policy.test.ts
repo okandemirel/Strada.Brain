@@ -87,6 +87,15 @@ describe("DMPolicy", () => {
       expect(prefs.level).toBe(ApprovalLevel.ALWAYS);
     });
 
+    it("reuses chat-scoped autonomous prefs for a specific user session", () => {
+      policy.initFromProfile("chat1", { autonomousMode: true });
+
+      const prefs = policy.getSessionPrefs("user1", "chat1");
+
+      expect(prefs.userId).toBe("user1");
+      expect(prefs.level).toBe(ApprovalLevel.NEVER);
+    });
+
     it("should create separate prefs for different users", () => {
       policy.setSessionPrefs("user1", "chat1", { level: ApprovalLevel.ALWAYS });
       policy.setSessionPrefs("user2", "chat1", { level: ApprovalLevel.NEVER });
@@ -345,6 +354,14 @@ describe("DMPolicy", () => {
 
       const prefs = policy.getSessionPrefs("user1", "chat1");
       expect(prefs.level).toBe(ApprovalLevel.SMART);
+    });
+  });
+
+  describe("isAutonomousActive", () => {
+    it("honors chat-scoped autonomous mode for user-specific checks", () => {
+      policy.initFromProfile("chat1", { autonomousMode: true });
+
+      expect(policy.isAutonomousActive("chat1", "user1")).toBe(true);
     });
   });
 });

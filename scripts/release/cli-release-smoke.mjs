@@ -228,8 +228,63 @@ async function runInteractiveMemorySmoke(memoryDir, projectDir) {
   assert.equal(row?.display_name, "CodexTester", "interactive CLI should persist the captured display name");
 }
 
+async function runPreferencePersistenceSmoke(memoryDir, projectDir) {
+  console.log("2. Natural-language preference persistence smoke");
+  const session = new CliSession(["cli"], {
+    ...buildBaseEnv(memoryDir, projectDir),
+    READ_ONLY_MODE: "true",
+    REQUIRE_EDIT_CONFIRMATION: "true",
+  });
+
+  try {
+    await session.waitFor(/you> /);
+
+    let cursor = session.output.length;
+    session.sendLine("Adın Atlas olsun. Bundan sonra şu formatta cevap ver: önce kısa başlık, sonra 3 madde. Ultrathink modunu aç.");
+    await session.waitFor("Preference update acknowledged.", { fromIndex: cursor, timeoutMs: 20_000 });
+    await session.waitFor(/you> /, { fromIndex: cursor, timeoutMs: 20_000 });
+  } finally {
+    await session.close();
+  }
+
+  const memoryDbPath = join(memoryDir, "agentdb", "memory.db");
+  await ensureFile(memoryDbPath);
+  const db = new Database(memoryDbPath, { readonly: true });
+  const row = db.prepare("SELECT preferences FROM user_profiles WHERE chat_id = ?").get("cli-local");
+  db.close();
+
+  const preferences = JSON.parse(row?.preferences ?? "{}");
+  assert.equal(preferences.assistantName, "Atlas", "preference smoke should persist the assistant name");
+  assert.equal(preferences.ultrathinkMode, true, "preference smoke should persist ultrathink mode");
+  assert.match(
+    String(preferences.responseFormatInstruction ?? ""),
+    /önce kısa başlık/i,
+    "preference smoke should persist the custom response format instruction",
+  );
+
+  const recallSession = new CliSession(["cli"], {
+    ...buildBaseEnv(memoryDir, projectDir),
+    READ_ONLY_MODE: "true",
+    REQUIRE_EDIT_CONFIRMATION: "true",
+  });
+
+  try {
+    await recallSession.waitFor(/you> /);
+
+    const cursor = recallSession.output.length;
+    recallSession.sendLine("What assistant name should you use?");
+    await recallSession.waitFor("Assistant name: Atlas. Format: önce kısa başlık, sonra 3 madde", {
+      fromIndex: cursor,
+      timeoutMs: 20_000,
+    });
+    await recallSession.waitFor(/you> /, { fromIndex: cursor, timeoutMs: 20_000 });
+  } finally {
+    await recallSession.close();
+  }
+}
+
 async function runProviderFallbackSmoke(memoryDir, projectDir) {
-  console.log("2. Routed provider fallback smoke");
+  console.log("3. Routed provider fallback smoke");
   const session = new CliSession(["cli"], {
     ...buildBaseEnv(memoryDir, projectDir),
     PROVIDER_CHAIN: "qwen,kimi",
@@ -282,7 +337,7 @@ async function runProviderFallbackSmoke(memoryDir, projectDir) {
 }
 
 async function runDaemonSmoke(memoryDir, projectDir) {
-  console.log("3. Daemon autonomy, delegation, multi-agent and metrics smoke");
+  console.log("4. Daemon autonomy, delegation, multi-agent and metrics smoke");
   const session = new CliSession(["start", "--channel", "cli", "--daemon"], {
     ...buildBaseEnv(memoryDir, projectDir),
     READ_ONLY_MODE: "false",
@@ -413,10 +468,12 @@ async function main() {
   try {
     await runInteractiveMemorySmoke(memoryDir, projectDir);
     await wait(200);
+    await runPreferencePersistenceSmoke(memoryDir, projectDir);
+    await wait(200);
     await runProviderFallbackSmoke(memoryDir, projectDir);
     await wait(200);
     await runDaemonSmoke(memoryDir, projectDir);
-    console.log("4. Release smoke passed");
+    console.log("5. Release smoke passed");
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }

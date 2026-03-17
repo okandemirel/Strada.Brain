@@ -97,15 +97,49 @@ export class DMPolicy {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
+  private getPrimarySessionKey(userId: string, chatId: string): string {
+    return `${userId}:${chatId}`;
+  }
+
+  private getFallbackSessionKey(userId: string, chatId: string): string | null {
+    return userId === chatId ? null : `${chatId}:${chatId}`;
+  }
+
+  private resolveStoredSessionKey(userId: string, chatId: string): string {
+    const primaryKey = this.getPrimarySessionKey(userId, chatId);
+    if (this.sessionPrefs.has(primaryKey)) {
+      return primaryKey;
+    }
+
+    const fallbackKey = this.getFallbackSessionKey(userId, chatId);
+    if (fallbackKey && this.sessionPrefs.has(fallbackKey)) {
+      return fallbackKey;
+    }
+
+    return primaryKey;
+  }
+
   // ─── Session Preferences ───────────────────────────────────────────────────
 
   getSessionPrefs(userId: string, chatId: string): SessionApprovalPrefs {
-    const key = `${userId}:${chatId}`;
-    let prefs = this.sessionPrefs.get(key);
+    const primaryKey = this.getPrimarySessionKey(userId, chatId);
+    const resolvedKey = this.resolveStoredSessionKey(userId, chatId);
+    let prefs = this.sessionPrefs.get(resolvedKey);
 
     if (!prefs || this.isExpired(prefs)) {
       prefs = this.buildPrefs(userId, this.config.defaultLevel);
-      this.sessionPrefs.set(key, prefs);
+      this.sessionPrefs.set(primaryKey, prefs);
+      return prefs;
+    }
+
+    if (resolvedKey !== primaryKey) {
+      const copied = { ...prefs, userId };
+      this.sessionPrefs.set(primaryKey, copied);
+      const expiry = this.autonomousExpiry.get(resolvedKey);
+      if (expiry !== undefined) {
+        this.autonomousExpiry.set(primaryKey, expiry);
+      }
+      return copied;
     }
 
     return prefs;
@@ -154,7 +188,8 @@ export class DMPolicy {
   }
 
   isAutonomousActive(chatId: string, userId?: string): boolean {
-    const key = `${userId ?? chatId}:${chatId}`;
+    const resolvedUserId = userId ?? chatId;
+    const key = this.resolveStoredSessionKey(resolvedUserId, chatId);
     const prefs = this.sessionPrefs.get(key);
     if (!prefs || prefs.level !== ApprovalLevel.NEVER) {
       return false;

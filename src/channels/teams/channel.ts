@@ -18,6 +18,7 @@ export class TeamsChannel implements IChannelAdapter {
   private adapter: BotAdapterLike | null = null;
   private server: import("node:http").Server | null = null;
   private healthy = false;
+  private activeTurnContexts = new Map<string, TurnContextLike>();
 
   constructor(
     private readonly appId: string,
@@ -54,15 +55,24 @@ export class TeamsChannel implements IChannelAdapter {
               return;
             }
 
+            const chatId = context.activity.conversation.id;
+            this.activeTurnContexts.set(chatId, context);
+
             const msg: IncomingMessage = {
               channelType: "teams",
-              chatId: context.activity.conversation.id,
+              chatId,
               userId: context.activity.from.id,
               text: limitIncomingText(context.activity.text),
               timestamp: new Date(context.activity.timestamp ?? Date.now()),
             };
 
-            await this.handler?.(msg);
+            try {
+              await this.handler?.(msg);
+            } finally {
+              if (this.activeTurnContexts.get(chatId) === context) {
+                this.activeTurnContexts.delete(chatId);
+              }
+            }
           }
         });
       } else {
@@ -81,6 +91,7 @@ export class TeamsChannel implements IChannelAdapter {
 
   async disconnect(): Promise<void> {
     this.healthy = false;
+    this.activeTurnContexts.clear();
     await new Promise<void>((resolve) => {
       if (this.server) {
         this.server.close(() => resolve());
@@ -94,10 +105,13 @@ export class TeamsChannel implements IChannelAdapter {
     return this.healthy;
   }
 
-  async sendText(_chatId: string, _text: string): Promise<void> {
-    // Teams responses are sent via TurnContext during the activity handler.
-    // Out-of-band proactive messaging requires ConversationReference storage
-    // which will be implemented when Teams is fully integrated.
+  async sendText(chatId: string, text: string): Promise<void> {
+    const context = this.activeTurnContexts.get(chatId);
+    if (!context) {
+      throw new Error(`No active Teams turn context for conversation: ${chatId}`);
+    }
+
+    await context.sendActivity(text);
   }
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {

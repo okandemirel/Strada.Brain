@@ -128,6 +128,10 @@ function buildResponse(body) {
   const normalizedToolResult = lastToolResult.toLowerCase();
   const nameMatch = systemPrompt.match(/^Name:\s*(.+)$/m);
   const rememberedName = nameMatch?.[1]?.trim();
+  const assistantNameMatch = systemPrompt.match(/^Assistant Identity:\s+When referring to yourself, use the name "(.+?)"\.$/m);
+  const preferredAssistantName = assistantNameMatch?.[1]?.trim();
+  const responseFormatInstructionMatch = systemPrompt.match(/^Response Format Instruction:\s*(.+)$/m);
+  const preferredResponseFormatInstruction = responseFormatInstructionMatch?.[1]?.trim();
 
   if (normalizedUserText.includes("my name is codextester")) {
     return buildChatCompletion({
@@ -140,6 +144,20 @@ function buildResponse(body) {
       text: rememberedName
         ? `Your name is ${rememberedName}.`
         : "I don't know your name yet.",
+    });
+  }
+
+  if (normalizedUserText.includes("adın atlas olsun")) {
+    return buildChatCompletion({
+      text: "Preference update acknowledged.",
+    });
+  }
+
+  if (normalizedUserText.includes("what assistant name should you use")) {
+    return buildChatCompletion({
+      text: preferredAssistantName && preferredResponseFormatInstruction
+        ? `Assistant name: ${preferredAssistantName}. Format: ${preferredResponseFormatInstruction}`
+        : "No assistant preferences found.",
     });
   }
 

@@ -178,6 +178,145 @@ describe("Orchestrator", () => {
     db.close();
   });
 
+  it("persists assistant identity and response preferences from natural language instructions", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const profileOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+    });
+
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Preference update acknowledged.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+
+    const promise = profileOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-preferences",
+      userId: "user1",
+      text: "Adın Atlas olsun. Bundan sonra şu formatta cevap ver: önce kısa başlık, sonra 3 madde. Ultrathink modunu aç.",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const profile = userProfileStore.getProfile("chat-preferences");
+    expect(profile?.preferences.assistantName).toBe("Atlas");
+    expect(profile?.preferences.ultrathinkMode).toBe(true);
+    expect(String(profile?.preferences.responseFormatInstruction ?? "")).toContain("önce kısa başlık");
+
+    const firstPrompt = mockProvider.chat.mock.calls[0]?.[0] as string;
+    expect(firstPrompt).toContain('Assistant Identity: When referring to yourself, use the name "Atlas".');
+    expect(firstPrompt).toContain("Response Format Instruction: önce kısa başlık, sonra 3 madde");
+    expect(firstPrompt).toContain("Reasoning Mode: Use extra-careful, multi-step internal reasoning before answering.");
+    db.close();
+  });
+
+  it("does not mistake response-format instructions for the user's display name", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const profileOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+    });
+
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Preference update acknowledged.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+
+    const promise = profileOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-format-name-guard",
+      userId: "user1",
+      text: "Bundan sonra bana kısa ve madde madde cevap ver.",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const profile = userProfileStore.getProfile("chat-format-name-guard");
+    expect(profile?.displayName).toBeUndefined();
+    expect(profile?.preferences.verbosity).toBe("brief");
+    expect(profile?.preferences.responseFormat).toBe("bullet points");
+    db.close();
+  });
+
+  it("enables autonomous mode from natural language and skips write confirmation in the same turn", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const dmPolicy = new DMPolicy(mockChannel as any);
+    const profileOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+      dmPolicy,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{ id: "tc-write-auto", name: "file_write", input: { path: "output.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Autonomous write complete.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const promise = profileOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-auto-natural",
+      userId: "user-42",
+      text: "Bu görev için autonom çalış ve approval sormadan ilerle.",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const autonomousState = await userProfileStore.isAutonomousMode("chat-auto-natural");
+    expect(autonomousState.enabled).toBe(true);
+    expect(dmPolicy.isAutonomousActive("chat-auto-natural", "user-42")).toBe(true);
+    expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
+    expect(writeTool.execute).toHaveBeenCalled();
+    expect(mockProvider.chat.mock.calls[0]?.[0]).toContain("## AUTONOMOUS MODE ACTIVE");
+    db.close();
+  });
+
   it("executes tool calls and loops back to provider", async () => {
     const toolResponse: ProviderResponse = {
       text: "Let me read that file...",
