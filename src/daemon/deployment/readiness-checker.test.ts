@@ -99,6 +99,15 @@ describe("ReadinessChecker", () => {
       expect(result.branchMatch).toBe(true);
       expect(result.cached).toBe(false);
       expect(result.reason).toBeUndefined();
+      expect(mockSpawn).toHaveBeenNthCalledWith(
+        1,
+        "npm",
+        ["test"],
+        expect.objectContaining({
+          shell: false,
+          cwd: "/project",
+        }),
+      );
     });
 
     it("returns ready=false when test command fails", async () => {
@@ -237,6 +246,42 @@ describe("ReadinessChecker", () => {
 
       expect(result.ready).toBe(false);
       expect(result.testPassed).toBe(false);
+    });
+
+    it("tokenizes quoted test commands without invoking a shell", async () => {
+      const config = createDefaultConfig({ testCommand: 'npm run "smoke suite"' });
+      checker = new ReadinessChecker(config, "/project", mockLogger);
+
+      mockSpawn
+        .mockReturnValueOnce(createMockProcess(0))
+        .mockReturnValueOnce(createMockProcessWithStdout(""))
+        .mockReturnValueOnce(createMockProcessWithStdout("main"));
+
+      await checker.checkReadiness();
+
+      expect(mockSpawn).toHaveBeenNthCalledWith(
+        1,
+        "npm",
+        ["run", "smoke suite"],
+        expect.objectContaining({
+          shell: false,
+        }),
+      );
+    });
+
+    it("fails closed when the test command has unmatched quotes", async () => {
+      const config = createDefaultConfig({ testCommand: 'npm run "broken' });
+      checker = new ReadinessChecker(config, "/project", mockLogger);
+
+      mockSpawn
+        .mockReturnValueOnce(createMockProcessWithStdout(""))
+        .mockReturnValueOnce(createMockProcessWithStdout("main"));
+
+      const result = await checker.checkReadiness();
+
+      expect(result.ready).toBe(false);
+      expect(result.testPassed).toBe(false);
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
     });
 
     it("combines multiple failure reasons", async () => {

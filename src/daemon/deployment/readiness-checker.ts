@@ -111,11 +111,15 @@ export class ReadinessChecker {
       const { testCommand } = this.config;
       this.logger.debug(`Running test command: ${testCommand}`);
 
-      // Use shell mode for commands like "npm test" that need shell resolution.
-      // The command is from admin config (not user input), so shell injection
-      // risk is controlled.
-      const child = spawn(testCommand, {
-        shell: true,
+      const parsed = this.parseCommand(testCommand);
+      if (!parsed) {
+        this.logger.warn(`Invalid test command: ${testCommand}`);
+        resolve(false);
+        return;
+      }
+
+      const child = spawn(parsed.command, parsed.args, {
+        shell: false,
         cwd: this.projectRoot,
         timeout: this.config.testTimeoutMs,
         killSignal: "SIGTERM",
@@ -144,6 +148,65 @@ export class ReadinessChecker {
         resolve(code === 0);
       });
     });
+  }
+
+  private parseCommand(commandLine: string): { command: string; args: string[] } | null {
+    const tokens: string[] = [];
+    let current = "";
+    let quote: "'" | '"' | null = null;
+    let escaping = false;
+
+    for (const char of commandLine.trim()) {
+      if (escaping) {
+        current += char;
+        escaping = false;
+        continue;
+      }
+
+      if (char === "\\") {
+        escaping = true;
+        continue;
+      }
+
+      if (quote) {
+        if (char === quote) {
+          quote = null;
+        } else {
+          current += char;
+        }
+        continue;
+      }
+
+      if (char === "'" || char === '"') {
+        quote = char;
+        continue;
+      }
+
+      if (/\s/.test(char)) {
+        if (current) {
+          tokens.push(current);
+          current = "";
+        }
+        continue;
+      }
+
+      current += char;
+    }
+
+    if (escaping || quote) {
+      return null;
+    }
+
+    if (current) {
+      tokens.push(current);
+    }
+
+    const [command, ...args] = tokens;
+    if (!command) {
+      return null;
+    }
+
+    return { command, args };
   }
 
   private checkGitClean(): Promise<boolean> {
