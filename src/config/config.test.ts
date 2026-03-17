@@ -126,6 +126,7 @@ describe("loadConfig", () => {
     delete process.env["TASK_MAX_CONCURRENT"];
     delete process.env["TASK_MESSAGE_BURST_WINDOW_MS"];
     delete process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"];
+    delete process.env["MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH"];
   });
 
   it("loads valid configuration", () => {
@@ -227,6 +228,16 @@ describe("loadConfig", () => {
 
     expect(config.llmStreamInitialTimeoutMs).toBe(1500);
     expect(config.llmStreamStallTimeoutMs).toBe(750);
+  });
+
+  it("loads model intelligence provider source registry path into runtime config", () => {
+    setEnv({
+      MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH: "/opt/strada/provider-sources.json",
+    });
+
+    const config = loadConfig();
+
+    expect(config.modelIntelligence.providerSourcesPath).toBe("/opt/strada/provider-sources.json");
   });
 
   it("loads task routing env vars into runtime config", () => {

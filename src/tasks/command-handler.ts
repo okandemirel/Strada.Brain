@@ -381,6 +381,13 @@ export class CommandHandler {
           "",
           `*Hints*: ${snapshot.behavioralHints.join(". ")}`,
         ];
+        const officialSignals = descriptor?.officialSnapshot?.signals ?? [];
+        if (officialSignals.length > 0) {
+          lines.push(
+            "",
+            `*Official Signals*: ${officialSignals.slice(0, 3).map((signal) => signal.kind === "command" ? signal.value : signal.title).join(" | ")}`,
+          );
+        }
         await this.channel.sendMarkdown(chatId, lines.join("\n"));
       } catch {
         await this.channel.sendText(chatId, "Provider intelligence module not available.");

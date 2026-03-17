@@ -251,6 +251,7 @@ export type EnvVarName =
   | "MODEL_INTELLIGENCE_ENABLED"
   | "MODEL_INTELLIGENCE_REFRESH_HOURS"
   | "MODEL_INTELLIGENCE_DB_PATH"
+  | "MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH"
 
   // Provider Routing
   | "ROUTING_PRESET"
@@ -407,6 +408,7 @@ export interface ModelIntelligenceConfig {
   readonly enabled: boolean;
   readonly refreshHours: number;
   readonly dbPath: string;
+  readonly providerSourcesPath: string;
 }
 
 /** WebSocket dashboard configuration */
@@ -800,6 +802,7 @@ export const configSchema = z
       .pipe(z.number().int().min(1).max(168))
       .default("24"),
     modelIntelligenceDbPath: z.string().default(".strada-memory/model-intelligence.db"),
+    modelIntelligenceProviderSourcesPath: z.string().default("src/agents/providers/provider-sources.json"),
 
     // Memory
     memoryEnabled: boolFromString(true),
@@ -1289,6 +1292,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       enabled: rawConfig.modelIntelligenceEnabled,
       refreshHours: rawConfig.modelIntelligenceRefreshHours,
       dbPath: rawConfig.modelIntelligenceDbPath,
+      providerSourcesPath: rawConfig.modelIntelligenceProviderSourcesPath,
     },
 
     memory: {
@@ -1796,6 +1800,7 @@ interface EnvVars {
   modelIntelligenceEnabled: string | undefined;
   modelIntelligenceRefreshHours: string | undefined;
   modelIntelligenceDbPath: string | undefined;
+  modelIntelligenceProviderSourcesPath: string | undefined;
   memoryEnabled: string | undefined;
   memoryDbPath: string | undefined;
   memoryBackend: string | undefined;
@@ -2031,6 +2036,7 @@ function loadFromEnv(): EnvVars {
     modelIntelligenceEnabled: process.env["MODEL_INTELLIGENCE_ENABLED"],
     modelIntelligenceRefreshHours: process.env["MODEL_INTELLIGENCE_REFRESH_HOURS"],
     modelIntelligenceDbPath: process.env["MODEL_INTELLIGENCE_DB_PATH"],
+    modelIntelligenceProviderSourcesPath: process.env["MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH"],
     memoryEnabled: process.env["MEMORY_ENABLED"],
     memoryDbPath: process.env["MEMORY_DB_PATH"],
     memoryBackend: process.env["MEMORY_BACKEND"],

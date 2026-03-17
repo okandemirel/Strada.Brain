@@ -496,6 +496,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       const { ModelIntelligenceService } = await import("../agents/providers/model-intelligence.js");
       modelIntelligence = new ModelIntelligenceService({
         refreshHours: config.modelIntelligence.refreshHours,
+        providerSourcesPath: config.modelIntelligence.providerSourcesPath,
       });
       await modelIntelligence.initialize(config.modelIntelligence.dbPath, {
         refreshOnInitialize: false,
@@ -1345,24 +1346,21 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         return () => flat;
       })(),
       providerManager: {
-        listAvailable: () => providerManager.listAvailable().map(p => ({
-          name: p.name,
-          label: p.label,
-          defaultModel: p.defaultModel,
+        listAvailable: () => providerManager.listAvailable().map((provider) => ({
+          ...provider,
           configured: true,
-          models: [p.defaultModel],
+          models: [provider.defaultModel],
         })),
         listAvailableWithModels: async () => {
           const results = await providerManager.listAvailableWithModels();
-          return results.map(p => ({
-            name: p.name,
-            label: p.label,
-            defaultModel: p.defaultModel,
+          return results.map((provider) => ({
+            ...provider,
             configured: true,
-            models: p.models,
-            activeModel: p.defaultModel,
+            activeModel: provider.defaultModel,
           }));
         },
+        describeAvailable: () => providerManager.describeAvailable(),
+        getProviderCapabilities: (name: string, model?: string) => providerManager.getProviderCapabilities(name, model),
         getActiveInfo: (chatId: string) => {
           const info = providerManager.getActiveInfo(chatId);
           return info ? {
@@ -1375,6 +1373,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         setPreference: async (chatId: string, provider: string, model?: string) => {
           providerManager.setPreference(chatId, provider, model);
         },
+        refreshCatalog: async () => providerManager.refreshModelCatalog(),
       },
       userProfileStore,
       stradaDeps,

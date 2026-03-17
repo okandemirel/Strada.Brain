@@ -248,6 +248,43 @@ describe("DashboardServer", () => {
     }));
   });
 
+  it("refreshes the shared provider catalog instead of creating a temporary service", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    const refreshCatalog = vi.fn().mockResolvedValue({
+      modelsUpdated: 4,
+      source: "litellm",
+      errors: [],
+    });
+
+    server.registerExtendedServices({
+      providerManager: {
+        listAvailable: () => [],
+        getActiveInfo: () => null,
+        setPreference: async () => {},
+        refreshCatalog,
+      },
+    });
+
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/models/refresh`, {
+      method: "POST",
+    });
+
+    expect(res.status).toBe(200);
+    expect(refreshCatalog).toHaveBeenCalledTimes(1);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.result).toEqual(expect.objectContaining({
+      modelsUpdated: 4,
+      source: "litellm",
+    }));
+  });
+
   describe("/api/agent-metrics", () => {
     function getPort(srv: DashboardServer): number {
       const addr = (srv as unknown as { server: { address: () => { port: number } } }).server.address();

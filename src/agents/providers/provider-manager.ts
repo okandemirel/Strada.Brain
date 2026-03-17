@@ -13,6 +13,8 @@ import { buildProviderChain, createProvider, PROVIDER_PRESETS } from "./provider
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import { getLogger } from "../../utils/logger.js";
 import { LRUCache } from "../../common/lru-cache.js";
+import type { ProviderOfficialSnapshot } from "./provider-source-registry.js";
+import type { RefreshResult } from "./model-intelligence.js";
 
 export interface ProviderActiveInfo {
   providerName: string;
@@ -25,10 +27,13 @@ export interface ProviderDescriptor {
   readonly label: string;
   readonly defaultModel: string;
   readonly capabilities: ProviderCapabilities | null;
+  readonly officialSnapshot: ProviderOfficialSnapshot | null;
 }
 
 interface ProviderModelCatalogLookup {
   getProviderModels(provider: string): Array<{ id: string }>;
+  getProviderOfficialSnapshot?(provider: string): ProviderOfficialSnapshot | undefined;
+  refresh?(): Promise<RefreshResult>;
 }
 
 const MAX_CACHED_PROVIDERS = 50;
@@ -203,8 +208,26 @@ export class ProviderManager {
     this.modelCatalog = modelCatalog;
   }
 
+  async refreshModelCatalog(): Promise<RefreshResult | null> {
+    if (!this.modelCatalog?.refresh) {
+      return null;
+    }
+    return this.modelCatalog.refresh();
+  }
+
   async listAvailableWithModels(): Promise<
-    Array<{ name: string; label: string; defaultModel: string; models: string[] }>
+    Array<{
+      name: string;
+      label: string;
+      defaultModel: string;
+      models: string[];
+      contextWindow?: number;
+      thinkingSupported?: boolean;
+      specialFeatures?: string[];
+      officialSignals?: ProviderOfficialSnapshot["signals"];
+      officialSourceUrls?: string[];
+      catalogUpdatedAt?: number;
+    }>
   > {
     const available = this.listAvailable();
     const AGGREGATE_TIMEOUT = 8_000;
@@ -244,35 +267,122 @@ export class ProviderManager {
     return this.buildResilientProvider(name);
   }
 
+  private getProviderOfficialSnapshot(name: string): ProviderOfficialSnapshot | undefined {
+    return this.modelCatalog?.getProviderOfficialSnapshot?.(name.trim().toLowerCase());
+  }
+
+  private mergeCapabilities(
+    name: string,
+    model?: string,
+  ): ProviderCapabilities | undefined {
+    const baseCapabilities = this.buildPrimaryProvider(name, model)?.capabilities;
+    const officialSnapshot = this.getProviderOfficialSnapshot(name);
+    if (!baseCapabilities && !officialSnapshot) {
+      return undefined;
+    }
+
+    const specialFeatures = [
+      ...(baseCapabilities?.specialFeatures ?? []),
+      ...(officialSnapshot?.featureTags ?? []),
+    ];
+
+    return {
+      maxTokens: baseCapabilities?.maxTokens ?? 0,
+      streaming: baseCapabilities?.streaming ?? false,
+      structuredStreaming: baseCapabilities?.structuredStreaming ?? false,
+      toolCalling: baseCapabilities?.toolCalling ?? false,
+      vision: baseCapabilities?.vision ?? false,
+      systemPrompt: baseCapabilities?.systemPrompt ?? true,
+      contextWindow: baseCapabilities?.contextWindow,
+      thinkingSupported: baseCapabilities?.thinkingSupported,
+      specialFeatures: [...new Set(specialFeatures)],
+    };
+  }
+
   getProviderCapabilities(name: string, model?: string): ProviderCapabilities | undefined {
-    return this.buildPrimaryProvider(name, model)?.capabilities;
+    return this.mergeCapabilities(name, model);
   }
 
   describeAvailable(): ProviderDescriptor[] {
     return this.listAvailable().map((entry) => ({
       ...entry,
       capabilities: this.getProviderCapabilities(entry.name, entry.defaultModel) ?? null,
+      officialSnapshot: this.getProviderOfficialSnapshot(entry.name) ?? null,
     }));
   }
 
-  listAvailable(): Array<{ name: string; label: string; defaultModel: string }> {
-    const available: Array<{ name: string; label: string; defaultModel: string }> = [];
+  private buildAvailableEntry(name: string, label: string, defaultModel: string): {
+    name: string;
+    label: string;
+    defaultModel: string;
+    contextWindow?: number;
+    thinkingSupported?: boolean;
+    specialFeatures?: string[];
+    officialSignals?: ProviderOfficialSnapshot["signals"];
+    officialSourceUrls?: string[];
+    catalogUpdatedAt?: number;
+  } {
+    const capabilities = this.getProviderCapabilities(name, defaultModel);
+    const officialSnapshot = this.getProviderOfficialSnapshot(name);
+    return {
+      name,
+      label,
+      defaultModel,
+      contextWindow: capabilities?.contextWindow,
+      thinkingSupported: capabilities?.thinkingSupported,
+      specialFeatures: capabilities?.specialFeatures,
+      officialSignals: officialSnapshot?.signals,
+      officialSourceUrls: officialSnapshot?.sourceUrls,
+      catalogUpdatedAt: officialSnapshot?.lastUpdated,
+    };
+  }
+
+  listAvailable(): Array<{
+    name: string;
+    label: string;
+    defaultModel: string;
+    contextWindow?: number;
+    thinkingSupported?: boolean;
+    specialFeatures?: string[];
+    officialSignals?: ProviderOfficialSnapshot["signals"];
+    officialSourceUrls?: string[];
+    catalogUpdatedAt?: number;
+  }> {
+    const available: Array<{
+      name: string;
+      label: string;
+      defaultModel: string;
+      contextWindow?: number;
+      thinkingSupported?: boolean;
+      specialFeatures?: string[];
+      officialSignals?: ProviderOfficialSnapshot["signals"];
+      officialSourceUrls?: string[];
+      catalogUpdatedAt?: number;
+    }> = [];
 
     if (this.isAvailable("claude")) {
-      available.push({ name: "claude", label: "Anthropic Claude", defaultModel: this.modelOverrides?.["claude"] ?? "claude-sonnet-4-6-20250514" });
+      available.push(this.buildAvailableEntry(
+        "claude",
+        "Anthropic Claude",
+        this.modelOverrides?.["claude"] ?? "claude-sonnet-4-6-20250514",
+      ));
     }
 
     if (this.ollamaVerified) {
-      available.push({ name: "ollama", label: "Ollama (Local)", defaultModel: this.modelOverrides?.["ollama"] ?? "llama3.3" });
+      available.push(this.buildAvailableEntry(
+        "ollama",
+        "Ollama (Local)",
+        this.modelOverrides?.["ollama"] ?? "llama3.3",
+      ));
     }
 
     for (const [name, preset] of Object.entries(PROVIDER_PRESETS)) {
       if (this.isAvailable(name)) {
-        available.push({
+        available.push(this.buildAvailableEntry(
           name,
-          label: preset.label,
-          defaultModel: this.modelOverrides?.[name] ?? preset.defaultModel,
-        });
+          preset.label,
+          this.modelOverrides?.[name] ?? preset.defaultModel,
+        ));
       }
     }
 

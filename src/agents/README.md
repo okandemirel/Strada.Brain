@@ -26,16 +26,13 @@ The `Orchestrator` class implements a single-agent, multi-tool loop. There is on
 
 All providers implement `IAIProvider`. Streaming providers additionally implement `IStreamingProvider`.
 
-| Provider | File | Library | Default Model | Streaming |
-|----------|------|---------|---------------|-----------|
-| Claude | `claude.ts` | `@anthropic-ai/sdk` | `claude-sonnet-4-20250514` | Yes |
-| OpenAI | `openai.ts` | `fetch()` | `gpt-4o` | No |
-| Ollama | `ollama.ts` | `fetch()` | `llama3.1` | No |
-| Fallback Chain | `fallback-chain.ts` | wraps others | chain name | inherits |
+Default models are no longer documented here as static truth; runtime resolves them from `provider-registry.ts`, live model intelligence, and any configured model overrides. The dashboard/model selector reads the same shared catalog the orchestrator uses.
 
 `FallbackChainProvider` tries providers in order, swallows errors from non-last providers. Built via `buildProviderChain()` from `PROVIDER_CHAIN` env var.
 
 `PROVIDER_PRESETS` in `provider-registry.ts` maps names to `{ baseUrl, defaultModel }` for: openai, deepseek, qwen, kimi, minimax, groq, mistral, together, fireworks, gemini.
+
+`model-intelligence.ts` refreshes model metadata from live sources and mines official provider docs/changelogs from `provider-sources.json`, so routing, provider info, and the model selector can adapt without provider-specific hardcoded role tables.
 
 ## Tools (`tools/`)
 

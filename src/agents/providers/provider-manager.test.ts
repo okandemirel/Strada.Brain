@@ -40,6 +40,7 @@ vi.mock("./provider-registry.js", () => ({
     },
   },
   buildProviderChain: buildProviderChainMock,
+  createProvider: vi.fn(({ name }: { name: string }) => makeProvider(name)),
 }));
 
 vi.mock("./provider-preferences.js", () => ({
@@ -172,5 +173,31 @@ describe("ProviderManager", () => {
     );
 
     expect(manager.getProvider("chat-1")).toBe(defaultProvider);
+  });
+
+  it("merges official source features into provider capabilities", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    manager.setModelCatalog({
+      getProviderModels: () => [],
+      getProviderOfficialSnapshot: () => ({
+        provider: "kimi",
+        lastUpdated: Date.now(),
+        sourceUrls: ["https://official.example/kimi"],
+        signals: [],
+        featureTags: ["agents", "planning"],
+      }),
+    });
+
+    const capabilities = manager.getProviderCapabilities("kimi", "kimi-for-coding");
+
+    expect(capabilities?.specialFeatures).toEqual(expect.arrayContaining(["agents", "planning"]));
   });
 });

@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { writeFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 
 vi.mock("../../utils/logger.js", () => ({
   getLogger: () => ({
@@ -130,14 +132,25 @@ describe("ModelInfo and RefreshResult types", () => {
 
 describe("ModelIntelligenceService", () => {
   let service: ModelIntelligenceService;
+  let tempRegistryPath: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    service = new ModelIntelligenceService();
+    tempRegistryPath = undefined;
+    service = new ModelIntelligenceService({
+      providerSourcesPath: "/tmp/strada-test-missing-provider-sources.json",
+    });
   });
 
   afterEach(() => {
     service.shutdown();
+    if (tempRegistryPath) {
+      try {
+        unlinkSync(tempRegistryPath);
+      } catch {
+        // ignore temp cleanup failures
+      }
+    }
   });
 
   it("initialize creates DB tables without error", async () => {
@@ -343,5 +356,205 @@ describe("ModelIntelligenceService", () => {
     mockFetch.mockRejectedValue(new Error("offline"));
     await service.initialize(":memory:");
     expect(service.size).toBeGreaterThanOrEqual(12);
+  });
+
+  it("extracts official provider signals from configured official sources", async () => {
+    tempRegistryPath = join(process.cwd(), ".tmp-provider-sources.test.json");
+    writeFileSync(tempRegistryPath, JSON.stringify({
+      version: 1,
+      providers: {
+        gemini: [
+          {
+            url: "https://official.example/gemini",
+            label: "Gemini official docs",
+            kind: "html",
+          },
+        ],
+      },
+    }));
+
+    service.shutdown();
+    service = new ModelIntelligenceService({
+      providerSourcesPath: tempRegistryPath,
+    });
+
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("official.example/gemini")) {
+        return {
+          ok: true,
+          text: async () => "<h1>/plan</h1><p>Grounding and tool calling support for coding workflows.</p><p>kimi-for-coding</p>",
+          headers: { get: () => null },
+        };
+      }
+      return {
+        ok: false,
+        status: 503,
+        headers: { get: () => null },
+        json: async () => ({}),
+      };
+    });
+
+    await service.refresh();
+
+    const snapshot = service.getProviderOfficialSnapshot("gemini");
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.sourceUrls).toEqual(["https://official.example/gemini"]);
+    expect(snapshot?.featureTags).toContain("tool-calling");
+    expect(snapshot?.featureTags).toContain("search");
+    expect(snapshot?.signals.some((signal) => signal.kind === "command" && signal.value === "/plan")).toBe(true);
+    expect(snapshot?.signals.some((signal) => signal.value === "kimi-for-coding")).toBe(false);
+  });
+
+  it("persists official provider snapshots across initialize calls", async () => {
+    tempRegistryPath = join(process.cwd(), ".tmp-provider-sources-persist.test.json");
+    const tempDbPath = join(process.cwd(), ".tmp-model-intelligence-persist.test.db");
+    writeFileSync(tempRegistryPath, JSON.stringify({
+      version: 1,
+      providers: {
+        claude: [
+          {
+            url: "https://official.example/claude",
+            label: "Claude official docs",
+            kind: "html",
+          },
+        ],
+      },
+    }));
+
+    service.shutdown();
+    service = new ModelIntelligenceService({
+      providerSourcesPath: tempRegistryPath,
+    });
+
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("official.example/claude")) {
+        return {
+          ok: true,
+          text: async () => "<p>/loop</p><p>Hooks and plan support.</p>",
+          headers: { get: () => null },
+        };
+      }
+      throw new Error("offline");
+    });
+
+    await service.initialize(tempDbPath);
+    await service.refresh();
+    service.shutdown();
+
+    const reloaded = new ModelIntelligenceService({
+      providerSourcesPath: tempRegistryPath,
+    });
+    await reloaded.initialize(tempDbPath);
+    const snapshot = reloaded.getProviderOfficialSnapshot("claude");
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.signals.some((signal) => signal.value === "/loop")).toBe(true);
+    reloaded.shutdown();
+    try {
+      unlinkSync(tempDbPath);
+    } catch {
+      // ignore temp cleanup failures
+    }
+  });
+
+  it("deferred initialize refreshes official snapshots even when model cache is fresh", async () => {
+    tempRegistryPath = join(process.cwd(), ".tmp-provider-sources-deferred.test.json");
+    writeFileSync(tempRegistryPath, JSON.stringify({
+      version: 1,
+      providers: {
+        gemini: [
+          {
+            url: "https://official.example/gemini-deferred",
+            label: "Gemini deferred docs",
+            kind: "html",
+          },
+        ],
+      },
+    }));
+
+    service.shutdown();
+    service = new ModelIntelligenceService({
+      providerSourcesPath: tempRegistryPath,
+    });
+
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("official.example/gemini-deferred")) {
+        return {
+          ok: true,
+          text: async () => "<p>/loop</p><p>Agent, grounding, and tool calling updates.</p>",
+          headers: { get: () => null },
+        };
+      }
+      throw new Error("offline");
+    });
+
+    await service.initialize(":memory:", { refreshOnInitialize: false });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const snapshot = service.getProviderOfficialSnapshot("gemini");
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.signals.some((signal) => signal.value === "/loop")).toBe(true);
+  });
+
+  it("clears stale official snapshots when a later successful refresh yields no relevant signals", async () => {
+    tempRegistryPath = join(process.cwd(), ".tmp-provider-sources-clear.test.json");
+    const tempDbPath = join(process.cwd(), ".tmp-model-intelligence-clear.test.db");
+    writeFileSync(tempRegistryPath, JSON.stringify({
+      version: 1,
+      providers: {
+        gemini: [
+          {
+            url: "https://official.example/gemini-clear",
+            label: "Gemini clear docs",
+            kind: "html",
+          },
+        ],
+      },
+    }));
+
+    let phase: "seed" | "clear" = "seed";
+
+    service.shutdown();
+    service = new ModelIntelligenceService({
+      providerSourcesPath: tempRegistryPath,
+    });
+
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (!url.includes("official.example/gemini-clear")) {
+        throw new Error("offline");
+      }
+      return {
+        ok: true,
+        text: async () => phase === "seed"
+          ? "<p>/plan</p><p>Grounding and tool calling support.</p>"
+          : "{\"object\":\"list\",\"data\":[{\"id\":\"kimi-for-coding\"}]}",
+        headers: { get: () => null },
+      };
+    });
+
+    await service.initialize(tempDbPath);
+    await service.refresh();
+    expect(service.getProviderOfficialSnapshot("gemini")).toBeDefined();
+
+    phase = "clear";
+    await service.refresh();
+    expect(service.getProviderOfficialSnapshot("gemini")).toBeUndefined();
+
+    service.shutdown();
+    const reloaded = new ModelIntelligenceService({
+      providerSourcesPath: tempRegistryPath,
+    });
+    await reloaded.initialize(tempDbPath);
+    expect(reloaded.getProviderOfficialSnapshot("gemini")).toBeUndefined();
+    reloaded.shutdown();
+
+    try {
+      unlinkSync(tempDbPath);
+    } catch {
+      // ignore temp cleanup failures
+    }
   });
 });

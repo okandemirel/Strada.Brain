@@ -631,6 +631,9 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 | `CONSENSUS_MODE` | `auto` | Consensus mode: `auto`, `critical-only`, `always`, or `disabled` |
 | `CONSENSUS_THRESHOLD` | `0.5` | Confidence threshold for triggering consensus |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | Maximum providers to consult for consensus |
+| `MODEL_INTELLIGENCE_ENABLED` | `true` | Enable shared live model/provider catalog refresh |
+| `MODEL_INTELLIGENCE_REFRESH_HOURS` | `24` | Refresh cadence for model metadata and official provider-source snapshots |
+| `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` | `src/agents/providers/provider-sources.json` | JSON registry of official provider docs/news URLs that feed dynamic provider capabilities and the model selector |
 | `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | Daily budget (USD) for daemon mode |
 
 ### Rate Limiting

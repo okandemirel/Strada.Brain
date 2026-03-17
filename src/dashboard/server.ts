@@ -33,6 +33,7 @@ import {
 } from "../learning/chains/chain-types.js";
 import type { ChainResilienceConfig } from "../learning/chains/chain-types.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
+import type { ProviderOfficialSnapshot } from "../agents/providers/provider-source-registry.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -167,6 +168,12 @@ interface DashboardProviderManager {
     label?: string;
     defaultModel?: string;
     models?: string[];
+    contextWindow?: number;
+    thinkingSupported?: boolean;
+    specialFeatures?: string[];
+    officialSignals?: ProviderOfficialSnapshot["signals"];
+    officialSourceUrls?: string[];
+    catalogUpdatedAt?: number;
   }>;
   listAvailableWithModels?(): Promise<Array<{
     name: string;
@@ -175,6 +182,12 @@ interface DashboardProviderManager {
     defaultModel?: string;
     models: string[];
     activeModel?: string;
+    contextWindow?: number;
+    thinkingSupported?: boolean;
+    specialFeatures?: string[];
+    officialSignals?: ProviderOfficialSnapshot["signals"];
+    officialSourceUrls?: string[];
+    catalogUpdatedAt?: number;
   }>>;
   describeAvailable?(): Array<{
     name: string;
@@ -188,6 +201,7 @@ interface DashboardProviderManager {
       streaming?: boolean;
       specialFeatures?: string[];
     } | null;
+    officialSnapshot?: ProviderOfficialSnapshot | null;
   }>;
   getProviderCapabilities?(name: string, model?: string): {
     contextWindow?: number;
@@ -197,6 +211,11 @@ interface DashboardProviderManager {
     streaming?: boolean;
     specialFeatures?: string[];
   } | undefined;
+  refreshCatalog?(): Promise<{
+    modelsUpdated: number;
+    source: string;
+    errors: string[];
+  } | null>;
   getActiveInfo(chatId: string): {
     provider?: string;
     providerName?: string;
@@ -1314,6 +1333,7 @@ export class DashboardServer {
               label: entry.label ?? entry.name,
               defaultModel: entry.defaultModel ?? "default",
               capabilities: this.providerManager?.getProviderCapabilities?.(entry.name, entry.defaultModel),
+              officialSnapshot: null,
             }))
             ?? [];
           const descriptor = available.find((entry) => entry.name === provider);
@@ -1337,7 +1357,12 @@ export class DashboardServer {
             descriptor.label,
           );
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ provider, snapshot, intelligence }));
+          res.end(JSON.stringify({
+            provider,
+            snapshot,
+            intelligence,
+            officialSnapshot: descriptor.officialSnapshot ?? null,
+          }));
         }).catch((err) => {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
@@ -1354,6 +1379,7 @@ export class DashboardServer {
               label: entry.label ?? entry.name,
               defaultModel: entry.defaultModel ?? "default",
               capabilities: this.providerManager?.getProviderCapabilities?.(entry.name, entry.defaultModel),
+              officialSnapshot: null,
             }))
             ?? [];
           const capabilities = available.map((entry) => getProviderIntelligenceSnapshot(
@@ -1364,7 +1390,15 @@ export class DashboardServer {
             entry.label,
           ));
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ capabilities }));
+          res.end(JSON.stringify({
+            capabilities,
+            officialSnapshots: available
+              .filter((entry) => entry.officialSnapshot)
+              .map((entry) => ({
+                provider: entry.name,
+                snapshot: entry.officialSnapshot,
+              })),
+          }));
         }).catch((err) => {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
@@ -1384,16 +1418,20 @@ export class DashboardServer {
         }
         this._lastModelRefreshMs = now;
 
-        // Dynamic import to avoid circular dependencies and handle missing module
-        void import("../agents/providers/model-intelligence.js").then(({ ModelIntelligenceService }) => {
-          const service = new ModelIntelligenceService();
-          return service.initialize(".strada-memory/model-intelligence.db")
-            .then(() => service.refresh())
-            .then((result) => {
-              service.shutdown();
-              res.writeHead(200, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ success: true, result }));
-            });
+        if (!this.providerManager?.refreshCatalog) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Provider catalog refresh not available" }));
+          return;
+        }
+
+        void this.providerManager.refreshCatalog().then((result) => {
+          if (!result) {
+            res.writeHead(501, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Provider catalog refresh not available" }));
+            return;
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true, result }));
         }).catch((err) => {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));

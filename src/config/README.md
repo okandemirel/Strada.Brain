@@ -43,6 +43,7 @@ The `Config` type groups settings into nested sub-configs:
 | `dashboard` | `DashboardConfig` | `DASHBOARD_ENABLED`, `DASHBOARD_PORT` (default 3100) |
 | `websocketDashboard` | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100), `WEBSOCKET_DASHBOARD_AUTH_TOKEN`, `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` (`WEBSOCKET_DASHBOARD_AUTH_TOKEN` also protects dashboard APIs when present) |
 | `prometheus` | `PrometheusConfig` | `ENABLE_PROMETHEUS`, `PROMETHEUS_PORT` (default 9090) |
+| `modelIntelligence` | `ModelIntelligenceConfig` | `MODEL_INTELLIGENCE_ENABLED`, `MODEL_INTELLIGENCE_REFRESH_HOURS`, `MODEL_INTELLIGENCE_DB_PATH`, `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` |
 | `memory` | `MemoryConfig` | `MEMORY_ENABLED` (default true), `MEMORY_DB_PATH` (default `.strada-memory`) |
 | `rag` | `RAGConfig` | `RAG_ENABLED` (default true), `EMBEDDING_PROVIDER` (default `auto`), `RAG_CONTEXT_MAX_TOKENS` (default 4000, range 500..16000) |
 | `rateLimit` | `RateLimitConfig` | `RATE_LIMIT_ENABLED`, `RATE_LIMIT_MESSAGES_PER_MINUTE`, `RATE_LIMIT_DAILY_BUDGET_USD`, etc. |
@@ -57,6 +58,7 @@ The `Config` type groups settings into nested sub-configs:
 - `STRADA_CORE_REPO_URL` / `STRADA_MODULES_REPO_URL` - official git remotes used when the agent offers to install missing Strada packages
 - `STRADA_MCP_PATH` - optional absolute/local path that pins Strada.MCP discovery to a specific checkout before sibling/global detection
 - `LLM_STREAM_INITIAL_TIMEOUT_MS` / `LLM_STREAM_STALL_TIMEOUT_MS` - progress-aware stream watchdog thresholds used by interactive and background streaming paths
+- `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` - path to the JSON registry of official provider docs/changelog URLs used to mine dynamic feature signals
 - `LOG_LEVEL` - one of `error`, `warn`, `info`, `debug` (default `info`)
 - `LOG_FILE` - default `strada-brain.log`
 - `WEBSOCKET_DASHBOARD_AUTH_TOKEN` - optional; when unset, the embedded same-origin dashboard bootstraps a process-scoped token automatically

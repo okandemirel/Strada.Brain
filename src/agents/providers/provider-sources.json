@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "providers": {
+    "claude": [
+      {
+        "url": "https://docs.anthropic.com/en/docs/claude-code/slash-commands",
+        "label": "Claude Code slash commands",
+        "kind": "html"
+      },
+      {
+        "url": "https://docs.anthropic.com/en/api/models",
+        "label": "Anthropic models",
+        "kind": "html"
+      }
+    ],
+    "openai": [
+      {
+        "url": "https://developers.openai.com/api/docs/models",
+        "label": "OpenAI models",
+        "kind": "html"
+      },
+      {
+        "url": "https://developers.openai.com/",
+        "label": "OpenAI developer updates",
+        "kind": "html"
+      }
+    ],
+    "gemini": [
+      {
+        "url": "https://ai.google.dev/gemini-api/docs/models",
+        "label": "Gemini models",
+        "kind": "html"
+      },
+      {
+        "url": "https://ai.google.dev/gemini-api/docs/function-calling",
+        "label": "Gemini function calling",
+        "kind": "html"
+      }
+    ],
+    "kimi": [
+      {
+        "url": "https://platform.moonshot.ai/docs/guide/start-using-kimi-api",
+        "label": "Kimi API quickstart",
+        "kind": "html"
+      }
+    ],
+    "groq": [
+      {
+        "url": "https://console.groq.com/docs/models",
+        "label": "Groq supported models",
+        "kind": "html"
+      }
+    ],
+    "mistral": [
+      {
+        "url": "https://docs.mistral.ai/getting-started/models/",
+        "label": "Mistral models",
+        "kind": "html"
+      }
+    ],
+    "together": [
+      {
+        "url": "https://docs.together.ai/docs/serverless-models",
+        "label": "Together models",
+        "kind": "html"
+      }
+    ],
+    "fireworks": [
+      {
+        "url": "https://docs.fireworks.ai/models/",
+        "label": "Fireworks models",
+        "kind": "html"
+      }
+    ],
+    "deepseek": [
+      {
+        "url": "https://api-docs.deepseek.com/quick_start/pricing",
+        "label": "DeepSeek API docs",
+        "kind": "html"
+      }
+    ]
+  }
+}

@@ -9,6 +9,16 @@ interface ProviderInfo {
   contextWindow?: number
   thinkingSupported?: boolean
   specialFeatures?: string[]
+  officialSignals?: Array<{
+    kind: 'command' | 'feature' | 'model'
+    title: string
+    value: string
+    url: string
+    sourceLabel: string
+    tags: string[]
+  }>
+  officialSourceUrls?: string[]
+  catalogUpdatedAt?: number
 }
 
 interface ActiveInfo {
@@ -198,6 +208,7 @@ export default function ModelSelector() {
                     <span className="model-selector-badges">
                       <span className="badge badge-context">{(p.contextWindow / 1000).toFixed(0)}K</span>
                       {p.thinkingSupported && <span className="badge badge-thinking">Think</span>}
+                      {p.catalogUpdatedAt && <span className="badge">Live</span>}
                     </span>
                   )}
                   <span className="model-selector-option-icons">
@@ -233,6 +244,14 @@ export default function ModelSelector() {
                     )}
                   </span>
                 </button>
+
+                {(p.specialFeatures?.length || p.officialSignals?.length) ? (
+                  <div className="model-selector-meta" style={{ padding: '0 0.8rem 0.45rem', fontSize: '0.78rem', opacity: 0.75 }}>
+                    {p.specialFeatures?.slice(0, 2).join(' • ')}
+                    {p.specialFeatures?.length && p.officialSignals?.length ? ' • ' : ''}
+                    {p.officialSignals?.length ? `${p.officialSignals.length} live signals` : ''}
+                  </div>
+                ) : null}
 
                 {isExpanded && hasMultipleModels && (
                   <div className="model-selector-models">

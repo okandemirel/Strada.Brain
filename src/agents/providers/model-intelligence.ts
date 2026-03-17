@@ -14,6 +14,13 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 import { getLogger } from "../../utils/logger.js";
+import {
+  DEFAULT_PROVIDER_SOURCE_REGISTRY_PATH,
+  extractProviderOfficialSignals,
+  loadProviderSourceRegistry,
+  type ProviderOfficialSnapshot,
+  type ProviderOfficialSource,
+} from "./provider-source-registry.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -272,6 +279,39 @@ async function safeJsonParse<T>(response: Response, label: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function safeTextParse(response: Response, label: string): Promise<string> {
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength && Number(contentLength) > MAX_RESPONSE_BYTES) {
+    throw new Error(`${label} response too large: ${contentLength} bytes (limit: ${MAX_RESPONSE_BYTES})`);
+  }
+
+  if (response.body && typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.length;
+        if (totalBytes > MAX_RESPONSE_BYTES) {
+          reader.cancel();
+          throw new Error(`${label} response too large: >${MAX_RESPONSE_BYTES} bytes`);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const decoder = new TextDecoder();
+    return chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") + decoder.decode();
+  }
+
+  return response.text();
+}
+
 // ---------------------------------------------------------------------------
 // LiteLLM fetcher
 // ---------------------------------------------------------------------------
@@ -485,6 +525,14 @@ interface MetaRow {
   value: string;
 }
 
+interface ProviderSnapshotRow {
+  provider: string;
+  last_updated: number;
+  source_urls_json: string;
+  signals_json: string;
+  feature_tags_json: string;
+}
+
 // ---------------------------------------------------------------------------
 // Row conversion helper
 // ---------------------------------------------------------------------------
@@ -513,6 +561,7 @@ const DEFAULT_REFRESH_HOURS = 24;
 
 export interface ModelIntelligenceServiceOptions {
   readonly refreshHours?: number;
+  readonly providerSourcesPath?: string;
 }
 
 export interface InitializeModelIntelligenceOptions {
@@ -522,11 +571,15 @@ export interface InitializeModelIntelligenceOptions {
 export class ModelIntelligenceService {
   private db: Database.Database | null = null;
   private models: Map<string, ModelInfo> = new Map();
+  private providerSnapshots: Map<string, ProviderOfficialSnapshot> = new Map();
   private refreshTimer: NodeJS.Timeout | null = null;
   private lastRefreshTimestamp = 0;
 
   private stmtUpsert!: Database.Statement;
   private stmtGetAll!: Database.Statement;
+  private stmtUpsertProviderSnapshot!: Database.Statement;
+  private stmtGetProviderSnapshots!: Database.Statement;
+  private stmtClearProviderSnapshots!: Database.Statement;
   private stmtSetMeta!: Database.Statement;
   private stmtGetMeta!: Database.Statement;
 
@@ -535,6 +588,10 @@ export class ModelIntelligenceService {
   private get refreshIntervalMs(): number {
     const hours = this.options.refreshHours ?? DEFAULT_REFRESH_HOURS;
     return hours * 60 * 60 * 1000;
+  }
+
+  private needsRefresh(): boolean {
+    return this.isStale() || this.providerSnapshots.size === 0;
   }
 
   /**
@@ -565,7 +622,7 @@ export class ModelIntelligenceService {
       });
 
       const shouldRefreshOnInitialize = options.refreshOnInitialize ?? true;
-      if (shouldRefreshOnInitialize && this.isStale()) {
+      if (shouldRefreshOnInitialize && this.needsRefresh()) {
         const result = await this.refresh();
         logger.info("ModelIntelligence initial refresh", {
           modelsUpdated: result.modelsUpdated,
@@ -576,7 +633,7 @@ export class ModelIntelligenceService {
 
       this.startRefreshTimer();
 
-      if (!shouldRefreshOnInitialize && this.isStale()) {
+      if (!shouldRefreshOnInitialize && this.needsRefresh()) {
         const initialRefresh = setTimeout(() => {
           this.refresh().catch((error) => {
             logger.warn("ModelIntelligence deferred refresh failed", {
@@ -605,6 +662,9 @@ export class ModelIntelligenceService {
   async refresh(): Promise<RefreshResult> {
     const logger = getLogger();
     const errors: string[] = [];
+
+    const officialSourceErrors = await this.refreshProviderOfficialSnapshots();
+    errors.push(...officialSourceErrors);
 
     // 1. Try LiteLLM (primary)
     let fetched: Map<string, ModelInfo>;
@@ -705,6 +765,10 @@ export class ModelIntelligenceService {
     return results;
   }
 
+  getProviderOfficialSnapshot(provider: string): ProviderOfficialSnapshot | undefined {
+    return this.providerSnapshots.get(provider.toLowerCase());
+  }
+
   /** Returns true if the last refresh was more than the configured interval ago. */
   isStale(): boolean {
     const lastRefresh = this.lastRefreshTimestamp || this.getLastRefresh();
@@ -754,6 +818,16 @@ export class ModelIntelligenceService {
         value TEXT NOT NULL
       )
     `);
+
+    this.db!.exec(`
+      CREATE TABLE IF NOT EXISTS provider_official_snapshot (
+        provider TEXT PRIMARY KEY,
+        last_updated INTEGER NOT NULL,
+        source_urls_json TEXT NOT NULL,
+        signals_json TEXT NOT NULL,
+        feature_tags_json TEXT NOT NULL
+      )
+    `);
   }
 
   private prepareStatements(): void {
@@ -767,6 +841,20 @@ export class ModelIntelligenceService {
     `);
 
     this.stmtGetAll = this.db!.prepare("SELECT * FROM model_info");
+
+    this.stmtUpsertProviderSnapshot = this.db!.prepare(`
+      INSERT OR REPLACE INTO provider_official_snapshot
+        (provider, last_updated, source_urls_json, signals_json, feature_tags_json)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    this.stmtGetProviderSnapshots = this.db!.prepare(
+      "SELECT * FROM provider_official_snapshot",
+    );
+
+    this.stmtClearProviderSnapshots = this.db!.prepare(
+      "DELETE FROM provider_official_snapshot",
+    );
 
     this.stmtSetMeta = this.db!.prepare(
       "INSERT OR REPLACE INTO model_meta (key, value) VALUES (?, ?)",
@@ -787,6 +875,21 @@ export class ModelIntelligenceService {
       }
     } catch {
       // DB might be empty on first run
+    }
+
+    try {
+      const snapshotRows = this.stmtGetProviderSnapshots.all() as ProviderSnapshotRow[];
+      for (const row of snapshotRows) {
+        this.providerSnapshots.set(row.provider, {
+          provider: row.provider,
+          lastUpdated: row.last_updated,
+          sourceUrls: JSON.parse(row.source_urls_json) as string[],
+          signals: JSON.parse(row.signals_json) as ProviderOfficialSnapshot["signals"],
+          featureTags: JSON.parse(row.feature_tags_json) as string[],
+        });
+      }
+    } catch {
+      // DB might be empty or older schema on first run
     }
   }
 
@@ -815,6 +918,31 @@ export class ModelIntelligenceService {
       upsertMany([...this.models.values()]);
     } catch (error) {
       getLogger().warn("ModelIntelligence DB save failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private saveProviderSnapshotsToDb(): void {
+    if (!this.db) return;
+
+    try {
+      const upsertMany = this.db.transaction((snapshots: ProviderOfficialSnapshot[]) => {
+        this.stmtClearProviderSnapshots.run();
+        for (const snapshot of snapshots) {
+          this.stmtUpsertProviderSnapshot.run(
+            snapshot.provider,
+            snapshot.lastUpdated,
+            JSON.stringify(snapshot.sourceUrls),
+            JSON.stringify(snapshot.signals),
+            JSON.stringify(snapshot.featureTags),
+          );
+        }
+      });
+
+      upsertMany([...this.providerSnapshots.values()]);
+    } catch (error) {
+      getLogger().warn("Provider official snapshot save failed", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -859,5 +987,80 @@ export class ModelIntelligenceService {
     if (this.refreshTimer.unref) {
       this.refreshTimer.unref();
     }
+  }
+
+  private async fetchOfficialSourceContent(source: ProviderOfficialSource): Promise<string> {
+    const response = await fetch(source.url, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        "User-Agent": "Strada.Brain/1.0 (+https://github.com/okandemirel/Strada.Brain)",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    return safeTextParse(response, source.label ?? source.url);
+  }
+
+  private async refreshProviderOfficialSnapshots(): Promise<string[]> {
+    const logger = getLogger();
+    const registry = loadProviderSourceRegistry(
+      this.options.providerSourcesPath ?? DEFAULT_PROVIDER_SOURCE_REGISTRY_PATH,
+    );
+    const providers = Object.entries(registry.providers);
+    if (providers.length === 0) {
+      return [];
+    }
+
+    const errors: string[] = [];
+    const nextSnapshots = new Map<string, ProviderOfficialSnapshot>();
+    let hadSuccessfulFetch = false;
+
+    for (const [provider, sources] of providers) {
+      const providerSignals: ProviderOfficialSnapshot["signals"] = [];
+      const sourceUrls: string[] = [];
+      let fetchedSourceCount = 0;
+
+      for (const source of sources) {
+        try {
+          const content = await this.fetchOfficialSourceContent(source);
+          fetchedSourceCount += 1;
+          hadSuccessfulFetch = true;
+          providerSignals.push(...extractProviderOfficialSignals(provider, source, content));
+          sourceUrls.push(source.url);
+        } catch (error) {
+          errors.push(`${provider}:${source.url} — ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      if (providerSignals.length === 0) {
+        const cached = this.providerSnapshots.get(provider);
+        if (cached && fetchedSourceCount === 0) {
+          nextSnapshots.set(provider, cached);
+        }
+        continue;
+      }
+
+      const featureTags = [...new Set(providerSignals.flatMap((signal) => signal.tags))];
+      nextSnapshots.set(provider, {
+        provider,
+        lastUpdated: Date.now(),
+        sourceUrls,
+        signals: providerSignals.slice(0, 20),
+        featureTags,
+      });
+    }
+
+    if (hadSuccessfulFetch || nextSnapshots.size > 0) {
+      this.providerSnapshots = nextSnapshots;
+      this.saveProviderSnapshotsToDb();
+      logger.info("Provider official sources refreshed", {
+        providers: nextSnapshots.size,
+      });
+    }
+
+    return errors;
   }
 }
