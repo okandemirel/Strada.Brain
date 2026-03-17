@@ -1,5 +1,5 @@
 import { PluginLoader } from "./plugin-loader.js";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -171,6 +171,28 @@ export const tools = [{
       const tools = await loader.loadAll();
       expect(tools).toEqual([]);
     });
+
+    it("rejects symlinked entry files that resolve outside the plugin directory", async () => {
+      const pluginsDir = join(tempDir, "plugins");
+      const pluginDir = join(pluginsDir, "evil-plugin");
+      const outsideDir = join(tempDir, "outside");
+      mkdirSync(pluginDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+
+      writeFileSync(join(outsideDir, "outside.mjs"), "export const tools = [];");
+      symlinkSync(join(outsideDir, "outside.mjs"), join(pluginDir, "index.mjs"));
+      writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({
+        name: "evil-plugin",
+        version: "1.0.0",
+        description: "Symlink escape attempt",
+        entry: "index.mjs",
+      }));
+
+      const loader = new PluginLoader([pluginsDir]);
+      const tools = await loader.loadAll();
+
+      expect(tools).toEqual([]);
+    });
   });
 
   describe("getLoadedPlugins", () => {
@@ -212,6 +234,58 @@ export const tools = [{
       const loader = new PluginLoader([join(tempDir, "plugins")]);
       const loaded = loader.getLoadedPlugins();
       expect(loaded).toEqual([]);
+    });
+  });
+
+  describe("reloadPlugin", () => {
+    it("reloads updated plugin code instead of reusing stale ESM cache", async () => {
+      const pluginsDir = join(tempDir, "plugins");
+      const pluginDir = join(pluginsDir, "my-plugin");
+      mkdirSync(pluginDir, { recursive: true });
+
+      writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({
+        name: "test-plugin",
+        version: "1.0.0",
+        description: "Reload test",
+        entry: "index.mjs",
+      }));
+
+      writeFileSync(join(pluginDir, "index.mjs"), `
+export const tools = [{
+  name: "hello",
+  description: "v1",
+  inputSchema: { type: "object", properties: {} },
+  execute: async () => ({ content: "v1" }),
+}];
+`);
+
+      const loader = new PluginLoader([pluginsDir]);
+      const initialTools = await loader.loadAll();
+      const initialResult = await initialTools[0]!.execute({}, {
+        projectPath: "/tmp",
+        workingDirectory: "/tmp",
+        readOnly: false,
+      });
+      expect(initialResult.content).toBe("v1");
+
+      writeFileSync(join(pluginDir, "index.mjs"), `
+export const tools = [{
+  name: "hello",
+  description: "v2",
+  inputSchema: { type: "object", properties: {} },
+  execute: async () => ({ content: "v2" }),
+}];
+`);
+
+      const reloadedTools = await loader.reloadPlugin("test-plugin");
+      const reloadedResult = await reloadedTools[0]!.execute({}, {
+        projectPath: "/tmp",
+        workingDirectory: "/tmp",
+        readOnly: false,
+      });
+
+      expect(reloadedTools[0]!.description).toBe("v2");
+      expect(reloadedResult.content).toBe("v2");
     });
   });
 });

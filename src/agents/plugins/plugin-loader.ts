@@ -1,5 +1,6 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { getLogger } from "../../utils/logger.js";
 import type { ITool } from "../tools/tool.interface.js";
 
@@ -45,9 +46,47 @@ export interface LoadedPlugin {
 export class PluginLoader {
   private readonly pluginDirs: string[];
   private readonly loadedPlugins = new Map<string, LoadedPlugin>();
+  private importNonce = 0;
 
   constructor(pluginDirs: string[]) {
     this.pluginDirs = pluginDirs.map((d) => resolve(d));
+  }
+
+  private isPathInside(basePath: string, candidatePath: string): boolean {
+    const relativePath = relative(basePath, candidatePath);
+    return candidatePath === basePath || (
+      relativePath !== "" &&
+      !relativePath.startsWith("..") &&
+      !isAbsolute(relativePath)
+    );
+  }
+
+  private async resolvePluginEntryPaths(pluginPath: string, entry: string): Promise<{
+    pluginRootPath: string;
+    entryPath: string;
+  }> {
+    const pluginRootPath = await realpath(pluginPath);
+    const entryPath = resolve(pluginRootPath, entry);
+    const relativeEntryPath = relative(pluginRootPath, entryPath);
+    if (relativeEntryPath.startsWith("..") || isAbsolute(relativeEntryPath)) {
+      throw new Error("Plugin entry path escapes plugin directory");
+    }
+
+    const realEntryPath = await realpath(entryPath);
+    if (!this.isPathInside(pluginRootPath, realEntryPath)) {
+      throw new Error("Plugin entry path resolves outside plugin directory");
+    }
+
+    return {
+      pluginRootPath,
+      entryPath: realEntryPath,
+    };
+  }
+
+  private async importPluginModule(entryPath: string): Promise<Record<string, unknown>> {
+    const entryFileUrl = pathToFileURL(entryPath);
+    entryFileUrl.searchParams.set("strada_plugin_nonce", String(++this.importNonce));
+    return import(entryFileUrl.href) as Promise<Record<string, unknown>>;
   }
 
   /**
@@ -110,18 +149,10 @@ export class PluginLoader {
       throw new Error("Plugin manifest missing required fields: name, entry");
     }
 
-    // Validate entry path stays within plugin directory
-    const entryPath = resolve(pluginPath, manifest.entry);
-    const relativeEntryPath = relative(pluginPath, entryPath);
-    if (
-      relativeEntryPath.startsWith("..") ||
-      isAbsolute(relativeEntryPath)
-    ) {
-      throw new Error("Plugin entry path escapes plugin directory");
-    }
+    const { pluginRootPath, entryPath } = await this.resolvePluginEntryPaths(pluginPath, manifest.entry);
 
-    // Dynamic import
-    const module = await import(entryPath) as Record<string, unknown>;
+    // Dynamic import with a nonce so reloads do not reuse stale ESM cache entries.
+    const module = await this.importPluginModule(entryPath);
 
     // Extract tools - support both default export and named export
     let tools: ITool[] = [];
@@ -149,7 +180,7 @@ export class PluginLoader {
       isPlugin: true,
     }));
 
-    return { manifest, tools: namespacedTools, path: pluginPath };
+    return { manifest, tools: namespacedTools, path: pluginRootPath };
   }
 
   /**
