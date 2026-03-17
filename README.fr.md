@@ -562,7 +562,7 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `MEMORY_DB_PATH` | `.strada-memory` | R&eacute;pertoire des fichiers de la base de donn&eacute;es m&eacute;moire |
 | `WEB_CHANNEL_PORT` | `3000` | Port du tableau de bord web |
 | `DASHBOARD_ENABLED` | `false` | Active le tableau de bord de surveillance HTTP |
-| `DASHBOARD_PORT` | `3001` | Port du serveur du tableau de bord |
+| `DASHBOARD_PORT` | `3100` | Port du serveur du tableau de bord |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Active le tableau de bord en temps r&eacute;el WebSocket |
 | `ENABLE_PROMETHEUS` | `false` | Active l'endpoint de m&eacute;triques Prometheus (port 9090) |
 | `MULTI_AGENT_ENABLED` | `true` | Activer l'orchestration multi-agent |

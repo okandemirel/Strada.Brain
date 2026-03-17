@@ -1,5 +1,7 @@
 # Agent Core v5.0 — Phase 1 & Phase 2 Implementation Plan
 
+> Historical plan note: This file is an implementation snapshot, not the source of truth for current runtime behavior or env defaults. Use [README.md](../../../README.md), [src/config/README.md](../../../src/config/README.md), [src/channels/README.md](../../../src/channels/README.md), and [SECURITY.md](../../../SECURITY.md) for the current system.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Eliminate the PAOR/TaskPlanner planning conflict and unify interactive + background execution into a single PAOR-driven loop, so all tasks (user, daemon, agent-core) get the same quality of reasoning.

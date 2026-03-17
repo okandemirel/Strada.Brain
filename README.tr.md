@@ -522,7 +522,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `MEMORY_DB_PATH` | `.strada-memory` | Hafiza veritabani dosyalari icin dizin |
 | `WEB_CHANNEL_PORT` | `3000` | Web paneli portu |
 | `DASHBOARD_ENABLED` | `false` | HTTP izleme panelini etkinlestir |
-| `DASHBOARD_PORT` | `3001` | Panel sunucu portu |
+| `DASHBOARD_PORT` | `3100` | Panel sunucu portu |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket gercek zamanli paneli etkinlestir |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus metrik uc noktasini etkinlestir (port 9090) |
 | `MULTI_AGENT_ENABLED` | `true` | Coklu ajan orkestrasyonunu etkinlestir |

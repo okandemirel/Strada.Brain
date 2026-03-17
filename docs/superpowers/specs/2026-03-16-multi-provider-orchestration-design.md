@@ -1,5 +1,7 @@
 # Multi-Provider Intelligent Orchestration
 
+> Historical design note: This file records a design snapshot. It is not the authoritative source for current runtime behavior or env defaults. Use [README.md](../../../README.md), [src/config/README.md](../../../src/config/README.md), [src/channels/README.md](../../../src/channels/README.md), and [SECURITY.md](../../../SECURITY.md) for the current system.
+
 ## Problem Statement
 
 Strada.Brain supports 12+ AI providers but uses them in a primitive way: one provider per chat session with simple fallback chain. The system cannot use different providers for different purposes (planning vs execution vs review), cannot self-verify by consulting a second model, and has no task-aware routing to optimize cost/quality/speed tradeoffs.

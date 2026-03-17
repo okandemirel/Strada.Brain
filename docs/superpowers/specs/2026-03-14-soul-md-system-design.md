@@ -1,5 +1,7 @@
 # SOUL.md — Agent Personality System Design
 
+> Historical design note: This file records a design snapshot. It is not the authoritative source for current runtime behavior or env defaults. Use [README.md](../../../README.md), [src/config/README.md](../../../src/config/README.md), [src/channels/README.md](../../../src/channels/README.md), and [SECURITY.md](../../../SECURITY.md) for the current system.
+
 **Goal:** Replace hardcoded agent behavior with a user-editable Markdown personality file that defines identity, communication style, clarification rules, and boundaries. Hot-reloadable, channel-overridable, provider-agnostic.
 
 ## Architecture

@@ -1,5 +1,7 @@
 # Memory Architecture Overhaul Implementation Plan
 
+> Historical plan note: This file is an implementation snapshot, not the source of truth for current runtime behavior or env defaults. Use [README.md](../../../README.md), [src/config/README.md](../../../src/config/README.md), [src/channels/README.md](../../../src/channels/README.md), and [SECURITY.md](../../../SECURITY.md) for the current system.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Transform Strada.Brain from an amnesic chatbot into a Jarvis-level persistent AI assistant that remembers users, conversations, preferences, and context across sessions.

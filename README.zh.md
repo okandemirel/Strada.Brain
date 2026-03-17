@@ -562,7 +562,7 @@ npm run dev -- daemon --channel web
 | `MEMORY_DB_PATH` | `.strada-memory` | 记忆数据库文件目录 |
 | `WEB_CHANNEL_PORT` | `3000` | Web 仪表板端口 |
 | `DASHBOARD_ENABLED` | `false` | 启用 HTTP 监控仪表板 |
-| `DASHBOARD_PORT` | `3001` | 仪表板服务器端口 |
+| `DASHBOARD_PORT` | `3100` | 仪表板服务器端口 |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | 启用 WebSocket 实时仪表板 |
 | `ENABLE_PROMETHEUS` | `false` | 启用 Prometheus 指标端点（端口 9090） |
 | `MULTI_AGENT_ENABLED` | `true` | 启用多代理编排 |

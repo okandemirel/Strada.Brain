@@ -1,5 +1,7 @@
 # Setup Wizard & Auto-Update Implementation Plan
 
+> Historical plan note: This file is an implementation snapshot, not the source of truth for current runtime behavior or env defaults. Use [README.md](../../../README.md), [src/config/README.md](../../../src/config/README.md), [src/channels/README.md](../../../src/channels/README.md), and [SECURITY.md](../../../SECURITY.md) for the current system.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add `strada` CLI command with terminal setup wizard and automatic self-updating system for all installation types.
@@ -476,7 +478,7 @@ export function generateEnvContent(answers: WizardAnswers): string {
   lines.push("MULTI_AGENT_ENABLED=true");
   lines.push("LOG_LEVEL=info");
   lines.push("WEB_CHANNEL_PORT=3000");
-  lines.push("DASHBOARD_PORT=3001");
+  lines.push("DASHBOARD_PORT=3100");
   lines.push("");
 
   return lines.join("\n") + "\n";

@@ -1,5 +1,7 @@
 # Agent Core: Autonomous Intelligence Architecture
 
+> Historical design note: This file records a design snapshot. It is not the authoritative source for current runtime behavior or env defaults. Use [README.md](../../../README.md), [src/config/README.md](../../../src/config/README.md), [src/channels/README.md](../../../src/channels/README.md), and [SECURITY.md](../../../SECURITY.md) for the current system.
+
 ## Problem Statement
 
 Strada.Brain has 7 sophisticated subsystems (PAOR, GoalSystem, Learning, Daemon, ErrorRecovery, SelfVerification, TaskPlanner) that each work individually but fail to produce intelligent autonomous behavior when combined. Three specific architectural problems prevent this:

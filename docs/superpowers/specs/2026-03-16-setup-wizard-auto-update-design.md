@@ -1,5 +1,7 @@
 # Setup Wizard & Auto-Update System Design
 
+> Historical design note: This file records a design snapshot. It is not the authoritative source for current runtime behavior or env defaults. Use [README.md](../../../README.md), [src/config/README.md](../../../src/config/README.md), [src/channels/README.md](../../../src/channels/README.md), and [SECURITY.md](../../../SECURITY.md) for the current system.
+
 **Date:** 2026-03-16
 **Status:** Approved
 **Scope:** CLI entry point, terminal setup wizard, auto-update system

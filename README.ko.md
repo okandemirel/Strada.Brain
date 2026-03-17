@@ -562,7 +562,7 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 | `MEMORY_DB_PATH` | `.strada-memory` | 메모리 데이터베이스 파일 디렉터리 |
 | `WEB_CHANNEL_PORT` | `3000` | 웹 대시보드 포트 |
 | `DASHBOARD_ENABLED` | `false` | HTTP 모니터링 대시보드 활성화 |
-| `DASHBOARD_PORT` | `3001` | 대시보드 서버 포트 |
+| `DASHBOARD_PORT` | `3100` | 대시보드 서버 포트 |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket 실시간 대시보드 활성화 |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus 메트릭 엔드포인트 활성화 (포트 9090) |
 | `MULTI_AGENT_ENABLED` | `true` | 멀티 에이전트 오케스트레이션 활성화 |

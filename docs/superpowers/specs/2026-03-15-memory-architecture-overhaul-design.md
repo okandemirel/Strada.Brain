@@ -1,5 +1,7 @@
 # Memory Architecture Overhaul — Design Spec
 
+> Historical design note: This file records a design snapshot. It is not the authoritative source for current runtime behavior or env defaults. Use [README.md](../../../README.md), [src/config/README.md](../../../src/config/README.md), [src/channels/README.md](../../../src/channels/README.md), and [SECURITY.md](../../../SECURITY.md) for the current system.
+
 **Date:** 2026-03-15
 **Status:** Approved
 **Goal:** Transform Strada.Brain from an amnesic chatbot into a Jarvis-level persistent AI assistant that remembers users, conversations, preferences, and context across sessions.

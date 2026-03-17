@@ -1,5 +1,7 @@
 # Strada.Brain Comprehensive Codebase Audit
 
+> Snapshot note: This audit captures findings from 2026-03-17. It is not the authoritative source for current runtime behavior or env defaults. For current behavior, use [README.md](../../README.md), [SECURITY.md](../../SECURITY.md), [src/config/README.md](../../src/config/README.md), [src/channels/README.md](../../src/channels/README.md), and [src/dashboard/README.md](../../src/dashboard/README.md).
+
 **Date**: 2026-03-17
 **Scope**: 508 TypeScript files, ~96K lines source code, ~64K lines test code, 50 web portal files
 **Method**: 100 parallel agents across 10 audit categories

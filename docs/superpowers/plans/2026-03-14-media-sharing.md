@@ -1,5 +1,7 @@
 # Media Sharing Pipeline Implementation Plan
 
+> Historical plan note: This file is an implementation snapshot, not the source of truth for current runtime behavior or env defaults. Use [README.md](../../../README.md), [src/config/README.md](../../../src/config/README.md), [src/channels/README.md](../../../src/channels/README.md), and [SECURITY.md](../../../SECURITY.md) for the current system.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Enable all channels to receive image/video/audio/document attachments, validate them securely, and forward vision-capable content to LLM providers as image blocks.
