@@ -145,6 +145,7 @@ export class AgentRegistry {
       `INSERT INTO agents (id, key, channel_type, chat_id, status, created_at, last_activity, budget_cap_usd, memory_entry_count)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET
+         chat_id = excluded.chat_id,
          status = excluded.status,
          last_activity = excluded.last_activity,
          budget_cap_usd = excluded.budget_cap_usd,

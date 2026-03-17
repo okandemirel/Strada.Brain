@@ -26,6 +26,8 @@ export interface IncomingMessage {
   channelType: ChannelType;
   /** Unique identifier for the chat/conversation */
   chatId: string;
+  /** Stable conversation identity when chatId is transient (optional). */
+  conversationId?: string;
   /** Unique identifier for the user */
   userId: string;
   /** The text content of the message */

@@ -54,7 +54,12 @@ export class CommandHandler {
     this.providerRouter = router;
   }
 
-  async handle(chatId: string, command: TaskCommand, args: string[]): Promise<void> {
+  private getIdentityKey(chatId: string, userId?: string): string {
+    const normalizedUserId = userId?.trim();
+    return normalizedUserId ? normalizedUserId : chatId;
+  }
+
+  async handle(chatId: string, command: TaskCommand, args: string[], userId?: string): Promise<void> {
     switch (command) {
       case "status":
         await this.handleStatus(chatId, args[0] as TaskId | undefined);
@@ -78,16 +83,16 @@ export class CommandHandler {
         await this.handleResume(chatId, args[0] as TaskId | undefined);
         break;
       case "model":
-        await this.handleModel(chatId, args);
+        await this.handleModel(chatId, args, userId);
         break;
       case "goal":
-        await this.handleGoal(chatId, args);
+        await this.handleGoal(chatId, args, userId);
         break;
       case "autonomous":
-        await this.handleAutonomous(chatId, args);
+        await this.handleAutonomous(chatId, args, userId);
         break;
       case "persona":
-        await this.handlePersona(chatId, args);
+        await this.handlePersona(chatId, args, userId);
         break;
       case "daemon":
         await this.handleDaemon(chatId, args);
@@ -170,7 +175,7 @@ export class CommandHandler {
     await this.channel.sendMarkdown(chatId, this.formatTaskDetail(task));
   }
 
-  private async handleGoal(chatId: string, args: string[]): Promise<void> {
+  private async handleGoal(chatId: string, args: string[], userId?: string): Promise<void> {
     if (args.length === 0) {
       await this.channel.sendText(
         chatId,
@@ -193,7 +198,9 @@ export class CommandHandler {
 
     // Default: submit as a goal task
     const prompt = args.join(" ").slice(0, 2000);
-    await this.taskManager.submit(chatId, "goal", prompt);
+    await this.taskManager.submit(chatId, "goal", prompt, {
+      userId: this.getIdentityKey(chatId, userId),
+    });
     await this.channel.sendText(chatId, `Goal submitted: ${prompt.slice(0, 80)}`);
   }
 
@@ -289,17 +296,18 @@ export class CommandHandler {
     await this.channel.sendText(chatId, `Resume is not yet supported. Please start a new task.`);
   }
 
-  private async handleModel(chatId: string, args: string[]): Promise<void> {
+  private async handleModel(chatId: string, args: string[], userId?: string): Promise<void> {
     if (!this.providerManager) {
       await this.channel.sendText(chatId, "Model switching is not available.");
       return;
     }
 
+    const identityKey = this.getIdentityKey(chatId, userId);
     const subcommand = args[0]?.toLowerCase();
 
     // No args → show current
     if (!subcommand) {
-      const info = this.providerManager.getActiveInfo(chatId);
+      const info = this.providerManager.getActiveInfo(identityKey);
       const status = info.isDefault ? " (system default)" : "";
       await this.channel.sendMarkdown(
         chatId,
@@ -324,7 +332,7 @@ export class CommandHandler {
     // info / bilgi — show provider capabilities and intelligence
     if (subcommand === "info" || subcommand === "bilgi") {
       const providerArg = args[1]?.toLowerCase();
-      const targetProvider = providerArg || this.providerManager.getActiveInfo(chatId)?.providerName;
+      const targetProvider = providerArg || this.providerManager.getActiveInfo(identityKey)?.providerName;
 
       if (!targetProvider) {
         await this.channel.sendText(chatId, "Could not determine current provider.");
@@ -360,8 +368,8 @@ export class CommandHandler {
 
     // reset / sıfırla
     if (subcommand === "reset" || subcommand === "sıfırla") {
-      this.providerManager.clearPreference(chatId);
-      const info = this.providerManager.getActiveInfo(chatId);
+      this.providerManager.clearPreference(identityKey);
+      const info = this.providerManager.getActiveInfo(identityKey);
       await this.channel.sendMarkdown(
         chatId,
         `Model reset to system default: \`${info.providerName}\``,
@@ -389,25 +397,26 @@ export class CommandHandler {
       return;
     }
 
-    this.providerManager.setPreference(chatId, providerName, model);
-    const info = this.providerManager.getActiveInfo(chatId);
+    this.providerManager.setPreference(identityKey, providerName, model);
+    const info = this.providerManager.getActiveInfo(identityKey);
     await this.channel.sendMarkdown(
       chatId,
       `Switched to \`${info.providerName}\` (model: \`${info.model}\`)`,
     );
   }
 
-  private async handleAutonomous(chatId: string, args: string[]): Promise<void> {
+  private async handleAutonomous(chatId: string, args: string[], userId?: string): Promise<void> {
     if (!this.dmPolicy || !this.userProfileStore) {
       await this.channel.sendText(chatId, "Autonomous mode requires profile store.");
       return;
     }
 
+    const identityKey = this.getIdentityKey(chatId, userId);
     const subcommand = args[0]?.toLowerCase();
 
     // status / no args → show current state
     if (!subcommand || subcommand === "status") {
-      const result = await this.userProfileStore.isAutonomousMode(chatId);
+      const result = await this.userProfileStore.isAutonomousMode(identityKey);
       if (!result.enabled) {
         await this.channel.sendText(chatId, "Autonomous mode is currently disabled.");
         return;
@@ -445,8 +454,8 @@ export class CommandHandler {
       }
 
       const expiresAt = Date.now() + hours * 3600_000;
-      await this.userProfileStore.setAutonomousMode(chatId, true, expiresAt);
-      this.dmPolicy.initFromProfile(chatId, { autonomousMode: true, autonomousExpiresAt: expiresAt });
+      await this.userProfileStore.setAutonomousMode(identityKey, true, expiresAt);
+      this.dmPolicy.initFromProfile(chatId, { autonomousMode: true, autonomousExpiresAt: expiresAt }, identityKey);
       // Propagate autonomous mode to daemon security policy (with expiry for auto-revocation)
       this.heartbeatLoopRef?.getSecurityPolicy?.()?.setAutonomousOverride(true, expiresAt);
 
@@ -459,8 +468,8 @@ export class CommandHandler {
 
     // off
     if (subcommand === "off") {
-      await this.userProfileStore.setAutonomousMode(chatId, false);
-      this.dmPolicy.initFromProfile(chatId, { autonomousMode: false });
+      await this.userProfileStore.setAutonomousMode(identityKey, false);
+      this.dmPolicy.initFromProfile(chatId, { autonomousMode: false }, identityKey);
       // Propagate autonomous mode off to daemon security policy
       this.heartbeatLoopRef?.getSecurityPolicy?.()?.setAutonomousOverride(false);
 
@@ -474,12 +483,13 @@ export class CommandHandler {
     await this.channel.sendText(chatId, "Usage: /autonomous on [hours] | off | status");
   }
 
-  private async handlePersona(chatId: string, args: string[]): Promise<void> {
+  private async handlePersona(chatId: string, args: string[], userId?: string): Promise<void> {
     if (!this.soulLoader) {
       await this.channel.sendText(chatId, "Personality management is not available.");
       return;
     }
 
+    const identityKey = this.getIdentityKey(chatId, userId);
     const subcommand = args[0]?.toLowerCase();
 
     // No args → show current profile + usage
@@ -529,7 +539,7 @@ export class CommandHandler {
         // Update user profile store if available
         if (this.userProfileStore) {
           try {
-            this.userProfileStore.setActivePersona(chatId, name);
+            this.userProfileStore.setActivePersona(identityKey, name);
           } catch {
             // Non-fatal
           }
@@ -585,7 +595,7 @@ export class CommandHandler {
         // If active persona was deleted, update profile store
         if (this.userProfileStore) {
           try {
-            this.userProfileStore.setActivePersona(chatId, "default");
+            this.userProfileStore.setActivePersona(identityKey, "default");
           } catch {
             // Non-fatal
           }

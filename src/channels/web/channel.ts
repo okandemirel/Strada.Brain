@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin } from "../../security/origin-validation.js";
 import { validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
+import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
 import type {
   IChannelAdapter,
   IChannelStreaming,
@@ -36,6 +37,7 @@ interface WsClient {
   ws: WebSocket;
   chatId: string;
   reconnectToken: string;
+  profileId: string;
   /** Message count in current rate-limit window. */
   msgCount: number;
   /** Timestamp (ms) when current rate-limit window started. */
@@ -59,6 +61,7 @@ interface PendingConfirmation {
 
 interface WebChannelOptions {
   dashboardAuthToken?: string;
+  identityDbPath?: string;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -101,6 +104,7 @@ export class WebChannel
   /** Recently disconnected chatIds eligible for reconnect (5 min TTL) */
   private recentlyDisconnected = new Map<string, RecentlyDisconnectedSession>();
   private readonly staticDir = resolveStaticDir();
+  private readonly identityStore: WebIdentityStore;
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
@@ -109,7 +113,9 @@ export class WebChannel
     private readonly port: number = 3000,
     private readonly dashboardPort: number = 3100,
     private readonly options: WebChannelOptions = {},
-  ) {}
+  ) {
+    this.identityStore = new WebIdentityStore(options.identityDbPath ?? ":memory:");
+  }
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
@@ -182,6 +188,7 @@ export class WebChannel
       client.ws.close(1000, "Server shutting down");
     }
     this.clients.clear();
+    this.identityStore.close();
 
     this.wss?.close();
     await new Promise<void>((res) => {
@@ -367,32 +374,26 @@ export class WebChannel
   private handleWsConnection(ws: WebSocket): void {
     let chatId: string = randomUUID();
     let assignedId = false;
-    let reconnectToken = this.generateReconnectToken();
-
-    const client: WsClient = { ws, chatId, reconnectToken, msgCount: 0, windowStart: Date.now() };
+    const client: WsClient = {
+      ws,
+      chatId,
+      reconnectToken: this.generateReconnectToken(),
+      profileId: chatId,
+      msgCount: 0,
+      windowStart: Date.now(),
+    };
     this.clients.set(chatId, client);
 
     // Send welcome with chatId
-    this.sendJson(ws, { type: "connected", chatId, reconnectToken });
+    this.sendJson(ws, { type: "connected", chatId, reconnectToken: client.reconnectToken });
 
     ws.on("message", (raw) => {
       try {
         const data = JSON.parse(raw.toString()) as Record<string, unknown>;
 
-        // Handle reconnect: reuse old chatId if recently disconnected
-        if (
-          !assignedId &&
-          data.type === "reconnect" &&
-          typeof data.chatId === "string" &&
-          typeof data.reconnectToken === "string"
-        ) {
-          const oldId = data.chatId;
-          const presentedToken = data.reconnectToken;
-          const reclaimed = this.tryReclaimSession(ws, client, oldId, presentedToken);
-          if (reclaimed) {
-            chatId = reclaimed.chatId;
-            reconnectToken = reclaimed.reconnectToken;
-          }
+        if (!assignedId && (data.type === "session_init" || data.type === "reconnect")) {
+          const initialized = this.initializeSession(ws, client, data);
+          chatId = initialized.chatId;
           assignedId = true;
           return;
         }
@@ -429,7 +430,6 @@ export class WebChannel
   }
 
   private tryReclaimSession(
-    ws: WebSocket,
     client: WsClient,
     oldId: string,
     presentedToken: string,
@@ -448,7 +448,7 @@ export class WebChannel
       : false;
 
     const activeSession = this.clients.get(oldId);
-    const activeTokenMatches = activeSession && activeSession.ws !== ws
+    const activeTokenMatches = activeSession && activeSession.ws !== client.ws
       ? this.safeTokenEquals(presentedToken, activeSession.reconnectToken)
       : false;
 
@@ -456,7 +456,7 @@ export class WebChannel
       return null;
     }
 
-    if (activeSession && activeSession.ws !== ws) {
+    if (activeSession && activeSession.ws !== client.ws) {
       this.clients.delete(oldId);
       try {
         activeSession.ws.close(1000, "Session resumed elsewhere");
@@ -472,9 +472,39 @@ export class WebChannel
     client.chatId = oldId;
     client.reconnectToken = reconnectToken;
     this.clients.set(oldId, client);
-    this.sendJson(ws, { type: "connected", chatId: oldId, reconnectToken });
 
     return { chatId: oldId, reconnectToken };
+  }
+
+  private initializeSession(
+    ws: WebSocket,
+    client: WsClient,
+    data: Record<string, unknown>,
+  ): SessionReclaimResult {
+    const requestedChatId = typeof data.chatId === "string" ? data.chatId : "";
+    const requestedReconnectToken = typeof data.reconnectToken === "string" ? data.reconnectToken : "";
+
+    let chatId = client.chatId;
+    let reconnectToken = client.reconnectToken;
+    if (requestedChatId && requestedReconnectToken) {
+      const reclaimed = this.tryReclaimSession(client, requestedChatId, requestedReconnectToken);
+      if (reclaimed) {
+        chatId = reclaimed.chatId;
+        reconnectToken = reclaimed.reconnectToken;
+      }
+    }
+
+    const identity = this.resolveWebIdentity(data);
+    client.profileId = identity.profileId;
+    this.sendJson(ws, {
+      type: "connected",
+      chatId,
+      reconnectToken,
+      profileId: identity.profileId,
+      profileToken: identity.profileToken,
+    });
+
+    return { chatId, reconnectToken };
   }
 
   private handleWsMessage(chatId: string, data: Record<string, unknown>): void {
@@ -556,7 +586,8 @@ export class WebChannel
         const msg: IncomingMessage = {
           channelType: "web",
           chatId,
-          userId: `web-${chatId}`,
+          conversationId: client?.profileId ?? chatId,
+          userId: client?.profileId ?? chatId,
           text: limitIncomingText(text || ""),
           attachments: attachments.length > 0 ? attachments : undefined,
           timestamp: new Date(),
@@ -592,7 +623,8 @@ export class WebChannel
         const msg: IncomingMessage = {
           channelType: "web",
           chatId,
-          userId: `web-${chatId}`,
+          conversationId: client?.profileId ?? chatId,
+          userId: client?.profileId ?? chatId,
           text: limitIncomingText(text),
           timestamp: new Date(),
         };
@@ -614,7 +646,8 @@ export class WebChannel
         const msg: IncomingMessage = {
           channelType: "web",
           chatId,
-          userId: `web-${chatId}`,
+          conversationId: client?.profileId ?? chatId,
+          userId: client?.profileId ?? chatId,
           text: limitIncomingText(text),
           timestamp: new Date(),
         };
@@ -646,6 +679,34 @@ export class WebChannel
     } catch {
       // Connection may have closed
     }
+  }
+
+  private resolveWebIdentity(data: Record<string, unknown>): WebIdentity {
+    const profileId = typeof data.profileId === "string" ? data.profileId.trim() : "";
+    const profileToken = typeof data.profileToken === "string" ? data.profileToken.trim() : "";
+    if (
+      WebChannel.UUID_RE.test(profileId) &&
+      profileToken.length > 0 &&
+      this.identityStore.verify(profileId, profileToken)
+    ) {
+      return { profileId, profileToken };
+    }
+
+    const legacyProfileId = this.resolveLegacyProfileId(data);
+    if (legacyProfileId) {
+      return this.identityStore.issue(legacyProfileId);
+    }
+
+    return this.identityStore.issue();
+  }
+
+  private resolveLegacyProfileId(data: Record<string, unknown>): string | undefined {
+    const legacyProfileId = typeof data.legacyProfileChatId === "string"
+      ? data.legacyProfileChatId.trim()
+      : typeof data.profileChatId === "string"
+        ? data.profileChatId.trim()
+        : "";
+    return WebChannel.UUID_RE.test(legacyProfileId) ? legacyProfileId : undefined;
   }
 
   private generateReconnectToken(): string {

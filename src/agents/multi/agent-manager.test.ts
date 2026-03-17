@@ -204,6 +204,20 @@ describe("AgentManager", () => {
       expect(manager.getActiveCount()).toBe(1);
     });
 
+    it("reuses the same agent when a stable conversation id survives chat session changes", async () => {
+      await manager.routeMessage(makeMsg({
+        chatId: "chat-1",
+        conversationId: "stable-web-profile",
+      }));
+      await manager.routeMessage(makeMsg({
+        chatId: "chat-2",
+        conversationId: "stable-web-profile",
+      }));
+
+      expect(manager.getActiveCount()).toBe(1);
+      expect(manager.getAllAgents()[0]?.chatId).toBe("chat-2");
+    });
+
     it("creates different agents for different channelType:chatId", async () => {
       const msg1 = makeMsg({ channelType: "web", chatId: "chat-1" });
       const msg2 = makeMsg({ channelType: "telegram", chatId: "chat-2" });
@@ -265,6 +279,84 @@ describe("AgentManager", () => {
       const mockConstructor = Orchestrator as unknown as Mock;
       const orchestratorInstance = mockConstructor.mock.results[0]?.value;
       expect(orchestratorInstance.handleMessage).not.toHaveBeenCalled();
+    });
+
+    it("batches consecutive background messages for the same conversation when burst mode is enabled", async () => {
+      vi.useFakeTimers();
+      const burstManager = new AgentManager({
+        config: makeConfig(),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+        messageBurstWindowMs: 25,
+        maxBurstMessages: 8,
+      });
+      const submitter = vi.fn();
+      burstManager.setBackgroundTaskSubmitter(submitter);
+
+      try {
+        await burstManager.routeMessage(makeMsg({ text: "part one" }));
+        await burstManager.routeMessage(makeMsg({ text: "part two" }));
+
+        expect(submitter).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(25);
+        await Promise.resolve();
+
+        expect(submitter).toHaveBeenCalledOnce();
+        expect(submitter.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({
+            text: expect.stringContaining("part one"),
+          }),
+        );
+        expect(submitter.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({
+            text: expect.stringContaining("part two"),
+          }),
+        );
+      } finally {
+        await burstManager.shutdown();
+        vi.useRealTimers();
+      }
+    });
+
+    it("passes the shared user profile store into per-agent orchestrators", async () => {
+      const sharedProfileStore = { getProfile: vi.fn() } as never;
+      const sharedManager = new AgentManager({
+        config: makeConfig(),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+        userProfileStore: sharedProfileStore,
+      });
+
+      try {
+        await sharedManager.routeMessage(makeMsg());
+        const { Orchestrator } = await import("../orchestrator.js");
+        const mockConstructor = Orchestrator as unknown as Mock;
+        const opts = mockConstructor.mock.calls.at(-1)?.[0];
+        expect(opts?.userProfileStore).toBe(sharedProfileStore);
+      } finally {
+        await sharedManager.shutdown();
+      }
     });
   });
 

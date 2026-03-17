@@ -241,7 +241,10 @@ export type EnvVarName =
   | "AUTO_UPDATE_IDLE_TIMEOUT_MIN"
   | "AUTO_UPDATE_CHANNEL"
   | "AUTO_UPDATE_NOTIFY"
-  | "AUTO_UPDATE_AUTO_RESTART";
+  | "AUTO_UPDATE_AUTO_RESTART"
+  | "TASK_MAX_CONCURRENT"
+  | "TASK_MESSAGE_BURST_WINDOW_MS"
+  | "TASK_MESSAGE_BURST_MAX_MESSAGES";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -409,6 +412,13 @@ export interface SecurityConfig {
   readonly readOnlyMode: boolean;
 }
 
+/** Task execution and routing configuration */
+export interface TaskConfig {
+  readonly concurrencyLimit: number;
+  readonly messageBurstWindowMs: number;
+  readonly messageBurstMaxMessages: number;
+}
+
 // =============================================================================
 // MAIN CONFIG TYPE
 // =============================================================================
@@ -439,6 +449,9 @@ export interface Config {
 
   // Security
   readonly security: SecurityConfig;
+
+  // Tasks
+  readonly tasks: TaskConfig;
 
   // Project
   readonly unityProjectPath: string;
@@ -910,6 +923,11 @@ export const configSchema = z
     // Autonomous Mode
     autonomousDefaultHours: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(168)).default("24"),
 
+    // Tasks
+    taskMaxConcurrent: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
+    taskMessageBurstWindowMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(5000)).default("350"),
+    taskMessageBurstMaxMessages: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("8"),
+
     // Provider Routing
     routingPreset: z.enum(["budget", "balanced", "performance"]).default("balanced"),
     routingPhaseSwitching: boolFromString(true),
@@ -1053,6 +1071,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     security: {
       requireEditConfirmation: rawConfig.requireEditConfirmation,
       readOnlyMode: rawConfig.readOnlyMode,
+    },
+
+    tasks: {
+      concurrencyLimit: rawConfig.taskMaxConcurrent,
+      messageBurstWindowMs: rawConfig.taskMessageBurstWindowMs,
+      messageBurstMaxMessages: rawConfig.taskMessageBurstMaxMessages,
     },
 
     unityProjectPath: rawConfig.unityProjectPath,
@@ -1696,6 +1720,10 @@ interface EnvVars {
   delegationVerbosity: string | undefined;
   delegationTypes: string | undefined;
   delegationMaxIterationsPerType: string | undefined;
+  // Task routing
+  taskMaxConcurrent: string | undefined;
+  taskMessageBurstWindowMs: string | undefined;
+  taskMessageBurstMaxMessages: string | undefined;
   // Autonomous Mode
   autonomousDefaultHours: string | undefined;
   // Provider Routing
@@ -1898,6 +1926,9 @@ function loadFromEnv(): EnvVars {
     delegationVerbosity: process.env["DELEGATION_VERBOSITY"],
     delegationTypes: process.env["DELEGATION_TYPES"],
     delegationMaxIterationsPerType: process.env["DELEGATION_MAX_ITERATIONS_PER_TYPE"],
+    taskMaxConcurrent: process.env["TASK_MAX_CONCURRENT"],
+    taskMessageBurstWindowMs: process.env["TASK_MESSAGE_BURST_WINDOW_MS"],
+    taskMessageBurstMaxMessages: process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"],
     // Autonomous Mode
     autonomousDefaultHours: process.env["AUTONOMOUS_DEFAULT_HOURS"],
     // Provider Routing

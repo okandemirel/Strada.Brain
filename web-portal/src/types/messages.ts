@@ -4,6 +4,8 @@ export interface ConnectedMessage {
   type: 'connected'
   chatId: string
   reconnectToken: string
+  profileId?: string
+  profileToken?: string
 }
 
 export interface TextMessage {
@@ -67,6 +69,15 @@ export interface SendMessage {
   attachments?: Attachment[]
 }
 
+export interface SessionInitMessage {
+  type: 'session_init'
+  chatId?: string
+  reconnectToken?: string
+  profileId?: string
+  profileToken?: string
+  legacyProfileChatId?: string
+}
+
 export interface ConfirmationResponse {
   type: 'confirmation_response'
   confirmId: string
@@ -93,6 +104,7 @@ export interface AutonomousToggleMessage {
 
 export type OutgoingMessage =
   | SendMessage
+  | SessionInitMessage
   | ConfirmationResponse
   | ReconnectMessage
   | ProviderSwitchMessage

@@ -22,13 +22,14 @@ export function buildPlanningPrompt(
     "Each step should be a concrete, actionable item.",
     "",
     "### Verification Protocol",
-    "- After editing compilable files (.cs, .csproj, .sln), run dotnet_build to verify.",
-    "- After bug fixes, run dotnet_test to confirm the fix.",
-    "- NEVER declare done without verifying compilation succeeds.",
+    "- After editing code or config, run the most relevant verification available (for example dotnet_build, dotnet_test, shell-based build/test/lint/typecheck, or a runtime smoke).",
+    "- After bug fixes, verify the specific failing behavior is now clean, not just that the patch was applied.",
+    "- If verification fails, keep iterating until it passes or you can clearly explain the blocker.",
+    "- NEVER declare done based only on the patch; finish only after a relevant clean verification signal.",
     "",
     "### Error Recovery Order",
     "- When build/test fails, fix in dependency order: missing types → undefined symbols → type mismatches → logic errors.",
-    "- After each fix, rebuild to verify. If stuck after 3 attempts, try a fundamentally different approach.",
+    "- After each fix, verify again. If stuck after 3 attempts, try a fundamentally different approach.",
   ];
 
   if (learnedInsights && learnedInsights.length > 0) {
@@ -110,6 +111,8 @@ export function buildReflectionPrompt(state: AgentState): string {
     "- **DONE_WITH_SUGGESTIONS** - task complete, but include proactive next-step recommendations for the user",
     "",
     "Prefer DONE_WITH_SUGGESTIONS over DONE when you can identify useful follow-up actions.",
+    "Only choose DONE or DONE_WITH_SUGGESTIONS when recent failures are resolved and the final state has a relevant clean verification signal.",
+    "If a bug fix still has failing tool output, missing verification, or contradictory evidence, choose CONTINUE or REPLAN.",
     "Your final line MUST be one of: **CONTINUE**, **REPLAN**, **DONE**, or **DONE_WITH_SUGGESTIONS**",
   );
 

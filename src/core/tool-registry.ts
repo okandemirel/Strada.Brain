@@ -18,6 +18,7 @@ import type { MetricsStorage } from "../metrics/metrics-storage.js";
 import { PluginLoader } from "../agents/plugins/plugin-loader.js";
 import { getLogger } from "../utils/logger.js";
 import { ValidationError } from "../common/errors.js";
+import { loadInstalledStradaMcpTools, registerStradaMcpTools } from "./strada-mcp-tool-loader.js";
 
 // Tool category metadata
 export const ToolCategories = {
@@ -151,6 +152,24 @@ export class ToolRegistry {
 
     // Register built-in tools
     this.registerBuiltinTools(options);
+
+    // Load Strada.MCP tools as first-class Brain tools when available.
+    try {
+      const mcpLoad = await loadInstalledStradaMcpTools(_config);
+      if (mcpLoad) {
+        const result = registerStradaMcpTools(this, mcpLoad.tools);
+        logger.info("Loaded Strada.MCP tools into main toolchain", {
+          sourcePath: mcpLoad.source.path,
+          version: mcpLoad.source.version,
+          registered: result.registered,
+          skipped: result.skipped,
+        });
+      }
+    } catch (error) {
+      logger.warn("Failed to load Strada.MCP tools", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     // Load plugin tools
     if (this.pluginLoader) {

@@ -16,7 +16,7 @@
  */
 
 import type { Task } from "./types.js";
-import { TaskStatus } from "./types.js";
+import { getTaskConversationKey, TaskStatus } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
@@ -87,6 +87,7 @@ export interface BackgroundExecutorOptions {
 
 export class BackgroundExecutor {
   private readonly queue: QueueEntry[] = [];
+  private readonly activeConversations = new Set<string>();
   private running = 0;
   private taskManager: TaskManager | null = null;
   private readonly orchestrator: Orchestrator;
@@ -164,14 +165,24 @@ export class BackgroundExecutor {
    */
   private processQueue(): void {
     const logger = getLogger();
-    while (this.running < this.concurrencyLimit && this.queue.length > 0) {
-      const entry = this.queue.shift()!;
+    while (this.running < this.concurrencyLimit) {
+      const nextIndex = this.findNextRunnableIndex();
+      if (nextIndex < 0) {
+        return;
+      }
+      const entry = this.queue.splice(nextIndex, 1)[0]!;
+      const conversationKey = getTaskConversationKey(
+        entry.task.chatId,
+        entry.task.channelType,
+        entry.task.conversationId,
+      );
 
       // Skip if already cancelled
       if (entry.signal.aborted) {
         continue;
       }
 
+      this.activeConversations.add(conversationKey);
       this.running++;
       this.executeTask(entry)
         .catch((err) => {
@@ -191,6 +202,7 @@ export class BackgroundExecutor {
           }
         })
         .finally(() => {
+          this.activeConversations.delete(conversationKey);
           this.running--;
           try {
             this.processQueue();
@@ -201,6 +213,24 @@ export class BackgroundExecutor {
           }
         });
     }
+  }
+
+  private findNextRunnableIndex(): number {
+    for (let index = 0; index < this.queue.length; index += 1) {
+      const entry = this.queue[index]!;
+      if (entry.signal.aborted) {
+        return index;
+      }
+      const conversationKey = getTaskConversationKey(
+        entry.task.chatId,
+        entry.task.channelType,
+        entry.task.conversationId,
+      );
+      if (!this.activeConversations.has(conversationKey)) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   private async executeTask(entry: QueueEntry): Promise<void> {
@@ -251,6 +281,8 @@ export class BackgroundExecutor {
         onProgress,
         chatId: task.chatId,
         channelType: task.channelType,
+        conversationId: task.conversationId,
+        userId: task.userId,
         attachments: task.attachments,
         onUsage: this.buildUsageRecorder(task),
       });
@@ -344,6 +376,8 @@ export class BackgroundExecutor {
         onProgress: (msg: string) => onProgress(`[${node.task}] ${msg}`),
         chatId: task.chatId,
         channelType: task.channelType,
+        conversationId: task.conversationId,
+        userId: task.userId,
         onUsage: this.buildUsageRecorder(task),
       });
     };

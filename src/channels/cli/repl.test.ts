@@ -6,9 +6,10 @@ import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
 vi.mock("node:readline", () => {
   return {
     createInterface: vi.fn().mockReturnValue({
-      question: vi.fn(),
       close: vi.fn(),
       on: vi.fn(),
+      prompt: vi.fn(),
+      setPrompt: vi.fn(),
     }),
   };
 });
@@ -17,8 +18,10 @@ import * as readline from "node:readline";
 
 function getMockRl() {
   return vi.mocked(readline.createInterface).mock.results[0]?.value as {
-    question: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
+    on: ReturnType<typeof vi.fn>;
+    prompt: ReturnType<typeof vi.fn>;
+    setPrompt: ReturnType<typeof vi.fn>;
   } | undefined;
 }
 
@@ -28,9 +31,10 @@ describe("CLIChannel", () => {
   beforeEach(() => {
     // Reset the mock so createInterface returns a fresh mock
     vi.mocked(readline.createInterface).mockReturnValue({
-      question: vi.fn(),
       close: vi.fn(),
       on: vi.fn(),
+      prompt: vi.fn(),
+      setPrompt: vi.fn(),
     } as any);
     channel = new CLIChannel();
   });
@@ -89,34 +93,42 @@ describe("CLIChannel", () => {
   it("requestConfirmation returns selected option", async () => {
     await channel.connect();
     const rl = getMockRl()!;
-
-    // The first question() call is the "you> " prompt from connect()
-    // We need the requestConfirmation call, which is the second question() call
-    rl.question.mockImplementation((_prompt: string, cb: (answer: string) => void) => {
-      cb("2"); // Select option 2
+    const handlers = new Map<string, (input: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
     });
+    await channel.disconnect();
+    await channel.connect();
 
-    const result = await channel.requestConfirmation({
+    const resultPromise = channel.requestConfirmation({
       chatId: "cli",
       question: "Confirm?",
       options: ["Yes", "No"],
     });
+    handlers.get("line")?.("2");
+    const result = await resultPromise;
     expect(result).toBe("No");
   });
 
   it("requestConfirmation defaults to first option for invalid input", async () => {
     await channel.connect();
     const rl = getMockRl()!;
-
-    rl.question.mockImplementation((_prompt: string, cb: (answer: string) => void) => {
-      cb("invalid");
+    const handlers = new Map<string, (input: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
     });
+    await channel.disconnect();
+    await channel.connect();
 
-    const result = await channel.requestConfirmation({
+    const resultPromise = channel.requestConfirmation({
       chatId: "cli",
       question: "Confirm?",
       options: ["Yes", "No"],
     });
+    handlers.get("line")?.("invalid");
+    const result = await resultPromise;
     expect(result).toBe("Yes");
   });
 
@@ -125,10 +137,16 @@ describe("CLIChannel", () => {
     channel.onMessage(handler);
     await channel.connect();
     const rl = getMockRl()!;
+    const handlers = new Map<string, (input: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    channel.onMessage(handler);
+    await channel.connect();
 
-    // The first question call is the "you> " prompt
-    const promptCallback = rl.question.mock.calls[0]![1] as (input: string) => Promise<void>;
-    await promptCallback("hello world");
+    await handlers.get("line")?.("hello world");
 
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -145,9 +163,16 @@ describe("CLIChannel", () => {
     channel.onMessage(handler);
     await channel.connect();
     const rl = getMockRl()!;
+    const handlers = new Map<string, (input: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    channel.onMessage(handler);
+    await channel.connect();
 
-    const promptCallback = rl.question.mock.calls[0]![1] as (input: string) => Promise<void>;
-    await promptCallback("a".repeat(MAX_INCOMING_TEXT_LENGTH + 50));
+    await handlers.get("line")?.("a".repeat(MAX_INCOMING_TEXT_LENGTH + 50));
 
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -160,9 +185,15 @@ describe("CLIChannel", () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     await channel.connect();
     const rl = getMockRl()!;
+    const handlers = new Map<string, (input: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    await channel.connect();
 
-    const promptCallback = rl.question.mock.calls[0]![1] as (input: string) => Promise<void>;
-    await promptCallback("exit");
+    await handlers.get("line")?.("exit");
 
     expect(channel.isHealthy()).toBe(false);
     expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGINT");
@@ -174,10 +205,52 @@ describe("CLIChannel", () => {
     channel.onMessage(handler);
     await channel.connect();
     const rl = getMockRl()!;
+    const handlers = new Map<string, (input: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    channel.onMessage(handler);
+    await channel.connect();
 
-    const promptCallback = rl.question.mock.calls[0]![1] as (input: string) => Promise<void>;
-    await promptCallback("");
+    await handlers.get("line")?.("");
 
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("queues consecutive user inputs while a previous message is still processing", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const handler = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      }))
+      .mockResolvedValueOnce(undefined);
+
+    channel.onMessage(handler);
+    await channel.connect();
+    const rl = getMockRl()!;
+    const handlers = new Map<string, (input: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    channel.onMessage(handler);
+    await channel.connect();
+
+    handlers.get("line")?.("first");
+    handlers.get("line")?.("second");
+
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    releaseFirst?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ text: "second" }),
+    );
   });
 });

@@ -97,6 +97,9 @@ describe("loadConfig", () => {
     delete process.env["DELEGATION_VERBOSITY"];
     delete process.env["DELEGATION_TYPES"];
     delete process.env["DELEGATION_MAX_ITERATIONS_PER_TYPE"];
+    delete process.env["TASK_MAX_CONCURRENT"];
+    delete process.env["TASK_MESSAGE_BURST_WINDOW_MS"];
+    delete process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"];
   });
 
   it("loads valid configuration", () => {
@@ -163,6 +166,22 @@ describe("loadConfig", () => {
     expect(config.delegation.types[0]?.maxIterations).toBe(7);
   });
 
+  it("loads task routing env vars into runtime config", () => {
+    setEnv({
+      TASK_MAX_CONCURRENT: "4",
+      TASK_MESSAGE_BURST_WINDOW_MS: "500",
+      TASK_MESSAGE_BURST_MAX_MESSAGES: "6",
+    });
+
+    const config = loadConfig();
+
+    expect(config.tasks).toEqual({
+      concurrencyLimit: 4,
+      messageBurstWindowMs: 500,
+      messageBurstMaxMessages: 6,
+    });
+  });
+
   it("parses CSV user IDs correctly", () => {
     setEnv({ ALLOWED_TELEGRAM_USER_IDS: "1,2,3" });
     const config = loadConfig();
@@ -174,6 +193,11 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.security.requireEditConfirmation).toBe(true);
     expect(config.security.readOnlyMode).toBe(false);
+    expect(config.tasks).toEqual({
+      concurrencyLimit: 3,
+      messageBurstWindowMs: 350,
+      messageBurstMaxMessages: 8,
+    });
     expect(config.logLevel).toBe("info");
     expect(config.logFile).toBe("strada-brain.log");
   });

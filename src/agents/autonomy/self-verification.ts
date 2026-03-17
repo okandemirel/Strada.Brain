@@ -11,7 +11,9 @@
  */
 
 import type { ToolResult } from "../providers/provider.interface.js";
-import { MUTATION_TOOLS, COMPILABLE_EXT, extractFilePath } from "./constants.js";
+import { MUTATION_TOOLS, VERIFY_TOOLS, COMPILABLE_EXT, extractFilePath } from "./constants.js";
+
+const VERIFICATION_SHELL_COMMAND_RE = /\b(?:test|build|check|lint|typecheck|verify|compile|tsc|eslint|vitest|jest|pytest)\b/iu;
 
 // ─── State ──────────────────────────────────────────────────────────────────────
 
@@ -56,7 +58,7 @@ export class SelfVerification {
     }
 
     // Track build results — O(1)
-    if (toolName === "dotnet_build") {
+    if (isVerificationTool(toolName, input)) {
       const ok = !(result.isError ?? false);
       this.lastBuildOk = ok;
       if (ok) {
@@ -98,4 +100,16 @@ export class SelfVerification {
       lastBuildOk: this.lastBuildOk,
     };
   }
+}
+
+function isVerificationTool(toolName: string, input: Record<string, unknown>): boolean {
+  if (VERIFY_TOOLS.has(toolName)) {
+    return true;
+  }
+  if (toolName !== "shell_exec") {
+    return false;
+  }
+
+  const command = typeof input["command"] === "string" ? input["command"].trim() : "";
+  return command.length > 0 && VERIFICATION_SHELL_COMMAND_RE.test(command);
 }

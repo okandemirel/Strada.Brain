@@ -42,6 +42,8 @@ export class TaskManager extends EventEmitter {
       goalTree?: GoalTree;
       attachments?: import("../channels/channel.interface.js").Attachment[];
       orchestrator?: Orchestrator;
+      conversationId?: string;
+      userId?: string;
     },
   ): Task {
     const logger = getLogger();
@@ -51,6 +53,8 @@ export class TaskManager extends EventEmitter {
       id: generateTaskId(),
       chatId,
       channelType,
+      conversationId: options?.conversationId,
+      userId: options?.userId,
       title: prompt.slice(0, 80),
       status: TaskStatus.pending,
       prompt,

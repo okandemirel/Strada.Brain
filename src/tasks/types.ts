@@ -18,6 +18,10 @@ export function generateTaskId(): TaskId {
   return `task_${randomBytes(4).toString("hex")}` as TaskId;
 }
 
+export function getTaskConversationKey(chatId: string, channelType: string, conversationId?: string): string {
+  return JSON.stringify([channelType, conversationId?.trim() || chatId]);
+}
+
 // ─── Task State Machine ─────────────────────────────────────────────────────────
 
 export enum TaskStatus {
@@ -60,6 +64,8 @@ export interface Task {
   id: TaskId;
   chatId: string;
   channelType: string;
+  conversationId?: string;
+  userId?: string;
   title: string;
   status: TaskStatus;
   prompt: string;
@@ -106,6 +112,8 @@ export interface BackgroundTaskOptions {
   onProgress: (message: string) => void;
   chatId: string;
   channelType: string;
+  conversationId?: string;
+  userId?: string;
   /** Attachments from the original message for vision/file support */
   attachments?: import("../channels/channel.interface.js").Attachment[];
   /** Parent metric ID for subtask tracking (passed from BackgroundExecutor for decomposed tasks) */

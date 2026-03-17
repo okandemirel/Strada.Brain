@@ -596,6 +596,9 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | Max gap between streaming chunks before treating an in-progress response as stalled |
 | `ENABLE_PROMETHEUS` | `false` | Enable Prometheus metrics endpoint (port 9090) |
 | `MULTI_AGENT_ENABLED` | `false` | Enable multi-agent orchestration |
+| `TASK_MAX_CONCURRENT` | `3` | Maximum number of background tasks that can run at once across distinct conversations |
+| `TASK_MESSAGE_BURST_WINDOW_MS` | `350` | Time window for merging rapid consecutive user messages into one ordered task |
+| `TASK_MESSAGE_BURST_MAX_MESSAGES` | `8` | Maximum consecutive messages to merge into a single task burst |
 | `TASK_DELEGATION_ENABLED` | `false` | Enable task delegation between agents |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Maximum delegation chain depth |
 | `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | Maximum concurrent delegations per parent agent |

@@ -41,7 +41,7 @@ import type { IEmbeddingProvider } from "../rag/rag.interface.js";
 import { shouldForceReplan } from "./failure-classifier.js";
 import { buildProviderIntelligence, getRecommendedMaxMessages } from "./providers/provider-knowledge.js";
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
-import { WRITE_OPERATIONS } from "./autonomy/constants.js";
+import { VERIFY_TOOLS, WRITE_OPERATIONS } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
 import {
   checkReadOnlyBlock,
@@ -89,8 +89,8 @@ const PERMISSION_QUESTION_PATTERN = /\b(approve|approval|permission|okay|ok(?:ay
 const AUTO_APPROVE_OPTION_PATTERN = /\b(approve|approved|continue|proceed|yes|ok|okay|go ahead|accept)\b/i;
 const AUTO_REJECT_OPTION_PATTERN = /\b(reject|deny|cancel|stop|no)\b/i;
 const NATURAL_LANGUAGE_AUTONOMOUS_HOURS = 24;
-const SAFE_SHELL_FALLBACK_PATTERN =
-  /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck)\b)|npx\s+(?:vitest|eslint|tsc)\b|git\s+(?:status|diff|log|show|branch|rev-parse)\b|(?:rg|ls|pwd|cat|head|tail|find|sed|wc|stat)\b|(?:vitest|eslint|tsc)\b)/i;
+const SAFE_SHELL_SEGMENT_PATTERN =
+  /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck)\b)|npx\s+(?:vitest|eslint|tsc)\b|git\s+(?:status|diff|log|show|branch|rev-parse)\b|(?:rg|ls|pwd|cat|head|tail|find|sed|wc|stat|grep|test)\b|(?:vitest|eslint|tsc)\b)/i;
 const SHELL_REVIEW_SYSTEM_PROMPT = `You are the shell safety arbiter for an autonomous coding agent.
 Decide whether the proposed shell command should execute automatically.
 
@@ -200,6 +200,11 @@ function getStringPreference(preferences: Record<string, unknown>, key: string, 
 function getBooleanPreference(preferences: Record<string, unknown>, key: string): boolean | undefined {
   const value = preferences[key];
   return typeof value === "boolean" ? value : undefined;
+}
+
+function resolveIdentityKey(chatId: string, userId?: string): string {
+  const normalizedUserId = userId?.trim();
+  return normalizedUserId ? normalizedUserId : chatId;
 }
 
 function detectVerbosityPreference(text: string): string | undefined {
@@ -430,6 +435,8 @@ export class Orchestrator {
   private readonly sessions = new Map<string, Session>();
   private readonly sessionLocks = new Map<string, Promise<void>>();
   private systemPrompt: string;
+  private readonly getIdentityState?: () => IdentityState;
+  private readonly crashRecoveryContext?: CrashRecoveryContext;
   private stradaDeps: StradaDepsStatus | undefined;
   private depsSetupComplete: boolean = false;
   private readonly pendingDepsPrompt = new Map<string, boolean>();
@@ -519,6 +526,8 @@ export class Orchestrator {
     this.consensusManager = opts.consensusManager;
     this.confidenceEstimator = opts.confidenceEstimator;
     this.onUsage = opts.onUsage;
+    this.getIdentityState = opts.getIdentityState;
+    this.crashRecoveryContext = opts.crashRecoveryContext;
 
     // Build tool registry
     this.tools = new Map();
@@ -529,14 +538,19 @@ export class Orchestrator {
 
     this.stradaDeps = opts.stradaDeps;
     this.depsSetupComplete = !opts.stradaDeps || opts.stradaDeps.coreInstalled;
+    this.systemPrompt = "";
+    this.rebuildBaseSystemPrompt();
+  }
+
+  private rebuildBaseSystemPrompt(): void {
     this.systemPrompt =
       STRADA_SYSTEM_PROMPT +
       buildProjectContext(this.projectPath) +
-      buildDepsContext(opts.stradaDeps) +
+      buildDepsContext(this.stradaDeps) +
       buildCapabilityManifest() +
       (this.readOnly ? getReadOnlySystemPrompt() : "") +
-      (opts.getIdentityState ? buildIdentitySection(opts.getIdentityState()) : "") +
-      (opts.crashRecoveryContext ? buildCrashNotificationSection(opts.crashRecoveryContext) : "");
+      (this.getIdentityState ? buildIdentitySection(this.getIdentityState()) : "") +
+      (this.crashRecoveryContext ? buildCrashNotificationSection(this.crashRecoveryContext) : "");
   }
 
   /**
@@ -821,7 +835,8 @@ export class Orchestrator {
   async runBackgroundTask(prompt: string, options: BackgroundTaskOptions): Promise<string> {
     const logger = getLogger();
     const { signal, onProgress, chatId } = options;
-    let currentProvider = this.providerManager.getProvider(chatId);
+    const identityKey = resolveIdentityKey(chatId, options.userId);
+    let currentProvider = this.providerManager.getProvider(identityKey);
 
     // ─── Metrics: start recording ────────────────────────────────────
     const taskType = options.parentMetricId ? "subtask" as const : "background" as const;
@@ -845,35 +860,35 @@ export class Orchestrator {
     // Instead of a hardcoded Q&A flow, inject onboarding instructions into
     // the system prompt. The LLM naturally introduces itself, asks the user's
     // name in conversation, and we extract preferences from the response.
-    let profile = this.userProfileStore?.getProfile(chatId) ?? null;
+    let profile = this.userProfileStore?.getProfile(identityKey) ?? null;
     if (this.userProfileStore && !profile) {
       const configLang = process.env["LANGUAGE_PREFERENCE"] ?? "en";
-      this.userProfileStore.upsertProfile(chatId, { language: configLang });
-      profile = this.userProfileStore.getProfile(chatId) ?? null;
-      logger.info("New user detected, injecting onboarding context", { chatId, language: configLang });
+      this.userProfileStore.upsertProfile(identityKey, { language: configLang });
+      profile = this.userProfileStore.getProfile(identityKey) ?? null;
+      logger.info("New user detected, injecting onboarding context", { chatId, identityKey, language: configLang });
     }
 
     // Touch user profile (debounced)
     if (this.userProfileStore && profile) {
-      const lastTouch = this.lastPersistTime.get(`touch:${chatId}`) ?? 0;
+      const lastTouch = this.lastPersistTime.get(`touch:${identityKey}`) ?? 0;
       if (Date.now() - lastTouch > 60_000) {
-        this.userProfileStore.touchLastSeen(chatId);
-        this.lastPersistTime.set(`touch:${chatId}`, Date.now());
+        this.userProfileStore.touchLastSeen(identityKey);
+        this.lastPersistTime.set(`touch:${identityKey}`, Date.now());
       }
     }
 
-    await this.maybeUpdateUserProfileFromPrompt(chatId, prompt);
-    profile = this.userProfileStore?.getProfile(chatId) ?? profile;
+    await this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, prompt, options.userId);
+    profile = this.userProfileStore?.getProfile(identityKey) ?? profile;
 
     // Load autonomous mode from profile at session start
     if (this.dmPolicy && this.userProfileStore) {
       try {
-        const autonomousState = await this.userProfileStore.isAutonomousMode(chatId);
+        const autonomousState = await this.userProfileStore.isAutonomousMode(identityKey);
         if (autonomousState.enabled) {
           this.dmPolicy.initFromProfile(chatId, {
             autonomousMode: true,
             autonomousExpiresAt: autonomousState.expiresAt,
-          });
+          }, options.userId);
         }
       } catch {
         // Autonomous mode restoration failure is non-fatal
@@ -931,7 +946,6 @@ export class Orchestrator {
     const errorRecovery = new ErrorRecoveryEngine();
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
-    let verificationRequested = false;
 
     let bgIteration = 0;
     let bgToolCallCount = 0;
@@ -993,6 +1007,23 @@ export class Orchestrator {
           const decision = parseReflectionDecision(response.text);
 
           if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
+            const completionGate = getCompletionGatePrompt(bgAgentState, selfVerification);
+            if (completionGate) {
+              bgAgentState = {
+                ...bgAgentState,
+                lastReflection: response.text ?? bgAgentState.lastReflection,
+                reflectionCount: bgAgentState.reflectionCount + 1,
+                consecutiveErrors: 0,
+              };
+              bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: completionGate });
+              onProgress("Verification required before completion");
+              continue;
+            }
+
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
@@ -1042,12 +1073,12 @@ export class Orchestrator {
 
         // Final response — return text
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-          if (!verificationRequested && selfVerification.needsVerification()) {
-            verificationRequested = true;
+          const completionGate = getCompletionGatePrompt(bgAgentState, selfVerification);
+          if (completionGate) {
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
-            session.messages.push({ role: "user", content: selfVerification.getPrompt() });
+            session.messages.push({ role: "user", content: completionGate });
             continue;
           }
 
@@ -1102,7 +1133,6 @@ export class Orchestrator {
           const tr = toolResults[i]!;
           taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
           selfVerification.track(tc.name, tc.input, tr);
-          if (tc.name === "dotnet_build") verificationRequested = false;
 
           const analysis = errorRecovery.analyze(tc.name, tr);
           if (analysis) {
@@ -1293,11 +1323,7 @@ export class Orchestrator {
         const result = await installStradaDep(this.projectPath, "core");
         if (result.kind === "ok") {
           this.stradaDeps = checkStradaDeps(this.projectPath);
-          this.systemPrompt =
-            STRADA_SYSTEM_PROMPT +
-            buildCapabilityManifest() +
-            buildProjectContext(this.projectPath) +
-            buildDepsContext(this.stradaDeps);
+          this.rebuildBaseSystemPrompt();
           this.depsSetupComplete = true;
           await this.channel.sendText(chatId, "Strada.Core kuruldu! Artık kullanabilirsiniz.");
 
@@ -1347,11 +1373,7 @@ export class Orchestrator {
       const result = await installStradaDep(this.projectPath, "modules");
       if (result.kind === "ok") {
         this.stradaDeps = checkStradaDeps(this.projectPath);
-        this.systemPrompt =
-          STRADA_SYSTEM_PROMPT +
-          buildCapabilityManifest() +
-          buildProjectContext(this.projectPath) +
-          buildDepsContext(this.stradaDeps);
+        this.rebuildBaseSystemPrompt();
         await this.channel.sendText(chatId, "Strada.Modules kuruldu!");
       } else {
         await this.channel.sendText(chatId, `Modules kurulumu başarısız: ${result.error}`);
@@ -1411,6 +1433,7 @@ export class Orchestrator {
 
     this.metrics?.recordMessage();
     this.metrics?.setActiveSessions(this.sessions.size);
+    const identityKey = resolveIdentityKey(chatId, userId);
 
     // Get or create session
     const session = this.getOrCreateSession(chatId);
@@ -1418,17 +1441,17 @@ export class Orchestrator {
 
     // Touch user profile (lastSeenAt) — debounced to avoid per-message SQLite writes
     if (this.userProfileStore) {
-      const lastTouch = this.lastPersistTime.get(`touch:${chatId}`) ?? 0;
+      const lastTouch = this.lastPersistTime.get(`touch:${identityKey}`) ?? 0;
       if (Date.now() - lastTouch > 60_000) {
-        this.userProfileStore.touchLastSeen(chatId);
-        this.lastPersistTime.set(`touch:${chatId}`, Date.now());
+        this.userProfileStore.touchLastSeen(identityKey);
+        this.lastPersistTime.set(`touch:${identityKey}`, Date.now());
       }
     }
 
     // Load autonomous mode from profile at session start
     if (this.dmPolicy && this.userProfileStore) {
       try {
-        const autonomousState = await this.userProfileStore.isAutonomousMode(chatId);
+        const autonomousState = await this.userProfileStore.isAutonomousMode(identityKey);
         if (autonomousState.enabled) {
           this.dmPolicy.initFromProfile(chatId, {
             autonomousMode: true,
@@ -1440,17 +1463,17 @@ export class Orchestrator {
       }
     }
 
-    await this.maybeUpdateUserProfileFromPrompt(chatId, text, userId);
+    await this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, text, userId);
 
     // Add user message (with vision blocks if applicable)
-    const provider = this.providerManager.getProvider(chatId);
+    const provider = this.providerManager.getProvider(identityKey);
     const supportsVision = provider.capabilities.vision;
     const userContent = buildUserContent(text, msg.attachments, supportsVision);
     session.messages.push({ role: "user", content: userContent });
 
     // Trim old messages to manage context window (provider-aware threshold)
     // Persist trimmed messages to memory before discarding
-    const providerInfo = this.providerManager.getActiveInfo?.(chatId);
+    const providerInfo = this.providerManager.getActiveInfo?.(identityKey);
     const trimmed = this.trimSession(session, getRecommendedMaxMessages(providerInfo?.providerName ?? ""));
     if (trimmed.length > 0) {
       await this.persistSessionToMemory(chatId, trimmed, /* force */ true);
@@ -1496,10 +1519,11 @@ export class Orchestrator {
     userId?: string,
   ): Promise<void> {
     const logger = getLogger();
-    let currentProvider = this.providerManager.getProvider(chatId);
+    const identityKey = resolveIdentityKey(chatId, userId);
+    let currentProvider = this.providerManager.getProvider(identityKey);
 
     // Load user profile once for the entire agent loop
-    const profile = this.userProfileStore?.getProfile(chatId) ?? null;
+    const profile = this.userProfileStore?.getProfile(identityKey) ?? null;
 
     // Per-user persona override (from profile, not global SoulLoader mutation)
     let personaContent: string | undefined;
@@ -1549,7 +1573,6 @@ export class Orchestrator {
     const errorRecovery = new ErrorRecoveryEngine();
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
-    let verificationRequested = false;
     // ────────────────────────────────────────────────────────────────────
 
     // ─── PAOR State Machine ──────────────────────────────────────────────
@@ -1652,6 +1675,22 @@ export class Orchestrator {
         const decision = parseReflectionDecision(response.text);
 
         if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
+          const completionGate = getCompletionGatePrompt(agentState, selfVerification);
+          if (completionGate) {
+            agentState = {
+              ...agentState,
+              lastReflection: response.text ?? agentState.lastReflection,
+              reflectionCount: agentState.reflectionCount + 1,
+              consecutiveErrors: 0,
+            };
+            agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: completionGate });
+            continue;
+          }
+
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
             await this.channel.sendMarkdown(chatId, response.text);
@@ -1755,7 +1794,10 @@ export class Orchestrator {
           await this.channel.sendText(chatId, ackMsg);
 
           // Submit as background task with pre-decomposed tree
-          this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, { goalTree });
+          this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, {
+            goalTree,
+            userId: identityKey,
+          });
 
           // Record metric end for the interactive session (goal runs separately)
           this.recordMetricEnd(metricId, {
@@ -1775,14 +1817,14 @@ export class Orchestrator {
       // (streaming already sent it, so skip for streamed end_turn)
       if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
         // ─── Verification gate: catch unverified exits ──────────────────
-        if (!verificationRequested && selfVerification.needsVerification()) {
-          verificationRequested = true;
+        const completionGate = getCompletionGatePrompt(agentState, selfVerification);
+        if (completionGate) {
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
           }
           session.messages.push({
             role: "user",
-            content: selfVerification.getPrompt(),
+            content: completionGate,
           });
           logger.debug("Verification gate triggered", { chatId, iteration });
           continue; // send back to LLM with verification reminder
@@ -1925,11 +1967,6 @@ export class Orchestrator {
         // O(1) tracking in planner & verifier
         taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
         selfVerification.track(tc.name, tc.input, tr);
-
-        // Reset verification gate after build attempt so it can re-fire on failure
-        if (tc.name === "dotnet_build") {
-          verificationRequested = false;
-        }
 
         // Error recovery: analyze and enrich the tool result
         const analysis = errorRecovery.analyze(tc.name, tr);
@@ -2601,10 +2638,19 @@ export class Orchestrator {
 
   private isSafeShellFallback(command: string): boolean {
     const normalized = command.replace(/\s+/g, " ").trim();
-    if (!normalized || /[|;&]/.test(normalized)) {
+    if (!normalized || normalized.includes("|") || normalized.includes(";") || normalized.includes("||")) {
       return false;
     }
-    return SAFE_SHELL_FALLBACK_PATTERN.test(normalized);
+    if (/(^|[^&])&([^&]|$)/.test(normalized)) {
+      return false;
+    }
+
+    const segments = normalized
+      .split(/\s*&&\s*/u)
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0);
+
+    return segments.length > 0 && segments.every((segment) => SAFE_SHELL_SEGMENT_PATTERN.test(segment));
   }
 
   private async reviewShellCommandWithProvider(
@@ -2614,7 +2660,7 @@ export class Orchestrator {
     options: ToolExecutionOptions,
     input: Record<string, unknown>,
   ): Promise<SelfManagedWriteReview> {
-    const provider = this.providerManager.getProvider(chatId);
+    const provider = this.providerManager.getProvider(resolveIdentityKey(chatId, options.userId));
     const taskPrompt = this.normalizeInteractiveText(options.taskPrompt);
     const recentContext = this.summarizeMessagesForShellReview(options.sessionMessages);
     const workingDirectory = this.normalizeInteractiveText(input["working_directory"]) || ".";
@@ -3181,12 +3227,12 @@ export class Orchestrator {
     return updates;
   }
 
-  private async maybeUpdateUserProfileFromPrompt(chatId: string, prompt: string, userId?: string): Promise<void> {
+  private async maybeUpdateUserProfileFromPrompt(chatId: string, profileKey: string, prompt: string, userId?: string): Promise<void> {
     if (!this.userProfileStore || !prompt.trim()) {
       return;
     }
 
-    const latestProfile = this.userProfileStore.getProfile(chatId);
+    const latestProfile = this.userProfileStore.getProfile(profileKey);
     const updates = this.extractNaturalLanguageDirectiveUpdates(latestProfile, prompt);
     const profileUpdates: Record<string, unknown> = {};
 
@@ -3201,12 +3247,12 @@ export class Orchestrator {
     }
 
     if (Object.keys(profileUpdates).length > 0) {
-      this.userProfileStore.upsertProfile(chatId, profileUpdates);
+      this.userProfileStore.upsertProfile(profileKey, profileUpdates);
     }
 
     if (updates.autonomousMode) {
       await this.userProfileStore.setAutonomousMode(
-        chatId,
+        profileKey,
         updates.autonomousMode.enabled,
         updates.autonomousMode.expiresAt,
       );
@@ -3297,6 +3343,70 @@ function parseReflectionDecision(text: string | null | undefined): ReflectionDec
   const lastLine = (text.trim().split("\n").pop() ?? "").toUpperCase() as ReflectionDecision;
   if (VALID_DECISIONS.has(lastLine)) return lastLine;
   return "CONTINUE";
+}
+
+function getCompletionGatePrompt(state: AgentState, selfVerification: SelfVerification): string | null {
+  if (selfVerification.needsVerification()) {
+    return selfVerification.getPrompt();
+  }
+  return buildUnresolvedFailurePrompt(state);
+}
+
+function buildUnresolvedFailurePrompt(state: AgentState): string | null {
+  const lastFailureIndex = findLastFailureIndex(state.stepResults);
+  if (lastFailureIndex === -1) {
+    return null;
+  }
+
+  const stepsAfterLastFailure = state.stepResults.slice(lastFailureIndex + 1);
+  if (stepsAfterLastFailure.some(isCleanVerificationStep)) {
+    return null;
+  }
+
+  const recentFailures = state.stepResults
+    .filter((step) => !step.success)
+    .slice(-3)
+    .map((step) => `- ${step.toolName}: ${step.summary}`)
+    .join("\n");
+
+  return (
+    "[UNRESOLVED FAILURES] Recent failures are still open:\n" +
+    recentFailures +
+    "\nDo not declare the task done yet. Return to the failing path, apply the remaining fix, run the relevant verification command/tool, and finish only after a clean result."
+  );
+}
+
+function findLastFailureIndex(stepResults: readonly StepResult[]): number {
+  for (let index = stepResults.length - 1; index >= 0; index--) {
+    if (!stepResults[index]!.success) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isCleanVerificationStep(step: StepResult): boolean {
+  if (!step.success) {
+    return false;
+  }
+  if (VERIFY_TOOLS.has(step.toolName)) {
+    return true;
+  }
+  if (step.toolName !== "shell_exec") {
+    return false;
+  }
+
+  const command = extractShellCommand(step.summary);
+  return command !== null && isVerificationShellCommand(command);
+}
+
+function extractShellCommand(summary: string): string | null {
+  const match = summary.match(/^\$\s+(.+)$/mu);
+  return match?.[1]?.trim() || null;
+}
+
+function isVerificationShellCommand(command: string): boolean {
+  return /\b(?:test|build|check|lint|typecheck|verify|compile|tsc|eslint|vitest|jest|pytest)\b/iu.test(command);
 }
 
 function extractApproachSummary(state: AgentState): string {

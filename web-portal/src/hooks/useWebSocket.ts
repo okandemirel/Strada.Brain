@@ -10,6 +10,11 @@ import { readSessionMessages, writeSessionMessages } from './websocket-storage'
 
 const MAX_RECONNECT_DELAY = 30000
 const MAX_RECONNECT_ATTEMPTS = 8
+const CHAT_ID_STORAGE_KEY = 'strada-chatId'
+const PROFILE_ID_STORAGE_KEY = 'strada-profileId'
+const PROFILE_TOKEN_STORAGE_KEY = 'strada-profileToken'
+const LEGACY_PROFILE_CHAT_ID_STORAGE_KEY = 'strada-profileChatId'
+const RECONNECT_TOKEN_STORAGE_KEY = 'strada-reconnectToken'
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
@@ -17,12 +22,26 @@ function generateId(): string {
 
 function readStoredChatId(): string | null {
   if (typeof window === 'undefined') return null
-  return window.localStorage.getItem('strada-chatId')
+  return window.localStorage.getItem(CHAT_ID_STORAGE_KEY)
+}
+
+function readStoredProfileId(): string | null {
+  if (typeof window === 'undefined') return null
+  return (
+    window.localStorage.getItem(PROFILE_ID_STORAGE_KEY) ??
+    window.localStorage.getItem(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY) ??
+    readStoredChatId()
+  )
+}
+
+function readStoredProfileToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem(PROFILE_TOKEN_STORAGE_KEY)
 }
 
 function readStoredReconnectToken(): string | null {
   if (typeof window === 'undefined') return null
-  return window.localStorage.getItem('strada-reconnectToken')
+  return window.localStorage.getItem(RECONNECT_TOKEN_STORAGE_KEY)
 }
 
 export interface UseWebSocketReturn {
@@ -38,7 +57,7 @@ export interface UseWebSocketReturn {
 }
 
 export function useWebSocket(): UseWebSocketReturn {
-  const [messages, setMessages] = useState<ChatMessage[]>(() => readSessionMessages(readStoredChatId()))
+  const [messages, setMessages] = useState<ChatMessage[]>(() => readSessionMessages(readStoredProfileId()))
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null)
   const [isTyping, setIsTyping] = useState(false)
@@ -46,7 +65,8 @@ export function useWebSocket(): UseWebSocketReturn {
 
   const wsRef = useRef<WebSocket | null>(null)
   const chatIdRef = useRef<string | null>(readStoredChatId())
-  const reconnectTokenRef = useRef<string | null>(readStoredReconnectToken())
+  const profileIdRef = useRef<string | null>(readStoredProfileId())
+  const profileTokenRef = useRef<string | null>(readStoredProfileToken())
   const reconnectDelayRef = useRef(1000)
   const reconnectAttemptsRef = useRef(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -59,17 +79,29 @@ export function useWebSocket(): UseWebSocketReturn {
   // on their own -- we update `messages` state explicitly when streams change.
   const streamsRef = useRef<Map<string, string>>(new Map())
 
-  const acceptConnectedSession = useCallback((chatId: string, reconnectToken: string) => {
+  const acceptConnectedSession = useCallback((
+    chatId: string,
+    reconnectToken: string,
+    profileId?: string,
+    profileToken?: string,
+  ) => {
     const previousChatId = chatIdRef.current
+    const nextProfileId = profileId?.trim() || profileIdRef.current || previousChatId || chatId
 
     chatIdRef.current = chatId
-    reconnectTokenRef.current = reconnectToken
+    profileIdRef.current = nextProfileId
+    profileTokenRef.current = profileToken?.trim() || profileTokenRef.current
     setSessionId(chatId)
-    localStorage.setItem('strada-chatId', chatId)
-    localStorage.setItem('strada-reconnectToken', reconnectToken)
+    localStorage.setItem(CHAT_ID_STORAGE_KEY, chatId)
+    localStorage.setItem(PROFILE_ID_STORAGE_KEY, nextProfileId)
+    localStorage.removeItem(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY)
+    if (profileTokenRef.current) {
+      localStorage.setItem(PROFILE_TOKEN_STORAGE_KEY, profileTokenRef.current)
+    }
+    localStorage.setItem(RECONNECT_TOKEN_STORAGE_KEY, reconnectToken)
 
     if (previousChatId !== chatId) {
-      setMessages(readSessionMessages(chatId))
+      setMessages(readSessionMessages(nextProfileId))
     }
   }, [])
 
@@ -86,18 +118,23 @@ export function useWebSocket(): UseWebSocketReturn {
       reconnectDelayRef.current = 1000
       reconnectAttemptsRef.current = 0
 
-      // Attempt reconnect with previous session (skip on first-run to get fresh chatId)
-      if (localStorage.getItem('strada-firstRun') !== '1') {
-        const savedChatId = localStorage.getItem('strada-chatId')
-        const savedReconnectToken = localStorage.getItem('strada-reconnectToken')
-        if (savedChatId && savedReconnectToken) {
-          pendingReconnectChatIdRef.current = savedChatId
-          ws.send(JSON.stringify({ type: 'reconnect', chatId: savedChatId, reconnectToken: savedReconnectToken }))
-          return
-        }
-      }
+      const savedChatId = readStoredChatId()
+      const savedReconnectToken = readStoredReconnectToken()
+      const savedProfileId = profileIdRef.current ?? savedChatId ?? undefined
+      const savedProfileToken = profileTokenRef.current ?? undefined
+      const legacyProfileChatId = !savedProfileToken
+        ? localStorage.getItem(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY) ?? undefined
+        : undefined
 
-      pendingReconnectChatIdRef.current = null
+      pendingReconnectChatIdRef.current = savedChatId
+      ws.send(JSON.stringify({
+        type: 'session_init',
+        chatId: savedChatId ?? undefined,
+        reconnectToken: savedReconnectToken ?? undefined,
+        profileId: savedProfileId,
+        profileToken: savedProfileToken,
+        legacyProfileChatId,
+      }))
     })
 
     ws.addEventListener('close', () => {
@@ -161,7 +198,7 @@ export function useWebSocket(): UseWebSocketReturn {
             pendingReconnectTimerRef.current = setTimeout(() => {
               pendingReconnectTimerRef.current = null
               pendingReconnectChatIdRef.current = null
-              acceptConnectedSession(data.chatId, data.reconnectToken)
+              acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken)
             }, 400)
             break
           }
@@ -172,7 +209,7 @@ export function useWebSocket(): UseWebSocketReturn {
           }
 
           pendingReconnectChatIdRef.current = null
-          acceptConnectedSession(data.chatId, data.reconnectToken)
+          acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken)
           // First-run: send sentinel to trigger deterministic onboarding (no user bubble)
           if (localStorage.getItem('strada-firstRun') === '1') {
             localStorage.removeItem('strada-firstRun')
@@ -261,7 +298,7 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [connect])
 
   useEffect(() => {
-    writeSessionMessages(chatIdRef.current, messages)
+    writeSessionMessages(profileIdRef.current ?? chatIdRef.current, messages)
   }, [messages])
 
   useEffect(() => {
@@ -299,7 +336,10 @@ export function useWebSocket(): UseWebSocketReturn {
       },
     ])
 
-    const payload: Record<string, unknown> = { type: 'message', text }
+    const payload: Record<string, unknown> = {
+      type: 'message',
+      text,
+    }
     if (attachments && attachments.length > 0) {
       payload.attachments = attachments
     }

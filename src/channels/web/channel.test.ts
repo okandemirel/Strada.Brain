@@ -1,4 +1,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { WebChannel } from "./channel.js";
 import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
 
@@ -147,8 +150,8 @@ describe("WebChannel reconnect security", () => {
     );
 
     const sent = secondSocket.getSentMessages();
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.chatId).not.toBe(originalChatId);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.chatId).not.toBe(originalChatId);
   });
 
   it("reclaims the live session during a refresh race when the active token matches", () => {
@@ -239,6 +242,102 @@ describe("WebChannel dashboard proxy", () => {
 });
 
 describe("WebChannel inbound message limits", () => {
+  it("uses the verified web profile identity as the message user id", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    const handler = vi.fn().mockResolvedValue(undefined);
+
+    channel.onMessage(handler);
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "session_init",
+      })),
+    );
+
+    const profileId = String(socket.getSentMessages()[1]?.profileId);
+    const profileToken = String(socket.getSentMessages()[1]?.profileToken);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "message",
+        text: "hello",
+        profileId,
+        profileToken,
+      })),
+    );
+
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelType: "web",
+        userId: profileId,
+      }),
+    );
+  });
+
+  it("restores the same durable web identity after a process restart", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "strada-web-channel-"));
+    const dbPath = join(tempDir, "web-identities.db");
+    let firstChannel: WebChannel | undefined;
+    let secondChannel: WebChannel | undefined;
+    try {
+      firstChannel = new WebChannel(3000, 3100, { identityDbPath: dbPath });
+      const firstSocket = createMockSocket();
+      (firstChannel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(firstSocket);
+
+      firstSocket.emit(
+        "message",
+        Buffer.from(JSON.stringify({
+          type: "session_init",
+        })),
+      );
+
+      const firstIdentity = firstSocket.getSentMessages()[1]!;
+      const profileId = String(firstIdentity.profileId);
+      const profileToken = String(firstIdentity.profileToken);
+
+      secondChannel = new WebChannel(3000, 3100, { identityDbPath: dbPath });
+      const secondSocket = createMockSocket();
+      const handler = vi.fn().mockResolvedValue(undefined);
+      secondChannel.onMessage(handler);
+      (secondChannel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(secondSocket);
+
+      secondSocket.emit(
+        "message",
+        Buffer.from(JSON.stringify({
+          type: "session_init",
+          profileId,
+          profileToken,
+        })),
+      );
+      secondSocket.emit(
+        "message",
+        Buffer.from(JSON.stringify({
+          type: "message",
+          text: "hello again",
+        })),
+      );
+
+      await Promise.resolve();
+
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelType: "web",
+          userId: profileId,
+        }),
+      );
+    } finally {
+      await firstChannel?.disconnect();
+      await secondChannel?.disconnect();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("truncates oversized websocket text before routing it", async () => {
     const channel = new WebChannel();
     const socket = createMockSocket();

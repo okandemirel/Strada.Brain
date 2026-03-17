@@ -162,7 +162,7 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await firstMessage;
 
-    expect(userProfileStore.getProfile("chat-profile")?.displayName).toBe("Alice");
+    expect(userProfileStore.getProfile("user1")?.displayName).toBe("Alice");
 
     const secondMessage = profileOrch.handleMessage({
       channelType: "cli",
@@ -212,7 +212,7 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    const profile = userProfileStore.getProfile("chat-preferences");
+    const profile = userProfileStore.getProfile("user1");
     expect(profile?.preferences.assistantName).toBe("Atlas");
     expect(profile?.preferences.ultrathinkMode).toBe(true);
     expect(String(profile?.preferences.responseFormatInstruction ?? "")).toContain("önce kısa başlık");
@@ -221,6 +221,38 @@ describe("Orchestrator", () => {
     expect(firstPrompt).toContain('Assistant Identity: When referring to yourself, use the name "Atlas".');
     expect(firstPrompt).toContain("Response Format Instruction: önce kısa başlık, sonra 3 madde");
     expect(firstPrompt).toContain("Reasoning Mode: Use extra-careful, multi-step internal reasoning before answering.");
+    db.close();
+  });
+
+  it("reuses a stable user identity for background tasks even when the chat session changes", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    userProfileStore.upsertProfile("stable-web-user", { displayName: "Alice" });
+
+    const profileOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+    });
+
+    await profileOrch.runBackgroundTask("What is my name?", {
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "new-web-chat",
+      channelType: "web",
+      userId: "stable-web-user",
+    });
+
+    expect(mockProvider.chat).toHaveBeenCalled();
+    expect(String(mockProvider.chat.mock.calls.at(-1)?.[0] ?? "")).toContain("Name: Alice");
     db.close();
   });
 
@@ -258,7 +290,7 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    const profile = userProfileStore.getProfile("chat-format-name-guard");
+    const profile = userProfileStore.getProfile("user1");
     expect(profile?.displayName).toBeUndefined();
     expect(profile?.preferences.verbosity).toBe("brief");
     expect(profile?.preferences.responseFormat).toBe("bullet points");
@@ -308,7 +340,7 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    const autonomousState = await userProfileStore.isAutonomousMode("chat-auto-natural");
+    const autonomousState = await userProfileStore.isAutonomousMode("user-42");
     expect(autonomousState.enabled).toBe(true);
     expect(dmPolicy.isAutonomousActive("chat-auto-natural", "user-42")).toBe(true);
     expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
@@ -718,6 +750,61 @@ describe("Orchestrator", () => {
     expect(shellTool.execute).toHaveBeenCalledWith(
       { command: "npm test" },
       expect.objectContaining({ chatId: "bg-safe-shell" }),
+    );
+  });
+
+  it("approves bounded verification shell chains via fallback review when the reviewer is inconclusive", async () => {
+    const shellTool = createMockTool("shell_exec", true);
+    const backgroundOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [shellTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-shell-fallback",
+          name: "shell_exec",
+          input: {
+            command: "test -f Assets/paor-proof.txt && grep -qx 'paor ok' Assets/paor-proof.txt",
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "I am not sure.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      })
+      .mockResolvedValueOnce({
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const abortController = new AbortController();
+    await backgroundOrch.runBackgroundTask("Verify the proof file", {
+      chatId: "bg-safe-shell-fallback",
+      channelType: "cli",
+      signal: abortController.signal,
+      onProgress: vi.fn(),
+    });
+
+    expect(shellTool.execute).toHaveBeenCalledWith(
+      { command: "test -f Assets/paor-proof.txt && grep -qx 'paor ok' Assets/paor-proof.txt" },
+      expect.objectContaining({ chatId: "bg-safe-shell-fallback" }),
     );
   });
 
@@ -1663,6 +1750,80 @@ describe("Orchestrator", () => {
       expect(hasReflection).toBe(true);
       expect(chatSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
+
+    it("does not allow reflection to finish while failures remain unverified", async () => {
+      const buildTool = createMockTool("dotnet_build");
+      buildTool.execute = vi.fn()
+        .mockResolvedValueOnce({
+          content: "Build failed: error CS0103",
+          isError: true,
+        })
+        .mockResolvedValueOnce({
+          content: "Build succeeded",
+          isError: false,
+        });
+
+      const orchWithBuild = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [buildTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+
+      const chatSpy = vi.fn()
+        .mockResolvedValueOnce({
+          text: "Plan: 1. Reproduce 2. Fix 3. Verify",
+          toolCalls: [{ id: "tc-build-1", name: "dotnet_build", input: {} }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Patch applied.\n**DONE**",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "",
+          toolCalls: [{ id: "tc-build-2", name: "dotnet_build", input: {} }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Verified clean.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
+
+      mockProvider.chat = chatSpy;
+
+      const promise = orchWithBuild.handleMessage({
+        channelType: "cli",
+        chatId: "paor-done-gate",
+        userId: "user1",
+        text: "Fix the failing build",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(chatSpy).toHaveBeenCalledTimes(4);
+      const gatedMessages = chatSpy.mock.calls[2]?.[1] as Array<{ role: string; content: unknown }>;
+      const gateMessage = gatedMessages.find((message) =>
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.includes("UNRESOLVED FAILURES"),
+      );
+      expect(gateMessage).toBeDefined();
+      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("paor-done-gate", "Verified clean.");
+    });
   });
 
   describe("MetricsRecorder Integration", () => {
@@ -2280,6 +2441,21 @@ describe("Orchestrator", () => {
     });
 
     it("tool failure mid-loop recovery: error -> retry -> success -> done", async () => {
+      const buildTool = createMockTool("dotnet_build");
+      buildTool.execute = vi.fn().mockResolvedValue({ content: "Build succeeded", isError: false });
+      const orchWithBuild = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool, writeTool, buildTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: true,
+      });
+
       // Step 1: Provider requests a tool call
       const firstToolCall: ProviderResponse = {
         text: "Plan: Build the project",
@@ -2296,7 +2472,14 @@ describe("Orchestrator", () => {
         usage: { inputTokens: 60, outputTokens: 30 },
       };
 
-      // Step 3: Provider signals completion
+      const verifyToolCall: ProviderResponse = {
+        text: "Now verifying the recovered state",
+        toolCalls: [{ id: "tc3", name: "dotnet_build", input: {} }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 70, outputTokens: 20 },
+      };
+
+      // Step 4: Provider signals completion
       const doneResponse: ProviderResponse = {
         text: "Recovery successful. Task complete.\nDONE",
         toolCalls: [],
@@ -2312,9 +2495,10 @@ describe("Orchestrator", () => {
       mockProvider.chat
         .mockResolvedValueOnce(firstToolCall)
         .mockResolvedValueOnce(recoveryToolCall)
+        .mockResolvedValueOnce(verifyToolCall)
         .mockResolvedValueOnce(doneResponse);
 
-      const promise = orch.handleMessage({
+      const promise = orchWithBuild.handleMessage({
         channelType: "cli",
         chatId: "paor-e2e-recovery",
         userId: "user1",
@@ -2324,10 +2508,10 @@ describe("Orchestrator", () => {
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      // Provider was called at least 3 times (plan+error reflection, recovery, done)
-      expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(4);
       // Tool was called twice (first failed, second succeeded)
       expect(readTool.execute).toHaveBeenCalledTimes(2);
+      expect(buildTool.execute).toHaveBeenCalledTimes(1);
       // Final response was sent
       expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
         "paor-e2e-recovery",

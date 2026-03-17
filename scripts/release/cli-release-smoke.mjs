@@ -12,6 +12,10 @@ const HOOK_PATH = join(ROOT, "scripts", "release", "mock-kimi-hook.mjs");
 const PAOR_RECOVERY_PROMPT =
   "Run the PAOR recovery smoke: let the initial approach fail, then replan and create Assets/paor-proof.txt with exact content 'paor ok'.";
 const PROVIDER_FALLBACK_PROMPT = "Run the provider fallback smoke and say exactly: provider fallback ok.";
+const RAPID_MESSAGE_PART_ONE = "Rapid message smoke part 1: keep this request together.";
+const RAPID_MESSAGE_PART_TWO = "Rapid message smoke part 2: say exactly rapid batch ok.";
+const CLI_CHAT_ID = "cli-local";
+const CLI_USER_ID = "cli-user";
 
 function findPattern(output, pattern, fromIndex) {
   const slice = output.slice(fromIndex);
@@ -223,7 +227,7 @@ async function runInteractiveMemorySmoke(memoryDir, projectDir) {
   const memoryDbPath = join(memoryDir, "agentdb", "memory.db");
   await ensureFile(memoryDbPath);
   const db = new Database(memoryDbPath, { readonly: true });
-  const row = db.prepare("SELECT display_name FROM user_profiles WHERE chat_id = ?").get("cli-local");
+  const row = db.prepare("SELECT display_name FROM user_profiles WHERE chat_id = ?").get(CLI_USER_ID);
   db.close();
   assert.equal(row?.display_name, "CodexTester", "interactive CLI should persist the captured display name");
 }
@@ -250,7 +254,7 @@ async function runPreferencePersistenceSmoke(memoryDir, projectDir) {
   const memoryDbPath = join(memoryDir, "agentdb", "memory.db");
   await ensureFile(memoryDbPath);
   const db = new Database(memoryDbPath, { readonly: true });
-  const row = db.prepare("SELECT preferences FROM user_profiles WHERE chat_id = ?").get("cli-local");
+  const row = db.prepare("SELECT preferences FROM user_profiles WHERE chat_id = ?").get(CLI_USER_ID);
   db.close();
 
   const preferences = JSON.parse(row?.preferences ?? "{}");
@@ -347,6 +351,7 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     DELEGATION_TIER_CHEAP: "kimi:kimi-for-coding",
     DELEGATION_TIER_STANDARD: "kimi:kimi-for-coding",
     DELEGATION_TIER_PREMIUM: "kimi:kimi-for-coding",
+    TASK_MESSAGE_BURST_WINDOW_MS: "700",
   });
 
   try {
@@ -355,6 +360,16 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     let cursor = session.output.length;
     session.sendLine("/autonomous on 1");
     await session.waitFor("Autonomous mode enabled for 1 hours.", { fromIndex: cursor, timeoutMs: 20_000 });
+
+    cursor = session.output.length;
+    session.sendLine(RAPID_MESSAGE_PART_ONE);
+    session.sendLine(RAPID_MESSAGE_PART_TWO);
+    await session.waitFor("rapid batch ok", { fromIndex: cursor, timeoutMs: 30_000 });
+    const rapidOutput = session.output.slice(cursor).toLowerCase();
+    assert(
+      !rapidOutput.includes("rapid batch incomplete"),
+      "rapid message smoke should merge consecutive messages before task execution",
+    );
 
     cursor = session.output.length;
     session.sendLine("Use file_write to create Assets/autonomy-proof.txt with exact content 'autonomy ok'. Do not ask for confirmation.");
@@ -395,10 +410,34 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     "PAOR smoke should recover from the failed first approach and write the proof file",
   );
 
+  const logPath = join(memoryDir, "mock-provider.log");
+  const logEntries = (await readFile(logPath, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const rapidEntries = logEntries.filter((entry) => {
+    const lastUserText = typeof entry.lastUserText === "string" ? entry.lastUserText.toLowerCase() : "";
+    return lastUserText.includes("rapid message smoke part 1") || lastUserText.includes("rapid message smoke part 2");
+  });
+  const combinedRapidEntry = rapidEntries.find((entry) => {
+    const lastUserText = String(entry.lastUserText ?? "").toLowerCase();
+    return lastUserText.includes("rapid message smoke part 1") && lastUserText.includes("rapid message smoke part 2");
+  });
+  const splitRapidEntries = rapidEntries.filter((entry) => {
+    const lastUserText = String(entry.lastUserText ?? "").toLowerCase();
+    const hasPartOne = lastUserText.includes("rapid message smoke part 1");
+    const hasPartTwo = lastUserText.includes("rapid message smoke part 2");
+    return hasPartOne !== hasPartTwo;
+  });
+
+  assert(combinedRapidEntry, "rapid message smoke should reach the provider as one combined prompt");
+  assert.equal(splitRapidEntries.length, 0, "rapid message smoke should not create split provider requests");
+
   const daemonDb = new Database(join(memoryDir, "daemon.db"), { readonly: true });
   const agentRow = daemonDb.prepare(
     "SELECT id, key, status, memory_entry_count FROM agents WHERE key = ?",
-  ).get("cli:cli-local");
+  ).get(`cli:${CLI_CHAT_ID}`);
   const delegationStats = daemonDb.prepare(
     "SELECT COUNT(*) AS count FROM delegation_log WHERE status = 'completed'",
   ).get();
@@ -418,7 +457,7 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     FROM task_metrics
     WHERE session_id = ?
     ORDER BY completed_at DESC
-  `).all("cli-local");
+  `).all(CLI_CHAT_ID);
   const paorMetric = learningDb.prepare(`
     SELECT completion_status, paor_iterations, tool_call_count
     FROM task_metrics
@@ -427,11 +466,11 @@ async function runDaemonSmoke(memoryDir, projectDir) {
       AND task_description = ?
     ORDER BY completed_at DESC
     LIMIT 1
-  `).get("cli-local", PAOR_RECOVERY_PROMPT);
+  `).get(CLI_CHAT_ID, PAOR_RECOVERY_PROMPT);
   learningDb.close();
 
   const backgroundRows = metricsRows.filter((row) => row.task_type === "background");
-  assert(backgroundRows.length >= 3, "daemon smoke should record background task metrics");
+  assert(backgroundRows.length >= 4, "daemon smoke should record background task metrics");
   assert(
     backgroundRows.every((row) => row.completion_status === "success"),
     "daemon smoke background tasks should complete successfully",
@@ -451,8 +490,8 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     "PAOR recovery smoke should record multiple PAOR iterations after replanning",
   );
   assert(
-    paorMetric.tool_call_count >= 2,
-    "PAOR recovery smoke should record both the failed initial tool call and the recovery tool call",
+    paorMetric.tool_call_count >= 3,
+    "PAOR recovery smoke should record the failed read, recovery write, and final verification command",
   );
 }
 
@@ -475,7 +514,11 @@ async function main() {
     await runDaemonSmoke(memoryDir, projectDir);
     console.log("5. Release smoke passed");
   } finally {
-    await rm(tempRoot, { recursive: true, force: true });
+    if (process.env.STRADA_SMOKE_KEEP_TEMP === "true") {
+      console.error(`Preserving smoke temp root: ${tempRoot}`);
+    } else {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   }
 }
 

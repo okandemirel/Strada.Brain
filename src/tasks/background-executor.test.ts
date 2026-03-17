@@ -191,6 +191,96 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(onProgress).not.toHaveBeenCalledWith("Task started");
   });
 
+  it("never runs two tasks from the same conversation in parallel", async () => {
+    let releaseFirstTask: (() => void) | undefined;
+    const runBackgroundTask = vi.fn()
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          releaseFirstTask = resolve;
+        });
+        return "first done";
+      })
+      .mockResolvedValueOnce("second done")
+      .mockResolvedValueOnce("third done");
+
+    const executor = new BackgroundExecutor({
+      orchestrator: { runBackgroundTask } as any,
+      concurrencyLimit: 2,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_same_1" as any, chatId: "shared", channelType: "web" }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_same_2" as any, chatId: "shared", channelType: "web" }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_other" as any, chatId: "other", channelType: "web" }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+
+    await vi.waitFor(() => {
+      expect(runBackgroundTask).toHaveBeenCalledTimes(2);
+    }, { timeout: 5000 });
+
+    expect(runBackgroundTask.mock.calls[0]?.[1]?.chatId).toBe("shared");
+    expect(runBackgroundTask.mock.calls[1]?.[1]?.chatId).toBe("other");
+
+    releaseFirstTask?.();
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledTimes(3);
+    }, { timeout: 5000 });
+
+    expect(runBackgroundTask.mock.calls[2]?.[1]?.chatId).toBe("shared");
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
+  });
+
+  it("treats matching chat IDs from different channels as separate conversations", async () => {
+    const runBackgroundTask = vi.fn().mockResolvedValue("done");
+    const executor = new BackgroundExecutor({
+      orchestrator: { runBackgroundTask } as any,
+      concurrencyLimit: 2,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_cli" as any, chatId: "shared", channelType: "cli" }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+    executor.enqueue(
+      createTestTask(undefined, { id: "task_web" as any, chatId: "shared", channelType: "web" }),
+      new AbortController().signal,
+      vi.fn(),
+    );
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledTimes(2);
+    }, { timeout: 5000 });
+
+    expect(runBackgroundTask.mock.calls).toHaveLength(2);
+    expect(runBackgroundTask.mock.calls[0]?.[1]?.channelType).not.toBe(runBackgroundTask.mock.calls[1]?.[1]?.channelType);
+  });
+
   it("persists goalTree via GoalStorage.upsertTree at start of execution", async () => {
     const goalTree = buildTestGoalTree();
     const task = createTestTask(goalTree);

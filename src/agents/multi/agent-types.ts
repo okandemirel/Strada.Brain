@@ -40,7 +40,7 @@ export interface AgentConfig {
 /** Runtime agent instance state (persisted to SQLite) */
 export interface AgentInstance {
   readonly id: AgentId;
-  /** Composite key: channelType:chatId */
+  /** Composite key: channelType:stableConversationId */
   readonly key: string;
   readonly channelType: ChannelType;
   readonly chatId: string;
@@ -80,7 +80,7 @@ export function createAgentId(): AgentId {
   return randomUUID() as AgentId;
 }
 
-/** Resolve the composite key for a channel+chat pair */
-export function resolveAgentKey(channelType: ChannelType, chatId: string): string {
-  return `${channelType}:${chatId}`;
+/** Resolve the composite key for a channel + stable conversation identity. */
+export function resolveAgentKey(channelType: ChannelType, conversationId: string): string {
+  return `${channelType}:${conversationId}`;
 }

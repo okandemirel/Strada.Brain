@@ -24,6 +24,12 @@ export interface StradaDepsStatus {
   readonly warnings: string[];
 }
 
+export interface StradaMcpInstall {
+  readonly installed: boolean;
+  readonly path: string | null;
+  readonly version: string | null;
+}
+
 const CORE_NAMES = ["strada.core", "com.strada.core", "Strada.Core"] as const;
 const MODULES_NAMES = ["strada.modules", "com.strada.modules", "Strada.Modules"] as const;
 
@@ -134,7 +140,7 @@ export async function installStradaDep(
  * Checks: 1) sibling directory ../Strada.MCP relative to project root
  *         2) global npm install via `which strada-mcp`
  */
-function detectStradaMcp(): { installed: boolean; path: string | null; version: string | null } {
+export function detectStradaMcp(): StradaMcpInstall {
   // 1. Check sibling directory relative to Strada.Brain project root
   const brainRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   const siblingPath = join(brainRoot, "..", "Strada.MCP");

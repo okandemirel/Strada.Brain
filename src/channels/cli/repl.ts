@@ -8,6 +8,11 @@ import { limitIncomingText } from "../channel-messages.interface.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
+interface PendingCliConfirmation {
+  options: string[];
+  finalize: (value: string) => void;
+}
+
 /**
  * CLI REPL channel for local development and testing.
  * Allows interacting with Strada Brain directly from the terminal.
@@ -19,6 +24,8 @@ export class CLIChannel implements IChannelAdapter {
   private handler: MessageHandler | null = null;
   private healthy = false;
   private processing = false;
+  private readonly pendingInputs: string[] = [];
+  private pendingConfirmation: PendingCliConfirmation | null = null;
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
@@ -39,17 +46,21 @@ export class CLIChannel implements IChannelAdapter {
         process.kill(process.pid, "SIGINT");
       }
     });
+    this.rl.on("line", (input) => {
+      void this.handleLine(input);
+    });
 
     this.healthy = true;
 
     console.log("\n=== Strada Brain CLI ===");
     console.log("Type your messages below. Type 'exit' or 'quit' to stop.\n");
 
-    this.promptNext();
+    this.showUserPrompt();
   }
 
   async disconnect(): Promise<void> {
     this.healthy = false;
+    this.pendingConfirmation?.finalize("timeout");
     this.rl?.close();
     this.rl = null;
     console.log("\nStrada Brain CLI disconnected.");
@@ -75,21 +86,41 @@ export class CLIChannel implements IChannelAdapter {
 
     return new Promise<string>((resolve) => {
       const optionStr = req.options.map((o, i) => `${i + 1}) ${o}`).join("  ");
-      const prompt = `\n${req.question}\n${req.details ? req.details + "\n" : ""}${optionStr}\nChoice: `;
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-      const timeout = setTimeout(() => {
-        resolve("timeout");
+      const finalize = (value: string) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        if (this.pendingConfirmation?.finalize === finalize) {
+          this.pendingConfirmation = null;
+        }
+        resolve(value);
+        this.showUserPrompt();
+        void this.drainInputQueue();
+      };
+
+      this.pendingConfirmation = {
+        options: req.options,
+        finalize,
+      };
+
+      console.log(`\n${req.question}`);
+      if (req.details) {
+        console.log(req.details);
+      }
+      console.log(optionStr);
+
+      timeoutId = setTimeout(() => {
+        finalize("timeout");
       }, 60_000);
 
-      this.rl!.question(prompt, (answer) => {
-        clearTimeout(timeout);
-        const idx = parseInt(answer.trim(), 10) - 1;
-        if (idx >= 0 && idx < req.options.length) {
-          resolve(req.options[idx]!);
-        } else {
-          resolve(req.options[0]!);
-        }
-      });
+      this.showConfirmationPrompt();
     });
   }
 
@@ -114,57 +145,84 @@ export class CLIChannel implements IChannelAdapter {
     console.log();
   }
 
-  private promptNext(): void {
-    if (!this.rl || !this.healthy) return;
+  private showUserPrompt(): void {
+    if (!this.rl || !this.healthy || this.pendingConfirmation) return;
+    this.rl.setPrompt("you> ");
+    this.rl.prompt();
+  }
 
-    this.rl.question("you> ", async (input) => {
-      const trimmed = input.trim();
+  private showConfirmationPrompt(): void {
+    if (!this.rl || !this.healthy || !this.pendingConfirmation) return;
+    this.rl.setPrompt("Choice: ");
+    this.rl.prompt();
+  }
 
-      if (trimmed === "exit" || trimmed === "quit") {
-        await this.disconnect();
-        // Emit SIGINT for graceful shutdown instead of hard exit
-        process.kill(process.pid, "SIGINT");
-        return;
+  private async handleLine(input: string): Promise<void> {
+    const trimmed = input.trim();
+
+    if (this.pendingConfirmation) {
+      const idx = parseInt(trimmed, 10) - 1;
+      const value = idx >= 0 && idx < this.pendingConfirmation.options.length
+        ? this.pendingConfirmation.options[idx]!
+        : this.pendingConfirmation.options[0] ?? "timeout";
+      this.pendingConfirmation.finalize(value);
+      return;
+    }
+
+    if (trimmed === "exit" || trimmed === "quit") {
+      await this.disconnect();
+      process.kill(process.pid, "SIGINT");
+      return;
+    }
+
+    if (!trimmed) {
+      this.showUserPrompt();
+      return;
+    }
+
+    if (!this.handler) {
+      console.log("Brain not ready yet.");
+      this.showUserPrompt();
+      return;
+    }
+
+    this.pendingInputs.push(trimmed);
+    this.showUserPrompt();
+    void this.drainInputQueue();
+  }
+
+  private async drainInputQueue(): Promise<void> {
+    if (this.processing || this.pendingConfirmation || !this.handler) {
+      return;
+    }
+
+    this.processing = true;
+
+    try {
+      while (this.pendingInputs.length > 0 && !this.pendingConfirmation) {
+        const nextInput = this.pendingInputs.shift()!;
+        const msg: IncomingMessage = {
+          channelType: "cli",
+          chatId: "cli-local",
+          userId: "cli-user",
+          text: limitIncomingText(nextInput),
+          timestamp: new Date(),
+        };
+
+        try {
+          await this.handler(msg);
+        } catch (error) {
+          console.error(
+            "Error:",
+            error instanceof Error ? error.message : "Unknown error",
+          );
+        }
       }
-
-      if (!trimmed) {
-        this.promptNext();
-        return;
+    } finally {
+      this.processing = false;
+      if (!this.pendingConfirmation) {
+        this.showUserPrompt();
       }
-
-      if (!this.handler) {
-        console.log("Brain not ready yet.");
-        this.promptNext();
-        return;
-      }
-
-      if (this.processing) {
-        console.log("Still processing previous message...");
-        this.promptNext();
-        return;
-      }
-
-      this.processing = true;
-
-      const msg: IncomingMessage = {
-        channelType: "cli",
-        chatId: "cli-local",
-        userId: "cli-user",
-        text: limitIncomingText(trimmed),
-        timestamp: new Date(),
-      };
-
-      try {
-        await this.handler(msg);
-      } catch (error) {
-        console.error(
-          "Error:",
-          error instanceof Error ? error.message : "Unknown error"
-        );
-      } finally {
-        this.processing = false;
-        this.promptNext();
-      }
-    });
+    }
   }
 }

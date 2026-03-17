@@ -4,6 +4,11 @@ import { CommandHandler } from "./command-handler.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import { createLogger } from "../utils/logger.js";
 
+const TEST_ROUTER_OPTIONS = {
+  burstWindowMs: 25,
+  maxBurstMessages: 8,
+} as const;
+
 function createMessage(text: string): IncomingMessage {
   return {
     channelType: "cli",
@@ -20,11 +25,16 @@ describe("MessageRouter", () => {
   const sendMarkdown = vi.fn().mockResolvedValue(undefined);
 
   beforeEach(() => {
+    vi.useFakeTimers();
     createLogger("error", "/tmp/strada-message-router-test.log");
     submit.mockReset();
     handle.mockReset();
     sendMarkdown.mockReset();
     sendMarkdown.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("sends startup notices once before the first task", async () => {
@@ -36,17 +46,25 @@ describe("MessageRouter", () => {
         "RAG disabled: no compatible embedding provider found.",
         "Daemon disabled: budget is missing.",
       ],
+      TEST_ROUTER_OPTIONS,
     );
 
     await router.route(createMessage("analyze the project"));
     await router.route(createMessage("list systems"));
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
 
     expect(sendMarkdown).toHaveBeenCalledTimes(1);
     expect(sendMarkdown).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("*System Status*"),
     );
-    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith(
+      "chat-1",
+      "cli",
+      expect.stringContaining("[User message 1]"),
+      expect.any(Object),
+    );
     expect(handle).not.toHaveBeenCalled();
   });
 
@@ -56,12 +74,63 @@ describe("MessageRouter", () => {
       { handle } as unknown as CommandHandler,
       { sendMarkdown } as never,
       ["Instinct embeddings disabled."],
+      TEST_ROUTER_OPTIONS,
     );
 
     await router.route(createMessage("/help"));
 
     expect(sendMarkdown).toHaveBeenCalledTimes(1);
-    expect(handle).toHaveBeenCalledWith("chat-1", "help", []);
+    expect(handle).toHaveBeenCalledWith("chat-1", "help", [], "user-1");
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("flushes a pending batch before handling a command", async () => {
+    const router = new MessageRouter(
+      { submit } as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown } as never,
+      [],
+      TEST_ROUTER_OPTIONS,
+    );
+
+    await router.route(createMessage("first"));
+    await router.route(createMessage("/status"));
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith("chat-1", "cli", "first", {
+      attachments: undefined,
+      conversationId: undefined,
+      userId: "user-1",
+    });
+    expect(handle).toHaveBeenCalledWith("chat-1", "status", [], "user-1");
+  });
+
+  it("keeps different channel conversations isolated even when chat IDs match", async () => {
+    const router = new MessageRouter(
+      { submit } as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown } as never,
+      [],
+      TEST_ROUTER_OPTIONS,
+    );
+
+    await router.route(createMessage("cli message"));
+    await router.route({
+      ...createMessage("web message"),
+      channelType: "web",
+    });
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
+
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit).toHaveBeenNthCalledWith(1, "chat-1", "cli", "cli message", {
+      attachments: undefined,
+      conversationId: undefined,
+      userId: "user-1",
+    });
+    expect(submit).toHaveBeenNthCalledWith(2, "chat-1", "web", "web message", {
+      attachments: undefined,
+      conversationId: undefined,
+      userId: "user-1",
+    });
   });
 });

@@ -31,7 +31,10 @@ import type { IdentityState } from "../../identity/identity-state.js";
 import type { ReRetrievalConfig } from "../../config/config.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
+import type { DMPolicy } from "../../security/dm-policy.js";
+import type { UserProfileStore } from "../../memory/unified/user-profile-store.js";
 import { estimateCost } from "../../security/rate-limiter.js";
+import { getLogger } from "../../utils/logger.js";
 import { Orchestrator } from "../orchestrator.js";
 import { AgentDBMemory } from "../../memory/unified/agentdb-memory.js";
 import { AgentRegistry } from "./agent-registry.js";
@@ -87,6 +90,10 @@ export interface AgentManagerOptions {
   readonly embeddingProvider?: IEmbeddingProvider;
   readonly memoryConfig: MemoryConfig;
   readonly soulLoader?: import("../../agents/soul/index.js").SoulLoader;
+  readonly dmPolicy?: DMPolicy;
+  readonly userProfileStore?: UserProfileStore;
+  readonly messageBurstWindowMs?: number;
+  readonly maxBurstMessages?: number;
 }
 
 /** In-memory representation of a running agent with its resources */
@@ -94,6 +101,12 @@ interface LiveAgent {
   instance: AgentInstance;
   orchestrator: Orchestrator;
   memory: AgentDBMemory;
+}
+
+interface PendingBackgroundBatch {
+  liveAgent: LiveAgent;
+  messages: IncomingMessage[];
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 type BackgroundTaskSubmitter = (
@@ -129,6 +142,9 @@ export class AgentManager {
 
   /** Optional submitter for routing plain messages into background task execution */
   private backgroundTaskSubmitter?: BackgroundTaskSubmitter;
+  private readonly pendingBackgroundBatches = new Map<string, PendingBackgroundBatch>();
+  private readonly messageBurstWindowMs: number;
+  private readonly maxBurstMessages: number;
 
   constructor(opts: AgentManagerOptions) {
     this.config = opts.config;
@@ -136,6 +152,8 @@ export class AgentManager {
     this.budgetTracker = opts.budgetTracker;
     this.eventBus = opts.eventBus;
     this.opts = opts;
+    this.messageBurstWindowMs = opts.messageBurstWindowMs ?? 0;
+    this.maxBurstMessages = opts.maxBurstMessages ?? 1;
 
     // Start periodic idle eviction check (half the timeout interval)
     if (this.config.idleTimeoutMs > 0) {
@@ -185,7 +203,7 @@ export class AgentManager {
     if (this.commandHandler && msg.text.trim()) {
       const classification = detectCommand(msg.text);
       if (classification.type === "command") {
-        await this.commandHandler.handle(msg.chatId, classification.command, classification.args);
+        await this.commandHandler.handle(msg.chatId, classification.command, classification.args, msg.userId);
         return;
       }
     }
@@ -221,8 +239,12 @@ export class AgentManager {
     liveAgent.instance = { ...liveAgent.instance, lastActivity: now };
 
     if (this.backgroundTaskSubmitter) {
-      await this.backgroundTaskSubmitter(msg, liveAgent.instance);
-      this.syncMemoryCount(liveAgent);
+      if (this.messageBurstWindowMs > 0 && this.maxBurstMessages > 1) {
+        this.bufferBackgroundMessage(msg, liveAgent);
+      } else {
+        await this.backgroundTaskSubmitter(msg, liveAgent.instance);
+        this.syncMemoryCount(liveAgent);
+      }
       return;
     }
 
@@ -302,6 +324,13 @@ export class AgentManager {
       this.idleCheckInterval = undefined;
     }
 
+    for (const batch of this.pendingBackgroundBatches.values()) {
+      if (batch.timer) {
+        clearTimeout(batch.timer);
+      }
+    }
+    this.pendingBackgroundBatches.clear();
+
     // Close all agent resources
     const closePromises: Promise<unknown>[] = [];
     for (const [, liveAgent] of this.agents) {
@@ -363,11 +392,12 @@ export class AgentManager {
    * Uses a creation lock to prevent duplicate agents from concurrent calls.
    */
   private async resolveAgent(msg: IncomingMessage): Promise<LiveAgent> {
-    const key = resolveAgentKey(msg.channelType, msg.chatId);
+    const stableConversationId = msg.conversationId?.trim() || msg.chatId;
+    const key = resolveAgentKey(msg.channelType, stableConversationId);
 
     // 1. Check in-memory Map
     const existing = this.agents.get(key);
-    if (existing) return existing;
+    if (existing) return this.syncLiveAgentChatId(existing, msg.chatId);
 
     // 2. Check if creation is already in-flight for this key (race guard)
     const inflight = this.creating.get(key);
@@ -382,7 +412,7 @@ export class AgentManager {
           this.registry.updateStatus(liveAgent.instance.id, "active");
           liveAgent.instance = { ...liveAgent.instance, status: "active" };
         }
-        return liveAgent;
+        return this.syncLiveAgentChatId(liveAgent, msg.chatId);
       });
       this.creating.set(key, loadPromise);
       try {
@@ -478,7 +508,7 @@ export class AgentManager {
     await memory.initialize();
 
     const adapter = new AgentDBAdapter(memory);
-    const profileStore = adapter.getUserProfileStore() ?? undefined;
+    const profileStore = this.opts.userProfileStore ?? adapter.getUserProfileStore() ?? undefined;
 
     const orchestrator = new Orchestrator({
       providerManager: this.opts.providerManager,
@@ -502,6 +532,7 @@ export class AgentManager {
       embeddingProvider: this.opts.embeddingProvider,
       userProfileStore: profileStore,
       soulLoader: this.opts.soulLoader,
+      dmPolicy: this.opts.dmPolicy,
       onUsage: (usage) => {
         const costUsd = estimateCost(usage.inputTokens, usage.outputTokens, usage.provider);
         if (costUsd <= 0) {
@@ -524,6 +555,102 @@ export class AgentManager {
     }
 
     return { memory, orchestrator };
+  }
+
+  private syncLiveAgentChatId(liveAgent: LiveAgent, chatId: string): LiveAgent {
+    if (liveAgent.instance.chatId === chatId) {
+      return liveAgent;
+    }
+
+    liveAgent.instance = {
+      ...liveAgent.instance,
+      chatId,
+    };
+    this.registry.upsert(liveAgent.instance);
+    return liveAgent;
+  }
+
+  private bufferBackgroundMessage(msg: IncomingMessage, liveAgent: LiveAgent): void {
+    const existing = this.pendingBackgroundBatches.get(liveAgent.instance.key);
+    if (existing) {
+      existing.liveAgent = liveAgent;
+      existing.messages.push(msg);
+      if (existing.messages.length >= this.maxBurstMessages) {
+        void this.flushBackgroundBatch(liveAgent.instance.key);
+        return;
+      }
+      this.scheduleBackgroundBatchFlush(liveAgent.instance.key, existing);
+      return;
+    }
+
+    const batch: PendingBackgroundBatch = {
+      liveAgent,
+      messages: [msg],
+      timer: null,
+    };
+    this.pendingBackgroundBatches.set(liveAgent.instance.key, batch);
+    this.scheduleBackgroundBatchFlush(liveAgent.instance.key, batch);
+  }
+
+  private scheduleBackgroundBatchFlush(key: string, batch: PendingBackgroundBatch): void {
+    if (batch.timer) {
+      clearTimeout(batch.timer);
+    }
+    batch.timer = setTimeout(() => {
+      void this.flushBackgroundBatch(key);
+    }, this.messageBurstWindowMs);
+  }
+
+  private async flushBackgroundBatch(key: string): Promise<void> {
+    const batch = this.pendingBackgroundBatches.get(key);
+    if (!batch || !this.backgroundTaskSubmitter) {
+      return;
+    }
+
+    this.pendingBackgroundBatches.delete(key);
+    if (batch.timer) {
+      clearTimeout(batch.timer);
+    }
+
+    const latest = batch.messages[batch.messages.length - 1];
+    if (!latest) {
+      return;
+    }
+
+    const attachments = batch.messages.flatMap((message) => message.attachments ?? []);
+    const merged: IncomingMessage = {
+      ...latest,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      text: this.buildBatchedPrompt(batch.messages),
+    };
+
+    try {
+      getLogger().info("AgentManager submitted batched background work", {
+        key,
+        burstCount: batch.messages.length,
+        promptLength: merged.text.length,
+      });
+    } catch {
+      // Logger may be intentionally absent in isolated tests.
+    }
+
+    await this.backgroundTaskSubmitter(merged, batch.liveAgent.instance);
+    this.syncMemoryCount(batch.liveAgent);
+  }
+
+  private buildBatchedPrompt(messages: IncomingMessage[]): string {
+    if (messages.length === 1) {
+      return messages[0]!.text;
+    }
+
+    const parts = messages.map((message, index) =>
+      `[User message ${index + 1}]\n${message.text.trim()}`,
+    );
+    return [
+      `The user sent ${messages.length} consecutive messages before you responded. Treat them as one ordered request.`,
+      "",
+      ...parts,
+    ].join("\n\n");
   }
 
   // ===========================================================================

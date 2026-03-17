@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
   buildCapabilityManifest,
+  buildDepsContext,
   buildIdentitySection,
   buildCrashNotificationSection,
   buildProjectContext,
 } from "./strada-knowledge.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { makeIdentityState, makeGoalTree } from "../../test-helpers.js";
+import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
 describe("buildCapabilityManifest", () => {
   it("returns a non-empty string", () => {
@@ -38,6 +40,12 @@ describe("buildCapabilityManifest", () => {
   it("contains Introspection section", () => {
     const result = buildCapabilityManifest();
     expect(result).toMatch(/introspection/i);
+  });
+
+  it("contains a completion contract", () => {
+    const result = buildCapabilityManifest();
+    expect(result).toMatch(/completion contract/i);
+    expect(result).toMatch(/do not declare success/i);
   });
 
   it("does NOT contain hardcoded tool names that change at runtime", () => {
@@ -164,5 +172,41 @@ describe("buildProjectContext", () => {
     expect(result).toContain("verify by reading/searching the file");
     expect(result).toContain("does not exist");
     expect(result).toContain("multiple files could match");
+  });
+});
+
+describe("buildDepsContext", () => {
+  function makeDepsStatus(overrides?: Partial<StradaDepsStatus>): StradaDepsStatus {
+    return {
+      coreInstalled: true,
+      corePath: "/packages/strada.core",
+      modulesInstalled: true,
+      modulesPath: "/packages/strada.modules",
+      mcpInstalled: true,
+      mcpPath: "/tools/Strada.MCP",
+      mcpVersion: "1.2.3",
+      warnings: [],
+      ...overrides,
+    };
+  }
+
+  it("treats Strada.MCP as a first-class authoritative source", () => {
+    const result = buildDepsContext(makeDepsStatus());
+
+    expect(result).toContain("Framework Source Authority");
+    expect(result).toContain("Strada.MCP");
+    expect(result).toContain("first-class part of the Strada toolchain");
+    expect(result).toContain("/tools/Strada.MCP/src/tools");
+  });
+
+  it("does not mention Strada.MCP authority when it is not installed", () => {
+    const result = buildDepsContext(makeDepsStatus({
+      mcpInstalled: false,
+      mcpPath: null,
+      mcpVersion: null,
+    }));
+
+    expect(result).toContain("strada.mcp: NOT INSTALLED");
+    expect(result).not.toContain("first-class part of the Strada toolchain");
   });
 });

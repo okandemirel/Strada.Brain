@@ -615,6 +615,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const taskStorage = initializeTaskStorage(config, logger);
   const backgroundExecutor = new BackgroundExecutor({
     orchestrator,
+    concurrencyLimit: config.tasks.concurrencyLimit,
     decomposer: goalDecomposer,
     goalStorage,
     goalExecutorConfig,
@@ -654,7 +655,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     commandHandler.setProviderRouter(providerRouter);
   }
   // HeartbeatLoop wired to CommandHandler below after daemon init (late binding)
-  const messageRouter = new MessageRouter(taskManager, commandHandler, channel, startupNotices);
+  const messageRouter = new MessageRouter(taskManager, commandHandler, channel, startupNotices, {
+    burstWindowMs: config.tasks.messageBurstWindowMs,
+    maxBurstMessages: config.tasks.messageBurstMaxMessages,
+  });
   // ProgressReporter subscribes to taskManager events in constructor
   new ProgressReporter(channel, taskManager);
 
@@ -922,6 +926,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         embeddingProvider: cachedEmbeddingProvider,
         memoryConfig: { dimensions: config.memory.unified.dimensions, dbBasePath: config.memory.dbPath },
         soulLoader,
+        dmPolicy,
+        userProfileStore,
+        messageBurstWindowMs: config.tasks.messageBurstWindowMs,
+        maxBurstMessages: config.tasks.messageBurstMaxMessages,
       });
 
       // Add agentManager to daemon context for CLI commands
@@ -932,7 +940,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         agentManager.setBackgroundTaskSubmitter((msg, agent) => {
           taskManager.submit(msg.chatId, msg.channelType, msg.text, {
             attachments: msg.attachments,
+            conversationId: msg.conversationId,
             orchestrator: agentManager!.getLiveOrchestrator(agent.id),
+            userId: msg.userId,
           });
         });
       }
@@ -2073,6 +2083,7 @@ async function initializeChannel(
     case "web":
       return new WebChannel(config.web.port, config.dashboard.port, {
         dashboardAuthToken: config.websocketDashboard.authToken,
+        identityDbPath: join(config.memory.dbPath, "web-identities.db"),
       });
 
     case "matrix": {

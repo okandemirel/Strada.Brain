@@ -161,6 +161,16 @@ function buildResponse(body) {
     });
   }
 
+  if (normalizedUserText.includes("rapid message smoke part 1") || normalizedUserText.includes("rapid message smoke part 2")) {
+    return buildChatCompletion({
+      text:
+        normalizedUserText.includes("rapid message smoke part 1") &&
+          normalizedUserText.includes("rapid message smoke part 2")
+          ? "rapid batch ok"
+          : "rapid batch incomplete",
+    });
+  }
+
   if (lastUserText.includes("Task: Summarize release risk in one sentence.")) {
     return buildChatCompletion({
       text: "Sub-agent analysis: release risk looks low for this smoke scenario.",
@@ -201,7 +211,7 @@ function buildResponse(body) {
         text: [
           "1. Stop retrying the missing file read.",
           "2. Create Assets/paor-proof.txt directly with the requested content.",
-          "3. Verify the write result and conclude.",
+          "3. Verify the proof file with a real command before concluding.",
         ].join("\n"),
         toolCalls: [
           makeToolCall("tool-paor-write", "file_write", {
@@ -212,7 +222,25 @@ function buildResponse(body) {
       });
     }
 
-    if (normalizedToolResult.includes("file written: assets/paor-proof.txt")) {
+    if (
+      (normalizedToolResult.includes("file written: assets/paor-proof.txt") ||
+        conversationText.includes("file written: assets/paor-proof.txt")) &&
+      !conversationText.includes("test -f assets/paor-proof.txt")
+    ) {
+      return buildChatCompletion({
+        text: "The proof file exists. Running an explicit verification command now.",
+        toolCalls: [
+          makeToolCall("tool-paor-verify", "shell_exec", {
+            command: "test -f Assets/paor-proof.txt && grep -qx 'paor ok' Assets/paor-proof.txt",
+          }),
+        ],
+      });
+    }
+
+    if (
+      conversationText.includes("test -f assets/paor-proof.txt") &&
+      conversationText.includes("exit code: 0")
+    ) {
       return buildChatCompletion({
         text: "PAOR recovery completed after replanning.",
       });
