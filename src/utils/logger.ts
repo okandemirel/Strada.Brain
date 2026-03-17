@@ -26,7 +26,7 @@ const MAX_MESSAGE_LENGTH = 4096;
 
 class RingBufferTransport extends TransportStream {
   log(info: { timestamp?: string; level: string; message: string; service?: string; [key: string]: unknown }, callback: () => void): void {
-    const { timestamp, level, message, service, ...meta } = info;
+    const { timestamp, level, message, service: _service, ...meta } = info;
     let truncatedMeta: Record<string, unknown> | undefined;
     if (Object.keys(meta).length > 0) {
       try {

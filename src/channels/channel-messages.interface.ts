@@ -9,6 +9,15 @@
  */
 export type ChannelType = "telegram" | "whatsapp" | "cli" | "web" | "discord" | "slack" | "matrix" | "irc" | "teams";
 
+/** Hard cap for inbound user text across all channels. */
+export const MAX_INCOMING_TEXT_LENGTH = 16_000;
+
+export function limitIncomingText(text: string): string {
+  return text.length > MAX_INCOMING_TEXT_LENGTH
+    ? text.slice(0, MAX_INCOMING_TEXT_LENGTH)
+    : text;
+}
+
 /**
  * Represents an incoming message from any channel.
  */

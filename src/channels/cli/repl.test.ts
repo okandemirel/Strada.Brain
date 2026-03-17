@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CLIChannel } from "./repl.js";
+import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
 
 // vi.mock factory must not reference variables defined outside it
 vi.mock("node:readline", () => {
@@ -135,6 +136,22 @@ describe("CLIChannel", () => {
         chatId: "cli-local",
         userId: "cli-user",
         text: "hello world",
+      })
+    );
+  });
+
+  it("truncates oversized user input before handing it to the agent", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+    await channel.connect();
+    const rl = getMockRl()!;
+
+    const promptCallback = rl.question.mock.calls[0]![1] as (input: string) => Promise<void>;
+    await promptCallback("a".repeat(MAX_INCOMING_TEXT_LENGTH + 50));
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "a".repeat(MAX_INCOMING_TEXT_LENGTH),
       })
     );
   });

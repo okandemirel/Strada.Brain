@@ -287,8 +287,7 @@ describe("WhatsAppChannel", () => {
   // ---------------------------------------------------------------------------
 
   describe("media attachment detection", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let eventHandlers: Record<string, (...args: any[]) => void>;
+    let eventHandlers: Record<string, (...args: unknown[]) => void>;
     let connectedChannel: WhatsAppChannel;
 
     beforeEach(async () => {

@@ -20,6 +20,7 @@ import type {
   ConfirmationRequest,
   Attachment,
 } from "../channel.interface.js";
+import { limitIncomingText } from "../channel-messages.interface.js";
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
 import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
@@ -702,7 +703,7 @@ export class DiscordChannel implements IChannelAdapter {
           channelType: "discord",
           chatId: interaction.channelId,
           userId: interaction.user.id,
-          text: question,
+          text: limitIncomingText(question),
           timestamp: new Date(),
         };
 
@@ -719,7 +720,7 @@ export class DiscordChannel implements IChannelAdapter {
           channelType: "discord",
           chatId: interaction.channelId,
           userId: interaction.user.id,
-          text: "Analyze project structure",
+          text: limitIncomingText("Analyze project structure"),
           timestamp: new Date(),
         };
 
@@ -740,7 +741,7 @@ export class DiscordChannel implements IChannelAdapter {
           channelType: "discord",
           chatId: interaction.channelId,
           userId: interaction.user.id,
-          text: `Create ${type} named "${name}"${description ? `: ${description}` : ""}`,
+          text: limitIncomingText(`Create ${type} named "${name}"${description ? `: ${description}` : ""}`),
           timestamp: new Date(),
         };
 
@@ -799,7 +800,7 @@ export class DiscordChannel implements IChannelAdapter {
           channelType: "discord",
           chatId: interaction.channelId,
           userId: interaction.user.id,
-          text: autonomousText,
+          text: limitIncomingText(autonomousText),
           timestamp: new Date(),
         };
 
@@ -823,7 +824,7 @@ export class DiscordChannel implements IChannelAdapter {
           channelType: "discord",
           chatId: interaction.channelId,
           userId: interaction.user.id,
-          text: modelText,
+          text: limitIncomingText(modelText),
           timestamp: new Date(),
         };
 
@@ -883,7 +884,7 @@ export class DiscordChannel implements IChannelAdapter {
       channelType: "discord",
       chatId: message.channelId,
       userId: message.author.id,
-      text: message.content,
+      text: limitIncomingText(message.content),
       attachments: attachments.length > 0 ? attachments : undefined,
       replyTo: message.reference?.messageId ?? undefined,
       timestamp: message.createdAt,

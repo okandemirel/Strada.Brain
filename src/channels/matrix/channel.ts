@@ -10,7 +10,7 @@ import type {
   IChannelAdapter,
   IChannelRichMessaging,
 } from "../channel.interface.js";
-import type { IncomingMessage, Attachment } from "../channel-messages.interface.js";
+import { limitIncomingText, type IncomingMessage, type Attachment } from "../channel-messages.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
@@ -37,7 +37,6 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
   async connect(): Promise<void> {
     const logger = getLogger();
     // Dynamic import to avoid hard dependency
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { createClient } = await import("matrix-js-sdk" as string);
 
     this.client = createClient({
@@ -62,7 +61,7 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
         channelType: "matrix",
         chatId: roomId,
         userId: sender,
-        text: content.body,
+        text: limitIncomingText(content.body),
         timestamp: new Date(event.getTs()),
       };
 

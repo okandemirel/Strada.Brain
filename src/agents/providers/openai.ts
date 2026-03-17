@@ -207,7 +207,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.values())
       .filter((tc) => tc.id)
-      .map((tc: any, idx: number) => {
+      .map((tc, idx: number) => {
         let input: import("../../types/index.js").JsonObject;
         try {
           input = JSON.parse(tc.arguments) as import("../../types/index.js").JsonObject;
@@ -416,7 +416,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     const message = choice.message;
     const text = message.content ?? "";
-    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc: any) => {
+    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc) => {
       let input: import("../../types/index.js").JsonObject;
       try {
         input = JSON.parse(tc.function.arguments) as import("../../types/index.js").JsonObject;

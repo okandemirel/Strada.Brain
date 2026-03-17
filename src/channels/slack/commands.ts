@@ -8,6 +8,7 @@ import type { WebClient } from "@slack/web-api";
 import { getLogger } from "../../utils/logger.js";
 import { createHelpBlocks, createProcessingBlock } from "./blocks.js";
 import type { IncomingMessage } from "../channel.interface.js";
+import { limitIncomingText } from "../channel-messages.interface.js";
 
 const logger = getLogger();
 
@@ -349,7 +350,7 @@ async function handleAutonomousCommand(ctx: CommandContext, routeMessage?: Route
       channelType: "slack",
       chatId: ctx.channelId,
       userId: ctx.userId,
-      text: commandText,
+      text: limitIncomingText(commandText),
       timestamp: new Date(),
     };
 
@@ -378,7 +379,7 @@ async function handleModelCommand(ctx: CommandContext, routeMessage?: RouteMessa
       channelType: "slack",
       chatId: ctx.channelId,
       userId: ctx.userId,
-      text: commandText,
+      text: limitIncomingText(commandText),
       timestamp: new Date(),
     };
 

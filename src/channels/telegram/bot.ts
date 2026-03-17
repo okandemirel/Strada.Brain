@@ -6,6 +6,7 @@ import type {
   ConfirmationRequest,
   Attachment,
 } from "../channel.interface.js";
+import { limitIncomingText } from "../channel-messages.interface.js";
 import { downloadMedia, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 import { AuthManager } from "../../security/auth.js";
 import { getLogger } from "../../utils/logger.js";
@@ -41,6 +42,12 @@ interface PendingDiffConfirmation {
   fullDiff?: string;
   chatId: string;
   operation?: string;
+}
+
+interface TelegramMediaEnvelope {
+  voice?: { file_id: string };
+  audio?: { file_id: string };
+  caption?: string;
 }
 
 /**
@@ -560,7 +567,7 @@ export class TelegramChannel implements IChannelAdapter {
       channelType: "telegram",
       chatId: String(ctx.chat?.id ?? ""),
       userId,
-      text: ctx.message?.text ?? "",
+      text: limitIncomingText(ctx.message?.text ?? ""),
       replyTo: ctx.message?.reply_to_message?.message_id?.toString(),
       timestamp: new Date(
         (ctx.message?.date ?? Math.floor(Date.now() / 1000)) * 1000
@@ -663,7 +670,8 @@ export class TelegramChannel implements IChannelAdapter {
           }
         }
       } else if (mediaType === "audio") {
-        const audio = (message as any).voice ?? (message as any).audio;
+        const mediaEnvelope = message as typeof message & TelegramMediaEnvelope;
+        const audio = mediaEnvelope.voice ?? mediaEnvelope.audio;
         if (audio) {
           const file = await ctx.api.getFile(audio.file_id);
           const fileUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
@@ -693,13 +701,13 @@ export class TelegramChannel implements IChannelAdapter {
       });
     }
 
-    const caption = (message as any).caption ?? "";
+    const caption = (message as typeof message & TelegramMediaEnvelope).caption ?? "";
 
     const msg: IncomingMessage = {
       channelType: "telegram",
       chatId: String(ctx.chat?.id ?? ""),
       userId,
-      text: caption,
+      text: limitIncomingText(caption),
       attachments: attachments.length > 0 ? attachments : undefined,
       replyTo: message.reply_to_message?.message_id?.toString(),
       timestamp: new Date((message.date ?? Math.floor(Date.now() / 1000)) * 1000),

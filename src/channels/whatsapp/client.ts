@@ -10,6 +10,7 @@ import type {
   Attachment,
   ConfirmationRequest,
 } from "../channel.interface.js";
+import { limitIncomingText } from "../channel-messages.interface.js";
 
 // ---------- Constants ----------
 
@@ -307,7 +308,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
             channelType: "whatsapp",
             chatId,
             userId: senderId,
-            text,
+            text: limitIncomingText(text),
             attachments: attachments.length > 0 ? attachments : undefined,
             timestamp: msg.messageTimestamp != null
               ? new Date((msg.messageTimestamp as number) * 1000)

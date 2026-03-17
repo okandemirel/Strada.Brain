@@ -6,7 +6,7 @@
  */
 
 import type { IChannelAdapter } from "../channel.interface.js";
-import type { IncomingMessage } from "../channel-messages.interface.js";
+import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
@@ -31,7 +31,6 @@ export class IRCChannel implements IChannelAdapter {
 
   async connect(): Promise<void> {
     const logger = getLogger();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const irc = await import("irc" as string);
 
     this.client = new irc.Client(this.server, this.nick, {
@@ -50,7 +49,7 @@ export class IRCChannel implements IChannelAdapter {
       if (!isDirectMessage && !isMention) return;
       if (!this.isAllowedInboundUser(from)) return;
 
-      const cleanText = (isMention ? text.slice(this.nick.length + 1).trim() : text).slice(0, 4096);
+      const cleanText = limitIncomingText((isMention ? text.slice(this.nick.length + 1).trim() : text).slice(0, 4096));
       const chatId = isDirectMessage ? from : to;
 
       const msg: IncomingMessage = {

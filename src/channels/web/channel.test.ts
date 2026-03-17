@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { WebChannel } from "./channel.js";
+import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
 
 type WsHandler = (payload?: Buffer) => void;
 
@@ -191,5 +192,32 @@ describe("WebChannel dashboard proxy", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(403);
     expect(JSON.parse(res.body)).toEqual({ error: "Forbidden" });
+  });
+});
+
+describe("WebChannel inbound message limits", () => {
+  it("truncates oversized websocket text before routing it", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    const handler = vi.fn().mockResolvedValue(undefined);
+
+    channel.onMessage(handler);
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "message",
+        text: "b".repeat(MAX_INCOMING_TEXT_LENGTH + 25),
+      })),
+    );
+
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "b".repeat(MAX_INCOMING_TEXT_LENGTH),
+      }),
+    );
   });
 });

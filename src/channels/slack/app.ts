@@ -13,6 +13,7 @@ import type {
   ConfirmationRequest,
   Attachment,
 } from "../channel.interface.js";
+import { limitIncomingText } from "../channel-messages.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { SlackRateLimiter, StreamingRateLimiter } from "./rate-limiter.js";
 import { registerSlashCommands } from "./commands.js";
@@ -80,6 +81,15 @@ interface SlackMessageEvent {
   subtype?: string;
   team?: string;
   bot_id?: string;
+  files?: SlackFile[];
+}
+
+interface SlackFile {
+  id: string;
+  name?: string;
+  mimetype?: string;
+  size?: number;
+  url_private?: string;
 }
 
 // Constants
@@ -739,13 +749,7 @@ export class SlackChannel implements IChannelAdapter {
     const attachments: Attachment[] = [];
 
     // Extract files from message
-    const files = (message as any).files as Array<{
-      id: string;
-      name?: string;
-      mimetype?: string;
-      size?: number;
-      url_private?: string;
-    }> | undefined;
+    const files = message.files;
 
     if (files && Array.isArray(files)) {
       // Download files in parallel — Slack url_private requires Bearer auth
@@ -784,7 +788,7 @@ export class SlackChannel implements IChannelAdapter {
       channelType: "slack",
       chatId: channelId,
       userId,
-      text,
+      text: limitIncomingText(text),
       attachments: attachments.length > 0 ? attachments : undefined,
       replyTo: threadTs,
       timestamp: new Date(Number(message.ts) * 1000),

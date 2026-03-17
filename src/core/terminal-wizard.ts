@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- terminal setup wizard intentionally prints directly to stdout/stderr */
 /**
  * Terminal Setup Wizard - Interactive readline-based first-time configuration.
  *

@@ -6,7 +6,7 @@
  */
 
 import type { IChannelAdapter } from "../channel.interface.js";
-import type { IncomingMessage } from "../channel-messages.interface.js";
+import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
@@ -33,7 +33,6 @@ export class TeamsChannel implements IChannelAdapter {
 
   async connect(): Promise<void> {
     const logger = getLogger();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { CloudAdapter, ConfigurationBotFrameworkAuthentication } =
       await import("botbuilder" as string);
 
@@ -59,7 +58,7 @@ export class TeamsChannel implements IChannelAdapter {
               channelType: "teams",
               chatId: context.activity.conversation.id,
               userId: context.activity.from.id,
-              text: context.activity.text,
+              text: limitIncomingText(context.activity.text),
               timestamp: new Date(context.activity.timestamp ?? Date.now()),
             };
 

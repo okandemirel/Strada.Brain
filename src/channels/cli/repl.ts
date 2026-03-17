@@ -4,6 +4,7 @@ import type {
   IncomingMessage,
   ConfirmationRequest,
 } from "../channel.interface.js";
+import { limitIncomingText } from "../channel-messages.interface.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -149,7 +150,7 @@ export class CLIChannel implements IChannelAdapter {
         channelType: "cli",
         chatId: "cli-local",
         userId: "cli-user",
-        text: trimmed,
+        text: limitIncomingText(trimmed),
         timestamp: new Date(),
       };
 

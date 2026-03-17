@@ -27,7 +27,7 @@ import type {
   ConfirmationRequest,
   Attachment,
 } from "../channel.interface.js";
-import type { IncomingMessage } from "../channel-messages.interface.js";
+import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
 import { classifyErrorMessage } from "../../utils/error-messages.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
@@ -507,7 +507,7 @@ export class WebChannel
           channelType: "web",
           chatId,
           userId: `web-${chatId}`,
-          text: text || "",
+          text: limitIncomingText(text || ""),
           attachments: attachments.length > 0 ? attachments : undefined,
           timestamp: new Date(),
         };
@@ -543,7 +543,7 @@ export class WebChannel
           channelType: "web",
           chatId,
           userId: `web-${chatId}`,
-          text,
+          text: limitIncomingText(text),
           timestamp: new Date(),
         };
         this.handler(msg).catch(() => {
@@ -565,7 +565,7 @@ export class WebChannel
           channelType: "web",
           chatId,
           userId: `web-${chatId}`,
-          text,
+          text: limitIncomingText(text),
           timestamp: new Date(),
         };
         this.handler(msg).catch(() => {
