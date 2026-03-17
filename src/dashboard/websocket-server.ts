@@ -6,7 +6,7 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { getLogger } from "../utils/logger.js";
 import { BruteForceProtection } from "../security/auth-hardened.js";
@@ -58,7 +58,8 @@ const DEFAULT_AUTH_LOCKOUT_MS = 5 * 60 * 1_000;
 
 export class WebSocketDashboardServer {
   private readonly port: number;
-  private readonly authToken: string | undefined;
+  private readonly authToken: string;
+  private readonly usesGeneratedAuthToken: boolean;
   private readonly metrics: MetricsCollector;
   private readonly getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
   private readonly getPluginsStats: (() => { loaded: number; directories: string[] } | undefined) | undefined;
@@ -74,8 +75,10 @@ export class WebSocketDashboardServer {
   private readonly logger = getLogger();
 
   constructor(opts: WebSocketDashboardServerOptions) {
+    const configuredAuthToken = opts.authToken?.trim();
     this.port = opts.port;
-    this.authToken = opts.authToken;
+    this.authToken = configuredAuthToken ?? randomBytes(32).toString("hex");
+    this.usesGeneratedAuthToken = !configuredAuthToken;
     this.metrics = opts.metrics;
     this.getMemoryStats = opts.getMemoryStats;
     this.getPluginsStats = opts.getPluginsStats;
@@ -115,6 +118,9 @@ export class WebSocketDashboardServer {
         httpServer.off("error", onError);
         this.logger.info(`WebSocket Dashboard running at http://localhost:${this.port}`);
         this.logger.info(`WebSocket endpoint: ws://localhost:${this.port}/ws`);
+        if (this.usesGeneratedAuthToken) {
+          this.logger.info("WebSocket dashboard using generated same-process auth token");
+        }
         this.startMetricsPush();
         this.startHeartbeat();
         resolve();
@@ -205,7 +211,7 @@ export class WebSocketDashboardServer {
 
     if (url === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(WEBSOCKET_DASHBOARD_HTML);
+      res.end(this.renderDashboardHtml());
       return;
     }
 
@@ -218,7 +224,7 @@ export class WebSocketDashboardServer {
   private handleWsConnection(ws: WebSocket, req: import("http").IncomingMessage): void {
     const clientId = this.generateClientId();
     const client = ws as WSClient;
-    client.isAuthenticated = !this.authToken;
+    client.isAuthenticated = false;
     client.clientId = clientId;
     client.lastPing = Date.now();
     client.remoteIp = req.socket.remoteAddress ?? "unknown";
@@ -229,8 +235,8 @@ export class WebSocketDashboardServer {
     this.send(client, {
       type: "auth",
       payload: { 
-        requiresAuth: !!this.authToken,
-        message: this.authToken ? "Please authenticate" : "Authentication not required"
+        requiresAuth: true,
+        message: "Please authenticate",
       }
     });
 
@@ -279,12 +285,6 @@ export class WebSocketDashboardServer {
   }
 
   private handleAuth(client: WSClient, payload: { token?: string }): void {
-    if (!this.authToken) {
-      client.isAuthenticated = true;
-      this.send(client, { type: "auth_success", payload: { message: "Authentication not required" } });
-      return;
-    }
-
     // Check brute-force protection
     const check = this.bruteForce.canAttempt(client.remoteIp);
     if (!check.allowed) {
@@ -355,6 +355,14 @@ export class WebSocketDashboardServer {
 
   private sendError(client: WSClient, error: string, id?: string): void {
     this.send(client, { type: "error", id, payload: { error } });
+  }
+
+  private renderDashboardHtml(): string {
+    const bootstrapAuthToken = this.usesGeneratedAuthToken ? this.authToken : null;
+    return WEBSOCKET_DASHBOARD_HTML.replace(
+      "__BOOTSTRAP_AUTH_TOKEN__",
+      JSON.stringify(bootstrapAuthToken),
+    );
   }
 
   private startMetricsPush(): void {
@@ -475,7 +483,8 @@ const WEBSOCKET_DASHBOARD_HTML = `<!DOCTYPE html>
 
 <script>
 const WS_URL = 'ws://' + window.location.host + '/ws';
-let ws = null, reconnectAttempts = 0, isAuthenticated = false, requiresAuth = false;
+const BOOTSTRAP_AUTH_TOKEN = __BOOTSTRAP_AUTH_TOKEN__;
+let ws = null, reconnectAttempts = 0, isAuthenticated = false, requiresAuth = false, authInFlight = false;
 const els = {
   status: document.getElementById('ws-status'),
   authSection: document.getElementById('auth-section'),
@@ -508,6 +517,7 @@ function connect() {
     els.lastUpdate.textContent = 'Disconnected';
     els.dashboard.classList.add('hidden');
     isAuthenticated = false;
+    authInFlight = false;
     if (reconnectAttempts < 5) {
       reconnectAttempts++;
       setTimeout(connect, 1000 * reconnectAttempts);
@@ -520,6 +530,11 @@ function handleMessage(msg) {
     case 'auth':
       requiresAuth = msg.payload?.requiresAuth;
       if (requiresAuth && !isAuthenticated) {
+        if (BOOTSTRAP_AUTH_TOKEN && !authInFlight) {
+          authInFlight = true;
+          ws.send(JSON.stringify({ type: 'auth', payload: { token: BOOTSTRAP_AUTH_TOKEN } }));
+          return;
+        }
         els.authSection.classList.remove('hidden');
         els.dashboard.classList.add('hidden');
       } else {
@@ -529,12 +544,17 @@ function handleMessage(msg) {
       break;
     case 'auth_success':
       isAuthenticated = true;
+      authInFlight = false;
       els.authSection.classList.add('hidden');
       els.dashboard.classList.remove('hidden');
       els.authError.textContent = '';
       break;
     case 'auth_error':
+      authInFlight = false;
       els.authError.textContent = msg.payload?.message || 'Authentication failed';
+      if (!BOOTSTRAP_AUTH_TOKEN) {
+        els.authSection.classList.remove('hidden');
+      }
       break;
     case 'metrics':
       updateDashboard(msg.payload);
@@ -553,6 +573,7 @@ function handleMessage(msg) {
 function authenticate() {
   const token = els.authToken.value.trim();
   if (!token) return;
+  authInFlight = true;
   ws.send(JSON.stringify({ type: 'auth', payload: { token } }));
 }
 

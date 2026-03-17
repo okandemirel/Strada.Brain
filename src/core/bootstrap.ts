@@ -260,13 +260,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     const wsDashboard = new WebSocketDashboardServer({
       port: config.websocketDashboard.port,
       authToken: config.websocketDashboard.authToken,
+      allowedOrigins: config.websocketDashboard.allowedOrigins,
       metrics,
       getMemoryStats: () => memoryManager?.getStats(),
     });
     await wsDashboard.start();
     stoppableServers.push(wsDashboard);
     if (!config.websocketDashboard.authToken) {
-      logger.warn("SECURITY: WebSocket dashboard enabled without auth token — all connections unauthenticated");
+      logger.info("WebSocket dashboard enabled without static auth token; using generated same-process auth token");
     }
     logger.info("WebSocket dashboard started", { port: config.websocketDashboard.port });
   }

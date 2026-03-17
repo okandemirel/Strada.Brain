@@ -36,7 +36,7 @@ The `Config` type groups settings into nested sub-configs:
 | `slack` | `SlackConfig` | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APP_TOKEN`, `SLACK_SOCKET_MODE` |
 | `security` | `SecurityConfig` | `REQUIRE_EDIT_CONFIRMATION` (default true), `READ_ONLY_MODE` (default false) |
 | `dashboard` | `DashboardConfig` | `DASHBOARD_ENABLED`, `DASHBOARD_PORT` (default 3100) |
-| `websocketDashboard` | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100) |
+| `websocketDashboard` | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100), `WEBSOCKET_DASHBOARD_AUTH_TOKEN`, `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` |
 | `prometheus` | `PrometheusConfig` | `ENABLE_PROMETHEUS`, `PROMETHEUS_PORT` (default 9090) |
 | `memory` | `MemoryConfig` | `MEMORY_ENABLED` (default true), `MEMORY_DB_PATH` (default `.strada-memory`) |
 | `rag` | `RAGConfig` | `RAG_ENABLED` (default true), `EMBEDDING_PROVIDER` (default `openai`), `RAG_CONTEXT_MAX_TOKENS` (default 4000, range 500..16000) |

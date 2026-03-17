@@ -51,6 +51,20 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
     }
   }
 
+  async function fetchDashboardHtml(port: number): Promise<string> {
+    const response = await fetch(`http://localhost:${port}/`);
+    expect(response.status).toBe(200);
+    return response.text();
+  }
+
+  function extractBootstrapToken(html: string): string | null {
+    const match = html.match(/const BOOTSTRAP_AUTH_TOKEN = ("[^"]+"|null);/);
+    if (!match) {
+      throw new Error("Missing BOOTSTRAP_AUTH_TOKEN bootstrap script");
+    }
+    return JSON.parse(match[1]!) as string | null;
+  }
+
   /** Wait for a specific message type from a WebSocket. */
   function waitForMessage<T = unknown>(ws: WebSocket, type: string): Promise<T> {
     return new Promise((resolve) => {
@@ -184,6 +198,8 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
 
     const commandHandler = vi.fn().mockResolvedValue({ result: "success" });
     server.registerCommandHandler("test_command", commandHandler);
+    const bootstrapToken = extractBootstrapToken(await fetchDashboardHtml(port));
+    expect(bootstrapToken).not.toBeNull();
 
     const ws = new WebSocket(`ws://localhost:${port}/ws`);
 
@@ -191,10 +207,12 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
       ws.on("open", resolve);
     });
 
-    // Wait for auth message
-    await new Promise<void>((resolve) => {
-      ws.on("message", () => resolve());
-    });
+    await waitForMessage(ws, "auth");
+    ws.send(JSON.stringify({
+      type: "auth",
+      payload: { token: bootstrapToken! },
+    }));
+    await waitForMessage(ws, "auth_success");
 
     // Send command
     ws.send(JSON.stringify({
@@ -377,15 +395,70 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
       return;
     }
 
+    const bootstrapToken = extractBootstrapToken(await fetchDashboardHtml(port));
+    expect(bootstrapToken).not.toBeNull();
+
     const ws = new WebSocket(`ws://localhost:${port}/ws`);
 
     await new Promise<void>((resolve) => {
       ws.on("open", resolve);
     });
 
+    await waitForMessage(ws, "auth");
+    expect(authServer.getAuthenticatedClientCount()).toBe(0);
+
+    ws.send(JSON.stringify({
+      type: "auth",
+      payload: { token: bootstrapToken! },
+    }));
+
+    await waitForMessage(ws, "auth_success");
+
     expect(authServer.getAuthenticatedClientCount()).toBe(1);
 
     ws.close();
+    await authServer.stop();
+  });
+
+  it("requires authentication even when no static token is configured", async () => {
+    const port = await safeStart(server);
+    if (port === null) return;
+
+    const ws = new WebSocket(`ws://localhost:${port}/ws`);
+    const authMessage = await waitForMessage<{ type: string; payload?: { requiresAuth?: boolean } }>(ws, "auth");
+
+    expect(authMessage).toMatchObject({
+      type: "auth",
+      payload: { requiresAuth: true },
+    });
+
+    ws.close();
+  });
+
+  it("bootstraps a generated auth token into the embedded dashboard page", async () => {
+    const port = await safeStart(server);
+    if (port === null) return;
+
+    const html = await fetchDashboardHtml(port);
+    const bootstrapToken = extractBootstrapToken(html);
+
+    expect(typeof bootstrapToken).toBe("string");
+    expect(bootstrapToken).toHaveLength(64);
+  });
+
+  it("does not embed configured auth tokens into the dashboard page", async () => {
+    const authServer = createServer({ authToken: "secret-token" });
+    const port = await safeStart(authServer);
+    if (port === null) {
+      await authServer.stop();
+      return;
+    }
+
+    const html = await fetchDashboardHtml(port);
+
+    expect(extractBootstrapToken(html)).toBeNull();
+    expect(html).not.toContain("secret-token");
+
     await authServer.stop();
   });
 

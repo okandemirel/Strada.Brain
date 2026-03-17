@@ -42,6 +42,10 @@ Separate HTTP server on port 9090 using `prom-client`.
 
 Uses `ws` library. Serves HTTP (embedded full-featured dashboard) and WebSocket at `/ws`.
 
+**Authentication:**
+- If `WEBSOCKET_DASHBOARD_AUTH_TOKEN` is set, the browser must supply that token manually.
+- If it is unset, the server generates a process-scoped token and injects it into the same-origin dashboard HTML, so the feature stays usable without running unauthenticated.
+
 **Protocol:**
 1. Server sends `{type:"auth", payload:{requiresAuth:bool}}` on connect
 2. Client authenticates if required
