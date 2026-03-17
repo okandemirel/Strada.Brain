@@ -57,12 +57,25 @@ export class DaemonSecurityPolicy {
 
   /**
    * Enable or disable autonomous override.
-   * When enabled, all tools are allowed immediately (bypasses ALWAYS_QUEUE_TOOLS).
-   * Expiry ensures override auto-reverts even if /autonomous off is never called.
+   * When enabled with a future expiry, all tools are allowed immediately
+   * (including ALWAYS_QUEUE_TOOLS) until that expiry. Missing or stale expiry
+   * fails closed and leaves override disabled.
    */
   setAutonomousOverride(enabled: boolean, expiresAt?: number): void {
-    this.autonomousOverride = enabled;
-    this.autonomousExpiresAt = enabled ? expiresAt : undefined;
+    if (!enabled) {
+      this.autonomousOverride = false;
+      this.autonomousExpiresAt = undefined;
+      return;
+    }
+
+    if (expiresAt === undefined || expiresAt <= Date.now()) {
+      this.autonomousOverride = false;
+      this.autonomousExpiresAt = undefined;
+      return;
+    }
+
+    this.autonomousOverride = true;
+    this.autonomousExpiresAt = expiresAt;
   }
 
   /**

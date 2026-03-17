@@ -526,22 +526,22 @@ function escapeText(text: string): string {
 
 /**
  * Validate workspace membership.
- * Deny-by-default: if no workspaces are configured, reject all.
+ * Empty allowlists mean "no restriction" to match the Slack message handler path.
  */
 export function isValidWorkspace(teamId: string, allowedWorkspaces: string[]): boolean {
   if (allowedWorkspaces.length === 0) {
-    return false; // Deny all if no allowed list configured (deny-by-default)
+    return true;
   }
   return allowedWorkspaces.includes(teamId);
 }
 
 /**
  * Validate user access.
- * Deny-by-default: if no users are configured, reject all.
+ * Empty allowlists mean "no restriction" to match the Slack message handler path.
  */
 export function isValidUser(userId: string, allowedUsers: string[]): boolean {
   if (allowedUsers.length === 0) {
-    return false; // Deny all if no allowed list configured (deny-by-default)
+    return true;
   }
   return allowedUsers.includes(userId);
 }

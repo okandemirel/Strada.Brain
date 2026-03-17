@@ -83,6 +83,27 @@ describe("DaemonSecurityPolicy", () => {
     it("returns 'queue' for file_edit (always requires approval)", () => {
       expect(policy.checkPermission("file_edit")).toBe("queue");
     });
+
+    it("allows all tools during a valid time-bounded autonomous override", () => {
+      policy.setAutonomousOverride(true, Date.now() + 60_000);
+
+      expect(policy.checkPermission("shell_exec")).toBe("allow");
+      expect(policy.checkPermission("file_write")).toBe("allow");
+    });
+
+    it("fails closed when autonomous override is enabled without an expiry", () => {
+      policy.setAutonomousOverride(true);
+
+      expect(policy.checkPermission("shell_exec")).toBe("queue");
+      expect(policy.checkPermission("file_write")).toBe("queue");
+    });
+
+    it("fails closed when autonomous override is enabled with a stale expiry", () => {
+      policy.setAutonomousOverride(true, Date.now() - 1);
+
+      expect(policy.checkPermission("shell_exec")).toBe("queue");
+      expect(policy.checkPermission("file_write")).toBe("queue");
+    });
   });
 
   // =========================================================================
