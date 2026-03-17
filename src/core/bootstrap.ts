@@ -2092,6 +2092,7 @@ async function initializeChannel(
       const homeserver = process.env["MATRIX_HOMESERVER"];
       const accessToken = process.env["MATRIX_ACCESS_TOKEN"];
       const matrixUserId = process.env["MATRIX_USER_ID"];
+      const allowOpenAccess = (process.env["MATRIX_ALLOW_OPEN_ACCESS"] ?? "").trim().toLowerCase() === "true";
       const allowedUserIds = (process.env["MATRIX_ALLOWED_USER_IDS"] ?? "")
         .split(",")
         .map((value) => value.trim())
@@ -2106,13 +2107,21 @@ async function initializeChannel(
           "MISSING_MATRIX_CONFIG",
         );
       }
-      return new MatrixChannel(homeserver, accessToken, matrixUserId, allowedUserIds, allowedRoomIds);
+      return new MatrixChannel(
+        homeserver,
+        accessToken,
+        matrixUserId,
+        allowedUserIds,
+        allowedRoomIds,
+        allowOpenAccess,
+      );
     }
 
     case "irc": {
       const { IRCChannel } = await import("../channels/irc/channel.js");
       const ircServer = process.env["IRC_SERVER"];
       const ircNick = process.env["IRC_NICK"] ?? "strada-brain";
+      const allowOpenAccess = (process.env["IRC_ALLOW_OPEN_ACCESS"] ?? "").trim().toLowerCase() === "true";
       const ircChannels = (process.env["IRC_CHANNELS"] ?? "").split(",").filter(Boolean);
       const allowedUsers = (process.env["IRC_ALLOWED_USERS"] ?? "")
         .split(",")
@@ -2121,13 +2130,14 @@ async function initializeChannel(
       if (!ircServer) {
         throw new AppError("IRC_SERVER is required for IRC channel", "MISSING_IRC_CONFIG");
       }
-      return new IRCChannel(ircServer, ircNick, ircChannels, allowedUsers);
+      return new IRCChannel(ircServer, ircNick, ircChannels, allowedUsers, allowOpenAccess);
     }
 
     case "teams": {
       const { TeamsChannel } = await import("../channels/teams/channel.js");
       const teamsAppId = process.env["TEAMS_APP_ID"];
       const teamsAppPassword = process.env["TEAMS_APP_PASSWORD"];
+      const allowOpenAccess = (process.env["TEAMS_ALLOW_OPEN_ACCESS"] ?? "").trim().toLowerCase() === "true";
       const allowedUserIds = (process.env["TEAMS_ALLOWED_USER_IDS"] ?? "")
         .split(",")
         .map((value) => value.trim())
@@ -2138,7 +2148,7 @@ async function initializeChannel(
           "MISSING_TEAMS_CONFIG",
         );
       }
-      return new TeamsChannel(teamsAppId, teamsAppPassword, 3978, allowedUserIds);
+      return new TeamsChannel(teamsAppId, teamsAppPassword, 3978, allowedUserIds, "127.0.0.1", allowOpenAccess);
     }
 
     case "telegram":

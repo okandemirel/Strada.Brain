@@ -2,7 +2,7 @@
  * Microsoft Teams Channel - Bot Framework adapter
  *
  * Requires: botframework-connector, botbuilder (npm install botbuilder)
- * Config: TEAMS_APP_ID, TEAMS_APP_PASSWORD, TEAMS_ALLOWED_USER_IDS
+ * Config: TEAMS_APP_ID, TEAMS_APP_PASSWORD, TEAMS_ALLOWED_USER_IDS, TEAMS_ALLOW_OPEN_ACCESS
  */
 
 import type { IChannelAdapter } from "../channel.interface.js";
@@ -26,6 +26,7 @@ export class TeamsChannel implements IChannelAdapter {
     private readonly port: number = 3978,
     private readonly allowedUserIds: readonly string[] = [],
     private readonly listenHost: string = "127.0.0.1",
+    private readonly allowOpenAccess: boolean = false,
   ) {}
 
   onMessage(handler: MessageHandler): void {
@@ -119,7 +120,9 @@ export class TeamsChannel implements IChannelAdapter {
   }
 
   private isAllowedInboundUser(userId: string): boolean {
-    return this.allowedUserIds.length === 0 || this.allowedUserIds.includes(userId);
+    return this.allowedUserIds.length === 0
+      ? this.allowOpenAccess
+      : this.allowedUserIds.includes(userId);
   }
 }
 

@@ -2,8 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { TeamsChannel } from "./channel.js";
 
 describe("TeamsChannel", () => {
-  it("allows all inbound users when no allowlist is configured", () => {
+  it("denies inbound users by default when no allowlist is configured", () => {
     const channel = new TeamsChannel("app-id", "app-password");
+
+    expect((channel as any).isAllowedInboundUser("user-1")).toBe(false);
+  });
+
+  it("supports explicit open access when configured", () => {
+    const channel = new TeamsChannel("app-id", "app-password", 3978, [], "127.0.0.1", true);
 
     expect((channel as any).isAllowedInboundUser("user-1")).toBe(true);
   });

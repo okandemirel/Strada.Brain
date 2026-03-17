@@ -2,8 +2,21 @@ import { describe, expect, it } from "vitest";
 import { MatrixChannel } from "./channel.js";
 
 describe("MatrixChannel", () => {
-  it("allows all inbound events when no allowlists are configured", () => {
+  it("denies inbound events by default when no allowlists are configured", () => {
     const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example");
+
+    expect((channel as any).isAllowedInboundMessage("@alice:example", "!room:example")).toBe(false);
+  });
+
+  it("supports explicit open access when configured", () => {
+    const channel = new MatrixChannel(
+      "https://matrix.example",
+      "token",
+      "@bot:example",
+      [],
+      [],
+      true,
+    );
 
     expect((channel as any).isAllowedInboundMessage("@alice:example", "!room:example")).toBe(true);
   });

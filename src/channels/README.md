@@ -10,6 +10,9 @@ Channel adapters connect Strada.Brain to messaging platforms. Each adapter trans
 | Discord | `DiscordChannel` | discord.js | Deny-all (must set allowlist) |
 | Slack | `SlackChannel` | @slack/bolt | **Open-all** (must set allowlist for production) |
 | WhatsApp | `WhatsAppChannel` | @whiskeysockets/baileys | Deny-all (must set allowlist) |
+| Matrix | `MatrixChannel` | matrix-js-sdk | Deny-all unless `MATRIX_ALLOW_OPEN_ACCESS=true` |
+| IRC | `IRCChannel` | irc | Deny-all unless `IRC_ALLOW_OPEN_ACCESS=true` |
+| Teams | `TeamsChannel` | botbuilder | Deny-all unless `TEAMS_ALLOW_OPEN_ACCESS=true` |
 | Web | `WebChannel` | ws (WebSocket) | Localhost-only binding |
 | CLI | `CLIChannel` | node:readline | No auth needed |
 
@@ -47,7 +50,7 @@ Normalized types decouple the orchestrator from any platform:
 ```
 Platform event (Telegram message, Discord interaction, etc.)
   → Adapter's event handler
-  → Authentication check (AuthManager allowlists)
+  → Authentication check (allowlists or explicit open-access opt-in)
   → Rate limit check (per-user sliding window)
   → Normalize to IncomingMessage
   → Call messageHandler (set by bootstrap via onMessage())

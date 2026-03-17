@@ -3,7 +3,7 @@
  *
  * Requires: matrix-js-sdk (npm install matrix-js-sdk)
  * Config: MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, MATRIX_USER_ID,
- *         MATRIX_ALLOWED_USER_IDS, MATRIX_ALLOWED_ROOM_IDS
+ *         MATRIX_ALLOWED_USER_IDS, MATRIX_ALLOWED_ROOM_IDS, MATRIX_ALLOW_OPEN_ACCESS
  */
 
 import type {
@@ -28,6 +28,7 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
     private readonly userId: string,
     private readonly allowedUserIds: readonly string[] = [],
     private readonly allowedRoomIds: readonly string[] = [],
+    private readonly allowOpenAccess: boolean = false,
   ) {}
 
   onMessage(handler: MessageHandler): void {
@@ -111,6 +112,9 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
   }
 
   private isAllowedInboundMessage(userId: string, roomId: string): boolean {
+    if (this.allowedUserIds.length === 0 && this.allowedRoomIds.length === 0) {
+      return this.allowOpenAccess;
+    }
     const userAllowed = this.allowedUserIds.length === 0 || this.allowedUserIds.includes(userId);
     const roomAllowed = this.allowedRoomIds.length === 0 || this.allowedRoomIds.includes(roomId);
     return userAllowed && roomAllowed;
