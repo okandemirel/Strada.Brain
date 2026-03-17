@@ -47,6 +47,7 @@ The `Config` type groups settings into nested sub-configs:
 | `rag` | `RAGConfig` | `RAG_ENABLED` (default true), `EMBEDDING_PROVIDER` (default `auto`), `RAG_CONTEXT_MAX_TOKENS` (default 4000, range 500..16000) |
 | `rateLimit` | `RateLimitConfig` | `RATE_LIMIT_ENABLED`, `RATE_LIMIT_MESSAGES_PER_MINUTE`, `RATE_LIMIT_DAILY_BUDGET_USD`, etc. |
 | `web` | Web config | `WEB_CHANNEL_PORT` (default 3000) |
+| top-level streaming safety | numeric fields | `LLM_STREAM_INITIAL_TIMEOUT_MS` (default 600000), `LLM_STREAM_STALL_TIMEOUT_MS` (default 120000) |
 | `agent` | `AgentConfig` | `MULTI_AGENT_ENABLED` (default true), `AGENT_DEFAULT_BUDGET_USD`, `AGENT_MAX_CONCURRENT`, `AGENT_IDLE_TIMEOUT_MS`, `AGENT_MAX_MEMORY_ENTRIES` |
 | `delegation` | `DelegationConfig` | `TASK_DELEGATION_ENABLED` (default false), `AGENT_MAX_DELEGATION_DEPTH`, `AGENT_MAX_CONCURRENT_DELEGATIONS`, `DELEGATION_TIER_LOCAL`, `DELEGATION_TIER_CHEAP`, `DELEGATION_TIER_STANDARD`, `DELEGATION_TIER_PREMIUM`, `DELEGATION_VERBOSITY`, `DELEGATION_TYPES`, `DELEGATION_MAX_ITERATIONS_PER_TYPE` |
 | `autoUpdate` | auto-update config | `AUTO_UPDATE_ENABLED`, `AUTO_UPDATE_INTERVAL_HOURS`, `AUTO_UPDATE_IDLE_TIMEOUT_MIN`, `AUTO_UPDATE_CHANNEL`, `AUTO_UPDATE_NOTIFY`, `AUTO_UPDATE_AUTO_RESTART` |
@@ -55,6 +56,7 @@ The `Config` type groups settings into nested sub-configs:
 - `PLUGIN_DIRS` - comma-separated directory paths for plugin loading
 - `STRADA_CORE_REPO_URL` / `STRADA_MODULES_REPO_URL` - official git remotes used when the agent offers to install missing Strada packages
 - `STRADA_MCP_PATH` - optional absolute/local path that pins Strada.MCP discovery to a specific checkout before sibling/global detection
+- `LLM_STREAM_INITIAL_TIMEOUT_MS` / `LLM_STREAM_STALL_TIMEOUT_MS` - progress-aware stream watchdog thresholds used by interactive and background streaming paths
 - `LOG_LEVEL` - one of `error`, `warn`, `info`, `debug` (default `info`)
 - `LOG_FILE` - default `strada-brain.log`
 - `WEBSOCKET_DASHBOARD_AUTH_TOKEN` - optional; when unset, the embedded same-origin dashboard bootstraps a process-scoped token automatically

@@ -47,6 +47,9 @@ export interface DelegationManagerOptions {
   readonly channel: IChannelAdapter;
   readonly projectPath: string;
   readonly readOnly: boolean;
+  readonly defaultLanguage?: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
+  readonly streamInitialTimeoutMs?: number;
+  readonly streamStallTimeoutMs?: number;
   readonly stradaDeps: StradaDepsStatus;
   readonly stradaConfig?: Partial<StradaDependencyConfig>;
   readonly parentTools: ITool[];
@@ -323,6 +326,9 @@ export class DelegationManager {
         readOnly: this.opts.readOnly,
         requireConfirmation: false,
         streamingEnabled: false,
+        defaultLanguage: this.opts.defaultLanguage,
+        streamInitialTimeoutMs: this.opts.streamInitialTimeoutMs,
+        streamStallTimeoutMs: this.opts.streamStallTimeoutMs,
         stradaDeps: this.opts.stradaDeps,
         stradaConfig: this.opts.stradaConfig,
       });

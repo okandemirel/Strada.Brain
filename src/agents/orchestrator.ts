@@ -36,7 +36,12 @@ import { AgentPhase, createInitialState, transitionPhase, type AgentState, type 
 import { buildPlanningPrompt, buildReflectionPrompt, buildReplanningPrompt, buildExecutionContext } from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import { MemoryRefresher } from "./memory-refresher.js";
-import type { ReRetrievalConfig, StradaDependencyConfig } from "../config/config.js";
+import {
+  DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
+  DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS,
+  type ReRetrievalConfig,
+  type StradaDependencyConfig,
+} from "../config/config.js";
 import type { IEmbeddingProvider } from "../rag/rag.interface.js";
 import { shouldForceReplan } from "./failure-classifier.js";
 import { buildProviderIntelligence, getRecommendedMaxMessages } from "./providers/provider-knowledge.js";
@@ -68,8 +73,6 @@ const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
-const DEFAULT_STREAM_INITIAL_TIMEOUT_MS = 10 * 60 * 1000; // Allow long tasks to begin
-const DEFAULT_STREAM_STALL_TIMEOUT_MS = 2 * 60 * 1000; // Abort only when progress stops
 const AUTONOMOUS_MODE_DIRECTIVE = `\n\n## AUTONOMOUS MODE ACTIVE
 You are operating in AUTONOMOUS MODE. The user has explicitly granted you full autonomy.
 - Execute ALL operations directly without asking for confirmation
@@ -257,11 +260,6 @@ function detectResponseFormatPreference(text: string): { format?: string; instru
   return {};
 }
 
-function parsePositiveTimeout(rawValue: string | undefined, fallbackMs: number): number {
-  const parsed = Number.parseInt(rawValue ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
-}
-
 function createStreamingProgressTimeout(initialTimeoutMs: number, stallTimeoutMs: number): {
   markProgress: () => void;
   timeoutPromise: Promise<never>;
@@ -432,6 +430,9 @@ export class Orchestrator {
   private readonly ragPipeline?: IRAGPipeline;
   private readonly rateLimiter?: RateLimiter;
   private readonly streamingEnabled: boolean;
+  private readonly defaultLanguage: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
+  private readonly streamInitialTimeoutMs: number;
+  private readonly streamStallTimeoutMs: number;
   private readonly sessions = new Map<string, Session>();
   private readonly sessionLocks = new Map<string, Promise<void>>();
   private systemPrompt: string;
@@ -482,6 +483,9 @@ export class Orchestrator {
     ragPipeline?: IRAGPipeline;
     rateLimiter?: RateLimiter;
     streamingEnabled?: boolean;
+    defaultLanguage?: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
+    streamInitialTimeoutMs?: number;
+    streamStallTimeoutMs?: number;
     stradaDeps?: StradaDepsStatus;
     stradaConfig?: Partial<StradaDependencyConfig>;
     instinctRetriever?: InstinctRetriever;
@@ -513,6 +517,11 @@ export class Orchestrator {
     this.ragPipeline = opts.ragPipeline;
     this.rateLimiter = opts.rateLimiter;
     this.streamingEnabled = opts.streamingEnabled ?? false;
+    this.defaultLanguage = opts.defaultLanguage ?? "en";
+    this.streamInitialTimeoutMs =
+      opts.streamInitialTimeoutMs ?? DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS;
+    this.streamStallTimeoutMs =
+      opts.streamStallTimeoutMs ?? DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS;
     this.stradaConfig = opts.stradaConfig;
     this.instinctRetriever = opts.instinctRetriever ?? null;
     this.eventEmitter = opts.eventEmitter ?? null;
@@ -704,7 +713,7 @@ export class Orchestrator {
 
     // 1. Language directive — FIRST, highest priority, before personality
     // Always inject: profile language > LANGUAGE_PREFERENCE env > "en"
-    const effectiveLang = params.profile?.language ?? process.env["LANGUAGE_PREFERENCE"] ?? "en";
+    const effectiveLang = params.profile?.language ?? this.defaultLanguage;
     const langName = LANGUAGE_DISPLAY_NAMES[effectiveLang] ?? "English";
     const langDirective = `\n## LANGUAGE RULE\nYour current language is ${langName}. Respond in ${langName} unless the user clearly switches to a different language — in that case, follow their lead.\n`;
 
@@ -865,7 +874,7 @@ export class Orchestrator {
     // name in conversation, and we extract preferences from the response.
     let profile = this.userProfileStore?.getProfile(identityKey) ?? null;
     if (this.userProfileStore && !profile) {
-      const configLang = process.env["LANGUAGE_PREFERENCE"] ?? "en";
+      const configLang = this.defaultLanguage;
       this.userProfileStore.upsertProfile(identityKey, { language: configLang });
       profile = this.userProfileStore.getProfile(identityKey) ?? null;
       logger.info("New user detected, injecting onboarding context", { chatId, identityKey, language: configLang });
@@ -1914,7 +1923,7 @@ export class Orchestrator {
           await this.channel.sendMarkdown(chatId, response.text);
         } else {
           // LLM returned empty response — send fallback to user
-          const lang = process.env["LANGUAGE_PREFERENCE"] ?? "en";
+          const lang = profile?.language ?? this.defaultLanguage;
           const fallback = lang === "tr" ? "Bir yanıt oluşturamadım. Sorunuzu yeniden ifade edebilir misiniz?"
             : lang === "ja" ? "応答を生成できませんでした。質問を言い換えていただけますか？"
             : lang === "ko" ? "응답을 생성할 수 없었습니다. 질문을 다시 표현해 주시겠어요?"
@@ -2215,14 +2224,8 @@ export class Orchestrator {
     provider: IAIProvider,
   ): Promise<ProviderResponse> => {
     const timeoutGuard = createStreamingProgressTimeout(
-      parsePositiveTimeout(
-        process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"],
-        DEFAULT_STREAM_INITIAL_TIMEOUT_MS,
-      ),
-      parsePositiveTimeout(
-        process.env["LLM_STREAM_STALL_TIMEOUT_MS"],
-        DEFAULT_STREAM_STALL_TIMEOUT_MS,
-      ),
+      this.streamInitialTimeoutMs,
+      this.streamStallTimeoutMs,
     );
     try {
       const streamPromise = (provider as IStreamingProvider).chatStream(
@@ -2311,14 +2314,8 @@ export class Orchestrator {
 
     let response: ProviderResponse;
     const timeoutGuard = createStreamingProgressTimeout(
-      parsePositiveTimeout(
-        process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"],
-        DEFAULT_STREAM_INITIAL_TIMEOUT_MS,
-      ),
-      parsePositiveTimeout(
-        process.env["LLM_STREAM_STALL_TIMEOUT_MS"],
-        DEFAULT_STREAM_STALL_TIMEOUT_MS,
-      ),
+      this.streamInitialTimeoutMs,
+      this.streamStallTimeoutMs,
     );
     try {
 

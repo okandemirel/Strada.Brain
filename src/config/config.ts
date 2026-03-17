@@ -239,6 +239,8 @@ export type EnvVarName =
 
   // Language Preference
   | "LANGUAGE_PREFERENCE"
+  | "LLM_STREAM_INITIAL_TIMEOUT_MS"
+  | "LLM_STREAM_STALL_TIMEOUT_MS"
 
   // Autonomous Mode
   | "AUTONOMOUS_DEFAULT_HOURS"
@@ -486,6 +488,8 @@ export interface StradaDependencyConfig {
 export const DEFAULT_STRADA_CORE_REPO_URL = "https://github.com/okandemirel/Strada.Core.git";
 export const DEFAULT_STRADA_MODULES_REPO_URL =
   "https://github.com/okandemirel/Strada.Modules.git";
+export const DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS = 10 * 60 * 1000;
+export const DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS = 2 * 60 * 1000;
 
 // =============================================================================
 // MAIN CONFIG TYPE
@@ -543,6 +547,8 @@ export interface Config {
   // Features
   readonly streamingEnabled: boolean;
   readonly shellEnabled: boolean;
+  readonly llmStreamInitialTimeoutMs: number;
+  readonly llmStreamStallTimeoutMs: number;
 
   // Rate Limiting
   readonly rateLimit: RateLimitConfig;
@@ -845,6 +851,16 @@ export const configSchema = z
     // Features
     streamingEnabled: boolFromString(true),
     shellEnabled: boolFromString(true),
+    llmStreamInitialTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(60 * 60 * 1000))
+      .default(String(DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS)),
+    llmStreamStallTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(60 * 60 * 1000))
+      .default(String(DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS)),
 
     // Rate Limiting
     rateLimitEnabled: boolFromString(false),
@@ -1286,6 +1302,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
 
     streamingEnabled: rawConfig.streamingEnabled,
     shellEnabled: rawConfig.shellEnabled,
+    llmStreamInitialTimeoutMs: rawConfig.llmStreamInitialTimeoutMs,
+    llmStreamStallTimeoutMs: rawConfig.llmStreamStallTimeoutMs,
 
     rateLimit: {
       enabled: rawConfig.rateLimitEnabled,
@@ -1755,6 +1773,8 @@ interface EnvVars {
   ragContextMaxTokens: string | undefined;
   streamingEnabled: string | undefined;
   shellEnabled: string | undefined;
+  llmStreamInitialTimeoutMs: string | undefined;
+  llmStreamStallTimeoutMs: string | undefined;
   rateLimitEnabled: string | undefined;
   rateLimitMessagesPerMinute: string | undefined;
   rateLimitMessagesPerHour: string | undefined;
@@ -1983,6 +2003,8 @@ function loadFromEnv(): EnvVars {
     ragContextMaxTokens: process.env["RAG_CONTEXT_MAX_TOKENS"],
     streamingEnabled: process.env["STREAMING_ENABLED"],
     shellEnabled: process.env["SHELL_ENABLED"],
+    llmStreamInitialTimeoutMs: process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"],
+    llmStreamStallTimeoutMs: process.env["LLM_STREAM_STALL_TIMEOUT_MS"],
     rateLimitEnabled: process.env["RATE_LIMIT_ENABLED"],
     rateLimitMessagesPerMinute: process.env["RATE_LIMIT_MESSAGES_PER_MINUTE"],
     rateLimitMessagesPerHour: process.env["RATE_LIMIT_MESSAGES_PER_HOUR"],

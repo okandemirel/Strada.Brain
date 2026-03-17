@@ -81,6 +81,9 @@ export interface AgentManagerOptions {
   readonly ragPipeline?: IRAGPipeline;
   readonly rateLimiter?: RateLimiter;
   readonly streamingEnabled: boolean;
+  readonly defaultLanguage?: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
+  readonly streamInitialTimeoutMs?: number;
+  readonly streamStallTimeoutMs?: number;
   readonly stradaDeps: StradaDepsStatus;
   readonly stradaConfig?: Partial<StradaDependencyConfig>;
   readonly instinctRetriever?: InstinctRetriever;
@@ -523,6 +526,9 @@ export class AgentManager {
       ragPipeline: this.opts.ragPipeline,
       rateLimiter: this.opts.rateLimiter,
       streamingEnabled: this.opts.streamingEnabled,
+      defaultLanguage: this.opts.defaultLanguage,
+      streamInitialTimeoutMs: this.opts.streamInitialTimeoutMs,
+      streamStallTimeoutMs: this.opts.streamStallTimeoutMs,
       stradaDeps: this.opts.stradaDeps,
       stradaConfig: this.opts.stradaConfig,
       instinctRetriever: this.opts.instinctRetriever,

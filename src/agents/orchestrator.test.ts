@@ -2122,26 +2122,7 @@ describe("Orchestrator", () => {
   });
 
   describe("Streaming timeout behavior", () => {
-    const initialTimeoutEnv = process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"];
-    const stallTimeoutEnv = process.env["LLM_STREAM_STALL_TIMEOUT_MS"];
-
-    afterEach(() => {
-      if (initialTimeoutEnv === undefined) {
-        delete process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"];
-      } else {
-        process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"] = initialTimeoutEnv;
-      }
-      if (stallTimeoutEnv === undefined) {
-        delete process.env["LLM_STREAM_STALL_TIMEOUT_MS"];
-      } else {
-        process.env["LLM_STREAM_STALL_TIMEOUT_MS"] = stallTimeoutEnv;
-      }
-    });
-
     it("keeps silent streaming alive while progress continues", async () => {
-      process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"] = "50";
-      process.env["LLM_STREAM_STALL_TIMEOUT_MS"] = "50";
-
       const streamedResponse: ProviderResponse = {
         text: "stream complete",
         toolCalls: [],
@@ -2166,8 +2147,18 @@ describe("Orchestrator", () => {
             setTimeout(() => resolve(streamedResponse), 120);
           })),
       };
+      const timeoutOrch = new Orchestrator({
+        providerManager: { getProvider: () => streamingProvider, shutdown: vi.fn() } as any,
+        tools: [],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: true,
+        streamInitialTimeoutMs: 50,
+        streamStallTimeoutMs: 50,
+      });
 
-      const promise = (orch as any).silentStream(
+      const promise = (timeoutOrch as any).silentStream(
         "stream-chat",
         "system",
         { messages: [], lastActivity: new Date() },
@@ -2180,9 +2171,6 @@ describe("Orchestrator", () => {
     });
 
     it("falls back when the stream never starts", async () => {
-      process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"] = "50";
-      process.env["LLM_STREAM_STALL_TIMEOUT_MS"] = "50";
-
       const fallbackResponse: ProviderResponse = {
         text: "fallback complete",
         toolCalls: [],
@@ -2202,8 +2190,18 @@ describe("Orchestrator", () => {
         chat: vi.fn().mockResolvedValue(fallbackResponse),
         chatStream: vi.fn(() => new Promise<ProviderResponse>(() => {})),
       };
+      const timeoutOrch = new Orchestrator({
+        providerManager: { getProvider: () => streamingProvider, shutdown: vi.fn() } as any,
+        tools: [],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: true,
+        streamInitialTimeoutMs: 50,
+        streamStallTimeoutMs: 50,
+      });
 
-      const promise = (orch as any).silentStream(
+      const promise = (timeoutOrch as any).silentStream(
         "stream-chat",
         "system",
         { messages: [], lastActivity: new Date() },

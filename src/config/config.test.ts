@@ -60,6 +60,8 @@ describe("loadConfig", () => {
     delete process.env["TEAMS_ALLOW_OPEN_ACCESS"];
     delete process.env["REQUIRE_EDIT_CONFIRMATION"];
     delete process.env["READ_ONLY_MODE"];
+    delete process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"];
+    delete process.env["LLM_STREAM_STALL_TIMEOUT_MS"];
     delete process.env["UNITY_PROJECT_PATH"];
     delete process.env["STRADA_CORE_REPO_URL"];
     delete process.env["STRADA_MODULES_REPO_URL"];
@@ -132,6 +134,8 @@ describe("loadConfig", () => {
     expect(config.strada.coreRepoUrl).toBe("https://github.com/okandemirel/Strada.Core.git");
     expect(config.strada.modulesRepoUrl).toBe("https://github.com/okandemirel/Strada.Modules.git");
     expect(config.strada.mcpPath).toBeUndefined();
+    expect(config.llmStreamInitialTimeoutMs).toBe(600000);
+    expect(config.llmStreamStallTimeoutMs).toBe(120000);
   });
 
   it("throws when ANTHROPIC_API_KEY is missing", () => {
@@ -205,6 +209,18 @@ describe("loadConfig", () => {
       modulesRepoUrl: "https://example.com/modules.git",
       mcpPath: "/opt/strada-mcp",
     });
+  });
+
+  it("loads streaming timeout config into runtime config", () => {
+    setEnv({
+      LLM_STREAM_INITIAL_TIMEOUT_MS: "1500",
+      LLM_STREAM_STALL_TIMEOUT_MS: "750",
+    });
+
+    const config = loadConfig();
+
+    expect(config.llmStreamInitialTimeoutMs).toBe(1500);
+    expect(config.llmStreamStallTimeoutMs).toBe(750);
   });
 
   it("loads task routing env vars into runtime config", () => {
