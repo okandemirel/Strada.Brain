@@ -359,10 +359,9 @@ export class WebSocketDashboardServer {
 
   private renderDashboardHtml(): string {
     const bootstrapAuthToken = this.usesGeneratedAuthToken ? this.authToken : null;
-    return WEBSOCKET_DASHBOARD_HTML.replace(
-      "__BOOTSTRAP_AUTH_TOKEN__",
-      JSON.stringify(bootstrapAuthToken),
-    );
+    return WEBSOCKET_DASHBOARD_HTML
+      .replace("__BOOTSTRAP_AUTH_TOKEN__", JSON.stringify(bootstrapAuthToken))
+      .replace("__BOOTSTRAP_COMMANDS__", JSON.stringify([...this.commandHandlers.keys()].sort()));
   }
 
   private startMetricsPush(): void {
@@ -442,7 +441,8 @@ const WEBSOCKET_DASHBOARD_HTML = `<!DOCTYPE html>
   .bar { height: 100%; border-radius: 4px; transition: width 0.3s; }
   .bar-input { background: #3fb950; }
   .controls { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
-  .btn { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; margin-right: 8px; transition: background 0.2s; }
+  .command-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .btn { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; transition: background 0.2s; }
   .btn:hover { background: #2ea043; }
   .btn.secondary { background: #1f6feb; }
   .btn:disabled { background: #30363d; cursor: not-allowed; }
@@ -463,11 +463,9 @@ const WEBSOCKET_DASHBOARD_HTML = `<!DOCTYPE html>
 </div>
 
 <div id="dashboard-content" class="hidden">
-  <div class="controls">
-    <h3>Quick Actions</h3>
-    <button class="btn" onclick="sendCommand('reload_plugin')" id="btn-reload">Reload Plugins</button>
-    <button class="btn secondary" onclick="sendCommand('clear_cache')">Clear Cache</button>
-    <button class="btn secondary" onclick="sendCommand('get_logs')">Get Logs</button>
+  <div id="controls-section" class="controls hidden">
+    <h3>Available Commands</h3>
+    <div id="command-buttons" class="command-buttons"></div>
   </div>
   <div class="grid" id="cards"></div>
   <div class="section">
@@ -484,6 +482,7 @@ const WEBSOCKET_DASHBOARD_HTML = `<!DOCTYPE html>
 <script>
 const WS_URL = 'ws://' + window.location.host + '/ws';
 const BOOTSTRAP_AUTH_TOKEN = __BOOTSTRAP_AUTH_TOKEN__;
+const BOOTSTRAP_COMMANDS = __BOOTSTRAP_COMMANDS__;
 let ws = null, reconnectAttempts = 0, isAuthenticated = false, requiresAuth = false, authInFlight = false;
 const els = {
   status: document.getElementById('ws-status'),
@@ -491,10 +490,11 @@ const els = {
   authToken: document.getElementById('auth-token'),
   authError: document.getElementById('auth-error'),
   dashboard: document.getElementById('dashboard-content'),
+  controls: document.getElementById('controls-section'),
+  commandButtons: document.getElementById('command-buttons'),
   cards: document.getElementById('cards'),
   toolTable: document.querySelector('#tool-table tbody'),
-  lastUpdate: document.getElementById('last-update'),
-  btnReload: document.getElementById('btn-reload')
+  lastUpdate: document.getElementById('last-update')
 };
 
 function connect() {
@@ -548,6 +548,7 @@ function handleMessage(msg) {
       els.authSection.classList.add('hidden');
       els.dashboard.classList.remove('hidden');
       els.authError.textContent = '';
+      renderCommandButtons();
       break;
     case 'auth_error':
       authInFlight = false;
@@ -560,9 +561,7 @@ function handleMessage(msg) {
       updateDashboard(msg.payload);
       break;
     case 'command_result':
-      if (msg.payload?.command === 'reload_plugin') {
-        els.lastUpdate.textContent = msg.payload?.success ? 'Plugins reloaded' : 'Reload failed';
-      }
+      els.lastUpdate.textContent = (msg.payload?.success ? 'Completed: ' : 'Failed: ') + formatCommandLabel(msg.payload?.command || 'command');
       break;
     case 'ping':
       ws.send(JSON.stringify({ type: 'pong' }));
@@ -580,10 +579,32 @@ function authenticate() {
 function sendCommand(command, data) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ type: 'command', payload: { command, data } }));
-  if (command === 'reload_plugin') {
-    els.btnReload.disabled = true;
-    setTimeout(() => els.btnReload.disabled = false, 3000);
+}
+
+function renderCommandButtons() {
+  els.commandButtons.innerHTML = '';
+  if (!Array.isArray(BOOTSTRAP_COMMANDS) || BOOTSTRAP_COMMANDS.length === 0) {
+    els.controls.classList.add('hidden');
+    return;
   }
+
+  els.controls.classList.remove('hidden');
+  for (const command of BOOTSTRAP_COMMANDS) {
+    if (typeof command !== 'string' || !command.trim()) continue;
+    const button = document.createElement('button');
+    button.className = 'btn';
+    button.textContent = formatCommandLabel(command);
+    button.addEventListener('click', () => sendCommand(command));
+    els.commandButtons.appendChild(button);
+  }
+}
+
+function formatCommandLabel(command) {
+  return String(command)
+    .split(/[_-]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 function updateDashboard(data) {
@@ -637,6 +658,7 @@ function fmtDuration(ms) {
 }
 
 els.authToken.addEventListener('keypress', (e) => { if (e.key === 'Enter') authenticate(); });
+renderCommandButtons();
 connect();
 </script>
 </body>

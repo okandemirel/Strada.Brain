@@ -47,7 +47,7 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 
 - **Node.js 20+** and npm
 - At least one supported AI provider configured (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), or an `ollama`-only `PROVIDER_CHAIN`
-- A **Unity project** with Strada.Core framework (the path you give the agent)
+- A **Unity project** (the path you give the agent). Strada.Core is recommended for full framework-aware assistance; without it, Strada.Brain still runs with reduced Strada-specific guidance.
 
 ### 1. Install
 
@@ -229,10 +229,11 @@ The active memory backend is `AgentDBMemory` -- SQLite with HNSW vector indexing
 - **Persistent memory** -- long-term storage, promoted from ephemeral based on access frequency and importance
 
 **How it works:**
-- When session history exceeds 40 messages, old messages are summarized and stored as conversation entries
+- Session history is trimmed with provider-aware thresholds, and trimmed slices are persisted to memory before they leave the active context window
 - Hybrid retrieval combines 70% semantic similarity (HNSW vectors) with 30% TF-IDF keyword matching
 - The `strada_analyze_project` tool caches project structure analysis for instant context injection
 - Memory persists across restarts in the `MEMORY_DB_PATH` directory (default: `.strada-memory/`)
+- The session summarizer updates the user profile every 10 active messages and again during session cleanup
 - Automatic migration from the legacy FileMemoryManager runs on first startup
 
 **Fallback:** If AgentDB initialization fails, the system automatically falls back to `FileMemoryManager` (JSON + TF-IDF).
@@ -423,7 +424,7 @@ With 2+ providers configured, Strada.Brain automatically routes tasks to the opt
 
 ### Strada.MCP Integration
 
-Strada.Brain detects [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (76-tool Unity MCP server) and informs the agent about available MCP capabilities including runtime control, file operations, git, .NET build, code analysis, and scene/prefab management.
+Strada.Brain detects an installed [Strada.MCP](https://github.com/okandemirel/Strada.MCP), verifies the package root, and loads its tools into the main toolchain as first-class Brain tools. When available locally, Strada.Core and Strada.MCP are also treated as authoritative knowledge sources.
 
 ---
 
@@ -476,6 +477,11 @@ The agent maintains a persistent identity across sessions and restarts.
 - Clean shutdown detection for crash recovery
 - In-memory counter cache with periodic flush to minimize SQLite writes
 
+**User preferences and web continuity:**
+- Natural-language preferences such as assistant name, response format, and ultrathink mode are persisted in the user profile store
+- The web channel keeps a stable browser profile via `profileId` + `profileToken`, while reconnects use a rotating `reconnectToken`
+- Refreshing `localhost` keeps the same logical web user as long as browser storage remains intact and the user has not explicitly reset the session
+
 **Crash recovery:**
 - On startup, if previous session did not shut down cleanly, builds a `CrashRecoveryContext`
 - Includes downtime duration, interrupted goal trees, and boot count
@@ -487,21 +493,20 @@ The agent maintains a persistent identity across sessions and restarts.
 
 All configuration is via environment variables. See `.env.example` for the full list.
 
-### Required
+### Minimum Runtime Config
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Claude API key (primary LLM provider) |
 | `UNITY_PROJECT_PATH` | Absolute path to your Unity project root (must contain `Assets/`) |
 | `JWT_SECRET` | Secret for JWT signing. Generate: `openssl rand -hex 64` |
 
 ### AI Providers
 
-Any OpenAI-compatible provider works. All providers below are already implemented and need only an API key to activate.
+Any OpenAI-compatible provider works. Configure at least one hosted provider key, or include `ollama` in `PROVIDER_CHAIN` for local-only operation.
 
 | Variable | Provider | Default Model |
 |----------|----------|---------------|
-| `ANTHROPIC_API_KEY` | Claude (primary) | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_API_KEY` | Claude | `claude-sonnet-4-20250514` |
 | `OPENAI_API_KEY` | OpenAI | `gpt-4o` |
 | `DEEPSEEK_API_KEY` | DeepSeek | `deepseek-chat` |
 | `GROQ_API_KEY` | Groq | `llama-3.3-70b-versatile` |
@@ -534,7 +539,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | Variable | Description |
 |----------|-------------|
 | `DISCORD_BOT_TOKEN` | Discord bot token |
-| `DISCORD_CLIENT_ID` | Discord application client ID |
+| `DISCORD_GUILD_ID` | Discord guild ID used for scoped command registration and startup validation |
 | `ALLOWED_DISCORD_USER_IDS` | Comma-separated user IDs (deny-all if empty) |
 | `ALLOWED_DISCORD_ROLE_IDS` | Comma-separated role IDs for role-based access |
 
@@ -551,7 +556,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | Variable | Description |
 |----------|-------------|
 | `WHATSAPP_SESSION_PATH` | Directory for session files (default: `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Comma-separated phone numbers |
+| `WHATSAPP_ALLOWED_NUMBERS` | Comma-separated phone numbers (deny-all if empty) |
 
 **Matrix:**
 | Variable | Description |
@@ -559,8 +564,8 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `MATRIX_HOMESERVER` | Matrix homeserver URL |
 | `MATRIX_ACCESS_TOKEN` | Bot access token |
 | `MATRIX_USER_ID` | Bot user ID |
-| `MATRIX_ALLOWED_USER_IDS` | Optional comma-separated Matrix user IDs allowed to talk to the bot |
-| `MATRIX_ALLOWED_ROOM_IDS` | Optional comma-separated Matrix room IDs allowed to deliver messages |
+| `MATRIX_ALLOWED_USER_IDS` | Comma-separated Matrix user IDs allowed to talk to the bot |
+| `MATRIX_ALLOWED_ROOM_IDS` | Comma-separated Matrix room IDs allowed to deliver messages |
 | `MATRIX_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound Matrix traffic without user/room allowlists |
 
 **IRC:**
@@ -569,7 +574,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `IRC_SERVER` | IRC server hostname |
 | `IRC_NICK` | Bot nick |
 | `IRC_CHANNELS` | Comma-separated channels to join |
-| `IRC_ALLOWED_USERS` | Optional comma-separated IRC nicknames allowed to trigger the bot |
+| `IRC_ALLOWED_USERS` | Comma-separated IRC nicknames allowed to trigger the bot |
 | `IRC_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound IRC traffic without a user allowlist |
 
 **Teams:**
@@ -577,7 +582,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 |----------|-------------|
 | `TEAMS_APP_ID` | Microsoft Teams app ID |
 | `TEAMS_APP_PASSWORD` | Microsoft Teams app password |
-| `TEAMS_ALLOWED_USER_IDS` | Optional comma-separated Teams user IDs allowed to message the bot |
+| `TEAMS_ALLOWED_USER_IDS` | Comma-separated Teams user IDs allowed to message the bot |
 | `TEAMS_ALLOW_OPEN_ACCESS` | Set to `true` to allow inbound Teams traffic without a user allowlist |
 
 ### Features
@@ -594,7 +599,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `DASHBOARD_PORT` | `3100` | Dashboard server port |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Enable WebSocket real-time dashboard |
 | `WEBSOCKET_DASHBOARD_PORT` | `3100` | WebSocket dashboard server port |
-| `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | (unset) | Optional bearer token for dashboard API proxy and WebSocket dashboard auth |
+| `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | (unset) | Optional bearer token for WebSocket dashboard auth; when present it also protects dashboard APIs, and when absent the embedded same-origin dashboard bootstraps a process-scoped token automatically |
 | `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | (unset) | Comma-separated extra allowed origins for the WebSocket dashboard |
 | `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | Max time to wait for a streaming response to start before treating it as stalled |
 | `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | Max gap between streaming chunks before treating an in-progress response as stalled |
@@ -607,7 +612,7 @@ Any OpenAI-compatible provider works. All providers below are already implemente
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Maximum delegation chain depth |
 | `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | Maximum concurrent delegations per parent agent |
 | `DELEGATION_VERBOSITY` | `normal` | Delegation logging verbosity: `quiet`, `normal`, or `verbose` |
-| `DEPLOYMENT_ENABLED` | `false` | Enable deployment subsystem |
+| `DEPLOY_ENABLED` | `false` | Enable deployment subsystem |
 | `SOUL_FILE` | `soul.md` | Path to the agent personality file (SOUL.md); hot-reloaded on change |
 | `SOUL_FILE_WEB` | (unset) | Per-channel personality override for the web channel |
 | `SOUL_FILE_TELEGRAM` | (unset) | Per-channel personality override for Telegram |
@@ -828,7 +833,7 @@ Accessible at `http://localhost:3100` (localhost only by default). Shows: uptime
 Metrics at `http://localhost:9090/metrics`. Counters for messages, tool calls, tokens. Histograms for request duration, tool duration, LLM latency. Default Node.js metrics (CPU, heap, GC, event loop).
 
 ### WebSocket Dashboard (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-Real-time metrics are pushed every second. Supports optional token authentication, heartbeat monitoring, and app-registered command handlers or notifications. If `WEBSOCKET_DASHBOARD_AUTH_TOKEN` is set, use the web channel UI or provide a bearer token when accessing protected dashboard APIs.
+Real-time metrics are pushed every second. Supports authenticated access, heartbeat monitoring, and app-registered command handlers or notifications. If `WEBSOCKET_DASHBOARD_AUTH_TOKEN` is set, use that bearer token. If it is unset, the embedded same-origin dashboard bootstraps a process-scoped token automatically instead of running unauthenticated.
 
 ### Metrics System
 `MetricsStorage` (SQLite) records task completion rate, iteration counts, tool usage, and pattern reuse. `MetricsRecorder` captures metrics per-session. `metrics` CLI command displays historical metrics.

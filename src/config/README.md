@@ -50,6 +50,7 @@ The `Config` type groups settings into nested sub-configs:
 - `PLUGIN_DIRS` - comma-separated directory paths for plugin loading
 - `LOG_LEVEL` - one of `error`, `warn`, `info`, `debug` (default `info`)
 - `LOG_FILE` - default `strada-brain.log`
+- `WEBSOCKET_DASHBOARD_AUTH_TOKEN` - optional; when unset, the embedded same-origin dashboard bootstraps a process-scoped token automatically
 
 ### Validation Helpers
 

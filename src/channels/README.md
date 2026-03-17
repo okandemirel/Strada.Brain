@@ -13,7 +13,7 @@ Channel adapters connect Strada.Brain to messaging platforms. Each adapter trans
 | Matrix | `MatrixChannel` | matrix-js-sdk | Deny-all unless `MATRIX_ALLOW_OPEN_ACCESS=true` |
 | IRC | `IRCChannel` | irc | Deny-all unless `IRC_ALLOW_OPEN_ACCESS=true` |
 | Teams | `TeamsChannel` | botbuilder | Deny-all unless `TEAMS_ALLOW_OPEN_ACCESS=true` |
-| Web | `WebChannel` | ws (WebSocket) | Localhost-only binding |
+| Web | `WebChannel` | ws (WebSocket) | Localhost-only binding, Origin-gated browser access, reconnect/profile tokens |
 | CLI | `CLIChannel` | node:readline | No auth needed |
 
 ## Interface Architecture
@@ -43,7 +43,7 @@ Normalized types decouple the orchestrator from any platform:
 
 - `IncomingMessage` — `{ channelType, chatId, userId, text, attachments?, replyTo?, timestamp }`
 - `OutgoingMessage` — `{ chatId, text, format?, attachments?, replyTo? }`
-- `ChannelType` — `"telegram" | "whatsapp" | "cli" | "web" | "discord" | "slack"`
+- `ChannelType` — `"telegram" | "whatsapp" | "cli" | "web" | "discord" | "slack" | "matrix" | "irc" | "teams"`
 
 ## Message Flow
 
@@ -51,16 +51,18 @@ Normalized types decouple the orchestrator from any platform:
 Platform event (Telegram message, Discord interaction, etc.)
   → Adapter's event handler
   → Authentication check (allowlists or explicit open-access opt-in)
-  → Rate limit check (per-user sliding window)
+  → Adapter-specific validation / rate limiting when implemented
   → Normalize to IncomingMessage
   → Call messageHandler (set by bootstrap via onMessage())
   → Orchestrator processes message
   → Orchestrator calls channel.sendMarkdown() or streaming methods
 ```
 
+Not every adapter enforces inbound rate limits locally. Web and WhatsApp do; other channels rely more heavily on platform limits and the higher-level orchestrator/daemon guards.
+
 ## Streaming
 
-Web, Telegram, Discord, Slack, WhatsApp, and CLI all implement edit-in-place streaming:
+Web, Telegram, Discord, Slack, WhatsApp, and CLI all implement streaming, but not every adapter uses a platform edit API:
 
 1. **Start:** Send placeholder message, return a `streamId`
 2. **Update:** Edit the same message with accumulated text (throttled)
@@ -70,6 +72,7 @@ Throttle rates:
 - WhatsApp/Discord: 1 update/second (`setTimeout` queue)
 - Slack: 2 updates/second (`StreamingRateLimiter`)
 - Telegram: no client-side throttle (relies on Telegram's 30 edits/sec limit)
+- Web: real-time `stream_*` events over WebSocket
 - CLI: terminal cursor rewrite (`\r\x1b[K`)
 
 All `finalizeStreamingMessage` implementations fall back to sending a new message if the edit fails.
@@ -89,8 +92,8 @@ Two distinct systems coexist intentionally:
 
 - **WhatsApp:** Full per-channel session tracking. `Map<string, SessionState>` with 30-minute timeout, 5-minute cleanup interval.
 - **Web:** Uses `WebIdentityStore` plus reconnect tokens so a browser refresh can reclaim the live conversation until the reconnect TTL expires or the user clears the browser session.
-- **Other channels:** Session tracking handled by the orchestrator (not the channel adapter).
-- **All channels:** Pending confirmations tracked in `Map<string, {resolve, timeout}>` with 2-5 minute timeouts. Drained on `disconnect()`.
+- **Other channels:** Session tracking is primarily handled by the orchestrator, not the channel adapter.
+- **Interactive channels only:** Telegram, Discord, Slack, WhatsApp, Web, and CLI track pending confirmations with timeout cleanup. Matrix, IRC, and Teams do not implement confirmation dialogs.
 
 ## Capability Matrix
 
@@ -130,7 +133,7 @@ All communication is localhost-only (`127.0.0.1`). WebSocket connections validat
 
 **WebSocket Communication:**
 - Assigns each live socket a `chatId` (UUID) and also manages a stable browser profile + reconnect token pair for refresh-safe session reclaim
-- Bidirectional JSON messaging: server sends `type: "text" | "markdown" | "confirmation" | "stream_*" | "typing"`, client sends `type: "message" | "confirmation_response"`
+- Bidirectional JSON messaging: server sends `type: "connected" | "text" | "markdown" | "confirmation" | "stream_*" | "typing"`, client sends `type: "session_init" | "message" | "confirmation_response" | "provider_switch" | "autonomous_toggle"`
 - Maximum payload: 25 MiB (large enough for validated media uploads plus base64 overhead)
 
 **Streaming Support:**
@@ -156,12 +159,13 @@ All communication is localhost-only (`127.0.0.1`). WebSocket connections validat
 - `X-Content-Type-Options: nosniff` — Prevent MIME type sniffing
 - `X-Frame-Options: DENY` — Block iframe embedding
 - `Referrer-Policy: no-referrer` — Prevent referrer leakage
-- `Content-Security-Policy` — Restrict scripts/styles to self + Cloudflare CDN, allow WebSocket to localhost only, block inline scripts and unsafe-eval
+- `Content-Security-Policy` — Restrict scripts/styles to self, allow WebSocket only to localhost/127.0.0.1, block embeds and unsafe origins
 
 **WebSocket Validation:**
 - `verifyClient` hook validates `Origin` header before accepting connection
 - Only `localhost` and `127.0.0.1` allowed (blocks CSRF from different hosts)
 - Non-browser clients (CLI tools, tests) without Origin header are accepted
+- Browser sessions also rely on `profileToken` and `reconnectToken` continuity rather than trusting a bare `chatId`
 
 **Path Traversal Protection:**
 - Uses `path.resolve()` to normalize paths and eliminate `../` and URL-encoded variants (`%2e%2e`)
@@ -181,7 +185,7 @@ Default port is 3000. Server binds to `127.0.0.1:3000` (localhost).
 
 **Server → Client:**
 ```typescript
-{ type: "connected", chatId: string }
+{ type: "connected", chatId: string, reconnectToken: string, profileId?: string, profileToken?: string }
 { type: "text", text: string, messageId: string }
 { type: "markdown", text: string, messageId: string }
 { type: "typing", active: boolean }
@@ -193,9 +197,14 @@ Default port is 3000. Server binds to `127.0.0.1:3000` (localhost).
 
 **Client → Server:**
 ```typescript
-{ type: "message", text: string }
+{ type: "session_init", chatId?: string, reconnectToken?: string, profileId?: string, profileToken?: string }
+{ type: "message", text: string, attachments?: Attachment[] }
 { type: "confirmation_response", confirmId: string, option: string }
+{ type: "provider_switch", provider: string, model?: string }
+{ type: "autonomous_toggle", enabled: boolean, hours?: number }
 ```
+
+The web portal stores the current visible transcript in browser `sessionStorage` keyed by the stable profile ID, so a simple refresh restores the active tab's transcript without changing the logical web user identity.
 
 ## Adding a New Channel
 

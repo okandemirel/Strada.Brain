@@ -29,6 +29,14 @@ function extractBootstrapToken(html: string): string | null {
   return JSON.parse(match[1]!) as string | null;
 }
 
+function extractBootstrapCommands(html: string): string[] {
+  const match = html.match(/const BOOTSTRAP_COMMANDS = (\[[^\n]*\]);/);
+  if (!match) {
+    throw new Error("Missing BOOTSTRAP_COMMANDS bootstrap script");
+  }
+  return JSON.parse(match[1]!) as string[];
+}
+
 function createClient(remoteIp = "127.0.0.1"): {
   isAuthenticated: boolean;
   clientId: string;
@@ -68,6 +76,18 @@ describe("WebSocketDashboardServer auth bootstrap", () => {
 
     expect(extractBootstrapToken(html)).toBeNull();
     expect(html).not.toContain("secret-token");
+  });
+
+  it("embeds registered command handlers into the dashboard HTML", () => {
+    const server = createServer();
+    server.registerCommandHandler("reload_plugin", vi.fn());
+    server.registerCommandHandler("clear_cache", vi.fn());
+
+    const html = (server as unknown as {
+      renderDashboardHtml(): string;
+    }).renderDashboardHtml();
+
+    expect(extractBootstrapCommands(html)).toEqual(["clear_cache", "reload_plugin"]);
   });
 
   it("authenticates a client with the generated bootstrap token", () => {
