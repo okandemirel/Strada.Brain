@@ -15,7 +15,8 @@
  *   - Error history: bounded array (max 10)
  */
 
-import { MUTATION_TOOLS, VERIFY_TOOLS } from "./constants.js";
+import { MUTATION_TOOLS, isVerificationToolName } from "./constants.js";
+import { expandExecutedToolCalls } from "./executed-tools.js";
 import type { LearningPipeline, TrajectoryStep, TrajectoryOutcome, TrajectoryStepResult, ErrorDetails } from "../../learning/index.js";
 import { createBrand, now, durationMs, type JsonObject, type JsonValue } from "../../types/index.js";
 
@@ -166,26 +167,36 @@ export class TaskPlanner {
     input?: Record<string, unknown>,
     output?: string,
   ): void {
-    this.iterationsUsed++;
+    const executedTools = expandExecutedToolCalls(
+      toolName,
+      input ?? {},
+      { toolCallId: "planner-track", content: output ?? "", isError },
+    );
 
-    // Mutation tracking — O(1)
-    if (MUTATION_TOOLS.has(toolName)) {
-      this.mutationsSinceVerify++;
-      this.buildVerified = false;
-    }
+    for (const executedTool of executedTools) {
+      this.iterationsUsed++;
 
-    // Verification tracking — O(1)
-    if (VERIFY_TOOLS.has(toolName) && !isError) {
-      this.mutationsSinceVerify = 0;
-      if (toolName === "dotnet_build") this.buildVerified = true;
-      this.consecutiveErrors = 0;
-    }
+      // Mutation tracking — O(1)
+      if (MUTATION_TOOLS.has(executedTool.toolName)) {
+        this.mutationsSinceVerify++;
+        this.buildVerified = false;
+      }
 
-    // Error tracking — O(1)
-    if (isError) {
-      this.consecutiveErrors++;
-    } else if (!VERIFY_TOOLS.has(toolName)) {
-      this.consecutiveErrors = 0;
+      // Verification tracking — O(1)
+      const isVerificationTool = isVerificationToolName(executedTool.toolName);
+
+      if (isVerificationTool && !executedTool.isError) {
+        this.mutationsSinceVerify = 0;
+        this.buildVerified = true;
+        this.consecutiveErrors = 0;
+      }
+
+      // Error tracking — O(1)
+      if (executedTool.isError) {
+        this.consecutiveErrors++;
+      } else if (!isVerificationTool) {
+        this.consecutiveErrors = 0;
+      }
     }
 
     // Record step for trajectory

@@ -23,6 +23,9 @@ export const VERIFY_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_build", "dotnet_test",
 ]);
 
+const VERIFY_TOOL_NAME_RE =
+  /(?:^|[_-])(build|test|check|verify|lint|typecheck|compile|playmode|editmode|smoke)(?:$|[_-])/iu;
+
 /** File extensions that affect .NET compilation. */
 export const COMPILABLE_EXT: ReadonlySet<string> = new Set([
   ".cs", ".csproj", ".sln", ".props", ".targets",
@@ -34,4 +37,8 @@ export const COMPILABLE_EXT: ReadonlySet<string> = new Set([
  */
 export function extractFilePath(input: Record<string, unknown>): string {
   return String(input["path"] ?? input["file"] ?? input["name"] ?? "");
+}
+
+export function isVerificationToolName(toolName: string): boolean {
+  return VERIFY_TOOLS.has(toolName) || VERIFY_TOOL_NAME_RE.test(toolName);
 }

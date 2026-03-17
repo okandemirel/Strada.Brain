@@ -121,7 +121,7 @@ describe("GeminiProvider", () => {
       });
     });
 
-    it("builds tool_calls without extra fields when no providerMetadata", () => {
+    it("injects a dummy thought signature when no providerMetadata exists", () => {
       const messages: ConversationMessage[] = [
         {
           role: "assistant",
@@ -142,8 +142,9 @@ describe("GeminiProvider", () => {
 
       const assistantMsg = result[1]!;
       expect(assistantMsg.tool_calls).toHaveLength(1);
-      // Should only have id, type, function — no extra_content
-      expect(assistantMsg.tool_calls![0]!["extra_content"]).toBeUndefined();
+      expect(assistantMsg.tool_calls![0]!["extra_content"]).toEqual({
+        google: { thought_signature: "skip_thought_signature_validator" },
+      });
     });
   });
 });

@@ -6,6 +6,7 @@ import { ShowPlanTool } from "./tools/show-plan.js";
 import { AskUserTool } from "./tools/ask-user.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
+import { buildGoalTreeFromBlock } from "../goals/types.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
@@ -37,6 +38,26 @@ function createMockProvider() {
     },
     chat: vi.fn().mockResolvedValue({
       text: "Hello!",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 10, outputTokens: 20 },
+    }),
+  };
+}
+
+function createNamedProvider(name: string) {
+  return {
+    name,
+    capabilities: {
+      maxTokens: 4096,
+      streaming: false,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+    },
+    chat: vi.fn().mockResolvedValue({
+      text: `${name} response`,
       toolCalls: [],
       stopReason: "end_turn" as const,
       usage: { inputTokens: 10, outputTokens: 20 },
@@ -119,6 +140,171 @@ describe("Orchestrator", () => {
 
     expect(mockProvider.chat).toHaveBeenCalledTimes(1);
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat1", "Hello!");
+  });
+
+  it("keeps the selected provider as executor while routing plan and synthesis through orchestrator-assigned workers", async () => {
+    const plannerProvider = createNamedProvider("planner");
+    const executorProvider = createNamedProvider("executor");
+    const reviewerProvider = createNamedProvider("reviewer");
+    const synthProvider = createNamedProvider("synth");
+
+    plannerProvider.chat.mockResolvedValueOnce({
+      text: "Plan:\n1. Read the file",
+      toolCalls: [{ id: "tc-plan", name: "file_read", input: { path: "test.cs" } }],
+      stopReason: "tool_use",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+    executorProvider.chat.mockResolvedValueOnce({
+      text: "Execution draft complete.\nDONE",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 12, outputTokens: 18 },
+    });
+    synthProvider.chat.mockResolvedValueOnce({
+      text: "Supervisor final answer",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 9, outputTokens: 11 },
+    });
+
+    const providers = new Map([
+      ["planner", plannerProvider],
+      ["executor", executorProvider],
+      ["reviewer", reviewerProvider],
+      ["synth", synthProvider],
+    ]);
+
+    const routedOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => executorProvider,
+        getProviderByName: (name: string) => providers.get(name) ?? null,
+        getActiveInfo: () => ({ providerName: "executor", model: "default", isDefault: false }),
+        listAvailable: () => [...providers.keys()].map((name) => ({ name, label: name, defaultModel: "default" })),
+        shutdown: vi.fn(),
+      } as any,
+      providerRouter: {
+        resolve: (task: { type: string }, phase?: string) => {
+          if (phase === "reflecting" || task.type === "code-review") {
+            return { provider: "reviewer", reason: "review fit", task, timestamp: Date.now() };
+          }
+          if (task.type === "planning") {
+            return { provider: "planner", reason: "planning fit", task, timestamp: Date.now() };
+          }
+          if (task.type === "simple-question") {
+            return { provider: "synth", reason: "synthesis fit", task, timestamp: Date.now() };
+          }
+          return { provider: "executor", reason: "execution fit", task, timestamp: Date.now() };
+        },
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    const promise = routedOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-supervisor",
+      userId: "user1",
+      text: "Fix the file issue",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(plannerProvider.chat).toHaveBeenCalledTimes(1);
+    expect(executorProvider.chat).toHaveBeenCalledTimes(1);
+    expect(synthProvider.chat).toHaveBeenCalledTimes(1);
+    expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: planner");
+    expect(executorProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: executor");
+    expect(synthProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: synthesizer");
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-supervisor", "Supervisor final answer");
+  });
+
+  it("pins the active tool-turn provider after execution starts to preserve provider-specific tool context", async () => {
+    const plannerProvider = createNamedProvider("planner");
+    const executorProvider = createNamedProvider("executor");
+    const reviewerProvider = createNamedProvider("reviewer");
+    const synthProvider = createNamedProvider("synth");
+
+    plannerProvider.chat.mockResolvedValueOnce({
+      text: "Plan the work",
+      toolCalls: [{ id: "tc-plan-read", name: "file_read", input: { path: "Assets/Test.cs" } }],
+      stopReason: "tool_use",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+    executorProvider.chat
+      .mockResolvedValueOnce({
+        text: "Execution in progress",
+        toolCalls: [{ id: "tc-exec-read", name: "file_read", input: { path: "Assets/Test.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 11, outputTokens: 19 },
+      })
+      .mockResolvedValueOnce({
+        text: "Execution verified.\nDONE",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 8, outputTokens: 14 },
+      });
+    synthProvider.chat.mockResolvedValueOnce({
+      text: "Pinned tool-turn response",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 7, outputTokens: 10 },
+    });
+
+    const providers = new Map([
+      ["planner", plannerProvider],
+      ["executor", executorProvider],
+      ["reviewer", reviewerProvider],
+      ["synth", synthProvider],
+    ]);
+
+    const routedOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => executorProvider,
+        getProviderByName: (name: string) => providers.get(name) ?? null,
+        getActiveInfo: () => ({ providerName: "executor", model: "default", isDefault: false }),
+        listAvailable: () => [...providers.keys()].map((name) => ({ name, label: name, defaultModel: "default" })),
+        shutdown: vi.fn(),
+      } as any,
+      providerRouter: {
+        resolve: (task: { type: string }, phase?: string) => {
+          if (phase === "reflecting" || task.type === "code-review") {
+            return { provider: "reviewer", reason: "review fit", task, timestamp: Date.now() };
+          }
+          if (task.type === "planning") {
+            return { provider: "planner", reason: "planning fit", task, timestamp: Date.now() };
+          }
+          if (task.type === "simple-question") {
+            return { provider: "synth", reason: "synthesis fit", task, timestamp: Date.now() };
+          }
+          return { provider: "executor", reason: "execution fit", task, timestamp: Date.now() };
+        },
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    const promise = routedOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-pinned",
+      userId: "user1",
+      text: "Inspect and finish the issue",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(plannerProvider.chat).toHaveBeenCalledTimes(1);
+    expect(executorProvider.chat).toHaveBeenCalledTimes(2);
+    expect(reviewerProvider.chat).not.toHaveBeenCalled();
+    expect(synthProvider.chat).toHaveBeenCalledTimes(1);
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-pinned", "Pinned tool-turn response");
   });
 
   it("captures an interactive user's name and injects it into later prompts", async () => {
@@ -254,6 +440,235 @@ describe("Orchestrator", () => {
     expect(mockProvider.chat).toHaveBeenCalled();
     expect(String(mockProvider.chat.mock.calls.at(-1)?.[0] ?? "")).toContain("Name: Alice");
     db.close();
+  });
+
+  it("does not inject first-time onboarding into background tasks", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const backgroundOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+    });
+
+    await backgroundOrch.runBackgroundTask("Fix the failing Unity test", {
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "ephemeral-web-chat",
+      channelType: "web",
+      userId: "stable-web-user",
+    });
+
+    expect(String(mockProvider.chat.mock.calls[0]?.[0] ?? "")).not.toContain("## First-Time User");
+    expect(userProfileStore.getProfile("stable-web-user")).toBeNull();
+    db.close();
+  });
+
+  it("stores periodic session summaries under the stable profile identity", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const sessionSummarizer = {
+      summarizeAndUpdateProfile: vi.fn().mockResolvedValue({
+        summary: "Discussed the fix",
+        keyDecisions: [],
+        openItems: [],
+        topics: ["fix"],
+      }),
+    };
+    const summaryOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+      sessionSummarizer: sessionSummarizer as any,
+    });
+
+    for (let i = 0; i < 5; i++) {
+      const promise = summaryOrch.handleMessage({
+        channelType: "web",
+        chatId: "web-chat-ephemeral",
+        userId: "stable-web-user",
+        text: `Message ${i + 1}`,
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+    }
+
+    expect(sessionSummarizer.summarizeAndUpdateProfile).toHaveBeenCalledWith(
+      "stable-web-user",
+      expect.any(Array),
+    );
+    db.close();
+  });
+
+  it("falls back to chat-scoped summaries when a session mixes multiple participants", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const sessionSummarizer = {
+      summarizeAndUpdateProfile: vi.fn().mockResolvedValue({
+        summary: "Mixed chat",
+        keyDecisions: [],
+        openItems: [],
+        topics: ["chat"],
+      }),
+    };
+    const summaryOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+      sessionSummarizer: sessionSummarizer as any,
+    });
+
+    const firstPromise = summaryOrch.handleMessage({
+      channelType: "discord",
+      chatId: "shared-channel",
+      userId: "user-a",
+      text: "First participant",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await firstPromise;
+
+    const secondPromise = summaryOrch.handleMessage({
+      channelType: "discord",
+      chatId: "shared-channel",
+      userId: "user-b",
+      text: "Second participant",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await secondPromise;
+
+    summaryOrch.cleanupSessions(-1);
+
+    expect(sessionSummarizer.summarizeAndUpdateProfile).toHaveBeenCalledWith(
+      "shared-channel",
+      expect.any(Array),
+    );
+    db.close();
+  });
+
+  it("does not surface interrupted goal trees to unrelated conversations", async () => {
+    const interruptedTree = buildGoalTreeFromBlock({
+      isGoal: true,
+      estimatedMinutes: 5,
+      nodes: [{ id: "fix", task: "Fix the failing test", dependsOn: [] }],
+    }, "stable-profile", "Fix the failing test");
+
+    const resumeOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      interruptedGoalTrees: [interruptedTree],
+    });
+
+    const promise = resumeOrch.handleMessage({
+      channelType: "web",
+      chatId: "other-chat",
+      conversationId: "other-profile",
+      userId: "other-profile",
+      text: "hello",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(mockProvider.chat).toHaveBeenCalledTimes(1);
+    expect(mockChannel.sendMarkdown).not.toHaveBeenCalledWith(
+      "other-chat",
+      expect.stringContaining("interrupted goal tree"),
+    );
+  });
+
+  it("resumes interrupted goal trees for the matching stable conversation identity", async () => {
+    const interruptedTree = buildGoalTreeFromBlock({
+      isGoal: true,
+      estimatedMinutes: 5,
+      nodes: [{ id: "fix", task: "Fix the failing test", dependsOn: [] }],
+    }, "stable-profile", "Fix the failing test");
+
+    const resumeOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      interruptedGoalTrees: [interruptedTree],
+    });
+
+    const resumePromise = resumeOrch.handleMessage({
+      channelType: "web",
+      chatId: "ephemeral-chat",
+      conversationId: "stable-profile",
+      userId: "stable-profile",
+      text: "resume",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await resumePromise;
+
+    expect(mockProvider.chat).not.toHaveBeenCalled();
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "ephemeral-chat",
+      expect.stringContaining("interrupted goal tree"),
+    );
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "ephemeral-chat",
+      "Resuming interrupted goal trees...",
+    );
+
+    mockProvider.chat.mockClear();
+    mockChannel.sendMarkdown.mockClear();
+
+    const followUpPromise = resumeOrch.handleMessage({
+      channelType: "web",
+      chatId: "ephemeral-chat",
+      conversationId: "stable-profile",
+      userId: "stable-profile",
+      text: "continue",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await followUpPromise;
+
+    expect(String(mockProvider.chat.mock.calls[0]?.[0] ?? "")).toContain("## Open Tasks");
+    expect(String(mockProvider.chat.mock.calls[0]?.[0] ?? "")).toContain("Fix the failing test");
   });
 
   it("does not mistake response-format instructions for the user's display name", async () => {
@@ -417,6 +832,88 @@ describe("Orchestrator", () => {
 
     expect(mockChannel.requestConfirmation).toHaveBeenCalled();
     expect(writeTool.execute).toHaveBeenCalled();
+  });
+
+  it("requires Strada authoritative-source review before completing framework code changes", async () => {
+    const shellTool = createMockTool("shell_exec");
+    const conformanceOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool, shellTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      stradaDeps: {
+        coreInstalled: true,
+        corePath: "/tmp/test-project/Packages/Strada.Core",
+        modulesInstalled: true,
+        modulesPath: "/tmp/test-project/Packages/Strada.Modules",
+        mcpInstalled: false,
+        mcpPath: null,
+        mcpVersion: null,
+        warnings: [],
+      },
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Plan: update the system",
+        toolCalls: [{ id: "tc-conformance-write", name: "file_write", input: { path: "Assets/FooSystem.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Running verification",
+        toolCalls: [{ id: "tc-conformance-verify", name: "shell_exec", input: { command: "dotnet build" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Implementation complete.\nDONE",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Checking Strada.Core guidance",
+        toolCalls: [{ id: "tc-conformance-read", name: "file_read", input: { path: "/tmp/test-project/Packages/Strada.Core/README.md" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Conformance confirmed. Implementation matches Strada guidance.\nDONE",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const promise = conformanceOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-conformance",
+      userId: "user1",
+      text: "Update the Strada system implementation",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(mockProvider.chat).toHaveBeenCalledTimes(5);
+    const gatedMessages = mockProvider.chat.mock.calls[3]?.[1] as Array<{ role: string; content: unknown }>;
+    const gateMessage = gatedMessages.find(
+      (message) =>
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.includes("[STRADA CONFORMANCE REQUIRED]"),
+    );
+    expect(String(gateMessage?.content ?? "")).toContain("[STRADA CONFORMANCE REQUIRED]");
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-conformance",
+      expect.stringContaining("Conformance confirmed"),
+    );
   });
 
   it("cancels write operation when user denies confirmation", async () => {
@@ -2602,10 +3099,10 @@ describe("Orchestrator", () => {
       expect(mockProvider.chat).toHaveBeenCalledTimes(4);
       // Tool was executed 3 times
       expect(readTool.execute).toHaveBeenCalledTimes(3);
-      // Final DONE response was sent to channel
+      // Final user-facing response strips internal DONE markers
       expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
         "paor-e2e-1",
-        expect.stringContaining("DONE"),
+        expect.stringContaining("Analysis complete"),
       );
     });
 

@@ -538,6 +538,30 @@ describe("Feature: Gemini thought_signature round-trip", () => {
       [{ type: "google.thought_signature", data: "sig123" }],
     );
   });
+
+  it("buildMessages injects skip_thought_signature_validator when tool metadata is missing", () => {
+    const gemini = new GeminiProvider("key");
+    const build = (sys: string, msgs: any[]) =>
+      (gemini as any).buildMessages(sys, msgs);
+
+    const messages = [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{
+          id: "call_1",
+          name: "test",
+          input: {},
+        }],
+      },
+    ];
+
+    const result = build("system", messages);
+    const assistantMsg = result.find((m: any) => m.role === "assistant");
+    expect(assistantMsg.tool_calls[0].extra_content).toEqual(
+      { google: { thought_signature: "skip_thought_signature_validator" } },
+    );
+  });
 });
 
 // ============================================================================

@@ -29,6 +29,23 @@ interface GeminiStreamChunk {
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
+const GEMINI_SKIP_THOUGHT_SIGNATURE = {
+  google: { thought_signature: "skip_thought_signature_validator" },
+} as const;
+
+function ensureGeminiToolMetadata(
+  providerMetadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (providerMetadata?.["extra_content"] !== undefined) {
+    return providerMetadata;
+  }
+
+  return {
+    ...(providerMetadata ?? {}),
+    extra_content: GEMINI_SKIP_THOUGHT_SIGNATURE,
+  };
+}
+
 /**
  * Google Gemini provider.
  * Extends OpenAI-compatible provider with thought_signature handling.
@@ -258,7 +275,7 @@ export class GeminiProvider extends OpenAIProvider {
           name: tc.name,
           arguments: JSON.stringify(tc.input),
         },
-        ...(tc.providerMetadata ?? {}),
+        ...ensureGeminiToolMetadata(tc.providerMetadata),
       })),
     };
   }

@@ -93,6 +93,38 @@ describe("TaskPlanner", () => {
       expect(state.buildVerified).toBe(true);
     });
 
+    it("should treat generic Unity verification tools as successful verification", () => {
+      planner.trackToolCall("file_write", false);
+      planner.trackToolCall("unity_playmode_test", false);
+
+      const state = planner.getState();
+      expect(state.mutationsSinceVerify).toBe(0);
+      expect(state.buildVerified).toBe(true);
+    });
+
+    it("should expand nested batch_execute operations for verification tracking", () => {
+      planner.trackToolCall(
+        "batch_execute",
+        false,
+        {
+          operations: [
+            { tool: "file_write", input: { path: "Assets/Gameplay/BatchedSystem.cs" } },
+            { tool: "unity_playmode_test", input: {} },
+          ],
+        },
+        JSON.stringify({
+          results: [
+            { tool: "file_write", success: true, content: "written" },
+            { tool: "unity_playmode_test", success: true, content: "all green" },
+          ],
+        }),
+      );
+
+      const state = planner.getState();
+      expect(state.mutationsSinceVerify).toBe(0);
+      expect(state.buildVerified).toBe(true);
+    });
+
     it("should track consecutive errors", () => {
       planner.trackToolCall("file_write", true);
       planner.trackToolCall("file_edit", true);

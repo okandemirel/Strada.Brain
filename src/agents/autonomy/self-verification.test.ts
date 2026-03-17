@@ -21,4 +21,51 @@ describe("SelfVerification", () => {
     expect(verifier.needsVerification()).toBe(false);
     expect(verifier.getState().pendingFiles.size).toBe(0);
   });
+
+  it("treats generic Unity verification tools as valid clean signals", () => {
+    const verifier = new SelfVerification();
+
+    verifier.track("file_write", { path: "Assets/Gameplay/TestSystem.cs" }, {
+      toolCallId: "tc-write",
+      content: "written",
+      isError: false,
+    });
+    expect(verifier.needsVerification()).toBe(true);
+
+    verifier.track("unity_editmode_test", {}, {
+      toolCallId: "tc-unity-verify",
+      content: "All tests passed",
+      isError: false,
+    });
+
+    expect(verifier.needsVerification()).toBe(false);
+    expect(verifier.getState().pendingFiles.size).toBe(0);
+  });
+
+  it("tracks nested batch_execute mutations and verification results", () => {
+    const verifier = new SelfVerification();
+
+    verifier.track(
+      "batch_execute",
+      {
+        operations: [
+          { tool: "file_write", input: { path: "Assets/Gameplay/BatchedSystem.cs" } },
+          { tool: "unity_editmode_test", input: {} },
+        ],
+      },
+      {
+        toolCallId: "tc-batch",
+        content: JSON.stringify({
+          results: [
+            { tool: "file_write", success: true, content: "written" },
+            { tool: "unity_editmode_test", success: true, content: "all green" },
+          ],
+        }),
+        isError: false,
+      },
+    );
+
+    expect(verifier.needsVerification()).toBe(false);
+    expect(verifier.getState().pendingFiles.size).toBe(0);
+  });
 });

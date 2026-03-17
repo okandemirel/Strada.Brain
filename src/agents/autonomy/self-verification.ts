@@ -11,7 +11,8 @@
  */
 
 import type { ToolResult } from "../providers/provider.interface.js";
-import { MUTATION_TOOLS, VERIFY_TOOLS, COMPILABLE_EXT, extractFilePath } from "./constants.js";
+import { MUTATION_TOOLS, COMPILABLE_EXT, extractFilePath, isVerificationToolName } from "./constants.js";
+import { expandExecutedToolCalls } from "./executed-tools.js";
 
 const VERIFICATION_SHELL_COMMAND_RE = /\b(?:test|build|check|lint|typecheck|verify|compile|tsc|eslint|vitest|jest|pytest)\b/iu;
 
@@ -45,28 +46,29 @@ export class SelfVerification {
     input: Record<string, unknown>,
     result: ToolResult,
   ): void {
-    // Track mutations — O(1) set add + extension check
-    if (MUTATION_TOOLS.has(toolName)) {
-      const file = extractFilePath(input);
-      if (file) {
-        this.pendingFiles.add(file);
-        const dotIdx = file.lastIndexOf(".");
-        if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
-          this.hasCompilableChanges = true;
+    for (const executedTool of expandExecutedToolCalls(toolName, input, result)) {
+      // Track mutations — O(1) set add + extension check
+      if (MUTATION_TOOLS.has(executedTool.toolName)) {
+        const file = extractFilePath(executedTool.input);
+        if (file) {
+          this.pendingFiles.add(file);
+          const dotIdx = file.lastIndexOf(".");
+          if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
+            this.hasCompilableChanges = true;
+          }
+        }
+      }
+
+      // Track build results — O(1)
+      if (isVerificationTool(executedTool.toolName, executedTool.input)) {
+        const ok = !executedTool.isError;
+        this.lastBuildOk = ok;
+        if (ok) {
+          this.pendingFiles.clear();
+          this.hasCompilableChanges = false;
         }
       }
     }
-
-    // Track build results — O(1)
-    if (isVerificationTool(toolName, input)) {
-      const ok = !(result.isError ?? false);
-      this.lastBuildOk = ok;
-      if (ok) {
-        this.pendingFiles.clear();
-        this.hasCompilableChanges = false;
-      }
-    }
-
   }
 
   /**
@@ -88,7 +90,7 @@ export class SelfVerification {
       `[VERIFICATION REQUIRED] You modified compilable files without verifying:\n` +
       shown.map(f => `  - ${f}`).join("\n") +
       (rest > 0 ? `\n  ... and ${rest} more` : "") +
-      `\nRun dotnet_build to verify these changes compile correctly.`
+      `\nRun the most relevant verification tool or command before declaring the task complete.`
     );
   }
 
@@ -103,7 +105,7 @@ export class SelfVerification {
 }
 
 function isVerificationTool(toolName: string, input: Record<string, unknown>): boolean {
-  if (VERIFY_TOOLS.has(toolName)) {
+  if (isVerificationToolName(toolName)) {
     return true;
   }
   if (toolName !== "shell_exec") {

@@ -50,7 +50,8 @@ import {
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
-import { VERIFY_TOOLS, WRITE_OPERATIONS } from "./autonomy/constants.js";
+import { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
+import { WRITE_OPERATIONS, isVerificationToolName } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
 import {
   checkReadOnlyBlock,
@@ -71,6 +72,7 @@ import type { SessionSummarizer } from "../memory/unified/session-summarizer.js"
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
+import type { TaskClassification } from "../agent-core/routing/routing-types.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -109,10 +111,25 @@ Reject when the command is unrelated, broad, destructive, secret-seeking, privil
 
 Return JSON only:
 {"decision":"approve"|"reject","reason":"short reason","taskAligned":true|false,"bounded":true|false}`;
+const INTERNAL_DECISION_LINE_RE = /^\s*\*{0,2}(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\*{0,2}\s*$/gim;
+const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
+The orchestrator remains the primary intelligence and the user-facing agent.
+You are not the overall assistant for the session.
+
+Your job:
+- Convert verified execution artifacts into the final user-facing response.
+- Preserve completed work, blockers, verification status, and next steps.
+- Remove internal control markers such as DONE, CONTINUE, or REPLAN.
+- Do not invent tool results, code changes, or success claims.
+- If the task is incomplete or blocked, say that clearly.
+- Do not ask for permission unless the evidence truly shows missing user intent.`;
 
 interface Session {
   messages: ConversationMessage[];
   lastActivity: Date;
+  conversationScope?: string;
+  profileKey?: string;
+  mixedParticipants?: boolean;
 }
 
 type ToolExecutionMode = "interactive" | "background";
@@ -135,6 +152,24 @@ interface ShellCommandReviewDecision {
   reason?: string;
   taskAligned?: boolean;
   bounded?: boolean;
+}
+
+type SupervisorRole = "planner" | "executor" | "reviewer" | "synthesizer";
+
+interface SupervisorAssignment {
+  role: SupervisorRole;
+  providerName: string;
+  provider: IAIProvider;
+  reason: string;
+}
+
+interface SupervisorExecutionStrategy {
+  task: TaskClassification;
+  planner: SupervisorAssignment;
+  executor: SupervisorAssignment;
+  reviewer: SupervisorAssignment;
+  synthesizer: SupervisorAssignment;
+  usesMultipleProviders: boolean;
 }
 
 /** Maps ISO codes to display names for system prompt injection. */
@@ -209,9 +244,17 @@ function getBooleanPreference(preferences: Record<string, unknown>, key: string)
   return typeof value === "boolean" ? value : undefined;
 }
 
-function resolveIdentityKey(chatId: string, userId?: string): string {
+function resolveConversationScope(chatId: string, conversationId?: string): string {
+  const normalizedConversationId = conversationId?.trim();
+  return normalizedConversationId ? normalizedConversationId : chatId;
+}
+
+function resolveIdentityKey(chatId: string, userId?: string, conversationId?: string): string {
   const normalizedUserId = userId?.trim();
-  return normalizedUserId ? normalizedUserId : chatId;
+  if (normalizedUserId) {
+    return normalizedUserId;
+  }
+  return resolveConversationScope(chatId, conversationId);
 }
 
 function detectVerbosityPreference(text: string): string | undefined {
@@ -458,7 +501,7 @@ export class Orchestrator {
   /** Active goal trees per session for proactive/reactive decomposition */
   private readonly activeGoalTrees = new Map<string, GoalTree>();
   /** Interrupted goal trees detected on startup, pending user resume/discard decision */
-  private pendingResumeTrees: GoalTree[];
+  private readonly pendingResumeTrees = new Map<string, GoalTree[]>();
   /** TaskManager reference for inline goal detection submission (lazy setter) */
   private taskManager: TaskManager | null = null;
   private readonly soulLoader: SoulLoader | null;
@@ -534,7 +577,11 @@ export class Orchestrator {
     this.eventEmitter = opts.eventEmitter ?? null;
     this.metricsRecorder = opts.metricsRecorder ?? null;
     this.goalDecomposer = opts.goalDecomposer ?? null;
-    this.pendingResumeTrees = opts.interruptedGoalTrees ?? [];
+    for (const tree of opts.interruptedGoalTrees ?? []) {
+      const existing = this.pendingResumeTrees.get(tree.sessionId) ?? [];
+      existing.push(tree);
+      this.pendingResumeTrees.set(tree.sessionId, existing);
+    }
     this.reRetrievalConfig = opts.reRetrievalConfig;
     this.embeddingProvider = opts.embeddingProvider;
     this.soulLoader = opts.soulLoader ?? null;
@@ -573,23 +620,316 @@ export class Orchestrator {
       (this.crashRecoveryContext ? buildCrashNotificationSection(this.crashRecoveryContext) : "");
   }
 
-  /**
-   * Resolve the best provider for a prompt using multi-provider routing.
-   * Returns the routed provider or the given fallback if routing is unavailable.
-   */
-  private resolveRoutedProvider(prompt: string, phase: string | undefined, fallback: IAIProvider): IAIProvider {
-    if (!this.providerRouter) return fallback;
+  private buildStaticSupervisorAssignment(
+    role: SupervisorRole,
+    providerName: string,
+    provider: IAIProvider,
+    reason: string,
+  ): SupervisorAssignment {
+    return { role, providerName, provider, reason };
+  }
+
+  private getProviderByNameOrFallback(
+    providerName: string | undefined,
+    fallbackProvider: IAIProvider,
+  ): { providerName: string; provider: IAIProvider } {
+    const normalizedName = providerName?.trim();
+    const resolved =
+      (normalizedName ? this.providerManager.getProviderByName?.(normalizedName) : null) ??
+      fallbackProvider;
+    return {
+      providerName: normalizedName || fallbackProvider.name,
+      provider: resolved,
+    };
+  }
+
+  private resolveSupervisorAssignment(
+    role: SupervisorRole,
+    task: TaskClassification,
+    phase: string | undefined,
+    fallbackName: string,
+    fallbackProvider: IAIProvider,
+  ): SupervisorAssignment {
+    if (!this.providerRouter) {
+      return this.buildStaticSupervisorAssignment(
+        role,
+        fallbackName,
+        fallbackProvider,
+        "routing unavailable, reusing the current worker",
+      );
+    }
+
     try {
-      const taskClass = this.taskClassifier.classify(prompt);
-      const routed = this.providerRouter.resolve(taskClass, phase);
-      if (routed) {
-        const resolved = this.providerManager.getProviderByName(routed.provider);
-        if (resolved) return resolved;
-      }
+      const routed = this.providerRouter.resolve(task, phase);
+      const resolved = this.getProviderByNameOrFallback(routed.provider, fallbackProvider);
+      return this.buildStaticSupervisorAssignment(role, resolved.providerName, resolved.provider, routed.reason);
     } catch {
       // Routing failure is non-fatal — use fallback provider
     }
-    return fallback;
+
+    return this.buildStaticSupervisorAssignment(
+      role,
+      fallbackName,
+      fallbackProvider,
+      "routing fallback, reusing the current worker",
+    );
+  }
+
+  private buildSupervisorExecutionStrategy(
+    prompt: string,
+    identityKey: string,
+    fallbackProvider: IAIProvider,
+  ): SupervisorExecutionStrategy {
+    const task = this.taskClassifier.classify(prompt);
+    const activeInfo = this.providerManager.getActiveInfo?.(identityKey);
+    const selected = this.getProviderByNameOrFallback(activeInfo?.providerName, fallbackProvider);
+    const selectedProviderName = selected.providerName;
+    const selectedProvider = selected.provider;
+
+    const planner = this.resolveSupervisorAssignment(
+      "planner",
+      { ...task, type: "planning" },
+      "planning",
+      selectedProviderName,
+      selectedProvider,
+    );
+
+    const executor = this.buildStaticSupervisorAssignment(
+      "executor",
+      selectedProviderName,
+      selectedProvider,
+      activeInfo?.isDefault
+        ? "selected system-default provider as the primary execution worker"
+        : "kept the user-selected provider as the primary execution worker",
+    );
+
+    let reviewer = this.resolveSupervisorAssignment(
+      "reviewer",
+      { ...task, type: "code-review" },
+      "reflecting",
+      planner.providerName,
+      planner.provider,
+    );
+    if (reviewer.providerName === executor.providerName && planner.providerName !== executor.providerName) {
+      reviewer = this.buildStaticSupervisorAssignment(
+        "reviewer",
+        planner.providerName,
+        planner.provider,
+        "reused the planning worker as reviewer to keep execution and review separated",
+      );
+    }
+
+    let synthesizer = this.resolveSupervisorAssignment(
+      "synthesizer",
+      { ...task, type: "simple-question" },
+      undefined,
+      reviewer.providerName,
+      reviewer.provider,
+    );
+    if (synthesizer.providerName === executor.providerName) {
+      if (reviewer.providerName !== executor.providerName) {
+        synthesizer = this.buildStaticSupervisorAssignment(
+          "synthesizer",
+          reviewer.providerName,
+          reviewer.provider,
+          "reused the reviewer as the user-facing synthesis worker to keep execution separate",
+        );
+      } else if (planner.providerName !== executor.providerName) {
+        synthesizer = this.buildStaticSupervisorAssignment(
+          "synthesizer",
+          planner.providerName,
+          planner.provider,
+          "reused the planner as the user-facing synthesis worker to keep execution separate",
+        );
+      }
+    }
+
+    const uniqueProviders = new Set([
+      planner.providerName,
+      executor.providerName,
+      reviewer.providerName,
+      synthesizer.providerName,
+    ]);
+
+    return {
+      task,
+      planner,
+      executor,
+      reviewer,
+      synthesizer,
+      usesMultipleProviders: uniqueProviders.size > 1,
+    };
+  }
+
+  private getSupervisorAssignmentForPhase(
+    strategy: SupervisorExecutionStrategy,
+    phase: AgentPhase,
+  ): SupervisorAssignment {
+    switch (phase) {
+      case AgentPhase.PLANNING:
+      case AgentPhase.REPLANNING:
+        return strategy.planner;
+      case AgentPhase.REFLECTING:
+        return strategy.reviewer;
+      case AgentPhase.EXECUTING:
+      case AgentPhase.COMPLETE:
+      case AgentPhase.FAILED:
+      default:
+        return strategy.executor;
+    }
+  }
+
+  private getPinnedToolTurnAssignment(
+    strategy: SupervisorExecutionStrategy,
+    phase: AgentPhase,
+    pinnedProvider: SupervisorAssignment | null,
+  ): SupervisorAssignment {
+    if (!pinnedProvider || phase === AgentPhase.COMPLETE || phase === AgentPhase.FAILED) {
+      return this.getSupervisorAssignmentForPhase(strategy, phase);
+    }
+
+    const role = this.getSupervisorAssignmentForPhase(strategy, phase).role;
+    return this.buildStaticSupervisorAssignment(
+      role,
+      pinnedProvider.providerName,
+      pinnedProvider.provider,
+      "kept the active tool-turn provider pinned to preserve provider-specific tool context",
+    );
+  }
+
+  private buildSupervisorRolePrompt(
+    strategy: SupervisorExecutionStrategy,
+    assignment: SupervisorAssignment,
+  ): string {
+    const lines = [
+      "## Orchestrator Assignment",
+      "Strada Brain has already analyzed the user request and owns the overall decision-making.",
+      "You are serving as a worker inside that orchestrated execution plan.",
+      `Current worker role: ${assignment.role}`,
+      "",
+      "Execution strategy:",
+      `- Planner: ${strategy.planner.providerName} (${strategy.planner.reason})`,
+      `- Executor: ${strategy.executor.providerName} (${strategy.executor.reason})`,
+      `- Reviewer: ${strategy.reviewer.providerName} (${strategy.reviewer.reason})`,
+      `- Synthesizer: ${strategy.synthesizer.providerName} (${strategy.synthesizer.reason})`,
+      "",
+      "Role contract:",
+    ];
+
+    switch (assignment.role) {
+      case "planner":
+        lines.push(
+          "- Produce or revise the plan only.",
+          "- Do not take over the full user conversation.",
+          "- Give the executor concrete, verifiable steps.",
+        );
+        break;
+      case "executor":
+        lines.push(
+          "- Execute the current plan and use tools when needed.",
+          "- Do not treat your draft as the final user-facing answer.",
+          "- Leave final presentation to the synthesizer unless the orchestrator explicitly surfaces a blocker.",
+        );
+        break;
+      case "reviewer":
+        lines.push(
+          "- Evaluate progress, verification, and failure signals.",
+          "- Decide whether execution should continue, replan, or complete.",
+          "- Do not rewrite the whole conversation as the final user answer.",
+        );
+        break;
+      case "synthesizer":
+        lines.push(
+          "- Produce the final user-facing response for the orchestrator.",
+          "- Preserve verified facts and blockers only.",
+          "- Never mention internal control markers or provider identities.",
+        );
+        break;
+    }
+
+    return `\n\n${lines.join("\n")}\n`;
+  }
+
+  private stripInternalDecisionMarkers(text: string | null | undefined): string {
+    if (!text) {
+      return "";
+    }
+    return text.replace(INTERNAL_DECISION_LINE_RE, "").trim();
+  }
+
+  private recordProviderUsage(
+    providerName: string,
+    usage: ProviderResponse["usage"] | undefined,
+    onUsage?: (usage: TaskUsageEvent) => void,
+  ): void {
+    const inputTokens = usage?.inputTokens ?? 0;
+    const outputTokens = usage?.outputTokens ?? 0;
+    this.metrics?.recordTokenUsage(inputTokens, outputTokens, providerName);
+    this.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, providerName);
+    onUsage?.({
+      provider: providerName,
+      inputTokens,
+      outputTokens,
+    });
+  }
+
+  private shouldUseSupervisorSynthesis(strategy: SupervisorExecutionStrategy): boolean {
+    return Boolean(this.providerRouter) && strategy.usesMultipleProviders;
+  }
+
+  private async synthesizeUserFacingResponse(params: {
+    prompt: string;
+    draft: string;
+    agentState: AgentState;
+    strategy: SupervisorExecutionStrategy;
+    systemPrompt: string;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }): Promise<string> {
+    const cleanedDraft = this.stripInternalDecisionMarkers(params.draft);
+    if (!cleanedDraft) {
+      return "";
+    }
+
+    if (!this.shouldUseSupervisorSynthesis(params.strategy)) {
+      return cleanedDraft;
+    }
+
+    const synthesisProvider = params.strategy.synthesizer.provider;
+    const recentSteps = params.agentState.stepResults
+      .slice(-8)
+      .map((step) => `- [${step.success ? "OK" : "FAIL"}] ${step.toolName}: ${step.summary}`)
+      .join("\n");
+    const synthesisRequest = [
+      "Create the final user-facing response for this completed orchestrated task.",
+      "",
+      `Original user request:\n${params.prompt}`,
+      "",
+      params.agentState.plan ? `Current plan:\n${params.agentState.plan}\n` : "Current plan:\n(none)\n",
+      recentSteps ? `Verified execution evidence:\n${recentSteps}\n` : "Verified execution evidence:\n(no tool evidence)\n",
+      `Worker draft:\n${cleanedDraft}`,
+      "",
+      "Requirements:",
+      "- Preserve only verified facts.",
+      "- Mention blockers if any remain.",
+      "- Remove internal workflow markers.",
+      "- Keep the answer directly usable for the user.",
+    ].join("\n");
+
+    try {
+      const synthesisResponse = await synthesisProvider.chat(
+        `${params.systemPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, params.strategy.synthesizer)}`,
+        [{ role: "user", content: synthesisRequest }],
+        [],
+      );
+      this.recordProviderUsage(
+        params.strategy.synthesizer.providerName,
+        synthesisResponse.usage,
+        params.usageHandler,
+      );
+      return this.stripInternalDecisionMarkers(synthesisResponse.text) || cleanedDraft;
+    } catch {
+      return cleanedDraft;
+    }
   }
 
   /**
@@ -635,7 +975,12 @@ export class Orchestrator {
    * Build 4-layer context injection for system prompt enrichment.
    * Layers: User Profile, Last Session Summary, Open Tasks/Goals, Semantic Memory.
    */
-  private async buildContextLayers(chatId: string, userMessage: string, profile: import("../memory/unified/user-profile-store.js").UserProfile | null, preComputedEmbedding?: number[]): Promise<{ context: string; contentHashes: string[] }> {
+  private async buildContextLayers(
+    goalScope: string,
+    userMessage: string,
+    profile: import("../memory/unified/user-profile-store.js").UserProfile | null,
+    preComputedEmbedding?: number[],
+  ): Promise<{ context: string; contentHashes: string[] }> {
     const layers: string[] = [];
     const contentHashes: string[] = [];
 
@@ -652,7 +997,7 @@ export class Orchestrator {
     }
 
     // Layer 3: Open Tasks/Goals
-    const activeGoalTree = this.activeGoalTrees?.get(chatId);
+    const activeGoalTree = this.activeGoalTrees?.get(goalScope);
     if (activeGoalTree) {
       const pendingGoals: Array<{ task: string; status: string }> = [];
       for (const node of activeGoalTree.nodes.values()) {
@@ -709,11 +1054,12 @@ export class Orchestrator {
    */
   private async buildSystemPromptWithContext(params: {
     chatId: string;
+    conversationScope: string;
     userId?: string;
     channelType?: string;
     prompt: string;
     personaContent?: string;
-    isUserTask: boolean;
+    allowFirstTimeOnboarding: boolean;
     profile: { displayName?: string; language: string; activePersona: string; preferences: unknown; contextSummary?: string } | null;
     preComputedEmbedding?: number[];
   }): Promise<{ systemPrompt: string; initialContentHashes: string[] }> {
@@ -747,7 +1093,7 @@ export class Orchestrator {
 
     // 5. Context layers (user profile, session summary, open tasks, semantic memory)
     const { context: contextLayers, contentHashes } = await this.buildContextLayers(
-      params.chatId,
+      params.conversationScope,
       params.prompt,
       params.profile as import("../memory/unified/user-profile-store.js").UserProfile | null,
       params.preComputedEmbedding,
@@ -756,7 +1102,7 @@ export class Orchestrator {
     const initialContentHashes: string[] = [...contentHashes];
 
     // 6. First-time user prompt (only for direct user tasks without a known profile)
-    if (params.isUserTask && (!params.profile || !params.profile.displayName)) {
+    if (params.allowFirstTimeOnboarding && (!params.profile || !params.profile.displayName)) {
       systemPrompt += FIRST_TIME_USER_PROMPT;
     }
 
@@ -861,8 +1207,10 @@ export class Orchestrator {
   async runBackgroundTask(prompt: string, options: BackgroundTaskOptions): Promise<string> {
     const logger = getLogger();
     const { signal, onProgress, chatId } = options;
-    const identityKey = resolveIdentityKey(chatId, options.userId);
-    let currentProvider = this.providerManager.getProvider(identityKey);
+    const conversationScope = resolveConversationScope(chatId, options.conversationId);
+    const identityKey = resolveIdentityKey(chatId, options.userId, options.conversationId);
+    const fallbackProvider = this.providerManager.getProvider(identityKey);
+    const executionStrategy = this.buildSupervisorExecutionStrategy(prompt, identityKey, fallbackProvider);
 
     // ─── Metrics: start recording ────────────────────────────────────
     const taskType = options.parentMetricId ? "subtask" as const : "background" as const;
@@ -875,24 +1223,14 @@ export class Orchestrator {
     // ────────────────────────────────────────────────────────────────
 
     // Build user content with vision support if attachments present
-    const supportsVision = currentProvider.capabilities.vision;
+    const supportsVision = fallbackProvider.capabilities.vision;
     const userContent = buildUserContent(prompt || DEFAULT_IMAGE_PROMPT, options.attachments, supportsVision);
     const session: Session = {
       messages: [{ role: "user", content: userContent }],
       lastActivity: new Date(),
     };
 
-    // ─── New user detection: LLM-driven natural onboarding ─────────────
-    // Instead of a hardcoded Q&A flow, inject onboarding instructions into
-    // the system prompt. The LLM naturally introduces itself, asks the user's
-    // name in conversation, and we extract preferences from the response.
     let profile = this.userProfileStore?.getProfile(identityKey) ?? null;
-    if (this.userProfileStore && !profile) {
-      const configLang = this.defaultLanguage;
-      this.userProfileStore.upsertProfile(identityKey, { language: configLang });
-      profile = this.userProfileStore.getProfile(identityKey) ?? null;
-      logger.info("New user detected, injecting onboarding context", { chatId, identityKey, language: configLang });
-    }
 
     // Touch user profile (debounced)
     if (this.userProfileStore && profile) {
@@ -934,12 +1272,12 @@ export class Orchestrator {
     }
 
     // Build system prompt with all context layers (DRY: shared with runAgentLoop)
-    const isUserTask = !options.parentMetricId;
     const { systemPrompt: builtPrompt, initialContentHashes: bgInitialContentHashes } = await this.buildSystemPromptWithContext({
       chatId,
+      conversationScope,
       channelType: options.channelType,
       prompt,
-      isUserTask,
+      allowFirstTimeOnboarding: false,
       profile,
       preComputedEmbedding: bgEmbedding,
     });
@@ -972,6 +1310,9 @@ export class Orchestrator {
     const errorRecovery = new ErrorRecoveryEngine();
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
+    const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
+    stradaConformance.trackPrompt(prompt);
+    let toolTurnAffinity: SupervisorAssignment | null = null;
 
     let bgIteration = 0;
     let bgToolCallCount = 0;
@@ -1002,8 +1343,13 @@ export class Orchestrator {
         }
         // ────────────────────────────────────────────────────────────────
 
-        // Phase-aware provider routing (multi-provider orchestration)
-        currentProvider = this.resolveRoutedProvider(prompt, bgAgentState.phase, currentProvider);
+        const currentAssignment = this.getPinnedToolTurnAssignment(
+          executionStrategy,
+          bgAgentState.phase,
+          toolTurnAffinity,
+        );
+        const currentProvider = currentAssignment.provider;
+        activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
 
         const response = await currentProvider.chat(
           activePrompt,
@@ -1018,22 +1364,28 @@ export class Orchestrator {
           stopReason: response.stopReason,
           toolCallCount: response.toolCalls.length,
         });
-        const bgInputTokens = response.usage?.inputTokens ?? 0;
-        const bgOutputTokens = response.usage?.outputTokens ?? 0;
-        this.metrics?.recordTokenUsage(bgInputTokens, bgOutputTokens, currentProvider.name);
-        this.rateLimiter?.recordTokenUsage(bgInputTokens, bgOutputTokens, currentProvider.name);
-        (options.onUsage ?? this.onUsage)?.({
-          provider: currentProvider.name,
-          inputTokens: bgInputTokens,
-          outputTokens: bgOutputTokens,
-        });
+        if (
+          response.toolCalls.length > 0 &&
+          !toolTurnAffinity &&
+          bgAgentState.phase !== AgentPhase.PLANNING &&
+          bgAgentState.phase !== AgentPhase.REPLANNING
+        ) {
+          toolTurnAffinity = currentAssignment;
+        }
+        this.recordProviderUsage(
+          currentAssignment.providerName,
+          response.usage,
+          options.onUsage ?? this.onUsage,
+        );
 
         // ─── PAOR: Handle REFLECTING phase response ─────────────────────
         if (bgAgentState.phase === AgentPhase.REFLECTING) {
           const decision = parseReflectionDecision(response.text);
 
           if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-            const completionGate = getCompletionGatePrompt(bgAgentState, selfVerification, response.text);
+            const completionGate =
+              getCompletionGatePrompt(bgAgentState, selfVerification, response.text) ??
+              stradaConformance.getPrompt();
             if (completionGate) {
               bgAgentState = {
                 ...bgAgentState,
@@ -1050,8 +1402,16 @@ export class Orchestrator {
               continue;
             }
 
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
+            const finalText = await this.synthesizeUserFacingResponse({
+              prompt,
+              draft: response.text ?? "",
+              agentState: bgAgentState,
+              strategy: executionStrategy,
+              systemPrompt,
+              usageHandler: options.onUsage ?? this.onUsage,
+            });
+            if (finalText) {
+              session.messages.push({ role: "assistant", content: finalText });
             }
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
@@ -1060,7 +1420,7 @@ export class Orchestrator {
               hitMaxIterations: false,
             });
             await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
-            return response.text || "Task completed without output.";
+            return finalText || "Task completed without output.";
           }
 
           if (decision === "REPLAN") {
@@ -1113,7 +1473,9 @@ export class Orchestrator {
 
         // Final response — return text
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-          const completionGate = getCompletionGatePrompt(bgAgentState, selfVerification, response.text);
+          const completionGate =
+            getCompletionGatePrompt(bgAgentState, selfVerification, response.text) ??
+            stradaConformance.getPrompt();
           if (completionGate) {
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
@@ -1122,8 +1484,16 @@ export class Orchestrator {
             continue;
           }
 
-          if (response.text) {
-            session.messages.push({ role: "assistant", content: response.text });
+          const finalText = await this.synthesizeUserFacingResponse({
+            prompt,
+            draft: response.text ?? "",
+            agentState: bgAgentState,
+            strategy: executionStrategy,
+            systemPrompt,
+            usageHandler: options.onUsage ?? this.onUsage,
+          });
+          if (finalText) {
+            session.messages.push({ role: "assistant", content: finalText });
           }
 
           // ─── Metrics: record success ────────────────────────────────
@@ -1138,7 +1508,7 @@ export class Orchestrator {
           // Persist background task conversation to memory
           await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
 
-          return response.text || "Task completed without output.";
+          return finalText || "Task completed without output.";
         }
 
         // ─── PAOR: Phase transitions ────────────────────────────────────
@@ -1173,6 +1543,7 @@ export class Orchestrator {
           const tr = toolResults[i]!;
           taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
           selfVerification.track(tc.name, tc.input, tr);
+          stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
 
           const analysis = errorRecovery.analyze(tc.name, tr);
           if (analysis) {
@@ -1197,7 +1568,7 @@ export class Orchestrator {
             const bgTaskClass = this.taskClassifier.classify(prompt);
             const bgConfidence = this.confidenceEstimator.estimate({
               task: bgTaskClass,
-              providerName: currentProvider.name ?? "unknown",
+              providerName: currentAssignment.providerName,
               agentState: bgAgentState,
               responseLength: (response.text ?? "").length,
             });
@@ -1207,9 +1578,9 @@ export class Orchestrator {
 
             if (bgStrategy !== "skip" && bgAvailableCount >= 2) {
               const bgAvailable = this.providerManager.listAvailable();
-              const bgReviewProviderName = bgAvailable.find(p => p.name !== (currentProvider.name ?? ""))?.name;
+              const bgReviewProviderName = bgAvailable.find(p => p.name !== currentAssignment.providerName)?.name;
               if (bgReviewProviderName) {
-                const bgReviewProvider = this.providerManager.getProviderByName(bgReviewProviderName);
+                const bgReviewProvider = this.getProviderByNameOrFallback(bgReviewProviderName, currentProvider).provider;
                 if (bgReviewProvider) {
                   const bgConsensusResult = await this.consensusManager.verify({
                     originalOutput: {
@@ -1219,7 +1590,7 @@ export class Orchestrator {
                         input: tc.input,
                       })),
                     },
-                    originalProvider: currentProvider.name ?? "unknown",
+                    originalProvider: currentAssignment.providerName,
                     task: bgTaskClass,
                     confidence: bgConfidence,
                     reviewProvider: bgReviewProvider,
@@ -1425,8 +1796,9 @@ export class Orchestrator {
 
   private async processMessage(msg: IncomingMessage): Promise<void> {
     const logger = getLogger();
-    const { chatId, text, userId: msgUserId } = msg;
+    const { chatId, text, userId: msgUserId, conversationId } = msg;
     const userId = msgUserId;
+    const conversationScope = resolveConversationScope(chatId, conversationId);
 
     logger.info("Processing message", {
       chatId,
@@ -1436,26 +1808,23 @@ export class Orchestrator {
     });
 
     // Goal tree resume detection (trigger on first message when interrupted trees exist)
-    if (this.pendingResumeTrees.length > 0) {
-      const resumePrompt = formatResumePrompt(this.pendingResumeTrees);
+    const pendingResumeTrees = this.takePendingResumeTrees(conversationScope, chatId);
+    if (pendingResumeTrees.length > 0) {
+      const resumePrompt = formatResumePrompt(pendingResumeTrees);
       await this.channel.sendMarkdown(chatId, resumePrompt);
 
       const normalized = text.toLowerCase().trim();
       if (normalized === "resume" || normalized === "resume all") {
-        for (const tree of this.pendingResumeTrees) {
+        for (const tree of pendingResumeTrees) {
           const prepared = prepareTreeForResume(tree);
           this.activeGoalTrees.set(tree.sessionId, prepared);
         }
-        this.pendingResumeTrees = [];
         await this.channel.sendMarkdown(chatId, "Resuming interrupted goal trees...");
         return;
       } else if (normalized === "discard" || normalized === "discard all") {
-        this.pendingResumeTrees = [];
         await this.channel.sendMarkdown(chatId, "Interrupted goal trees discarded.");
         return;
       }
-      // User chose to ignore the prompt — clear pending and continue with normal flow
-      this.pendingResumeTrees = [];
     }
 
     // Check rate limits before processing
@@ -1473,11 +1842,20 @@ export class Orchestrator {
 
     this.metrics?.recordMessage();
     this.metrics?.setActiveSessions(this.sessions.size);
-    const identityKey = resolveIdentityKey(chatId, userId);
+    const identityKey = resolveIdentityKey(chatId, userId, conversationId);
 
     // Get or create session
     const session = this.getOrCreateSession(chatId);
     session.lastActivity = new Date();
+    session.conversationScope = conversationScope;
+    if (!session.mixedParticipants) {
+      if (!session.profileKey) {
+        session.profileKey = identityKey;
+      } else if (session.profileKey !== identityKey) {
+        session.profileKey = undefined;
+        session.mixedParticipants = true;
+      }
+    }
 
     // Touch user profile (lastSeenAt) — debounced to avoid per-message SQLite writes
     if (this.userProfileStore) {
@@ -1538,7 +1916,7 @@ export class Orchestrator {
     }, TYPING_INTERVAL_MS);
 
     try {
-      await this.runAgentLoop(chatId, session, msg.channelType, userId);
+      await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
@@ -1549,7 +1927,7 @@ export class Orchestrator {
       await this.persistSessionToMemory(chatId, session.messages.slice(-10), /* force */ true);
       // Periodic summarization: every 10 messages, generate an LLM summary
       if (this.sessionSummarizer && session.messages.length > 0 && session.messages.length % 10 === 0) {
-        void this.sessionSummarizer.summarizeAndUpdateProfile(chatId, session.messages)
+        void this.sessionSummarizer.summarizeAndUpdateProfile(session.profileKey ?? chatId, session.messages)
           .catch(() => { /* periodic summarization failure is non-fatal */ });
       }
     }
@@ -1563,10 +1941,12 @@ export class Orchestrator {
     session: Session,
     channelType?: string,
     userId?: string,
+    conversationId?: string,
   ): Promise<void> {
     const logger = getLogger();
-    const identityKey = resolveIdentityKey(chatId, userId);
-    let currentProvider = this.providerManager.getProvider(identityKey);
+    const conversationScope = resolveConversationScope(chatId, conversationId);
+    const identityKey = resolveIdentityKey(chatId, userId, conversationId);
+    const fallbackProvider = this.providerManager.getProvider(identityKey);
 
     // Load user profile once for the entire agent loop
     const profile = this.userProfileStore?.getProfile(identityKey) ?? null;
@@ -1605,11 +1985,12 @@ export class Orchestrator {
     logger.debug("Building system prompt", { chatId });
     const { systemPrompt: builtSystemPrompt, initialContentHashes } = await this.buildSystemPromptWithContext({
       chatId,
+      conversationScope,
       userId,
       channelType,
       prompt: queryText,
       personaContent,
-      isUserTask: true,
+      allowFirstTimeOnboarding: true,
       profile,
       preComputedEmbedding,
     });
@@ -1619,11 +2000,15 @@ export class Orchestrator {
     const errorRecovery = new ErrorRecoveryEngine();
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
+    const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
     // ────────────────────────────────────────────────────────────────────
 
     // ─── PAOR State Machine ──────────────────────────────────────────────
     const lastUserMessage = this.extractLastUserMessage(session);
+    stradaConformance.trackPrompt(lastUserMessage);
     let agentState = createInitialState(lastUserMessage);
+    const executionStrategy = this.buildSupervisorExecutionStrategy(lastUserMessage, identityKey, fallbackProvider);
+    let toolTurnAffinity: SupervisorAssignment | null = null;
 
     let matchedInstinctIds: string[] = [];
     if (this.instinctRetriever) {
@@ -1655,12 +2040,6 @@ export class Orchestrator {
     // ────────────────────────────────────────────────────────────────────
 
     logger.debug("System prompt built", { chatId, promptLength: systemPrompt.length });
-    const canStream =
-      this.streamingEnabled &&
-      "chatStream" in currentProvider &&
-      typeof currentProvider.chatStream === "function" &&
-      "startStreamingMessage" in this.channel &&
-      typeof this.channel.startStreamingMessage === "function";
 
     try {
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -1683,10 +2062,21 @@ export class Orchestrator {
       }
       // ────────────────────────────────────────────────────────────────
 
-      // Phase-aware provider routing (multi-provider orchestration)
-      currentProvider = this.resolveRoutedProvider(lastUserMessage, agentState.phase, currentProvider);
+      const currentAssignment = this.getPinnedToolTurnAssignment(
+        executionStrategy,
+        agentState.phase,
+        toolTurnAffinity,
+      );
+      const currentProvider = currentAssignment.provider;
+      activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
+      const canStream =
+        this.streamingEnabled &&
+        "chatStream" in currentProvider &&
+        typeof currentProvider.chatStream === "function" &&
+        "startStreamingMessage" in this.channel &&
+        typeof this.channel.startStreamingMessage === "function";
 
-      logger.debug("Calling LLM", { chatId, canStream, provider: currentProvider.name, iteration });
+      logger.debug("Calling LLM", { chatId, canStream, provider: currentAssignment.providerName, iteration });
       let response;
       if (canStream) {
         // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
@@ -1697,31 +2087,33 @@ export class Orchestrator {
       }
       logger.debug("LLM responded", { chatId, hasText: !!response.text, textLen: response.text?.length ?? 0, toolCalls: response.toolCalls.length });
 
-      const inputTokens = response.usage?.inputTokens ?? 0;
-      const outputTokens = response.usage?.outputTokens ?? 0;
       logger.debug("LLM response", {
         chatId,
         iteration,
         stopReason: response.stopReason,
         toolCallCount: response.toolCalls.length,
-        inputTokens,
-        outputTokens,
+        inputTokens: response.usage?.inputTokens ?? 0,
+        outputTokens: response.usage?.outputTokens ?? 0,
         streamed: canStream,
       });
-      this.metrics?.recordTokenUsage(inputTokens, outputTokens, currentProvider.name);
-      this.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, currentProvider.name);
-      this.onUsage?.({
-        provider: currentProvider.name,
-        inputTokens,
-        outputTokens,
-      });
+      if (
+        response.toolCalls.length > 0 &&
+        !toolTurnAffinity &&
+        agentState.phase !== AgentPhase.PLANNING &&
+        agentState.phase !== AgentPhase.REPLANNING
+      ) {
+        toolTurnAffinity = currentAssignment;
+      }
+      this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
 
       // ─── PAOR: Handle REFLECTING phase response ─────────────────────
       if (agentState.phase === AgentPhase.REFLECTING) {
         const decision = parseReflectionDecision(response.text);
 
         if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-          const completionGate = getCompletionGatePrompt(agentState, selfVerification, response.text);
+          const completionGate =
+            getCompletionGatePrompt(agentState, selfVerification, response.text) ??
+            stradaConformance.getPrompt();
           if (completionGate) {
             agentState = {
               ...agentState,
@@ -1737,9 +2129,17 @@ export class Orchestrator {
             continue;
           }
 
-          if (response.text) {
-            session.messages.push({ role: "assistant", content: response.text });
-            await this.channel.sendMarkdown(chatId, response.text);
+          const finalText = await this.synthesizeUserFacingResponse({
+            prompt: lastUserMessage,
+            draft: response.text ?? "",
+            agentState,
+            strategy: executionStrategy,
+            systemPrompt,
+            usageHandler: this.onUsage,
+          });
+          if (finalText) {
+            session.messages.push({ role: "assistant", content: finalText });
+            await this.channel.sendMarkdown(chatId, finalText);
           }
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
@@ -1759,9 +2159,9 @@ export class Orchestrator {
           };
 
           // ─── Goal Decomposition: reactive decomposition when stuck ──────
-          if (this.goalDecomposer && this.activeGoalTrees.has(chatId)) {
+          if (this.goalDecomposer && this.activeGoalTrees.has(conversationScope)) {
             try {
-              const goalTree = this.activeGoalTrees.get(chatId)!;
+              const goalTree = this.activeGoalTrees.get(conversationScope)!;
               // Find the currently-executing node
               let executingNodeId: GoalNodeId | null = null;
               for (const [, node] of goalTree.nodes) {
@@ -1779,7 +2179,7 @@ export class Orchestrator {
                   response.text ?? "",
                 );
                 if (updatedTree) {
-                  this.activeGoalTrees.set(chatId, updatedTree);
+                  this.activeGoalTrees.set(conversationScope, updatedTree);
                   const treeViz = renderGoalTree(updatedTree);
                   await this.channel.sendMarkdown(chatId, "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```");
                 } else {
@@ -1844,7 +2244,7 @@ export class Orchestrator {
         if (goalBlock && goalBlock.isGoal) {
           // Build GoalTree from LLM output using shared factory
           const goalTree = buildGoalTreeFromBlock(
-            goalBlock, chatId, lastUserMessage, response.text ?? undefined,
+            goalBlock, conversationScope, lastUserMessage, response.text ?? undefined,
           );
 
           // Send acknowledgment
@@ -1856,6 +2256,7 @@ export class Orchestrator {
           // Submit as background task with pre-decomposed tree
           this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, {
             goalTree,
+            conversationId: conversationScope,
             userId: identityKey,
           });
 
@@ -1877,7 +2278,9 @@ export class Orchestrator {
       // (streaming already sent it, so skip for streamed end_turn)
       if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
         // ─── Verification gate: catch unverified exits ──────────────────
-        const completionGate = getCompletionGatePrompt(agentState, selfVerification, response.text);
+        const completionGate =
+          getCompletionGatePrompt(agentState, selfVerification, response.text) ??
+          stradaConformance.getPrompt();
         if (completionGate) {
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
@@ -1898,7 +2301,7 @@ export class Orchestrator {
             if (textTaskClass.criticality === "critical") {
               const textConfidence = this.confidenceEstimator.estimate({
                 task: textTaskClass,
-                providerName: currentProvider.name ?? "unknown",
+                providerName: currentAssignment.providerName,
                 agentState,
                 responseLength: response.text.length,
               });
@@ -1906,13 +2309,13 @@ export class Orchestrator {
               const textStrategy = this.consensusManager.shouldConsult(textConfidence, textTaskClass, textAvailableCount);
               if (textStrategy !== "skip" && textAvailableCount >= 2) {
                 const textAvailable = this.providerManager.listAvailable();
-                const textReviewName = textAvailable.find(p => p.name !== (currentProvider.name ?? ""))?.name;
+                const textReviewName = textAvailable.find(p => p.name !== currentAssignment.providerName)?.name;
                 if (textReviewName) {
-                  const textReviewProvider = this.providerManager.getProviderByName(textReviewName);
+                  const textReviewProvider = this.getProviderByNameOrFallback(textReviewName, currentProvider).provider;
                   if (textReviewProvider) {
                     const textConsensus = await this.consensusManager.verify({
                       originalOutput: { text: response.text },
-                      originalProvider: currentProvider.name ?? "unknown",
+                      originalProvider: currentAssignment.providerName,
                       task: textTaskClass,
                       confidence: textConfidence,
                       reviewProvider: textReviewProvider,
@@ -1936,11 +2339,21 @@ export class Orchestrator {
         // ────────────────────────────────────────────────────────────────
 
         if (response.text) {
-          session.messages.push({
-            role: "assistant",
-            content: response.text,
+          const finalText = await this.synthesizeUserFacingResponse({
+            prompt: lastUserMessage,
+            draft: response.text,
+            agentState,
+            strategy: executionStrategy,
+            systemPrompt,
+            usageHandler: this.onUsage,
           });
-          await this.channel.sendMarkdown(chatId, response.text);
+          if (finalText) {
+            session.messages.push({
+              role: "assistant",
+              content: finalText,
+            });
+            await this.channel.sendMarkdown(chatId, finalText);
+          }
         } else {
           // LLM returned empty response — send fallback to user
           const lang = profile?.language ?? this.defaultLanguage;
@@ -1952,7 +2365,7 @@ export class Orchestrator {
             : lang === "es" ? "No pude generar una respuesta. ¿Podría reformular su pregunta?"
             : lang === "fr" ? "Je n'ai pas pu générer de réponse. Pourriez-vous reformuler votre question ?"
             : "I wasn't able to generate a response. Could you rephrase your question?";
-          logger.warn("LLM returned empty response", { chatId, canStream, provider: currentProvider.name });
+          logger.warn("LLM returned empty response", { chatId, canStream, provider: currentAssignment.providerName });
           await this.channel.sendMarkdown(chatId, fallback);
         }
         // ─── Metrics: record end_turn ───────────────────────────────
@@ -1973,8 +2386,8 @@ export class Orchestrator {
         // ─── Goal Decomposition: proactive decomposition for complex tasks ───
         if (this.goalDecomposer && this.goalDecomposer.shouldDecompose(lastUserMessage)) {
           try {
-            const goalTree = await this.goalDecomposer.decomposeProactive(chatId, lastUserMessage);
-            this.activeGoalTrees.set(chatId, goalTree);
+            const goalTree = await this.goalDecomposer.decomposeProactive(conversationScope, lastUserMessage);
+            this.activeGoalTrees.set(conversationScope, goalTree);
             this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
             const treeViz = renderGoalTree(goalTree);
             await this.channel.sendMarkdown(chatId, "Goal decomposition:\n```\n" + treeViz + "\n```");
@@ -2027,6 +2440,7 @@ export class Orchestrator {
         // O(1) tracking in planner & verifier
         taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
         selfVerification.track(tc.name, tc.input, tr);
+        stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
 
         // Error recovery: analyze and enrich the tool result
         const analysis = errorRecovery.analyze(tc.name, tr);
@@ -2054,7 +2468,7 @@ export class Orchestrator {
           const taskClass = this.taskClassifier.classify(lastUserMessage);
           const confidence = this.confidenceEstimator.estimate({
             task: taskClass,
-            providerName: currentProvider.name ?? "unknown",
+            providerName: currentAssignment.providerName,
             agentState,
             responseLength: (response.text ?? "").length,
           });
@@ -2064,9 +2478,9 @@ export class Orchestrator {
 
           if (strategy !== "skip" && availableCount >= 2) {
             const available = this.providerManager.listAvailable();
-            const reviewProviderName = available.find(p => p.name !== (currentProvider.name ?? ""))?.name;
+            const reviewProviderName = available.find(p => p.name !== currentAssignment.providerName)?.name;
             if (reviewProviderName) {
-              const reviewProvider = this.providerManager.getProviderByName(reviewProviderName);
+              const reviewProvider = this.getProviderByNameOrFallback(reviewProviderName, currentProvider).provider;
               if (reviewProvider) {
                 const consensusResult = await this.consensusManager.verify({
                   originalOutput: {
@@ -2076,7 +2490,7 @@ export class Orchestrator {
                       input: tc.input,
                     })),
                   },
-                  originalProvider: currentProvider.name ?? "unknown",
+                  originalProvider: currentAssignment.providerName,
                   task: taskClass,
                   confidence,
                   reviewProvider,
@@ -2998,12 +3412,13 @@ export class Orchestrator {
     // Evict oldest session if at capacity
     if (this.sessions.size >= MAX_SESSIONS) {
       const oldestKey = this.sessions.keys().next().value as string;
+      const oldestSession = this.sessions.get(oldestKey);
       this.sessions.delete(oldestKey);
       this.sessionLocks.delete(oldestKey);
-      this.activeGoalTrees.delete(oldestKey);
+      this.activeGoalTrees.delete(oldestSession?.conversationScope ?? oldestKey);
     }
 
-    session = { messages: [], lastActivity: new Date() };
+    session = { messages: [], lastActivity: new Date(), mixedParticipants: false };
     this.sessions.set(chatId, session);
     return session;
   }
@@ -3086,7 +3501,7 @@ export class Orchestrator {
 
         // Session-end summarization (fire-and-forget)
         if (this.sessionSummarizer && session.messages.length >= 2) {
-          void this.sessionSummarizer.summarizeAndUpdateProfile(chatId, session.messages)
+          void this.sessionSummarizer.summarizeAndUpdateProfile(session.profileKey ?? chatId, session.messages)
             .catch(() => {
               // Session summarization failure is non-fatal
             });
@@ -3095,7 +3510,7 @@ export class Orchestrator {
         void this.persistSessionToMemory(chatId, session.messages.slice(-10), /* force */ true);
         this.lastPersistTime.delete(chatId);
         this.sessions.delete(chatId);
-        this.activeGoalTrees.delete(chatId);
+        this.activeGoalTrees.delete(session.conversationScope ?? chatId);
       }
     }
   }
@@ -3355,6 +3770,24 @@ export class Orchestrator {
     }
     return refresher;
   }
+
+  private takePendingResumeTrees(conversationScope: string, chatId: string): GoalTree[] {
+    const scoped = this.pendingResumeTrees.get(conversationScope);
+    if (scoped && scoped.length > 0) {
+      this.pendingResumeTrees.delete(conversationScope);
+      return scoped;
+    }
+
+    if (conversationScope !== chatId) {
+      const legacyChatScoped = this.pendingResumeTrees.get(chatId);
+      if (legacyChatScoped && legacyChatScoped.length > 0) {
+        this.pendingResumeTrees.delete(chatId);
+        return legacyChatScoped;
+      }
+    }
+
+    return [];
+  }
 }
 
 /**
@@ -3504,7 +3937,7 @@ function isCleanVerificationStep(step: StepResult): boolean {
   if (!step.success) {
     return false;
   }
-  if (VERIFY_TOOLS.has(step.toolName)) {
+  if (isVerificationToolName(step.toolName)) {
     return true;
   }
   if (step.toolName !== "shell_exec") {
