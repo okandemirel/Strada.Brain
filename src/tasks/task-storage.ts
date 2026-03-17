@@ -215,8 +215,8 @@ export class TaskStorage {
       updateResult: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       updateError: `UPDATE tasks SET error = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       listByChatId: `SELECT * FROM tasks WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?`,
-      listActiveByChatId: `SELECT * FROM tasks WHERE chat_id = ? AND status IN ('pending', 'planning', 'executing', 'paused') ORDER BY created_at DESC`,
-      loadIncomplete: `SELECT * FROM tasks WHERE status IN ('pending', 'planning', 'executing', 'paused')`,
+      listActiveByChatId: `SELECT * FROM tasks WHERE chat_id = ? AND status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input') ORDER BY created_at DESC`,
+      loadIncomplete: `SELECT * FROM tasks WHERE status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input')`,
       insertProgress: `INSERT INTO task_progress (task_id, timestamp, message) VALUES (?, ?, ?)`,
       getProgress: `SELECT * FROM task_progress WHERE task_id = ? ORDER BY timestamp ASC`,
     };

@@ -102,6 +102,101 @@ describe("DashboardServer", () => {
     expect(res.status).toBe(404);
   });
 
+  it("returns trigger objects compatible with dashboard view contracts", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.setDaemonContext({
+      registry: {
+        getAll: vi.fn().mockReturnValue([
+          {
+            metadata: { name: "nightly-scan", type: "cron" },
+            getState: vi.fn().mockReturnValue("active"),
+            getNextRun: vi.fn().mockReturnValue(new Date("2026-03-17T19:00:00.000Z")),
+          },
+        ]),
+      } as unknown as import("../daemon/trigger-registry.js").TriggerRegistry,
+    });
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/triggers`);
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data).toEqual([
+      expect.objectContaining({
+        id: "nightly-scan",
+        name: "nightly-scan",
+        type: "cron",
+        enabled: true,
+        state: "active",
+        fireCount: 0,
+      }),
+    ]);
+  });
+
+  it("returns provider payloads compatible with both settings page and model selector", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.registerExtendedServices({
+      providerManager: {
+        listAvailable: () => [
+          {
+            name: "kimi",
+            label: "Kimi (Moonshot)",
+            defaultModel: "kimi-for-coding",
+            configured: true,
+            models: ["kimi-for-coding"],
+          },
+        ],
+        listAvailableWithModels: async () => [
+          {
+            name: "kimi",
+            label: "Kimi (Moonshot)",
+            defaultModel: "kimi-for-coding",
+            configured: true,
+            models: ["kimi-for-coding", "kimi-fast"],
+            activeModel: "kimi-for-coding",
+          },
+        ],
+        getActiveInfo: () => ({
+          provider: "kimi",
+          providerName: "kimi",
+          model: "kimi-for-coding",
+          isDefault: false,
+        }),
+        setPreference: async () => {},
+      },
+    });
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const availableRes = await fetch(`http://localhost:${addr.port}/api/providers/available`);
+    expect(availableRes.status).toBe(200);
+    const availableData = await availableRes.json();
+    expect(availableData.providers[0]).toEqual(expect.objectContaining({
+      name: "kimi",
+      label: "Kimi (Moonshot)",
+      defaultModel: "kimi-for-coding",
+      configured: true,
+      models: ["kimi-for-coding"],
+    }));
+
+    const activeRes = await fetch(`http://localhost:${addr.port}/api/providers/active?chatId=chat-1`);
+    expect(activeRes.status).toBe(200);
+    const activeData = await activeRes.json();
+    expect(activeData.active).toEqual(expect.objectContaining({
+      provider: "kimi",
+      providerName: "kimi",
+      model: "kimi-for-coding",
+      isDefault: false,
+    }));
+  });
+
   describe("/api/agent-metrics", () => {
     function getPort(srv: DashboardServer): number {
       const addr = (srv as unknown as { server: { address: () => { port: number } } }).server.address();

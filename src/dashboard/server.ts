@@ -160,9 +160,27 @@ interface DashboardProviderRouter {
 
 /** Structural interface for provider management used by dashboard /api/providers endpoints */
 interface DashboardProviderManager {
-  listAvailable(): { name: string; configured: boolean; models?: string[] }[];
-  listAvailableWithModels?(): Promise<{ name: string; configured: boolean; models: string[]; activeModel: string }[]>;
-  getActiveInfo(chatId: string): { provider: string; model?: string } | null;
+  listAvailable(): Array<{
+    name: string;
+    configured: boolean;
+    label?: string;
+    defaultModel?: string;
+    models?: string[];
+  }>;
+  listAvailableWithModels?(): Promise<Array<{
+    name: string;
+    configured: boolean;
+    label?: string;
+    defaultModel?: string;
+    models: string[];
+    activeModel?: string;
+  }>>;
+  getActiveInfo(chatId: string): {
+    provider?: string;
+    providerName?: string;
+    model?: string;
+    isDefault?: boolean;
+  } | null;
   setPreference(chatId: string, provider: string, model?: string): Promise<void>;
 }
 
@@ -744,11 +762,15 @@ export class DashboardServer {
 
         const triggerList = triggers.map((t) => {
           const nextRun = t.getNextRun();
+          const state = t.getState();
           return {
+            id: t.metadata.name,
             name: t.metadata.name,
             type: t.metadata.type,
-            state: t.getState(),
+            state,
+            enabled: state !== "disabled",
             nextRun: nextRun ? nextRun.toISOString() : null,
+            fireCount: 0,
           };
         });
 

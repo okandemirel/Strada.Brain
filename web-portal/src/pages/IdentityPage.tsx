@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { formatUptime } from '../utils/format'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson } from '../utils/api'
+import { fetchJson, firstSettledError, settledValue } from '../utils/api'
 
 interface IdentityState {
   agentName: string
@@ -49,19 +49,25 @@ export default function IdentityPage() {
   const [loading, setLoading] = useState(true)
 
   const fetchData = useCallback(() => {
-    Promise.all([
+    Promise.allSettled([
       fetchJson<DaemonData>('/api/daemon'),
       fetchJson<{ uptime: number }>('/api/metrics'),
-    ]).then(([daemonData, metricsData]: [DaemonData | null, { uptime: number } | null]) => {
+    ]).then((results) => {
+      const [daemonResult, metricsResult] = results
+      const daemonData = settledValue(daemonResult)
+      const metricsData = settledValue(metricsResult)
+
       if (daemonData) setDaemon(daemonData)
       if (metricsData?.uptime) setUptime(metricsData.uptime / 1000)
       if (daemonData || metricsData) {
         setError(null)
       }
-      if (!daemonData && !metricsData) setError('Could not reach the server')
+      if (!daemonData && !metricsData) {
+        setError(firstSettledError(results) ?? 'Could not reach the server')
+      }
       setLoading(false)
     }).catch(e => {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : String(e))
       setLoading(false)
     })
   }, [])

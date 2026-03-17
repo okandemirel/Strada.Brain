@@ -369,6 +369,25 @@ describe("AgentManager", () => {
       const response = await manager.routeMessage(makeMsg());
       expect(response).toBe("mock response");
     });
+
+    it("force stop releases live resources so startAgent reloads cleanly", async () => {
+      await manager.routeMessage(makeMsg());
+      const agent = manager.getAllAgents()[0]!;
+
+      expect(manager.getActiveCount()).toBe(1);
+      expect(manager.getLiveOrchestrator(agent.id)).toBeDefined();
+
+      await manager.stopAgent(agent.id, true);
+
+      expect(manager.getActiveCount()).toBe(0);
+      expect(manager.getLiveOrchestrator(agent.id)).toBeUndefined();
+
+      await manager.startAgent(agent.id);
+
+      expect(manager.getActiveCount()).toBe(1);
+      const response = await manager.routeMessage(makeMsg());
+      expect(response).toBe("mock response");
+    });
   });
 
   // ===========================================================================

@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson } from '../utils/api'
+import { fetchJson, firstSettledError, settledValue } from '../utils/api'
 
 interface ToolInfo {
   name: string
@@ -25,10 +25,14 @@ export default function ToolsPage() {
   const [typeFilter, setTypeFilter] = useState<string>('all')
 
   const fetchData = useCallback(() => {
-    Promise.all([
+    Promise.allSettled([
       fetchJson<ToolsData>('/api/tools'),
       fetchJson<Record<string, unknown>>('/api/metrics'),
-    ]).then(([toolsData, metricsData]: [ToolsData | null, Record<string, unknown> | null]) => {
+    ]).then((results) => {
+      const [toolsResult, metricsResult] = results
+      const toolsData = settledValue(toolsResult)
+      const metricsData = settledValue(metricsResult)
+
       if (toolsData?.tools) {
         setTools(toolsData.tools)
       }
@@ -49,9 +53,12 @@ export default function ToolsPage() {
       if (toolsData || metricsData) {
         setError(null)
       }
+      if (!toolsData && !metricsData) {
+        setError(firstSettledError(results) ?? 'Could not reach tool endpoints')
+      }
       setLoading(false)
     }).catch(e => {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : String(e))
       setLoading(false)
     })
   }, [])

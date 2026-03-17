@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { formatUptime } from '../utils/format'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson } from '../utils/api'
+import { fetchJson, firstSettledError, settledValue } from '../utils/api'
 
 interface HealthData {
   status: string
@@ -44,10 +44,14 @@ export default function ChannelsPage() {
   const [loading, setLoading] = useState(true)
 
   const fetchData = useCallback(() => {
-    Promise.all([
+    Promise.allSettled([
       fetchJson<{ channels: ChannelInfo[] }>('/api/channels'),
       fetchJson<HealthData>('/health'),
-    ]).then(([channelsData, healthData]: [{ channels: ChannelInfo[] } | null, HealthData | null]) => {
+    ]).then((results) => {
+      const [channelsResult, healthResult] = results
+      const channelsData = settledValue(channelsResult)
+      const healthData = settledValue(healthResult)
+
       if (healthData) setHealth(healthData)
       if (channelsData || healthData) {
         setError(null)
@@ -67,8 +71,11 @@ export default function ChannelsPage() {
         }])
       }
       setLoading(false)
+      if (!channelsData && !healthData) {
+        setError(firstSettledError(results) ?? 'Could not reach channel endpoints')
+      }
     }).catch(e => {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : String(e))
       setLoading(false)
     })
   }, [])

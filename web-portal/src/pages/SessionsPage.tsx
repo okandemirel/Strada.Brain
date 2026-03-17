@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { formatTimeAgo } from '../utils/format'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson } from '../utils/api'
+import { fetchJson, firstSettledError, settledValue } from '../utils/api'
 
 interface SessionInfo {
   id: string
@@ -42,15 +42,16 @@ export default function SessionsPage() {
   const [loading, setLoading] = useState(true)
 
   const fetchData = useCallback(() => {
-    Promise.all([
+    Promise.allSettled([
       fetchJson<{ sessions: SessionInfo[] }>('/api/sessions'),
       fetchJson<MetricsData>('/api/metrics'),
       fetchJson<AgentsData>('/api/agents'),
-    ]).then(([sessionsData, metricsData, agentsData]: [
-      { sessions: SessionInfo[] } | null,
-      MetricsData | null,
-      AgentsData | null,
-    ]) => {
+    ]).then((results) => {
+      const [sessionsResult, metricsResult, agentsResult] = results
+      const sessionsData = settledValue(sessionsResult)
+      const metricsData = settledValue(metricsResult)
+      const agentsData = settledValue(agentsResult)
+
       if (metricsData) setMetrics(metricsData)
       if (sessionsData || metricsData || agentsData) {
         setError(null)
@@ -69,9 +70,12 @@ export default function SessionsPage() {
         }))
         setSessions(synth)
       }
+      if (!sessionsData && !metricsData && !agentsData) {
+        setError(firstSettledError(results) ?? 'Could not reach session endpoints')
+      }
       setLoading(false)
     }).catch(e => {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : String(e))
       setLoading(false)
     })
   }, [])

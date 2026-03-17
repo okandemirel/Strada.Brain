@@ -52,6 +52,7 @@ export interface GoalExecutorConfig {
   maxFailures: number;
   parallelExecution: boolean;
   maxParallel: number;
+  maxRedecompositions?: number;
 }
 
 /** Executes a single node's task. Injected by BackgroundExecutor. */
@@ -172,6 +173,8 @@ export class GoalExecutor {
       if (left.length !== right.length) return false;
       return left.every((depId, index) => depId === right[index]);
     };
+
+    const maxRedecompositions = this.config.maxRedecompositions ?? 2;
 
     const hasMeaningfulRecovery = (
       nodeId: GoalNodeId,
@@ -297,7 +300,10 @@ export class GoalExecutor {
           // LLM-driven recovery: ask whether to retry or re-decompose
           if (opts?.onNodeFailed) {
             const failedNode = mutableNodes.get(nodeId)!;
-            const recoveredTree = await opts.onNodeFailed(buildTree(), failedNode);
+            const currentRedecompositionCount = failedNode.redecompositionCount ?? 0;
+            const recoveredTree = currentRedecompositionCount < maxRedecompositions
+              ? await opts.onNodeFailed(buildTree(), failedNode)
+              : null;
             if (recoveredTree && hasMeaningfulRecovery(nodeId, recoveredTree)) {
               mergeRecoveredTree(recoveredTree);
 
@@ -307,7 +313,7 @@ export class GoalExecutor {
               const recoveredNode = mutableNodes.get(nodeId)!;
               const redecompositionCount = Math.max(
                 recoveredNode.redecompositionCount ?? 0,
-                (failedNode.redecompositionCount ?? 0) + 1,
+                currentRedecompositionCount + 1,
               );
 
               if (recoveredNode.status === "failed") {

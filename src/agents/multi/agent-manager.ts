@@ -247,7 +247,9 @@ export class AgentManager {
     liveAgent.instance = { ...liveAgent.instance, status: "stopped" };
 
     if (force) {
+      liveAgent.orchestrator.cleanupSessions();
       await liveAgent.memory.shutdown();
+      this.agents.delete(liveAgent.instance.key);
     }
 
     this.eventBus.emit("agent:stopped", this.buildLifecycleEvent(liveAgent.instance));

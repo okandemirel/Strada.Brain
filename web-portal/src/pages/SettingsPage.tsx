@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useWS } from '../hooks/useWS'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson } from '../utils/api'
+import { fetchJson, settledValue } from '../utils/api'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -140,13 +140,19 @@ export default function SettingsPage() {
 
   // --- Fetch providers ---
   const fetchProviders = useCallback(() => {
-    Promise.all([
+    Promise.allSettled([
       fetchJson<{ providers: ProviderInfo[] }>('/api/providers/available'),
       fetchJson<{ active: ActiveProvider | null }>(`/api/providers/active?chatId=${encodeURIComponent(chatId)}`),
-    ]).then(([availData, activeData]) => {
+    ]).then((results) => {
+      const [availResult, activeResult] = results
+      const availData = settledValue(availResult)
+      const activeData = settledValue(activeResult)
       if (availData?.providers) setProviders(availData.providers)
       if (activeData?.active) setActiveProvider(activeData.active)
       setModelLoading(false)
+      if (!availData && !activeData) {
+        setProviders([])
+      }
     }).catch(() => {
       setModelLoading(false)
     })

@@ -193,7 +193,9 @@ export class NotificationRouter {
    * Stop event subscriptions and scheduled tasks.
    */
   stop(): void {
-    // Cleanup is handled by EventBus lifecycle
+    for (const listener of this.listeners) {
+      this.eventBus.off(listener.event as keyof DaemonEventMap & string, listener.fn as never);
+    }
     this.listeners.length = 0;
   }
 

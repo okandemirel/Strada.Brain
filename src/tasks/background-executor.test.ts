@@ -164,6 +164,33 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(mockDecomposer.decomposeProactive).toHaveBeenCalled();
   });
 
+  it("does not overwrite cancelled tasks back to executing when already aborted", async () => {
+    const task = createTestTask();
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const onProgress = vi.fn();
+    const ac = new AbortController();
+    ac.abort();
+    executor.enqueue(task, ac.signal, onProgress);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockTaskManager.updateStatus).not.toHaveBeenCalled();
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
+    expect(onProgress).not.toHaveBeenCalledWith("Task started");
+  });
+
   it("persists goalTree via GoalStorage.upsertTree at start of execution", async () => {
     const goalTree = buildTestGoalTree();
     const task = createTestTask(goalTree);

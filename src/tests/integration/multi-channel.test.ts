@@ -343,7 +343,7 @@ describe("Multi-Channel Flow Integration", () => {
   });
 
   describe("Channel-Specific Features", () => {
-    it("should use streaming for Discord if enabled", async () => {
+    it("should use provider streaming for Discord if enabled", async () => {
       // Create new orchestrator with streaming
       const streamingDiscordChannel = createMockDiscordChannel({ supportsStreaming: true });
       const streamingOrchestrator = new Orchestrator({
@@ -368,9 +368,9 @@ describe("Multi-Channel Flow Integration", () => {
 
       await streamingDiscordChannel.simulateIncomingMessage("discord-stream", "Test streaming");
 
-      // Assert: Streaming methods were called
-      expect(streamingDiscordChannel.startStreamingSpy).toHaveBeenCalled();
-      expect(streamingDiscordChannel.finalizeStreamingSpy).toHaveBeenCalled();
+      // Assert: Orchestrator used the provider streaming path and still delivered the final response
+      expect(mockProvider.chatStreamSpy).toHaveBeenCalled();
+      expect(streamingDiscordChannel.hasMarkdownContaining("Streaming response for Discord", "discord-stream")).toBe(true);
     });
 
     it("should use confirmation dialogs appropriately per channel", async () => {

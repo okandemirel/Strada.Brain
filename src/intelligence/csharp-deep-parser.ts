@@ -1357,21 +1357,21 @@ export function parseDeep(content: string, filePath: string): CSharpAST {
 
 /** Flatten all types from an AST (including nested types and namespace-scoped). */
 export function flattenTypes(ast: CSharpAST): TypeDecl[] {
-  const result: TypeDecl[] = [...ast.types];
-  for (const ns of ast.namespaces) {
-    result.push(...ns.members);
-  }
+  const result: TypeDecl[] = [];
 
-  // Recursively collect nested types
-  const collectNested = (types: TypeDecl[]) => {
+  const collectNested = (types: readonly TypeDecl[]) => {
     for (const t of types) {
+      result.push(t);
       if (t.kind === "class" || t.kind === "struct") {
-        result.push(...t.nestedTypes);
         collectNested(t.nestedTypes);
       }
     }
   };
-  collectNested(result);
+
+  collectNested(ast.types);
+  for (const ns of ast.namespaces) {
+    collectNested(ns.members);
+  }
 
   return result;
 }

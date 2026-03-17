@@ -172,6 +172,22 @@ describe("NotificationRouter", () => {
 
       router.stop();
     });
+
+    it("stop unsubscribes daemon event listeners", async () => {
+      const router = createRouter();
+      router.start();
+      router.stop();
+
+      eventBus.emit("daemon:trigger_fired", {
+        triggerName: "after-stop",
+        taskId: "task-2",
+        timestamp: Date.now(),
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(storage.getNotificationHistory(10)).toHaveLength(0);
+    });
   });
 
   describe("time-window grouping", () => {

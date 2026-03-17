@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson } from '../utils/api'
+import { fetchJson, firstSettledError, settledValue } from '../utils/api'
 
 interface MemoryMetrics {
   totalEntries: number
@@ -50,15 +50,16 @@ export default function MemoryPage() {
   const [loading, setLoading] = useState(true)
 
   const fetchData = useCallback(() => {
-    Promise.all([
+    Promise.allSettled([
       fetchJson<{ memory: MemoryMetrics | null }>('/api/memory'),
       fetchJson<ConsolidationData>('/api/consolidation'),
       fetchJson<MaintenanceData>('/api/maintenance'),
-    ]).then(([metricsData, consData, maintData]: [
-      { memory: MemoryMetrics | null } | null,
-      ConsolidationData | null,
-      MaintenanceData | null,
-    ]) => {
+    ]).then((results) => {
+      const [metricsResult, consResult, maintResult] = results
+      const metricsData = settledValue(metricsResult)
+      const consData = settledValue(consResult)
+      const maintData = settledValue(maintResult)
+
       if (metricsData?.memory) setMemoryStats(metricsData.memory)
       if (consData) setConsolidation(consData)
       if (maintData) setMaintenance(maintData)
@@ -66,11 +67,11 @@ export default function MemoryPage() {
         setError(null)
       }
       if (!metricsData && !consData && !maintData) {
-        setError('Could not reach memory endpoints')
+        setError(firstSettledError(results) ?? 'Could not reach memory endpoints')
       }
       setLoading(false)
     }).catch(e => {
-      setError(e.message)
+      setError(e instanceof Error ? e.message : String(e))
       setLoading(false)
     })
   }, [])

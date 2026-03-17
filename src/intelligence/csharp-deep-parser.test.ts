@@ -539,6 +539,19 @@ public class Outer {
     expect(names).toContain("Middle");
     expect(names).toContain("Inner");
   });
+
+  it("does not duplicate nested types while flattening", () => {
+    const code = `
+public class Outer {
+    public class Middle {
+        public class Inner { }
+    }
+}`;
+    const ast = parseDeep(code, "t.cs");
+    const all = flattenTypes(ast);
+
+    expect(all.map((t) => t.name)).toEqual(["Outer", "Middle", "Inner"]);
+  });
 });
 
 describe("deepInheritsFrom", () => {

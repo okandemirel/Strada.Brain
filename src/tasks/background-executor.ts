@@ -213,6 +213,10 @@ export class BackgroundExecutor {
       return;
     }
 
+    if (signal.aborted) {
+      return;
+    }
+
     // Update status to executing
     this.taskManager.updateStatus(task.id, TaskStatus.executing);
     onProgress("Task started");
@@ -323,8 +327,13 @@ export class BackgroundExecutor {
     }
 
     // Create executor with config (or defaults)
-    const config = this.goalExecutorConfig ?? {
-      maxRetries: 1, maxFailures: 3, parallelExecution: true, maxParallel: 3,
+    const config: GoalExecutorConfig = {
+      maxRetries: 1,
+      maxFailures: 3,
+      parallelExecution: true,
+      maxParallel: 3,
+      ...this.goalExecutorConfig,
+      maxRedecompositions: this.goalExecutorConfig?.maxRedecompositions ?? this.goalConfig?.maxRedecompositions ?? 2,
     };
     const executor = new GoalExecutor(config);
 

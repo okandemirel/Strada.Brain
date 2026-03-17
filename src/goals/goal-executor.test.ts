@@ -695,6 +695,31 @@ describe("GoalExecutor", () => {
     expect(result.tree.nodes.get(aId)?.status).toBe("failed");
   });
 
+  it("stops requesting recovery trees once maxRedecompositions is reached", async () => {
+    const executor = new GoalExecutor({ ...defaultConfig, maxRetries: 0, maxRedecompositions: 1 });
+    const rootId = generateGoalNodeId();
+    const aId = generateGoalNodeId();
+    const root = makeNode({ id: rootId, task: "Root", status: "completed" });
+    const a = makeNode({
+      id: aId,
+      parentId: rootId,
+      depth: 1,
+      task: "FAIL-A",
+      dependsOn: [],
+      redecompositionCount: 1,
+    });
+    const tree = makeTree([root, a], rootId);
+
+    const onNodeFailed = vi.fn().mockResolvedValue(makeTree([root, a], rootId));
+    const result = await executor.executeTree(tree, mockExecutor, new AbortController().signal, {
+      onNodeFailed,
+    });
+
+    expect(onNodeFailed).not.toHaveBeenCalled();
+    expect(result.tree.nodes.get(aId)?.status).toBe("failed");
+    expect(result.failureCount).toBe(1);
+  });
+
   it("proceeds normally when onNodeFailed returns null", async () => {
     const onNodeFailed = vi.fn().mockResolvedValue(null);
     const executor = new GoalExecutor({ ...defaultConfig, maxRetries: 0 });

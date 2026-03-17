@@ -437,6 +437,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     maxFailures: config.goalMaxFailures,
     parallelExecution: config.goalParallelExecution,
     maxParallel: config.goalMaxParallel,
+    maxRedecompositions: config.goal.maxRedecompositions,
   };
 
   // Register services for deep readiness checks and agent metrics endpoint
@@ -1296,6 +1297,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       providerManager: {
         listAvailable: () => providerManager.listAvailable().map(p => ({
           name: p.name,
+          label: p.label,
+          defaultModel: p.defaultModel,
           configured: true,
           models: [p.defaultModel],
         })),
@@ -1303,6 +1306,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           const results = await providerManager.listAvailableWithModels();
           return results.map(p => ({
             name: p.name,
+            label: p.label,
+            defaultModel: p.defaultModel,
             configured: true,
             models: p.models,
             activeModel: p.defaultModel,
@@ -1310,7 +1315,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         },
         getActiveInfo: (chatId: string) => {
           const info = providerManager.getActiveInfo(chatId);
-          return info ? { provider: info.providerName, model: info.model } : null;
+          return info ? {
+            provider: info.providerName,
+            providerName: info.providerName,
+            model: info.model,
+            isDefault: info.isDefault,
+          } : null;
         },
         setPreference: async (chatId: string, provider: string, model?: string) => {
           providerManager.setPreference(chatId, provider, model);

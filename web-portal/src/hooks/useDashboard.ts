@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAutoRefresh } from './useAutoRefresh'
-import { fetchJson } from '../utils/api'
+import { fetchJson, firstSettledError, settledValue } from '../utils/api'
 
 const POLL_INTERVAL = 5000
 
@@ -144,30 +144,37 @@ export function useDashboard(): UseDashboardReturn {
 
   const fetchAll = useCallback(async () => {
     try {
-      // All endpoints on same origin — web channel proxies /api/* to dashboard server
-      const healthPromise = fetchJson<HealthData>('/health')
-      const metricsPromise = fetchJson<MetricsData>('/api/metrics')
-      const triggersPromise = fetchJson<TriggerData[]>('/api/triggers')
-      const agentsPromise = fetchJson<AgentsData>('/api/agents')
-      const delegationsPromise = fetchJson<DelegationsData>('/api/delegations')
-      const consolidationPromise = fetchJson<ConsolidationData>('/api/consolidation')
-      const deploymentPromise = fetchJson<DeploymentData>('/api/deployment')
-      const maintenancePromise = fetchJson<MaintenanceData>('/api/maintenance')
-
-      const [
-        health, metrics, triggers,
-        agents, delegations, consolidation, deployment, maintenance,
-      ] = await Promise.all([
-        healthPromise, metricsPromise, triggersPromise,
-        agentsPromise, delegationsPromise, consolidationPromise, deploymentPromise, maintenancePromise,
+      const results = await Promise.allSettled([
+        fetchJson<HealthData>('/health'),
+        fetchJson<MetricsData>('/api/metrics'),
+        fetchJson<TriggerData[]>('/api/triggers'),
+        fetchJson<AgentsData>('/api/agents'),
+        fetchJson<DelegationsData>('/api/delegations'),
+        fetchJson<ConsolidationData>('/api/consolidation'),
+        fetchJson<DeploymentData>('/api/deployment'),
+        fetchJson<MaintenanceData>('/api/maintenance'),
       ])
+      const [
+        healthResult, metricsResult, triggersResult,
+        agentsResult, delegationsResult, consolidationResult, deploymentResult, maintenanceResult,
+      ] = results
+      const health = settledValue(healthResult)
+      const metrics = settledValue(metricsResult)
+      const triggers = settledValue(triggersResult)
+      const agents = settledValue(agentsResult)
+      const delegations = settledValue(delegationsResult)
+      const consolidation = settledValue(consolidationResult)
+      const deployment = settledValue(deploymentResult)
+      const maintenance = settledValue(maintenanceResult)
 
       if (!mountedRef.current) return
 
       // If metrics fetch failed, dashboard is likely disabled
       const isDashboardUp = metrics !== null
       setDashboardEnabled(isDashboardUp)
-      setError(!isDashboardUp && !health ? 'Dashboard not enabled and web channel unreachable' : null)
+      setError(!isDashboardUp && !health
+        ? firstSettledError(results) ?? 'Dashboard not enabled and web channel unreachable'
+        : null)
 
       setData({
         health,
@@ -183,8 +190,11 @@ export function useDashboard(): UseDashboardReturn {
         setLoading(false)
         setLastUpdated(Date.now())
       }
-    } catch {
-      if (mountedRef.current) setLoading(false)
+    } catch (error) {
+      if (mountedRef.current) {
+        setError(error instanceof Error ? error.message : 'Failed to load dashboard data')
+        setLoading(false)
+      }
     }
   }, [])
 
