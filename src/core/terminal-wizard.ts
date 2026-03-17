@@ -44,7 +44,7 @@ export function validateUnityPath(inputPath: string): ValidationResult {
   const trimmed = inputPath.trim();
 
   if (!path.isAbsolute(trimmed)) {
-    return { valid: false, error: "Path must be absolute (e.g. /Users/you/MyGame)." };
+    return { valid: false, error: "Path must be absolute (e.g. /path/to/MyGame)." };
   }
 
   let resolved: string;

@@ -76,6 +76,7 @@ describe("docs consistency", () => {
       const content = readRepoFile(relativePath);
       expect(content).toMatch(/\[README\.md\]\(README\.md\)/u);
       expect(content).toMatch(/translation|ceviri|uebersetzung|traduccion|traduction|翻訳|번역|翻译/ui);
+      expect(content).not.toMatch(/76\s*(?:tools?|arac|outils?|herramientas|ツール|개 도구|工具)/iu);
     }
   });
 

@@ -383,7 +383,7 @@ Guvenlik: tickInFlight korumasi, hiz sinirlamasi, butce tabani (%10) ve DaemonSe
 
 ### Strada.MCP Entegrasyonu
 
-Strada.Brain, [Strada.MCP](https://github.com/okandemirel/Strada.MCP)'yi (76 aracli Unity MCP sunucusu) tespit eder ve ajani mevcut MCP yetenekleri hakkinda bilgilendirir: calisma zamani kontrolu, dosya islemleri, git, .NET derleme, kod analizi ve sahne/prefab yonetimi.
+Strada.Brain, [Strada.MCP](https://github.com/okandemirel/Strada.MCP)'yi (Unity MCP sunucusu) tespit eder ve ajani mevcut MCP yetenekleri hakkinda bilgilendirir: calisma zamani kontrolu, dosya islemleri, git, .NET derleme, kod analizi ve sahne/prefab yonetimi.
 
 ---
 

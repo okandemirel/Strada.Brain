@@ -2,7 +2,7 @@
  * Authoritative Strada.Core API Reference
  *
  * Single source of truth for Strada.Core API surface, verified against
- * real source at /Users/okanunico/Documents/Strada/Strada.Core/.
+ * a real Strada.Core source checkout during sync/audit workflows.
  *
  * Consumed by: strada-knowledge.ts, system-create.ts, module-create.ts,
  * component-create.ts, mediator-create.ts, strada-analyzer.ts.

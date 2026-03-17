@@ -424,7 +424,7 @@ Con 2+ proveedores configurados, Strada.Brain enruta automaticamente las tareas 
 
 ### Integracion con Strada.MCP
 
-Strada.Brain detecta [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (servidor MCP Unity de 76 herramientas) e informa al agente sobre las capacidades MCP disponibles, incluyendo control de tiempo de ejecucion, operaciones de archivos, git, compilacion .NET, analisis de codigo y gestion de escenas/prefabs.
+Strada.Brain detecta [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (servidor MCP de Unity) e informa al agente sobre las capacidades MCP disponibles, incluyendo control de tiempo de ejecucion, operaciones de archivos, git, compilacion .NET, analisis de codigo y gestion de escenas/prefabs.
 
 ---
 

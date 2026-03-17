@@ -423,7 +423,7 @@ Avec 2 fournisseurs ou plus configur&eacute;s, Strada.Brain route automatiquemen
 
 ### Int&eacute;gration Strada.MCP
 
-Strada.Brain d&eacute;tecte [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (serveur MCP Unity &agrave; 76 outils) et informe l'agent des capacit&eacute;s MCP disponibles, y compris le contr&ocirc;le d'ex&eacute;cution, les op&eacute;rations de fichiers, git, le build .NET, l'analyse de code et la gestion des sc&egrave;nes/prefabs.
+Strada.Brain d&eacute;tecte [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (serveur MCP Unity) et informe l'agent des capacit&eacute;s MCP disponibles, y compris le contr&ocirc;le d'ex&eacute;cution, les op&eacute;rations de fichiers, git, le build .NET, l'analyse de code et la gestion des sc&egrave;nes/prefabs.
 
 ---
 
