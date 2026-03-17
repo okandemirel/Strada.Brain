@@ -1390,24 +1390,25 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 // Private Helpers
 // ============================================================================
 
+function parseBooleanEnv(name: string): boolean {
+  return (process.env[name] ?? "").trim().toLowerCase() === "true";
+}
+
+function parseStringListEnv(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function initializeAuth(config: Config, channelType: string, logger: winston.Logger): AuthManager {
   const allowedTelegramIds = config.telegram.allowedUserIds ?? [];
   if (channelType === "telegram" && allowedTelegramIds.length === 0) {
     logger.warn("ALLOWED_TELEGRAM_USER_IDS is empty — all Telegram users will be denied access");
   }
 
-  const allowedDiscordIds = new Set(
-    process.env["ALLOWED_DISCORD_USER_IDS"]
-      ?.split(",")
-      .map((id) => id.trim())
-      .filter(Boolean) ?? [],
-  );
-  const allowedDiscordRoles = new Set(
-    process.env["ALLOWED_DISCORD_ROLE_IDS"]
-      ?.split(",")
-      .map((id) => id.trim())
-      .filter(Boolean) ?? [],
-  );
+  const allowedDiscordIds = new Set(parseStringListEnv("ALLOWED_DISCORD_USER_IDS"));
+  const allowedDiscordRoles = new Set(parseStringListEnv("ALLOWED_DISCORD_ROLE_IDS"));
 
   if (channelType === "discord" && allowedDiscordIds.size === 0 && allowedDiscordRoles.size === 0) {
     logger.warn(
@@ -2057,11 +2058,7 @@ async function initializeChannel(
 
     case "whatsapp": {
       const sessionPath = process.env["WHATSAPP_SESSION_PATH"] ?? ".whatsapp-session";
-      const allowedNumbers =
-        process.env["WHATSAPP_ALLOWED_NUMBERS"]
-          ?.split(",")
-          .map((n) => n.trim())
-          .filter(Boolean) ?? [];
+      const allowedNumbers = parseStringListEnv("WHATSAPP_ALLOWED_NUMBERS");
       if (allowedNumbers.length === 0) {
         logger.info("WHATSAPP_ALLOWED_NUMBERS is empty — WhatsApp is open to all senders");
       }
@@ -2092,15 +2089,9 @@ async function initializeChannel(
       const homeserver = process.env["MATRIX_HOMESERVER"];
       const accessToken = process.env["MATRIX_ACCESS_TOKEN"];
       const matrixUserId = process.env["MATRIX_USER_ID"];
-      const allowOpenAccess = (process.env["MATRIX_ALLOW_OPEN_ACCESS"] ?? "").trim().toLowerCase() === "true";
-      const allowedUserIds = (process.env["MATRIX_ALLOWED_USER_IDS"] ?? "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean);
-      const allowedRoomIds = (process.env["MATRIX_ALLOWED_ROOM_IDS"] ?? "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean);
+      const allowOpenAccess = parseBooleanEnv("MATRIX_ALLOW_OPEN_ACCESS");
+      const allowedUserIds = parseStringListEnv("MATRIX_ALLOWED_USER_IDS");
+      const allowedRoomIds = parseStringListEnv("MATRIX_ALLOWED_ROOM_IDS");
       if (!homeserver || !accessToken || !matrixUserId) {
         throw new AppError(
           "MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID are required for Matrix channel",
@@ -2121,12 +2112,9 @@ async function initializeChannel(
       const { IRCChannel } = await import("../channels/irc/channel.js");
       const ircServer = process.env["IRC_SERVER"];
       const ircNick = process.env["IRC_NICK"] ?? "strada-brain";
-      const allowOpenAccess = (process.env["IRC_ALLOW_OPEN_ACCESS"] ?? "").trim().toLowerCase() === "true";
-      const ircChannels = (process.env["IRC_CHANNELS"] ?? "").split(",").filter(Boolean);
-      const allowedUsers = (process.env["IRC_ALLOWED_USERS"] ?? "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean);
+      const allowOpenAccess = parseBooleanEnv("IRC_ALLOW_OPEN_ACCESS");
+      const ircChannels = parseStringListEnv("IRC_CHANNELS");
+      const allowedUsers = parseStringListEnv("IRC_ALLOWED_USERS");
       if (!ircServer) {
         throw new AppError("IRC_SERVER is required for IRC channel", "MISSING_IRC_CONFIG");
       }
@@ -2137,11 +2125,8 @@ async function initializeChannel(
       const { TeamsChannel } = await import("../channels/teams/channel.js");
       const teamsAppId = process.env["TEAMS_APP_ID"];
       const teamsAppPassword = process.env["TEAMS_APP_PASSWORD"];
-      const allowOpenAccess = (process.env["TEAMS_ALLOW_OPEN_ACCESS"] ?? "").trim().toLowerCase() === "true";
-      const allowedUserIds = (process.env["TEAMS_ALLOWED_USER_IDS"] ?? "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean);
+      const allowOpenAccess = parseBooleanEnv("TEAMS_ALLOW_OPEN_ACCESS");
+      const allowedUserIds = parseStringListEnv("TEAMS_ALLOWED_USER_IDS");
       if (!teamsAppId || !teamsAppPassword) {
         throw new AppError(
           "TEAMS_APP_ID and TEAMS_APP_PASSWORD are required for Teams channel",

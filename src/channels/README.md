@@ -7,7 +7,7 @@ Channel adapters connect Strada.Brain to messaging platforms. Each adapter trans
 | Channel | Class | Library | Auth Default |
 |---------|-------|---------|--------------|
 | Telegram | `TelegramChannel` | Grammy | Deny-all (must set allowlist) |
-| Discord | `DiscordChannel` | discord.js | Deny-all (must set allowlist) |
+| Discord | `DiscordChannel` | discord.js | Deny-all (must set user or role allowlist) |
 | Slack | `SlackChannel` | @slack/bolt | **Open-all** (must set allowlist for production) |
 | WhatsApp | `WhatsAppChannel` | @whiskeysockets/baileys | **Open-all** (set allowlist for production) |
 | Matrix | `MatrixChannel` | matrix-js-sdk | Deny-all unless `MATRIX_ALLOW_OPEN_ACCESS=true` |
@@ -50,7 +50,7 @@ Normalized types decouple the orchestrator from any platform:
 ```
 Platform event (Telegram message, Discord interaction, etc.)
   → Adapter's event handler
-  → Authentication check (allowlists or explicit open-access opt-in)
+  → Authentication check (channel-specific allowlists or explicit open-access opt-in)
   → Adapter-specific validation / rate limiting when implemented
   → Normalize to IncomingMessage
   → Call messageHandler (set by bootstrap via onMessage())
@@ -59,6 +59,11 @@ Platform event (Telegram message, Discord interaction, etc.)
 ```
 
 Not every adapter enforces inbound rate limits locally. Web and WhatsApp do; other channels rely more heavily on platform limits and the higher-level orchestrator/daemon guards.
+
+Inbound auth defaults differ intentionally by channel:
+- Telegram and Discord are closed by default. Discord can authorize by user ID or role ID.
+- Slack and WhatsApp are open by default when their allowlists are empty.
+- Matrix, IRC, and Teams stay closed by default unless you configure allowlists or enable their explicit `*_ALLOW_OPEN_ACCESS` flag.
 
 ## Streaming
 

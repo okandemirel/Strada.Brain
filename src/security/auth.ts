@@ -11,6 +11,27 @@ interface AuthOptions {
   allowedDiscordRoles?: Set<string>;
 }
 
+function warnUnauthorized(channel: string, details: Record<string, unknown>): void {
+  getLogger().warn(`Unauthorized ${channel} access attempt`, {
+    ...details,
+    channel,
+  });
+}
+
+function parseEnvNumberList(name: string): number[] {
+  return process.env[name]
+    ?.split(",")
+    .map((value) => parseInt(value.trim(), 10))
+    .filter((value) => !isNaN(value)) ?? [];
+}
+
+function parseEnvStringList(name: string): string[] {
+  return process.env[name]
+    ?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean) ?? [];
+}
+
 /**
  * Authentication and authorization for Strada Brain.
  * Controls who can access the bot and what they can do.
@@ -41,10 +62,7 @@ export class AuthManager {
   isTelegramUserAllowed(userId: number): boolean {
     const allowed = isAllowedBySingleIdPolicy(userId, this.allowedTelegramIds, "closed");
     if (!allowed) {
-      getLogger().warn("Unauthorized access attempt", {
-        userId,
-        channel: "telegram",
-      });
+      warnUnauthorized("telegram", { userId });
     }
     return allowed;
   }
@@ -53,12 +71,9 @@ export class AuthManager {
    * Check if a Slack user is authorized to use the bot.
    */
   isSlackUserAllowed(userId: string): boolean {
-    const allowed = isAllowedBySingleIdPolicy(userId, this.allowedSlackIds, "closed");
+    const allowed = isAllowedBySingleIdPolicy(userId, this.allowedSlackIds, "open");
     if (!allowed) {
-      getLogger().warn("Unauthorized Slack access attempt", {
-        userId,
-        channel: "slack",
-      });
+      warnUnauthorized("slack", { userId });
     }
     return allowed;
   }
@@ -67,12 +82,9 @@ export class AuthManager {
    * Check if a Slack workspace is authorized.
    */
   isSlackWorkspaceAllowed(workspaceId: string): boolean {
-    const allowed = isAllowedBySingleIdPolicy(workspaceId, this.allowedSlackWorkspaces, "closed");
+    const allowed = isAllowedBySingleIdPolicy(workspaceId, this.allowedSlackWorkspaces, "open");
     if (!allowed) {
-      getLogger().warn("Unauthorized Slack workspace", {
-        workspaceId,
-        channel: "slack",
-      });
+      warnUnauthorized("slack-workspace", { workspaceId });
     }
     return allowed;
   }
@@ -104,10 +116,7 @@ export class AuthManager {
       return true;
     }
 
-    getLogger().warn("Unauthorized Discord access attempt", {
-      userId,
-      channel: "discord",
-    });
+    warnUnauthorized("discord", { userId });
 
     return false;
   }
@@ -225,34 +234,11 @@ export class AuthManager {
  * Create an AuthManager from environment variables.
  */
 export function createAuthManagerFromEnv(): AuthManager {
-  const telegramIds = process.env["ALLOWED_TELEGRAM_USER_IDS"]
-    ?.split(",")
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !isNaN(n)) ?? [];
-
-  const slackIds = process.env["ALLOWED_SLACK_USER_IDS"]
-    ?.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean) ?? [];
-
-  const slackWorkspaces = process.env["ALLOWED_SLACK_WORKSPACES"]
-    ?.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean) ?? [];
-
-  const discordUserIds = new Set(
-    process.env["ALLOWED_DISCORD_USER_IDS"]
-      ?.split(",")
-      .map((s) => s.trim())
-      .filter(Boolean) ?? []
-  );
-
-  const discordRoleIds = new Set(
-    process.env["ALLOWED_DISCORD_ROLE_IDS"]
-      ?.split(",")
-      .map((s) => s.trim())
-      .filter(Boolean) ?? []
-  );
+  const telegramIds = parseEnvNumberList("ALLOWED_TELEGRAM_USER_IDS");
+  const slackIds = parseEnvStringList("ALLOWED_SLACK_USER_IDS");
+  const slackWorkspaces = parseEnvStringList("ALLOWED_SLACK_WORKSPACES");
+  const discordUserIds = new Set(parseEnvStringList("ALLOWED_DISCORD_USER_IDS"));
+  const discordRoleIds = new Set(parseEnvStringList("ALLOWED_DISCORD_ROLE_IDS"));
 
   return new AuthManager(telegramIds, {
     allowedSlackIds: slackIds,
