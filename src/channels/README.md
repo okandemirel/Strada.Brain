@@ -60,7 +60,7 @@ Platform event (Telegram message, Discord interaction, etc.)
 
 ## Streaming
 
-All five channels implement edit-in-place streaming:
+Web, Telegram, Discord, Slack, WhatsApp, and CLI all implement edit-in-place streaming:
 
 1. **Start:** Send placeholder message, return a `streamId`
 2. **Update:** Edit the same message with accumulated text (throttled)
@@ -88,6 +88,7 @@ Two distinct systems coexist intentionally:
 ## Session Management
 
 - **WhatsApp:** Full per-channel session tracking. `Map<string, SessionState>` with 30-minute timeout, 5-minute cleanup interval.
+- **Web:** Uses `WebIdentityStore` plus reconnect tokens so a browser refresh can reclaim the live conversation until the reconnect TTL expires or the user clears the browser session.
 - **Other channels:** Session tracking handled by the orchestrator (not the channel adapter).
 - **All channels:** Pending confirmations tracked in `Map<string, {resolve, timeout}>` with 2-5 minute timeouts. Drained on `disconnect()`.
 
@@ -128,9 +129,9 @@ All communication is localhost-only (`127.0.0.1`). WebSocket connections validat
 - Only GET requests allowed; 405 for other methods
 
 **WebSocket Communication:**
-- Assigns each connection a unique `chatId` (UUID)
+- Assigns each live socket a `chatId` (UUID) and also manages a stable browser profile + reconnect token pair for refresh-safe session reclaim
 - Bidirectional JSON messaging: server sends `type: "text" | "markdown" | "confirmation" | "stream_*" | "typing"`, client sends `type: "message" | "confirmation_response"`
-- Maximum payload: 1 MiB (prevents memory exhaustion)
+- Maximum payload: 25 MiB (large enough for validated media uploads plus base64 overhead)
 
 **Streaming Support:**
 - `startStreamingMessage()` — Send placeholder, return `streamId`
@@ -171,7 +172,7 @@ All communication is localhost-only (`127.0.0.1`). WebSocket connections validat
 
 Constructor parameter:
 ```typescript
-new WebChannel(port?: number = 3000)
+new WebChannel(port?: number = 3000, dashboardPort?: number = 3100, options?: { dashboardAuthToken?: string; identityDbPath?: string })
 ```
 
 Default port is 3000. Server binds to `127.0.0.1:3000` (localhost).
@@ -218,3 +219,4 @@ Default port is 3000. Server binds to `127.0.0.1:3000` (localhost).
 | `slack/rate-limiter.ts` | 4-tier sliding window + streaming limiter |
 | `whatsapp/client.ts` | Baileys adapter with session management |
 | `cli/repl.ts` | Readline REPL adapter |
+| `web/web-identity-store.ts` | Persistent browser identity + reconnect token store |
