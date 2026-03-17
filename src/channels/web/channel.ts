@@ -126,8 +126,20 @@ export class WebChannel
     this.wss.on("connection", (ws) => this.handleWsConnection(ws));
 
     await new Promise<void>((res, rej) => {
-      this.server!.listen(this.port, "localhost", () => res());
-      this.server!.once("error", rej);
+      const onError = (error: Error) => {
+        this.server?.off("error", onError);
+        rej(error);
+      };
+      try {
+        this.server!.once("error", onError);
+        this.server!.listen(this.port, "127.0.0.1", () => {
+          this.server?.off("error", onError);
+          res();
+        });
+      } catch (error) {
+        this.server?.off("error", onError);
+        rej(error as Error);
+      }
     });
 
     this.healthy = true;
@@ -142,7 +154,7 @@ export class WebChannel
       }
     }, WebChannel.RECONNECT_TTL_MS);
 
-    console.log(`Web channel running at http://localhost:${this.port}`);
+    console.log(`Web channel running at http://127.0.0.1:${this.port}`);
   }
 
   private _reconnectCleanupInterval: ReturnType<typeof setInterval> | undefined;

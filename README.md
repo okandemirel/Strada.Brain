@@ -123,7 +123,7 @@ Once running, send a message through your configured channel:
 > Run the build and fix any errors
 ```
 
-**Web channel:** No terminal needed -- interact through the web dashboard at `localhost:3000`.
+**Web channel:** No terminal needed -- interact through the web dashboard at `127.0.0.1:3000`.
 
 ### 5. Auto-Update
 

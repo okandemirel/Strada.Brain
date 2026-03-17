@@ -221,3 +221,23 @@ describe("WebChannel inbound message limits", () => {
     );
   });
 });
+
+describe("WebChannel HTTP surface", () => {
+  it("serves /health without requiring the static app or dashboard proxy", async () => {
+    const channel = new WebChannel();
+    const req = createMockRequest({ method: "GET", url: "/health" });
+    const res = createMockResponse();
+
+    await (channel as unknown as {
+      handleHttp: (req: unknown, res: unknown) => Promise<void>;
+    }).handleHttp(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual(
+      expect.objectContaining({
+        status: "degraded",
+        channel: "web",
+      }),
+    );
+  });
+});
