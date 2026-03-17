@@ -21,6 +21,7 @@ import { createConfirmationBlocks, createStreamingBlock, splitLongText } from ".
 import { formatToSlackMrkdwn, truncateForSlack } from "./formatters.js";
 import { sanitizeError } from "../../security/secret-sanitizer.js";
 import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
+import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 
 interface SlackConfig {
   botToken: string;
@@ -739,16 +740,24 @@ export class SlackChannel implements IChannelAdapter {
     const userId = message.user;
     const teamId = message.team || "";
 
-    if (this.config.allowedWorkspaces?.length && !this.config.allowedWorkspaces.includes(teamId)) {
+    const workspaceAllowed = isAllowedBySingleIdPolicy(
+      teamId,
+      this.config.allowedWorkspaces ?? [],
+      "open",
+    );
+    if (!workspaceAllowed) {
       this.logger.warn("Unauthorized workspace", { teamId, userId });
       await say("❌ This workspace is not authorized to use Strada Brain.");
       return;
     }
 
-    if (
-      this.config.allowedUserIds?.length &&
-      (!userId || !this.config.allowedUserIds.includes(userId))
-    ) {
+    const normalizedUserId = userId ?? "";
+    const userAllowed = isAllowedBySingleIdPolicy(
+      normalizedUserId,
+      this.config.allowedUserIds ?? [],
+      "open",
+    );
+    if (!userAllowed) {
       this.logger.warn("Unauthorized user", { userId, teamId });
       await say("❌ You are not authorized to use Strada Brain.");
       return;

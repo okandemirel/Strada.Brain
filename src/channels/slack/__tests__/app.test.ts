@@ -419,6 +419,51 @@ describe("SlackChannel", () => {
       });
       expect(restrictedChannel).toBeDefined();
     });
+
+    it("allows inbound Slack messages when no workspace or user allowlists are configured", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      channel.onMessage(handler);
+
+      await (channel as unknown as {
+        handleIncomingMessage: (message: Record<string, unknown>, say: ReturnType<typeof vi.fn>) => Promise<void>;
+      }).handleIncomingMessage(
+        {
+          type: "message",
+          user: "U-open",
+          team: "T-open",
+          channel: "C123",
+          text: "hello",
+          ts: "123.456",
+        },
+        vi.fn(),
+      );
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects Slack messages from unauthorized workspaces", async () => {
+      const restrictedChannel = new SlackChannel({
+        ...mockConfig,
+        allowedWorkspaces: ["T-allowed"],
+      });
+      const say = vi.fn().mockResolvedValue(undefined);
+
+      await (restrictedChannel as unknown as {
+        handleIncomingMessage: (message: Record<string, unknown>, say: ReturnType<typeof vi.fn>) => Promise<void>;
+      }).handleIncomingMessage(
+        {
+          type: "message",
+          user: "U123",
+          team: "T-blocked",
+          channel: "C123",
+          text: "hello",
+          ts: "123.456",
+        },
+        say,
+      );
+
+      expect(say).toHaveBeenCalledWith("❌ This workspace is not authorized to use Strada Brain.");
+    });
   });
 });
 
