@@ -331,6 +331,11 @@ export class CommandHandler {
 
     // info / bilgi — show provider capabilities and intelligence
     if (subcommand === "info" || subcommand === "bilgi") {
+      if (!this.providerManager) {
+        await this.channel.sendText(chatId, "Provider manager not available.");
+        return;
+      }
+
       const providerArg = args[1]?.toLowerCase();
       const targetProvider = providerArg || this.providerManager.getActiveInfo(identityKey)?.providerName;
 
@@ -340,24 +345,41 @@ export class CommandHandler {
       }
 
       try {
-        const { PROVIDER_KNOWLEDGE, formatContextWindow } = await import("../agents/providers/provider-knowledge.js");
-        const knowledge = PROVIDER_KNOWLEDGE[targetProvider];
-        if (!knowledge) {
-          await this.channel.sendText(chatId, `No intelligence data for provider "${targetProvider}".`);
-          return;
-        }
+        const {
+          getProviderIntelligenceSnapshot,
+          formatContextWindow,
+        } = await import("../agents/providers/provider-knowledge.js");
+        const providerManager = this.providerManager;
+        const available = providerManager.describeAvailable?.()
+          ?? providerManager.listAvailable().map((provider) => ({
+            ...provider,
+            capabilities: providerManager.getProviderCapabilities?.(provider.name, provider.defaultModel) ?? null,
+          }));
+        const descriptor = available.find((provider) => provider.name === targetProvider);
+        const activeInfo = providerManager.getActiveInfo(identityKey);
+        const modelId = activeInfo?.providerName === targetProvider
+          ? activeInfo.model
+          : descriptor?.defaultModel;
+        const snapshot = getProviderIntelligenceSnapshot(
+          targetProvider,
+          modelId,
+          undefined,
+          descriptor?.capabilities ?? providerManager.getProviderCapabilities?.(targetProvider, modelId),
+          descriptor?.label ?? targetProvider,
+        );
 
         const lines = [
-          `*Provider Intelligence: ${knowledge.provider}*`,
+          `*Provider Intelligence: ${snapshot.providerLabel}*`,
           "",
-          `Context Window: ${formatContextWindow(knowledge.contextWindow)} tokens`,
-          `Max Messages: ${knowledge.maxMessages}`,
+          `Model: ${snapshot.modelId ?? "default"}`,
+          `Context Window: ${formatContextWindow(snapshot.contextWindow)} tokens`,
+          `Max Messages: ${snapshot.maxMessages}`,
           "",
-          `*Strengths*: ${knowledge.strengths.join(", ")}`,
+          `*Strengths*: ${snapshot.strengths.join(", ")}`,
           "",
-          `*Limitations*: ${knowledge.limitations.join(", ")}`,
+          `*Limitations*: ${snapshot.limitations.join(", ")}`,
           "",
-          `*Hints*: ${knowledge.behavioralHints.join(". ")}`,
+          `*Hints*: ${snapshot.behavioralHints.join(". ")}`,
         ];
         await this.channel.sendMarkdown(chatId, lines.join("\n"));
       } catch {

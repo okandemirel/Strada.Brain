@@ -1,174 +1,160 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  PROVIDER_KNOWLEDGE,
   buildProviderIntelligence,
+  formatContextWindow,
+  getProviderIntelligenceSnapshot,
   getRecommendedMaxMessages,
+  type ModelIntelligenceLookup,
 } from "./provider-knowledge.js";
 
-const ALL_PROVIDERS = [
-  "claude",
-  "openai",
-  "gemini",
-  "deepseek",
-  "qwen",
-  "kimi",
-  "minimax",
-  "groq",
-  "mistral",
-  "together",
-  "fireworks",
-  "ollama",
-];
-
-describe("PROVIDER_KNOWLEDGE", () => {
-  it("should have knowledge entries for all 12 providers", () => {
-    for (const name of ALL_PROVIDERS) {
-      expect(PROVIDER_KNOWLEDGE[name]).toBeDefined();
+const mockModelIntelligence: ModelIntelligenceLookup = {
+  getModelInfo(modelId: string) {
+    if (modelId === "gemini-3-flash-preview") {
+      return {
+        contextWindow: 1_000_000,
+        inputPricePerMillion: 0.5,
+        outputPricePerMillion: 3,
+        supportsVision: true,
+        supportsThinking: false,
+        supportsToolCalling: true,
+        supportsStreaming: true,
+      };
     }
-    expect(Object.keys(PROVIDER_KNOWLEDGE)).toHaveLength(12);
-  });
 
-  it("should have non-empty strengths array for each provider", () => {
-    for (const name of ALL_PROVIDERS) {
-      const k = PROVIDER_KNOWLEDGE[name]!;
-      expect(k.strengths.length).toBeGreaterThan(0);
+    if (modelId === "local-mini") {
+      return {
+        contextWindow: 8_000,
+        inputPricePerMillion: 0,
+        outputPricePerMillion: 0,
+        supportsVision: false,
+        supportsThinking: false,
+        supportsToolCalling: true,
+        supportsStreaming: true,
+      };
     }
-  });
 
-  it("should have contextWindow > 0 for each provider", () => {
-    for (const name of ALL_PROVIDERS) {
-      expect(PROVIDER_KNOWLEDGE[name]!.contextWindow).toBeGreaterThan(0);
-    }
-  });
+    return undefined;
+  },
+};
 
-  it("should have maxMessages > 0 for each provider", () => {
-    for (const name of ALL_PROVIDERS) {
-      expect(PROVIDER_KNOWLEDGE[name]!.maxMessages).toBeGreaterThan(0);
-    }
+describe("formatContextWindow", () => {
+  it("formats token counts in K notation", () => {
+    expect(formatContextWindow(1_000_000)).toBe("1000K");
+    expect(formatContextWindow(128_000)).toBe("128K");
   });
+});
 
-  it("should have at least one behavioral hint for each provider", () => {
-    for (const name of ALL_PROVIDERS) {
-      expect(PROVIDER_KNOWLEDGE[name]!.behavioralHints.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("should have ollama with the lowest maxMessages (15)", () => {
-    const ollama = PROVIDER_KNOWLEDGE["ollama"]!;
-    expect(ollama.maxMessages).toBe(15);
-    for (const name of ALL_PROVIDERS) {
-      if (name === "ollama") continue;
-      expect(PROVIDER_KNOWLEDGE[name]!.maxMessages).toBeGreaterThan(ollama.maxMessages);
-    }
-  });
-
-  it("should have claude and gemini with the highest maxMessages (80)", () => {
-    expect(PROVIDER_KNOWLEDGE["claude"]!.maxMessages).toBe(80);
-    expect(PROVIDER_KNOWLEDGE["gemini"]!.maxMessages).toBe(80);
-    for (const name of ALL_PROVIDERS) {
-      expect(PROVIDER_KNOWLEDGE[name]!.maxMessages).toBeLessThanOrEqual(80);
-    }
-  });
-
-  it("should mention web search in qwen strengths", () => {
-    const qwen = PROVIDER_KNOWLEDGE["qwen"]!;
-    const hasWebSearch = qwen.strengths.some((s) =>
-      s.toLowerCase().includes("web search"),
+describe("getProviderIntelligenceSnapshot", () => {
+  it("derives feature tags from provider capabilities and live model intelligence", () => {
+    const snapshot = getProviderIntelligenceSnapshot(
+      "gemini",
+      "gemini-3-flash-preview",
+      mockModelIntelligence,
+      {
+        contextWindow: 1_000_000,
+        vision: true,
+        thinkingSupported: true,
+        toolCalling: true,
+        streaming: true,
+        specialFeatures: ["grounding", "thinking_level", "code_execution"],
+      },
+      "Google Gemini",
     );
-    expect(hasWebSearch).toBe(true);
+
+    expect(snapshot.providerLabel).toBe("Google Gemini");
+    expect(snapshot.featureTags).toContain("grounding");
+    expect(snapshot.featureTags).toContain("thinking-level");
+    expect(snapshot.featureTags).toContain("code-execution");
+    expect(snapshot.featureTags).toContain("multimodal");
+    expect(snapshot.featureTags).toContain("tool-calling");
+    expect(snapshot.maxMessages).toBe(80);
   });
 
-  it("should mention fast inference in groq strengths", () => {
-    const groq = PROVIDER_KNOWLEDGE["groq"]!;
-    const hasFastInference = groq.strengths.some((s) =>
-      s.toLowerCase().includes("fast inference"),
+  it("builds generic strengths, limitations, and hints without provider-specific tables", () => {
+    const snapshot = getProviderIntelligenceSnapshot(
+      "ollama",
+      "local-mini",
+      mockModelIntelligence,
+      {
+        contextWindow: 8_000,
+        vision: false,
+        thinkingSupported: false,
+        toolCalling: true,
+        streaming: true,
+        specialFeatures: ["local_inference", "privacy"],
+      },
+      "Ollama",
     );
-    expect(hasFastInference).toBe(true);
+
+    expect(snapshot.strengths).toContain("Local/offline execution");
+    expect(snapshot.limitations).toContain("Smaller context window");
+    expect(snapshot.behavioralHints).toContain("Prefer concise prompts to stay within local model budgets");
+    expect(snapshot.maxMessages).toBe(20);
   });
 
-  it("should mention privacy in ollama strengths", () => {
-    const ollama = PROVIDER_KNOWLEDGE["ollama"]!;
-    const hasPrivacy = ollama.strengths.some((s) =>
-      s.toLowerCase().includes("privacy"),
+  it("derives workload scores from generic capabilities", () => {
+    const snapshot = getProviderIntelligenceSnapshot(
+      "kimi",
+      "kimi-for-coding",
+      undefined,
+      {
+        contextWindow: 262_000,
+        thinkingSupported: true,
+        toolCalling: true,
+        streaming: true,
+        specialFeatures: ["coding", "reasoning"],
+      },
+      "Kimi",
     );
-    expect(hasPrivacy).toBe(true);
+
+    expect(snapshot.workloadScores.implementation).toBeGreaterThan(snapshot.workloadScores.documentation);
+    expect(snapshot.workloadScores.debugging).toBeGreaterThan(0.7);
   });
 });
 
 describe("buildProviderIntelligence", () => {
-  it("should return non-empty string for known providers", () => {
-    for (const name of ALL_PROVIDERS) {
-      const result = buildProviderIntelligence(name);
-      expect(result.length).toBeGreaterThan(0);
-    }
-  });
+  it("renders a provider intelligence block from runtime snapshots", () => {
+    const result = buildProviderIntelligence(
+      "gemini",
+      "gemini-3-flash-preview",
+      mockModelIntelligence,
+      {
+        contextWindow: 1_000_000,
+        vision: true,
+        toolCalling: true,
+        streaming: true,
+        specialFeatures: ["grounding"],
+      },
+      "Google Gemini",
+    );
 
-  it("should return empty string for unknown provider", () => {
-    expect(buildProviderIntelligence("nonexistent")).toBe("");
-    expect(buildProviderIntelligence("")).toBe("");
-    expect(buildProviderIntelligence("foobar_provider")).toBe("");
-  });
-
-  it("should include provider display name", () => {
-    const result = buildProviderIntelligence("claude");
-    expect(result).toContain("Claude (Anthropic)");
-  });
-
-  it("should include context window info", () => {
-    const result = buildProviderIntelligence("claude");
-    expect(result).toContain("1000K tokens");
-  });
-
-  it("should include model ID when provided", () => {
-    const result = buildProviderIntelligence("openai", "gpt-5.2");
-    expect(result).toContain("Model: gpt-5.2");
-  });
-
-  it("should show 'default' when model ID is not provided", () => {
-    const result = buildProviderIntelligence("openai");
-    expect(result).toContain("Model: default");
-  });
-
-  it("should include strengths", () => {
-    const result = buildProviderIntelligence("groq");
-    expect(result).toContain("Extremely fast inference");
-  });
-
-  it("should include limitations when present", () => {
-    const result = buildProviderIntelligence("deepseek");
-    expect(result).toContain("8K max output");
-  });
-
-  it("should include behavioral hints", () => {
-    const result = buildProviderIntelligence("ollama");
-    expect(result).toContain("Keep responses concise");
-  });
-
-  it("should contain Current Provider Intelligence header", () => {
-    const result = buildProviderIntelligence("claude");
     expect(result).toContain("## Current Provider Intelligence");
+    expect(result).toContain("Provider: Google Gemini");
+    expect(result).toContain("Model: gemini-3-flash-preview");
+    expect(result).toContain("grounding");
   });
 });
 
 describe("getRecommendedMaxMessages", () => {
-  it("should return correct values for each provider", () => {
-    expect(getRecommendedMaxMessages("claude")).toBe(80);
-    expect(getRecommendedMaxMessages("openai")).toBe(60);
-    expect(getRecommendedMaxMessages("gemini")).toBe(80);
-    expect(getRecommendedMaxMessages("deepseek")).toBe(40);
-    expect(getRecommendedMaxMessages("qwen")).toBe(60);
-    expect(getRecommendedMaxMessages("kimi")).toBe(50);
-    expect(getRecommendedMaxMessages("minimax")).toBe(60);
-    expect(getRecommendedMaxMessages("groq")).toBe(40);
-    expect(getRecommendedMaxMessages("mistral")).toBe(50);
-    expect(getRecommendedMaxMessages("together")).toBe(60);
-    expect(getRecommendedMaxMessages("fireworks")).toBe(60);
-    expect(getRecommendedMaxMessages("ollama")).toBe(15);
+  it("uses live context windows when available", () => {
+    expect(getRecommendedMaxMessages(
+      "gemini",
+      "gemini-3-flash-preview",
+      mockModelIntelligence,
+      { contextWindow: 1_000_000, toolCalling: true, streaming: true },
+      "Google Gemini",
+    )).toBe(80);
+
+    expect(getRecommendedMaxMessages(
+      "ollama",
+      "local-mini",
+      mockModelIntelligence,
+      { contextWindow: 8_000, toolCalling: true, streaming: true },
+      "Ollama",
+    )).toBe(20);
   });
 
-  it("should return 40 for unknown provider", () => {
-    expect(getRecommendedMaxMessages("nonexistent")).toBe(40);
-    expect(getRecommendedMaxMessages("")).toBe(40);
-    expect(getRecommendedMaxMessages("unknown_provider")).toBe(40);
+  it("falls back to balanced defaults without external metadata", () => {
+    expect(getRecommendedMaxMessages("unknown-provider")).toBe(40);
   });
 });

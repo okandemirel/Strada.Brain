@@ -76,6 +76,7 @@ Alternatively, create `.env` manually:
 ```env
 ANTHROPIC_API_KEY=sk-ant-...      # Or use another supported provider key instead
 UNITY_PROJECT_PATH=/path/to/your/UnityProject  # Must contain Assets/
+# Optional: enable internal system auth / JWT sessions
 JWT_SECRET=<generate with: openssl rand -hex 64>
 ```
 
@@ -498,7 +499,6 @@ All configuration is via environment variables. See `.env.example` for the full 
 | Variable | Description |
 |----------|-------------|
 | `UNITY_PROJECT_PATH` | Absolute path to your Unity project root (must contain `Assets/`) |
-| `JWT_SECRET` | Secret for JWT signing. Generate: `openssl rand -hex 64` |
 
 ### AI Providers
 
@@ -648,7 +648,8 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REQUIRE_MFA` | `false` | Require multi-factor authentication |
+| `JWT_SECRET` | (unset) | Optional secret for internal system auth and JWT/session flows. Generate with `openssl rand -hex 64` before enabling those features |
+| `REQUIRE_MFA` | `false` | Require multi-factor authentication for internal system auth |
 | `BROWSER_HEADLESS` | `true` | Run browser automation headless |
 | `BROWSER_MAX_CONCURRENT` | `5` | Maximum concurrent browser sessions |
 

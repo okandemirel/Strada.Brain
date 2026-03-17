@@ -72,6 +72,8 @@ export type EnvVarName =
   | "TEAMS_ALLOWED_USER_IDS"
   | "TEAMS_ALLOW_OPEN_ACCESS"
   | "ALLOWED_TELEGRAM_USER_IDS"
+  | "JWT_SECRET"
+  | "REQUIRE_MFA"
   | "REQUIRE_EDIT_CONFIRMATION"
   | "READ_ONLY_MODE"
   | "UNITY_PROJECT_PATH"
@@ -400,6 +402,13 @@ export interface PrometheusConfig {
   readonly port: number;
 }
 
+/** Model intelligence configuration */
+export interface ModelIntelligenceConfig {
+  readonly enabled: boolean;
+  readonly refreshHours: number;
+  readonly dbPath: string;
+}
+
 /** WebSocket dashboard configuration */
 export interface WebSocketDashboardConfig {
   readonly enabled: boolean;
@@ -466,9 +475,16 @@ export interface TeamsConfig {
 }
 
 /** Security configuration */
+export interface SystemAuthConfig {
+  readonly jwtSecret?: string;
+  readonly requireMfa: boolean;
+}
+
+/** Security configuration */
 export interface SecurityConfig {
   readonly requireEditConfirmation: boolean;
   readonly readOnlyMode: boolean;
+  readonly systemAuth: SystemAuthConfig;
 }
 
 /** Task execution and routing configuration */
@@ -537,6 +553,7 @@ export interface Config {
   readonly dashboard: DashboardConfig;
   readonly websocketDashboard: WebSocketDashboardConfig;
   readonly prometheus: PrometheusConfig;
+  readonly modelIntelligence: ModelIntelligenceConfig;
 
   // Memory
   readonly memory: MemoryConfig;
@@ -750,6 +767,8 @@ export const configSchema = z
     teamsAllowOpenAccess: boolFromString(false),
 
     // Security
+    jwtSecret: z.string().min(1).optional(),
+    requireMfa: boolFromString(false),
     requireEditConfirmation: boolFromString(true),
     readOnlyMode: boolFromString(false),
 
@@ -772,6 +791,15 @@ export const configSchema = z
     // Prometheus
     prometheusEnabled: boolFromString(false),
     prometheusPort: portSchema.default("9090"),
+
+    // Model Intelligence
+    modelIntelligenceEnabled: boolFromString(true),
+    modelIntelligenceRefreshHours: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(168))
+      .default("24"),
+    modelIntelligenceDbPath: z.string().default(".strada-memory/model-intelligence.db"),
 
     // Memory
     memoryEnabled: boolFromString(true),
@@ -1219,6 +1247,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     security: {
+      systemAuth: {
+        jwtSecret: rawConfig.jwtSecret,
+        requireMfa: rawConfig.requireMfa,
+      },
       requireEditConfirmation: rawConfig.requireEditConfirmation,
       readOnlyMode: rawConfig.readOnlyMode,
     },
@@ -1251,6 +1283,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     prometheus: {
       enabled: rawConfig.prometheusEnabled,
       port: rawConfig.prometheusPort,
+    },
+
+    modelIntelligence: {
+      enabled: rawConfig.modelIntelligenceEnabled,
+      refreshHours: rawConfig.modelIntelligenceRefreshHours,
+      dbPath: rawConfig.modelIntelligenceDbPath,
     },
 
     memory: {
@@ -1739,6 +1777,8 @@ interface EnvVars {
   teamsAppPassword: string | undefined;
   teamsAllowedUserIds: string | undefined;
   teamsAllowOpenAccess: string | undefined;
+  jwtSecret: string | undefined;
+  requireMfa: string | undefined;
   requireEditConfirmation: string | undefined;
   readOnlyMode: string | undefined;
   unityProjectPath: string | undefined;
@@ -1753,6 +1793,9 @@ interface EnvVars {
   websocketDashboardAllowedOrigins: string | undefined;
   prometheusEnabled: string | undefined;
   prometheusPort: string | undefined;
+  modelIntelligenceEnabled: string | undefined;
+  modelIntelligenceRefreshHours: string | undefined;
+  modelIntelligenceDbPath: string | undefined;
   memoryEnabled: string | undefined;
   memoryDbPath: string | undefined;
   memoryBackend: string | undefined;
@@ -1969,6 +2012,8 @@ function loadFromEnv(): EnvVars {
     teamsAppPassword: process.env["TEAMS_APP_PASSWORD"],
     teamsAllowedUserIds: process.env["TEAMS_ALLOWED_USER_IDS"],
     teamsAllowOpenAccess: process.env["TEAMS_ALLOW_OPEN_ACCESS"],
+    jwtSecret: process.env["JWT_SECRET"],
+    requireMfa: process.env["REQUIRE_MFA"],
     requireEditConfirmation: process.env["REQUIRE_EDIT_CONFIRMATION"],
     readOnlyMode: process.env["READ_ONLY_MODE"],
     unityProjectPath: process.env["UNITY_PROJECT_PATH"],
@@ -1983,6 +2028,9 @@ function loadFromEnv(): EnvVars {
     websocketDashboardAllowedOrigins: process.env["WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS"],
     prometheusEnabled: process.env["ENABLE_PROMETHEUS"],
     prometheusPort: process.env["PROMETHEUS_PORT"],
+    modelIntelligenceEnabled: process.env["MODEL_INTELLIGENCE_ENABLED"],
+    modelIntelligenceRefreshHours: process.env["MODEL_INTELLIGENCE_REFRESH_HOURS"],
+    modelIntelligenceDbPath: process.env["MODEL_INTELLIGENCE_DB_PATH"],
     memoryEnabled: process.env["MEMORY_ENABLED"],
     memoryDbPath: process.env["MEMORY_DB_PATH"],
     memoryBackend: process.env["MEMORY_BACKEND"],
@@ -2398,10 +2446,21 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     matrix: { ...base.matrix, ...partial.matrix },
     irc: { ...base.irc, ...partial.irc },
     teams: { ...base.teams, ...partial.teams },
-    security: { ...base.security, ...partial.security },
+    security: {
+      ...base.security,
+      ...partial.security,
+      systemAuth: {
+        ...base.security.systemAuth,
+        ...(partial.security?.systemAuth ?? {}),
+      },
+    },
     dashboard: { ...base.dashboard, ...partial.dashboard },
     websocketDashboard: { ...base.websocketDashboard, ...partial.websocketDashboard },
     prometheus: { ...base.prometheus, ...partial.prometheus },
+    modelIntelligence: {
+      ...base.modelIntelligence,
+      ...((partial as Partial<Config>).modelIntelligence ?? {}),
+    },
     memory: {
       ...base.memory,
       ...partial.memory,

@@ -8,7 +8,8 @@
 
 import { join } from "node:path";
 import type { IAIProvider } from "./provider.interface.js";
-import { buildProviderChain, PROVIDER_PRESETS } from "./provider-registry.js";
+import type { ProviderCapabilities } from "./provider.interface.js";
+import { buildProviderChain, createProvider, PROVIDER_PRESETS } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import { getLogger } from "../../utils/logger.js";
 import { LRUCache } from "../../common/lru-cache.js";
@@ -19,12 +20,25 @@ export interface ProviderActiveInfo {
   isDefault: boolean;
 }
 
+export interface ProviderDescriptor {
+  readonly name: string;
+  readonly label: string;
+  readonly defaultModel: string;
+  readonly capabilities: ProviderCapabilities | null;
+}
+
+interface ProviderModelCatalogLookup {
+  getProviderModels(provider: string): Array<{ id: string }>;
+}
+
 const MAX_CACHED_PROVIDERS = 50;
 
 export class ProviderManager {
   private readonly preferences: ProviderPreferenceStore;
   private readonly providerCache = new LRUCache<string, IAIProvider>(MAX_CACHED_PROVIDERS);
+  private readonly primaryProviderCache = new LRUCache<string, IAIProvider>(MAX_CACHED_PROVIDERS);
   private ollamaVerified = false;
+  private modelCatalog?: ProviderModelCatalogLookup;
 
   constructor(
     private readonly defaultProvider: IAIProvider,
@@ -112,12 +126,57 @@ export class ProviderManager {
     return `chain:${order.join(">")}:${primaryName}:${model ?? "(default)"}`;
   }
 
+  private getDefaultPrimaryName(): string {
+    return this.defaultProviderOrder[0] ?? this.defaultProvider.name.trim().toLowerCase();
+  }
+
+  private getDefaultModelForProvider(name: string): string {
+    if (name === "claude" || name === "anthropic") {
+      return this.modelOverrides?.[name] ?? "claude-sonnet-4-6-20250514";
+    }
+    if (name === "ollama") {
+      return this.modelOverrides?.[name] ?? "llama3.3";
+    }
+    return this.modelOverrides?.[name] ?? PROVIDER_PRESETS[name]?.defaultModel ?? "default";
+  }
+
+  private buildPrimaryProvider(name: string, model?: string): IAIProvider | null {
+    const normalizedName = name.trim().toLowerCase();
+    if (!normalizedName) {
+      return null;
+    }
+
+    const cacheKey = `primary:${normalizedName}:${model ?? "(default)"}`;
+    const cached = this.primaryProviderCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const provider = createProvider({
+        name: normalizedName,
+        apiKey: this.apiKeys[normalizedName],
+        model: model ?? this.modelOverrides?.[normalizedName],
+      });
+      this.primaryProviderCache.set(cacheKey, provider);
+      return provider;
+    } catch (error) {
+      getLogger().warn("Failed to create primary provider metadata", {
+        provider: normalizedName,
+        model,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
   getActiveInfo(chatId: string): ProviderActiveInfo {
     const pref = this.preferences.get(chatId);
     if (!pref) {
+      const defaultProviderName = this.getDefaultPrimaryName();
       return {
-        providerName: this.defaultProvider.name,
-        model: "default",
+        providerName: defaultProviderName,
+        model: this.getDefaultModelForProvider(defaultProviderName),
         isDefault: true,
       };
     }
@@ -140,6 +199,10 @@ export class ProviderManager {
     getLogger().info("Provider preference cleared", { chatId });
   }
 
+  setModelCatalog(modelCatalog?: ProviderModelCatalogLookup): void {
+    this.modelCatalog = modelCatalog;
+  }
+
   async listAvailableWithModels(): Promise<
     Array<{ name: string; label: string; defaultModel: string; models: string[] }>
   > {
@@ -157,6 +220,8 @@ export class ProviderManager {
           } catch {
             // Fallback to default model
           }
+          const catalogModels = this.modelCatalog?.getProviderModels(p.name).map((model) => model.id) ?? [];
+          models = [...new Set([...models, ...catalogModels, p.defaultModel])];
           return { ...p, models };
         }),
       ),
@@ -177,6 +242,17 @@ export class ProviderManager {
    */
   getProviderByName(name: string): IAIProvider | null {
     return this.buildResilientProvider(name);
+  }
+
+  getProviderCapabilities(name: string, model?: string): ProviderCapabilities | undefined {
+    return this.buildPrimaryProvider(name, model)?.capabilities;
+  }
+
+  describeAvailable(): ProviderDescriptor[] {
+    return this.listAvailable().map((entry) => ({
+      ...entry,
+      capabilities: this.getProviderCapabilities(entry.name, entry.defaultModel) ?? null,
+    }));
   }
 
   listAvailable(): Array<{ name: string; label: string; defaultModel: string }> {

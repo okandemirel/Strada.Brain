@@ -12,6 +12,7 @@ import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
 import { createLogger, getLogger } from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
+import { configureAuthManager } from "../security/auth-hardened.js";
 import { ClaudeProvider } from "../agents/providers/claude.js";
 import { buildProviderChain } from "../agents/providers/provider-registry.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
@@ -153,6 +154,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     projectPath: config.unityProjectPath,
     readOnly: config.security.readOnlyMode,
   });
+
+  configureAuthManager(config.security.systemAuth);
 
   // Check Strada framework dependencies
   const stradaDeps = checkStradaDeps(config.unityProjectPath, config.strada);
@@ -486,11 +489,36 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // use the same approval/confirmation state per session.
   const dmPolicy = new DMPolicy(channel);
 
+  // Live model intelligence (provider catalogs, capability refresh, model metadata)
+  let modelIntelligence: import("../agents/providers/model-intelligence.js").ModelIntelligenceService | undefined;
+  if (config.modelIntelligence.enabled) {
+    try {
+      const { ModelIntelligenceService } = await import("../agents/providers/model-intelligence.js");
+      modelIntelligence = new ModelIntelligenceService({
+        refreshHours: config.modelIntelligence.refreshHours,
+      });
+      await modelIntelligence.initialize(config.modelIntelligence.dbPath, {
+        refreshOnInitialize: false,
+      });
+      providerManager.setModelCatalog?.(modelIntelligence);
+      logger.info("ModelIntelligenceService initialized", {
+        dbPath: config.modelIntelligence.dbPath,
+        refreshHours: config.modelIntelligence.refreshHours,
+      });
+    } catch (error) {
+      logger.warn("ModelIntelligenceService initialization failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // Multi-provider routing (if 2+ providers available)
   let providerRouter: import("../agent-core/routing/provider-router.js").ProviderRouter | undefined;
   try {
     const { ProviderRouter } = await import("../agent-core/routing/provider-router.js");
-    providerRouter = new ProviderRouter(providerManager, config.routing.preset);
+    providerRouter = new ProviderRouter(providerManager, config.routing.preset, {
+      modelIntelligence,
+    });
     logger.info("ProviderRouter initialized", { preset: config.routing.preset });
   } catch {
     // Non-fatal — routing disabled
@@ -545,11 +573,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     sessionSummarizer,
     userProfileStore,
     providerRouter,
+    modelIntelligence,
     consensusManager,
     confidenceEstimator,
   });
-
-  // TODO: Initialize ModelIntelligenceService here for self-updating model data
 
   // Initialize tool chain synthesis (TOOL-01 through TOOL-05)
   let chainManager: ChainManager | undefined;
@@ -1385,6 +1412,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       goalStorage,
       chainManager,
       identityManager,
+      modelIntelligence,
       uptimeInterval,
       heartbeatLoop,
       digestReporter: digestReporterInstance,
@@ -2271,6 +2299,7 @@ interface ShutdownOptions {
   goalStorage?: GoalStorage;
   chainManager?: ChainManager;
   identityManager?: IdentityStateManager;
+  modelIntelligence?: import("../agents/providers/model-intelligence.js").ModelIntelligenceService;
   uptimeInterval?: ReturnType<typeof setInterval>;
   heartbeatLoop?: HeartbeatLoop;
   digestReporter?: DigestReporter;
@@ -2360,6 +2389,10 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
 
       if (options.providerManager) {
         options.providerManager.shutdown();
+      }
+
+      if (options.modelIntelligence) {
+        options.modelIntelligence.shutdown();
       }
 
       if (dashboard) {

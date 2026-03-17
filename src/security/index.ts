@@ -24,6 +24,7 @@ export {
   type Session,
   type JwtPayload,
   authManager,
+  configureAuthManager,
   hasPermission,
   hasAnyPermission,
   hasAllPermissions,

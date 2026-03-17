@@ -6,7 +6,7 @@
  * a hardcoded fallback registry for offline operation.
  *
  * Merge strategy: LiteLLM (primary) -> models.dev (enrichment) -> SQLite cache -> hardcoded fallback.
- * Refresh interval: 24h (configurable via MODEL_INTELLIGENCE_REFRESH_HOURS).
+ * Refresh interval: 24h by default (configured by runtime config).
  */
 
 import { mkdirSync, existsSync } from "node:fs";
@@ -511,6 +511,14 @@ function rowToModelInfo(row: ModelRow): ModelInfo {
 
 const DEFAULT_REFRESH_HOURS = 24;
 
+export interface ModelIntelligenceServiceOptions {
+  readonly refreshHours?: number;
+}
+
+export interface InitializeModelIntelligenceOptions {
+  readonly refreshOnInitialize?: boolean;
+}
+
 export class ModelIntelligenceService {
   private db: Database.Database | null = null;
   private models: Map<string, ModelInfo> = new Map();
@@ -522,8 +530,10 @@ export class ModelIntelligenceService {
   private stmtSetMeta!: Database.Statement;
   private stmtGetMeta!: Database.Statement;
 
+  constructor(private readonly options: ModelIntelligenceServiceOptions = {}) {}
+
   private get refreshIntervalMs(): number {
-    const hours = Number(process.env["MODEL_INTELLIGENCE_REFRESH_HOURS"]) || DEFAULT_REFRESH_HOURS;
+    const hours = this.options.refreshHours ?? DEFAULT_REFRESH_HOURS;
     return hours * 60 * 60 * 1000;
   }
 
@@ -531,7 +541,10 @@ export class ModelIntelligenceService {
    * Initialize the service: open/create DB, load cache, refresh if stale,
    * and start the periodic refresh timer.
    */
-  async initialize(dbPath: string): Promise<void> {
+  async initialize(
+    dbPath: string,
+    options: InitializeModelIntelligenceOptions = {},
+  ): Promise<void> {
     const logger = getLogger();
 
     try {
@@ -551,7 +564,8 @@ export class ModelIntelligenceService {
         dbPath,
       });
 
-      if (this.isStale()) {
+      const shouldRefreshOnInitialize = options.refreshOnInitialize ?? true;
+      if (shouldRefreshOnInitialize && this.isStale()) {
         const result = await this.refresh();
         logger.info("ModelIntelligence initial refresh", {
           modelsUpdated: result.modelsUpdated,
@@ -561,6 +575,19 @@ export class ModelIntelligenceService {
       }
 
       this.startRefreshTimer();
+
+      if (!shouldRefreshOnInitialize && this.isStale()) {
+        const initialRefresh = setTimeout(() => {
+          this.refresh().catch((error) => {
+            logger.warn("ModelIntelligence deferred refresh failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }, 0);
+        if (initialRefresh.unref) {
+          initialRefresh.unref();
+        }
+      }
     } catch (error) {
       logger.warn("ModelIntelligence DB init failed, using hardcoded fallback", {
         error: error instanceof Error ? error.message : String(error),

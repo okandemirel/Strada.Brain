@@ -132,7 +132,7 @@ const SELF_REGISTERABLE_ROLES = new Set<UserRole>(["viewer"]);
 // CONFIGURATION
 // =============================================================================
 
-interface AuthConfig {
+export interface AuthConfig {
   jwtSecret: string;
   jwtExpiresIn: number; // seconds
   jwtRefreshExpiresIn: number; // seconds
@@ -147,7 +147,7 @@ interface AuthConfig {
 }
 
 const DEFAULT_CONFIG: AuthConfig = {
-  jwtSecret: process.env["JWT_SECRET"] ?? "",
+  jwtSecret: "",
   jwtExpiresIn: 15 * 60, // 15 minutes
   jwtRefreshExpiresIn: 7 * 24 * 60 * 60, // 7 days
   sessionTimeout: 30 * 60 * 1000, // 30 minutes
@@ -155,9 +155,15 @@ const DEFAULT_CONFIG: AuthConfig = {
   lockoutDuration: 30 * 60 * 1000, // 30 minutes
   issuer: "strada-brain",
   audience: "strada-brain-api",
-  requireMfa: process.env["REQUIRE_MFA"] === "true",
+  requireMfa: false,
   passwordMinLength: 12,
 };
+
+let configuredAuthDefaults: Partial<AuthConfig> = {};
+
+function resolveAuthConfig(config: Partial<AuthConfig> = {}): AuthConfig {
+  return { ...DEFAULT_CONFIG, ...configuredAuthDefaults, ...config };
+}
 
 const TOTP_STEP_SECONDS = 30;
 const TOTP_WINDOW_STEPS = 1;
@@ -271,13 +277,13 @@ export class JwtManager {
   private readonly logger = getLogger();
 
   constructor(config: Partial<AuthConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config = resolveAuthConfig(config);
   }
 
   private requireSecret(): string {
     if (!this.config.jwtSecret) {
       throw new Error(
-        "JWT_SECRET environment variable is required. Set it before using authentication.",
+        "JWT secret is required. Configure system authentication before using authentication.",
       );
     }
     return this.config.jwtSecret;
@@ -511,7 +517,7 @@ export class SessionManager {
   private readonly logger = getLogger();
 
   constructor(config: Partial<AuthConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config = resolveAuthConfig(config);
   }
 
   /**
@@ -757,7 +763,7 @@ export class HardenedAuthManager {
   private readonly logger = getLogger();
 
   constructor(config: Partial<AuthConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config = resolveAuthConfig(config);
     this.sessions = new SessionManager(config);
     this.jwt = new JwtManager(config);
     this.mfa = new MfaManager();
@@ -1111,18 +1117,38 @@ export function getRolePermissions(role: UserRole): Permission[] {
 let _authManager: HardenedAuthManager | null = null;
 
 /**
+ * Configure module-wide defaults for the hardened auth singleton.
+ */
+export function configureAuthManager(config: Partial<AuthConfig>): void {
+  configuredAuthDefaults = { ...config };
+  _authManager = null;
+}
+
+/**
+ * Test helper to clear singleton state and configured defaults.
+ */
+export function resetAuthManagerForTests(): void {
+  configuredAuthDefaults = {};
+  _authManager = null;
+}
+
+/**
  * Lazy singleton — created on first call, not at import time.
- * Throws if JWT_SECRET is not set.
+ * Throws until configured with a JWT secret.
  */
 export function getAuthManager(): HardenedAuthManager {
-  if (!_authManager) {
-    if (!process.env["JWT_SECRET"]) {
-      throw new Error(
-        "JWT_SECRET environment variable is required. Set it before starting the application.",
-      );
-    }
-    _authManager = new HardenedAuthManager({ jwtSecret: process.env["JWT_SECRET"] });
+  if (_authManager) {
+    return _authManager;
   }
+
+  const config = resolveAuthConfig();
+  if (!config.jwtSecret) {
+    throw new Error(
+      "JWT secret is required. Configure system authentication before starting the application.",
+    );
+  }
+
+  _authManager = new HardenedAuthManager(config);
   return _authManager;
 }
 

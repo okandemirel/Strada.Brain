@@ -2,7 +2,7 @@
  * Provider Router
  *
  * Scores each available provider against a TaskClassification using
- * configurable routing presets and PROVIDER_KNOWLEDGE metadata.
+ * configurable routing presets and live provider intelligence snapshots.
  * Zero overhead when only one provider is available.
  */
 
@@ -11,9 +11,15 @@ import type {
   RoutingPreset,
   RoutingWeights,
   RoutingDecision,
+  TaskType,
 } from "./routing-types.js";
 import { ROUTING_PRESETS } from "./routing-presets.js";
-import { PROVIDER_KNOWLEDGE } from "../../agents/providers/provider-knowledge.js";
+import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
+import {
+  getProviderIntelligenceSnapshot,
+  type ModelIntelligenceLookup,
+  type ProviderWorkload,
+} from "../../agents/providers/provider-knowledge.js";
 
 /* ------------------------------------------------------------------ */
 /*  Provider Manager structural interface (avoids hard coupling)      */
@@ -21,6 +27,13 @@ import { PROVIDER_KNOWLEDGE } from "../../agents/providers/provider-knowledge.js
 
 export interface ProviderManagerRef {
   listAvailable(): Array<{ name: string; label: string; defaultModel: string }>;
+  describeAvailable?(): Array<{
+    name: string;
+    label: string;
+    defaultModel: string;
+    capabilities: ProviderCapabilities | null;
+  }>;
+  getProviderCapabilities?(name: string, model?: string): ProviderCapabilities | undefined;
   isAvailable(name: string): boolean;
 }
 
@@ -35,57 +48,24 @@ export interface TierRouterRef {
   getTypeEffectiveTier(type: string, defaultTier: string): string;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Cost & Speed tiers (0 = cheapest/fastest)                         */
-/* ------------------------------------------------------------------ */
-
-const COST_TIER: Record<string, number> = {
-  ollama: 0,
-  groq: 1,
-  kimi: 2,
-  deepseek: 2,
-  qwen: 2,
-  mistral: 3,
-  together: 3,
-  fireworks: 3,
-  minimax: 3,
-  openai: 4,
-  gemini: 4,
-  claude: 5,
-};
-
-const SPEED_TIER: Record<string, number> = {
-  groq: 0,
-  ollama: 1,
-  kimi: 2,
-  fireworks: 2,
-  together: 2,
-  deepseek: 3,
-  qwen: 3,
-  mistral: 3,
-  minimax: 3,
-  openai: 4,
-  gemini: 4,
-  claude: 4,
-};
-
-const MAX_COST_TIER = 5;
-const MAX_SPEED_TIER = 4;
 const MAX_DECISIONS = 100;
 
-/* ------------------------------------------------------------------ */
-/*  Capability keyword sets matched against provider strengths        */
-/* ------------------------------------------------------------------ */
+type AvailableProvider = {
+  name: string;
+  label: string;
+  defaultModel: string;
+  capabilities?: ProviderCapabilities | null;
+};
 
-const CAPABILITY_KEYWORDS: Record<string, string[]> = {
-  planning: ["reasoning", "nuanced", "strong"],
-  "code-generation": ["code", "coding", "tool calling", "function calling"],
-  "code-review": ["reasoning", "nuanced", "audit"],
-  debugging: ["reasoning", "code", "coding"],
-  refactoring: ["code", "coding", "tool calling"],
-  analysis: ["reasoning", "context", "multimodal", "grounding"],
-  "simple-question": ["fast", "general"],
-  "destructive-operation": ["tool calling", "function calling"],
+const TASK_TYPE_TO_WORKLOAD: Record<TaskType, ProviderWorkload> = {
+  planning: "planning",
+  "code-generation": "implementation",
+  "code-review": "review",
+  "simple-question": "coordination",
+  analysis: "analysis",
+  refactoring: "implementation",
+  "destructive-operation": "debugging",
+  debugging: "debugging",
 };
 
 /* ------------------------------------------------------------------ */
@@ -97,6 +77,7 @@ export class ProviderRouter {
   private presetName: string;
   private readonly decisions: RoutingDecision[] = [];
   private lastExecutingProvider: string | undefined;
+  private readonly modelIntelligence?: ModelIntelligenceLookup;
 
   /** Optional TierRouter for delegation escalation compatibility */
   private tierRouter?: TierRouterRef;
@@ -104,9 +85,13 @@ export class ProviderRouter {
   constructor(
     private readonly providerManager: ProviderManagerRef,
     preset: RoutingPreset = "balanced",
+    options: {
+      modelIntelligence?: ModelIntelligenceLookup;
+    } = {},
   ) {
     this.weights = ROUTING_PRESETS[preset];
     this.presetName = preset;
+    this.modelIntelligence = options.modelIntelligence;
   }
 
   /**
@@ -150,7 +135,7 @@ export class ProviderRouter {
     task: TaskClassification,
     phase?: string,
   ): RoutingDecision {
-    const available = this.providerManager.listAvailable();
+    const available = this.getAvailableProviders();
 
     // Zero overhead: single provider → return immediately
     if (available.length <= 1) {
@@ -179,11 +164,11 @@ export class ProviderRouter {
     let bestReason = "";
 
     for (const entry of available) {
-      const score = this.scoreProvider(entry.name, task, weights);
+      const score = this.scoreProvider(entry, task, weights, available);
       if (score > bestScore) {
         bestScore = score;
         bestProvider = entry.name;
-        bestReason = this.buildReason(task, weights);
+        bestReason = this.buildReason(entry, task, weights);
       }
     }
 
@@ -233,14 +218,15 @@ export class ProviderRouter {
   /* ---------------------------------------------------------------- */
 
   private scoreProvider(
-    name: string,
+    entry: AvailableProvider,
     task: TaskClassification,
     weights: RoutingWeights,
+    available: readonly AvailableProvider[],
   ): number {
-    const cost = this.costScore(name);
-    const capability = this.capabilityScore(name, task);
-    const speed = this.speedScore(name);
-    const diversity = this.diversityScore(name);
+    const cost = this.costScore(entry, available);
+    const capability = this.capabilityScore(entry, task);
+    const speed = this.speedScore(entry);
+    const diversity = this.diversityScore(entry.name);
 
     return (
       weights.costWeight * cost +
@@ -250,45 +236,129 @@ export class ProviderRouter {
     );
   }
 
-  /** Inverse cost: cheaper → higher score (0..1). */
-  private costScore(name: string): number {
-    const tier = COST_TIER[name] ?? 3;
-    return Math.max(0, 1 - tier / MAX_COST_TIER);
+  private getAvailableProviders(): AvailableProvider[] {
+    if (this.providerManager.describeAvailable) {
+      return this.providerManager.describeAvailable();
+    }
+    return this.providerManager.listAvailable().map((entry) => ({
+      ...entry,
+      capabilities: this.providerManager.getProviderCapabilities?.(entry.name, entry.defaultModel) ?? null,
+    }));
   }
 
-  /** Capability: context window size (normalized) + keyword match bonus. */
+  private getSnapshot(entry: AvailableProvider) {
+    return getProviderIntelligenceSnapshot(
+      entry.name,
+      entry.defaultModel,
+      this.modelIntelligence,
+      entry.capabilities ?? this.providerManager.getProviderCapabilities?.(entry.name, entry.defaultModel),
+      entry.label,
+    );
+  }
+
+  private normalizeContextWindow(tokens: number): number {
+    return Math.min(Math.log10(Math.max(tokens, 4_000)) / Math.log10(1_000_000), 1.0);
+  }
+
+  private getWorkload(taskType: TaskType): ProviderWorkload {
+    return TASK_TYPE_TO_WORKLOAD[taskType];
+  }
+
+  private getFeatureFit(entry: AvailableProvider, task: TaskClassification): number {
+    const snapshot = this.getSnapshot(entry);
+    if (!snapshot) {
+      return 0.3;
+    }
+
+    const features = new Set(snapshot.featureTags.map((tag) => tag.toLowerCase()));
+    const search = features.has("search") || features.has("grounding") || features.has("web-search") ? 1 : 0;
+    const coding = features.has("coding") || features.has("implementation") || features.has("agentic-coding") || features.has("code-execution") ? 1 : 0;
+    const reviewer = features.has("reviewer") || features.has("prompt-caching") || features.has("context-caching") ? 1 : 0;
+    const speed = features.has("fast-inference") || features.has("latency-sensitive") ? 1 : 0.5;
+    const cheapness = this.costScore(entry, [entry]);
+
+    switch (task.type) {
+      case "planning":
+        return (Number(snapshot.capabilities.supportsThinking) + search + reviewer) / 3;
+      case "code-generation":
+      case "refactoring":
+        return (Number(snapshot.capabilities.supportsToolCalling) + coding + speed) / 3;
+      case "code-review":
+        return (Number(snapshot.capabilities.supportsThinking) + reviewer + Number(snapshot.capabilities.supportsToolCalling)) / 3;
+      case "analysis":
+        return (search + Number(snapshot.capabilities.supportsVision) + Number(snapshot.capabilities.supportsThinking)) / 3;
+      case "debugging":
+      case "destructive-operation":
+        return (Number(snapshot.capabilities.supportsThinking) + Number(snapshot.capabilities.supportsToolCalling) + coding) / 3;
+      case "simple-question":
+        return (speed + cheapness + Number(snapshot.capabilities.supportsStreaming)) / 3;
+      default:
+        return 0.5;
+    }
+  }
+
+  /** Inverse cost: cheaper → higher score (0..1). Uses live model pricing when available. */
+  private costScore(entry: AvailableProvider, available: readonly AvailableProvider[]): number {
+    const priced = available
+      .map((provider) => this.getSnapshot(provider)?.economics)
+      .map((economics) =>
+        economics && (economics.inputPricePerMillion !== undefined || economics.outputPricePerMillion !== undefined)
+          ? (economics.inputPricePerMillion ?? 0) + (economics.outputPricePerMillion ?? 0)
+          : undefined,
+      )
+      .filter((price): price is number => price !== undefined);
+
+    const snapshot = this.getSnapshot(entry);
+    const totalPrice =
+      snapshot && (snapshot.economics.inputPricePerMillion !== undefined || snapshot.economics.outputPricePerMillion !== undefined)
+        ? (snapshot.economics.inputPricePerMillion ?? 0) + (snapshot.economics.outputPricePerMillion ?? 0)
+        : undefined;
+
+    if (totalPrice !== undefined && priced.length >= 2) {
+      const min = Math.min(...priced);
+      const max = Math.max(...priced);
+      if (min === max) {
+        return 1;
+      }
+      return Math.max(0, 1 - (totalPrice - min) / (max - min));
+    }
+
+    const features = new Set(snapshot.featureTags.map((tag) => tag.toLowerCase()));
+    if (features.has("local-inference") || features.has("privacy") || features.has("offline")) {
+      return 1;
+    }
+    if (features.has("cost-efficient") || features.has("cost-aware")) {
+      return 0.8;
+    }
+    return 0.5;
+  }
+
+  /** Capability: workload fit + context window + task-specific feature fit. */
   private capabilityScore(
-    name: string,
+    entry: AvailableProvider,
     task: TaskClassification,
   ): number {
-    const knowledge = PROVIDER_KNOWLEDGE[name];
-    if (!knowledge) return 0.3;
+    const snapshot = this.getSnapshot(entry);
+    if (!snapshot) return 0.3;
 
-    // Normalized context window (log-scale relative to 1M)
-    const contextScore = Math.min(
-      Math.log10(knowledge.contextWindow) / Math.log10(1_000_000),
-      1.0,
-    );
+    const workload = this.getWorkload(task.type);
+    const workloadScore = snapshot.workloadScores[workload] ?? 0.4;
+    const contextScore = this.normalizeContextWindow(snapshot.contextWindow);
+    const featureFit = this.getFeatureFit(entry, task);
 
-    // Keyword match bonus
-    const keywords = CAPABILITY_KEYWORDS[task.type] ?? [];
-    const strengths = knowledge.strengths.map((s) => s.toLowerCase());
-    let keywordHits = 0;
-    for (const kw of keywords) {
-      if (strengths.some((s) => s.includes(kw))) {
-        keywordHits++;
-      }
-    }
-    const keywordScore =
-      keywords.length > 0 ? keywordHits / keywords.length : 0;
-
-    return contextScore * 0.4 + keywordScore * 0.6;
+    return workloadScore * 0.6 + contextScore * 0.25 + featureFit * 0.15;
   }
 
   /** Inverse speed tier: faster → higher score (0..1). */
-  private speedScore(name: string): number {
-    const tier = SPEED_TIER[name] ?? 3;
-    return Math.max(0, 1 - tier / MAX_SPEED_TIER);
+  private speedScore(entry: AvailableProvider): number {
+    const snapshot = this.getSnapshot(entry);
+    if (snapshot.featureTags.some((tag) => tag === "fast-inference" || tag === "latency-sensitive")) {
+      return 1;
+    }
+    if (snapshot.featureTags.includes("local-inference")) {
+      return 0.35;
+    }
+    return 0.5;
   }
 
   /** Diversity: bonus for using a different provider than the last one. */
@@ -298,16 +368,24 @@ export class ProviderRouter {
   }
 
   private buildReason(
+    entry: AvailableProvider,
     task: TaskClassification,
     weights: RoutingWeights,
   ): string {
+    const snapshot = this.getSnapshot(entry);
     const parts: string[] = [];
     if (weights.costWeight > 0.3) parts.push("cost-effective");
     if (weights.capabilityWeight > 0.3) parts.push("high-capability");
     if (weights.speedWeight > 0.15) parts.push("fast");
     if (weights.diversityWeight > 0.2) parts.push("diverse");
     const qualifier = parts.length > 0 ? parts.join("+") : "balanced";
-    return `${qualifier} choice for ${task.type} (${task.complexity})`;
+    if (!snapshot) {
+      return `${qualifier} choice for ${task.type} (${task.complexity})`;
+    }
+
+    const workload = this.getWorkload(task.type);
+    const topFeatures = snapshot.featureTags.slice(0, 2).join(", ");
+    return `${qualifier} choice for ${task.type} (${task.complexity}); ${workload} fit ${snapshot.workloadScores[workload].toFixed(2)}${topFeatures ? ` via ${topFeatures}` : ""}`;
   }
 
   private recordDecision(decision: RoutingDecision): void {

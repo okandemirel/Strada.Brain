@@ -44,7 +44,11 @@ import {
 } from "../config/config.js";
 import type { IEmbeddingProvider } from "../rag/rag.interface.js";
 import { shouldForceReplan } from "./failure-classifier.js";
-import { buildProviderIntelligence, getRecommendedMaxMessages } from "./providers/provider-knowledge.js";
+import {
+  buildProviderIntelligence,
+  getRecommendedMaxMessages,
+  type ModelIntelligenceLookup,
+} from "./providers/provider-knowledge.js";
 import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
 import { VERIFY_TOOLS, WRITE_OPERATIONS } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
@@ -464,6 +468,8 @@ export class Orchestrator {
   private readonly userProfileStore?: UserProfileStore;
   /** Multi-provider routing: selects best provider per task/phase. */
   private readonly providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
+  /** Live model intelligence for provider-aware prompting and trimming. */
+  private readonly modelIntelligence?: ModelIntelligenceLookup;
   /** Consensus verification: cross-provider output validation on low confidence. */
   private readonly consensusManager?: import("../agent-core/routing/consensus-manager.js").ConsensusManager;
   /** Confidence estimation for consensus gating. */
@@ -503,6 +509,7 @@ export class Orchestrator {
     sessionSummarizer?: SessionSummarizer;
     userProfileStore?: UserProfileStore;
     providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
+    modelIntelligence?: ModelIntelligenceLookup;
     consensusManager?: import("../agent-core/routing/consensus-manager.js").ConsensusManager;
     confidenceEstimator?: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
     onUsage?: (usage: TaskUsageEvent) => void;
@@ -535,6 +542,7 @@ export class Orchestrator {
     this.sessionSummarizer = opts.sessionSummarizer;
     this.userProfileStore = opts.userProfileStore;
     this.providerRouter = opts.providerRouter;
+    this.modelIntelligence = opts.modelIntelligence;
     this.consensusManager = opts.consensusManager;
     this.confidenceEstimator = opts.confidenceEstimator;
     this.onUsage = opts.onUsage;
@@ -728,7 +736,13 @@ export class Orchestrator {
     // 4. Provider intelligence: inject strengths, limitations, and behavioral hints
     const activeInfo = this.providerManager.getActiveInfo?.(params.chatId);
     if (activeInfo) {
-      systemPrompt += buildProviderIntelligence(activeInfo.providerName, activeInfo.model);
+      systemPrompt += buildProviderIntelligence(
+        activeInfo.providerName,
+        activeInfo.model,
+        this.modelIntelligence,
+        this.providerManager.getProviderCapabilities?.(activeInfo.providerName, activeInfo.model),
+        activeInfo.providerName,
+      );
     }
 
     // 5. Context layers (user profile, session summary, open tasks, semantic memory)
@@ -1500,7 +1514,13 @@ export class Orchestrator {
     // Trim old messages to manage context window (provider-aware threshold)
     // Persist trimmed messages to memory before discarding
     const providerInfo = this.providerManager.getActiveInfo?.(identityKey);
-    const trimmed = this.trimSession(session, getRecommendedMaxMessages(providerInfo?.providerName ?? ""));
+    const trimmed = this.trimSession(session, getRecommendedMaxMessages(
+      providerInfo?.providerName ?? provider.name,
+      providerInfo?.model,
+      this.modelIntelligence,
+      this.providerManager.getProviderCapabilities?.(providerInfo?.providerName ?? provider.name, providerInfo?.model),
+      providerInfo?.providerName ?? provider.name,
+    ));
     if (trimmed.length > 0) {
       await this.persistSessionToMemory(chatId, trimmed, /* force */ true);
     }

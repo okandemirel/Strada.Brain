@@ -88,6 +88,23 @@ describe("ProviderManager", () => {
     expect(buildProviderChainMock).not.toHaveBeenCalled();
   });
 
+  it("reports canonical default provider info instead of fallback chain name", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    expect(manager.getActiveInfo("chat-1")).toEqual({
+      providerName: "qwen",
+      model: "qwen-max",
+      isDefault: true,
+    });
+  });
+
   it("wraps a preferred provider with the configured fallback chain", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     preferenceState.set("chat-1", { providerName: "kimi", model: "kimi-long-context" });

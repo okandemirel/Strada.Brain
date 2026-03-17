@@ -176,6 +176,27 @@ interface DashboardProviderManager {
     models: string[];
     activeModel?: string;
   }>>;
+  describeAvailable?(): Array<{
+    name: string;
+    label: string;
+    defaultModel: string;
+    capabilities: {
+      contextWindow?: number;
+      vision?: boolean;
+      thinkingSupported?: boolean;
+      toolCalling?: boolean;
+      streaming?: boolean;
+      specialFeatures?: string[];
+    } | null;
+  }>;
+  getProviderCapabilities?(name: string, model?: string): {
+    contextWindow?: number;
+    vision?: boolean;
+    thinkingSupported?: boolean;
+    toolCalling?: boolean;
+    streaming?: boolean;
+    specialFeatures?: string[];
+  } | undefined;
   getActiveInfo(chatId: string): {
     provider?: string;
     providerName?: string;
@@ -1286,16 +1307,37 @@ export class DashboardServer {
           res.end(JSON.stringify({ error: "Invalid provider name format" }));
           return;
         }
-        void import("../agents/providers/provider-knowledge.js").then(({ PROVIDER_KNOWLEDGE, buildProviderIntelligence }) => {
-          const knowledge = PROVIDER_KNOWLEDGE[provider];
-          if (!knowledge) {
+        void import("../agents/providers/provider-knowledge.js").then(({ buildProviderIntelligence, getProviderIntelligenceSnapshot }) => {
+          const available = this.providerManager?.describeAvailable?.()
+            ?? this.providerManager?.listAvailable().map((entry) => ({
+              name: entry.name,
+              label: entry.label ?? entry.name,
+              defaultModel: entry.defaultModel ?? "default",
+              capabilities: this.providerManager?.getProviderCapabilities?.(entry.name, entry.defaultModel),
+            }))
+            ?? [];
+          const descriptor = available.find((entry) => entry.name === provider);
+          if (!descriptor) {
             res.writeHead(404, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: `Unknown provider: ${provider}` }));
             return;
           }
-          const intelligence = buildProviderIntelligence(provider);
+          const snapshot = getProviderIntelligenceSnapshot(
+            provider,
+            descriptor.defaultModel,
+            undefined,
+            descriptor.capabilities ?? undefined,
+            descriptor.label,
+          );
+          const intelligence = buildProviderIntelligence(
+            provider,
+            descriptor.defaultModel,
+            undefined,
+            descriptor.capabilities ?? undefined,
+            descriptor.label,
+          );
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ provider, knowledge, intelligence }));
+          res.end(JSON.stringify({ provider, snapshot, intelligence }));
         }).catch((err) => {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
@@ -1305,15 +1347,22 @@ export class DashboardServer {
 
       // GET /api/providers/capabilities -- Get capabilities for all providers
       if (req.method === "GET" && url === "/api/providers/capabilities") {
-        void import("../agents/providers/provider-knowledge.js").then(({ PROVIDER_KNOWLEDGE }) => {
-          const capabilities = Object.entries(PROVIDER_KNOWLEDGE).map(([name, k]) => ({
-            name,
-            provider: k.provider,
-            contextWindow: k.contextWindow,
-            maxMessages: k.maxMessages,
-            strengths: k.strengths,
-            limitations: k.limitations,
-          }));
+        void import("../agents/providers/provider-knowledge.js").then(({ getProviderIntelligenceSnapshot }) => {
+          const available = this.providerManager?.describeAvailable?.()
+            ?? this.providerManager?.listAvailable().map((entry) => ({
+              name: entry.name,
+              label: entry.label ?? entry.name,
+              defaultModel: entry.defaultModel ?? "default",
+              capabilities: this.providerManager?.getProviderCapabilities?.(entry.name, entry.defaultModel),
+            }))
+            ?? [];
+          const capabilities = available.map((entry) => getProviderIntelligenceSnapshot(
+            entry.name,
+            entry.defaultModel,
+            undefined,
+            entry.capabilities ?? undefined,
+            entry.label,
+          ));
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ capabilities }));
         }).catch((err) => {

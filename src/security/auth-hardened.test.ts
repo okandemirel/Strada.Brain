@@ -1,10 +1,5 @@
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createHmac } from "node:crypto";
-
-// Set JWT_SECRET before importing to avoid the guard
-beforeAll(() => {
-  process.env["JWT_SECRET"] = "test-secret-minimum-length-for-jwt-signing-purposes";
-});
 
 import {
   PasswordHasher,
@@ -17,6 +12,9 @@ import {
   hasAnyPermission,
   hasAllPermissions,
   getRolePermissions,
+  configureAuthManager,
+  resetAuthManagerForTests,
+  getAuthManager,
   type User,
   type Permission,
 } from "./auth-hardened.js";
@@ -34,6 +32,10 @@ vi.mock("../utils/logger.js", () => ({
   }),
   createLogger: vi.fn(),
 }));
+
+beforeEach(() => {
+  resetAuthManagerForTests();
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -266,7 +268,7 @@ describe("JwtManager", () => {
   it("should throw when JWT_SECRET is empty (requireSecret)", () => {
     const noSecretJwt = new JwtManager({ jwtSecret: "" });
     expect(() => noSecretJwt.generateToken(testUser)).toThrow(
-      "JWT_SECRET environment variable is required",
+      "JWT secret is required",
     );
   });
 
@@ -995,6 +997,60 @@ describe("HardenedAuthManager", () => {
       expect(result).toHaveProperty("sessionsRemoved");
       expect(typeof result.sessionsRemoved).toBe("number");
     });
+  });
+});
+
+describe("hardened auth singleton configuration", () => {
+  it("fails closed when system auth has not been configured", () => {
+    expect(() => getAuthManager()).toThrow(
+      "JWT secret is required. Configure system authentication before starting the application.",
+    );
+  });
+
+  it("creates a singleton from configured auth defaults", () => {
+    configureAuthManager({
+      jwtSecret: TEST_JWT_SECRET,
+      requireMfa: true,
+      passwordMinLength: 10,
+    });
+
+    const auth = getAuthManager();
+    const sameAuth = getAuthManager();
+
+    expect(auth).toBe(sameAuth);
+  });
+
+  it("rebuilds the singleton when configuration changes", async () => {
+    configureAuthManager({
+      jwtSecret: TEST_JWT_SECRET,
+      passwordMinLength: 8,
+    });
+
+    const first = getAuthManager();
+    const firstRegistration = await first.registerUser(
+      "first",
+      "first@example.com",
+      "password-123",
+      "viewer",
+    );
+    expect(firstRegistration.success).toBe(true);
+
+    configureAuthManager({
+      jwtSecret: `${TEST_JWT_SECRET}-rotated`,
+      passwordMinLength: 14,
+    });
+
+    const second = getAuthManager();
+    expect(second).not.toBe(first);
+
+    const shortPassword = await second.registerUser(
+      "second",
+      "second@example.com",
+      "short-pass",
+      "viewer",
+    );
+    expect(shortPassword.success).toBe(false);
+    expect(shortPassword.error).toContain("Password must be at least 14 characters");
   });
 });
 

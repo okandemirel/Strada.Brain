@@ -58,6 +58,8 @@ describe("loadConfig", () => {
     delete process.env["TEAMS_APP_PASSWORD"];
     delete process.env["TEAMS_ALLOWED_USER_IDS"];
     delete process.env["TEAMS_ALLOW_OPEN_ACCESS"];
+    delete process.env["JWT_SECRET"];
+    delete process.env["REQUIRE_MFA"];
     delete process.env["REQUIRE_EDIT_CONFIRMATION"];
     delete process.env["READ_ONLY_MODE"];
     delete process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"];
@@ -134,6 +136,10 @@ describe("loadConfig", () => {
     expect(config.strada.coreRepoUrl).toBe("https://github.com/okandemirel/Strada.Core.git");
     expect(config.strada.modulesRepoUrl).toBe("https://github.com/okandemirel/Strada.Modules.git");
     expect(config.strada.mcpPath).toBeUndefined();
+    expect(config.security.systemAuth).toEqual({
+      jwtSecret: undefined,
+      requireMfa: false,
+    });
     expect(config.llmStreamInitialTimeoutMs).toBe(600000);
     expect(config.llmStreamStallTimeoutMs).toBe(120000);
   });
@@ -315,10 +321,16 @@ describe("loadConfig", () => {
 
   it("parses boolean strings correctly", () => {
     setEnv({
+      JWT_SECRET: "super-secret-for-tests",
+      REQUIRE_MFA: "true",
       REQUIRE_EDIT_CONFIRMATION: "false",
       READ_ONLY_MODE: "true",
     });
     const config = loadConfig();
+    expect(config.security.systemAuth).toEqual({
+      jwtSecret: "super-secret-for-tests",
+      requireMfa: true,
+    });
     expect(config.security.requireEditConfirmation).toBe(false);
     expect(config.security.readOnlyMode).toBe(true);
   });

@@ -38,7 +38,7 @@ The `Config` type groups settings into nested sub-configs:
 | `matrix` | `MatrixConfig` | `MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, `MATRIX_USER_ID`, `MATRIX_ALLOWED_USER_IDS`, `MATRIX_ALLOWED_ROOM_IDS`, `MATRIX_ALLOW_OPEN_ACCESS` |
 | `irc` | `IRCConfig` | `IRC_SERVER`, `IRC_NICK`, `IRC_CHANNELS`, `IRC_ALLOWED_USERS`, `IRC_ALLOW_OPEN_ACCESS` |
 | `teams` | `TeamsConfig` | `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `TEAMS_ALLOWED_USER_IDS`, `TEAMS_ALLOW_OPEN_ACCESS` |
-| `security` | `SecurityConfig` | `REQUIRE_EDIT_CONFIRMATION` (default true), `READ_ONLY_MODE` (default false) |
+| `security` | `SecurityConfig` | `REQUIRE_EDIT_CONFIRMATION` (default true), `READ_ONLY_MODE` (default false), `JWT_SECRET` (optional unless internal system auth is used), `REQUIRE_MFA` (default false) |
 | `strada` | `StradaDependencyConfig` | `STRADA_CORE_REPO_URL` and `STRADA_MODULES_REPO_URL` (official defaults), optional `STRADA_MCP_PATH` override for a local Strada.MCP checkout |
 | `dashboard` | `DashboardConfig` | `DASHBOARD_ENABLED`, `DASHBOARD_PORT` (default 3100) |
 | `websocketDashboard` | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100), `WEBSOCKET_DASHBOARD_AUTH_TOKEN`, `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` (`WEBSOCKET_DASHBOARD_AUTH_TOKEN` also protects dashboard APIs when present) |

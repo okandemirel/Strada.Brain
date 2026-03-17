@@ -2,29 +2,109 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { ProviderRouter } from "./provider-router.js";
 import type { ProviderManagerRef } from "./provider-router.js";
 import type { TaskClassification } from "./routing-types.js";
+import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
 
 function createMockManager(
-  providers: Array<{ name: string; label: string; defaultModel: string }>,
+  providers: Array<{ name: string; label: string; defaultModel: string; capabilities?: ProviderCapabilities }>,
 ): ProviderManagerRef {
   return {
-    listAvailable: () => providers,
+    listAvailable: () => providers.map(({ capabilities: _capabilities, ...provider }) => provider),
+    describeAvailable: () => providers.map((provider) => ({
+      ...provider,
+      capabilities: provider.capabilities ?? null,
+    })),
     isAvailable: (name: string) => providers.some((p) => p.name === name),
   };
 }
 
 const SINGLE_PROVIDER = [
-  { name: "ollama", label: "Ollama (Local)", defaultModel: "llama3.3" },
+  {
+    name: "ollama",
+    label: "Ollama (Local)",
+    defaultModel: "llama3.3",
+    capabilities: {
+      maxTokens: 4096,
+      streaming: true,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+      contextWindow: 8_000,
+      thinkingSupported: false,
+      specialFeatures: ["local_inference"],
+    },
+  },
 ];
 
 const MULTI_PROVIDERS = [
-  { name: "ollama", label: "Ollama (Local)", defaultModel: "llama3.3" },
-  { name: "claude", label: "Anthropic Claude", defaultModel: "claude-sonnet-4-6-20250514" },
-  { name: "groq", label: "Groq", defaultModel: "llama-3.3-70b-versatile" },
-  { name: "deepseek", label: "DeepSeek", defaultModel: "deepseek-chat" },
+  {
+    name: "ollama",
+    label: "Ollama (Local)",
+    defaultModel: "llama3.3",
+    capabilities: {
+      maxTokens: 4096,
+      streaming: true,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+      contextWindow: 8_000,
+      thinkingSupported: false,
+      specialFeatures: ["local_inference"],
+    },
+  },
+  {
+    name: "claude",
+    label: "Anthropic Claude",
+    defaultModel: "claude-sonnet-4-6-20250514",
+    capabilities: {
+      maxTokens: 8192,
+      streaming: true,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: true,
+      systemPrompt: true,
+      contextWindow: 1_000_000,
+      thinkingSupported: true,
+      specialFeatures: ["prompt_caching", "adaptive_thinking"],
+    },
+  },
+  {
+    name: "groq",
+    label: "Groq",
+    defaultModel: "llama-3.3-70b-versatile",
+    capabilities: {
+      maxTokens: 8192,
+      streaming: true,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+      contextWindow: 128_000,
+      thinkingSupported: false,
+      specialFeatures: ["fast_inference"],
+    },
+  },
+  {
+    name: "deepseek",
+    label: "DeepSeek",
+    defaultModel: "deepseek-chat",
+    capabilities: {
+      maxTokens: 8192,
+      streaming: true,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+      contextWindow: 128_000,
+      thinkingSupported: true,
+      specialFeatures: ["reasoning", "context_caching"],
+    },
+  },
 ];
 
 const planningTask: TaskClassification = {

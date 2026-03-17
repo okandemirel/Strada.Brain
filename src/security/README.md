@@ -20,7 +20,7 @@ Internal System Auth (auth-hardened.ts)
   ├── JwtManager         ← HS256 JWT with jti-based revocation, 15min expiry
   ├── SessionManager     ← Sliding-window sessions with 7-day refresh
   ├── PasswordHasher     ← scrypt (N=16384, r=8, p=1) with timingSafeEqual
-  ├── MfaManager         ← Backup codes (TOTP is a stub — not production-ready)
+  ├── MfaManager         ← Backup codes + RFC 6238 TOTP verification
   └── BruteForceProtection ← Escalating lockouts (5 attempts, 30min base, 32x max)
 
 Infrastructure
@@ -49,10 +49,12 @@ Auth is checked at the earliest point — inside the platform event handler — 
 
 Internal user authentication with JWT, sessions, MFA, and brute force protection.
 
+Bootstrap wires this module from the main config surface. `auth-hardened.ts` does not read `process.env` directly; `JWT_SECRET` and `REQUIRE_MFA` are loaded by `src/config/config.ts` and injected via bootstrap.
+
 - **JWT:** Hand-rolled HS256 using `createHmac("sha256")`. 15-minute expiry. `jti`-based revocation via in-memory Map. Signature comparison uses `timingSafeEqual`.
 - **Sessions:** `Map<string, Session>` with sliding window expiry. 7-day refresh token. Per-user session tracking.
 - **Password hashing:** `scryptSync` with `N=16384, r=8, p=1`. 32-byte random salt. Format: `scrypt:<saltHex>:<hashHex>`.
-- **MFA:** Backup codes work (10 one-time 8-hex codes). **TOTP is not implemented** — `verifyTotp()` throws, directing to install `otplib`.
+- **MFA:** Backup codes work (10 one-time 8-hex codes). TOTP verification is implemented with a 30-second step and ±1 step skew window.
 - **Brute force:** 5 attempts per 30-minute window. Lockout escalates exponentially (2^n, capped at 32x). Count persists across lock periods until successful login.
 
 **Note:** Sessions, revoked tokens, and brute force state are all in-memory. Server restart clears them.
