@@ -6,6 +6,7 @@
 import type { App, AckFn, RespondFn } from "@slack/bolt";
 import type { WebClient } from "@slack/web-api";
 import { getLogger } from "../../utils/logger.js";
+import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 import { createHelpBlocks, createProcessingBlock } from "./blocks.js";
 import type { IncomingMessage } from "../channel.interface.js";
 import { limitIncomingText } from "../channel-messages.interface.js";
@@ -529,10 +530,7 @@ function escapeText(text: string): string {
  * Empty allowlists mean "no restriction" to match the Slack message handler path.
  */
 export function isValidWorkspace(teamId: string, allowedWorkspaces: string[]): boolean {
-  if (allowedWorkspaces.length === 0) {
-    return true;
-  }
-  return allowedWorkspaces.includes(teamId);
+  return isAllowedBySingleIdPolicy(teamId, allowedWorkspaces, "open");
 }
 
 /**
@@ -540,8 +538,5 @@ export function isValidWorkspace(teamId: string, allowedWorkspaces: string[]): b
  * Empty allowlists mean "no restriction" to match the Slack message handler path.
  */
 export function isValidUser(userId: string, allowedUsers: string[]): boolean {
-  if (allowedUsers.length === 0) {
-    return true;
-  }
-  return allowedUsers.includes(userId);
+  return isAllowedBySingleIdPolicy(userId, allowedUsers, "open");
 }
