@@ -1,4 +1,8 @@
 import { getLogger } from "../utils/logger.js";
+import {
+  isAllowedByAnyOfPolicy,
+  isAllowedBySingleIdPolicy,
+} from "./access-policy.js";
 
 interface AuthOptions {
   allowedSlackIds?: string[];
@@ -35,7 +39,7 @@ export class AuthManager {
    * Check if a Telegram user is authorized to use the bot.
    */
   isTelegramUserAllowed(userId: number): boolean {
-    const allowed = this.allowedTelegramIds.has(userId);
+    const allowed = isAllowedBySingleIdPolicy(userId, this.allowedTelegramIds, "closed");
     if (!allowed) {
       getLogger().warn("Unauthorized access attempt", {
         userId,
@@ -49,16 +53,7 @@ export class AuthManager {
    * Check if a Slack user is authorized to use the bot.
    */
   isSlackUserAllowed(userId: string): boolean {
-    // If no allowed IDs configured, deny all (least privilege)
-    if (this.allowedSlackIds.size === 0) {
-      getLogger().warn("Slack access denied — no allowed user IDs configured", {
-        userId,
-        channel: "slack",
-      });
-      return false;
-    }
-
-    const allowed = this.allowedSlackIds.has(userId);
+    const allowed = isAllowedBySingleIdPolicy(userId, this.allowedSlackIds, "closed");
     if (!allowed) {
       getLogger().warn("Unauthorized Slack access attempt", {
         userId,
@@ -72,16 +67,7 @@ export class AuthManager {
    * Check if a Slack workspace is authorized.
    */
   isSlackWorkspaceAllowed(workspaceId: string): boolean {
-    // If no allowed workspaces configured, deny all (least privilege)
-    if (this.allowedSlackWorkspaces.size === 0) {
-      getLogger().warn("Slack workspace denied — no allowed workspaces configured", {
-        workspaceId,
-        channel: "slack",
-      });
-      return false;
-    }
-
-    const allowed = this.allowedSlackWorkspaces.has(workspaceId);
+    const allowed = isAllowedBySingleIdPolicy(workspaceId, this.allowedSlackWorkspaces, "closed");
     if (!allowed) {
       getLogger().warn("Unauthorized Slack workspace", {
         workspaceId,
@@ -107,22 +93,15 @@ export class AuthManager {
    * Check if a Discord user is authorized to use the bot.
    */
   isDiscordUserAllowed(userId: string, userRoles?: string[]): boolean {
-    // If no restrictions set, deny all (Discord requires explicit configuration)
-    if (this.allowedDiscordUserIds.size === 0 && this.allowedDiscordRoleIds.size === 0) {
-      return false;
-    }
-
-    // Check if user ID is explicitly allowed
-    if (this.allowedDiscordUserIds.has(userId)) {
+    const allowed = isAllowedByAnyOfPolicy({
+      subjectId: userId,
+      subjectAllowlist: this.allowedDiscordUserIds,
+      attributes: userRoles ?? [],
+      attributeAllowlist: this.allowedDiscordRoleIds,
+      emptyAllowlistMode: "closed",
+    });
+    if (allowed) {
       return true;
-    }
-
-    // Check if user has an allowed role
-    if (userRoles && userRoles.length > 0) {
-      const hasAllowedRole = userRoles.some((role) => this.allowedDiscordRoleIds.has(role));
-      if (hasAllowedRole) {
-        return true;
-      }
     }
 
     getLogger().warn("Unauthorized Discord access attempt", {
@@ -144,10 +123,13 @@ export class AuthManager {
    * Check if user has an allowed Discord role.
    */
   hasAllowedDiscordRole(userRoles: string[]): boolean {
-    if (this.allowedDiscordRoleIds.size === 0) {
-      return false;
-    }
-    return userRoles.some((role) => this.allowedDiscordRoleIds.has(role));
+    return isAllowedByAnyOfPolicy({
+      subjectId: "",
+      subjectAllowlist: [] as string[],
+      attributes: userRoles,
+      attributeAllowlist: this.allowedDiscordRoleIds,
+      emptyAllowlistMode: "closed",
+    });
   }
 
   /**

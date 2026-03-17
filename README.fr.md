@@ -9,6 +9,8 @@
   Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7. D&eacute;sormais avec orchestration multi-agent, d&eacute;l&eacute;gation de t&acirc;ches, consolidation de m&eacute;moire, un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation, partage de m&eacute;dias avec support de vision LLM, un syst&egrave;me de personnalit&eacute; configurable via SOUL.md, des outils de clarification interactifs, un routage intelligent multi-fournisseur avec commutation dynamique selon la t&acirc;che, une v&eacute;rification par consensus bas&eacute;e sur la confiance, un Agent Core autonome avec boucle de raisonnement OODA, et l'int&eacute;gration Strada.MCP.
 </p>
 
+> Note de traduction : pour le comportement runtime actuel, les valeurs par d&eacute;faut des variables d'environnement et la s&eacute;mantique de s&eacute;curit&eacute;, la source canonique est [README.md](README.md). Ce fichier en est une traduction.
+
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
@@ -549,7 +551,7 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | Variable | Description |
 |----------|-------------|
 | `WHATSAPP_SESSION_PATH` | R&eacute;pertoire pour les fichiers de session (d&eacute;faut : `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Num&eacute;ros de t&eacute;l&eacute;phone s&eacute;par&eacute;s par des virgules |
+| `WHATSAPP_ALLOWED_NUMBERS` | Num&eacute;ros de t&eacute;l&eacute;phone s&eacute;par&eacute;s par des virgules (optionnel ; vide = acc&egrave;s ouvert) |
 
 ### Fonctionnalit&eacute;s
 
@@ -735,7 +737,7 @@ Tous les canaux impl&eacute;mentent le streaming par &eacute;dition en place. La
 - **Telegram** : Refus par d&eacute;faut. Vous devez d&eacute;finir `ALLOWED_TELEGRAM_USER_IDS`.
 - **Discord** : Refus par d&eacute;faut. Vous devez d&eacute;finir `ALLOWED_DISCORD_USER_IDS` ou `ALLOWED_DISCORD_ROLE_IDS`.
 - **Slack** : **Ouvert par d&eacute;faut.** Si `ALLOWED_SLACK_USER_IDS` est vide, tout utilisateur Slack peut acc&eacute;der au bot. D&eacute;finissez la liste d'autorisation pour la production.
-- **WhatsApp** : Utilise la liste d'autorisation `WHATSAPP_ALLOWED_NUMBERS` v&eacute;rifi&eacute;e localement dans l'adaptateur.
+- **WhatsApp** : Ouvert par d&eacute;faut. Si `WHATSAPP_ALLOWED_NUMBERS` est d&eacute;fini, l'adaptateur limite les messages entrants &agrave; cette liste d'autorisation.
 
 ---
 
@@ -776,7 +778,7 @@ Toutes les sorties d'outils sont limit&eacute;es &agrave; 8192 caract&egrave;res
 ## Tableau de Bord et Surveillance
 
 ### Tableau de Bord HTTP (`DASHBOARD_ENABLED=true`)
-Accessible &agrave; `http://localhost:3001` (localhost uniquement). Affiche : disponibilit&eacute;, nombre de messages, utilisation des tokens, sessions actives, tableau d'utilisation des outils, statistiques de s&eacute;curit&eacute;. Rafra&icirc;chissement automatique toutes les 3 secondes.
+Accessible &agrave; `http://localhost:3100` (localhost uniquement). Affiche : disponibilit&eacute;, nombre de messages, utilisation des tokens, sessions actives, tableau d'utilisation des outils, statistiques de s&eacute;curit&eacute;. Rafra&icirc;chissement automatique toutes les 3 secondes.
 
 ### Endpoints de Sant&eacute;
 - `GET /health` -- Sonde de vivacit&eacute; (`{"status":"ok"}`)
@@ -786,7 +788,7 @@ Accessible &agrave; `http://localhost:3001` (localhost uniquement). Affiche : di
 M&eacute;triques &agrave; `http://localhost:9090/metrics`. Compteurs pour les messages, appels d'outils, tokens. Histogrammes pour la dur&eacute;e des requ&ecirc;tes, dur&eacute;e des outils, latence LLM. M&eacute;triques Node.js par d&eacute;faut (CPU, heap, GC, boucle d'&eacute;v&eacute;nements).
 
 ### Tableau de Bord WebSocket (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-M&eacute;triques en temps r&eacute;el pouss&eacute;es chaque seconde. Supporte les connexions authentifi&eacute;es et les commandes &agrave; distance (rechargement de plugins, vidage du cache, r&eacute;cup&eacute;ration des logs). Les &eacute;v&eacute;nements du daemon (d&eacute;clenchements, alertes de budget, progression des objectifs) sont diffus&eacute;s via WebSocket.
+M&eacute;triques en temps r&eacute;el pouss&eacute;es chaque seconde. Supporte les connexions authentifi&eacute;es, la surveillance par heartbeat ainsi que les handlers de commandes/notifications enregistr&eacute;s par l'application. Si `WEBSOCKET_DASHBOARD_AUTH_TOKEN` est d&eacute;fini, utilisez ce bearer token ; sinon, le tableau de bord same-origin inject&eacute; bootstrappe automatiquement un token li&eacute; au processus.
 
 ### Syst&egrave;me de M&eacute;triques
 `MetricsStorage` (SQLite) enregistre le taux de compl&eacute;tion des t&acirc;ches, le nombre d'it&eacute;rations, l'utilisation des outils et la r&eacute;utilisation des motifs. `MetricsRecorder` capture les m&eacute;triques par session. La commande CLI `metrics` affiche les m&eacute;triques historiques.

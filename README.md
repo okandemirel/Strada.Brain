@@ -556,7 +556,7 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 | Variable | Description |
 |----------|-------------|
 | `WHATSAPP_SESSION_PATH` | Directory for session files (default: `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Comma-separated phone numbers (deny-all if empty) |
+| `WHATSAPP_ALLOWED_NUMBERS` | Comma-separated phone numbers (optional; empty means open access) |
 
 **Matrix:**
 | Variable | Description |
@@ -779,7 +779,7 @@ All channels implement edit-in-place streaming. The agent's response appears pro
 - **Telegram**: Deny-all by default. Must set `ALLOWED_TELEGRAM_USER_IDS`.
 - **Discord**: Deny-all by default. Must set `ALLOWED_DISCORD_USER_IDS` or `ALLOWED_DISCORD_ROLE_IDS`.
 - **Slack**: **Open by default.** If `ALLOWED_SLACK_USER_IDS` is empty, any Slack user can access the bot. Set the allowlist for production.
-- **WhatsApp**: Uses `WHATSAPP_ALLOWED_NUMBERS` allowlist checked locally in the adapter.
+- **WhatsApp**: Open by default. If `WHATSAPP_ALLOWED_NUMBERS` is set, the adapter restricts inbound messages to that allowlist.
 - **Matrix**: Deny-all by default. Set allowlists or `MATRIX_ALLOW_OPEN_ACCESS=true`.
 - **IRC**: Deny-all by default. Set `IRC_ALLOWED_USERS` or `IRC_ALLOW_OPEN_ACCESS=true`.
 - **Teams**: Deny-all by default. Set `TEAMS_ALLOWED_USER_IDS` or `TEAMS_ALLOW_OPEN_ACCESS=true`.

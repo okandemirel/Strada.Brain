@@ -6,6 +6,15 @@ const REPO_ROOT = process.cwd();
 
 const authoritativeDocs = [
   "README.md",
+  "SECURITY.md",
+  "src/config/README.md",
+  "src/channels/README.md",
+  "src/dashboard/README.md",
+  "src/agents/README.md",
+  "src/common/README.md",
+] as const;
+
+const localizedReadmes = [
   "README.de.md",
   "README.es.md",
   "README.fr.md",
@@ -13,12 +22,6 @@ const authoritativeDocs = [
   "README.ko.md",
   "README.tr.md",
   "README.zh.md",
-  "SECURITY.md",
-  "src/config/README.md",
-  "src/channels/README.md",
-  "src/dashboard/README.md",
-  "src/agents/README.md",
-  "src/common/README.md",
 ] as const;
 
 const historicalDocs = [
@@ -65,6 +68,14 @@ describe("docs consistency", () => {
     for (const relativePath of historicalDocs) {
       const content = readRepoFile(relativePath);
       expect(content).toMatch(/not the (?:authoritative source|source of truth) for current runtime behavior or env defaults/u);
+    }
+  });
+
+  it("marks localized READMEs as translations that defer to the English canonical README", () => {
+    for (const relativePath of localizedReadmes) {
+      const content = readRepoFile(relativePath);
+      expect(content).toMatch(/\[README\.md\]\(README\.md\)/u);
+      expect(content).toMatch(/translation|ceviri|uebersetzung|traduccion|traduction|翻訳|번역|翻译/ui);
     }
   });
 

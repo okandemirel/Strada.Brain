@@ -9,6 +9,8 @@
   Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt, Fehler automatisch behebt und aus seinen Fehlern lernt &mdash; und mit einer 24/7-Daemon-Schleife autonom arbeitet. Jetzt mit Multi-Agent-Orchestrierung, Aufgabendelegation, Ged&auml;chtniskonsolidierung, einem Deployment-Subsystem mit Genehmigungsgates, Medienfreigabe mit LLM-Vision-Unterstuetzung, einem konfigurierbaren Persoenlichkeitssystem ueber SOUL.md, interaktiven Klaerungstools, intelligentem Multi-Provider-Routing mit aufgabenbewusstem dynamischem Wechsel, konfidenzbasierter Konsensverifizierung, einem autonomen Agent Core mit OODA-Reasoning-Loop und Strada.MCP-Integration.
 </p>
 
+> Uebersetzungshinweis: Fuer aktuelles Laufzeitverhalten, Umgebungsvariablen-Defaults und Sicherheitssemantik ist [README.md](README.md) die kanonische Quelle. Diese Datei ist eine Uebersetzung davon.
+
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
@@ -519,7 +521,7 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | Variable | Beschreibung |
 |----------|-------------|
 | `WHATSAPP_SESSION_PATH` | Verzeichnis fuer Sitzungsdateien (Standard: `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Kommagetrennte Telefonnummern |
+| `WHATSAPP_ALLOWED_NUMBERS` | Kommagetrennte Telefonnummern (optional; leer = offen fuer alle) |
 
 ### Funktionen
 
@@ -705,7 +707,7 @@ Alle Kanaele implementieren In-Place-Streaming. Die Antwort des Agenten erschein
 - **Telegram**: Standardmaessig alles blockiert. `ALLOWED_TELEGRAM_USER_IDS` muss gesetzt werden.
 - **Discord**: Standardmaessig alles blockiert. `ALLOWED_DISCORD_USER_IDS` oder `ALLOWED_DISCORD_ROLE_IDS` muss gesetzt werden.
 - **Slack**: **Standardmaessig offen.** Wenn `ALLOWED_SLACK_USER_IDS` leer ist, kann jeder Slack-Benutzer auf den Bot zugreifen. Setzen Sie die Erlaubnisliste fuer die Produktion.
-- **WhatsApp**: Verwendet die `WHATSAPP_ALLOWED_NUMBERS`-Erlaubnisliste, die lokal im Adapter geprueft wird.
+- **WhatsApp**: Standardmaessig offen. Wenn `WHATSAPP_ALLOWED_NUMBERS` gesetzt ist, beschraenkt der Adapter eingehende Nachrichten auf diese Erlaubnisliste.
 
 ---
 
@@ -746,7 +748,7 @@ Alle Tool-Ergebnisse werden auf 8192 Zeichen begrenzt und vor der Rueckgabe an d
 ## Dashboard und Monitoring
 
 ### HTTP-Dashboard (`DASHBOARD_ENABLED=true`)
-Erreichbar unter `http://localhost:3001` (nur Localhost). Zeigt: Betriebszeit, Nachrichtenanzahl, Token-Verbrauch, aktive Sitzungen, Tool-Nutzungstabelle, Sicherheitsstatistiken. Automatische Aktualisierung alle 3 Sekunden.
+Erreichbar unter `http://localhost:3100` (nur Localhost). Zeigt: Betriebszeit, Nachrichtenanzahl, Token-Verbrauch, aktive Sitzungen, Tool-Nutzungstabelle, Sicherheitsstatistiken. Automatische Aktualisierung alle 3 Sekunden.
 
 ### Health-Endpunkte
 - `GET /health` -- Liveness-Probe (`{"status":"ok"}`)
@@ -756,7 +758,7 @@ Erreichbar unter `http://localhost:3001` (nur Localhost). Zeigt: Betriebszeit, N
 Metriken unter `http://localhost:9090/metrics`. Zaehler fuer Nachrichten, Tool-Aufrufe, Tokens. Histogramme fuer Anfragedauer, Tool-Dauer, LLM-Latenz. Standard-Node.js-Metriken (CPU, Heap, GC, Event Loop).
 
 ### WebSocket-Dashboard (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-Echtzeit-Metriken, die jede Sekunde gepusht werden. Unterstuetzt authentifizierte Verbindungen und Remote-Befehle (Plugin-Neuladen, Cache-Leerung, Log-Abruf). Daemon-Ereignisse (Ausloeseraktivierungen, Budget-Warnungen, Zielfortschritt) werden ueber WebSocket uebertragen.
+Echtzeit-Metriken werden jede Sekunde gepusht. Unterstuetzt authentifizierte Verbindungen, Heartbeat-Ueberwachung sowie von der Anwendung registrierte Befehls- und Benachrichtigungs-Handler. Wenn `WEBSOCKET_DASHBOARD_AUTH_TOKEN` gesetzt ist, verwenden Sie dieses Bearer-Token; andernfalls bootstrappt das Same-Origin-Dashboard automatisch ein prozessgebundenes Token.
 
 ### Metrik-System
 `MetricsStorage` (SQLite) zeichnet Aufgabenabschlussrate, Iterationszaehler, Tool-Nutzung und Musterwiederverwendung auf. `MetricsRecorder` erfasst Metriken pro Sitzung. Der `metrics`-CLI-Befehl zeigt historische Metriken an.

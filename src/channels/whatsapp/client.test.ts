@@ -395,6 +395,44 @@ describe("WhatsAppChannel", () => {
       });
     });
 
+    it("allows inbound messages when no WhatsApp allowlist is configured", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      const openChannel = new WhatsAppChannel(".test-session", []);
+      await openChannel.connect();
+      openChannel.onMessage(handler);
+
+      if (eventHandlers["connection.update"]) {
+        eventHandlers["connection.update"]({ connection: "open" });
+      }
+
+      const upsert = {
+        messages: [
+          {
+            key: {
+              remoteJid: "chat1@s.whatsapp.net",
+              participant: "558877665544@s.whatsapp.net",
+              fromMe: false,
+            },
+            message: {
+              conversation: "hello from unrestricted sender",
+            },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]![0]).toMatchObject({
+        chatId: "chat1@s.whatsapp.net",
+        userId: "558877665544@s.whatsapp.net",
+        text: "hello from unrestricted sender",
+      });
+
+      await openChannel.disconnect();
+    });
+
     it("should use default mimeType for video without mimetype", async () => {
       const handler = vi.fn().mockResolvedValue(undefined);
       connectedChannel.onMessage(handler);

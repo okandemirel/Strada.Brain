@@ -12,6 +12,7 @@ import type {
 } from "../channel.interface.js";
 import { limitIncomingText, type IncomingMessage, type Attachment } from "../channel-messages.interface.js";
 import { getLogger } from "../../utils/logger.js";
+import { isAllowedByDualAllowlistPolicy } from "../../security/access-policy.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -112,12 +113,13 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
   }
 
   private isAllowedInboundMessage(userId: string, roomId: string): boolean {
-    if (this.allowedUserIds.length === 0 && this.allowedRoomIds.length === 0) {
-      return this.allowOpenAccess;
-    }
-    const userAllowed = this.allowedUserIds.length === 0 || this.allowedUserIds.includes(userId);
-    const roomAllowed = this.allowedRoomIds.length === 0 || this.allowedRoomIds.includes(roomId);
-    return userAllowed && roomAllowed;
+    return isAllowedByDualAllowlistPolicy({
+      primaryId: userId,
+      primaryAllowlist: this.allowedUserIds,
+      secondaryId: roomId,
+      secondaryAllowlist: this.allowedRoomIds,
+      emptyAllowlistMode: this.allowOpenAccess ? "open" : "closed",
+    });
   }
 }
 

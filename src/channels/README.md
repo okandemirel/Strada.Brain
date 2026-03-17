@@ -9,7 +9,7 @@ Channel adapters connect Strada.Brain to messaging platforms. Each adapter trans
 | Telegram | `TelegramChannel` | Grammy | Deny-all (must set allowlist) |
 | Discord | `DiscordChannel` | discord.js | Deny-all (must set allowlist) |
 | Slack | `SlackChannel` | @slack/bolt | **Open-all** (must set allowlist for production) |
-| WhatsApp | `WhatsAppChannel` | @whiskeysockets/baileys | Deny-all (must set allowlist) |
+| WhatsApp | `WhatsAppChannel` | @whiskeysockets/baileys | **Open-all** (set allowlist for production) |
 | Matrix | `MatrixChannel` | matrix-js-sdk | Deny-all unless `MATRIX_ALLOW_OPEN_ACCESS=true` |
 | IRC | `IRCChannel` | irc | Deny-all unless `IRC_ALLOW_OPEN_ACCESS=true` |
 | Teams | `TeamsChannel` | botbuilder | Deny-all unless `TEAMS_ALLOW_OPEN_ACCESS=true` |

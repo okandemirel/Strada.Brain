@@ -2063,7 +2063,7 @@ async function initializeChannel(
           .map((n) => n.trim())
           .filter(Boolean) ?? [];
       if (allowedNumbers.length === 0) {
-        logger.warn("WHATSAPP_ALLOWED_NUMBERS is empty — all WhatsApp users will be denied access");
+        logger.info("WHATSAPP_ALLOWED_NUMBERS is empty — WhatsApp is open to all senders");
       }
       return new WhatsAppChannel(sessionPath, allowedNumbers);
     }

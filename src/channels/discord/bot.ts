@@ -646,7 +646,7 @@ export class DiscordChannel implements IChannelAdapter {
       if (message.author.bot) return;
 
       const userId = message.author.id;
-      if (!this.auth.isDiscordUserAllowed(userId)) {
+      if (!this.auth.isDiscordUserAllowed(userId, this.extractRoleIds(message))) {
         await message.reply(
           "You are not authorized to use Strada Brain. Contact the administrator."
         );
@@ -662,7 +662,7 @@ export class DiscordChannel implements IChannelAdapter {
   private async handleButtonInteraction(
     interaction: ButtonInteraction
   ): Promise<void> {
-    if (!this.auth.isDiscordUserAllowed(interaction.user.id)) {
+    if (!this.auth.isDiscordUserAllowed(interaction.user.id, this.extractRoleIds(interaction))) {
       await interaction.reply({
         content: "Unauthorized",
         ephemeral: true,
@@ -710,7 +710,7 @@ export class DiscordChannel implements IChannelAdapter {
   private async handleSlashCommand(
     interaction: ChatInputCommandInteraction
   ): Promise<void> {
-    if (!this.auth.isDiscordUserAllowed(interaction.user.id)) {
+    if (!this.auth.isDiscordUserAllowed(interaction.user.id, this.extractRoleIds(interaction))) {
       await interaction.reply({
         content: "You are not authorized to use Strada Brain.",
         ephemeral: true,
@@ -866,6 +866,45 @@ export class DiscordChannel implements IChannelAdapter {
           ephemeral: true,
         });
     }
+  }
+
+  private extractRoleIds(source: { member?: unknown }): string[] {
+    const member = source.member;
+    if (!member || typeof member !== "object") {
+      return [];
+    }
+
+    const roles = (member as { roles?: unknown }).roles;
+    if (!roles) {
+      return [];
+    }
+
+    if (Array.isArray(roles)) {
+      return roles.filter((role): role is string => typeof role === "string");
+    }
+
+    if (typeof roles === "object" && roles !== null && "cache" in roles) {
+      const cache = (roles as { cache?: unknown }).cache;
+      if (cache instanceof Map) {
+        return Array.from(cache.keys()).filter((role): role is string => typeof role === "string");
+      }
+      if (cache && typeof cache === "object" && "keys" in cache && typeof cache.keys === "function") {
+        return Array.from(cache.keys()).filter((role): role is string => typeof role === "string");
+      }
+      if (cache && typeof cache === "object" && "values" in cache && typeof cache.values === "function") {
+        return Array.from(cache.values()).flatMap((role) => {
+          if (typeof role === "string") {
+            return [role];
+          }
+          if (role && typeof role === "object" && "id" in role && typeof role.id === "string") {
+            return [role.id];
+          }
+          return [];
+        });
+      }
+    }
+
+    return [];
   }
 
   private async handleRegularMessage(message: Message): Promise<void> {

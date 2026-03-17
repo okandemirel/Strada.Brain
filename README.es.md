@@ -9,6 +9,8 @@
   Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7. Ahora con orquestacion multi-agente, delegacion de tareas, consolidacion de memoria, un subsistema de despliegue con puertas de aprobacion, comparticion de medios con soporte de vision LLM, un sistema de personalidad configurable via SOUL.md, herramientas de aclaracion interactivas, enrutamiento inteligente multi-proveedor con conmutacion dinamica segun tarea, verificacion de consenso basada en confianza, un Agent Core autonomo con bucle de razonamiento OODA e integracion con Strada.MCP.
 </p>
 
+> Nota de traduccion: Para el comportamiento actual en runtime, los valores por defecto de variables de entorno y la semantica de seguridad, la fuente canonica es [README.md](README.md). Este archivo es una traduccion de ese documento.
+
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
@@ -550,7 +552,7 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | Variable | Descripcion |
 |----------|-------------|
 | `WHATSAPP_SESSION_PATH` | Directorio para archivos de sesion (por defecto: `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Numeros de telefono separados por comas |
+| `WHATSAPP_ALLOWED_NUMBERS` | Numeros de telefono separados por comas (opcional; vacio = acceso abierto) |
 
 ### Funcionalidades
 
@@ -736,7 +738,7 @@ Todos los canales implementan streaming con edicion in situ. La respuesta del ag
 - **Telegram**: Bloquea todo por defecto. Se debe configurar `ALLOWED_TELEGRAM_USER_IDS`.
 - **Discord**: Bloquea todo por defecto. Se debe configurar `ALLOWED_DISCORD_USER_IDS` o `ALLOWED_DISCORD_ROLE_IDS`.
 - **Slack**: **Abierto por defecto.** Si `ALLOWED_SLACK_USER_IDS` esta vacio, cualquier usuario de Slack puede acceder al bot. Configura la lista de permitidos para produccion.
-- **WhatsApp**: Usa la lista de permitidos `WHATSAPP_ALLOWED_NUMBERS` verificada localmente en el adaptador.
+- **WhatsApp**: Abierto por defecto. Si se configura `WHATSAPP_ALLOWED_NUMBERS`, el adaptador restringe los mensajes entrantes a esa lista de permitidos.
 
 ---
 
@@ -777,7 +779,7 @@ Todos los resultados de herramientas se limitan a 8192 caracteres y se limpian d
 ## Dashboard y Monitoreo
 
 ### Dashboard HTTP (`DASHBOARD_ENABLED=true`)
-Accesible en `http://localhost:3001` (solo localhost). Muestra: tiempo de actividad, conteo de mensajes, uso de tokens, sesiones activas, tabla de uso de herramientas, estadisticas de seguridad. Se actualiza automaticamente cada 3 segundos.
+Accesible en `http://localhost:3100` (solo localhost). Muestra: tiempo de actividad, conteo de mensajes, uso de tokens, sesiones activas, tabla de uso de herramientas, estadisticas de seguridad. Se actualiza automaticamente cada 3 segundos.
 
 ### Endpoints de Salud
 - `GET /health` -- Sonda de actividad (`{"status":"ok"}`)
@@ -787,7 +789,7 @@ Accesible en `http://localhost:3001` (solo localhost). Muestra: tiempo de activi
 Metricas en `http://localhost:9090/metrics`. Contadores para mensajes, llamadas a herramientas, tokens. Histogramas para duracion de solicitudes, duracion de herramientas, latencia LLM. Metricas estandar de Node.js (CPU, heap, GC, event loop).
 
 ### Dashboard WebSocket (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-Metricas en tiempo real enviadas cada segundo. Soporta conexiones autenticadas y comandos remotos (recarga de plugins, limpieza de cache, recuperacion de logs). Los eventos del daemon (disparos de disparadores, alertas de presupuesto, progreso de objetivos) se transmiten por WebSocket.
+Metricas en tiempo real enviadas cada segundo. Soporta conexiones autenticadas, monitoreo por heartbeat y handlers de comandos/notificaciones registrados por la aplicacion. Si `WEBSOCKET_DASHBOARD_AUTH_TOKEN` esta configurado, usa ese bearer token; si no lo esta, el dashboard same-origin inyectado arranca con un token de alcance de proceso.
 
 ### Sistema de Metricas
 `MetricsStorage` (SQLite) registra tasa de completitud de tareas, conteos de iteraciones, uso de herramientas y reutilizacion de patrones. `MetricsRecorder` captura metricas por sesion. El comando CLI `metrics` muestra metricas historicas.

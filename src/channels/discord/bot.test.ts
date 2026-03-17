@@ -354,6 +354,38 @@ describe("DiscordChannel attachment extraction", () => {
     expect(msg.attachments).toBeUndefined();
   });
 
+  it("should authorize regular messages via allowed Discord role IDs", async () => {
+    const roleBasedAuth = new AuthManager([], {
+      allowedDiscordIds: new Set(),
+      allowedDiscordRoles: new Set(["role123"]),
+    });
+    const roleBasedChannel = new DiscordChannel("fake-token", roleBasedAuth, {
+      guildId: "guild123",
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    roleBasedChannel.onMessage(handler);
+
+    const client = roleBasedChannel.getClient();
+    const onCalls = (client.on as ReturnType<typeof vi.fn>).mock.calls;
+    const mcEntry = onCalls.find(
+      (c: unknown[]) => c[0] === "messageCreate"
+    );
+    const roleMessageCreateHandler = mcEntry![1] as (message: Record<string, unknown>) => Promise<void>;
+
+    await roleMessageCreateHandler(
+      makeMessage({
+        author: { bot: false, id: "unlisted-user" },
+        member: {
+          roles: {
+            cache: new Map([["role123", { id: "role123" }]]),
+          },
+        },
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("should extract image attachment", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     channel.onMessage(handler);
@@ -530,5 +562,42 @@ describe("DiscordChannel with auth checks", () => {
     });
     
     expect(auth.isDiscordUserAllowed("special", ["user"])).toBe(true);
+  });
+
+  it("authorizes slash commands via Discord role IDs carried on the interaction member", async () => {
+    const auth = new AuthManager([], {
+      allowedDiscordIds: new Set(),
+      allowedDiscordRoles: new Set(["role123"]),
+    });
+    const channel = new DiscordChannel("fake-token", auth, {
+      guildId: "guild123",
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    channel.onMessage(handler);
+
+    const interaction = {
+      user: { id: "unlisted-user" },
+      member: { roles: ["role123"] },
+      commandName: "ask",
+      channelId: "channel123",
+      options: {
+        getString: vi.fn().mockReturnValue("Role gated question"),
+      },
+      deferReply: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      reply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await (channel as unknown as {
+      handleSlashCommand: (interaction: unknown) => Promise<void>;
+    }).handleSlashCommand(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      chatId: "channel123",
+      userId: "unlisted-user",
+      text: "Role gated question",
+    });
   });
 });

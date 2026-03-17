@@ -9,6 +9,8 @@
   Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu, onay kapili dagitim alt sistemi, LLM goruntu destegiyle medya paylasimi, SOUL.md uzerinden yapilandirilabilir kisilik sistemi, etkilesimli aciklama araclari, gorev bilinclii dinamik gecis ile akilli coklu saglayici yonlendirme, guven tabanli konsensus dogrulamasi, OODA akil yurutme dongusune sahip otonom Agent Core ve Strada.MCP entegrasyonu ile.
 </p>
 
+> Ceviri notu: Guncel calisma zamani davranisi, ortam degiskeni varsayilanlari ve guvenlik semantigi icin kanonik kaynak [README.md](README.md) dosyasidir. Bu dosya onun cevirisidir.
+
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
@@ -509,7 +511,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | Degisken | Aciklama |
 |----------|----------|
 | `WHATSAPP_SESSION_PATH` | Oturum dosyalari icin dizin (varsayilan: `.whatsapp-session`) |
-| `WHATSAPP_ALLOWED_NUMBERS` | Virgule ayrilmis telefon numaralari |
+| `WHATSAPP_ALLOWED_NUMBERS` | Virgule ayrilmis telefon numaralari (opsiyonel; bos ise herkese acik) |
 
 ### Ozellikler
 
@@ -695,7 +697,7 @@ Tum kanallar yerinde duzenleme akisi uygular. Ajanin yaniti, LLM urettikce asama
 - **Telegram**: Varsayilan olarak tumu reddeder. `ALLOWED_TELEGRAM_USER_IDS` ayarlanmalidir.
 - **Discord**: Varsayilan olarak tumu reddeder. `ALLOWED_DISCORD_USER_IDS` veya `ALLOWED_DISCORD_ROLE_IDS` ayarlanmalidir.
 - **Slack**: **Varsayilan olarak herkese aciktir.** `ALLOWED_SLACK_USER_IDS` bos ise, herhangi bir Slack kullanicisi bota erisebilir. Uretim ortami icin izin listesini ayarlayin.
-- **WhatsApp**: Adaptorde yerel olarak kontrol edilen `WHATSAPP_ALLOWED_NUMBERS` izin listesini kullanir.
+- **WhatsApp**: Varsayilan olarak herkese aciktir. `WHATSAPP_ALLOWED_NUMBERS` ayarlanirsa adaptor yalnizca bu izin listesindeki numaralari kabul eder.
 
 ---
 
@@ -736,7 +738,7 @@ Tum arac sonuclari 8192 karakter ile sinirlandirilir ve LLM'e geri beslenmeden o
 ## Panel ve Izleme
 
 ### HTTP Paneli (`DASHBOARD_ENABLED=true`)
-`http://localhost:3001` adresinden erisilebilir (yalnizca localhost). Gosterir: calisma suresi, mesaj sayisi, token kullanimi, aktif oturumlar, arac kullanim tablosu, guvenlik istatistikleri. Her 3 saniyede otomatik yenilenir.
+`http://localhost:3100` adresinden erisilebilir (yalnizca localhost). Gosterir: calisma suresi, mesaj sayisi, token kullanimi, aktif oturumlar, arac kullanim tablosu, guvenlik istatistikleri. Her 3 saniyede otomatik yenilenir.
 
 ### Saglik Uc Noktalari
 - `GET /health` -- Canlilik probu (`{"status":"ok"}`)
@@ -746,7 +748,7 @@ Tum arac sonuclari 8192 karakter ile sinirlandirilir ve LLM'e geri beslenmeden o
 `http://localhost:9090/metrics` adresinde metrikler. Mesajlar, arac cagrilari, token'lar icin sayaclar. Istek suresi, arac suresi, LLM gecikmesi icin histogramlar. Varsayilan Node.js metrikleri (CPU, heap, GC, olay dongusu).
 
 ### WebSocket Paneli (`ENABLE_WEBSOCKET_DASHBOARD=true`)
-Her saniye gonderilen gercek zamanli metrikler. Kimlik dogrulanmis baglantilari ve uzak komutlari (eklenti yeniden yukleme, onbellek temizleme, log alma) destekler. Daemon olaylari (tetikleyici ateslemeleri, butce uyarilari, hedef ilerlemesi) WebSocket uzerinden yayinlanir.
+Her saniye gonderilen gercek zamanli metrikler. Kimlik dogrulanmis baglantilari, heartbeat izlemeyi ve uygulama tarafinda kaydedilen komut/notification handler'larini destekler. `WEBSOCKET_DASHBOARD_AUTH_TOKEN` ayarliysa o bearer token kullanilir; ayarli degilse ayni origin dashboard process-scope bir token bootstrap eder.
 
 ### Metrik Sistemi
 `MetricsStorage` (SQLite) gorev tamamlama oranini, iterasyon sayilarini, arac kullanimini ve kalip yeniden kullanimini kaydeder. `MetricsRecorder` oturum basina metrikleri yakalar. `metrics` CLI komutu gecmis metrikleri goruntulur.

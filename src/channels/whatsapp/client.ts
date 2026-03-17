@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { getLogger } from "../../utils/logger.js";
 import { downloadMedia, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
+import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 import { RateLimiter } from "../../security/rate-limiter.js";
 import type { RateLimitConfig } from "../../security/rate-limiter.js";
 import type {
@@ -189,15 +190,11 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
             msg.message.videoMessage?.caption ??
             "";
 
-          // Auth check — deny all if no allowed numbers configured (like Discord's pattern)
+          // Auth check — empty allowlist means no restriction, matching Slack-style open access
           {
             const normalized = senderId.replace(/@.*$/, "");
-            if (this.allowedNumbers.size === 0) {
-              logger.warn("WhatsApp: no allowed numbers configured, denying all", { senderId });
-              void this.sendText(chatId, "Unauthorized. Contact the admin.");
-              continue;
-            }
-            if (!this.allowedNumbers.has(normalized)) {
+            const allowed = isAllowedBySingleIdPolicy(normalized, this.allowedNumbers, "open");
+            if (!allowed) {
               logger.warn("WhatsApp: unauthorized number", { senderId });
               void this.sendText(chatId, "Unauthorized. Contact the admin.");
               continue;

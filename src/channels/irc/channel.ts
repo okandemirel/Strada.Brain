@@ -8,6 +8,7 @@
 import type { IChannelAdapter } from "../channel.interface.js";
 import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
 import { getLogger } from "../../utils/logger.js";
+import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -108,9 +109,11 @@ export class IRCChannel implements IChannelAdapter {
   }
 
   private isAllowedInboundUser(userId: string): boolean {
-    return this.allowedUsers.length === 0
-      ? this.allowOpenAccess
-      : this.allowedUsers.includes(userId);
+    return isAllowedBySingleIdPolicy(
+      userId,
+      this.allowedUsers,
+      this.allowOpenAccess ? "open" : "closed",
+    );
   }
 }
 

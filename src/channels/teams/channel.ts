@@ -8,6 +8,7 @@
 import type { IChannelAdapter } from "../channel.interface.js";
 import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
 import { getLogger } from "../../utils/logger.js";
+import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -120,9 +121,11 @@ export class TeamsChannel implements IChannelAdapter {
   }
 
   private isAllowedInboundUser(userId: string): boolean {
-    return this.allowedUserIds.length === 0
-      ? this.allowOpenAccess
-      : this.allowedUserIds.includes(userId);
+    return isAllowedBySingleIdPolicy(
+      userId,
+      this.allowedUserIds,
+      this.allowOpenAccess ? "open" : "closed",
+    );
   }
 }
 
