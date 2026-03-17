@@ -315,7 +315,7 @@ Coklu ajan orkestrasyonu, birden fazla ajanin es zamanli olarak farkli gorevler 
 - **AgentManager** -- kanal ve oturum bazinda ajan olusturma ve yonetim, oturum izolasyonu
 - **AgentBudgetTracker** -- ajan bazinda token ve maliyet takibi
 - **AgentRegistry** -- aktif ajanlarin merkezi kaydi
-- `MULTI_AGENT_ENABLED` ortam degiskeni ile etkinlestirilir (varsayilan: kapali)
+- `MULTI_AGENT_ENABLED` ortam degiskeni varsayilan olarak etkindir; legacy tek ajan davranisina donmek icin `false` yapin
 
 ---
 
@@ -492,7 +492,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | Degisken | Aciklama |
 |----------|----------|
 | `DISCORD_BOT_TOKEN` | Discord bot token'i |
-| `DISCORD_CLIENT_ID` | Discord uygulama istemci kimligi |
+| `DISCORD_GUILD_ID` | Discord sunucu (guild) kimligi |
 | `ALLOWED_DISCORD_USER_IDS` | Virgule ayrilmis kullanici kimlikleri (bos ise tumu reddedilir) |
 | `ALLOWED_DISCORD_ROLE_IDS` | Rol tabanli erisim icin virgule ayrilmis rol kimlikleri |
 
@@ -525,10 +525,10 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `DASHBOARD_PORT` | `3001` | Panel sunucu portu |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket gercek zamanli paneli etkinlestir |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus metrik uc noktasini etkinlestir (port 9090) |
-| `MULTI_AGENT_ENABLED` | `false` | Coklu ajan orkestrasyonunu etkinlestir |
-| `DELEGATION_ENABLED` | `false` | Ajanlar arasi gorev delegasyonunu etkinlestir |
-| `DELEGATION_MAX_DEPTH` | `2` | Maksimum delegasyon zincir derinligi |
-| `DEPLOYMENT_ENABLED` | `false` | Dagitim alt sistemini etkinlestir |
+| `MULTI_AGENT_ENABLED` | `true` | Coklu ajan orkestrasyonunu etkinlestir |
+| `TASK_DELEGATION_ENABLED` | `false` | Ajanlar arasi gorev delegasyonunu etkinlestir |
+| `AGENT_MAX_DELEGATION_DEPTH` | `2` | Maksimum delegasyon zincir derinligi |
+| `DEPLOY_ENABLED` | `false` | Dagitim alt sistemini etkinlestir |
 | `SOUL_FILE` | `soul.md` | Ajan kisilik dosyasinin yolu (degisiklikte sicak yeniden yuklenir) |
 | `SOUL_FILE_WEB` | (ayarsiz) | Web kanali icin kanal bazli kisilik gecikmesi |
 | `SOUL_FILE_TELEGRAM` | (ayarsiz) | Telegram icin kanal bazli kisilik gecikmesi |

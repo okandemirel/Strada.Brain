@@ -227,7 +227,7 @@ Le backend de m&eacute;moire actif est `AgentDBMemory` -- SQLite avec indexation
 - **M&eacute;moire persistante** -- stockage &agrave; long terme, promue depuis l'&eacute;ph&eacute;m&egrave;re en fonction de la fr&eacute;quence d'acc&egrave;s et de l'importance
 
 **Fonctionnement :**
-- Lorsque l'historique de session d&eacute;passe 40 messages, les anciens messages sont r&eacute;sum&eacute;s et stock&eacute;s comme entr&eacute;es de conversation
+- Le rognage de session utilise des seuils adapt&eacute;s au fournisseur, puis les segments retir&eacute;s sont persist&eacute;s en m&eacute;moire avant de quitter le contexte actif
 - La r&eacute;cup&eacute;ration hybride combine 70% de similarit&eacute; s&eacute;mantique (vecteurs HNSW) avec 30% de correspondance par mots-cl&eacute;s TF-IDF
 - L'outil `strada_analyze_project` met en cache l'analyse de la structure du projet pour une injection de contexte instantan&eacute;e
 - La m&eacute;moire persiste entre les red&eacute;marrages dans le r&eacute;pertoire `MEMORY_DB_PATH` (d&eacute;faut : `.strada-memory/`)
@@ -314,7 +314,7 @@ Plusieurs instances d'agents peuvent fonctionner simultan&eacute;ment avec isola
 **AgentManager :**
 - Cr&eacute;e et g&egrave;re les instances d'agents par canal/session
 - L'isolation des sessions garantit que les agents sur diff&eacute;rents canaux n'interf&egrave;rent pas entre eux
-- Configurable via `MULTI_AGENT_ENABLED` (opt-in, d&eacute;sactiv&eacute; par d&eacute;faut -- comportement identique au mode mono-agent lorsque d&eacute;sactiv&eacute;)
+- Configurable via `MULTI_AGENT_ENABLED` (activ&eacute; par d&eacute;faut ; utilisez `false` pour revenir au comportement mono-agent historique)
 
 **AgentBudgetTracker :**
 - Suivi budg&eacute;taire par agent en tokens et en co&ucirc;t avec limites configurables
@@ -532,7 +532,7 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | Variable | Description |
 |----------|-------------|
 | `DISCORD_BOT_TOKEN` | Token du bot Discord |
-| `DISCORD_CLIENT_ID` | ID client de l'application Discord |
+| `DISCORD_GUILD_ID` | ID du serveur (guild) Discord |
 | `ALLOWED_DISCORD_USER_IDS` | IDs utilisateur s&eacute;par&eacute;s par des virgules (refuse tout si vide) |
 | `ALLOWED_DISCORD_ROLE_IDS` | IDs de r&ocirc;le s&eacute;par&eacute;s par des virgules pour l'acc&egrave;s par r&ocirc;le |
 
@@ -565,10 +565,10 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `DASHBOARD_PORT` | `3001` | Port du serveur du tableau de bord |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Active le tableau de bord en temps r&eacute;el WebSocket |
 | `ENABLE_PROMETHEUS` | `false` | Active l'endpoint de m&eacute;triques Prometheus (port 9090) |
-| `MULTI_AGENT_ENABLED` | `false` | Activer l'orchestration multi-agent |
-| `DELEGATION_ENABLED` | `false` | Activer la d&eacute;l&eacute;gation de t&acirc;ches entre agents |
-| `DELEGATION_MAX_DEPTH` | `2` | Profondeur maximale de cha&icirc;ne de d&eacute;l&eacute;gation |
-| `DEPLOYMENT_ENABLED` | `false` | Activer le sous-syst&egrave;me de d&eacute;ploiement |
+| `MULTI_AGENT_ENABLED` | `true` | Activer l'orchestration multi-agent |
+| `TASK_DELEGATION_ENABLED` | `false` | Activer la d&eacute;l&eacute;gation de t&acirc;ches entre agents |
+| `AGENT_MAX_DELEGATION_DEPTH` | `2` | Profondeur maximale de cha&icirc;ne de d&eacute;l&eacute;gation |
+| `DEPLOY_ENABLED` | `false` | Activer le sous-syst&egrave;me de d&eacute;ploiement |
 | `SOUL_FILE` | `soul.md` | Chemin vers le fichier de personnalit&eacute; de l'agent (rechargement &agrave; chaud lors des changements) |
 | `SOUL_FILE_WEB` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour le canal web |
 | `SOUL_FILE_TELEGRAM` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour Telegram |

@@ -7,7 +7,7 @@ Shared constants and error types used throughout the application.
 Centralized numeric limits, thresholds, and default values grouped by domain.
 
 - `FILE_LIMITS` — max read size 512 KB, max write size 1 MB, max lines 2,000
-- `SESSION_CONFIG` — max 100 concurrent sessions, 1-hour timeout, 40 messages before trimming, 30-minute cleanup interval
+- `SESSION_CONFIG` — max 100 concurrent sessions, 1-hour timeout, 40-message baseline trimming constant, 30-minute cleanup interval
 - `MEMORY_CONFIG` — default DB path `.strada-memory`, max 10 retrieval results, min similarity 0.15, 24-hour analysis cache
 - `TOOL_LIMITS` — max 50 iterations per request, 8 KB result length, 5-minute execution timeout
 - `DEFAULT_RATE_LIMITS` — messages/minute, messages/hour, tokens/day, daily/monthly budget (all default 0 = unlimited)
@@ -20,7 +20,7 @@ Centralized numeric limits, thresholds, and default values grouped by domain.
 - `SECURITY_CONFIG` — read-only default false, max path depth 100, 1-hour secret pattern refresh
 - `LOGGING_CONFIG` — info level, 10 MB max file size, 3 file rotation
 - `TIMEOUTS` — provider API 2 min, channel connect 30s, shutdown 10s, health check 5s
-- `CHANNEL_DEFAULTS` — default type web, supported: web/telegram/discord/whatsapp/cli/slack
+- `CHANNEL_DEFAULTS` — default type web, supported: web/telegram/discord/whatsapp/cli/slack/matrix/irc/teams
 - `RETRY_CONFIG` — max 3 retries, 1s base delay, 30s max delay, 6 retryable error codes
 - Backward-compatibility aliases exported for commonly used values
 

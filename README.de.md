@@ -316,7 +316,7 @@ Das Multi-Agent-System ermoeglicht die gleichzeitige Verwaltung mehrerer Agenten
 - **AgentBudgetTracker** -- agentbasiertes Budget-Tracking mit konfigurierbaren Limits
 - **AgentRegistry** -- zentrale Registrierung aller aktiven Agenten
 
-**Aktivierung:** Opt-in ueber `MULTI_AGENT_ENABLED=true`. Bei Deaktivierung verhaelt sich das System identisch wie v2.0.
+**Aktivierung:** Standardmaessig aktiviert. Setzen Sie `MULTI_AGENT_ENABLED=false`, um das Legacy-Single-Agent-Verhalten zu verwenden.
 
 ---
 
@@ -330,7 +330,7 @@ Das Delegationssystem ermoeglicht es Agenten, Aufgaben an andere Agenten zu dele
 - **DelegationTool** -- Tool-Schnittstelle fuer die Agenten-zu-Agenten-Delegation
 - Budgetbewusst -- delegierte Aufgaben werden gegen das Budget des delegierenden Agenten verrechnet
 
-**Aktivierung:** Opt-in ueber `DELEGATION_ENABLED=true`.
+**Aktivierung:** Opt-in ueber `TASK_DELEGATION_ENABLED=true`.
 
 ---
 
@@ -358,7 +358,7 @@ Das Deployment-Subsystem ermoeglicht automatisierte Deployments mit Sicherheitsg
 - **DeploymentExecutor** -- fuehrt Deployments aus mit integriertem Rollback bei Fehlern
 - **Circuit Breaker** -- unterbricht Deployments bei wiederholten Fehlern
 
-**Aktivierung:** Standardmaessig deaktiviert. Opt-in ueber `DEPLOYMENT_ENABLED=true`.
+**Aktivierung:** Standardmaessig deaktiviert. Opt-in ueber `DEPLOY_ENABLED=true`.
 
 ---
 
@@ -502,7 +502,7 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | Variable | Beschreibung |
 |----------|-------------|
 | `DISCORD_BOT_TOKEN` | Discord-Bot-Token |
-| `DISCORD_CLIENT_ID` | Discord-Anwendungs-Client-ID |
+| `DISCORD_GUILD_ID` | Discord-Guild-ID |
 | `ALLOWED_DISCORD_USER_IDS` | Kommagetrennte Benutzer-IDs (blockiert alle wenn leer) |
 | `ALLOWED_DISCORD_ROLE_IDS` | Kommagetrennte Rollen-IDs fuer rollenbasierten Zugriff |
 
@@ -535,10 +535,10 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | `DASHBOARD_PORT` | `3001` | Dashboard-Server-Port |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket-Echtzeit-Dashboard aktivieren |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus-Metriken-Endpunkt aktivieren (Port 9090) |
-| `MULTI_AGENT_ENABLED` | `false` | Multi-Agent-Orchestrierung aktivieren |
-| `DELEGATION_ENABLED` | `false` | Aufgabendelegation zwischen Agenten aktivieren |
-| `DELEGATION_MAX_DEPTH` | `2` | Maximale Delegationskettiefe |
-| `DEPLOYMENT_ENABLED` | `false` | Deployment-Subsystem aktivieren |
+| `MULTI_AGENT_ENABLED` | `true` | Multi-Agent-Orchestrierung aktivieren |
+| `TASK_DELEGATION_ENABLED` | `false` | Aufgabendelegation zwischen Agenten aktivieren |
+| `AGENT_MAX_DELEGATION_DEPTH` | `2` | Maximale Delegationskettiefe |
+| `DEPLOY_ENABLED` | `false` | Deployment-Subsystem aktivieren |
 | `SOUL_FILE` | `soul.md` | Pfad zur Agenten-Persoenlichkeitsdatei (Hot-Reload bei Aenderung) |
 | `SOUL_FILE_WEB` | (nicht gesetzt) | Kanalspezifische Persoenlichkeit fuer den Web-Kanal |
 | `SOUL_FILE_TELEGRAM` | (nicht gesetzt) | Kanalspezifische Persoenlichkeit fuer Telegram |

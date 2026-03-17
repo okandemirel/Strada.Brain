@@ -132,7 +132,7 @@ The deployment subsystem enforces human-in-the-loop approval and circuit breaker
 - **Circuit breaker**: consecutive deployment failures trigger automatic cooldown with exponential backoff, preventing cascading failures.
 - **Environment sanitization**: the `DeploymentExecutor` strips environment variables from deployment logs to prevent credential leakage.
 - **Readiness validation**: `ReadinessChecker` validates system health (build status, test results, resource availability) before allowing deployment to proceed.
-- **Opt-in only**: deployment is disabled by default (`DEPLOYMENT_ENABLED=false`) and requires explicit activation.
+- **Opt-in only**: deployment is disabled by default (`DEPLOY_ENABLED=false`) and requires explicit activation.
 
 Implementation: `src/daemon/triggers/deploy-trigger.ts`, `src/daemon/deployment/deployment-executor.ts`
 
@@ -243,10 +243,10 @@ Security-related environment variables:
 | `RATE_LIMIT_TOKENS_PER_DAY` | Max API tokens per day (all users) | `1000000` |
 | `RATE_LIMIT_DAILY_BUDGET_USD` | Max daily spend | `50` |
 | `RATE_LIMIT_MONTHLY_BUDGET_USD` | Max monthly spend | `1000` |
-| `MULTI_AGENT_ENABLED` | Enable multi-agent orchestration | `false` |
-| `DELEGATION_ENABLED` | Enable task delegation | `false` |
-| `DELEGATION_MAX_DEPTH` | Maximum delegation chain depth | `2` |
-| `DEPLOYMENT_ENABLED` | Enable deployment subsystem | `false` |
+| `MULTI_AGENT_ENABLED` | Enable multi-agent orchestration | `true` |
+| `TASK_DELEGATION_ENABLED` | Enable task delegation | `false` |
+| `AGENT_MAX_DELEGATION_DEPTH` | Maximum delegation chain depth | `2` |
+| `DEPLOY_ENABLED` | Enable deployment subsystem | `false` |
 | `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | Additional allowed WebSocket origins | (localhost only) |
 
 ## Deployment Recommendations

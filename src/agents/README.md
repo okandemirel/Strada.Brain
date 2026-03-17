@@ -16,7 +16,7 @@ The `Orchestrator` class implements a single-agent, multi-tool loop. There is on
 7. Self-verification gate: forces `dotnet_build` before responding if `.cs` files were modified
 8. Loop repeats up to `MAX_TOOL_ITERATIONS = 50`
 
-**Session management:** LRU map capped at 100 sessions. Trim at 40 messages — trimmed content is summarized and saved to persistent memory.
+**Session management:** LRU map capped at 100 sessions. Session trimming uses provider-aware thresholds (40-message baseline by default); trimmed slices are persisted to memory before leaving the active context window.
 
 **Streaming:** When both the provider (`IStreamingProvider`) and channel (`IChannelStreaming`) support it, responses stream edit-in-place with 500ms throttled updates.
 
@@ -76,7 +76,7 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 
 ## Context (`context/strada-knowledge.ts`)
 
-`STRADA_SYSTEM_PROMPT` — hardcoded system prompt establishing agent identity and deep Strada.Core framework knowledge (architecture pillars, code conventions, file structure, behavioral guidelines). Augmented at runtime with project context, memory, RAG results, and cached analysis.
+`STRADA_SYSTEM_PROMPT` — core system prompt establishing agent identity and Strada-specific behavior. It is augmented at runtime with project context, memory, RAG results, cached analysis, and authoritative local sources such as Strada.Core and Strada.MCP when available.
 
 ## Key Files
 

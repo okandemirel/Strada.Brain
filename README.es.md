@@ -315,7 +315,7 @@ Multiples instancias de agente pueden ejecutarse simultaneamente con aislamiento
 **AgentManager:**
 - Crea y gestiona instancias de agente por canal/sesion
 - El aislamiento de sesion asegura que los agentes en diferentes canales no interfieran entre si
-- Configurable via `MULTI_AGENT_ENABLED` (habilitacion opcional, deshabilitado por defecto -- identico al comportamiento de agente unico cuando esta desactivado)
+- Configurable via `MULTI_AGENT_ENABLED` (habilitado por defecto; usa `false` para volver al comportamiento legacy de agente unico)
 
 **AgentBudgetTracker:**
 - Seguimiento de tokens y costos por agente con limites de presupuesto configurables
@@ -533,7 +533,7 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | Variable | Descripcion |
 |----------|-------------|
 | `DISCORD_BOT_TOKEN` | Token del bot de Discord |
-| `DISCORD_CLIENT_ID` | ID de cliente de la aplicacion Discord |
+| `DISCORD_GUILD_ID` | ID del servidor (guild) de Discord |
 | `ALLOWED_DISCORD_USER_IDS` | IDs de usuario separados por comas (bloquea todo si esta vacio) |
 | `ALLOWED_DISCORD_ROLE_IDS` | IDs de roles separados por comas para acceso basado en roles |
 
@@ -566,10 +566,10 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | `DASHBOARD_PORT` | `3001` | Puerto del servidor del dashboard |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Habilitar dashboard en tiempo real via WebSocket |
 | `ENABLE_PROMETHEUS` | `false` | Habilitar endpoint de metricas Prometheus (puerto 9090) |
-| `MULTI_AGENT_ENABLED` | `false` | Habilitar orquestacion multi-agente |
-| `DELEGATION_ENABLED` | `false` | Habilitar delegacion de tareas entre agentes |
-| `DELEGATION_MAX_DEPTH` | `2` | Profundidad maxima de cadena de delegacion |
-| `DEPLOYMENT_ENABLED` | `false` | Habilitar subsistema de despliegue |
+| `MULTI_AGENT_ENABLED` | `true` | Habilitar orquestacion multi-agente |
+| `TASK_DELEGATION_ENABLED` | `false` | Habilitar delegacion de tareas entre agentes |
+| `AGENT_MAX_DELEGATION_DEPTH` | `2` | Profundidad maxima de cadena de delegacion |
+| `DEPLOY_ENABLED` | `false` | Habilitar subsistema de despliegue |
 | `SOUL_FILE` | `soul.md` | Ruta al archivo de personalidad del agente (recarga en caliente al cambiar) |
 | `SOUL_FILE_WEB` | (no definido) | Anulacion de personalidad por canal para el canal web |
 | `SOUL_FILE_TELEGRAM` | (no definido) | Anulacion de personalidad por canal para Telegram |
