@@ -7,11 +7,20 @@ type WsHandler = (payload?: Buffer) => void;
 function createMockSocket() {
   const handlers = new Map<string, WsHandler>();
   const sent: Array<Record<string, unknown>> = [];
+  const closeCalls: Array<{ code?: number; reason?: string }> = [];
+  let readyState = 1;
 
   return {
-    readyState: 1,
+    get readyState() {
+      return readyState;
+    },
     send(payload: string) {
       sent.push(JSON.parse(payload) as Record<string, unknown>);
+    },
+    close(code?: number, reason?: string) {
+      closeCalls.push({ code, reason });
+      readyState = 3;
+      handlers.get("close")?.();
     },
     on(event: string, handler: WsHandler) {
       handlers.set(event, handler);
@@ -21,6 +30,9 @@ function createMockSocket() {
     },
     getSentMessages() {
       return sent;
+    },
+    getCloseCalls() {
+      return closeCalls;
     },
   };
 }
@@ -137,6 +149,37 @@ describe("WebChannel reconnect security", () => {
     const sent = secondSocket.getSentMessages();
     expect(sent).toHaveLength(1);
     expect(sent[0]?.chatId).not.toBe(originalChatId);
+  });
+
+  it("reclaims the live session during a refresh race when the active token matches", () => {
+    const channel = new WebChannel();
+    const firstSocket = createMockSocket();
+
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(firstSocket);
+
+    const firstConnected = firstSocket.getSentMessages()[0]!;
+    const originalChatId = String(firstConnected.chatId);
+    const originalReconnectToken = String(firstConnected.reconnectToken);
+
+    const secondSocket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(secondSocket);
+
+    secondSocket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "reconnect",
+        chatId: originalChatId,
+        reconnectToken: originalReconnectToken,
+      })),
+    );
+
+    const sent = secondSocket.getSentMessages();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.chatId).toBe(originalChatId);
+    expect(sent[1]?.reconnectToken).not.toBe(originalReconnectToken);
+    expect(firstSocket.getCloseCalls()).toEqual([
+      { code: 1000, reason: "Session resumed elsewhere" },
+    ]);
   });
 });
 

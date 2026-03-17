@@ -87,6 +87,7 @@ export class AskUserTool implements ITool {
 
       const response = await channel.requestConfirmation({
         chatId: context.chatId ?? "",
+        userId: context.userId,
         question: message,
         options: confirmOptions,
         details: safeContext,

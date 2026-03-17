@@ -35,6 +35,8 @@ interface PendingConfirmation {
   resolve: (value: string) => void;
   reject: (reason: Error) => void;
   timestamp: number;
+  chatId: string;
+  userId?: string;
 }
 
 interface StreamingMessage {
@@ -487,6 +489,8 @@ export class SlackChannel implements IChannelAdapter {
         resolve,
         reject,
         timestamp: Date.now(),
+        chatId: req.chatId,
+        userId: req.userId,
       };
 
       this.pendingConfirmations.set(actionIdPrefix, confirmation);
@@ -675,6 +679,25 @@ export class SlackChannel implements IChannelAdapter {
       const pending = this.pendingConfirmations.get(prefix);
 
       if (pending) {
+        const actionBody = body as {
+          channel?: { id?: string };
+          user?: { id?: string };
+          message?: { ts?: string };
+        };
+        const channelId = actionBody.channel?.id;
+        const actorUserId = actionBody.user?.id;
+
+        if ((channelId && channelId !== pending.chatId) || (pending.userId && actorUserId !== pending.userId)) {
+          if (this.app?.client && channelId && actorUserId) {
+            await this.app.client.chat.postEphemeral({
+              channel: channelId,
+              user: actorUserId,
+              text: "Only the original requester can respond to this confirmation.",
+            });
+          }
+          return;
+        }
+
         this.pendingConfirmations.delete(prefix);
         pending.resolve(value === "approve" ? "approve" : "deny");
 

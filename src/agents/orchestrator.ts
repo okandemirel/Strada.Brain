@@ -111,6 +111,7 @@ type ToolExecutionMode = "interactive" | "background";
 
 interface ToolExecutionOptions {
   mode?: ToolExecutionMode;
+  userId?: string;
   taskPrompt?: string;
   sessionMessages?: ConversationMessage[];
   onUsage?: (usage: TaskUsageEvent) => void;
@@ -1342,7 +1343,7 @@ export class Orchestrator {
     }, TYPING_INTERVAL_MS);
 
     try {
-      await this.runAgentLoop(chatId, session, msg.channelType);
+      await this.runAgentLoop(chatId, session, msg.channelType, userId);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
@@ -1362,7 +1363,12 @@ export class Orchestrator {
   /**
    * The core agent loop: LLM → Tool calls → LLM → ... → Response
    */
-  private async runAgentLoop(chatId: string, session: Session, channelType?: string): Promise<void> {
+  private async runAgentLoop(
+    chatId: string,
+    session: Session,
+    channelType?: string,
+    userId?: string,
+  ): Promise<void> {
     const logger = getLogger();
     let currentProvider = this.providerManager.getProvider(chatId);
 
@@ -1779,6 +1785,7 @@ export class Orchestrator {
       // Execute all tool calls
       const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
         mode: "interactive",
+        userId,
         taskPrompt: lastUserMessage,
         sessionMessages: session.messages,
         onUsage: this.onUsage,
@@ -2551,6 +2558,7 @@ export class Orchestrator {
       projectPath: this.projectPath,
       workingDirectory: this.projectPath,
       readOnly: this.readOnly,
+      userId: options.userId,
       chatId,
       channel: this.channel,
       soulLoader: this.soulLoader,
@@ -2616,7 +2624,7 @@ export class Orchestrator {
             isRename: false,
           };
           if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
-            const confirmed = await this.requestWriteConfirmation(chatId, tc.name, tc.input);
+            const confirmed = await this.requestWriteConfirmation(chatId, options.userId, tc.name, tc.input);
             if (!confirmed) {
               results.push({
                 toolCallId: tc.id,
@@ -2682,6 +2690,7 @@ export class Orchestrator {
 
   private async requestWriteConfirmation(
     chatId: string,
+    userId: string | undefined,
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<boolean> {
@@ -2724,6 +2733,7 @@ export class Orchestrator {
       this.channel as unknown as {
         requestConfirmation: (req: {
           chatId: string;
+          userId?: string;
           question: string;
           options: string[];
           details?: string;
@@ -2731,6 +2741,7 @@ export class Orchestrator {
       }
     ).requestConfirmation({
       chatId,
+      userId,
       question,
       options: ["Yes", "No"],
       details,

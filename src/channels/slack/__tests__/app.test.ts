@@ -319,6 +319,71 @@ describe("SlackChannel", () => {
       // The promise will be rejected by disconnect() in afterEach
       promise.catch(() => {});
     });
+
+    it("binds confirmation buttons to the original requester when userId is provided", async () => {
+      await channel.connect();
+
+      const promise = channel.requestConfirmation({
+        chatId: "C123",
+        userId: "U123",
+        question: "Confirm?",
+        options: ["Yes", "No"],
+      });
+      const guardedPromise = promise.catch((error) => error);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(
+        (channel as unknown as {
+          pendingConfirmations: Map<string, unknown>;
+        }).pendingConfirmations.size,
+      ).toBe(1);
+
+      const app = (channel as unknown as {
+        app: {
+          action: ReturnType<typeof vi.fn>;
+          client: {
+            chat: {
+              postEphemeral: ReturnType<typeof vi.fn>;
+            };
+          };
+        };
+        pendingConfirmations: Map<string, unknown>;
+      }).app;
+      const actionHandler = app.action.mock.calls[0]?.[1] as ((payload: unknown) => Promise<void>) | undefined;
+      const [confirmId] = Array.from(
+        (channel as unknown as {
+          pendingConfirmations: Map<string, unknown>;
+        }).pendingConfirmations.keys(),
+      );
+
+      expect(actionHandler).toBeDefined();
+
+      await actionHandler!({
+        ack: vi.fn().mockResolvedValue(undefined),
+        body: {
+          channel: { id: "C123" },
+          user: { id: "U999" },
+          message: { ts: "1234567890.123456" },
+        },
+        action: {
+          action_id: `${confirmId}_approve`,
+          value: "approve",
+        },
+      });
+
+      expect(app.client.chat.postEphemeral).toHaveBeenCalledWith({
+        channel: "C123",
+        user: "U999",
+        text: "Only the original requester can respond to this confirmation.",
+      });
+      expect(
+        (channel as unknown as {
+          pendingConfirmations: Map<string, unknown>;
+        }).pendingConfirmations.has(confirmId!),
+      ).toBe(true);
+
+      await channel.disconnect();
+      await expect(guardedPromise).resolves.toBeInstanceOf(Error);
+    });
   });
 
   describe("isHealthy", () => {

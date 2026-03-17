@@ -64,6 +64,7 @@ export interface IChannelInteractive {
 
 export interface ConfirmationRequest {
   chatId: string;
+  userId?: string;
   question: string;
   options: string[];
   details?: string;

@@ -47,6 +47,11 @@ interface RecentlyDisconnectedSession {
   reconnectToken: string;
 }
 
+interface SessionReclaimResult {
+  chatId: string;
+  reconnectToken: string;
+}
+
 interface PendingConfirmation {
   resolve: (value: string) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -383,26 +388,10 @@ export class WebChannel
         ) {
           const oldId = data.chatId;
           const presentedToken = data.reconnectToken;
-          // Validate UUID format to prevent arbitrary string injection
-          if (WebChannel.UUID_RE.test(oldId)) {
-            const disconnectedSession = this.recentlyDisconnected.get(oldId);
-            const withinTtl = disconnectedSession && (Date.now() - disconnectedSession.disconnectedAt) < WebChannel.RECONNECT_TTL_MS;
-            const existing = this.clients.get(oldId);
-            const validReconnectToken = disconnectedSession
-              ? this.safeTokenEquals(presentedToken, disconnectedSession.reconnectToken)
-              : false;
-            if (withinTtl && validReconnectToken && (!existing || existing.ws.readyState !== 1)) {
-              // Remove stale entry and remap
-              if (existing) this.clients.delete(oldId);
-              this.recentlyDisconnected.delete(oldId);
-              this.clients.delete(chatId);
-              chatId = oldId;
-              reconnectToken = this.generateReconnectToken();
-              client.chatId = oldId;
-              client.reconnectToken = reconnectToken;
-              this.clients.set(chatId, client);
-              this.sendJson(ws, { type: "connected", chatId, reconnectToken });
-            }
+          const reclaimed = this.tryReclaimSession(ws, client, oldId, presentedToken);
+          if (reclaimed) {
+            chatId = reclaimed.chatId;
+            reconnectToken = reclaimed.reconnectToken;
           }
           assignedId = true;
           return;
@@ -437,6 +426,55 @@ export class WebChannel
         });
       }
     });
+  }
+
+  private tryReclaimSession(
+    ws: WebSocket,
+    client: WsClient,
+    oldId: string,
+    presentedToken: string,
+  ): SessionReclaimResult | null {
+    if (!WebChannel.UUID_RE.test(oldId)) {
+      return null;
+    }
+
+    const now = Date.now();
+    const disconnectedSession = this.recentlyDisconnected.get(oldId);
+    const disconnectedWithinTtl = disconnectedSession
+      ? (now - disconnectedSession.disconnectedAt) < WebChannel.RECONNECT_TTL_MS
+      : false;
+    const disconnectedTokenMatches = disconnectedSession
+      ? this.safeTokenEquals(presentedToken, disconnectedSession.reconnectToken)
+      : false;
+
+    const activeSession = this.clients.get(oldId);
+    const activeTokenMatches = activeSession && activeSession.ws !== ws
+      ? this.safeTokenEquals(presentedToken, activeSession.reconnectToken)
+      : false;
+
+    if (!((disconnectedWithinTtl && disconnectedTokenMatches) || activeTokenMatches)) {
+      return null;
+    }
+
+    if (activeSession && activeSession.ws !== ws) {
+      this.clients.delete(oldId);
+      try {
+        activeSession.ws.close(1000, "Session resumed elsewhere");
+      } catch {
+        // Connection may already be closing.
+      }
+    }
+
+    this.recentlyDisconnected.delete(oldId);
+    this.clients.delete(client.chatId);
+
+    const reconnectToken = this.generateReconnectToken();
+    client.chatId = oldId;
+    client.reconnectToken = reconnectToken;
+    this.clients.set(oldId, client);
+    this.sendJson(ws, { type: "connected", chatId: oldId, reconnectToken });
+
+    return { chatId: oldId, reconnectToken };
   }
 
   private handleWsMessage(chatId: string, data: Record<string, unknown>): void {

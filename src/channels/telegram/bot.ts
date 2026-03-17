@@ -63,7 +63,12 @@ export class TelegramChannel implements IChannelAdapter {
   private handler: MessageHandler | null = null;
   private readonly pendingConfirmations = new Map<
     string,
-    { resolve: (value: string) => void; timeout: ReturnType<typeof setTimeout> }
+    {
+      resolve: (value: string) => void;
+      timeout: ReturnType<typeof setTimeout>;
+      chatId: string;
+      userId?: string;
+    }
   >();
   private readonly pendingDiffConfirmations = new Map<string, PendingDiffConfirmation>();
 
@@ -166,7 +171,12 @@ export class TelegramChannel implements IChannelAdapter {
         resolve("timeout");
       }, 120_000); // 2 minute timeout
 
-      this.pendingConfirmations.set(confirmId, { resolve, timeout });
+      this.pendingConfirmations.set(confirmId, {
+        resolve,
+        timeout,
+        chatId: req.chatId,
+        userId: req.userId,
+      });
     });
   }
 
@@ -422,6 +432,16 @@ export class TelegramChannel implements IChannelAdapter {
       // Handle regular confirmations
       const pending = this.pendingConfirmations.get(confirmId);
       if (pending) {
+        if (String(ctx.chat?.id ?? "") !== pending.chatId) {
+          await ctx.answerCallbackQuery({ text: "Confirmation is no longer valid." });
+          return;
+        }
+
+        if (pending.userId && String(userId) !== pending.userId) {
+          await ctx.answerCallbackQuery({ text: "Only the original requester can respond." });
+          return;
+        }
+
         clearTimeout(pending.timeout);
         this.pendingConfirmations.delete(confirmId);
         pending.resolve(selectedOption);

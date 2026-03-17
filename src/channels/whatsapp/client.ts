@@ -73,7 +73,12 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
   private readonly allowedNumbers: Set<string>;
   private readonly pendingConfirmations = new Map<
     string,
-    { resolve: (value: string) => void; options: string[]; timer: ReturnType<typeof setTimeout> }
+    {
+      resolve: (value: string) => void;
+      options: string[];
+      timer: ReturnType<typeof setTimeout>;
+      userId?: string;
+    }
   >();
 
   // 4.1 Streaming support
@@ -287,6 +292,14 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
           // Check if this is a confirmation response
           const pending = this.pendingConfirmations.get(chatId);
           if (pending && text) {
+            if (pending.userId && senderId !== pending.userId) {
+              await this.sendText(
+                chatId,
+                "Only the original requester can respond to this confirmation.",
+              );
+              continue;
+            }
+
             const idx = parseInt(text, 10) - 1;
             if (idx >= 0 && idx < pending.options.length) {
               clearTimeout(pending.timer);
@@ -349,8 +362,9 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
       this.sock = null;
     }
     this.healthy = false;
-    for (const { timer } of this.pendingConfirmations.values()) {
+    for (const { resolve, timer } of this.pendingConfirmations.values()) {
       clearTimeout(timer);
+      resolve("cancelled");
     }
     this.pendingConfirmations.clear();
     this.streamingMessages.clear();
@@ -626,6 +640,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
         resolve,
         options: req.options,
         timer,
+        userId: req.userId,
       });
     });
   }

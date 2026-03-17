@@ -60,6 +60,7 @@ export class ShowPlanTool implements ITool {
     if (channel && supportsInteractivity(channel)) {
       const response = await channel.requestConfirmation({
         chatId: context.chatId ?? "",
+        userId: context.userId,
         question: planText,
         options: ["Approve", "Modify", "Reject"],
         details: `${steps.length} step${steps.length !== 1 ? "s" : ""} planned`,

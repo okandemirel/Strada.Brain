@@ -315,7 +315,7 @@ describe("WhatsAppChannel", () => {
       }));
 
       // Create a channel with the test sender number allowed
-      connectedChannel = new WhatsAppChannel(".test-session", ["chat1"]);
+      connectedChannel = new WhatsAppChannel(".test-session", ["chat1", "5511999990000", "5511888880000"]);
       await connectedChannel.connect();
 
       // Simulate connection open
@@ -550,6 +550,50 @@ describe("WhatsAppChannel", () => {
 
       await vi.advanceTimersByTimeAsync(120_000);
       await expect(confirmPromise).resolves.toBe("timeout");
+      vi.useRealTimers();
+    });
+
+    it("should only accept confirmation replies from the original requester", async () => {
+      vi.useFakeTimers();
+      connectedChannel.sendText = vi.fn().mockResolvedValue(undefined);
+
+      let resolved: string | undefined;
+      const confirmPromise = connectedChannel.requestConfirmation({
+        chatId: "chat1@s.whatsapp.net",
+        userId: "5511999990000@s.whatsapp.net",
+        question: "Confirm?",
+        options: ["Yes", "No"],
+      });
+      void confirmPromise.then((value) => {
+        resolved = value;
+      });
+      await Promise.resolve();
+
+      const upsert = {
+        messages: [
+          {
+            key: {
+              remoteJid: "chat1@s.whatsapp.net",
+              participant: "5511888880000@s.whatsapp.net",
+              fromMe: false,
+            },
+            message: { conversation: "1" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+      await Promise.resolve();
+
+      expect(resolved).toBeUndefined();
+      expect(connectedChannel.sendText).toHaveBeenCalledWith(
+        "chat1@s.whatsapp.net",
+        "Only the original requester can respond to this confirmation.",
+      );
+
+      await connectedChannel.disconnect();
+      await expect(confirmPromise).resolves.toBe("cancelled");
       vi.useRealTimers();
     });
   });

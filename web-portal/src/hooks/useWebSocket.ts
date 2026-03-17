@@ -6,6 +6,7 @@ import type {
   ConnectionStatus,
   IncomingMessage,
 } from '../types/messages'
+import { readSessionMessages, writeSessionMessages } from './websocket-storage'
 
 const MAX_RECONNECT_DELAY = 30000
 const MAX_RECONNECT_ATTEMPTS = 8
@@ -37,7 +38,7 @@ export interface UseWebSocketReturn {
 }
 
 export function useWebSocket(): UseWebSocketReturn {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>(() => readSessionMessages(readStoredChatId()))
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null)
   const [isTyping, setIsTyping] = useState(false)
@@ -49,12 +50,28 @@ export function useWebSocket(): UseWebSocketReturn {
   const reconnectDelayRef = useRef(1000)
   const reconnectAttemptsRef = useRef(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingReconnectChatIdRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
   const connectRef = useRef<(() => void) | null>(null)
 
   // Use a ref for the streaming map so updates to it don't trigger re-renders
   // on their own -- we update `messages` state explicitly when streams change.
   const streamsRef = useRef<Map<string, string>>(new Map())
+
+  const acceptConnectedSession = useCallback((chatId: string, reconnectToken: string) => {
+    const previousChatId = chatIdRef.current
+
+    chatIdRef.current = chatId
+    reconnectTokenRef.current = reconnectToken
+    setSessionId(chatId)
+    localStorage.setItem('strada-chatId', chatId)
+    localStorage.setItem('strada-reconnectToken', reconnectToken)
+
+    if (previousChatId !== chatId) {
+      setMessages(readSessionMessages(chatId))
+    }
+  }, [])
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return
@@ -74,9 +91,13 @@ export function useWebSocket(): UseWebSocketReturn {
         const savedChatId = localStorage.getItem('strada-chatId')
         const savedReconnectToken = localStorage.getItem('strada-reconnectToken')
         if (savedChatId && savedReconnectToken) {
+          pendingReconnectChatIdRef.current = savedChatId
           ws.send(JSON.stringify({ type: 'reconnect', chatId: savedChatId, reconnectToken: savedReconnectToken }))
+          return
         }
       }
+
+      pendingReconnectChatIdRef.current = null
     })
 
     ws.addEventListener('close', () => {
@@ -129,11 +150,29 @@ export function useWebSocket(): UseWebSocketReturn {
 
       switch (data.type) {
         case 'connected':
-          chatIdRef.current = data.chatId
-          reconnectTokenRef.current = data.reconnectToken
-          setSessionId(data.chatId)
-          localStorage.setItem('strada-chatId', data.chatId)
-          localStorage.setItem('strada-reconnectToken', data.reconnectToken)
+          if (
+            pendingReconnectChatIdRef.current &&
+            data.chatId !== pendingReconnectChatIdRef.current
+          ) {
+            if (pendingReconnectTimerRef.current) {
+              clearTimeout(pendingReconnectTimerRef.current)
+            }
+
+            pendingReconnectTimerRef.current = setTimeout(() => {
+              pendingReconnectTimerRef.current = null
+              pendingReconnectChatIdRef.current = null
+              acceptConnectedSession(data.chatId, data.reconnectToken)
+            }, 400)
+            break
+          }
+
+          if (pendingReconnectTimerRef.current) {
+            clearTimeout(pendingReconnectTimerRef.current)
+            pendingReconnectTimerRef.current = null
+          }
+
+          pendingReconnectChatIdRef.current = null
+          acceptConnectedSession(data.chatId, data.reconnectToken)
           // First-run: send sentinel to trigger deterministic onboarding (no user bubble)
           if (localStorage.getItem('strada-firstRun') === '1') {
             localStorage.removeItem('strada-firstRun')
@@ -215,11 +254,15 @@ export function useWebSocket(): UseWebSocketReturn {
           break
       }
     })
-  }, [])
+  }, [acceptConnectedSession])
 
   useEffect(() => {
     connectRef.current = connect
   }, [connect])
+
+  useEffect(() => {
+    writeSessionMessages(chatIdRef.current, messages)
+  }, [messages])
 
   useEffect(() => {
     mountedRef.current = true
@@ -229,6 +272,9 @@ export function useWebSocket(): UseWebSocketReturn {
       mountedRef.current = false
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
+      }
+      if (pendingReconnectTimerRef.current) {
+        clearTimeout(pendingReconnectTimerRef.current)
       }
       if (wsRef.current) {
         wsRef.current.close()

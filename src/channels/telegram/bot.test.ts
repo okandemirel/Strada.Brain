@@ -162,6 +162,39 @@ describe("TelegramChannel", () => {
     expect(answerCallbackQuery).toHaveBeenCalledWith({ text: "Unauthorized" });
   });
 
+  it("only allows the original requester to answer a confirmation", async () => {
+    const callbackHandler = mockHandlers.get("callback_query:data");
+    expect(callbackHandler).toBeDefined();
+
+    const promise = channel.requestConfirmation({
+      chatId: "42",
+      userId: "123",
+      question: "Confirm?",
+      options: ["Yes", "No"],
+    });
+    await Promise.resolve();
+
+    const answerCallbackQuery = vi.fn();
+    await callbackHandler!({
+      chat: { id: 42 },
+      from: { id: 456 },
+      callbackQuery: { data: "confirm_test-uuid-1234:Yes" },
+      answerCallbackQuery,
+    });
+
+    expect(answerCallbackQuery).toHaveBeenCalledWith({
+      text: "Only the original requester can respond.",
+    });
+    expect(
+      (channel as unknown as {
+        pendingConfirmations: Map<string, unknown>;
+      }).pendingConfirmations.has("confirm_test-uuid-1234"),
+    ).toBe(true);
+
+    await channel.disconnect();
+    await expect(promise).resolves.toBe("cancelled");
+  });
+
   it("isHealthy returns bot init state", () => {
     expect(channel.isHealthy()).toBe(true);
   });

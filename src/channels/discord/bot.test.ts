@@ -161,6 +161,70 @@ describe("DiscordChannel", () => {
       // Should not throw immediately
       expect(promise).toBeInstanceOf(Promise);
     });
+
+    it("binds confirmation buttons to the original requester when userId is provided", async () => {
+      const permissiveAuth = new AuthManager([], {
+        allowedDiscordIds: new Set(["allowed123", "allowed456"]),
+        allowedDiscordRoles: new Set<string>(),
+      });
+      const boundChannel = new DiscordChannel("fake-token", permissiveAuth, {
+        guildId: "guild123",
+      });
+
+      await boundChannel.connect();
+
+      const promise = (boundChannel as unknown as {
+        requestConfirmationImmediate: (req: {
+          chatId: string;
+          userId?: string;
+          question: string;
+          options: string[];
+          details?: string;
+        }) => Promise<string>;
+      }).requestConfirmationImmediate({
+        chatId: "channel123",
+        userId: "allowed123",
+        question: "Confirm?",
+        options: ["Yes", "No"],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(
+        (boundChannel as unknown as {
+          pendingConfirmations: Map<string, unknown>;
+        }).pendingConfirmations.size,
+      ).toBe(1);
+
+      const [confirmId] = Array.from(
+        (boundChannel as unknown as {
+          pendingConfirmations: Map<string, unknown>;
+        }).pendingConfirmations.keys(),
+      );
+
+      const interaction = {
+        user: { id: "allowed456" },
+        channelId: "channel123",
+        customId: `${confirmId}:Yes`,
+        reply: vi.fn().mockResolvedValue(undefined),
+        update: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await (boundChannel as unknown as {
+        handleButtonInteraction: (interaction: unknown) => Promise<void>;
+      }).handleButtonInteraction(interaction);
+
+      expect(interaction.reply).toHaveBeenCalledWith({
+        content: "Only the original requester can respond to this confirmation.",
+        ephemeral: true,
+      });
+      expect(
+        (boundChannel as unknown as {
+          pendingConfirmations: Map<string, unknown>;
+        }).pendingConfirmations.has(confirmId!),
+      ).toBe(true);
+
+      await boundChannel.disconnect();
+      await expect(promise).resolves.toBe("cancelled");
+    });
   });
 
   describe("streaming messages", () => {
