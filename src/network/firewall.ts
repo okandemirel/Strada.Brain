@@ -175,6 +175,7 @@ export class Firewall {
   private rules: FirewallRule[] = [];
   private whitelist = new Set<string>();
   private blacklist = new Set<string>();
+  private readonly rateLimiter = new RateLimiter();
   private readonly logger = getLogger();
 
   /**
@@ -268,6 +269,34 @@ export class Firewall {
             sourceIp,
             destinationPort,
           });
+        }
+
+        if (rule.action === "rate_limit") {
+          const rateConfig = rule.rateLimit;
+          if (!rateConfig) {
+            this.logger.warn("Rate-limit firewall rule missing rateLimit config", {
+              ruleId: rule.id,
+              sourceIp,
+              destinationPort,
+            });
+            return {
+              allowed: false,
+              action: "rate_limit_misconfigured",
+              ruleId: rule.id,
+            };
+          }
+
+          const limitResult = this.rateLimiter.checkLimit(
+            `${rule.id}:${sourceIp}:${destinationIp}:${destinationPort}:${protocol}`,
+            rateConfig.requestsPerSecond,
+            rateConfig.burstSize,
+          );
+
+          return {
+            allowed: limitResult.allowed,
+            action: limitResult.allowed ? "rate_limit" : "rate_limited",
+            ruleId: rule.id,
+          };
         }
 
         return {

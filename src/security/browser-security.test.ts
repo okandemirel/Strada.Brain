@@ -88,6 +88,17 @@ describe("BrowserSecurity", () => {
       expect(result.valid).toBe(false);
     });
 
+    it("should block common DNS rebinding domains", () => {
+      const result = validateUrlWithConfig("https://127.0.0.1.nip.io/hook");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("DNS rebinding");
+    });
+
+    it("should not reject external URLs that merely mention localhost in the query string", () => {
+      const result = validateUrlWithConfig("https://example.com/hook?next=127.0.0.1");
+      expect(result.valid).toBe(true);
+    });
+
     it("should block file:// protocol", () => {
       const result = validateUrlWithConfig("file:///etc/passwd");
       expect(result.valid).toBe(false);

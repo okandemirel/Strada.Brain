@@ -39,7 +39,7 @@ plugins/my-plugin/
 
 1. Scan all directories in `PLUGIN_DIRS`
 2. Read `plugin.json` manifest, validate required fields
-3. Path traversal check: `entryPath.startsWith(pluginPath)`
+3. Path traversal check: `relative(pluginPath, entryPath)` must stay inside the plugin directory
 4. Dynamic `import(entryPath)`
 5. Validate each exported tool has the `ITool` interface
 

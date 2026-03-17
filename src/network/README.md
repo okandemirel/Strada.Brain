@@ -18,6 +18,7 @@ Static helper class for IPv4 address operations.
 Rule-based connection filter with whitelist/blacklist and priority-ordered rule evaluation.
 
 - Rules are `FirewallRule` objects with `action` (`allow` | `deny` | `rate_limit`), `direction`, `protocol`, `sourceIps`, `destinationIps`, `ports`, and `priority`
+- `rate_limit` rules consult the built-in token bucket using `rateLimit.requestsPerSecond` and `rateLimit.burstSize`; matching requests return `rate_limit` while within budget and `rate_limited` after burst exhaustion
 - IP ranges support three types: `single` (exact match), `cidr`, and `range` (start-end)
 - `checkConnection(sourceIp, destIp, destPort, protocol)` evaluates in order: whitelist set, blacklist set, then rules sorted by descending priority
 - Default policy is deny (returns `{ allowed: false, action: "default_deny" }` if no rule matches)

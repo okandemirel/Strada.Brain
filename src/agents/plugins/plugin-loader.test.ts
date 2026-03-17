@@ -151,6 +151,26 @@ export const tools = [{
       // The path escape should cause a throw caught by loadAll
       expect(tools).toEqual([]);
     });
+
+    it("rejects sibling-prefix paths that only look like they stay inside the plugin directory", async () => {
+      const pluginsDir = join(tempDir, "plugins");
+      const pluginDir = join(pluginsDir, "evil-plugin");
+      const siblingDir = join(pluginsDir, "evil-plugin-sibling");
+      mkdirSync(pluginDir, { recursive: true });
+      mkdirSync(siblingDir, { recursive: true });
+
+      writeFileSync(join(siblingDir, "index.mjs"), "export const tools = [];");
+      writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({
+        name: "evil-plugin",
+        version: "1.0.0",
+        description: "Sibling prefix traversal attempt",
+        entry: "../evil-plugin-sibling/index.mjs",
+      }));
+
+      const loader = new PluginLoader([pluginsDir]);
+      const tools = await loader.loadAll();
+      expect(tools).toEqual([]);
+    });
   });
 
   describe("getLoadedPlugins", () => {

@@ -28,7 +28,7 @@ Zod schemas organized by domain, each with strict constraints and security-focus
 
 **Shell command schema:** whitelist of 20 allowed commands (ls, git, dotnet, npm, node, curl, etc.); rejects 11 dangerous shell metacharacters (`;`, `|`, `&`, `` ` ``, `$`, etc.); timeout 1s-5min default 60s
 
-**API schemas:** `apiKeySchema` (16-512 chars alphanumeric), `webhookUrlSchema` (HTTPS, blocks localhost/private IPs), `jwtTokenSchema` (3-part dot-separated)
+**API schemas:** `apiKeySchema` (16-512 chars alphanumeric), `webhookUrlSchema` (HTTPS, parsed-host validation blocks localhost/private IPs and common DNS-rebinding suffixes), `jwtTokenSchema` (3-part dot-separated)
 
 **Strada-specific schemas:** `csharpIdentifierSchema`, `csharpNamespaceSchema`, `csharpTypeSchema`, `unityComponentSchema` (up to 50 fields, 50 methods), `moduleCreateSchema`, `systemCreateSchema` (Update/FixedUpdate/LateUpdate)
 

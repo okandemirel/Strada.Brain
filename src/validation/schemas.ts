@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { validateUrlWithConfig } from "../security/browser-security.js";
 
 // =============================================================================
 // COMMON VALIDATORS
@@ -245,18 +246,14 @@ export const webhookUrlSchema = z.string()
     { message: "Webhook must use HTTPS" }
   )
   .refine(
-    (url) => {
-      // Prevent localhost/private IP webhooks in production
-      const blockedHosts = [
-        "localhost",
-        "127.",
-        "10.",
-        "192.168.",
-        "172.16.",
-        "0.",
-      ];
-      return !blockedHosts.some((blocked) => url.includes(blocked));
-    },
+    (url) => validateUrlWithConfig(url, {
+      allowedUrlPatterns: [],
+      blockedUrlPatterns: [],
+      blockLocalhost: true,
+      blockFileProtocol: true,
+      blockDataProtocol: true,
+      blockJavascriptProtocol: true,
+    }).valid,
     { message: "Webhook URL cannot point to private/internal addresses" }
   );
 

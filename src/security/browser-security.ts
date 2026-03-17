@@ -71,6 +71,14 @@ export const DEFAULT_SECURITY_CONFIG: BrowserSecurityConfig = {
   maxOperationsPerMinute: 60,
 };
 
+const REBINDING_HOST_SUFFIXES = [
+  "nip.io",
+  "sslip.io",
+  "xip.io",
+  "localtest.me",
+  "localhost.direct",
+];
+
 // ---------- URL Validation ----------
 
 /**
@@ -111,21 +119,27 @@ export function validateUrlWithConfig(
     // Check localhost/private network
     if (mergedConfig.blockLocalhost) {
       const hostname = parsedUrl.hostname.toLowerCase();
+      const normalizedHostname = hostname.replace(/^\[|\]$/g, "");
 
       // Block localhost variants
       if (
-        hostname === "localhost" ||
-        hostname === "127.0.0.1" ||
-        hostname === "0.0.0.0" ||
-        hostname === "::1" ||
-        hostname.endsWith(".localhost") ||
-        hostname.endsWith(".local")
+        normalizedHostname === "localhost" ||
+        normalizedHostname === "127.0.0.1" ||
+        normalizedHostname === "0.0.0.0" ||
+        normalizedHostname === "::1" ||
+        normalizedHostname.endsWith(".localhost") ||
+        normalizedHostname.endsWith(".local")
       ) {
         return { valid: false, reason: "Localhost access is blocked" };
       }
 
+      if (REBINDING_HOST_SUFFIXES.some((suffix) =>
+        normalizedHostname === suffix || normalizedHostname.endsWith(`.${suffix}`))) {
+        return { valid: false, reason: "DNS rebinding host is blocked" };
+      }
+
       // Block private IP ranges
-      if (isPrivateIp(hostname)) {
+      if (isPrivateIp(normalizedHostname)) {
         return { valid: false, reason: "Private IP range access is blocked" };
       }
     }

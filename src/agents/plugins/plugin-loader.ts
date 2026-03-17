@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { getLogger } from "../../utils/logger.js";
 import type { ITool } from "../tools/tool.interface.js";
 
@@ -112,7 +112,11 @@ export class PluginLoader {
 
     // Validate entry path stays within plugin directory
     const entryPath = resolve(pluginPath, manifest.entry);
-    if (!entryPath.startsWith(pluginPath)) {
+    const relativeEntryPath = relative(pluginPath, entryPath);
+    if (
+      relativeEntryPath.startsWith("..") ||
+      isAbsolute(relativeEntryPath)
+    ) {
       throw new Error("Plugin entry path escapes plugin directory");
     }
 
