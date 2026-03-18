@@ -534,6 +534,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 **Saglayici zinciri:** `PROVIDER_CHAIN` degiskenini virgule ayrilmis saglayici adlari listesi olarak ayarlayin. Strada control-plane olarak kalir ve bu zinciri birincil execution worker, supervisor routing ve fallback secimi icin varsayilan orkestrasyon havuzu olarak kullanir. Ornek: `PROVIDER_CHAIN=kimi,deepseek,claude` once Kimi'yi kullanir, Kimi basarisiz olursa DeepSeek, sonra Claude.
 
 **Onemli:** `OPENAI_AUTH_MODE=chatgpt-subscription` sadece Strada icindeki OpenAI konusma turlari icin gecerli olur. OpenAI API veya embedding kotasi saglamaz. `EMBEDDING_PROVIDER=openai` secersen yine `OPENAI_API_KEY` gerekir.
+Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik analiz donerse, "ne yapmaliyim?" diye sorarsa veya yeterli kanit olmadan genis kapsamli bir tamamlanma iddiasi kurarsa, Strada donguyu yeniden acar, ek inceleme/review turu yaptirir ve ancak sonuc dogrulandiginda ya da gercek bir dis engel kaldiginda kullaniciya doner.
 
 ### Sohbet Kanallari
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentPhase, type AgentState } from "../agent-state.js";
 import {
+  buildAutonomyDeflectionGate,
   buildCompletionReviewGate,
   collectCompletionReviewEvidence,
   hasOpenReviewFindings,
@@ -88,6 +89,11 @@ describe("completion-review", () => {
           meta: { chatId: "chat-123" },
         },
       ],
+      recentSteps: ["[OK] file_read: Read Level_031.asset"],
+      totalStepCount: 1,
+      inspectionStepCount: 1,
+      verificationStepCount: 0,
+      mutationStepCount: 0,
       verificationState: {
         pendingFiles: new Set(),
         touchedFiles: new Set(["src/runtime/reviewer.ts"]),
@@ -100,5 +106,51 @@ describe("completion-review", () => {
     expect(gate).toContain("[COMPLETION REVIEW REQUIRED]");
     expect(gate).toContain("Unhandled error remained in console output.");
     expect(gate).toContain("Security review: clean");
+  });
+
+  it("forces review when the draft makes a broad completion claim after tool activity", () => {
+    const evidence = collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [
+          { toolName: "list_directory", success: true, summary: "Listed Assets/Resources/Levels", timestamp: Date.now() },
+        ],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      chatId: "chat-claim",
+      taskStartedAtMs: Date.now() - 1000,
+      logEntries: [],
+    });
+
+    expect(shouldRunCompletionReview(evidence, "All 100 levels analyzed successfully.")).toBe(true);
+  });
+
+  it("builds an autonomy gate when the draft throws the next step back to the user", () => {
+    const evidence = collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [
+          { toolName: "list_directory", success: true, summary: "Listed Assets/Resources/Levels", timestamp: Date.now() },
+        ],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      chatId: "chat-deflection",
+      taskStartedAtMs: Date.now() - 1000,
+      logEntries: [],
+    });
+
+    const gate = buildAutonomyDeflectionGate("I checked the directory. What should I do next?", evidence);
+    expect(gate).toContain("[AUTONOMY REQUIRED]");
+    expect(gate).toContain("Strada must continue autonomously here.");
   });
 });

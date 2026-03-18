@@ -542,6 +542,7 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 **Anbieter-Kette:** Setzen Sie `PROVIDER_CHAIN` auf eine kommagetrennte Liste von Anbieternamen. Strada bleibt die Control Plane und nutzt diese Kette als Standard-Orchestrierungspool fuer den primaeren Ausfuehrungs-Worker, das Supervisor-Routing und Fallbacks. Beispiel: `PROVIDER_CHAIN=kimi,deepseek,claude` verwendet Kimi zuerst, DeepSeek wenn Kimi fehlschlaegt, dann Claude.
 
 **Wichtig:** `OPENAI_AUTH_MODE=chatgpt-subscription` gilt nur fuer OpenAI-Konversationszuege in Strada. Dadurch erhalten Sie kein OpenAI-API- oder Embedding-Kontingent. Wenn Sie `EMBEDDING_PROVIDER=openai` waehlen, brauchen Sie weiterhin `OPENAI_API_KEY`.
+Strada gibt offensichtliche naechste Schritte nicht an den Benutzer zurueck. Wenn ein Provider eine unvollstaendige Analyse liefert, den Benutzer fragt, was als Naechstes zu tun ist, oder ohne genug Belege eine breite Abschlussbehauptung aufstellt, oeffnet Strada die Schleife erneut, fuehrt einen weiteren Inspektions-/Review-Durchlauf aus und antwortet erst wieder, wenn das Ergebnis verifiziert ist oder ein echter externer Blocker bleibt.
 
 ### Chat-Kanaele
 

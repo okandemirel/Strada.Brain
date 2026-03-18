@@ -275,6 +275,7 @@ Strada.Brain automatically checks for updates daily and applies them when idle. 
 13. **Response sent** to the user through the channel (streaming if supported)
 
 **Provider/model selection semantics:** Strada is always the agent talking to the user. Choosing a provider/model does not bypass Strada or send your message directly to that provider. Instead, it sets Strada's primary execution worker. Planning, review, synthesis, routing, and fallback stay inside Strada's current orchestration pool: the configured `PROVIDER_CHAIN`, plus the actively selected worker if you temporarily switch outside that chain.
+Strada also keeps ownership of the next step. If a provider returns an incomplete analysis, asks the user what to do next, or makes a broad completion claim without enough evidence, Strada reopens the loop, routes another inspection/review pass, and only returns once the result is verified or a real external blocker remains.
 
 ---
 

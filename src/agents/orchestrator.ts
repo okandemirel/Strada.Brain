@@ -50,6 +50,7 @@ import {
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
 import {
+  buildAutonomyDeflectionGate,
   COMPLETION_REVIEW_SYSTEM_PROMPT,
   ErrorRecoveryEngine,
   TaskPlanner,
@@ -3344,7 +3345,12 @@ export class Orchestrator {
       chatId: params.chatId,
       taskStartedAtMs: params.taskStartedAtMs,
     });
-    if (!shouldRunCompletionReview(evidence)) {
+    const autonomyDeflectionGate = buildAutonomyDeflectionGate(params.draft ?? "", evidence);
+    if (autonomyDeflectionGate) {
+      return autonomyDeflectionGate;
+    }
+
+    if (!shouldRunCompletionReview(evidence, params.draft ?? "")) {
       return null;
     }
 

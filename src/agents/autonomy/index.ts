@@ -5,6 +5,7 @@ export type { TaskState } from "./task-planner.js";
 export { SelfVerification } from "./self-verification.js";
 export type { VerificationState } from "./self-verification.js";
 export {
+  buildAutonomyDeflectionGate,
   COMPLETION_REVIEW_SYSTEM_PROMPT,
   buildCompletionReviewGate,
   buildCompletionReviewRequest,

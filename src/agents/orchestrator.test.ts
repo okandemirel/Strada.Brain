@@ -1204,6 +1204,93 @@ describe("Orchestrator", () => {
     );
   });
 
+  it("continues autonomously when a draft asks the user what to do next without a blocker", async () => {
+    const listTool = createMockTool("list_directory");
+    const autonomousOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [listTool, readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Checking the level directory",
+        toolCalls: [{ id: "tc-levels-dir", name: "list_directory", input: { path: "Assets/Resources/Levels" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "I checked the directory and Level_031 may still be wrong. What should I do next?",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Continuing autonomously with direct asset inspection",
+        toolCalls: [{ id: "tc-level-read", name: "file_read", input: { path: "Assets/Resources/Levels/Level_031.asset" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Level 31 issue verified and analyzed.\nDONE",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "The autonomous follow-up inspection completed the task.",
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "not_applicable",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const promise = autonomousOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-autonomy-review",
+      userId: "user1",
+      text: "Inspect the level assets and keep going until you understand the real issue",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(mockProvider.chat).toHaveBeenCalledTimes(4);
+    expect(mockProvider.chat.mock.calls[2]?.[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("[AUTONOMY REQUIRED]"),
+        }),
+      ]),
+    );
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-autonomy-review",
+      expect.stringContaining("Level 31 issue verified and analyzed."),
+    );
+    expect(mockChannel.sendMarkdown).not.toHaveBeenCalledWith(
+      "chat-autonomy-review",
+      expect.stringContaining("What should I do next?"),
+    );
+  });
+
   it("cancels write operation when user denies confirmation", async () => {
     const toolResponse: ProviderResponse = {
       text: "",
@@ -3378,7 +3465,7 @@ describe("Orchestrator", () => {
 
       // Phase 4: REFLECTING - provider decides DONE
       const reflectDoneResponse: ProviderResponse = {
-        text: "Analysis complete. All files reviewed successfully.\n\n**DONE**",
+        text: "Analysis complete. The requested files were reviewed.\n\n**DONE**",
         toolCalls: [],
         stopReason: "end_turn",
         usage: { inputTokens: 120, outputTokens: 30 },

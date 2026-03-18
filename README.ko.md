@@ -572,6 +572,7 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 **공급자 체인:** `PROVIDER_CHAIN`에 공급자 이름을 쉼표로 구분하여 설정합니다. Strada는 계속 컨트롤 플레인으로 남고, 이 체인을 주 실행 워커, supervisor 라우팅, 폴백 선택에 쓰는 기본 오케스트레이션 풀로 사용합니다. 예: `PROVIDER_CHAIN=kimi,deepseek,claude`는 Kimi를 먼저 사용하고, Kimi가 실패하면 DeepSeek, 그다음 Claude를 사용합니다.
 
 **중요:** `OPENAI_AUTH_MODE=chatgpt-subscription`은 Strada 내부의 OpenAI 대화 턴에만 적용됩니다. OpenAI API나 임베딩 쿼터를 제공하지 않습니다. `EMBEDDING_PROVIDER=openai`를 사용하려면 여전히 `OPENAI_API_KEY`가 필요합니다.
+Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니다. 어떤 제공자가 불완전한 분석을 반환하거나, 다음에 무엇을 해야 하는지 사용자에게 묻거나, 충분한 근거 없이 넓은 완료 주장을 하면 Strada가 루프를 다시 열고 추가 점검/리뷰를 수행한 뒤, 결과가 검증되었거나 실제 외부 블로커만 남았을 때만 사용자에게 응답합니다.
 
 ### 채팅 채널
 

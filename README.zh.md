@@ -572,6 +572,7 @@ npm run dev -- daemon --channel web
 **提供商链：** 将 `PROVIDER_CHAIN` 设置为以逗号分隔的提供商名称列表。Strada 仍然是控制平面，并将这条链作为默认编排池，用于主执行 worker、supervisor 路由以及故障回退。示例：`PROVIDER_CHAIN=kimi,deepseek,claude` 首先使用 Kimi，Kimi 失败则使用 DeepSeek，然后是 Claude。
 
 **重要：** `OPENAI_AUTH_MODE=chatgpt-subscription` 只覆盖 Strada 内的 OpenAI 对话回合，不会提供 OpenAI API 或 embeddings 配额。如果你选择 `EMBEDDING_PROVIDER=openai`，仍然需要 `OPENAI_API_KEY`。
+Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返回了不完整的分析、反过来询问用户下一步该做什么，或在证据不足时声称大范围任务已经完成，Strada 会重新打开循环，再做一轮检查/评审，只有在结果已经验证完毕或确实只剩真实外部阻塞时才向用户返回。
 
 ### 聊天频道
 
