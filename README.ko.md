@@ -88,12 +88,12 @@ Strada가 패키지된 npm/tarball 릴리스로 설치되면 런타임 설정은
 ./strada setup --terminal
 ```
 
-`./strada setup --web` 이 전체 웹 포털을 빌드할 수 없는 오래된 Node 버전을 감지하더라도 Strada는 웹을 1순위로 유지합니다. `nvm` 이 있으면 승인 후 호환 Node 버전을 설치하고 곧바로 웹 setup 으로 다시 들어가며, 그 안내형 업그레이드는 임시로 깨끗한 HOME 안에서 실행되어 호환되지 않는 npm `prefix` / `globalconfig` 설정이 `nvm` 을 막지 않게 합니다. 그렇지 않아도 Node 다운로드/업그레이드 흐름으로 안내한 뒤 조용히 터미널 setup 으로 떨어지지 않습니다.
+`./strada setup --web` 이 전체 웹 포털을 빌드할 수 없는 오래된 Node 버전을 감지하더라도 Strada는 웹을 1순위로 유지합니다. `nvm` 이 있으면 승인 후 호환 Node 버전을 설치하고 곧바로 웹 setup 으로 다시 들어가며, 그 안내형 업그레이드는 임시로 깨끗한 HOME 안에서 실행되어 호환되지 않는 npm `prefix` / `globalconfig` 설정이 `nvm` 을 막지 않게 합니다. 그렇지 않으면 Node 다운로드/업그레이드 흐름으로 안내합니다. 업그레이드를 거부하면 Strada 는 대신 터미널 setup 으로 계속할지 여부를 명시적으로 묻습니다.
 Node 22 가 이미 `nvm` 에 설치되어 있으면 Strada 는 다시 내려받지 않고 그 런타임을 재사용합니다. 웹 setup 은 로컬 루트 URL 에서 열리고 메인 앱으로 핸드오프될 때도 같은 URL 을 유지합니다.
 첫 브라우저 열기에는 명시적인 setup 플래그도 함께 들어가므로, 오래된 캐시 포털 탭이 남아 있어도 죽은 "Not Found" 페이지 대신 setup 마법사로 돌아갑니다.
 
 마법사는 Unity 프로젝트 경로, AI 공급자 API 키, 기본 채널, 언어를 묻습니다. `./strada setup` 은 이제 기본적으로 **Web Browser** 를 우선하며, 더 빠른 텍스트 흐름을 명시적으로 원할 때만 **Terminal** 을 선택하면 됩니다.
-이제 터미널 setup 도 fallback / 멀티 에이전트 오케스트레이션을 위해 응답 provider 를 하나씩 추가할 수 있고, embedding provider 선택은 별도로 유지됩니다.
+터미널 setup 은 단일 프롬프트에서 쉼표로 구분된 provider 를 허용합니다 (예: `kimi,deepseek`). fallback / 멀티 에이전트 오케스트레이션에 사용하거나, 하나씩 대화형으로 추가할 수도 있습니다. "하나 더 추가하시겠습니까?" 루프는 provider 를 하나만 입력했을 때만 표시됩니다. embedding provider 선택은 별도로 유지됩니다.
 웹 마법사에서 저장이 끝나면 Strada 는 같은 URL 에서 메인 웹 앱으로 핸드오프하므로 전환 중 새로고침해도 죽은 setup 페이지로 떨어지지 않습니다.
 RAG 가 켜져 있지만 사용할 수 있는 embedding provider 가 없으면 마법사는 이제 review 단계까지는 진행시켜 주지만, 유효한 embedding provider 를 고르거나 RAG 를 끌 때까지 Save 는 계속 막혀 있습니다.
 첫 setup 이 끝나면 서브커맨드 없는 `./strada` 가 스마트 런처가 됩니다.

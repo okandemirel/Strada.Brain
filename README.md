@@ -86,12 +86,12 @@ When Strada is installed from a packaged npm/tarball release, it keeps its runti
 ./strada setup --terminal
 ```
 
-If `./strada setup --web` detects an older Node runtime that cannot build the full portal bundle, Strada keeps web as the primary path: when `nvm` is available it can install a compatible Node.js version for you and continue directly into web setup after you approve it, running that guided upgrade inside a temporary clean HOME so incompatible `prefix` / `globalconfig` npm settings do not block `nvm`; otherwise it opens the upgrade/download path and sends you back to web setup instead of silently dropping to terminal setup.
+If `./strada setup --web` detects an older Node runtime that cannot build the full portal bundle, Strada keeps web as the primary path: when `nvm` is available it can install a compatible Node.js version for you and continue directly into web setup after you approve it, running that guided upgrade inside a temporary clean HOME so incompatible `prefix` / `globalconfig` npm settings do not block `nvm`; otherwise it opens the upgrade/download path. If you decline the upgrade, Strada offers to continue with terminal setup instead.
 If Node 22 is already installed in `nvm`, Strada reuses that runtime instead of downloading it again. The setup browser flow opens on the root local URL and stays on that same URL when it hands off to the main app.
 That first-run browser open also carries an explicit setup flag, so a stale cached portal tab still resolves into the setup wizard instead of a dead "Not Found" page.
 
 The wizard asks for your Unity project path, AI provider API key, default channel, and language. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
-Terminal setup can now add multiple response providers one by one for fallback / multi-agent orchestration, while still keeping the embedding provider choice separate.
+Terminal setup accepts comma-separated providers in a single prompt (e.g. `kimi,deepseek`) for fallback / multi-agent orchestration, or you can add them one at a time interactively. The "Add another?" loop only appears when a single provider is entered. The embedding provider choice stays separate.
 After you save the web wizard, Strada hands off to the main web app on the same URL so refreshes can survive the transition instead of dropping you onto a dead setup page.
 If RAG is enabled without a usable embedding provider, the wizard now lets you continue to the review step but keeps Save blocked until you choose a valid embedding provider or disable RAG.
 
