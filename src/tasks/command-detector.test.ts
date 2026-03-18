@@ -151,4 +151,22 @@ describe("detectCommand existing commands still work", () => {
       args: [],
     });
   });
+
+  it("/routing info returns routing command with info arg", () => {
+    const result = detectCommand("/routing info");
+    expect(result).toEqual({
+      type: "command",
+      command: "routing",
+      args: ["info"],
+    });
+  });
+
+  it("/yonlendirme info returns routing command with info arg", () => {
+    const result = detectCommand("/yonlendirme info");
+    expect(result).toEqual({
+      type: "command",
+      command: "routing",
+      args: ["info"],
+    });
+  });
 });

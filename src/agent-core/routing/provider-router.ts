@@ -12,6 +12,7 @@ import type {
   RoutingWeights,
   RoutingDecision,
   TaskType,
+  ExecutionTrace,
 } from "./routing-types.js";
 import { ROUTING_PRESETS } from "./routing-presets.js";
 import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
@@ -82,6 +83,7 @@ export class ProviderRouter {
   private weights: RoutingWeights;
   private presetName: string;
   private readonly decisions: RoutingDecision[] = [];
+  private readonly executionTraces: ExecutionTrace[] = [];
   private lastExecutingProvider: string | undefined;
   private readonly modelIntelligence?: ModelIntelligenceLookup;
 
@@ -155,6 +157,7 @@ export class ProviderRouter {
         reason: "only available provider",
         task,
         timestamp: Date.now(),
+        identityKey: options.identityKey,
       };
       this.recordDecision(decision);
       return decision;
@@ -187,6 +190,7 @@ export class ProviderRouter {
       reason: bestReason,
       task,
       timestamp: Date.now(),
+      identityKey: options.identityKey,
     };
 
     this.recordDecision(decision);
@@ -197,8 +201,31 @@ export class ProviderRouter {
   /**
    * Return the last N routing decisions for diagnostics.
    */
-  getRecentDecisions(n: number): RoutingDecision[] {
-    return this.decisions.slice(-n);
+  getRecentDecisions(n: number, identityKey?: string): RoutingDecision[] {
+    const relevant = identityKey
+      ? this.decisions.filter((decision) => decision.identityKey === identityKey)
+      : this.decisions;
+    return relevant.slice(-n);
+  }
+
+  /**
+   * Record actual runtime provider execution, not just routing intent.
+   */
+  recordExecutionTrace(trace: ExecutionTrace): void {
+    this.executionTraces.push(trace);
+    if (this.executionTraces.length > MAX_DECISIONS) {
+      this.executionTraces.splice(0, this.executionTraces.length - MAX_DECISIONS);
+    }
+  }
+
+  /**
+   * Return the last N runtime execution traces for diagnostics.
+   */
+  getRecentExecutionTraces(n: number, identityKey?: string): ExecutionTrace[] {
+    const relevant = identityKey
+      ? this.executionTraces.filter((trace) => trace.identityKey === identityKey)
+      : this.executionTraces;
+    return relevant.slice(-n);
   }
 
   /**

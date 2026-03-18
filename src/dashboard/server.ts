@@ -174,7 +174,17 @@ function isDashboardIdentityPartTooLong(value: string | null): boolean {
 
 /** Structural interface for ProviderRouter methods used by dashboard /api/agent-activity endpoint */
 interface DashboardProviderRouter {
-  getRecentDecisions(n: number): Array<{ provider: string; reason: string; task: { type: string; complexity: string; criticality: string }; timestamp: number }>;
+  getRecentDecisions(n: number, identityKey?: string): Array<{ provider: string; reason: string; task: { type: string; complexity: string; criticality: string }; timestamp: number }>;
+  getRecentExecutionTraces?(n: number, identityKey?: string): Array<{
+    provider: string;
+    model?: string;
+    role: string;
+    phase: string;
+    source: string;
+    reason: string;
+    task: { type: string; complexity: string; criticality: string };
+    timestamp: number;
+  }>;
   getPreset(): string;
   setPreset(preset: "budget" | "balanced" | "performance"): void;
 }
@@ -1549,10 +1559,17 @@ export class DashboardServer {
 
       // GET /api/agent-activity -- Recent routing decisions and agent activity
       if (req.method === "GET" && (url === "/api/agent-activity" || url.startsWith("/api/agent-activity?"))) {
-        const routingDecisions = this.providerRouter?.getRecentDecisions(20) ?? [];
+        const query = new URL(req.url ?? "", `http://${req.headers.host ?? "127.0.0.1"}`).searchParams;
+        const identityKey = resolveDashboardIdentityKey(
+          query.get("chatId") ?? "default",
+          query.get("userId"),
+          query.get("conversationId"),
+        );
+        const routingDecisions = this.providerRouter?.getRecentDecisions(20, identityKey) ?? [];
+        const executionTraces = this.providerRouter?.getRecentExecutionTraces?.(20, identityKey) ?? [];
         const preset = this.providerRouter?.getPreset() ?? "balanced";
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ routing: routingDecisions, preset }));
+        res.end(JSON.stringify({ routing: routingDecisions, execution: executionTraces, preset }));
         return;
       }
 

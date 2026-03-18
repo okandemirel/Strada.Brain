@@ -717,7 +717,7 @@ Slash-Befehle, die in allen Chat-Kanaelen verfuegbar sind:
 | `/agent` | Agent-Core-Status anzeigen |
 | `/routing` | Routing-Status und Preset anzeigen |
 | `/routing preset <name>` | Routing-Preset wechseln (budget/balanced/performance) |
-| `/routing info` | Letzte Routing-Entscheidungen anzeigen |
+| `/routing info` | Letzte Routing-Entscheidungen und Laufzeit-Ausfuehrungsspuren fuer die aktuelle Identitaet anzeigen |
 
 ---
 

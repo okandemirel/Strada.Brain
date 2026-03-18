@@ -182,15 +182,19 @@ describe("ProviderRouter", () => {
       const manager = createMockManager(MULTI_PROVIDERS);
       const router = new ProviderRouter(manager, "balanced");
 
-      router.resolve(planningTask);
-      router.resolve(simpleTask);
-      router.resolve(codeGenTask);
+      router.resolve(planningTask, undefined, { identityKey: "user-1" });
+      router.resolve(simpleTask, undefined, { identityKey: "user-1" });
+      router.resolve(codeGenTask, undefined, { identityKey: "user-2" });
 
       const decisions = router.getRecentDecisions(10);
       expect(decisions).toHaveLength(3);
       expect(decisions[0]!.task.type).toBe("planning");
       expect(decisions[1]!.task.type).toBe("simple-question");
       expect(decisions[2]!.task.type).toBe("code-generation");
+
+      const userOneDecisions = router.getRecentDecisions(10, "user-1");
+      expect(userOneDecisions).toHaveLength(2);
+      expect(userOneDecisions.every((decision) => decision.identityKey === "user-1")).toBe(true);
     });
 
     it("limits stored decisions to max", () => {
@@ -203,6 +207,50 @@ describe("ProviderRouter", () => {
 
       const decisions = router.getRecentDecisions(200);
       expect(decisions.length).toBeLessThanOrEqual(100);
+    });
+
+    it("records runtime execution traces separately from routing intent", () => {
+      const manager = createMockManager(MULTI_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      router.recordExecutionTrace({
+        provider: "kimi",
+        model: "kimi-for-coding",
+        role: "executor",
+        phase: "executing",
+        source: "tool-turn-affinity",
+        reason: "kept the active tool-turn provider pinned to preserve provider-specific tool context",
+        task: codeGenTask,
+        timestamp: 1,
+        identityKey: "user-1",
+      });
+      router.recordExecutionTrace({
+        provider: "gemini",
+        model: "gemini-2.5-pro",
+        role: "reviewer",
+        phase: "consensus-review",
+        source: "consensus-review",
+        reason: "selected the review worker for cross-provider verification",
+        task: planningTask,
+        timestamp: 2,
+        identityKey: "user-2",
+      });
+
+      const traces = router.getRecentExecutionTraces(10);
+      expect(traces).toHaveLength(2);
+      expect(traces[0]).toEqual(expect.objectContaining({
+        provider: "kimi",
+        model: "kimi-for-coding",
+        role: "executor",
+        phase: "executing",
+        source: "tool-turn-affinity",
+      }));
+      expect(router.getRecentExecutionTraces(10, "user-1")).toEqual([
+        expect.objectContaining({
+          provider: "kimi",
+          identityKey: "user-1",
+        }),
+      ]);
     });
   });
 

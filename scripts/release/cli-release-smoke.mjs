@@ -403,6 +403,10 @@ async function runProviderFallbackSmoke(memoryDir, projectDir) {
       fromIndex: cursor,
       timeoutMs: 20_000,
     });
+    await session.waitFor("*Recent Runtime Execution*", {
+      fromIndex: cursor,
+      timeoutMs: 20_000,
+    });
   } finally {
     await session.close();
   }

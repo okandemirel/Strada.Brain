@@ -35,6 +35,37 @@ export interface RoutingDecision {
   readonly reason: string;
   readonly task: TaskClassification;
   readonly timestamp: number;
+  readonly identityKey?: string;
+}
+
+export type ExecutionRole = "planner" | "executor" | "reviewer" | "synthesizer";
+export type ExecutionPhase =
+  | "planning"
+  | "executing"
+  | "reflecting"
+  | "replanning"
+  | "synthesis"
+  | "completion-review"
+  | "consensus-review"
+  | "shell-review";
+export type ExecutionTraceSource =
+  | "supervisor-strategy"
+  | "tool-turn-affinity"
+  | "synthesis"
+  | "completion-review"
+  | "consensus-review"
+  | "shell-review";
+
+export interface ExecutionTrace {
+  readonly provider: string;
+  readonly model?: string;
+  readonly role: ExecutionRole;
+  readonly phase: ExecutionPhase;
+  readonly source: ExecutionTraceSource;
+  readonly reason: string;
+  readonly task: TaskClassification;
+  readonly timestamp: number;
+  readonly identityKey?: string;
 }
 
 export interface OriginalOutput {

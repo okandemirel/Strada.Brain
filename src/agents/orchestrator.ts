@@ -84,7 +84,11 @@ import type { SessionSummarizer } from "../memory/unified/session-summarizer.js"
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
-import type { TaskClassification } from "../agent-core/routing/routing-types.js";
+import type {
+  TaskClassification,
+  ExecutionPhase,
+  ExecutionTraceSource,
+} from "../agent-core/routing/routing-types.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -174,6 +178,7 @@ interface SupervisorAssignment {
   modelId?: string;
   provider: IAIProvider;
   reason: string;
+  traceSource?: ExecutionTraceSource;
 }
 
 interface SupervisorExecutionStrategy {
@@ -680,8 +685,9 @@ export class Orchestrator {
     modelId: string | undefined,
     provider: IAIProvider,
     reason: string,
+    traceSource?: ExecutionTraceSource,
   ): SupervisorAssignment {
-    return { role, providerName, modelId, provider, reason };
+    return { role, providerName, modelId, provider, reason, traceSource };
   }
 
   private getProviderByNameOrFallback(
@@ -889,6 +895,7 @@ export class Orchestrator {
       pinnedProvider.modelId,
       pinnedProvider.provider,
       "kept the active tool-turn provider pinned to preserve provider-specific tool context",
+      "tool-turn-affinity",
     );
   }
 
@@ -978,11 +985,85 @@ export class Orchestrator {
     });
   }
 
+  private toExecutionPhase(phase: AgentPhase): ExecutionPhase {
+    switch (phase) {
+      case AgentPhase.PLANNING:
+        return "planning";
+      case AgentPhase.REFLECTING:
+        return "reflecting";
+      case AgentPhase.REPLANNING:
+        return "replanning";
+      case AgentPhase.EXECUTING:
+      case AgentPhase.COMPLETE:
+      case AgentPhase.FAILED:
+      default:
+        return "executing";
+    }
+  }
+
+  private resolveExecutionTraceSource(
+    assignment: SupervisorAssignment,
+    fallback: ExecutionTraceSource = "supervisor-strategy",
+  ): ExecutionTraceSource {
+    return assignment.traceSource ?? fallback;
+  }
+
+  private recordExecutionTrace(params: {
+    identityKey: string;
+    assignment: SupervisorAssignment;
+    phase: ExecutionPhase;
+    source?: ExecutionTraceSource;
+    task: TaskClassification;
+    reason?: string;
+  }): void {
+    this.providerRouter?.recordExecutionTrace?.({
+      provider: params.assignment.providerName,
+      model: params.assignment.modelId,
+      role: params.assignment.role,
+      phase: params.phase,
+      source: params.source ?? this.resolveExecutionTraceSource(params.assignment),
+      reason: params.reason ?? params.assignment.reason,
+      task: params.task,
+      timestamp: Date.now(),
+      identityKey: params.identityKey,
+    });
+  }
+
+  private resolveConsensusReviewAssignment(
+    preferredReviewer: SupervisorAssignment,
+    currentAssignment: SupervisorAssignment,
+    identityKey: string,
+  ): SupervisorAssignment | null {
+    if (preferredReviewer.providerName !== currentAssignment.providerName) {
+      return preferredReviewer;
+    }
+
+    const fallbackReviewName = this.providerManager
+      .listAvailable()
+      .find((provider) => provider.name !== currentAssignment.providerName)?.name;
+    if (!fallbackReviewName) {
+      return null;
+    }
+
+    const fallbackReviewProvider = this.getProviderByNameOrFallback(
+      fallbackReviewName,
+      currentAssignment.provider,
+    );
+    return this.buildStaticSupervisorAssignment(
+      "reviewer",
+      fallbackReviewProvider.providerName,
+      this.resolveProviderModelId(fallbackReviewProvider.providerName, identityKey),
+      fallbackReviewProvider.provider,
+      "selected an alternate reviewer to keep consensus verification cross-provider",
+    );
+  }
+
   private shouldUseSupervisorSynthesis(strategy: SupervisorExecutionStrategy): boolean {
     return Boolean(this.providerRouter) && strategy.usesMultipleProviders;
   }
 
   private async synthesizeUserFacingResponse(params: {
+    identityKey: string;
     prompt: string;
     draft: string;
     agentState: AgentState;
@@ -1033,6 +1114,13 @@ export class Orchestrator {
         [{ role: "user", content: synthesisRequest }],
         [],
       );
+      this.recordExecutionTrace({
+        identityKey: params.identityKey,
+        assignment: params.strategy.synthesizer,
+        phase: "synthesis",
+        source: "synthesis",
+        task: params.strategy.task,
+      });
       this.recordProviderUsage(
         params.strategy.synthesizer.providerName,
         synthesisResponse.usage,
@@ -1102,6 +1190,13 @@ export class Orchestrator {
         [{ role: "user", content: synthesisRequest }],
         [],
       );
+      this.recordExecutionTrace({
+        identityKey,
+        assignment: strategy.synthesizer,
+        phase: "synthesis",
+        source: "synthesis",
+        task: strategy.task,
+      });
       this.recordProviderUsage(
         strategy.synthesizer.providerName,
         synthesisResponse.usage,
@@ -1534,6 +1629,13 @@ export class Orchestrator {
           session.messages,
           this.toolDefinitions,
         );
+        this.recordExecutionTrace({
+          identityKey,
+          assignment: currentAssignment,
+          phase: this.toExecutionPhase(bgAgentState.phase),
+          source: this.resolveExecutionTraceSource(currentAssignment),
+          task: executionStrategy.task,
+        });
 
         logger.debug("Background task LLM response", {
           chatId,
@@ -1563,6 +1665,7 @@ export class Orchestrator {
           if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
             const completionGate = await this.resolveCompletionGate({
               chatId,
+              identityKey,
               prompt,
               state: bgAgentState,
               draft: response.text,
@@ -1589,6 +1692,7 @@ export class Orchestrator {
             }
 
             const finalText = await this.synthesizeUserFacingResponse({
+              identityKey,
               prompt,
               draft: response.text ?? "",
               agentState: bgAgentState,
@@ -1661,6 +1765,7 @@ export class Orchestrator {
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
           const completionGate = await this.resolveCompletionGate({
             chatId,
+            identityKey,
             prompt,
             state: bgAgentState,
             draft: response.text,
@@ -1679,6 +1784,7 @@ export class Orchestrator {
           }
 
           const finalText = await this.synthesizeUserFacingResponse({
+            identityKey,
             prompt,
             draft: response.text ?? "",
             agentState: bgAgentState,
@@ -1772,11 +1878,13 @@ export class Orchestrator {
             const bgStrategy = this.consensusManager.shouldConsult(bgConfidence, bgTaskClass, bgAvailableCount);
 
             if (bgStrategy !== "skip" && bgAvailableCount >= 2) {
-              const bgAvailable = this.providerManager.listAvailable();
-              const bgReviewProviderName = bgAvailable.find(p => p.name !== currentAssignment.providerName)?.name;
-              if (bgReviewProviderName) {
-                const bgReviewProvider = this.getProviderByNameOrFallback(bgReviewProviderName, currentProvider).provider;
-                if (bgReviewProvider) {
+              const bgReviewAssignment = this.resolveConsensusReviewAssignment(
+                executionStrategy.reviewer,
+                currentAssignment,
+                identityKey,
+              );
+              if (bgReviewAssignment) {
+                if (bgReviewAssignment.provider) {
                   const bgConsensusResult = await this.consensusManager.verify({
                     originalOutput: {
                       text: response.text ?? undefined,
@@ -1788,8 +1896,16 @@ export class Orchestrator {
                     originalProvider: currentAssignment.providerName,
                     task: bgTaskClass,
                     confidence: bgConfidence,
-                    reviewProvider: bgReviewProvider,
+                    reviewProvider: bgReviewAssignment.provider,
                     prompt,
+                  });
+                  this.recordExecutionTrace({
+                    identityKey,
+                    assignment: bgReviewAssignment,
+                    phase: "consensus-review",
+                    source: "consensus-review",
+                    task: bgTaskClass,
+                    reason: bgReviewAssignment.reason,
                   });
 
                   if (!bgConsensusResult.agreed) {
@@ -2282,6 +2398,13 @@ export class Orchestrator {
       } else {
         response = await currentProvider.chat(activePrompt, session.messages, this.toolDefinitions);
       }
+      this.recordExecutionTrace({
+        identityKey,
+        assignment: currentAssignment,
+        phase: this.toExecutionPhase(agentState.phase),
+        source: this.resolveExecutionTraceSource(currentAssignment),
+        task: executionStrategy.task,
+      });
       logger.debug("LLM responded", { chatId, hasText: !!response.text, textLen: response.text?.length ?? 0, toolCalls: response.toolCalls.length });
 
       logger.debug("LLM response", {
@@ -2310,6 +2433,7 @@ export class Orchestrator {
         if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
           const completionGate = await this.resolveCompletionGate({
             chatId,
+            identityKey,
             prompt: lastUserMessage,
             state: agentState,
             draft: response.text,
@@ -2335,6 +2459,7 @@ export class Orchestrator {
           }
 
           const finalText = await this.synthesizeUserFacingResponse({
+            identityKey,
             prompt: lastUserMessage,
             draft: response.text ?? "",
             agentState,
@@ -2485,6 +2610,7 @@ export class Orchestrator {
         // ─── Verification gate: catch unverified exits ──────────────────
         const completionGate = await this.resolveCompletionGate({
           chatId,
+          identityKey,
           prompt: lastUserMessage,
           state: agentState,
           draft: response.text,
@@ -2522,18 +2648,28 @@ export class Orchestrator {
               const textAvailableCount = this.providerManager.listAvailable().length;
               const textStrategy = this.consensusManager.shouldConsult(textConfidence, textTaskClass, textAvailableCount);
               if (textStrategy !== "skip" && textAvailableCount >= 2) {
-                const textAvailable = this.providerManager.listAvailable();
-                const textReviewName = textAvailable.find(p => p.name !== currentAssignment.providerName)?.name;
-                if (textReviewName) {
-                  const textReviewProvider = this.getProviderByNameOrFallback(textReviewName, currentProvider).provider;
-                  if (textReviewProvider) {
+                const textReviewAssignment = this.resolveConsensusReviewAssignment(
+                  executionStrategy.reviewer,
+                  currentAssignment,
+                  identityKey,
+                );
+                if (textReviewAssignment) {
+                  if (textReviewAssignment.provider) {
                     const textConsensus = await this.consensusManager.verify({
                       originalOutput: { text: response.text },
                       originalProvider: currentAssignment.providerName,
                       task: textTaskClass,
                       confidence: textConfidence,
-                      reviewProvider: textReviewProvider,
+                      reviewProvider: textReviewAssignment.provider,
                       prompt: lastUserMessage,
+                    });
+                    this.recordExecutionTrace({
+                      identityKey,
+                      assignment: textReviewAssignment,
+                      phase: "consensus-review",
+                      source: "consensus-review",
+                      task: textTaskClass,
+                      reason: textReviewAssignment.reason,
                     });
                     if (!textConsensus.agreed) {
                       logger.warn("Consensus disagreement (text-only, critical)", {
@@ -2554,6 +2690,7 @@ export class Orchestrator {
 
         if (response.text) {
           const finalText = await this.synthesizeUserFacingResponse({
+            identityKey,
             prompt: lastUserMessage,
             draft: response.text,
             agentState,
@@ -2692,11 +2829,13 @@ export class Orchestrator {
           const strategy = this.consensusManager.shouldConsult(confidence, taskClass, availableCount);
 
           if (strategy !== "skip" && availableCount >= 2) {
-            const available = this.providerManager.listAvailable();
-            const reviewProviderName = available.find(p => p.name !== currentAssignment.providerName)?.name;
-            if (reviewProviderName) {
-              const reviewProvider = this.getProviderByNameOrFallback(reviewProviderName, currentProvider).provider;
-              if (reviewProvider) {
+            const reviewAssignment = this.resolveConsensusReviewAssignment(
+              executionStrategy.reviewer,
+              currentAssignment,
+              identityKey,
+            );
+            if (reviewAssignment) {
+              if (reviewAssignment.provider) {
                 const consensusResult = await this.consensusManager.verify({
                   originalOutput: {
                     text: response.text ?? undefined,
@@ -2708,8 +2847,16 @@ export class Orchestrator {
                   originalProvider: currentAssignment.providerName,
                   task: taskClass,
                   confidence,
-                  reviewProvider,
+                  reviewProvider: reviewAssignment.provider,
                   prompt: lastUserMessage,
+                });
+                this.recordExecutionTrace({
+                  identityKey,
+                  assignment: reviewAssignment,
+                  phase: "consensus-review",
+                  source: "consensus-review",
+                  task: taskClass,
+                  reason: reviewAssignment.reason,
                 });
 
                 if (!consensusResult.agreed) {
@@ -3315,6 +3462,7 @@ export class Orchestrator {
 
   private async resolveCompletionGate(params: {
     chatId: string;
+    identityKey: string;
     prompt: string;
     state: AgentState;
     draft: string | null | undefined;
@@ -3369,6 +3517,13 @@ export class Orchestrator {
         }],
         [],
       );
+      this.recordExecutionTrace({
+        identityKey: params.identityKey,
+        assignment: reviewer,
+        phase: "completion-review",
+        source: "completion-review",
+        task: params.strategy.task,
+      });
       this.recordAuxiliaryUsage(
         reviewer.providerName,
         reviewResponse.usage,
@@ -3414,11 +3569,20 @@ export class Orchestrator {
     options: ToolExecutionOptions,
     input: Record<string, unknown>,
   ): Promise<SelfManagedWriteReview> {
-    const provider = this.providerManager.getProvider(resolveIdentityKey(chatId, options.userId));
+    const identityKey = resolveIdentityKey(chatId, options.userId);
+    const provider = this.providerManager.getProvider(identityKey);
     const taskPrompt = this.normalizeInteractiveText(options.taskPrompt);
     const recentContext = this.summarizeMessagesForShellReview(options.sessionMessages);
     const workingDirectory = this.normalizeInteractiveText(input["working_directory"]) || ".";
     const timeoutMs = Number(input["timeout_ms"] ?? 30000);
+    const reviewAssignment = this.buildStaticSupervisorAssignment(
+      "reviewer",
+      provider.name,
+      this.resolveProviderModelId(provider.name, identityKey),
+      provider,
+      "reviewed whether a write-capable shell command should run autonomously",
+    );
+    const reviewTask = this.taskClassifier.classify(taskPrompt || command);
 
     try {
       const response = await provider.chat(
@@ -3435,6 +3599,13 @@ export class Orchestrator {
         }],
         [],
       );
+      this.recordExecutionTrace({
+        identityKey,
+        assignment: reviewAssignment,
+        phase: "shell-review",
+        source: "shell-review",
+        task: reviewTask,
+      });
 
       this.recordAuxiliaryUsage(provider.name, response.usage, options.onUsage ?? this.onUsage);
       const decision = this.parseShellReviewDecision(response.text);

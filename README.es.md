@@ -748,7 +748,7 @@ Comandos slash disponibles en todos los canales de chat:
 | `/agent` | Mostrar estado del Agent Core |
 | `/routing` | Mostrar estado de enrutamiento y preset |
 | `/routing preset <nombre>` | Cambiar preset de enrutamiento (budget/balanced/performance) |
-| `/routing info` | Mostrar decisiones de enrutamiento recientes |
+| `/routing info` | Mostrar decisiones de enrutamiento recientes y trazas de ejecucion reales para la identidad actual |
 
 ---
 

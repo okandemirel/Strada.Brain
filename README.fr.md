@@ -747,7 +747,7 @@ Commandes slash disponibles dans tous les canaux de chat :
 | `/agent` | Afficher le statut de l'Agent Core |
 | `/routing` | Afficher le statut du routage et le pr&eacute;r&eacute;glage |
 | `/routing preset <name>` | Changer le pr&eacute;r&eacute;glage de routage (budget/balanced/performance) |
-| `/routing info` | Afficher les d&eacute;cisions de routage r&eacute;centes |
+| `/routing info` | Afficher les d&eacute;cisions de routage r&eacute;centes et les traces d'ex&eacute;cution r&eacute;elles pour l'identit&eacute; active |
 
 ---
 

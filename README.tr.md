@@ -709,7 +709,7 @@ Tum sohbet kanallarinda kullanilabilir slash komutlari:
 | `/agent` | Agent Core durumunu goster |
 | `/routing` | Yonlendirme durumunu ve on ayarini goster |
 | `/routing preset <ad>` | Yonlendirme on ayarini degistir (budget/balanced/performance) |
-| `/routing info` | Son yonlendirme kararlarini goster |
+| `/routing info` | Mevcut kimlik icin son yonlendirme kararlarini ve gercek calisma izlerini goster |
 
 ---
 

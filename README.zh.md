@@ -747,7 +747,7 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `/agent` | 显示 Agent Core 状态 |
 | `/routing` | 显示路由状态和预设 |
 | `/routing preset <name>` | 切换路由预设（budget/balanced/performance） |
-| `/routing info` | 显示最近的路由决策 |
+| `/routing info` | 显示当前身份最近的路由决策和实际执行轨迹 |
 
 ---
 

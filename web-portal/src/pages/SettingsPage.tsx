@@ -39,6 +39,21 @@ interface RoutingDecision {
   timestamp: number
 }
 
+interface ExecutionTrace {
+  provider: string
+  model?: string
+  role: string
+  phase: string
+  source: string
+  reason: string
+  task: {
+    type: string
+    complexity: string
+    criticality: string
+  }
+  timestamp: number
+}
+
 interface EmbeddingStatus {
   state: 'disabled' | 'active' | 'degraded'
   ragEnabled: boolean
@@ -159,6 +174,7 @@ export default function SettingsPage() {
   // --- Routing Preset ---
   const [routingPreset, setRoutingPreset] = useState<string>('balanced')
   const [routingDecisions, setRoutingDecisions] = useState<RoutingDecision[]>([])
+  const [executionTraces, setExecutionTraces] = useState<ExecutionTrace[]>([])
   const [routingLoading, setRoutingLoading] = useState(true)
   const [routingSwitching, setRoutingSwitching] = useState(false)
 
@@ -211,17 +227,19 @@ export default function SettingsPage() {
 
   // --- Fetch routing preset ---
   const fetchRouting = useCallback(() => {
-    fetchJson<{ routing: RoutingDecision[]; preset?: string }>('/api/agent-activity')
+    fetchJson<{ routing: RoutingDecision[]; execution?: ExecutionTrace[]; preset?: string }>(`/api/agent-activity?${identityQuery}`)
       .then((data) => {
         if (data?.preset) setRoutingPreset(data.preset)
         setRoutingDecisions(Array.isArray(data?.routing) ? data.routing.slice(0, 6) : [])
+        setExecutionTraces(Array.isArray(data?.execution) ? data.execution.slice(-6).reverse() : [])
         setRoutingLoading(false)
       })
       .catch(() => {
         setRoutingDecisions([])
+        setExecutionTraces([])
         setRoutingLoading(false)
       })
-  }, [])
+  }, [identityQuery])
 
   // --- Fetch daemon status ---
   const fetchDaemon = useCallback(() => {
@@ -644,6 +662,46 @@ export default function SettingsPage() {
                       </div>
                       <div className="settings-hint" style={{ margin: 0 }}>
                         {decision.reason}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {executionTraces.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
+                  <span className="admin-stat-label">Recent Runtime Execution</span>
+                  <span className="admin-stat-value">{executionTraces.length}</span>
+                </div>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {executionTraces.map((trace, index) => (
+                    <div
+                      key={`${trace.provider}-${trace.phase}-${trace.role}-${trace.timestamp}-${index}`}
+                      className="settings-provider-card"
+                      style={{
+                        textAlign: 'left',
+                        padding: '12px 14px',
+                        cursor: 'default',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                          {trace.phase}{' / '}{trace.role}{' -> '}{trace.provider}
+                        </div>
+                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                          {formatDecisionTime(trace.timestamp)}
+                        </div>
+                      </div>
+                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
+                        <span className="settings-provider-id">{trace.source}</span>
+                        {trace.model && (
+                          <span className="settings-provider-model">{trace.model}</span>
+                        )}
+                      </div>
+                      <div className="settings-hint" style={{ margin: 0 }}>
+                        {trace.reason}
                       </div>
                     </div>
                   ))}

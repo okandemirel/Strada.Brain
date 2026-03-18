@@ -13,13 +13,14 @@ import type { ProviderManager } from "../agents/providers/provider-manager.js";
 import type { DMPolicy } from "../security/dm-policy.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "../agents/soul/index.js";
-import type { RoutingDecision } from "../agent-core/routing/routing-types.js";
+import type { ExecutionTrace, RoutingDecision } from "../agent-core/routing/routing-types.js";
 
 /** Structural interface for ProviderRouter to avoid circular dependency */
 interface ProviderRouterRef {
   getPreset(): string;
   setPreset(p: string): void;
-  getRecentDecisions(n: number): RoutingDecision[];
+  getRecentDecisions(n: number, identityKey?: string): RoutingDecision[];
+  getRecentExecutionTraces?(n: number, identityKey?: string): ExecutionTrace[];
 }
 
 /** Structural interface for HeartbeatLoop to avoid circular dependency */
@@ -101,7 +102,7 @@ export class CommandHandler {
         await this.handleAgent(chatId, args);
         break;
       case "routing":
-        await this.handleRouting(chatId, args);
+        await this.handleRouting(chatId, args, userId);
         break;
     }
   }
@@ -777,7 +778,7 @@ export class CommandHandler {
     await this.channel.sendText(chatId, "Usage: /agent");
   }
 
-  private async handleRouting(chatId: string, args: string[]): Promise<void> {
+  private async handleRouting(chatId: string, args: string[], userId?: string): Promise<void> {
     const subcommand = args[0]?.toLowerCase();
 
     // No args → show status
@@ -810,15 +811,28 @@ export class CommandHandler {
 
     // info → recent decisions
     if (subcommand === "info") {
-      const decisions = this.providerRouter?.getRecentDecisions?.(10) ?? [];
-      if (decisions.length === 0) {
+      const identityKey = this.getIdentityKey(chatId, userId);
+      const decisions = this.providerRouter?.getRecentDecisions?.(10, identityKey) ?? [];
+      const executionTraces = this.providerRouter?.getRecentExecutionTraces?.(10, identityKey) ?? [];
+      if (decisions.length === 0 && executionTraces.length === 0) {
         await this.channel.sendText(chatId, "No routing decisions recorded yet.");
         return;
       }
-      const lines = decisions.map(d =>
-        `\`${d.task.type}\` → \`${d.provider}\` (${d.reason})`
-      );
-      await this.channel.sendMarkdown(chatId, `*Recent Routing Decisions*\n\n${lines.join("\n")}`);
+      const sections: string[] = [];
+      if (decisions.length > 0) {
+        const lines = decisions.map((decision) =>
+          `\`${decision.task.type}\` -> \`${decision.provider}\` (${decision.reason})`,
+        );
+        sections.push(`*Recent Routing Decisions*\n\n${lines.join("\n")}`);
+      }
+      if (executionTraces.length > 0) {
+        const lines = executionTraces.map((trace) => {
+          const modelPart = trace.model ? ` model=\`${trace.model}\`` : "";
+          return `\`${trace.phase}/${trace.role}\` -> \`${trace.provider}\`${modelPart} source=\`${trace.source}\` (${trace.reason})`;
+        });
+        sections.push(`*Recent Runtime Execution*\n\n${lines.join("\n")}`);
+      }
+      await this.channel.sendMarkdown(chatId, sections.join("\n\n"));
       return;
     }
 

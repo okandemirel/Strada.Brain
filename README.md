@@ -799,7 +799,7 @@ Slash commands available in all chat channels:
 | `/agent` | Show Agent Core status |
 | `/routing` | Show routing status and preset |
 | `/routing preset <name>` | Switch routing preset (budget/balanced/performance) |
-| `/routing info` | Show recent routing decisions |
+| `/routing info` | Show recent routing decisions and runtime execution traces for the current identity |
 
 ---
 

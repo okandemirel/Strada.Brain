@@ -331,6 +331,60 @@ describe("DashboardServer", () => {
     }));
   });
 
+  it("returns runtime execution traces alongside routing decisions", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    const getRecentDecisions = vi.fn(() => [{
+      provider: "kimi",
+      reason: "selected the planning-specialized worker",
+      task: { type: "planning", complexity: "complex", criticality: "high" },
+      timestamp: 123,
+    }]);
+    const getRecentExecutionTraces = vi.fn(() => [{
+      provider: "gemini",
+      model: "gemini-2.5-pro",
+      role: "reviewer",
+      phase: "consensus-review",
+      source: "consensus-review",
+      reason: "selected the review worker for cross-provider verification",
+      task: { type: "code-review", complexity: "complex", criticality: "high" },
+      timestamp: 456,
+    }]);
+    server.setProviderRouter({
+      getPreset: () => "balanced",
+      setPreset: () => {},
+      getRecentDecisions,
+      getRecentExecutionTraces,
+    });
+
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/agent-activity?chatId=chat-1&userId=user-1`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(getRecentDecisions).toHaveBeenCalledWith(20, "user-1");
+    expect(getRecentExecutionTraces).toHaveBeenCalledWith(20, "user-1");
+    expect(data.preset).toBe("balanced");
+    expect(data.routing).toEqual([
+      expect.objectContaining({
+        provider: "kimi",
+        task: expect.objectContaining({ type: "planning" }),
+      }),
+    ]);
+    expect(data.execution).toEqual([
+      expect.objectContaining({
+        provider: "gemini",
+        model: "gemini-2.5-pro",
+        role: "reviewer",
+        phase: "consensus-review",
+        source: "consensus-review",
+      }),
+    ]);
+  });
+
   it("resolves provider and autonomy settings against identity-aware keys when supplied", async () => {
     const metrics = new MetricsCollector();
     server = new DashboardServer(0, metrics, () => undefined);
