@@ -64,7 +64,7 @@ npm run bootstrap
 npm run setup:web
 npm run setup:terminal
 
-# Isterseniz bu checkout'tan `strada` / `strada-brain` komutlarini globale baglayin
+# Her seyi `strada` komutuyla baslatmak istiyorsaniz onerilen adim
 npm link
 ```
 
@@ -82,6 +82,9 @@ strada setup --terminal
 ```
 
 Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. Hizli kurulum icin **Terminal** secin veya tam ayarlar UI'si icin **Web Tarayicisi** secin.
+Ilk basarili kurulumdan sonra `strada` komutu artik akilli launcher olur:
+- ilk kullanimda config yoksa setup'i otomatik acar
+- sonraki kullanimlarda web, CLI, daemon, setup veya doctor secimi yapabileceginiz terminal paneli gosterir
 Kurulumdan sonra, ajani baslatmadan once hazirlik kontrolu calistirin:
 
 ```bash
@@ -103,6 +106,12 @@ JWT_SECRET=<su sekilde olusturun: openssl rand -hex 64>
 ### 3. Calistirma
 
 ```bash
+# Akilli launcher: gerekirse setup acilir, degilse Strada'yi nasil acacaginizi sorar
+strada
+
+# Kayitli varsayilan kanali dogrudan daemon modunda baslat
+strada --daemon
+
 # Varsayilan web kanali ile baslatin
 strada start
 
@@ -125,6 +134,8 @@ strada supervise --channel web
 ### 4. CLI Komutlari
 
 ```bash
+strada                    # Akilli launcher (ilk calisinda setup, sonrasinda terminal paneli)
+strada --daemon           # Kayitli varsayilan kanali daemon modunda baslat
 strada setup              # Etkilesimli kurulum sihirbazi
 strada setup --web        # Web sihirbazini dogrudan ac
 strada setup --terminal   # Terminal sihirbazini dogrudan kullan

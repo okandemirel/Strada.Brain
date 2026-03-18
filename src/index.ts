@@ -20,6 +20,12 @@ import { CHANNEL_DEFAULTS, type SupportedChannelType } from "./common/constants.
 import { runMetricsCommand } from "./metrics/metrics-cli.js";
 import { registerDaemonCommands } from "./daemon/daemon-cli.js";
 import { registerPresetCommands } from "./config/preset-cli.js";
+import {
+  getConfiguredDefaultChannel,
+  promptLauncherAction,
+  resolveQuickLaunchAction,
+  type RootLaunchOptions,
+} from "./core/launcher.js";
 
 // Setup global error handlers
 setupGlobalErrorHandlers(
@@ -34,6 +40,7 @@ setupGlobalErrorHandlers(
 
 // CLI Setup
 const program = new Command();
+program.enablePositionalOptions();
 
 program
   .name("strada")
@@ -41,6 +48,16 @@ program
   .version("0.1.0");
 
 program
+  .option("--daemon", "Run the selected launch target in daemon mode")
+  .option("--web", "Open or resume Strada through the local web channel")
+  .option("--cli", "Open Strada in the interactive CLI")
+  .option("--telegram", "Start the Telegram channel directly")
+  .option("--discord", "Start the Discord channel directly")
+  .option("--slack", "Start the Slack channel directly")
+  .option("--whatsapp", "Start the WhatsApp channel directly")
+  .option("--matrix", "Start the Matrix channel directly")
+  .option("--irc", "Start the IRC channel directly")
+  .option("--teams", "Start the Teams channel directly")
   .command("start")
   .description("Start Strada Brain")
   .option(
@@ -225,6 +242,10 @@ registerPresetCommands(program);
 let appResult: import("./core/bootstrap.js").BootstrapResult | undefined;
 registerDaemonCommands(program, () => appResult?.daemonContext);
 
+program.action(async (opts: RootLaunchOptions) => {
+  await runRootLauncher(opts);
+});
+
 // Run CLI
 program.parse();
 
@@ -345,6 +366,65 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
       });
     }
     process.exit(1);
+  }
+}
+
+async function runRootLauncher(options: RootLaunchOptions): Promise<void> {
+  const defaultChannel = getConfiguredDefaultChannel();
+  const quickAction = resolveQuickLaunchAction(options);
+  if (quickAction) {
+    await runLauncherAction(quickAction);
+    return;
+  }
+
+  const configResult = loadConfigSafe();
+  if (configResult.kind === "err") {
+    console.log("First-time setup is required before Strada can start.\n");
+    const { runTerminalWizard } = await import("./core/terminal-wizard.js");
+    await runTerminalWizard();
+    return;
+  }
+
+  if (options.daemon) {
+    await runLauncherAction({
+      kind: "start",
+      channelType: defaultChannel,
+      daemonMode: true,
+    });
+    return;
+  }
+
+  const action = await promptLauncherAction({
+    defaultChannel,
+    webPort: configResult.value.web.port,
+    dashboardPort: configResult.value.dashboard.port,
+  });
+  await runLauncherAction(action);
+}
+
+async function runLauncherAction(action: {
+  kind: "start";
+  channelType: SupportedChannelType;
+  daemonMode: boolean;
+} | { kind: "setup" } | { kind: "doctor" } | { kind: "exit" }): Promise<void> {
+  if (action.kind === "start") {
+    await startApp(action.channelType, action.daemonMode);
+    return;
+  }
+
+  if (action.kind === "setup") {
+    const { runTerminalWizard } = await import("./core/terminal-wizard.js");
+    await runTerminalWizard();
+    return;
+  }
+
+  if (action.kind === "doctor") {
+    const { runDoctorCommand } = await import("./core/setup-doctor.js");
+    const exitCode = await runDoctorCommand();
+    if (exitCode !== 0) {
+      process.exit(exitCode);
+    }
+    return;
   }
 }
 

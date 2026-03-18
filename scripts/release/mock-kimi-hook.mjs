@@ -298,7 +298,7 @@ function buildResponse(body) {
     }
   }
 
-  if (conversationText.includes("provider fallback smoke")) {
+  if (normalizedUserText.includes("provider fallback smoke")) {
     return buildChatCompletion({
       text: "provider fallback ok",
     });
@@ -347,8 +347,8 @@ globalThis.fetch = async function mockFetch(input, init) {
   if (url.includes("/chat/completions")) {
     const body = parseJsonBody(init);
     const lastUserText = getLastUserText(body.messages ?? []);
-    const conversationText = getConversationText(body.messages ?? []).toLowerCase();
-    if (url.includes("api.kimi.com") && conversationText.includes("provider fallback smoke")) {
+    const normalizedLastUserText = lastUserText.toLowerCase();
+    if (url.includes("api.kimi.com") && normalizedLastUserText.includes("provider fallback smoke")) {
       const error = new TypeError("fetch failed");
       log({
         type: "chat-failure",

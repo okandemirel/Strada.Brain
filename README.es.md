@@ -64,7 +64,7 @@ npm run bootstrap
 npm run setup:web
 npm run setup:terminal
 
-# Opcional: expone `strada` / `strada-brain` globalmente desde este checkout
+# Recomendado si quieres abrir todo con el comando `strada`
 npm link
 ```
 
@@ -82,6 +82,9 @@ strada setup --terminal
 ```
 
 El asistente te pide la ruta de tu proyecto Unity, la clave de API del proveedor de IA, el canal por defecto e idioma. Elige **Terminal** para configuracion rapida o **Navegador Web** para la interfaz de configuracion completa.
+Despues del primer setup correcto, `strada` sin subcomando se convierte en tu launcher inteligente:
+- en el primer uso abre setup automaticamente si falta la config
+- despues muestra un panel de terminal para elegir web, CLI, daemon, setup o doctor
 Despues del setup, ejecuta una comprobacion de readiness antes de iniciar el agente:
 
 ```bash
@@ -103,6 +106,12 @@ JWT_SECRET=<generar con: openssl rand -hex 64>
 ### 3. Ejecutar
 
 ```bash
+# Launcher inteligente: si hace falta abre setup, si no muestra el panel de entrada
+strada
+
+# Inicia directamente el canal por defecto en modo daemon
+strada --daemon
+
 # Comienza con canal web por defecto
 strada start
 
@@ -125,6 +134,8 @@ strada supervise --channel web
 ### 4. Comandos CLI
 
 ```bash
+strada                    # Launcher inteligente (setup en primer uso, panel despues)
+strada --daemon           # Inicia el canal por defecto en modo daemon
 strada setup              # Asistente de configuracion interactivo
 strada setup --web        # Abre directamente el asistente web
 strada setup --terminal   # Usa directamente el asistente de terminal

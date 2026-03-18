@@ -64,7 +64,7 @@ npm run bootstrap
 npm run setup:web
 npm run setup:terminal
 
-# 可选：从这个 checkout 全局链接 `strada` / `strada-brain`
+# 如果你希望统一用 `strada` 命令启动，推荐执行
 npm link
 ```
 
@@ -82,6 +82,9 @@ strada setup --terminal
 ```
 
 向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。选择**终端**进行快速设置，或选择 **Web 浏览器**进行完整配置 UI。
+第一次 setup 完成后，不带子命令的 `strada` 会变成你的智能启动器：
+- 第一次使用时如果没有 config，会自动进入 setup
+- 之后会显示一个终端面板，让你选择 web、CLI、daemon、setup 或 doctor
 设置完成后，在启动代理之前先做一次 readiness 检查：
 
 ```bash
@@ -103,6 +106,12 @@ JWT_SECRET=<使用以下命令生成: openssl rand -hex 64>
 ### 3. 运行
 
 ```bash
+# 智能启动器：需要时先开 setup，否则显示入口面板
+strada
+
+# 直接以 daemon 模式启动已保存的默认通道
+strada --daemon
+
 # 使用默认 Web 频道启动
 strada start
 
@@ -125,6 +134,8 @@ strada supervise --channel web
 ### 4. CLI 命令
 
 ```bash
+strada                    # 智能启动器（首次进入 setup，之后显示启动面板）
+strada --daemon           # 以 daemon 模式启动已保存的默认通道
 strada setup              # 交互式设置向导
 strada setup --web        # 直接打开 Web 向导
 strada setup --terminal   # 直接使用终端向导

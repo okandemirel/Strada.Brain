@@ -85,6 +85,7 @@ import type { ScopeContext } from "../learning/matching/pattern-matcher.js";
 // Multi-agent type-only imports (Plan 23-03: AGENT-01, AGENT-06, AGENT-07)
 import type { AgentManager as AgentManagerType } from "../agents/multi/agent-manager.js";
 import type { AgentBudgetTracker as AgentBudgetTrackerType } from "../agents/multi/agent-budget-tracker.js";
+import { createAgentId } from "../agents/multi/agent-types.js";
 
 // Delegation type-only imports (Plan 24-03: AGENT-03, AGENT-04, AGENT-05)
 import type { DelegationManager as DelegationManagerType } from "../agents/multi/delegation/delegation-manager.js";
@@ -1051,6 +1052,18 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         agentManager.setDelegationFactory((parentAgentId, depth) =>
           createDelegationTools(delegationTypes, delegationManager!, parentAgentId, depth, config.delegation.maxDepth),
         );
+
+        const rootDelegationAgentId = createAgentId();
+        const rootDelegationTools = createDelegationTools(
+          delegationTypes,
+          delegationManager,
+          rootDelegationAgentId,
+          0,
+          config.delegation.maxDepth,
+        );
+        for (const tool of rootDelegationTools) {
+          orchestrator.addTool(tool);
+        }
 
         // Wire TierRouter into ProviderRouter as facade sub-component
         if (providerRouter) {

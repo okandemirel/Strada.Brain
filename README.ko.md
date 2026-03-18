@@ -64,7 +64,7 @@ npm run bootstrap
 npm run setup:web
 npm run setup:terminal
 
-# 선택 사항: 이 체크아웃에서 `strada` / `strada-brain` 을 전역으로 링크
+# 모든 것을 `strada` 명령으로 열고 싶다면 권장
 npm link
 ```
 
@@ -82,6 +82,9 @@ strada setup --terminal
 ```
 
 마법사는 Unity 프로젝트 경로, AI 공급자 API 키, 기본 채널, 언어를 묻습니다. 빠른 설정은 **Terminal**을, 전체 구성 UI는 **Web Browser**를 선택하세요.
+첫 setup 이 끝나면 서브커맨드 없는 `strada` 가 스마트 런처가 됩니다.
+- 첫 사용에는 config 가 없으면 setup 을 자동으로 엽니다
+- 그 뒤에는 web / CLI / daemon / setup / doctor 를 고를 수 있는 터미널 패널을 보여줍니다
 설정이 끝나면 에이전트를 시작하기 전에 readiness 체크를 실행하세요.
 
 ```bash
@@ -103,6 +106,12 @@ JWT_SECRET=<생성 방법: openssl rand -hex 64>
 ### 3. 실행
 
 ```bash
+# 스마트 런처: 필요하면 setup 을 열고, 아니면 실행 패널을 보여줍니다
+strada
+
+# 저장된 기본 채널을 바로 daemon 모드로 시작
+strada --daemon
+
 # 기본 웹 채널로 시작
 strada start
 
@@ -125,6 +134,8 @@ strada supervise --channel web
 ### 4. CLI 명령
 
 ```bash
+strada                    # 스마트 런처 (첫 실행은 setup, 이후는 런처 패널)
+strada --daemon           # 저장된 기본 채널을 daemon 모드로 시작
 strada setup              # 인터랙티브 설정 마법사
 strada setup --web        # 웹 마법사를 바로 열기
 strada setup --terminal   # 터미널 마법사를 바로 사용

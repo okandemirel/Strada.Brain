@@ -172,8 +172,28 @@ async function createSmokeProject(projectDir) {
 }
 
 function buildBaseEnv(memoryDir, projectDir) {
+  const providerEnv = {
+    GEMINI_API_KEY: undefined,
+    OPENAI_API_KEY: undefined,
+    OPENAI_AUTH_MODE: undefined,
+    OPENAI_CHATGPT_AUTH_FILE: undefined,
+    KIMI_API_KEY: undefined,
+    DEEPSEEK_API_KEY: undefined,
+    CLAUDE_API_KEY: undefined,
+    ANTHROPIC_API_KEY: undefined,
+    GROQ_API_KEY: undefined,
+    MISTRAL_API_KEY: undefined,
+    TOGETHER_API_KEY: undefined,
+    FIREWORKS_API_KEY: undefined,
+    QWEN_API_KEY: undefined,
+    MINIMAX_API_KEY: undefined,
+    OLLAMA_BASE_URL: undefined,
+    OLLAMA_MODEL: undefined,
+  };
+
   return {
     ...process.env,
+    ...providerEnv,
     UNITY_PROJECT_PATH: projectDir,
     MEMORY_DB_PATH: memoryDir,
     STRADA_MOCK_LOG_PATH: join(memoryDir, "mock-provider.log"),

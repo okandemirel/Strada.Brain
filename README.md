@@ -62,7 +62,7 @@ npm run bootstrap
 npm run setup:web
 npm run setup:terminal
 
-# Optional: expose `strada` / `strada-brain` globally from this checkout
+# Recommended if you want to launch everything with the `strada` command
 npm link
 ```
 
@@ -80,6 +80,10 @@ strada setup --terminal
 ```
 
 The wizard asks for your Unity project path, AI provider API key, default channel, and language. Choose **Terminal** for quick setup or **Web Browser** for the full configuration UI.
+
+After the first successful setup, running `strada` with no subcommand becomes your smart launcher:
+- first use: opens setup automatically if config is missing
+- later uses: shows a terminal launcher so you can choose web, CLI, daemon mode, setup, or doctor
 
 After setup, run a readiness check before you start the agent:
 
@@ -103,6 +107,12 @@ JWT_SECRET=<generate with: openssl rand -hex 64>
 ### 3. Run
 
 ```bash
+# Smart launcher: first run setup if needed, otherwise choose how to open Strada
+strada
+
+# Start your configured default channel directly in daemon mode
+strada --daemon
+
 # Start with default web channel
 strada start
 
@@ -125,6 +135,8 @@ strada supervise --channel web
 ### 4. CLI Commands
 
 ```bash
+strada                    # Smart launcher (setup on first run, launcher panel afterwards)
+strada --daemon           # Start the configured default channel in daemon mode
 strada setup              # Interactive setup wizard
 strada setup --web        # Launch the browser wizard directly
 strada setup --terminal   # Use the terminal wizard directly

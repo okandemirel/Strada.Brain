@@ -64,7 +64,7 @@ npm run bootstrap
 npm run setup:web
 npm run setup:terminal
 
-# 必要ならこのチェックアウトから `strada` / `strada-brain` をグローバルにリンク
+# `strada` コマンドで一括起動したい場合は推奨
 npm link
 ```
 
@@ -82,6 +82,9 @@ strada setup --terminal
 ```
 
 ウィザードでは、Unity プロジェクトパス、AI プロバイダー API キー、デフォルトチャネル、言語が尋ねられます。**ターミナル** を選択すれば迅速なセットアップが、**Web ブラウザ** を選択すれば完全な設定 UI が表示されます。
+最初のセットアップ完了後は、サブコマンドなしの `strada` がスマートランチャーになります。
+- 初回は config がなければ自動で setup を開く
+- 以後は web / CLI / daemon / setup / doctor を選べるターミナルパネルを表示する
 セットアップ後は、エージェントを起動する前に readiness check を実行してください。
 
 ```bash
@@ -103,6 +106,12 @@ JWT_SECRET=<生成方法: openssl rand -hex 64>
 ### 3. 実行
 
 ```bash
+# スマートランチャー: 必要なら setup を開き、そうでなければ起動パネルを表示
+strada
+
+# 保存済みの既定チャネルを直接デーモンモードで起動
+strada --daemon
+
 # デフォルト Web チャネルで起動
 strada start
 
@@ -125,6 +134,8 @@ strada supervise --channel web
 ### 4. CLI コマンド
 
 ```bash
+strada                    # スマートランチャー（初回は setup、その後は起動パネル）
+strada --daemon           # 保存済みの既定チャネルをデーモンモードで起動
 strada setup              # インタラクティブセットアップウィザード
 strada setup --web        # Web ウィザードを直接起動
 strada setup --terminal   # Terminal ウィザードを直接使用
