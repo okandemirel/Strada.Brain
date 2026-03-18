@@ -1058,6 +1058,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           apiKeys: collectApiKeys(config),
           providerCredentials: collectProviderCredentials(config),
           preferencesDbPath: config.memory.dbPath,
+          verifiedLocalProviders: providerManager.isAvailable("ollama") ? ["ollama"] : [],
         });
 
         // Inject delegation tool factory into AgentManager

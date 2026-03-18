@@ -548,7 +548,17 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     const logger = getLogger();
     try {
       if (this.isChatGptSubscriptionMode()) {
-        this.resolveChatGptAuth();
+        const response = await fetch(`${this.baseUrl}/responses`, {
+          method: "POST",
+          headers: await this.buildHeaders(),
+          body: JSON.stringify(this.buildChatGptHealthCheckRequest()),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          logger.warn(`${this.name} health check failed: HTTP ${response.status}`);
+          return false;
+        }
+        await response.body?.cancel();
         return true;
       }
       const response = await fetch(`${this.baseUrl}/models`, {
@@ -698,6 +708,22 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
 
     return body;
+  }
+
+  private buildChatGptHealthCheckRequest(): Record<string, unknown> {
+    return {
+      model: this.model,
+      instructions: "Connectivity health check. Reply with OK.",
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "ping" }],
+        },
+      ],
+      store: false,
+      stream: true,
+      max_output_tokens: 1,
+    };
   }
 
   private buildChatGptInput(messages: ConversationMessage[]): ChatGptInputItem[] {

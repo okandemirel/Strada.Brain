@@ -35,7 +35,6 @@ import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-regis
 import { ProviderManager } from "../../providers/provider-manager.js";
 import { Orchestrator } from "../../orchestrator.js";
 import { getProviderIntelligenceSnapshot, type ProviderWorkload } from "../../providers/provider-knowledge.js";
-import { HARDCODED_MODELS } from "../../providers/model-intelligence.js";
 
 // =============================================================================
 // OPTIONS
@@ -59,6 +58,7 @@ export interface DelegationManagerOptions {
   readonly apiKeys: Record<string, string | undefined>;
   readonly providerCredentials?: ProviderCredentialMap;
   readonly preferencesDbPath?: string;
+  readonly verifiedLocalProviders?: readonly string[];
 }
 
 // =============================================================================
@@ -77,25 +77,6 @@ interface ResolvedDelegationProviderConfig {
   readonly name: string;
   readonly model: string;
 }
-
-const HARDCODED_MODEL_LOOKUP = {
-  getModelInfo(modelId: string) {
-    const info = HARDCODED_MODELS.get(modelId);
-    if (!info) {
-      return undefined;
-    }
-    return {
-      contextWindow: info.contextWindow,
-      maxOutputTokens: info.maxOutputTokens,
-      inputPricePerMillion: info.inputPricePerMillion,
-      outputPricePerMillion: info.outputPricePerMillion,
-      supportsVision: info.supportsVision,
-      supportsThinking: info.supportsThinking,
-      supportsToolCalling: info.supportsToolCalling,
-      supportsStreaming: info.supportsStreaming,
-    };
-  },
-};
 
 // =============================================================================
 // CAPTURE CHANNEL
@@ -498,6 +479,10 @@ export class DelegationManager {
       return dynamic;
     }
 
+    if (!normalizedName || normalizedName === "auto") {
+      throw new Error(`Could not resolve delegation provider for tier "${tier}"`);
+    }
+
     return {
       name: normalizedName,
       model: configured.model || this.getDefaultModelForProvider(normalizedName),
@@ -538,6 +523,12 @@ export class DelegationManager {
     provider: ReturnType<typeof createProvider>;
   }> {
     const names = new Set<string>();
+    for (const name of this.opts.verifiedLocalProviders ?? []) {
+      const normalized = name.trim().toLowerCase();
+      if (normalized) {
+        names.add(normalized);
+      }
+    }
 
     for (const name of Object.keys(this.opts.providerCredentials ?? {})) {
       const normalized = name.trim().toLowerCase();
@@ -546,8 +537,6 @@ export class DelegationManager {
         names.add(normalized);
       }
     }
-
-    names.add("ollama");
 
     const candidates: Array<{
       name: string;
@@ -597,14 +586,16 @@ export class DelegationManager {
     if (name === "claude" || name === "anthropic") {
       return "claude-sonnet-4-6-20250514";
     }
-    if (name === "ollama") {
-      return "llama3.3";
-    }
     return PROVIDER_PRESETS[name]?.defaultModel ?? "default";
   }
 
+  private isVerifiedLocalProvider(name: string): boolean {
+    const normalized = name.trim().toLowerCase();
+    return (this.opts.verifiedLocalProviders ?? []).some((provider) => provider.trim().toLowerCase() === normalized);
+  }
+
   private isDelegationProviderAvailable(name: string): boolean {
-    if (name === "ollama") {
+    if (this.isVerifiedLocalProvider(name)) {
       return true;
     }
     if (name === "claude" || name === "anthropic") {
@@ -661,7 +652,7 @@ export class DelegationManager {
     const snapshot = getProviderIntelligenceSnapshot(
       candidate.name,
       candidate.model,
-      HARDCODED_MODEL_LOOKUP,
+      undefined,
       candidate.provider.capabilities,
       candidate.provider.name,
     );
@@ -671,12 +662,12 @@ export class DelegationManager {
     const toolScore = snapshot.capabilities.supportsToolCalling ? 1 : 0.25;
     const cheapness = this.getCheapnessScore(snapshot, candidate.name);
     const maxOutputScore = Math.min(
-      (HARDCODED_MODEL_LOOKUP.getModelInfo(candidate.model)?.maxOutputTokens ?? 8_000) / 64_000,
+      (candidate.provider.capabilities.maxTokens ?? 8_000) / 64_000,
       1,
     );
 
     if (tier === "local") {
-      const localBonus = candidate.name === "ollama" ? 1 : 0;
+      const localBonus = this.isVerifiedLocalProvider(candidate.name) ? 1 : 0;
       return (localBonus * 0.7) + (cheapness * 0.2) + (workloadScore * 0.1);
     }
 
@@ -695,7 +686,7 @@ export class DelegationManager {
     snapshot: ReturnType<typeof getProviderIntelligenceSnapshot>,
     providerName: string,
   ): number {
-    if (providerName === "ollama") {
+    if (this.isVerifiedLocalProvider(providerName)) {
       return 1;
     }
     const totalPrice =

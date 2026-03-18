@@ -547,6 +547,51 @@ describe("DelegationManager", () => {
         }),
       );
     });
+
+    it("does not inject an implicit ollama candidate when local auto-routing has no verified local provider", async () => {
+      const autoLocalConfig: DelegationConfig = {
+        ...TEST_CONFIG,
+        tiers: {
+          ...TEST_TIER_MAP,
+          local: "auto",
+        },
+      };
+
+      const autoLocalManager = new DelegationManager(
+        buildManagerOpts({
+          config: autoLocalConfig,
+          delegationLog,
+          apiKeys: { openai: "test-key" },
+          providerCredentials: {
+            openai: { apiKey: "test-key" },
+          },
+        }),
+      );
+
+      const request: DelegationRequest = {
+        type: "local_task",
+        task: "Handle this locally if possible",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await autoLocalManager.delegate(request);
+
+      expect(result.metadata.model).toBe("gpt-5.2");
+      expect(vi.mocked(createProvider)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "openai",
+          model: "gpt-5.2",
+        }),
+      );
+      expect(vi.mocked(createProvider)).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "ollama",
+        }),
+      );
+    });
   });
 
   describe("delegateAsync", () => {

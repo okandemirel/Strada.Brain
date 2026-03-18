@@ -170,6 +170,7 @@ type SupervisorRole = "planner" | "executor" | "reviewer" | "synthesizer";
 interface SupervisorAssignment {
   role: SupervisorRole;
   providerName: string;
+  modelId?: string;
   provider: IAIProvider;
   reason: string;
 }
@@ -675,10 +676,11 @@ export class Orchestrator {
   private buildStaticSupervisorAssignment(
     role: SupervisorRole,
     providerName: string,
+    modelId: string | undefined,
     provider: IAIProvider,
     reason: string,
   ): SupervisorAssignment {
-    return { role, providerName, provider, reason };
+    return { role, providerName, modelId, provider, reason };
   }
 
   private getProviderByNameOrFallback(
@@ -695,6 +697,29 @@ export class Orchestrator {
     };
   }
 
+  private resolveProviderModelId(
+    providerName: string,
+    identityKey: string,
+  ): string | undefined {
+    const normalizedProvider = providerName.trim().toLowerCase();
+    const activeInfo = this.providerManager.getActiveInfo?.(identityKey);
+    if (activeInfo?.providerName === normalizedProvider && activeInfo.model) {
+      return activeInfo.model;
+    }
+
+    const executionCandidate = this.providerManager
+      .listExecutionCandidates?.(identityKey)
+      .find((candidate) => candidate.name === normalizedProvider);
+    if (executionCandidate?.defaultModel) {
+      return executionCandidate.defaultModel;
+    }
+
+    const availableCandidate = this.providerManager
+      .listAvailable?.()
+      .find((candidate) => candidate.name === normalizedProvider);
+    return availableCandidate?.defaultModel;
+  }
+
   private resolveSupervisorAssignment(
     role: SupervisorRole,
     task: TaskClassification,
@@ -707,6 +732,7 @@ export class Orchestrator {
       return this.buildStaticSupervisorAssignment(
         role,
         fallbackName,
+        this.resolveProviderModelId(fallbackName, identityKey),
         fallbackProvider,
         "routing unavailable, reusing the current worker",
       );
@@ -715,7 +741,13 @@ export class Orchestrator {
     try {
       const routed = this.providerRouter.resolve(task, phase, { identityKey });
       const resolved = this.getProviderByNameOrFallback(routed.provider, fallbackProvider);
-      return this.buildStaticSupervisorAssignment(role, resolved.providerName, resolved.provider, routed.reason);
+      return this.buildStaticSupervisorAssignment(
+        role,
+        resolved.providerName,
+        this.resolveProviderModelId(resolved.providerName, identityKey),
+        resolved.provider,
+        routed.reason,
+      );
     } catch {
       // Routing failure is non-fatal — use fallback provider
     }
@@ -723,6 +755,7 @@ export class Orchestrator {
     return this.buildStaticSupervisorAssignment(
       role,
       fallbackName,
+      this.resolveProviderModelId(fallbackName, identityKey),
       fallbackProvider,
       "routing fallback, reusing the current worker",
     );
@@ -751,6 +784,7 @@ export class Orchestrator {
     const executor = this.buildStaticSupervisorAssignment(
       "executor",
       selectedProviderName,
+      activeInfo?.model ?? this.resolveProviderModelId(selectedProviderName, identityKey),
       selectedProvider,
       activeInfo?.isDefault
         ? "selected system-default provider as the primary execution worker"
@@ -769,6 +803,7 @@ export class Orchestrator {
       reviewer = this.buildStaticSupervisorAssignment(
         "reviewer",
         planner.providerName,
+        planner.modelId,
         planner.provider,
         "reused the planning worker as reviewer to keep execution and review separated",
       );
@@ -787,6 +822,7 @@ export class Orchestrator {
         synthesizer = this.buildStaticSupervisorAssignment(
           "synthesizer",
           reviewer.providerName,
+          reviewer.modelId,
           reviewer.provider,
           "reused the reviewer as the user-facing synthesis worker to keep execution separate",
         );
@@ -794,6 +830,7 @@ export class Orchestrator {
         synthesizer = this.buildStaticSupervisorAssignment(
           "synthesizer",
           planner.providerName,
+          planner.modelId,
           planner.provider,
           "reused the planner as the user-facing synthesis worker to keep execution separate",
         );
@@ -848,6 +885,7 @@ export class Orchestrator {
     return this.buildStaticSupervisorAssignment(
       role,
       pinnedProvider.providerName,
+      pinnedProvider.modelId,
       pinnedProvider.provider,
       "kept the active tool-turn provider pinned to preserve provider-specific tool context",
     );
@@ -857,6 +895,10 @@ export class Orchestrator {
     strategy: SupervisorExecutionStrategy,
     assignment: SupervisorAssignment,
   ): string {
+    const providerCapabilities = this.providerManager.getProviderCapabilities?.(
+      assignment.providerName,
+      assignment.modelId,
+    );
     const lines = [
       "## Orchestrator Assignment",
       "Strada Brain has already analyzed the user request and owns the overall decision-making.",
@@ -903,7 +945,13 @@ export class Orchestrator {
         break;
     }
 
-    return `\n\n${lines.join("\n")}\n`;
+    return `\n\n${lines.join("\n")}\n${buildProviderIntelligence(
+      assignment.providerName,
+      assignment.modelId,
+      this.modelIntelligence,
+      providerCapabilities,
+      assignment.providerName,
+    )}\n`;
   }
 
   private stripInternalDecisionMarkers(text: string | null | undefined): string {
@@ -1218,19 +1266,7 @@ export class Orchestrator {
       systemPrompt += AUTONOMOUS_MODE_DIRECTIVE;
     }
 
-    // 4. Provider intelligence: inject strengths, limitations, and behavioral hints
-    const activeInfo = this.providerManager.getActiveInfo?.(params.identityKey);
-    if (activeInfo) {
-      systemPrompt += buildProviderIntelligence(
-        activeInfo.providerName,
-        activeInfo.model,
-        this.modelIntelligence,
-        this.providerManager.getProviderCapabilities?.(activeInfo.providerName, activeInfo.model),
-        activeInfo.providerName,
-      );
-    }
-
-    // 5. Context layers (user profile, session summary, open tasks, semantic memory)
+    // 4. Context layers (user profile, session summary, open tasks, semantic memory)
     const { context: contextLayers, contentHashes } = await this.buildContextLayers(
       params.conversationScope,
       params.prompt,
@@ -1240,12 +1276,12 @@ export class Orchestrator {
     systemPrompt += contextLayers;
     const initialContentHashes: string[] = [...contentHashes];
 
-    // 6. First-time user prompt (only for direct user tasks without a known profile)
+    // 5. First-time user prompt (only for direct user tasks without a known profile)
     if (params.allowFirstTimeOnboarding && (!params.profile || !params.profile.displayName)) {
       systemPrompt += FIRST_TIME_USER_PROMPT;
     }
 
-    // 7. RAG injection
+    // 6. RAG injection
     if (this.ragPipeline && params.prompt) {
       try {
         const ragResults = await this.ragPipeline.search(params.prompt, {
@@ -1268,7 +1304,7 @@ export class Orchestrator {
       }
     }
 
-    // 8. Analysis cache injection
+    // 7. Analysis cache injection
     if (this.memoryManager) {
       try {
         const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);

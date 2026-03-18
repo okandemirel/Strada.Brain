@@ -253,4 +253,58 @@ describe("OpenAIProvider", () => {
     expect(result.stopReason).toBe("end_turn");
     expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 1, totalTokens: 4 });
   });
+
+  it("performs a real subscription health probe against the responses endpoint", async () => {
+    const cancel = vi.fn(async () => undefined);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      body: { cancel },
+      headers: new Headers(),
+    });
+
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: "access-token",
+      accountId: "account-id",
+    });
+
+    await expect(provider.healthCheck()).resolves.toBe(true);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://chatgpt.com/backend-api/codex/responses",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer access-token",
+          "ChatGPT-Account-Id": "account-id",
+        }),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
+    expect(body).toMatchObject({
+      model: "gpt-5.2",
+      store: false,
+      stream: true,
+      max_output_tokens: 1,
+    });
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it("fails subscription health check when the responses endpoint rejects the probe", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => "Unauthorized",
+      headers: new Headers(),
+    });
+
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: "bad-token",
+      accountId: "account-id",
+    });
+
+    await expect(provider.healthCheck()).resolves.toBe(false);
+  });
 });

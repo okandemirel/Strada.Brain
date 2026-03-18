@@ -267,8 +267,12 @@ describe("Orchestrator", () => {
     expect(executorProvider.chat).toHaveBeenCalledTimes(1);
     expect(synthProvider.chat).toHaveBeenCalledTimes(1);
     expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: planner");
+    expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Provider: planner");
+    expect(plannerProvider.chat.mock.calls[0]?.[0]).not.toContain("Provider: executor");
     expect(executorProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: executor");
+    expect(executorProvider.chat.mock.calls[0]?.[0]).toContain("Provider: executor");
     expect(synthProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: synthesizer");
+    expect(synthProvider.chat.mock.calls[0]?.[0]).toContain("Provider: synth");
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-supervisor", "Supervisor final answer");
   });
 

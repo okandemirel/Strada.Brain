@@ -378,6 +378,13 @@ async function runProviderFallbackSmoke(memoryDir, projectDir) {
       !output.includes("could not connect to the ai provider"),
       "provider fallback smoke should recover instead of surfacing a network failure",
     );
+
+    cursor = session.output.length;
+    session.sendLine("/routing info");
+    await session.waitFor("*Recent Routing Decisions*", {
+      fromIndex: cursor,
+      timeoutMs: 20_000,
+    });
   } finally {
     await session.close();
   }
