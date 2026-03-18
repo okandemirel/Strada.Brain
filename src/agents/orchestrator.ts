@@ -1106,6 +1106,7 @@ export class Orchestrator {
   private async buildSystemPromptWithContext(params: {
     chatId: string;
     conversationScope: string;
+    identityKey: string;
     userId?: string;
     channelType?: string;
     prompt: string;
@@ -1134,7 +1135,7 @@ export class Orchestrator {
     }
 
     // 4. Provider intelligence: inject strengths, limitations, and behavioral hints
-    const activeInfo = this.providerManager.getActiveInfo?.(params.chatId);
+    const activeInfo = this.providerManager.getActiveInfo?.(params.identityKey);
     if (activeInfo) {
       systemPrompt += buildProviderIntelligence(
         activeInfo.providerName,
@@ -1329,6 +1330,7 @@ export class Orchestrator {
     const { systemPrompt: builtPrompt, initialContentHashes: bgInitialContentHashes } = await this.buildSystemPromptWithContext({
       chatId,
       conversationScope,
+      identityKey,
       channelType: options.channelType,
       prompt,
       allowFirstTimeOnboarding: false,
@@ -2040,6 +2042,7 @@ export class Orchestrator {
     const { systemPrompt: builtSystemPrompt, initialContentHashes } = await this.buildSystemPromptWithContext({
       chatId,
       conversationScope,
+      identityKey,
       userId,
       channelType,
       prompt: queryText,

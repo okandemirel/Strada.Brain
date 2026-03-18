@@ -142,6 +142,47 @@ describe("Orchestrator", () => {
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat1", "Hello!");
   });
 
+  it("builds provider intelligence from the identity-scoped preference instead of the raw chat id", async () => {
+    const scopedProviderManager = {
+      getProvider: () => mockProvider,
+      getActiveInfo: vi.fn((key: string) => key === "user-scoped"
+        ? { providerName: "persona-worker", model: "persona-model", isDefault: false }
+        : { providerName: "chat-worker", model: "chat-model", isDefault: false }),
+      getProviderCapabilities: () => ({
+        contextWindow: 64000,
+        thinkingSupported: true,
+        toolCalling: true,
+        streaming: true,
+        vision: false,
+        specialFeatures: ["reasoning"],
+      }),
+      shutdown: vi.fn(),
+    };
+
+    const scopedOrch = new Orchestrator({
+      providerManager: scopedProviderManager as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    const promise = scopedOrch.handleMessage({
+      channelType: "cli",
+      chatId: "shared-chat",
+      userId: "user-scoped",
+      text: "Hi there",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(scopedProviderManager.getActiveInfo).toHaveBeenCalledWith("user-scoped");
+    expect(mockProvider.chat.mock.calls[0]?.[0]).toContain("Provider: persona-worker");
+    expect(mockProvider.chat.mock.calls[0]?.[0]).toContain("Model: persona-model");
+  });
+
   it("keeps the selected provider as executor while routing plan and synthesis through orchestrator-assigned workers", async () => {
     const plannerProvider = createNamedProvider("planner");
     const executorProvider = createNamedProvider("executor");

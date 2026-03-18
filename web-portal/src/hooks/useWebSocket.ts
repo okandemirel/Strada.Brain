@@ -56,6 +56,12 @@ export interface UseWebSocketReturn {
   toggleAutonomous: (enabled: boolean, hours?: number) => boolean
 }
 
+export function buildModelSwitchCommand(provider: string, model?: string): string {
+  const safeProvider = provider.replace(/[^a-zA-Z0-9._-]/g, '')
+  const safeModel = model?.replace(/[^a-zA-Z0-9._:/-]/g, '')
+  return `/model ${safeProvider}${safeModel ? '/' + safeModel : ''}`
+}
+
 export function useWebSocket(): UseWebSocketReturn {
   const [messages, setMessages] = useState<ChatMessage[]>(() => readSessionMessages(readStoredProfileId()))
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
@@ -356,10 +362,7 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [])
 
   const switchProvider = useCallback((provider: string, model?: string): boolean => {
-    const safeProvider = provider.replace(/[^a-zA-Z0-9._-]/g, '')
-    const safeModel = model?.replace(/[^a-zA-Z0-9._:-]/g, '')
-    const text = `/model ${safeProvider}${safeModel ? '/' + safeModel : ''}`
-    return sendMessage(text)
+    return sendMessage(buildModelSwitchCommand(provider, model))
   }, [sendMessage])
 
   const toggleAutonomous = useCallback((enabled: boolean, hours?: number): boolean => {
