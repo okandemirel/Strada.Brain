@@ -161,6 +161,12 @@ function buildResponse(body) {
     });
   }
 
+  if (normalizedUserText.includes('reply with only: "atlas"')) {
+    return buildChatCompletion({
+      text: "Atlas\nExtra details that should never reach the user.",
+    });
+  }
+
   if (normalizedUserText.includes("rapid message smoke part 1") || normalizedUserText.includes("rapid message smoke part 2")) {
     return buildChatCompletion({
       text:

@@ -287,8 +287,37 @@ async function runPreferencePersistenceSmoke(memoryDir, projectDir) {
   }
 }
 
+async function runExactOutputSmoke(memoryDir, projectDir) {
+  console.log("3. Exact-output discipline smoke");
+  const session = new CliSession(["cli"], {
+    ...buildBaseEnv(memoryDir, projectDir),
+    READ_ONLY_MODE: "true",
+    REQUIRE_EDIT_CONFIRMATION: "true",
+  });
+
+  try {
+    await session.waitFor(/you> /);
+
+    const cursor = session.output.length;
+    session.sendLine('Reply with only: "Atlas"');
+    await session.waitFor("Atlas", {
+      fromIndex: cursor,
+      timeoutMs: 20_000,
+    });
+    await session.waitFor(/you> /, { fromIndex: cursor, timeoutMs: 20_000 });
+
+    const visibleOutput = session.output.slice(cursor);
+    assert(
+      !visibleOutput.includes("Extra details that should never reach the user."),
+      "exact-output smoke should suppress extra worker text and preserve the literal response only",
+    );
+  } finally {
+    await session.close();
+  }
+}
+
 async function runProviderFallbackSmoke(memoryDir, projectDir) {
-  console.log("3. Routed provider fallback smoke");
+  console.log("4. Routed provider fallback smoke");
   const session = new CliSession(["cli"], {
     ...buildBaseEnv(memoryDir, projectDir),
     PROVIDER_CHAIN: "qwen,kimi",
@@ -341,7 +370,7 @@ async function runProviderFallbackSmoke(memoryDir, projectDir) {
 }
 
 async function runDaemonSmoke(memoryDir, projectDir) {
-  console.log("4. Daemon autonomy, delegation, multi-agent and metrics smoke");
+  console.log("5. Daemon autonomy, delegation, multi-agent and metrics smoke");
   const session = new CliSession(["start", "--channel", "cli", "--daemon"], {
     ...buildBaseEnv(memoryDir, projectDir),
     READ_ONLY_MODE: "false",
@@ -509,10 +538,12 @@ async function main() {
     await wait(200);
     await runPreferencePersistenceSmoke(memoryDir, projectDir);
     await wait(200);
+    await runExactOutputSmoke(memoryDir, projectDir);
+    await wait(200);
     await runProviderFallbackSmoke(memoryDir, projectDir);
     await wait(200);
     await runDaemonSmoke(memoryDir, projectDir);
-    console.log("5. Release smoke passed");
+    console.log("6. Release smoke passed");
   } finally {
     if (process.env.STRADA_SMOKE_KEEP_TEMP === "true") {
       console.error(`Preserving smoke temp root: ${tempRoot}`);

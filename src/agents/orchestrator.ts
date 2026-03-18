@@ -265,6 +265,11 @@ function buildExactResponseDirective(prompt: string): string {
   ].join("\n");
 }
 
+function applyVisibleResponseContract(prompt: string, responseText: string): string {
+  const literal = extractExactResponseLiteral(prompt);
+  return literal ?? responseText;
+}
+
 function getStringPreference(preferences: Record<string, unknown>, key: string, maxLength = 160): string | undefined {
   const value = preferences[key];
   if (typeof value !== "string") {
@@ -928,7 +933,7 @@ export class Orchestrator {
     }
 
     if (!this.shouldUseSupervisorSynthesis(params.strategy)) {
-      return cleanedDraft;
+      return applyVisibleResponseContract(params.prompt, cleanedDraft);
     }
 
     const synthesisProvider = params.strategy.synthesizer.provider;
@@ -969,9 +974,12 @@ export class Orchestrator {
         synthesisResponse.usage,
         params.usageHandler,
       );
-      return this.stripInternalDecisionMarkers(synthesisResponse.text) || cleanedDraft;
+      return applyVisibleResponseContract(
+        params.prompt,
+        this.stripInternalDecisionMarkers(synthesisResponse.text) || cleanedDraft,
+      );
     } catch {
-      return cleanedDraft;
+      return applyVisibleResponseContract(params.prompt, cleanedDraft);
     }
   }
 

@@ -300,6 +300,27 @@ describe("Orchestrator", () => {
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-exact-output", "Atlas");
   });
 
+  it("enforces the exact visible output contract even when a single worker adds extra text", async () => {
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Atlas\nHere is your answer.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 11, outputTokens: 9 },
+    });
+
+    const promise = orch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-exact-single",
+      userId: "user1",
+      text: 'Reply with only: "Atlas"',
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-exact-single", "Atlas");
+  });
+
   it("pins the active tool-turn provider after execution starts to preserve provider-specific tool context", async () => {
     const plannerProvider = createNamedProvider("planner");
     const executorProvider = createNamedProvider("executor");
