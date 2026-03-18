@@ -317,6 +317,95 @@ describe("DashboardServer", () => {
     }));
   });
 
+  it("resolves provider and autonomy settings against identity-aware keys when supplied", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    const getActiveInfo = vi.fn(() => ({
+      provider: "kimi",
+      providerName: "kimi",
+      model: "accounts/fireworks/models/llama4-maverick-instruct-basic",
+      isDefault: false,
+      selectionMode: "strada-primary-worker",
+      executionPolicyNote: "Strada remains the control plane.",
+    }));
+    const setPreference = vi.fn().mockResolvedValue(undefined);
+    const isAutonomousMode = vi.fn().mockResolvedValue({ enabled: false });
+    const setAutonomousMode = vi.fn().mockResolvedValue(undefined);
+
+    server.registerExtendedServices({
+      providerManager: {
+        listAvailable: () => [
+          {
+            name: "kimi",
+            label: "Kimi (Moonshot)",
+            defaultModel: "kimi-for-coding",
+            configured: true,
+            models: ["kimi-for-coding"],
+          },
+        ],
+        getActiveInfo,
+        setPreference,
+      },
+      userProfileStore: {
+        isAutonomousMode,
+        setAutonomousMode,
+      },
+    });
+
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const activeRes = await fetch(
+      `http://localhost:${addr.port}/api/providers/active?chatId=shared-chat&userId=user-42`,
+    );
+    expect(activeRes.status).toBe(200);
+    expect(getActiveInfo).toHaveBeenCalledWith("user-42");
+
+    const switchRes = await fetch(`http://localhost:${addr.port}/api/providers/switch`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: `http://localhost:${addr.port}`,
+      },
+      body: JSON.stringify({
+        chatId: "shared-chat",
+        userId: "user-42",
+        provider: "kimi",
+        model: "accounts/fireworks/models/llama4-maverick-instruct-basic",
+      }),
+    });
+    expect(switchRes.status).toBe(200);
+    expect(setPreference).toHaveBeenCalledWith(
+      "user-42",
+      "kimi",
+      "accounts/fireworks/models/llama4-maverick-instruct-basic",
+    );
+
+    const autonomousRes = await fetch(
+      `http://localhost:${addr.port}/api/user/autonomous?chatId=shared-chat&conversationId=thread-7`,
+    );
+    expect(autonomousRes.status).toBe(200);
+    expect(isAutonomousMode).toHaveBeenCalledWith("thread-7");
+
+    const setAutonomousRes = await fetch(`http://localhost:${addr.port}/api/user/autonomous`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: `http://localhost:${addr.port}`,
+      },
+      body: JSON.stringify({
+        chatId: "shared-chat",
+        conversationId: "thread-7",
+        enabled: true,
+        hours: 2,
+      }),
+    });
+    expect(setAutonomousRes.status).toBe(200);
+    expect(setAutonomousMode).toHaveBeenCalledWith("thread-7", true, expect.any(Number));
+  });
+
   describe("/api/agent-metrics", () => {
     function getPort(srv: DashboardServer): number {
       const addr = (srv as unknown as { server: { address: () => { port: number } } }).server.address();

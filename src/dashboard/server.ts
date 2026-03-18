@@ -152,6 +152,25 @@ const NO_CACHE_HEADERS: Record<string, string> = {
   "Pragma": "no-cache",
   "Expires": "0",
 };
+const DASHBOARD_IDENTITY_MAX_LENGTH = 128;
+
+function resolveDashboardIdentityKey(chatId: string, userId?: string | null, conversationId?: string | null): string {
+  const normalizedUserId = userId?.trim();
+  if (normalizedUserId) {
+    return normalizedUserId;
+  }
+
+  const normalizedConversationId = conversationId?.trim();
+  if (normalizedConversationId) {
+    return normalizedConversationId;
+  }
+
+  return chatId;
+}
+
+function isDashboardIdentityPartTooLong(value: string | null): boolean {
+  return typeof value === "string" && value.length > DASHBOARD_IDENTITY_MAX_LENGTH;
+}
 
 /** Structural interface for ProviderRouter methods used by dashboard /api/agent-activity endpoint */
 interface DashboardProviderRouter {
@@ -1171,12 +1190,24 @@ export class DashboardServer {
         }
         const params = new URL(url, "http://localhost").searchParams;
         const chatId = params.get("chatId");
+        const userId = params.get("userId");
+        const conversationId = params.get("conversationId");
         if (!chatId) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Missing required query parameter: chatId" }));
           return;
         }
-        void this.userProfileStore.isAutonomousMode(chatId).then((result) => {
+        if (
+          chatId.length > DASHBOARD_IDENTITY_MAX_LENGTH ||
+          isDashboardIdentityPartTooLong(userId) ||
+          isDashboardIdentityPartTooLong(conversationId)
+        ) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `Identity values too long (max ${DASHBOARD_IDENTITY_MAX_LENGTH} chars)` }));
+          return;
+        }
+        const identityKey = resolveDashboardIdentityKey(chatId, userId, conversationId);
+        void this.userProfileStore.isAutonomousMode(identityKey).then((result) => {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(result));
         }).catch((err) => {
@@ -1193,7 +1224,7 @@ export class DashboardServer {
           res.end(JSON.stringify({ error: "User profile store not available" }));
           return;
         }
-        void this.readJsonBody<{ chatId?: string; enabled?: boolean; hours?: number }>(req, res).then((parsed) => {
+        void this.readJsonBody<{ chatId?: string; userId?: string; conversationId?: string; enabled?: boolean; hours?: number }>(req, res).then((parsed) => {
           if (!parsed) return;
           if (!parsed.chatId || typeof parsed.enabled !== "boolean") {
             res.writeHead(400, { "Content-Type": "application/json" });
@@ -1207,15 +1238,20 @@ export class DashboardServer {
             res.end(JSON.stringify({ error: `hours must be between ${MIN_HOURS} and ${MAX_HOURS}` }));
             return;
           }
-          if (typeof parsed.chatId === "string" && parsed.chatId.length > 128) {
+          if (
+            (typeof parsed.chatId === "string" && parsed.chatId.length > DASHBOARD_IDENTITY_MAX_LENGTH) ||
+            isDashboardIdentityPartTooLong(parsed.userId ?? null) ||
+            isDashboardIdentityPartTooLong(parsed.conversationId ?? null)
+          ) {
             res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "chatId too long (max 128 chars)" }));
+            res.end(JSON.stringify({ error: `Identity values too long (max ${DASHBOARD_IDENTITY_MAX_LENGTH} chars)` }));
             return;
           }
+          const identityKey = resolveDashboardIdentityKey(parsed.chatId, parsed.userId, parsed.conversationId);
           const expiresAt = parsed.hours && parsed.hours > 0
             ? Date.now() + parsed.hours * 3600000
             : undefined;
-          void this.userProfileStore!.setAutonomousMode(parsed.chatId, parsed.enabled, expiresAt).then(() => {
+          void this.userProfileStore!.setAutonomousMode(identityKey, parsed.enabled, expiresAt).then(() => {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ success: true, enabled: parsed.enabled, expiresAt: expiresAt ?? null }));
           }).catch((err) => {
@@ -1267,18 +1303,25 @@ export class DashboardServer {
         }
         const params = new URL(url, "http://localhost").searchParams;
         const chatId = params.get("chatId");
+        const userId = params.get("userId");
+        const conversationId = params.get("conversationId");
         if (!chatId) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Missing required query parameter: chatId" }));
           return;
         }
-        if (chatId.length > 128) {
+        if (
+          chatId.length > DASHBOARD_IDENTITY_MAX_LENGTH ||
+          isDashboardIdentityPartTooLong(userId) ||
+          isDashboardIdentityPartTooLong(conversationId)
+        ) {
           res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "chatId too long (max 128 chars)" }));
+          res.end(JSON.stringify({ error: `Identity values too long (max ${DASHBOARD_IDENTITY_MAX_LENGTH} chars)` }));
           return;
         }
         try {
-          const active = this.providerManager.getActiveInfo(chatId);
+          const identityKey = resolveDashboardIdentityKey(chatId, userId, conversationId);
+          const active = this.providerManager.getActiveInfo(identityKey);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ active }));
         } catch (err) {
@@ -1313,16 +1356,20 @@ export class DashboardServer {
           res.end(JSON.stringify({ error: "Provider manager not available" }));
           return;
         }
-        void this.readJsonBody<{ chatId?: string; provider?: string; model?: string }>(req, res).then((parsed) => {
+        void this.readJsonBody<{ chatId?: string; userId?: string; conversationId?: string; provider?: string; model?: string }>(req, res).then((parsed) => {
           if (!parsed) return;
           if (!parsed.chatId || !parsed.provider) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "Missing required fields: chatId (string), provider (string)" }));
             return;
           }
-          if (typeof parsed.chatId === "string" && parsed.chatId.length > 128) {
+          if (
+            (typeof parsed.chatId === "string" && parsed.chatId.length > DASHBOARD_IDENTITY_MAX_LENGTH) ||
+            isDashboardIdentityPartTooLong(parsed.userId ?? null) ||
+            isDashboardIdentityPartTooLong(parsed.conversationId ?? null)
+          ) {
             res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "chatId too long (max 128 chars)" }));
+            res.end(JSON.stringify({ error: `Identity values too long (max ${DASHBOARD_IDENTITY_MAX_LENGTH} chars)` }));
             return;
           }
           // Validate model name format
@@ -1339,7 +1386,8 @@ export class DashboardServer {
             res.end(JSON.stringify({ error: `Provider "${parsed.provider}" is not available` }));
             return;
           }
-          void this.providerManager!.setPreference(parsed.chatId, parsed.provider, parsed.model).then(() => {
+          const identityKey = resolveDashboardIdentityKey(parsed.chatId, parsed.userId, parsed.conversationId);
+          void this.providerManager!.setPreference(identityKey, parsed.provider, parsed.model).then(() => {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ success: true, provider: parsed.provider, model: parsed.model ?? null }));
           }).catch((err) => {
