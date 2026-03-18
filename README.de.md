@@ -88,7 +88,7 @@ Wenn Strada aus einer paketierten npm-/Tarball-Version installiert wird, liegt d
 ./strada setup --terminal
 ```
 
-Wenn `./strada setup --web` eine aeltere Node-Version erkennt, die das volle Portal-Bundle nicht bauen kann, bleibt Web der primaere Weg: Wenn `nvm` verfuegbar ist, kann Strada nach Ihrer Zustimmung eine kompatible Node-Version installieren und direkt zum Web-Setup zurueckkehren; andernfalls fuehrt es Sie durch den Upgrade/Download-Pfad und faellt nicht still auf das Terminal-Setup zurueck.
+Wenn `./strada setup --web` eine aeltere Node-Version erkennt, die das volle Portal-Bundle nicht bauen kann, bleibt Web der primaere Weg: Wenn `nvm` verfuegbar ist, kann Strada nach Ihrer Zustimmung eine kompatible Node-Version installieren und direkt zum Web-Setup zurueckkehren und filtert dabei inkompatible `prefix`-/`globalconfig`-npm-Einstellungen temporaer heraus; andernfalls fuehrt es Sie durch den Upgrade/Download-Pfad und faellt nicht still auf das Terminal-Setup zurueck.
 
 Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. `./strada setup` bevorzugt jetzt standardmaessig den **Web-Browser**; waehlen Sie **Terminal** nur dann, wenn Sie den schnelleren Text-Flow bewusst moechten.
 Nach dem ersten erfolgreichen Setup wird `./strada` ohne Subcommand zum smarten Launcher:

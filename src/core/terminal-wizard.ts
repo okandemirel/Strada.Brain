@@ -434,8 +434,17 @@ export function buildWebSetupUpgradeShellScript(
 ): string {
   return [
     "set -e",
+    "unset NPM_CONFIG_PREFIX npm_config_prefix NPM_CONFIG_GLOBALCONFIG npm_config_globalconfig",
+    "if [ -f \"$HOME/.npmrc\" ]; then",
+    "  STRADA_NPMRC=$(mktemp \"${TMPDIR:-/tmp}/strada-npmrc.XXXXXX\")",
+    "  grep -Evi '^\\s*(prefix|globalconfig)\\s*=' \"$HOME/.npmrc\" > \"$STRADA_NPMRC\" || true",
+    "  export NPM_CONFIG_USERCONFIG=\"$STRADA_NPMRC\"",
+    "  export npm_config_userconfig=\"$STRADA_NPMRC\"",
+    "  trap 'rm -f \"$STRADA_NPMRC\"' EXIT",
+    "fi",
     `export NVM_DIR=${shellEscape(nvmDir)}`,
     ". \"$NVM_DIR/nvm.sh\"",
+    `nvm use --delete-prefix ${shellEscape(`v${process.versions.node}`)} --silent >/dev/null || true`,
     "nvm install 22",
     "nvm use --delete-prefix 22 --silent >/dev/null",
     `cd ${shellEscape(cwd)}`,
@@ -464,6 +473,7 @@ async function promptForWebSetupUpgrade(
   const suggestedCommand = getSuggestedNodeUpgradeCommand();
   if (nvmDir && suggestedCommand) {
     console.log(`  Strada can install a compatible Node.js with nvm and continue directly to web setup.`);
+    console.log("  It temporarily ignores incompatible `prefix` / `globalconfig` npm settings during this guided upgrade.");
     console.log(`  It will run: ${suggestedCommand}`);
     const answer = await rl.question("  Install the required Node.js version now and continue to web setup? [Y/n]: ");
     const normalized = answer.trim().toLowerCase();

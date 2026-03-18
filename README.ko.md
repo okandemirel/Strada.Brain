@@ -88,7 +88,7 @@ Strada가 패키지된 npm/tarball 릴리스로 설치되면 런타임 설정은
 ./strada setup --terminal
 ```
 
-`./strada setup --web` 이 전체 웹 포털을 빌드할 수 없는 오래된 Node 버전을 감지하더라도 Strada는 웹을 1순위로 유지합니다. `nvm` 이 있으면 승인 후 호환 Node 버전을 설치하고 곧바로 웹 setup 으로 다시 들어가며, 그렇지 않아도 Node 다운로드/업그레이드 흐름으로 안내한 뒤 조용히 터미널 setup 으로 떨어지지 않습니다.
+`./strada setup --web` 이 전체 웹 포털을 빌드할 수 없는 오래된 Node 버전을 감지하더라도 Strada는 웹을 1순위로 유지합니다. `nvm` 이 있으면 승인 후 호환 Node 버전을 설치하고 곧바로 웹 setup 으로 다시 들어가며, 그 안내형 업그레이드 동안에는 호환되지 않는 npm `prefix` / `globalconfig` 설정을 임시로 걸러냅니다. 그렇지 않아도 Node 다운로드/업그레이드 흐름으로 안내한 뒤 조용히 터미널 setup 으로 떨어지지 않습니다.
 
 마법사는 Unity 프로젝트 경로, AI 공급자 API 키, 기본 채널, 언어를 묻습니다. `./strada setup` 은 이제 기본적으로 **Web Browser** 를 우선하며, 더 빠른 텍스트 흐름을 명시적으로 원할 때만 **Terminal** 을 선택하면 됩니다.
 첫 setup 이 끝나면 서브커맨드 없는 `./strada` 가 스마트 런처가 됩니다.

@@ -88,7 +88,7 @@ Quand Strada est installe depuis une version npm/tarball empaquetee, sa configur
 ./strada setup --terminal
 ```
 
-Si `./strada setup --web` detecte une version de Node trop ancienne pour construire le portail complet, Strada garde le web comme chemin principal : si `nvm` est disponible, Strada peut installer une version compatible de Node avec votre accord puis revenir directement au setup web ; sinon, il vous guide vers le telechargement/la mise a niveau et ne retombe jamais silencieusement sur le terminal.
+Si `./strada setup --web` detecte une version de Node trop ancienne pour construire le portail complet, Strada garde le web comme chemin principal : si `nvm` est disponible, Strada peut installer une version compatible de Node avec votre accord puis revenir directement au setup web, tout en filtrant temporairement les options npm incompatibles `prefix` / `globalconfig` pendant cette mise a niveau guidee ; sinon, il vous guide vers le telechargement/la mise a niveau et ne retombe jamais silencieusement sur le terminal.
 
 L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de fournisseur IA, votre canal par d&eacute;faut et votre langue. `./strada setup` privilegie maintenant **Navigateur Web** par d&eacute;faut ; choisissez **Terminal** seulement si vous voulez explicitement le flux texte le plus rapide.
 Apr&egrave;s le premier setup r&eacute;ussi, `./strada` sans sous-commande devient votre launcher intelligent :

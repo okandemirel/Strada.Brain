@@ -117,6 +117,7 @@ describe("docs consistency", () => {
     expect(englishReadme).toContain("./strada setup --web");
     expect(englishReadme).toContain("Node.js 20.19+");
     expect(englishReadme).toContain("nvm");
+    expect(englishReadme).toContain("prefix` / `globalconfig`");
     expect(englishReadme).toContain("./strada setup --terminal");
     expect(englishReadme).toContain("git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain");
     expect(englishReadme).toContain("repository root");

@@ -194,6 +194,10 @@ describe("buildWebSetupUpgradeShellScript", () => {
       ["--import", "tsx", "src/index.ts", "setup", "--web"],
     );
 
+    expect(script).toContain("unset NPM_CONFIG_PREFIX npm_config_prefix NPM_CONFIG_GLOBALCONFIG npm_config_globalconfig");
+    expect(script).toContain("grep -Evi '^\\s*(prefix|globalconfig)\\s*=' \"$HOME/.npmrc\" > \"$STRADA_NPMRC\" || true");
+    expect(script).toContain("export NPM_CONFIG_USERCONFIG=\"$STRADA_NPMRC\"");
+    expect(script).toContain("nvm use --delete-prefix 'v");
     expect(script).toContain("nvm install 22");
     expect(script).toContain("nvm use --delete-prefix 22 --silent >/dev/null");
     expect(script).toContain("cd '/Users/test/Strada.Brain'");
