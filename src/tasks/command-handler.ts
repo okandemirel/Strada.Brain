@@ -222,12 +222,12 @@ export class CommandHandler {
       "",
       "*Model Commands*",
       "",
-      "`/model` - Show current provider/model",
-      "`/model list` - List available providers",
-      "`/model <provider>` - Switch provider",
-      "`/model <provider>/<model>` - Switch provider and model",
+      "`/model` - Show Strada's primary execution worker",
+      "`/model list` - List available worker providers",
+      "`/model <provider>` - Set Strada's primary execution provider",
+      "`/model <provider>/<model>` - Set Strada's primary execution model",
       "`/model info [provider]` - Show provider capabilities",
-      "`/model reset` - Return to system default",
+      "`/model reset` - Return to Strada's system default worker",
       "",
       "*Autonomous Mode*",
       "",
@@ -311,7 +311,13 @@ export class CommandHandler {
       const status = info.isDefault ? " (system default)" : "";
       await this.channel.sendMarkdown(
         chatId,
-        `*Current Model*\nProvider: \`${info.providerName}\`\nModel: \`${info.model}\`${status}`,
+        [
+          "*Strada Execution Policy*",
+          `Primary worker provider: \`${info.providerName}\``,
+          `Primary worker model: \`${info.model}\`${status}`,
+          "",
+          info.executionPolicyNote,
+        ].join("\n"),
       );
       return;
     }
@@ -324,7 +330,7 @@ export class CommandHandler {
       );
       await this.channel.sendMarkdown(
         chatId,
-        `*Available Providers*\n\n${lines.join("\n")}\n\nUsage: \`/model provider\` or \`/model provider/model\``,
+        `*Available Worker Providers*\n\n${lines.join("\n")}\n\nUsage: \`/model provider\` or \`/model provider/model\`\n\nStrada remains the control plane; this only changes the primary execution worker.`,
       );
       return;
     }
@@ -401,7 +407,7 @@ export class CommandHandler {
       const info = this.providerManager.getActiveInfo(identityKey);
       await this.channel.sendMarkdown(
         chatId,
-        `Model reset to system default: \`${info.providerName}\``,
+        `Strada reset to the system-default execution worker: \`${info.providerName}\` (model: \`${info.model}\`)`,
       );
       return;
     }
@@ -430,7 +436,11 @@ export class CommandHandler {
     const info = this.providerManager.getActiveInfo(identityKey);
     await this.channel.sendMarkdown(
       chatId,
-      `Switched to \`${info.providerName}\` (model: \`${info.model}\`)`,
+      [
+        `Strada will use \`${info.providerName}\` (model: \`${info.model}\`) as the primary execution worker.`,
+        "",
+        info.executionPolicyNote,
+      ].join("\n"),
     );
   }
 

@@ -273,6 +273,9 @@ describe("DashboardServer", () => {
 
     const res = await fetch(`http://localhost:${addr.port}/api/models/refresh`, {
       method: "POST",
+      headers: {
+        Origin: `http://localhost:${addr.port}`,
+      },
     });
 
     expect(res.status).toBe(200);

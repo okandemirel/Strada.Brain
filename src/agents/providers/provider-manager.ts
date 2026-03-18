@@ -20,6 +20,8 @@ export interface ProviderActiveInfo {
   providerName: string;
   model: string;
   isDefault: boolean;
+  selectionMode: "strada-primary-worker";
+  executionPolicyNote: string;
 }
 
 export interface ProviderDescriptor {
@@ -37,6 +39,8 @@ interface ProviderModelCatalogLookup {
 }
 
 const MAX_CACHED_PROVIDERS = 50;
+const EXECUTION_POLICY_NOTE =
+  "Strada remains the control plane. This selection sets the primary execution worker; planning, review, and synthesis may still route to other providers.";
 
 export class ProviderManager {
   private readonly preferences: ProviderPreferenceStore;
@@ -183,6 +187,8 @@ export class ProviderManager {
         providerName: defaultProviderName,
         model: this.getDefaultModelForProvider(defaultProviderName),
         isDefault: true,
+        selectionMode: "strada-primary-worker",
+        executionPolicyNote: EXECUTION_POLICY_NOTE,
       };
     }
 
@@ -191,6 +197,8 @@ export class ProviderManager {
       providerName: pref.providerName,
       model: pref.model ?? this.modelOverrides?.[pref.providerName] ?? preset?.defaultModel ?? "default",
       isDefault: false,
+      selectionMode: "strada-primary-worker",
+      executionPolicyNote: EXECUTION_POLICY_NOTE,
     };
   }
 

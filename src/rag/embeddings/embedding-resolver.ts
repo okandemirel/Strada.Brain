@@ -91,13 +91,18 @@ function createEmbeddingProvider(
   };
 }
 
+const AUTO_FALLBACK_ORDER = [
+  "gemini", "openai", "deepseek", "mistral",
+  "together", "fireworks", "qwen", "ollama",
+] as const;
+
 /**
  * Resolve which embedding provider to use.
  *
  * Resolution order:
  * 1. Explicit provider (not "auto") -- look up in EMBEDDING_PRESETS
  * 2. "auto" -- scan provider chain for first embedding-capable provider
- * 3. "auto" with no chain -- try all known providers in priority order
+ * 3. "auto" fallback -- try any configured embedding-capable provider in priority order
  * 4. None found -- return null (RAG disabled)
  */
 export function resolveEmbeddingProvider(config: Config): EmbeddingResolution | null {
@@ -129,16 +134,22 @@ export function resolveEmbeddingProvider(config: Config): EmbeddingResolution | 
     if (result) return result;
   }
 
-  // 3. No chain specified -- try all known providers in priority order
-  if (chainNames.length === 0) {
-    const fallbackOrder = [
-      "gemini", "openai", "deepseek", "mistral",
-      "together", "fireworks", "qwen", "ollama",
-    ];
-    for (const name of fallbackOrder) {
-      const result = createEmbeddingProvider(name, apiKeys, autoOptions);
-      if (result) return result;
-    }
+  // 3. Fallback -- use any configured embedding-capable provider, even if the
+  // response chain itself contains only non-embedding models like Kimi/Claude.
+  const triedProviders = new Set(chainNames);
+  const fallbackSourcePrefix = chainNames.length > 0 ? "auto-fallback" : "auto";
+  const fallbackCandidates = chainNames.length > 0
+    ? AUTO_FALLBACK_ORDER.filter((name) => name !== "ollama")
+    : AUTO_FALLBACK_ORDER;
+
+  for (const name of fallbackCandidates) {
+    if (triedProviders.has(name)) continue;
+    const result = createEmbeddingProvider(name, apiKeys, {
+      modelOverride,
+      dimensionsOverride,
+      sourcePrefix: fallbackSourcePrefix,
+    });
+    if (result) return result;
   }
 
   return null;

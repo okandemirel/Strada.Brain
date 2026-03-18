@@ -64,7 +64,7 @@ describe("resolveEmbeddingProvider", () => {
     expect(result!.provider.name).toContain("OpenAI");
   });
 
-  it("auto mode: returns null when chain has only unsupported providers", () => {
+  it("auto mode: returns null when chain has only unsupported providers and no fallback key", () => {
     const config = makeConfig({
       providerChain: "kimi,groq,minimax",
       kimiApiKey: "kimi-key",
@@ -74,6 +74,20 @@ describe("resolveEmbeddingProvider", () => {
 
     const result = resolveEmbeddingProvider(config);
     expect(result).toBeNull();
+  });
+
+  it("auto mode: falls back to configured embedding provider outside the response chain", () => {
+    const config = makeConfig({
+      providerChain: "kimi",
+      kimiApiKey: "kimi-key",
+      geminiApiKey: "gem-key",
+    });
+
+    const result = resolveEmbeddingProvider(config);
+    expect(result).not.toBeNull();
+    expect(result!.source).toBe("auto-fallback:gemini");
+    expect(result!.provider.name).toContain("Gemini");
+    expect(result!.provider.dimensions).toBe(3072);
   });
 
   it("explicit mode: openai returns OpenAIEmbeddingProvider", () => {
@@ -99,15 +113,17 @@ describe("resolveEmbeddingProvider", () => {
     expect(result!.provider).toBeInstanceOf(OllamaEmbeddingProvider);
   });
 
-  it("explicit mode: unsupported provider (kimi) returns null", () => {
+  it("explicit auto mode with kimi-only chain falls back when a supported provider key exists", () => {
     const config = makeConfig({
       kimiApiKey: "kimi-key",
+      geminiApiKey: "gem-key",
       rag: { enabled: true, provider: "auto", contextMaxTokens: 4000 },
       providerChain: "kimi",
     });
 
     const result = resolveEmbeddingProvider(config);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.source).toBe("auto-fallback:gemini");
   });
 
   it("returns null when API key is missing for explicit provider", () => {

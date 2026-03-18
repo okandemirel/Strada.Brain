@@ -24,6 +24,8 @@ interface ProviderInfo {
 interface ActiveInfo {
   provider: string
   model?: string
+  selectionMode?: 'strada-primary-worker'
+  executionPolicyNote?: string
 }
 
 export default function ModelSelector() {
@@ -152,7 +154,7 @@ export default function ModelSelector() {
     [switchProvider],
   )
 
-  const displayName = active?.provider ?? 'Model'
+  const displayName = active?.provider ?? 'Worker'
   const displayLabel = active?.model
     ? `${active.provider}/${active.model}`
     : displayName
@@ -169,7 +171,7 @@ export default function ModelSelector() {
           setOpen((prev) => !prev)
           if (open) setExpandedProvider(null)
         }}
-        title="Switch AI provider"
+        title="Set Strada's primary execution worker"
       >
         <span className="model-selector-label">{displayLabel}</span>
         <svg
@@ -189,6 +191,11 @@ export default function ModelSelector() {
 
       {open && (
         <div className="model-selector-dropdown">
+          <div className="model-selector-loading" style={{ textAlign: 'left', lineHeight: 1.4 }}>
+            Strada stays in control.
+            <br />
+            This sets the primary execution worker, not a direct chat target.
+          </div>
           {modelsLoading && (
             <div className="model-selector-loading">Loading models...</div>
           )}

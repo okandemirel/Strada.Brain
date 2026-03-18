@@ -103,6 +103,8 @@ describe("ProviderManager", () => {
       providerName: "qwen",
       model: "qwen-max",
       isDefault: true,
+      selectionMode: "strada-primary-worker",
+      executionPolicyNote: "Strada remains the control plane. This selection sets the primary execution worker; planning, review, and synthesis may still route to other providers.",
     });
   });
 
