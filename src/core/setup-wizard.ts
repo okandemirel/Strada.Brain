@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
 const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../web-portal/dist");
+const SETUP_HOST = "127.0.0.1";
 
 function resolveStaticDir(): string {
   if (existsSync(SOURCE_BUILD_STATIC_DIR)) {
@@ -171,11 +172,11 @@ export class SetupWizard {
     this.server = createServer((req, res) => this.handleRequest(req, res));
 
     await new Promise<void>((resolve, reject) => {
-      this.server!.listen(this.port, "localhost", () => resolve());
+      this.server!.listen(this.port, SETUP_HOST, () => resolve());
       this.server!.once("error", reject);
     });
 
-    console.log(`Setup wizard running at http://localhost:${this.port}`);
+    console.log(`Setup wizard running at http://${SETUP_HOST}:${this.port}`);
   }
 
   /** Resolves when the user completes the setup flow and saves config. */

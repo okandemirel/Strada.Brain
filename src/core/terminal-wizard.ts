@@ -62,6 +62,7 @@ const DEFAULT_EMBEDDING_PROVIDERS = new Set([
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../../web-portal/dist");
 const PACKAGED_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../channels/web/static");
+const SETUP_HOST = "127.0.0.1";
 
 export interface WizardAnswers {
   unityProjectPath: string;
@@ -345,7 +346,7 @@ async function canBindLocalhostPort(port: number): Promise<boolean> {
       server.close(() => settle(false));
     });
 
-    server.listen(port, "localhost", () => {
+    server.listen(port, SETUP_HOST, () => {
       server.close(() => {
         settle(true);
       });
@@ -623,10 +624,10 @@ export async function runTerminalWizard(
       const port = await findAvailableSetupWizardPort(requestedPort);
       const { SetupWizard } = await import("./setup-wizard.js");
       const wizard = new SetupWizard({ port });
-      const url = `http://localhost:${port}/setup`;
+      const url = `http://${SETUP_HOST}:${port}/setup`;
       if (port !== requestedPort) {
         console.log(
-          `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on http://localhost:${port}/setup instead.`,
+          `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on http://${SETUP_HOST}:${port}/setup instead.`,
         );
       }
       await wizard.listen();
