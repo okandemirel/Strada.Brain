@@ -45,7 +45,7 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 
 ### Prerequisites
 
-- **Node.js 20+** and npm
+- **Node.js 20.19+** (or **22.12+**) and npm
 - At least one supported AI provider configured (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), an OpenAI ChatGPT/Codex subscription session (`OPENAI_AUTH_MODE=chatgpt-subscription`), or an `ollama`-only `PROVIDER_CHAIN`
 - A **Unity project** (the path you give the agent). Strada.Core is recommended for full framework-aware assistance; without it, Strada.Brain still runs with reduced Strada-specific guidance.
 
@@ -54,17 +54,22 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 ```bash
 # Clone from source (currently the canonical install path)
 git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
-cd Strada.Brain
 
-# Optional but recommended: install a user-local `strada` command
-./strada install-command
+# No `cd` required: use the checkout directly from the parent folder
+./Strada.Brain/strada install-command
+./Strada.Brain/strada setup
+
+# Optional shorter shell
+cd Strada.Brain
 ```
 
 `./strada` is the canonical source-checkout launcher. On first run it prepares the local checkout automatically, so normal setup no longer requires manual `npm install`, `npm run bootstrap`, or `npm link`.
 
-If you skip `./strada install-command`, keep using `./strada ...` from the repository root. Once installed, bare `strada ...` works from anywhere.
+If you skip `./strada install-command`, keep using `./Strada.Brain/strada ...` from the parent folder or `./strada ...` from the repository root. Once installed, bare `strada ...` works from anywhere.
 
-If you ever run `npm` manually, do it from the repository root, the folder that contains `package.json`. If you see an error like `ENOENT ... /Strada/package.json`, you are one directory too high; `cd` into `Strada.Brain` first.
+`./strada install-command` also updates your shell profile automatically so future terminals pick up the `strada` command without a manual PATH edit.
+
+If you ever run `npm` manually, do it from the repository root, the folder that contains `package.json`. If you see an error like `ENOENT ... /Strada/package.json`, you are one directory too high; either `cd Strada.Brain` first or prefix the command with `cd Strada.Brain && ...`.
 
 `strada-brain` is not currently published on the public npm registry, so `npm install -g strada-brain` will return `E404`. Until a registry release exists, use the source checkout flow above.
 

@@ -6,12 +6,25 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import { existsSync } from "node:fs";
 import { readFile, writeFile, stat, readdir, realpath } from "node:fs/promises";
 import { join, extname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 
-const STATIC_DIR = new URL("../channels/web/static/", import.meta.url).pathname;
+const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
+const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
+const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../web-portal/dist");
+
+function resolveStaticDir(): string {
+  if (existsSync(SOURCE_BUILD_STATIC_DIR)) {
+    return SOURCE_BUILD_STATIC_DIR;
+  }
+  return PACKAGED_STATIC_DIR;
+}
+
+const STATIC_DIR = resolveStaticDir();
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",

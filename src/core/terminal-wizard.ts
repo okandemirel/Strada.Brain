@@ -15,8 +15,9 @@ import { stdin, stdout } from "node:process";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
+import { fileURLToPath } from "node:url";
 
 const MAX_RETRIES = 3;
 const RESPONSE_PROVIDER_CHOICES = [
@@ -58,6 +59,9 @@ const PROVIDER_LABELS: Record<string, string> = {
 const DEFAULT_EMBEDDING_PROVIDERS = new Set([
   "gemini", "openai", "mistral", "together", "fireworks", "qwen", "ollama",
 ]);
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SOURCE_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../../web-portal/dist");
+const PACKAGED_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../channels/web/static");
 
 export interface WizardAnswers {
   unityProjectPath: string;
@@ -307,6 +311,54 @@ export async function findAvailableSetupWizardPort(
   );
 }
 
+function nodeSupportsWebPortalBuild(): boolean {
+  const [rawMajor = 0, rawMinor = 0] = process.versions.node
+    .split(".")
+    .map((part) => Number.parseInt(part, 10));
+  const major = Number.isFinite(rawMajor) ? rawMajor : 0;
+  const minor = Number.isFinite(rawMinor) ? rawMinor : 0;
+  if (major > 22) return true;
+  if (major === 22) return minor >= 12;
+  if (major === 20) return minor >= 19;
+  return false;
+}
+
+function hasWebSetupAssets(): boolean {
+  return fs.existsSync(path.join(SOURCE_WEB_SETUP_STATIC_DIR, "index.html"))
+    || fs.existsSync(path.join(PACKAGED_WEB_SETUP_STATIC_DIR, "index.html"));
+}
+
+function ensureWebSetupAssetsReady(): boolean {
+  if (hasWebSetupAssets()) {
+    return true;
+  }
+
+  if (!nodeSupportsWebPortalBuild()) {
+    console.log(
+      `\n  Web setup needs Node.js 20.19+ or 22.12+ to build the portal assets. Current Node: ${process.versions.node}.`,
+    );
+    return false;
+  }
+
+  if (!fs.existsSync(path.join(process.cwd(), "web-portal", "node_modules"))) {
+    console.log("\n  Installing web setup dependencies...");
+    const installResult = spawnSync("npm", ["install", "--prefix", "web-portal"], {
+      stdio: "inherit",
+      cwd: process.cwd(),
+    });
+    if (installResult.status !== 0) {
+      return false;
+    }
+  }
+
+  console.log("\n  Preparing web setup assets...");
+  const buildResult = spawnSync("npm", ["--prefix", "web-portal", "run", "build"], {
+    stdio: "inherit",
+    cwd: process.cwd(),
+  });
+  return buildResult.status === 0 && hasWebSetupAssets();
+}
+
 /**
  * Run the interactive terminal setup wizard.
  *
@@ -343,6 +395,10 @@ export async function runTerminalWizard(
     }
 
     if (useWebWizard) {
+      if (!ensureWebSetupAssetsReady()) {
+        console.log("  Falling back to terminal setup.\n");
+        useWebWizard = false;
+      } else {
       intentionalClose = true;
       rl.close();
       const requestedPort = process.env["SETUP_WIZARD_PORT"]
@@ -363,6 +419,7 @@ export async function runTerminalWizard(
       openBrowser(url);
       await wizard.waitForCompletion();
       return;
+      }
     }
 
     console.log("");

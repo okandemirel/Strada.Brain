@@ -91,12 +91,14 @@ describe("docs consistency", () => {
       expect(content).toContain(localizedProviderChainPhrases[relativePath]);
       expect(content).toContain(localizedControlPlanePhrases[relativePath]);
       expect(content).toContain("./strada install-command");
+      expect(content).toContain("./Strada.Brain/strada install-command");
+      expect(content).toContain("./Strada.Brain/strada setup");
+      expect(content).toMatch(/shell|profil|profile|PATH|zsh|bash|fish|シェル|셸|终端/ui);
       expect(content).toContain("./strada setup --web");
       expect(content).toContain("./strada setup --terminal");
       expect(content).toContain("./strada doctor");
       expect(content).toContain("./strada                  #");
       expect(content).toContain("strada --daemon");
-      expect(content).toContain("cd Strada.Brain");
       expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
     }
   });
@@ -104,10 +106,14 @@ describe("docs consistency", () => {
   it("keeps install docs aligned with the source-first release path", () => {
     const englishReadme = readRepoFile("README.md");
     expect(englishReadme).toContain("./strada install-command");
+    expect(englishReadme).toContain("./Strada.Brain/strada install-command");
+    expect(englishReadme).toContain("./Strada.Brain/strada setup");
+    expect(englishReadme).toContain("No `cd` required");
+    expect(englishReadme).toContain("updates your shell profile automatically");
     expect(englishReadme).toContain("./strada setup --web");
+    expect(englishReadme).toContain("Node.js 20.19+");
     expect(englishReadme).toContain("./strada setup --terminal");
     expect(englishReadme).toContain("git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain");
-    expect(englishReadme).toContain("cd Strada.Brain");
     expect(englishReadme).toContain("repository root");
     expect(englishReadme).toContain("ENOENT ... /Strada/package.json");
     expect(englishReadme).toContain("./strada                  # Canonical source-checkout launcher");

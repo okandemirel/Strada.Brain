@@ -47,7 +47,7 @@ Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosy
 
 ### On Kosullar
 
-- **Node.js 20+** ve npm
+- **Node.js 20.19+** (veya **22.12+**) ve npm
 - En az bir desteklenen AI saglayici kimligi (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` vb.), bir OpenAI ChatGPT/Codex subscription oturumu (`OPENAI_AUTH_MODE=chatgpt-subscription`) veya yalnizca `ollama` kullanan bir `PROVIDER_CHAIN`
 - Bir **Unity projesi** (ajana verdiginiz yol). Tam Strada-ozel yardim icin Strada.Core onerilir.
 
@@ -56,17 +56,22 @@ Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosy
 ```bash
 # Kaynaktan klonlayin (su an icin kanonik kurulum yolu)
 git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
-cd Strada.Brain
 
-# Opsiyonel ama onerilen adim: kullanici-local `strada` komutunu kur
-./strada install-command
+# `cd` zorunlu degil: parent klasorden dogrudan kullanabilirsiniz
+./Strada.Brain/strada install-command
+./Strada.Brain/strada setup
+
+# Daha kisa komutlar isterseniz opsiyonel
+cd Strada.Brain
 ```
 
 `./strada` kaynak checkout icin kanonik launcher'dir. Ilk calistirmada gerekli hazirligi kendi yapar; normal kurulumda artik manuel `npm install`, `npm run bootstrap` veya `npm link` gerekmez.
 
-`./strada install-command` atlanirsa repo kokunden `./strada ...` kullanmaya devam edin. Kurulduktan sonra yalniz `strada ...` komutu her yerden calisir.
+`./strada install-command` atlanirsa parent klasorden `./Strada.Brain/strada ...` veya repo kokunden `./strada ...` kullanmaya devam edin. Kurulduktan sonra yalniz `strada ...` komutu her yerden calisir.
 
-Eger bir gun `npm` komutunu manuel calistirmaniz gerekirse bunu `package.json` dosyasinin bulundugu repo kokunden yapin. `ENOENT ... /Strada/package.json` benzeri bir hata gorurseniz bir ust klasordesiniz; once `cd Strada.Brain` yapin.
+`./strada install-command`, gelecekte acilacak terminallerin `strada` komutunu dogrudan gormesi icin shell profilinizi de otomatik gunceller; ayrica PATH export yazmaniz gerekmez.
+
+Eger bir gun `npm` komutunu manuel calistirmaniz gerekirse bunu `package.json` dosyasinin bulundugu repo kokunden yapin. `ENOENT ... /Strada/package.json` benzeri bir hata gorurseniz bir ust klasordesiniz; once `cd Strada.Brain` yapin veya komutu `cd Strada.Brain && ...` ile calistirin.
 
 `strada-brain` paketi su anda public npm registry'de yayinli degil; bu nedenle `npm install -g strada-brain` komutu `E404` verir. Registry yayini gelene kadar yukaridaki kaynak checkout akisini kullanin.
 

@@ -47,7 +47,7 @@ Strada.Brain 是一个通过聊天频道与您对话的 AI 代理。您描述您
 
 ### 前提条件
 
-- **Node.js 20+** 和 npm
+- **Node.js 20.19+**（或 **22.12+**）和 npm
 - 至少一个受支持的 AI 提供商凭据（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY` 等），一个 OpenAI ChatGPT/Codex subscription 会话（`OPENAI_AUTH_MODE=chatgpt-subscription`），或者仅使用 `ollama` 的 `PROVIDER_CHAIN`
 - 一个 **Unity 项目**（您提供给代理的路径）。如果希望获得完整的 Strada 框架感知帮助，建议配合 Strada.Core。
 
@@ -56,15 +56,22 @@ Strada.Brain 是一个通过聊天频道与您对话的 AI 代理。您描述您
 ```bash
 # 从源码克隆（当前的规范安装方式）
 git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
-cd Strada.Brain
 
-# 可选但推荐：安装一个用户本地的 `strada` 命令
-./strada install-command
+# 不需要 `cd`：可以直接从父目录使用这个 checkout
+./Strada.Brain/strada install-command
+./Strada.Brain/strada setup
+
+# 如果你更喜欢更短的命令，也可以再进入仓库
+cd Strada.Brain
 ```
 
-所有 `npm` 命令都必须在包含 `package.json` 的仓库根目录中执行。如果看到类似 `ENOENT ... /Strada/package.json` 的错误，说明你当前在上一级目录；请先执行 `cd Strada.Brain`。
+所有 `npm` 命令都必须在包含 `package.json` 的仓库根目录中执行。如果看到类似 `ENOENT ... /Strada/package.json` 的错误，说明你当前在上一级目录；请先执行 `cd Strada.Brain`，或者把命令写成 `cd Strada.Brain && ...`。
 
 `./strada` 是源码 checkout 的规范 launcher。首次运行时它会自动准备本地 checkout，所以常规 setup 已经不再需要手动 `npm link`。
+
+如果你跳过 `./strada install-command`，仍然可以在父目录中继续使用 `./Strada.Brain/strada ...`，或者在仓库根目录中使用 `./strada ...`。安装完成后，裸命令 `strada ...` 可以在任何位置使用。
+
+`./strada install-command` 还会自动更新你的 shell profile，这样以后新开的终端无需手动编辑 PATH 就能直接使用 `strada`。
 
 `strada-brain` 目前还没有发布到 public npm registry，所以 `npm install -g strada-brain` 现在会返回 `E404`。在 npm 公共发布出现之前，请使用上面的源码 checkout 流程。
 

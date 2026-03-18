@@ -47,7 +47,7 @@ Nuevo en esta version: Strada.Brain ahora incluye un **Agent Core** -- un motor 
 
 ### Requisitos Previos
 
-- **Node.js 20+** y npm
+- **Node.js 20.19+** (o **22.12+**) y npm
 - Al menos una credencial compatible de proveedor de IA (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), una sesion de suscripcion OpenAI ChatGPT/Codex (`OPENAI_AUTH_MODE=chatgpt-subscription`) o una `PROVIDER_CHAIN` solo con `ollama`
 - Un **proyecto Unity** (la ruta que le das al agente). Strada.Core se recomienda para una ayuda totalmente consciente del framework.
 
@@ -56,15 +56,22 @@ Nuevo en esta version: Strada.Brain ahora incluye un **Agent Core** -- un motor 
 ```bash
 # Clona desde el codigo fuente (la via canonica por ahora)
 git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
-cd Strada.Brain
 
-# Opcional pero recomendado: instala un comando `strada` local para el usuario
-./strada install-command
+# No hace falta `cd`: usa el checkout directamente desde la carpeta padre
+./Strada.Brain/strada install-command
+./Strada.Brain/strada setup
+
+# Opcional si prefieres comandos mas cortos
+cd Strada.Brain
 ```
 
-Ejecuta todos los comandos `npm` desde la raiz del repositorio, la carpeta que contiene `package.json`. Si ves un error como `ENOENT ... /Strada/package.json`, estas un nivel por encima; entra primero en `Strada.Brain`.
+Ejecuta todos los comandos `npm` desde la raiz del repositorio, la carpeta que contiene `package.json`. Si ves un error como `ENOENT ... /Strada/package.json`, estas un nivel por encima; entra primero en `Strada.Brain` o ejecuta `cd Strada.Brain && ...`.
 
 `./strada` es el launcher canonico del source checkout. En el primer arranque prepara el checkout automaticamente, asi que el setup normal ya no necesita `npm link`.
+
+Si omites `./strada install-command`, sigue usando `./Strada.Brain/strada ...` desde la carpeta padre o `./strada ...` desde la raiz del repositorio. Despues de instalarlo, `strada ...` funciona desde cualquier lugar.
+
+`./strada install-command` tambien actualiza tu perfil de shell automaticamente para que los proximos terminales detecten `strada` sin editar PATH a mano.
 
 `strada-brain` todavia no esta publicado en el registro publico de npm, por lo que `npm install -g strada-brain` devolvera `E404`. Hasta que exista una publicacion en npm, usa el flujo de checkout de codigo fuente mostrado arriba.
 

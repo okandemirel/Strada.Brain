@@ -47,7 +47,7 @@ Strada.Brain はチャットチャネルを通じて対話する AI エージェ
 
 ### 前提条件
 
-- **Node.js 20+** および npm
+- **Node.js 20.19+**（または **22.12+**）および npm
 - 少なくとも 1 つの対応 AI プロバイダー認証情報（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY` など）、OpenAI ChatGPT/Codex subscription セッション（`OPENAI_AUTH_MODE=chatgpt-subscription`）、または `ollama` のみの `PROVIDER_CHAIN`
 - **Unity プロジェクト**（エージェントに渡すパス）。Strada.Core があると Strada 固有の支援がより完全になります。
 
@@ -56,15 +56,22 @@ Strada.Brain はチャットチャネルを通じて対話する AI エージェ
 ```bash
 # ソースからクローン（現時点の正規インストール手順）
 git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
-cd Strada.Brain
 
-# 任意ですが推奨: ユーザーローカルの `strada` コマンドをインストール
-./strada install-command
+# `cd` しなくても使えます: 親フォルダからそのまま checkout を使う
+./Strada.Brain/strada install-command
+./Strada.Brain/strada setup
+
+# もちろん短いコマンドにしたい場合は任意で移動
+cd Strada.Brain
 ```
 
-すべての `npm` コマンドは `package.json` があるリポジトリルートで実行してください。`ENOENT ... /Strada/package.json` のようなエラーが出た場合は一つ上の階層にいるので、先に `cd Strada.Brain` してください。
+すべての `npm` コマンドは `package.json` があるリポジトリルートで実行してください。`ENOENT ... /Strada/package.json` のようなエラーが出た場合は一つ上の階層にいるので、先に `cd Strada.Brain` するか `cd Strada.Brain && ...` で実行してください。
 
 `./strada` は source checkout 向けの正式ランチャーです。初回起動時に checkout を自動準備するため、通常セットアップで `npm link` は不要です。
+
+`./strada install-command` を省略した場合でも、親フォルダからは `./Strada.Brain/strada ...`、リポジトリルートからは `./strada ...` を使い続けられます。インストール後は bare `strada ...` がどこからでも使えます。
+
+`./strada install-command` はシェルプロファイルも自動更新するため、次に開くターミナルでは PATH を手で編集せずに `strada` を使えます。
 
 `strada-brain` はまだ public npm registry に公開されていないため、`npm install -g strada-brain` は現在 `E404` になります。npm 公開が行われるまでは、上の source checkout 手順を使ってください。
 
