@@ -7,6 +7,7 @@ import {
   findAvailableSetupWizardPort,
   generateEnvContent,
   getPostSetupWebLaunchCommand,
+  getRemainingResponseProviderChoices,
   getSuggestedNodeUpgradeCommand,
   nodeSupportsWebPortalBuild,
   validateUnityPath,
@@ -140,6 +141,15 @@ describe("findAvailableSetupWizardPort", () => {
       async (port) => port === 5050,
     );
     expect(resolvedPort).toBe(5050);
+  });
+});
+
+describe("getRemainingResponseProviderChoices", () => {
+  it("returns only providers that are not already in the response chain", () => {
+    expect(getRemainingResponseProviderChoices(["claude", "gemini"])).not.toContain("claude");
+    expect(getRemainingResponseProviderChoices(["claude", "gemini"])).not.toContain("gemini");
+    expect(getRemainingResponseProviderChoices(["claude", "gemini"])).toContain("openai");
+    expect(getRemainingResponseProviderChoices(["claude", "gemini"])).toContain("kimi");
   });
 });
 

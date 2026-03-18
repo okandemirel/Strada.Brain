@@ -93,6 +93,7 @@ Wenn Node 22 bereits in `nvm` installiert ist, verwendet Strada diese Laufzeit e
 Der erste Browser-Start traegt zusaetzlich ein explizites Setup-Flag, damit selbst ein veralteter gecachter Portal-Tab wieder im Setup-Assistenten landet statt auf einer toten "Not Found"-Seite.
 
 Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. `./strada setup` bevorzugt jetzt standardmaessig den **Web-Browser**; waehlen Sie **Terminal** nur dann, wenn Sie den schnelleren Text-Flow bewusst moechten.
+Das Terminal-Setup kann jetzt mehrere Response-Provider Schritt fuer Schritt fuer Fallbacks bzw. Multi-Agent-Orchestrierung hinzufuegen; die Embedding-Provider-Wahl bleibt dabei getrennt.
 Sobald Sie im Web-Assistenten speichern, uebergibt Strada auf derselben URL an die eigentliche Web-App, damit ein Refresh waehrend des Uebergangs nicht auf einer toten Setup-Seite landet.
 Wenn RAG aktiviert ist, aber kein nutzbarer Embedding-Provider konfiguriert wurde, laesst der Assistent Sie jetzt bis zum Review-Schritt weitergehen; Speichern bleibt jedoch blockiert, bis Sie einen gueltigen Embedding-Provider waehlen oder RAG deaktivieren.
 Nach dem ersten erfolgreichen Setup wird `./strada` ohne Subcommand zum smarten Launcher:

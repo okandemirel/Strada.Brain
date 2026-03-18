@@ -91,6 +91,7 @@ If Node 22 is already installed in `nvm`, Strada reuses that runtime instead of 
 That first-run browser open also carries an explicit setup flag, so a stale cached portal tab still resolves into the setup wizard instead of a dead "Not Found" page.
 
 The wizard asks for your Unity project path, AI provider API key, default channel, and language. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
+Terminal setup can now add multiple response providers one by one for fallback / multi-agent orchestration, while still keeping the embedding provider choice separate.
 After you save the web wizard, Strada hands off to the main web app on the same URL so refreshes can survive the transition instead of dropping you onto a dead setup page.
 If RAG is enabled without a usable embedding provider, the wizard now lets you continue to the review step but keeps Save blocked until you choose a valid embedding provider or disable RAG.
 

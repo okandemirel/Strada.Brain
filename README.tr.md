@@ -93,6 +93,7 @@ Node 22 `nvm` icinde zaten kuruluysa Strada yeniden indirmek yerine o kurulumu t
 Ilk tarayici acilisi acik bir setup bayragi da tasir; boylece cache'te kalmis eski bir portal sekmesi bile olu bir "Not Found" sayfasina dusmek yerine setup sihirbazina gider.
 
 Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. `./strada setup` artik varsayilan olarak **Web Tarayicisi** yolunu tercih eder; daha hizli metin akisina bilincli olarak ihtiyaciniz varsa **Terminal** secin.
+Terminal setup artik fallback / coklu ajan orkestrasyonu icin response provider'lari tek tek ekleyebilir; embedding provider secimi ise ayri kalir.
 Web sihirbazinda kaydetme tamamlandiginda Strada ayni URL uzerinden ana web uygulamasina devreder; boylece refresh gecisi olu setup sayfasina dusmez.
 RAG acik ama kullanilabilir bir embedding provider yoksa sihirbaz artik review adimina gecmenize izin verir; ancak gecerli bir embedding provider secene kadar veya RAG'i kapatana kadar Save bloklu kalir.
 Ilk basarili kurulumdan sonra `./strada` komutu artik akilli launcher olur:

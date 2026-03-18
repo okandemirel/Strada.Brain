@@ -93,6 +93,7 @@ cd Strada.Brain
 第一次浏览器打开时还会带上明确的 setup 标记，因此即使旧的门户缓存标签页还在，也会重新进入 setup 向导，而不是落到一个失效的 "Not Found" 页面。
 
 向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。`./strada setup` 现在默认优先 **Web 浏览器**；只有在你明确想走更快的纯文本流程时，才选择 **终端**。
+现在终端 setup 也可以为了 fallback / 多代理编排而逐个添加多个响应 provider，同时继续保持 embedding provider 选择独立。
 当你在 Web 向导里保存后，Strada 会在同一个 URL 上接管到主 Web 应用，因此切换期间刷新也不会掉回失效的 setup 页面。
 如果启用了 RAG 但还没有可用的 embedding provider，向导现在会允许你继续进入 review 步骤；不过在你选择有效的 embedding provider 或关闭 RAG 之前，Save 会保持阻塞。
 第一次 setup 完成后，不带子命令的 `./strada` 会变成你的智能启动器：

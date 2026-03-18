@@ -166,11 +166,11 @@ function isValidResponseProvider(value: string): boolean {
   return RESPONSE_PROVIDER_CHOICES.includes(value as typeof RESPONSE_PROVIDER_CHOICES[number]);
 }
 
-function parseProviderChain(input: string): string[] {
-  return input
-    .split(",")
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
+export function getRemainingResponseProviderChoices(
+  providerChain: readonly string[],
+): readonly string[] {
+  const selected = new Set(providerChain.map((value) => value.trim().toLowerCase()).filter(Boolean));
+  return RESPONSE_PROVIDER_CHOICES.filter((provider) => !selected.has(provider));
 }
 
 function getNormalizedProviderChain(answers: WizardAnswers): string[] {
@@ -731,27 +731,64 @@ export async function runTerminalWizard(
       validateUnityPath,
     );
 
-    const providerAnswer = await askWithRetry(
+    const primaryProviderAnswer = await askWithRetry(
       rl,
-      `? Response provider chain (${RESPONSE_PROVIDER_CHOICES.join(", ")}) [default: claude]: `,
+      `? Primary response provider (${RESPONSE_PROVIDER_CHOICES.join("/")}) [default: claude]: `,
       (input) => {
         const normalized = input.trim().toLowerCase();
         if (!normalized) return { valid: true };
-        const chain = parseProviderChain(normalized);
-        if (chain.length === 0) {
-          return { valid: false, error: "Enter at least one provider name." };
-        }
-        const invalid = chain.find((providerId) => !isValidResponseProvider(providerId));
-        if (invalid) {
+        if (!isValidResponseProvider(normalized)) {
           return {
             valid: false,
-            error: `Unsupported provider "${invalid}". Supported providers: ${RESPONSE_PROVIDER_CHOICES.join(", ")}.`,
+            error: `Unsupported provider "${normalized}". Supported providers: ${RESPONSE_PROVIDER_CHOICES.join(", ")}.`,
           };
         }
         return { valid: true };
       },
     );
-    const providerChain = parseProviderChain(providerAnswer.trim().toLowerCase() || "claude");
+    const providerChain = [primaryProviderAnswer.trim().toLowerCase() || "claude"];
+
+    while (true) {
+      const remainingProviders = getRemainingResponseProviderChoices(providerChain);
+      if (remainingProviders.length === 0) {
+        break;
+      }
+
+      const addMoreAnswer = await rl.question(
+        "? Add another response provider for fallback / multi-agent orchestration? [y/N]: ",
+      );
+      const normalizedAddMore = addMoreAnswer.trim().toLowerCase();
+      if (normalizedAddMore !== "y" && normalizedAddMore !== "yes") {
+        break;
+      }
+
+      const additionalProvider = await askWithRetry(
+        rl,
+        `? Additional response provider (${remainingProviders.join("/")}) : `,
+        (input) => {
+          const normalized = input.trim().toLowerCase();
+          if (!normalized) {
+            return { valid: false, error: "Choose one provider to add." };
+          }
+          if (!isValidResponseProvider(normalized)) {
+            return {
+              valid: false,
+              error: `Unsupported provider "${normalized}". Supported providers: ${remainingProviders.join(", ")}.`,
+            };
+          }
+          if (providerChain.includes(normalized)) {
+            return { valid: false, error: `${normalized} is already in the response chain.` };
+          }
+          return { valid: true };
+        },
+      );
+
+      providerChain.push(additionalProvider.trim().toLowerCase());
+    }
+
+    if (providerChain.length > 1) {
+      console.log(`  Response provider chain: ${providerChain.join(" -> ")}`);
+    }
     const provider = providerChain[0] ?? "claude";
     const providerCredentials: Record<string, string | undefined> = {};
     const providerAuthModes: Record<string, "api-key" | "chatgpt-subscription" | undefined> = {};

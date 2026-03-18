@@ -93,6 +93,7 @@ Si Node 22 ya esta instalado en `nvm`, Strada reutiliza ese runtime en lugar de 
 Ese primer arranque en el navegador tambien lleva una marca explicita de setup, para que incluso una pestana antigua en cache del portal vuelva al asistente en lugar de caer en una pagina muerta de "Not Found".
 
 El asistente te pide la ruta de tu proyecto Unity, la clave de API del proveedor de IA, el canal por defecto e idioma. `./strada setup` ahora prioriza **Navegador Web** por defecto; elige **Terminal** solo si quieres de forma explicita el flujo de texto mas rapido.
+El setup de terminal ahora puede agregar varios proveedores de respuesta uno por uno para fallback u orquestacion multiagente, mientras mantiene separada la eleccion del proveedor de embeddings.
 Cuando guardas el asistente web, Strada entrega el control a la aplicacion web principal en la misma URL para que un refresh durante la transicion no te deje en una pagina de setup muerta.
 Si RAG esta activado pero no hay un proveedor de embeddings utilizable, el asistente ahora te deja avanzar hasta la revision; aun asi Save queda bloqueado hasta que elijas un proveedor de embeddings valido o desactives RAG.
 Despues del primer setup correcto, `./strada` sin subcomando se convierte en tu launcher inteligente:
