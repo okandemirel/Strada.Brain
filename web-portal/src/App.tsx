@@ -15,12 +15,13 @@ import SettingsPage from './pages/SettingsPage'
 import SetupWizard from './pages/SetupWizard'
 
 export default function App() {
+  const setupMode = typeof window !== 'undefined' && Boolean((window as Window & { __STRADA_SETUP__?: boolean }).__STRADA_SETUP__)
   return (
     <ErrorBoundary>
       <Routes>
         <Route path="/setup" element={<SetupWizard />} />
         <Route element={<AppLayout />}>
-          <Route index element={<ChatView />} />
+          <Route index element={setupMode ? <SetupWizard /> : <ChatView />} />
           <Route path="dashboard" element={<DashboardView />} />
           <Route path="config" element={<ConfigPage />} />
           <Route path="tools" element={<ToolsPage />} />

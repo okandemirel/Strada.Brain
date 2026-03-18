@@ -89,6 +89,7 @@ Quand Strada est installe depuis une version npm/tarball empaquetee, sa configur
 ```
 
 Si `./strada setup --web` detecte une version de Node trop ancienne pour construire le portail complet, Strada garde le web comme chemin principal : si `nvm` est disponible, Strada peut installer une version compatible de Node avec votre accord puis revenir directement au setup web ; cette mise a niveau guidee s'execute dans un HOME temporaire propre afin que les options npm incompatibles `prefix` / `globalconfig` ne bloquent pas `nvm`. Sinon, il vous guide vers le telechargement/la mise a niveau et ne retombe jamais silencieusement sur le terminal.
+Si Node 22 est deja installe dans `nvm`, Strada reutilise ce runtime au lieu de le telecharger une nouvelle fois. Le flux de setup web s'ouvre sur l'URL locale racine et conserve cette meme URL lors du passage vers l'application principale.
 
 L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de fournisseur IA, votre canal par d&eacute;faut et votre langue. `./strada setup` privilegie maintenant **Navigateur Web** par d&eacute;faut ; choisissez **Terminal** seulement si vous voulez explicitement le flux texte le plus rapide.
 Une fois l'assistant web enregistr&eacute;, Strada bascule vers l'application web principale sur la m&ecirc;me URL afin qu'un refresh pendant la transition ne vous laisse pas sur une page de setup morte.

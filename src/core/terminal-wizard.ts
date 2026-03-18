@@ -423,9 +423,18 @@ export function getSuggestedNodeUpgradeCommand(
   env: NodeJS.ProcessEnv = process.env,
   homeDir: string = os.homedir(),
 ): string | null {
-  return resolveNvmDir(env, homeDir)
-    ? "nvm install 22 && nvm use --delete-prefix 22 --silent"
-    : null;
+  const nvmDir = resolveNvmDir(env, homeDir)
+  if (!nvmDir) return null
+
+  try {
+    const versionsDir = path.join(nvmDir, "versions", "node")
+    const hasNode22 = fs.readdirSync(versionsDir).some((entry) => entry.startsWith("v22."))
+    return hasNode22
+      ? "nvm use --delete-prefix 22 --silent"
+      : "nvm install 22 && nvm use --delete-prefix 22 --silent"
+  } catch {
+    return "nvm install 22 && nvm use --delete-prefix 22 --silent"
+  }
 }
 
 export function buildWebSetupUpgradeShellScript(
@@ -458,8 +467,12 @@ export function buildWebSetupUpgradeShellScript(
       : "",
     ". \"$NVM_DIR/nvm.sh\"",
     `nvm use --delete-prefix ${shellEscape(`v${process.versions.node}`)} --silent >/dev/null || true`,
-    "nvm install 22",
-    "nvm use --delete-prefix 22 --silent >/dev/null",
+    "if nvm ls 22 >/dev/null 2>&1; then",
+    "  nvm use --delete-prefix 22 --silent >/dev/null",
+    "else",
+    "  nvm install 22",
+    "  nvm use --delete-prefix 22 --silent >/dev/null",
+    "fi",
     "STRADA_NODE_PATH=\"$(nvm which 22)\"",
     "if [ ! -x \"$STRADA_NODE_PATH\" ]; then",
     "  echo \"Strada could not locate the upgraded Node.js binary after nvm install.\"",
@@ -525,10 +538,17 @@ async function promptForWebSetupUpgrade(
   const nvmDir = resolveNvmDir();
   const suggestedCommand = getSuggestedNodeUpgradeCommand();
   if (nvmDir && suggestedCommand) {
-    console.log(`  Strada can install a compatible Node.js with nvm and continue directly to web setup.`);
+    const alreadyInstalled = !suggestedCommand.includes("install 22");
+    console.log(
+      alreadyInstalled
+        ? "  Strada can switch to an already installed compatible Node.js with nvm and continue directly to web setup."
+        : "  Strada can install a compatible Node.js with nvm and continue directly to web setup.",
+    );
     console.log("  It runs the upgrade inside a temporary clean HOME so incompatible `prefix` / `globalconfig` npm settings do not block nvm.");
     console.log(`  It will run: ${suggestedCommand}`);
-    const answer = await rl.question("  Install the required Node.js version now and continue to web setup? [Y/n]: ");
+    const answer = await rl.question(
+      `${alreadyInstalled ? "  Use the compatible Node.js version now" : "  Install the required Node.js version now"} and continue to web setup? [Y/n]: `,
+    );
     const normalized = answer.trim().toLowerCase();
     if (!normalized || normalized === "y" || normalized === "yes") {
       console.log("");
@@ -655,10 +675,10 @@ export async function runTerminalWizard(
       const port = await findAvailableSetupWizardPort(requestedPort);
       const { SetupWizard } = await import("./setup-wizard.js");
       const wizard = new SetupWizard({ port });
-      const url = `http://${SETUP_HOST}:${port}/setup`;
+      const url = `http://${SETUP_HOST}:${port}/`;
       if (port !== requestedPort) {
         console.log(
-          `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on http://${SETUP_HOST}:${port}/setup instead.`,
+          `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on http://${SETUP_HOST}:${port}/ instead.`,
         );
       }
       await wizard.listen();

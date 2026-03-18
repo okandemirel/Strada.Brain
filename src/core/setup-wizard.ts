@@ -27,6 +27,16 @@ function resolveStaticDir(): string {
 
 const STATIC_DIR = resolveStaticDir();
 
+export function injectSetupModeMarker(html: string): string {
+  if (html.includes("window.__STRADA_SETUP__")) {
+    return html;
+  }
+  return html.replace(
+    "</head>",
+    "    <script>window.__STRADA_SETUP__ = true;</script>\n  </head>",
+  );
+}
+
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -207,13 +217,6 @@ export class SetupWizard {
     const method = req.method ?? "GET";
 
     try {
-      // Redirect root to /setup so React Router renders the wizard
-      if (url === "/" && method === "GET") {
-        res.writeHead(302, { ...SECURITY_HEADERS, Location: "/setup" });
-        res.end();
-        return;
-      }
-
       // API endpoints
       if (url.startsWith("/api/setup/browse") && method === "GET") {
         await this.handleBrowse(url, res);
@@ -286,7 +289,7 @@ export class SetupWizard {
     // SPA fallback: serve index.html for all non-file routes (client-side routing)
     const indexPath = join(STATIC_DIR, "index.html");
     try {
-      const data = await readFile(indexPath);
+      const data = injectSetupModeMarker(await readFile(indexPath, "utf-8"));
       res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       res.end(data);
     } catch {

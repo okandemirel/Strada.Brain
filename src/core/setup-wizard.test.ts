@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
-import { SetupWizard, hasConfiguredEmbeddingCandidate } from "./setup-wizard.js";
+import { SetupWizard, hasConfiguredEmbeddingCandidate, injectSetupModeMarker } from "./setup-wizard.js";
 
 describe("SetupWizard path validation", () => {
   it("re-validates the project path during save using the resolved home-directory path", async () => {
@@ -50,5 +50,10 @@ describe("SetupWizard path validation", () => {
     expect(hasConfiguredEmbeddingCandidate({
       EMBEDDING_PROVIDER: "ollama",
     })).toBe(true);
+  });
+
+  it("injects setup mode into the shared portal html", () => {
+    const html = injectSetupModeMarker("<html><head></head><body></body></html>");
+    expect(html).toContain("window.__STRADA_SETUP__ = true");
   });
 });

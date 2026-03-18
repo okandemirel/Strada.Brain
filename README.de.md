@@ -89,6 +89,7 @@ Wenn Strada aus einer paketierten npm-/Tarball-Version installiert wird, liegt d
 ```
 
 Wenn `./strada setup --web` eine aeltere Node-Version erkennt, die das volle Portal-Bundle nicht bauen kann, bleibt Web der primaere Weg: Wenn `nvm` verfuegbar ist, kann Strada nach Ihrer Zustimmung eine kompatible Node-Version installieren und direkt zum Web-Setup zurueckkehren; dabei laeuft das gefuehrte Upgrade in einem temporaeren sauberen HOME, damit inkompatible npm-Einstellungen wie `prefix` / `globalconfig` `nvm` nicht blockieren. Andernfalls fuehrt es Sie durch den Upgrade/Download-Pfad und faellt nicht still auf das Terminal-Setup zurueck.
+Wenn Node 22 bereits in `nvm` installiert ist, verwendet Strada diese Laufzeit erneut, statt sie nochmals herunterzuladen. Der Web-Setup-Flow oeffnet auf der lokalen Root-URL und behaelt dieselbe URL auch beim Handoff an die Haupt-App.
 
 Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. `./strada setup` bevorzugt jetzt standardmaessig den **Web-Browser**; waehlen Sie **Terminal** nur dann, wenn Sie den schnelleren Text-Flow bewusst moechten.
 Sobald Sie im Web-Assistenten speichern, uebergibt Strada auf derselben URL an die eigentliche Web-App, damit ein Refresh waehrend des Uebergangs nicht auf einer toten Setup-Seite landet.

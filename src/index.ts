@@ -272,7 +272,7 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
             ? "Configuration missing or invalid. Starting setup wizard..."
             : `Configuration still invalid. Retrying setup wizard (attempt ${attempt}/${MAX_WIZARD_ATTEMPTS})...`,
         );
-        console.log(`Open http://127.0.0.1:${wizardPort} in your browser to configure.`);
+        console.log(`Open http://127.0.0.1:${wizardPort}/ in your browser to configure.`);
         const wizard = new SetupWizard({ port: wizardPort });
         await wizard.start();
         console.log("Setup complete! Validating configuration...");
@@ -296,7 +296,7 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
     } else {
       // Non-web channels: offer setup wizard as a web-based option
       console.warn(`Config invalid: ${configResult.error}. Run 'strada setup' to configure.`);
-      console.log(`\nStarting setup wizard on http://127.0.0.1:${wizardPort} — open in your browser to configure.`);
+      console.log(`\nStarting setup wizard on http://127.0.0.1:${wizardPort}/ — open in your browser to configure.`);
       const wizard = new SetupWizard({ port: wizardPort });
       await wizard.start();
       console.log("Setup complete! Validating configuration...");

@@ -185,6 +185,21 @@ describe("resolveNvmDir", () => {
       rmSync(tempHome, { recursive: true, force: true });
     }
   });
+
+  it("prefers reusing an installed Node 22 version when nvm already has one", () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-nvm-home-"));
+    const nvmDir = path.join(tempHome, ".nvm");
+    mkdirSync(path.join(nvmDir, "versions", "node", "v22.22.1"), { recursive: true });
+    writeFileSync(path.join(nvmDir, "nvm.sh"), "#!/bin/sh\n");
+
+    try {
+      expect(getSuggestedNodeUpgradeCommand({}, tempHome)).toBe(
+        "nvm use --delete-prefix 22 --silent",
+      );
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("buildWebSetupUpgradeShellScript", () => {
@@ -212,6 +227,7 @@ describe("buildWebSetupUpgradeShellScript", () => {
       expect(script).toContain("export STRADA_SOURCE_CHECKOUT='true'");
       expect(script).toContain("export STRADA_LAUNCHER_PATH='/Users/test/Strada.Brain/strada'");
       expect(script).toContain("nvm use --delete-prefix 'v");
+      expect(script).toContain("if nvm ls 22 >/dev/null 2>&1; then");
       expect(script).toContain("nvm install 22");
       expect(script).toContain("nvm use --delete-prefix 22 --silent >/dev/null");
       expect(script).toContain("STRADA_NODE_PATH=\"$(nvm which 22)\"");

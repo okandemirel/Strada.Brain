@@ -89,6 +89,7 @@ cd Strada.Brain
 ```
 
 如果 `./strada setup --web` 检测到过旧的 Node 版本而无法构建完整 Web 门户，Strada 仍然会把 Web 作为第一优先路径：如果系统里有 `nvm`，Strada 会在你确认后安装兼容的 Node 版本并直接回到 Web setup；该引导升级会在临时的干净 HOME 中运行，因此不兼容的 npm `prefix` / `globalconfig` 设置不会阻塞 `nvm`。否则它会引导你完成下载/升级流程，而不会悄悄降级到终端 setup。
+如果 `nvm` 里已经装好了 Node 22，Strada 会直接复用它，而不是再次下载。Web setup 会在本地根 URL 打开，并在切换到主应用时继续使用同一个 URL。
 
 向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。`./strada setup` 现在默认优先 **Web 浏览器**；只有在你明确想走更快的纯文本流程时，才选择 **终端**。
 当你在 Web 向导里保存后，Strada 会在同一个 URL 上接管到主 Web 应用，因此切换期间刷新也不会掉回失效的 setup 页面。
