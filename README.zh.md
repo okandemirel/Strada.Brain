@@ -88,7 +88,7 @@ cd Strada.Brain
 ./strada setup --terminal
 ```
 
-如果 `./strada setup --web` 检测到过旧的 Node 版本而无法构建完整 Web 门户，Strada 仍然会把 Web 作为第一优先路径：如果系统里有 `nvm`，Strada 会在你确认后安装兼容的 Node 版本并直接回到 Web setup，并在该引导升级过程中临时过滤不兼容的 npm `prefix` / `globalconfig` 设置；否则它会引导你完成下载/升级流程，而不会悄悄降级到终端 setup。
+如果 `./strada setup --web` 检测到过旧的 Node 版本而无法构建完整 Web 门户，Strada 仍然会把 Web 作为第一优先路径：如果系统里有 `nvm`，Strada 会在你确认后安装兼容的 Node 版本并直接回到 Web setup；该引导升级会在临时的干净 HOME 中运行，因此不兼容的 npm `prefix` / `globalconfig` 设置不会阻塞 `nvm`。否则它会引导你完成下载/升级流程，而不会悄悄降级到终端 setup。
 
 向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。`./strada setup` 现在默认优先 **Web 浏览器**；只有在你明确想走更快的纯文本流程时，才选择 **终端**。
 第一次 setup 完成后，不带子命令的 `./strada` 会变成你的智能启动器：

@@ -434,19 +434,29 @@ export function buildWebSetupUpgradeShellScript(
 ): string {
   return [
     "set -e",
-    "unset NPM_CONFIG_PREFIX npm_config_prefix NPM_CONFIG_GLOBALCONFIG npm_config_globalconfig",
-    "if [ -f \"$HOME/.npmrc\" ]; then",
-    "  STRADA_NPMRC=$(mktemp \"${TMPDIR:-/tmp}/strada-npmrc.XXXXXX\")",
-    "  grep -Evi '^\\s*(prefix|globalconfig)\\s*=' \"$HOME/.npmrc\" > \"$STRADA_NPMRC\" || true",
-    "  export NPM_CONFIG_USERCONFIG=\"$STRADA_NPMRC\"",
-    "  export npm_config_userconfig=\"$STRADA_NPMRC\"",
-    "  trap 'rm -f \"$STRADA_NPMRC\"' EXIT",
+    "ORIGINAL_HOME=\"$HOME\"",
+    "STRADA_TMP_HOME=$(mktemp -d \"${TMPDIR:-/tmp}/strada-home.XXXXXX\")",
+    "trap 'rm -rf \"$STRADA_TMP_HOME\"' EXIT",
+    "export HOME=\"$STRADA_TMP_HOME\"",
+    "mkdir -p \"$HOME\"",
+    "if [ -f \"$ORIGINAL_HOME/.npmrc\" ]; then",
+    "  grep -Evi '^\\s*(prefix|globalconfig)\\s*=' \"$ORIGINAL_HOME/.npmrc\" > \"$HOME/.npmrc\" || true",
     "fi",
+    "unset NPM_CONFIG_PREFIX npm_config_prefix NPM_CONFIG_GLOBALCONFIG npm_config_globalconfig NPM_CONFIG_USERCONFIG npm_config_userconfig",
     `export NVM_DIR=${shellEscape(nvmDir)}`,
     ". \"$NVM_DIR/nvm.sh\"",
     `nvm use --delete-prefix ${shellEscape(`v${process.versions.node}`)} --silent >/dev/null || true`,
     "nvm install 22",
     "nvm use --delete-prefix 22 --silent >/dev/null",
+    "STRADA_NODE_PATH=\"$(nvm which 22)\"",
+    "if [ ! -x \"$STRADA_NODE_PATH\" ]; then",
+    "  echo \"Strada could not locate the upgraded Node.js binary after nvm install.\"",
+    "  exit 1",
+    "fi",
+    "export PATH=\"$(dirname \"$STRADA_NODE_PATH\"):$PATH\"",
+    "export HOME=\"$ORIGINAL_HOME\"",
+    "rm -rf \"$STRADA_TMP_HOME\"",
+    "trap - EXIT",
     `cd ${shellEscape(cwd)}`,
     `exec ${buildShellCommand(["node", ...execArgs.filter(Boolean)])}`,
   ].join("\n");
@@ -473,7 +483,7 @@ async function promptForWebSetupUpgrade(
   const suggestedCommand = getSuggestedNodeUpgradeCommand();
   if (nvmDir && suggestedCommand) {
     console.log(`  Strada can install a compatible Node.js with nvm and continue directly to web setup.`);
-    console.log("  It temporarily ignores incompatible `prefix` / `globalconfig` npm settings during this guided upgrade.");
+    console.log("  It runs the upgrade inside a temporary clean HOME so incompatible `prefix` / `globalconfig` npm settings do not block nvm.");
     console.log(`  It will run: ${suggestedCommand}`);
     const answer = await rl.question("  Install the required Node.js version now and continue to web setup? [Y/n]: ");
     const normalized = answer.trim().toLowerCase();

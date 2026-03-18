@@ -86,7 +86,7 @@ When Strada is installed from a packaged npm/tarball release, it keeps its runti
 ./strada setup --terminal
 ```
 
-If `./strada setup --web` detects an older Node runtime that cannot build the full portal bundle, Strada keeps web as the primary path: when `nvm` is available it can install a compatible Node.js version for you and continue directly into web setup after you approve it, temporarily filtering incompatible `prefix` / `globalconfig` npm settings during that guided upgrade; otherwise it opens the upgrade/download path and sends you back to web setup instead of silently dropping to terminal setup.
+If `./strada setup --web` detects an older Node runtime that cannot build the full portal bundle, Strada keeps web as the primary path: when `nvm` is available it can install a compatible Node.js version for you and continue directly into web setup after you approve it, running that guided upgrade inside a temporary clean HOME so incompatible `prefix` / `globalconfig` npm settings do not block `nvm`; otherwise it opens the upgrade/download path and sends you back to web setup instead of silently dropping to terminal setup.
 
 The wizard asks for your Unity project path, AI provider API key, default channel, and language. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
 
