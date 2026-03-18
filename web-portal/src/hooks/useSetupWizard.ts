@@ -2,6 +2,9 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import type { SaveStatus } from '../types/setup'
 import { PRESETS, PROVIDER_MAP, CHANNELS, EMBEDDING_CAPABLE } from '../types/setup-constants'
 
+const SETUP_AVAILABILITY_MAX_ATTEMPTS = 25
+const SETUP_AVAILABILITY_RETRY_MS = 1000
+
 export function hasUsableResponseCredential(
   providerId: string,
   providerKeys: Record<string, string>,
@@ -58,6 +61,42 @@ export function getSetupReviewBlockingReason(
   return `${providerName} embeddings need a usable API key before setup can be saved.`
 }
 
+export type SetupSurfaceProbe =
+  | { kind: 'available'; token: string }
+  | { kind: 'redirect' }
+  | { kind: 'retry' }
+
+export async function probeSetupSurface(
+  fetchImpl: typeof fetch = fetch,
+): Promise<SetupSurfaceProbe> {
+  try {
+    const res = await fetchImpl('/api/setup/csrf', { cache: 'no-store' })
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}))
+      const token = typeof data.token === 'string' ? data.token : ''
+      if (token) {
+        return { kind: 'available', token }
+      }
+    }
+  } catch {
+    // setup server may still be booting or handing off
+  }
+
+  try {
+    const healthRes = await fetchImpl('/health', { cache: 'no-store' })
+    if (healthRes.ok) {
+      const healthData = await healthRes.json().catch(() => null)
+      if (healthData && typeof healthData === 'object' && healthData.status === 'ok') {
+        return { kind: 'redirect' }
+      }
+    }
+  } catch {
+    // main app may not be ready yet
+  }
+
+  return { kind: 'retry' }
+}
+
 export function useSetupWizard() {
   const [setupAvailability, setSetupAvailability] = useState<'checking' | 'available' | 'unavailable'>('checking')
   const [setupUnavailableReason, setSetupUnavailableReason] = useState<string | null>(null)
@@ -83,6 +122,7 @@ export function useSetupWizard() {
 
   const csrfTokenRef = useRef<string>('')
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const availabilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
   const reviewBlockingReason = getSetupReviewBlockingReason(
     ragEnabled,
@@ -95,36 +135,47 @@ export function useSetupWizard() {
   // Fetch CSRF token on mount
   useEffect(() => {
     mountedRef.current = true
-    fetch('/api/setup/csrf')
-      .then(async (res) => {
-        if (!res.ok) {
-          throw new Error(`Setup wizard unavailable (${res.status})`)
-        }
-        return await res.json()
-      })
-      .then((data) => {
-        const token = typeof data.token === 'string' ? data.token : ''
-        if (!token) {
-          throw new Error('Setup wizard did not provide a CSRF token')
-        }
-        csrfTokenRef.current = token
-        if (mountedRef.current) {
-          setSetupAvailability('available')
-          setSetupUnavailableReason(null)
-        }
-      })
-      .catch(() => {
-        if (!mountedRef.current) return
-        setSetupAvailability('unavailable')
-        setSetupUnavailableReason(
-          'Setup wizard is only available before initial configuration. Run `strada setup` if you need to reconfigure this instance.',
-        )
-      })
+    let attempts = 0
+
+    const checkAvailability = async () => {
+      const result = await probeSetupSurface(fetch)
+      if (!mountedRef.current) return
+
+      if (result.kind === 'available') {
+        csrfTokenRef.current = result.token
+        setSetupAvailability('available')
+        setSetupUnavailableReason(null)
+        return
+      }
+
+      if (result.kind === 'redirect') {
+        window.location.replace('/')
+        return
+      }
+
+      attempts += 1
+      if (attempts < SETUP_AVAILABILITY_MAX_ATTEMPTS) {
+        availabilityTimerRef.current = setTimeout(() => {
+          void checkAvailability()
+        }, SETUP_AVAILABILITY_RETRY_MS)
+        return
+      }
+
+      setSetupAvailability('unavailable')
+      setSetupUnavailableReason(
+        'Setup wizard is not reachable right now. If setup already finished, Strada may still be handing off to the main app. Wait a moment and refresh, or run `strada setup` to try again.',
+      )
+    }
+
+    void checkAvailability()
 
     return () => {
       mountedRef.current = false
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current)
+      }
+      if (availabilityTimerRef.current) {
+        clearTimeout(availabilityTimerRef.current)
       }
     }
   }, [])

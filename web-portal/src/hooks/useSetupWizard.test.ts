@@ -4,6 +4,7 @@ import {
   hasAutoEmbeddingCandidate,
   hasUsableEmbeddingCredential,
   hasUsableResponseCredential,
+  probeSetupSurface,
 } from './useSetupWizard'
 
 describe('useSetupWizard helpers', () => {
@@ -36,5 +37,36 @@ describe('useSetupWizard helpers', () => {
     expect(
       getSetupReviewBlockingReason(true, 'gemini', new Set(['kimi']), {}, {}),
     ).toContain('Gemini embeddings need a usable API key')
+  })
+
+  it('detects a live setup surface from the csrf endpoint', async () => {
+    const result = await probeSetupSurface(async (input) => {
+      if (String(input) === '/api/setup/csrf') {
+        return {
+          ok: true,
+          json: async () => ({ token: 'csrf-token' }),
+        } as Response
+      }
+      throw new Error('unexpected fetch')
+    })
+
+    expect(result).toEqual({ kind: 'available', token: 'csrf-token' })
+  })
+
+  it('redirects when the main app is already healthy during setup handoff', async () => {
+    const result = await probeSetupSurface(async (input) => {
+      if (String(input) === '/api/setup/csrf') {
+        throw new Error('setup server restarting')
+      }
+      if (String(input) === '/health') {
+        return {
+          ok: true,
+          json: async () => ({ status: 'ok' }),
+        } as Response
+      }
+      throw new Error('unexpected fetch')
+    })
+
+    expect(result).toEqual({ kind: 'redirect' })
   })
 })
