@@ -574,6 +574,7 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 **Cadena de proveedores:** Configura `PROVIDER_CHAIN` con una lista de nombres de proveedores separados por comas. Strada sigue siendo el plano de control y usa esta cadena como pool de orquestacion por defecto para el worker principal, el routing del supervisor y sus fallbacks. Ejemplo: `PROVIDER_CHAIN=kimi,deepseek,claude` usa Kimi primero, DeepSeek si Kimi falla, luego Claude.
 La aclaracion tambien forma parte de ese plano de control. Un worker puede proponer una pregunta al usuario, pero Strada ahora ejecuta primero una fase interna de `clarification-review` antes de convertir cualquier borrador en un turno `ask_user`.
 La finalizacion tambien pasa ahora por un verifier pipeline interno. La verificacion de build, la comprobacion targeted repro / failing-path, la revision de logs, la conformance de Strada y la completion review deben quedar limpias antes de que Strada termine. `/routing info` y el dashboard ahora muestran tanto las trazas de ejecucion reales como los phase outcomes (`approved`, `continued`, `replanned`, `blocked`).
+Strada ahora tambien mantiene un execution journal y rollback memory internos por tarea. Los replans pueden reutilizar el ultimo checkpoint estable, recordar ramas agotadas y devolver adaptive phase scores al routing sin lore hardcodeado por proveedor.
 
 **Importante:** `OPENAI_AUTH_MODE=chatgpt-subscription` solo cubre los turnos de conversacion de OpenAI dentro de Strada. No concede cuota de API ni de embeddings de OpenAI. Si eliges `EMBEDDING_PROVIDER=openai`, sigues necesitando `OPENAI_API_KEY`.
 Strada no le devuelve al usuario los siguientes pasos obvios. Si un proveedor devuelve un analisis incompleto, pregunta que debe hacer despues o hace una afirmacion amplia de finalizacion sin evidencia suficiente, Strada reabre el bucle, ejecuta otra pasada de inspeccion/revision y solo responde cuando el resultado esta verificado o queda un bloqueo externo real.
@@ -751,7 +752,7 @@ Comandos slash disponibles en todos los canales de chat:
 | `/agent` | Mostrar estado del Agent Core |
 | `/routing` | Mostrar estado de enrutamiento y preset |
 | `/routing preset <nombre>` | Cambiar preset de enrutamiento (budget/balanced/performance) |
-| `/routing info` | Mostrar decisiones de enrutamiento recientes, trazas de ejecucion reales y phase outcomes para la identidad actual, incluyendo planning, execution, clarification-review, review y synthesis |
+| `/routing info` | Mostrar decisiones de enrutamiento recientes, trazas de ejecucion reales, phase outcomes y adaptive phase scores para la identidad actual, incluyendo planning, execution, clarification-review, review y synthesis |
 
 ---
 

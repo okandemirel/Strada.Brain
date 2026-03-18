@@ -361,12 +361,27 @@ describe("DashboardServer", () => {
       task: { type: "code-review", complexity: "complex", criticality: "high" },
       timestamp: 789,
     }]);
+    const getPhaseScoreboard = vi.fn(() => [{
+      provider: "reviewer",
+      role: "reviewer",
+      phase: "completion-review",
+      sampleSize: 3,
+      score: 0.82,
+      approvedCount: 2,
+      continuedCount: 0,
+      replannedCount: 1,
+      blockedCount: 0,
+      failedCount: 0,
+      latestTimestamp: 790,
+      latestReason: "Verifier review requested a different approach.",
+    }]);
     server.setProviderRouter({
       getPreset: () => "balanced",
       setPreset: () => {},
       getRecentDecisions,
       getRecentExecutionTraces,
       getRecentPhaseOutcomes,
+      getPhaseScoreboard,
     });
 
     if (!await safeStart(server)) return;
@@ -380,6 +395,7 @@ describe("DashboardServer", () => {
     expect(getRecentDecisions).toHaveBeenCalledWith(20, "user-1");
     expect(getRecentExecutionTraces).toHaveBeenCalledWith(20, "user-1");
     expect(getRecentPhaseOutcomes).toHaveBeenCalledWith(20, "user-1");
+    expect(getPhaseScoreboard).toHaveBeenCalledWith(12, "user-1");
     expect(data.preset).toBe("balanced");
     expect(data.execution).toEqual([
       expect.objectContaining({
@@ -402,6 +418,13 @@ describe("DashboardServer", () => {
         phase: "completion-review",
         source: "completion-review",
         status: "replanned",
+      }),
+    ]);
+    expect(data.phaseScores).toEqual([
+      expect.objectContaining({
+        provider: "reviewer",
+        phase: "completion-review",
+        score: 0.82,
       }),
     ]);
   });

@@ -90,6 +90,22 @@ export interface PhaseOutcome {
   readonly identityKey?: string;
 }
 
+export interface PhaseScore {
+  readonly provider: string;
+  readonly role: ExecutionRole;
+  readonly phase: ExecutionPhase;
+  readonly sampleSize: number;
+  readonly score: number;
+  readonly approvedCount: number;
+  readonly continuedCount: number;
+  readonly replannedCount: number;
+  readonly blockedCount: number;
+  readonly failedCount: number;
+  readonly latestTimestamp: number;
+  readonly latestReason: string;
+  readonly identityKey?: string;
+}
+
 export interface OriginalOutput {
   readonly text?: string;
   readonly toolCalls?: Array<{ name: string; input: Record<string, unknown> }>;

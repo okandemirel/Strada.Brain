@@ -70,6 +70,21 @@ interface PhaseOutcome {
   timestamp: number
 }
 
+interface PhaseScore {
+  provider: string
+  role: string
+  phase: string
+  sampleSize: number
+  score: number
+  approvedCount: number
+  continuedCount: number
+  replannedCount: number
+  blockedCount: number
+  failedCount: number
+  latestTimestamp: number
+  latestReason: string
+}
+
 interface EmbeddingStatus {
   state: 'disabled' | 'active' | 'degraded'
   ragEnabled: boolean
@@ -192,6 +207,7 @@ export default function SettingsPage() {
   const [routingDecisions, setRoutingDecisions] = useState<RoutingDecision[]>([])
   const [executionTraces, setExecutionTraces] = useState<ExecutionTrace[]>([])
   const [phaseOutcomes, setPhaseOutcomes] = useState<PhaseOutcome[]>([])
+  const [phaseScores, setPhaseScores] = useState<PhaseScore[]>([])
   const [routingLoading, setRoutingLoading] = useState(true)
   const [routingSwitching, setRoutingSwitching] = useState(false)
 
@@ -244,18 +260,20 @@ export default function SettingsPage() {
 
   // --- Fetch routing preset ---
   const fetchRouting = useCallback(() => {
-    fetchJson<{ routing: RoutingDecision[]; execution?: ExecutionTrace[]; outcomes?: PhaseOutcome[]; preset?: string }>(`/api/agent-activity?${identityQuery}`)
+    fetchJson<{ routing: RoutingDecision[]; execution?: ExecutionTrace[]; outcomes?: PhaseOutcome[]; phaseScores?: PhaseScore[]; preset?: string }>(`/api/agent-activity?${identityQuery}`)
       .then((data) => {
         if (data?.preset) setRoutingPreset(data.preset)
         setRoutingDecisions(Array.isArray(data?.routing) ? data.routing.slice(0, 6) : [])
         setExecutionTraces(Array.isArray(data?.execution) ? data.execution.slice(-6).reverse() : [])
         setPhaseOutcomes(Array.isArray(data?.outcomes) ? data.outcomes.slice(-6).reverse() : [])
+        setPhaseScores(Array.isArray(data?.phaseScores) ? data.phaseScores.slice(0, 6) : [])
         setRoutingLoading(false)
       })
       .catch(() => {
         setRoutingDecisions([])
         setExecutionTraces([])
         setPhaseOutcomes([])
+        setPhaseScores([])
         setRoutingLoading(false)
       })
   }, [identityQuery])
@@ -762,6 +780,43 @@ export default function SettingsPage() {
                       </div>
                       <div className="settings-hint" style={{ margin: 0 }}>
                         {outcome.reason}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {phaseScores.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
+                  <span className="admin-stat-label">Adaptive Phase Scores</span>
+                  <span className="admin-stat-value">{phaseScores.length}</span>
+                </div>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {phaseScores.map((score, index) => (
+                    <div
+                      key={`${score.provider}-${score.phase}-${score.role}-${index}`}
+                      className="settings-provider-card"
+                      style={{ textAlign: 'left', padding: '12px 14px', cursor: 'default' }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                          {score.phase}{' / '}{score.role}{' -> '}{score.provider}
+                        </div>
+                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                          {score.score.toFixed(2)} score
+                        </div>
+                      </div>
+                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
+                        <span className="settings-provider-id">samples {score.sampleSize}</span>
+                        <span className="settings-provider-model">approved {score.approvedCount}</span>
+                        <span className="settings-provider-model">continued {score.continuedCount}</span>
+                        <span className="settings-provider-model">replanned {score.replannedCount}</span>
+                        <span className="settings-provider-model">failed {score.failedCount}</span>
+                      </div>
+                      <div className="settings-hint" style={{ margin: 0 }}>
+                        {score.latestReason}
                       </div>
                     </div>
                   ))}

@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Confidence-Based Consensus**: ConfidenceEstimator (heuristic scoring from PAOR state) + ConsensusManager (review/re-execute strategies, fail-safe on errors)
 - **Autonomous Agent Overhaul**: 3-layer autonomous bypass (system prompt injection, ask_user/show_plan tool auto-resolve, DaemonSecurityPolicy override with time-based expiry)
 - **Verifier Pipeline**: explicit build/log/targeted-repro/conformance/completion-review pipeline with verifier-driven continue vs replan outcomes
+- **Execution Journal + Adaptive Phase Scores**: PAOR now keeps branch/rollback memory per task and feeds runtime phase outcomes back into routing without hardcoded provider lore
 - **PAOR Unification**: Removed TaskPlanner conflicting PLANNING_PROMPT, background tasks now use full PAOR (reflect/replan), extracted shared buildSystemPromptWithContext()
 - **Strada.MCP Detection**: Automatic detection of sibling Strada.MCP installation with system prompt awareness (76 tools)
 - **TierRouter Facade**: ProviderRouter wraps TierRouter as internal sub-component for delegation compatibility

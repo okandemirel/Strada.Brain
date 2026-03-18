@@ -70,6 +70,22 @@ describe("CommandHandler /routing", () => {
           timestamp: Date.now() + 2,
         },
       ],
+      getPhaseScoreboard: () => [
+        {
+          provider: "reviewer",
+          role: "reviewer",
+          phase: "completion-review",
+          sampleSize: 3,
+          score: 0.82,
+          approvedCount: 2,
+          continuedCount: 0,
+          replannedCount: 1,
+          blockedCount: 0,
+          failedCount: 0,
+          latestTimestamp: Date.now() + 3,
+          latestReason: "Verifier review requested a new approach.",
+        },
+      ],
     });
 
     await handler.handle("chat-1", "routing", ["info"], "user-1");
@@ -106,6 +122,14 @@ describe("CommandHandler /routing", () => {
       "chat-1",
       expect.stringContaining("status=`replanned`"),
     );
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("*Adaptive Phase Scores*"),
+    );
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("score=`0.82`"),
+    );
     expect(sendText).not.toHaveBeenCalled();
   });
 
@@ -127,6 +151,7 @@ describe("CommandHandler /routing", () => {
       getRecentDecisions: () => [],
       getRecentExecutionTraces: () => [],
       getRecentPhaseOutcomes: () => [],
+      getPhaseScoreboard: () => [],
     });
 
     await handler.handle("chat-1", "routing", ["info"], "user-1");

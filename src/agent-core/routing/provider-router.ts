@@ -14,6 +14,8 @@ import type {
   TaskType,
   ExecutionTrace,
   PhaseOutcome,
+  PhaseScore,
+  ExecutionPhase,
 } from "./routing-types.js";
 import { ROUTING_PRESETS } from "./routing-presets.js";
 import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
@@ -57,6 +59,9 @@ export interface TierRouterRef {
 }
 
 const MAX_DECISIONS = 100;
+const PHASE_SCORE_PRIOR_WEIGHT = 4;
+const PHASE_SCORE_NEUTRAL = 0.5;
+const PHASE_SCORE_BIAS_WEIGHT = 0.18;
 
 type AvailableProvider = {
   name: string;
@@ -179,11 +184,11 @@ export class ProviderRouter {
     let bestReason = "";
 
     for (const entry of available) {
-      const score = this.scoreProvider(entry, task, weights, available);
+      const score = this.scoreProvider(entry, task, weights, available, phase, options.identityKey);
       if (score > bestScore) {
         bestScore = score;
         bestProvider = entry.name;
-        bestReason = this.buildReason(entry, task, weights);
+        bestReason = this.buildReason(entry, task, weights, phase, options.identityKey);
       }
     }
 
@@ -244,6 +249,10 @@ export class ProviderRouter {
     return relevant.slice(-n);
   }
 
+  getPhaseScoreboard(n: number, identityKey?: string): PhaseScore[] {
+    return this.computePhaseScores(identityKey).slice(0, n);
+  }
+
   /**
    * Change the routing preset at runtime.
    */
@@ -275,17 +284,21 @@ export class ProviderRouter {
     task: TaskClassification,
     weights: RoutingWeights,
     available: readonly AvailableProvider[],
+    phase?: string,
+    identityKey?: string,
   ): number {
     const cost = this.costScore(entry, available);
     const capability = this.capabilityScore(entry, task);
     const speed = this.speedScore(entry);
     const diversity = this.diversityScore(entry.name);
+    const adaptiveBias = this.phaseReliabilityBias(entry.name, phase, identityKey);
 
     return (
       weights.costWeight * cost +
       weights.capabilityWeight * capability +
       weights.speedWeight * speed +
-      weights.diversityWeight * diversity
+      weights.diversityWeight * diversity +
+      adaptiveBias
     );
   }
 
@@ -447,6 +460,8 @@ export class ProviderRouter {
     entry: AvailableProvider,
     task: TaskClassification,
     weights: RoutingWeights,
+    phase?: string,
+    identityKey?: string,
   ): string {
     const snapshot = this.getSnapshot(entry);
     const parts: string[] = [];
@@ -461,7 +476,11 @@ export class ProviderRouter {
 
     const workload = this.getWorkload(task.type);
     const topFeatures = snapshot.featureTags.slice(0, 2).join(", ");
-    return `${qualifier} choice for ${task.type} (${task.complexity}); ${workload} fit ${snapshot.workloadScores[workload].toFixed(2)}${topFeatures ? ` via ${topFeatures}` : ""}`;
+    const phaseScore = this.getProviderPhaseScore(entry.name, phase, identityKey);
+    const phaseNote = phaseScore
+      ? `; phase score ${phaseScore.score.toFixed(2)} from ${phaseScore.sampleSize} runtime outcomes`
+      : "";
+    return `${qualifier} choice for ${task.type} (${task.complexity}); ${workload} fit ${snapshot.workloadScores[workload].toFixed(2)}${topFeatures ? ` via ${topFeatures}` : ""}${phaseNote}`;
   }
 
   private recordDecision(decision: RoutingDecision): void {
@@ -469,5 +488,143 @@ export class ProviderRouter {
     if (this.decisions.length > MAX_DECISIONS) {
       this.decisions.shift();
     }
+  }
+
+  private phaseReliabilityBias(
+    providerName: string,
+    phase: string | undefined,
+    identityKey?: string,
+  ): number {
+    const score = this.getProviderPhaseScore(providerName, phase, identityKey);
+    if (!score) {
+      return 0;
+    }
+    return (score.score - PHASE_SCORE_NEUTRAL) * PHASE_SCORE_BIAS_WEIGHT;
+  }
+
+  private getProviderPhaseScore(
+    providerName: string,
+    phase: string | undefined,
+    identityKey?: string,
+  ): PhaseScore | null {
+    const normalizedPhase = normalizeExecutionPhase(phase);
+    if (!normalizedPhase) {
+      return null;
+    }
+
+    const scoped = this.computePhaseScores(identityKey).find(
+      (entry) => entry.provider === providerName && entry.phase === normalizedPhase,
+    );
+    if (scoped && scoped.sampleSize >= 2) {
+      return scoped;
+    }
+
+    return this.computePhaseScores(undefined).find(
+      (entry) => entry.provider === providerName && entry.phase === normalizedPhase,
+    ) ?? scoped ?? null;
+  }
+
+  private computePhaseScores(identityKey?: string): PhaseScore[] {
+    const relevant = identityKey
+      ? this.phaseOutcomes.filter((outcome) => outcome.identityKey === identityKey)
+      : this.phaseOutcomes;
+
+    const grouped = new Map<string, {
+      provider: string;
+      role: PhaseScore["role"];
+      phase: PhaseScore["phase"];
+      sampleSize: number;
+      weightedTotal: number;
+      approvedCount: number;
+      continuedCount: number;
+      replannedCount: number;
+      blockedCount: number;
+      failedCount: number;
+      latestTimestamp: number;
+      latestReason: string;
+    }>();
+
+    for (const outcome of relevant) {
+      const key = `${outcome.provider}:${outcome.role}:${outcome.phase}`;
+      const current = grouped.get(key) ?? {
+        provider: outcome.provider,
+        role: outcome.role,
+        phase: outcome.phase,
+        sampleSize: 0,
+        weightedTotal: 0,
+        approvedCount: 0,
+        continuedCount: 0,
+        replannedCount: 0,
+        blockedCount: 0,
+        failedCount: 0,
+        latestTimestamp: 0,
+        latestReason: "",
+      };
+      current.sampleSize += 1;
+      current.weightedTotal += scorePhaseOutcome(outcome.status);
+      if (outcome.status === "approved") current.approvedCount += 1;
+      if (outcome.status === "continued") current.continuedCount += 1;
+      if (outcome.status === "replanned") current.replannedCount += 1;
+      if (outcome.status === "blocked") current.blockedCount += 1;
+      if (outcome.status === "failed") current.failedCount += 1;
+      if (outcome.timestamp >= current.latestTimestamp) {
+        current.latestTimestamp = outcome.timestamp;
+        current.latestReason = outcome.reason;
+      }
+      grouped.set(key, current);
+    }
+
+    return [...grouped.values()]
+      .map((entry) => ({
+        provider: entry.provider,
+        role: entry.role,
+        phase: entry.phase,
+        sampleSize: entry.sampleSize,
+        score: (
+          entry.weightedTotal + PHASE_SCORE_PRIOR_WEIGHT * PHASE_SCORE_NEUTRAL
+        ) / (entry.sampleSize + PHASE_SCORE_PRIOR_WEIGHT),
+        approvedCount: entry.approvedCount,
+        continuedCount: entry.continuedCount,
+        replannedCount: entry.replannedCount,
+        blockedCount: entry.blockedCount,
+        failedCount: entry.failedCount,
+        latestTimestamp: entry.latestTimestamp,
+        latestReason: entry.latestReason,
+        identityKey,
+      }))
+      .sort((left, right) => right.score - left.score || right.latestTimestamp - left.latestTimestamp);
+  }
+}
+
+function scorePhaseOutcome(status: PhaseOutcome["status"]): number {
+  switch (status) {
+    case "approved":
+      return 1;
+    case "continued":
+      return 0.65;
+    case "replanned":
+      return 0.25;
+    case "blocked":
+      return 0.1;
+    case "failed":
+    default:
+      return 0;
+  }
+}
+
+function normalizeExecutionPhase(phase: string | undefined): ExecutionPhase | null {
+  switch (phase) {
+    case "planning":
+    case "executing":
+    case "reflecting":
+    case "replanning":
+    case "synthesis":
+    case "clarification-review":
+    case "completion-review":
+    case "consensus-review":
+    case "shell-review":
+      return phase;
+    default:
+      return null;
   }
 }

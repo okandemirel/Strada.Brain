@@ -56,6 +56,7 @@ import {
   CLARIFICATION_REVIEW_SYSTEM_PROMPT,
   COMPLETION_REVIEW_SYSTEM_PROMPT,
   ErrorRecoveryEngine,
+  ExecutionJournal,
   TaskPlanner,
   SelfVerification,
   collectClarificationReviewEvidence,
@@ -1934,6 +1935,7 @@ export class Orchestrator {
     const errorRecovery = new ErrorRecoveryEngine();
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
+    const executionJournal = new ExecutionJournal(prompt);
     const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
     const taskStartedAtMs = Date.now();
     stradaConformance.trackPrompt(prompt);
@@ -1950,22 +1952,23 @@ export class Orchestrator {
         }
 
         // ─── PAOR: Build phase-aware system prompt ──────────────────────
-        let activePrompt = systemPrompt;
-        switch (bgAgentState.phase) {
-          case AgentPhase.PLANNING:
-            activePrompt += "\n\n" + buildPlanningPrompt(
+      let activePrompt = systemPrompt;
+      switch (bgAgentState.phase) {
+        case AgentPhase.PLANNING:
+          activePrompt += "\n\n" + buildPlanningPrompt(
               bgAgentState.taskDescription,
-              bgAgentState.learnedInsights,
+              mergeLearnedInsights(bgAgentState.learnedInsights, executionJournal.getLearnedInsights()),
               { enableGoalDetection: false }, // Background tasks don't spawn sub-goals
             );
             break;
-          case AgentPhase.EXECUTING:
-            activePrompt += buildExecutionContext(bgAgentState);
+        case AgentPhase.EXECUTING:
+          activePrompt += buildExecutionContext(bgAgentState);
             break;
           case AgentPhase.REPLANNING:
             activePrompt += "\n\n" + buildReplanningPrompt(bgAgentState);
             break;
         }
+        activePrompt += executionJournal.buildPromptSection(bgAgentState.phase);
         // ────────────────────────────────────────────────────────────────
 
         const currentAssignment = this.getPinnedToolTurnAssignment(
@@ -2013,6 +2016,12 @@ export class Orchestrator {
         // ─── PAOR: Handle REFLECTING phase response ─────────────────────
         if (bgAgentState.phase === AgentPhase.REFLECTING) {
           const decision = parseReflectionDecision(response.text);
+          executionJournal.recordReflection(
+            decision,
+            response.text,
+            currentAssignment.providerName,
+            currentAssignment.modelId,
+          );
 
           if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
             const clarificationIntervention = await this.resolveDraftClarificationIntervention({
@@ -2064,6 +2073,11 @@ export class Orchestrator {
               taskStartedAtMs,
               usageHandler: options.onUsage ?? this.onUsage,
             });
+            executionJournal.recordVerifierResult(
+              verifierIntervention.result,
+              executionStrategy.reviewer.providerName,
+              executionStrategy.reviewer.modelId,
+            );
             if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
               this.recordPhaseOutcome({
                 identityKey,
@@ -2088,6 +2102,12 @@ export class Orchestrator {
               continue;
             }
             if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+              executionJournal.beginReplan({
+                state: bgAgentState,
+                reason: verifierIntervention.result.summary,
+                providerName: executionStrategy.reviewer.providerName,
+                modelId: executionStrategy.reviewer.modelId,
+              });
               this.recordPhaseOutcome({
                 identityKey,
                 assignment: currentAssignment,
@@ -2136,6 +2156,12 @@ export class Orchestrator {
           }
 
           if (decision === "REPLAN") {
+            executionJournal.beginReplan({
+              state: bgAgentState,
+              reason: response.text ?? "reflection requested a new plan",
+              providerName: currentAssignment.providerName,
+              modelId: currentAssignment.modelId,
+            });
             bgAgentState = {
               ...bgAgentState,
               failedApproaches: [...bgAgentState.failedApproaches, extractApproachSummary(bgAgentState)],
@@ -2296,10 +2322,22 @@ export class Orchestrator {
 
         // ─── PAOR: Phase transitions ────────────────────────────────────
         if (bgAgentState.phase === AgentPhase.PLANNING) {
+          executionJournal.recordPlan(
+            response.text,
+            bgAgentState.phase,
+            currentAssignment.providerName,
+            currentAssignment.modelId,
+          );
           bgAgentState = { ...bgAgentState, plan: response.text ?? null };
           bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
         }
         if (bgAgentState.phase === AgentPhase.REPLANNING) {
+          executionJournal.recordPlan(
+            response.text,
+            bgAgentState.phase,
+            currentAssignment.providerName,
+            currentAssignment.modelId,
+          );
           bgAgentState = { ...bgAgentState, plan: response.text ?? null };
           bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
         }
@@ -2344,6 +2382,13 @@ export class Orchestrator {
 
           this.emitToolResult(chatId, tc, toolResults[i]!);
         }
+        executionJournal.recordToolBatch({
+          phase: bgAgentState.phase,
+          toolCalls: response.toolCalls,
+          toolResults,
+          providerName: currentAssignment.providerName,
+          modelId: currentAssignment.modelId,
+        });
 
         // Progress report: summarize tool calls
         const toolNames = response.toolCalls.map((tc) => tc.name).join(", ");
@@ -2807,15 +2852,16 @@ export class Orchestrator {
     let systemPrompt = builtSystemPrompt;
 
     // ─── Autonomy layer ──────────────────────────────────────────────────
+    const lastUserMessage = this.extractLastUserMessage(session);
     const errorRecovery = new ErrorRecoveryEngine();
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
+    const executionJournal = new ExecutionJournal(lastUserMessage);
     const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
     const taskStartedAtMs = Date.now();
     // ────────────────────────────────────────────────────────────────────
 
     // ─── PAOR State Machine ──────────────────────────────────────────────
-    const lastUserMessage = this.extractLastUserMessage(session);
     stradaConformance.trackPrompt(lastUserMessage);
     let agentState = createInitialState(lastUserMessage);
     const executionStrategy = this.buildSupervisorExecutionStrategy(lastUserMessage, identityKey, fallbackProvider);
@@ -2860,7 +2906,7 @@ export class Orchestrator {
         case AgentPhase.PLANNING:
           activePrompt += "\n\n" + buildPlanningPrompt(
             agentState.taskDescription,
-            agentState.learnedInsights,
+            mergeLearnedInsights(agentState.learnedInsights, executionJournal.getLearnedInsights()),
             { enableGoalDetection: !!this.taskManager },
           );
           break;
@@ -2871,6 +2917,7 @@ export class Orchestrator {
           activePrompt += "\n\n" + buildReplanningPrompt(agentState);
           break;
       }
+      activePrompt += executionJournal.buildPromptSection(agentState.phase);
       // ────────────────────────────────────────────────────────────────
 
       const currentAssignment = this.getPinnedToolTurnAssignment(
@@ -2927,6 +2974,12 @@ export class Orchestrator {
       // ─── PAOR: Handle REFLECTING phase response ─────────────────────
       if (agentState.phase === AgentPhase.REFLECTING) {
         const decision = parseReflectionDecision(response.text);
+        executionJournal.recordReflection(
+          decision,
+          response.text,
+          currentAssignment.providerName,
+          currentAssignment.modelId,
+        );
 
         if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
           const clarificationIntervention = await this.resolveDraftClarificationIntervention({
@@ -2977,6 +3030,11 @@ export class Orchestrator {
             taskStartedAtMs,
             usageHandler: this.onUsage,
           });
+          executionJournal.recordVerifierResult(
+            verifierIntervention.result,
+            executionStrategy.reviewer.providerName,
+            executionStrategy.reviewer.modelId,
+          );
           if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
             this.recordPhaseOutcome({
               identityKey,
@@ -3000,6 +3058,12 @@ export class Orchestrator {
             continue;
           }
           if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+            executionJournal.beginReplan({
+              state: agentState,
+              reason: verifierIntervention.result.summary,
+              providerName: executionStrategy.reviewer.providerName,
+              modelId: executionStrategy.reviewer.modelId,
+            });
             this.recordPhaseOutcome({
               identityKey,
               assignment: currentAssignment,
@@ -3047,6 +3111,12 @@ export class Orchestrator {
         }
 
         if (decision === "REPLAN") {
+          executionJournal.beginReplan({
+            state: agentState,
+            reason: response.text ?? "reflection requested a new plan",
+            providerName: currentAssignment.providerName,
+            modelId: currentAssignment.modelId,
+          });
           agentState = {
             ...agentState,
             failedApproaches: [...agentState.failedApproaches, extractApproachSummary(agentState)],
@@ -3380,6 +3450,12 @@ export class Orchestrator {
 
       // ─── PAOR: Phase transitions ────────────────────────────────────
       if (agentState.phase === AgentPhase.PLANNING) {
+        executionJournal.recordPlan(
+          response.text,
+          agentState.phase,
+          currentAssignment.providerName,
+          currentAssignment.modelId,
+        );
         agentState = { ...agentState, plan: response.text ?? null };
 
         // ─── Goal Decomposition: proactive decomposition for complex tasks ───
@@ -3406,6 +3482,12 @@ export class Orchestrator {
         agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
       }
       if (agentState.phase === AgentPhase.REPLANNING) {
+        executionJournal.recordPlan(
+          response.text,
+          agentState.phase,
+          currentAssignment.providerName,
+          currentAssignment.modelId,
+        );
         agentState = { ...agentState, plan: response.text ?? null };
         agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
       }
@@ -3460,6 +3542,13 @@ export class Orchestrator {
 
         this.emitToolResult(chatId, tc, toolResults[i]!);
       }
+      executionJournal.recordToolBatch({
+        phase: agentState.phase,
+        toolCalls: response.toolCalls,
+        toolResults,
+        providerName: currentAssignment.providerName,
+        modelId: currentAssignment.modelId,
+      });
 
       // Inject state-aware context (stall detection, budget warnings)
       const stateCtx = taskPlanner.getStateInjection();
@@ -5070,6 +5159,26 @@ function extractApproachSummary(state: AgentState): string {
   const recentSteps = state.stepResults.slice(-5);
   const tools = recentSteps.map(s => s.toolName + "(" + (s.success ? "OK" : "FAIL") + ")").join(" → ");
   return (state.plan?.slice(0, 100) ?? "Unknown plan") + ": " + tools;
+}
+
+function mergeLearnedInsights(
+  base: readonly string[] | null | undefined,
+  extra: readonly string[] | null | undefined,
+): string[] {
+  const merged = new Set<string>();
+  for (const value of base ?? []) {
+    const normalized = value.trim();
+    if (normalized) {
+      merged.add(normalized);
+    }
+  }
+  for (const value of extra ?? []) {
+    const normalized = value.trim();
+    if (normalized) {
+      merged.add(normalized);
+    }
+  }
+  return [...merged].slice(-12);
 }
 
 /** Sanitize tool input for learning events: cap size, strip API keys */

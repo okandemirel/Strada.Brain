@@ -136,6 +136,41 @@ const codeGenTask: TaskClassification = {
   criticality: "medium",
 };
 
+const PARITY_PROVIDERS = [
+  {
+    name: "alpha",
+    label: "Alpha",
+    defaultModel: "alpha-model",
+    capabilities: {
+      maxTokens: 8192,
+      streaming: true,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+      contextWindow: 128_000,
+      thinkingSupported: true,
+      specialFeatures: ["reasoning"],
+    },
+  },
+  {
+    name: "beta",
+    label: "Beta",
+    defaultModel: "beta-model",
+    capabilities: {
+      maxTokens: 8192,
+      streaming: true,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+      contextWindow: 128_000,
+      thinkingSupported: true,
+      specialFeatures: ["reasoning"],
+    },
+  },
+];
+
 /* ------------------------------------------------------------------ */
 /*  Tests                                                             */
 /* ------------------------------------------------------------------ */
@@ -304,6 +339,60 @@ describe("ProviderRouter", () => {
           identityKey: "user-1",
         }),
       ]);
+    });
+
+    it("builds an adaptive phase scoreboard and prefers providers with cleaner runtime history", () => {
+      const manager = createMockManager(PARITY_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      router.recordPhaseOutcome({
+        provider: "beta",
+        role: "planner",
+        phase: "planning",
+        source: "supervisor-strategy",
+        status: "approved",
+        reason: "Produced a clean plan.",
+        task: planningTask,
+        timestamp: 10,
+        identityKey: "user-1",
+      });
+      router.recordPhaseOutcome({
+        provider: "beta",
+        role: "planner",
+        phase: "planning",
+        source: "supervisor-strategy",
+        status: "approved",
+        reason: "Follow-up planning also stayed clean.",
+        task: planningTask,
+        timestamp: 11,
+        identityKey: "user-1",
+      });
+      router.recordPhaseOutcome({
+        provider: "alpha",
+        role: "planner",
+        phase: "planning",
+        source: "supervisor-strategy",
+        status: "replanned",
+        reason: "The plan had to be replaced.",
+        task: planningTask,
+        timestamp: 12,
+        identityKey: "user-1",
+      });
+
+      const scoreboard = router.getPhaseScoreboard(10, "user-1");
+      expect(scoreboard[0]).toEqual(expect.objectContaining({
+        provider: "beta",
+        phase: "planning",
+        score: expect.any(Number),
+        sampleSize: 2,
+      }));
+      expect(scoreboard.find((entry) => entry.provider === "beta")!.score).toBeGreaterThan(
+        scoreboard.find((entry) => entry.provider === "alpha")!.score,
+      );
+
+      const decision = router.resolve(planningTask, "planning", { identityKey: "user-1" });
+      expect(decision.provider).toBe("beta");
+      expect(decision.reason).toContain("phase score");
     });
   });
 

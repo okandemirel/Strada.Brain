@@ -196,6 +196,20 @@ interface DashboardProviderRouter {
     task: { type: string; complexity: string; criticality: string };
     timestamp: number;
   }>;
+  getPhaseScoreboard?(n: number, identityKey?: string): Array<{
+    provider: string;
+    role: string;
+    phase: string;
+    sampleSize: number;
+    score: number;
+    approvedCount: number;
+    continuedCount: number;
+    replannedCount: number;
+    blockedCount: number;
+    failedCount: number;
+    latestTimestamp: number;
+    latestReason: string;
+  }>;
   getPreset(): string;
   setPreset(preset: "budget" | "balanced" | "performance"): void;
 }
@@ -1579,9 +1593,10 @@ export class DashboardServer {
         const routingDecisions = this.providerRouter?.getRecentDecisions(20, identityKey) ?? [];
         const executionTraces = this.providerRouter?.getRecentExecutionTraces?.(20, identityKey) ?? [];
         const phaseOutcomes = this.providerRouter?.getRecentPhaseOutcomes?.(20, identityKey) ?? [];
+        const phaseScores = this.providerRouter?.getPhaseScoreboard?.(12, identityKey) ?? [];
         const preset = this.providerRouter?.getPreset() ?? "balanced";
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ routing: routingDecisions, execution: executionTraces, outcomes: phaseOutcomes, preset }));
+        res.end(JSON.stringify({ routing: routingDecisions, execution: executionTraces, outcomes: phaseOutcomes, phaseScores, preset }));
         return;
       }
 

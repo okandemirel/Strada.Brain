@@ -48,4 +48,5 @@ export type {
   VerifierPipelinePlan,
   VerifierPipelineResult,
 } from "./verifier-pipeline.js";
+export { ExecutionJournal } from "./execution-journal.js";
 export { MUTATION_TOOLS, VERIFY_TOOLS, WRITE_OPERATIONS, COMPILABLE_EXT, extractFilePath } from "./constants.js";
