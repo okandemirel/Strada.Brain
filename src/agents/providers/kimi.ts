@@ -69,9 +69,9 @@ export class KimiProvider extends OpenAIProvider {
     super(apiKey, model, baseUrl, "Kimi (Moonshot)");
   }
 
-  protected override buildHeaders(): Record<string, string> {
+  protected override async buildHeaders(): Promise<Record<string, string>> {
     return {
-      ...super.buildHeaders(),
+      ...(await super.buildHeaders()),
       "User-Agent": "claude-code/0.1.0",
     };
   }

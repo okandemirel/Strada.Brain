@@ -53,7 +53,9 @@ export default function SetupWizard() {
             checkedProviders={wiz.checkedProviders}
             toggleProvider={wiz.toggleProvider}
             providerKeys={wiz.providerKeys}
+            providerAuthModes={wiz.providerAuthModes}
             setProviderKey={wiz.setProviderKey}
+            setProviderAuthMode={wiz.setProviderAuthMode}
             onNext={wiz.nextStep}
             onBack={wiz.prevStep}
           />
@@ -86,6 +88,7 @@ export default function SetupWizard() {
             setEmbeddingProvider={wiz.setEmbeddingProvider}
             checkedProviders={wiz.checkedProviders}
             providerKeys={wiz.providerKeys}
+            providerAuthModes={wiz.providerAuthModes}
             setProviderKey={wiz.setProviderKey}
             daemonEnabled={wiz.daemonEnabled}
             setDaemonEnabled={wiz.setDaemonEnabled}
@@ -105,6 +108,7 @@ export default function SetupWizard() {
             selectedPreset={wiz.selectedPreset}
             checkedProviders={wiz.checkedProviders}
             providerKeys={wiz.providerKeys}
+            providerAuthModes={wiz.providerAuthModes}
             projectPath={wiz.projectPath}
             channel={wiz.channel}
             language={wiz.language}

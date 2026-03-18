@@ -13,6 +13,7 @@ interface ChannelRagStepProps {
   setEmbeddingProvider: (provider: string) => void
   checkedProviders: Set<string>
   providerKeys: Record<string, string>
+  providerAuthModes: Record<string, string>
   setProviderKey: (id: string, key: string) => void
   daemonEnabled: boolean
   setDaemonEnabled: (enabled: boolean) => void
@@ -39,6 +40,7 @@ export default function ChannelRagStep({
   setEmbeddingProvider,
   checkedProviders,
   providerKeys,
+  providerAuthModes,
   setProviderKey,
   daemonEnabled,
   setDaemonEnabled,
@@ -63,7 +65,14 @@ export default function ChannelRagStep({
   const needsDedicatedEmbeddingKey = Boolean(
     ragEnabled &&
     explicitEmbeddingProvider?.envKey &&
-    !checkedProviders.has(embeddingProvider),
+    (
+      !checkedProviders.has(embeddingProvider)
+      || (
+        embeddingProvider === 'openai'
+        && providerAuthModes.openai === 'chatgpt-subscription'
+        && !(providerKeys.openai ?? '').trim()
+      )
+    ),
   )
 
   return (
@@ -165,7 +174,7 @@ export default function ChannelRagStep({
                 <label htmlFor="embeddingProviderKey">{explicitEmbeddingProvider.name} Embedding API Key</label>
                 <input
                   id="embeddingProviderKey"
-                  type="text"
+                  type="password"
                   placeholder={explicitEmbeddingProvider.placeholder}
                   value={providerKeys[embeddingProvider] ?? ''}
                   onChange={(e) => setProviderKey(embeddingProvider, e.target.value)}

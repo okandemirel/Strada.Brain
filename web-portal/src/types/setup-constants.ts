@@ -10,7 +10,28 @@ export const PRESETS: PresetDef[] = [
 
 export const PROVIDERS: ProviderDef[] = [
   { id: 'claude', name: 'Claude', envKey: 'ANTHROPIC_API_KEY', placeholder: 'sk-ant-...', recommended: true, helpUrl: 'https://console.anthropic.com' },
-  { id: 'openai', name: 'OpenAI', envKey: 'OPENAI_API_KEY', placeholder: 'sk-...', helpUrl: 'https://platform.openai.com/api-keys' },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    envKey: 'OPENAI_API_KEY',
+    placeholder: 'sk-...',
+    helpUrl: 'https://platform.openai.com/api-keys',
+    authModes: [
+      {
+        id: 'api-key',
+        label: 'API Key',
+        description: 'Use OpenAI Platform billing with a standard API key.',
+        requiresSecret: true,
+        secretLabel: 'OpenAI API Key',
+        secretPlaceholder: 'sk-...',
+      },
+      {
+        id: 'chatgpt-subscription',
+        label: 'ChatGPT Subscription',
+        description: 'Reuse the local Codex/ChatGPT subscription login from this machine.',
+      },
+    ],
+  },
   { id: 'deepseek', name: 'DeepSeek', envKey: 'DEEPSEEK_API_KEY', placeholder: 'sk-...', helpUrl: 'https://platform.deepseek.com' },
   { id: 'kimi', name: 'Kimi', envKey: 'KIMI_API_KEY', placeholder: 'sk-...', helpUrl: 'https://platform.moonshot.cn' },
   { id: 'qwen', name: 'Qwen', envKey: 'QWEN_API_KEY', placeholder: 'sk-...', helpUrl: 'https://dashscope.console.aliyun.com' },

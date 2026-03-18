@@ -33,4 +33,20 @@ describe("generateEnvContent", () => {
     expect(content).toContain('GEMINI_API_KEY="AIza-gemini-key"');
     expect(content).toContain("EMBEDDING_PROVIDER=gemini");
   });
+
+  it("supports OpenAI ChatGPT/Codex subscription mode without writing an OpenAI API key", () => {
+    const content = generateEnvContent({
+      unityProjectPath: "/Users/test/MyGame",
+      provider: "openai",
+      openaiAuthMode: "chatgpt-subscription",
+      embeddingProvider: "openai",
+      embeddingApiKey: "sk-proj-openai-embed-key",
+      channel: "web",
+      language: "en",
+    });
+
+    expect(content).toContain("OPENAI_AUTH_MODE=chatgpt-subscription");
+    expect(content).toContain("PROVIDER_CHAIN=openai");
+    expect(content).toContain('OPENAI_API_KEY="sk-proj-openai-embed-key"');
+  });
 });

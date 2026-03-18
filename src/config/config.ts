@@ -32,6 +32,10 @@ dotenv.config();
 export type EnvVarName =
   | "ANTHROPIC_API_KEY"
   | "OPENAI_API_KEY"
+  | "OPENAI_AUTH_MODE"
+  | "OPENAI_CHATGPT_AUTH_FILE"
+  | "OPENAI_SUBSCRIPTION_ACCESS_TOKEN"
+  | "OPENAI_SUBSCRIPTION_ACCOUNT_ID"
   | "DEEPSEEK_API_KEY"
   | "QWEN_API_KEY"
   | "KIMI_API_KEY"
@@ -295,6 +299,9 @@ export type EmbeddingProvider =
   | "gemini"
   | "ollama";
 
+/** OpenAI authentication modes */
+export type OpenAIAuthMode = "api-key" | "chatgpt-subscription";
+
 /** AI provider names */
 export type AIProviderName =
   | "claude"
@@ -518,6 +525,10 @@ export interface Config {
   // AI Providers
   readonly anthropicApiKey?: string;
   readonly openaiApiKey?: string;
+  readonly openaiAuthMode: OpenAIAuthMode;
+  readonly openaiChatgptAuthFile?: string;
+  readonly openaiSubscriptionAccessToken?: string;
+  readonly openaiSubscriptionAccountId?: string;
   readonly deepseekApiKey?: string;
   readonly qwenApiKey?: string;
   readonly kimiApiKey?: string;
@@ -714,6 +725,10 @@ export const configSchema = z
     // AI Providers
     anthropicApiKey: z.string().optional(),
     openaiApiKey: z.string().optional(),
+    openaiAuthMode: z.enum(["api-key", "chatgpt-subscription"]).default("api-key"),
+    openaiChatgptAuthFile: z.string().optional(),
+    openaiSubscriptionAccessToken: z.string().optional(),
+    openaiSubscriptionAccountId: z.string().optional(),
     deepseekApiKey: z.string().optional(),
     qwenApiKey: z.string().optional(),
     kimiApiKey: z.string().optional(),
@@ -1139,10 +1154,14 @@ export const configSchema = z
       data.fireworksApiKey,
       data.geminiApiKey,
     ].some((k) => k && k.length > 0);
+    const hasOpenAISubscription =
+      data.openaiAuthMode === "chatgpt-subscription"
+      || Boolean(data.openaiSubscriptionAccessToken && data.openaiSubscriptionAccountId)
+      || Boolean(data.openaiChatgptAuthFile);
 
     const hasOllama = data.providerChain?.includes("ollama") ?? false;
 
-    if (!hasAnyKey && !hasOllama) {
+    if (!hasAnyKey && !hasOpenAISubscription && !hasOllama) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "At least one AI provider API key is required (or use Ollama)",
@@ -1188,6 +1207,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
   const config: Config = {
     anthropicApiKey: rawConfig.anthropicApiKey,
     openaiApiKey: rawConfig.openaiApiKey,
+    openaiAuthMode: rawConfig.openaiAuthMode,
+    openaiChatgptAuthFile: rawConfig.openaiChatgptAuthFile,
+    openaiSubscriptionAccessToken: rawConfig.openaiSubscriptionAccessToken,
+    openaiSubscriptionAccountId: rawConfig.openaiSubscriptionAccountId,
     deepseekApiKey: rawConfig.deepseekApiKey,
     qwenApiKey: rawConfig.qwenApiKey,
     kimiApiKey: rawConfig.kimiApiKey,
@@ -1742,6 +1765,10 @@ export const secretPatterns: SecretPattern[] = [
 interface EnvVars {
   anthropicApiKey: string | undefined;
   openaiApiKey: string | undefined;
+  openaiAuthMode: string | undefined;
+  openaiChatgptAuthFile: string | undefined;
+  openaiSubscriptionAccessToken: string | undefined;
+  openaiSubscriptionAccountId: string | undefined;
   deepseekApiKey: string | undefined;
   qwenApiKey: string | undefined;
   kimiApiKey: string | undefined;
@@ -1978,6 +2005,10 @@ function loadFromEnv(): EnvVars {
   return {
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
     openaiApiKey: process.env["OPENAI_API_KEY"],
+    openaiAuthMode: process.env["OPENAI_AUTH_MODE"],
+    openaiChatgptAuthFile: process.env["OPENAI_CHATGPT_AUTH_FILE"],
+    openaiSubscriptionAccessToken: process.env["OPENAI_SUBSCRIPTION_ACCESS_TOKEN"],
+    openaiSubscriptionAccountId: process.env["OPENAI_SUBSCRIPTION_ACCOUNT_ID"],
     deepseekApiKey: process.env["DEEPSEEK_API_KEY"],
     qwenApiKey: process.env["QWEN_API_KEY"],
     kimiApiKey: process.env["KIMI_API_KEY"],
@@ -2311,7 +2342,14 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
     const keyMap: Record<string, string | undefined> = {
       claude: config.anthropicApiKey,
       anthropic: config.anthropicApiKey,
-      openai: config.openaiApiKey,
+      openai: config.openaiApiKey
+        ?? (
+          config.openaiAuthMode === "chatgpt-subscription"
+          || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
+          || Boolean(config.openaiChatgptAuthFile)
+        ? "[chatgpt-subscription]"
+        : undefined
+        ),
       deepseek: config.deepseekApiKey,
       qwen: config.qwenApiKey,
       kimi: config.kimiApiKey,
@@ -2325,13 +2363,30 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
     for (const name of names) {
       if (name === "ollama") continue; // no key needed
       if (!keyMap[name]) {
+        if (name === "openai") {
+          const hasSubscription =
+            config.openaiAuthMode === "chatgpt-subscription"
+            || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
+            || Boolean(config.openaiChatgptAuthFile);
+          if (!hasSubscription) {
+            missing.push("OPENAI_API_KEY");
+          }
+          continue;
+        }
         missing.push(`${name.toUpperCase()}_API_KEY`);
       }
     }
   } else if (!config.anthropicApiKey) {
     // No chain specified and no Anthropic key — check if any key exists
     const hasAny = [
-      config.openaiApiKey,
+      config.openaiApiKey
+        ?? (
+          config.openaiAuthMode === "chatgpt-subscription"
+          || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
+          || Boolean(config.openaiChatgptAuthFile)
+          ? "[chatgpt-subscription]"
+          : undefined
+        ),
       config.deepseekApiKey,
       config.qwenApiKey,
       config.kimiApiKey,
@@ -2432,6 +2487,10 @@ export function createPartialConfig(env: Partial<EnvVarMap>): PartialConfig {
 
   if (env.ANTHROPIC_API_KEY) raw.anthropicApiKey = env.ANTHROPIC_API_KEY;
   if (env.OPENAI_API_KEY) raw.openaiApiKey = env.OPENAI_API_KEY;
+  if (env.OPENAI_AUTH_MODE) raw.openaiAuthMode = env.OPENAI_AUTH_MODE;
+  if (env.OPENAI_CHATGPT_AUTH_FILE) raw.openaiChatgptAuthFile = env.OPENAI_CHATGPT_AUTH_FILE;
+  if (env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN) raw.openaiSubscriptionAccessToken = env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN;
+  if (env.OPENAI_SUBSCRIPTION_ACCOUNT_ID) raw.openaiSubscriptionAccountId = env.OPENAI_SUBSCRIPTION_ACCOUNT_ID;
   if (env.LOG_LEVEL) raw.logLevel = env.LOG_LEVEL;
   if (env.READ_ONLY_MODE) raw.security = { readOnlyMode: env.READ_ONLY_MODE === "true" };
 

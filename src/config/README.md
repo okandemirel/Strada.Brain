@@ -30,7 +30,7 @@ The `Config` type groups settings into nested sub-configs:
 
 | Sub-config | Interface | Key env vars |
 |------------|-----------|-------------|
-| AI providers | top-level fields | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, etc. At least one key is required unless `PROVIDER_CHAIN` only uses local providers such as `ollama`. |
+| AI providers | top-level fields | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, etc. At least one usable hosted credential is required unless `PROVIDER_CHAIN` only uses local providers such as `ollama`; OpenAI can also authenticate via `OPENAI_AUTH_MODE=chatgpt-subscription` plus the local Codex auth session file. |
 | `telegram` | `TelegramConfig` | `TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_IDS` |
 | `discord` | `DiscordConfig` | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `ALLOWED_DISCORD_USER_IDS`, `ALLOWED_DISCORD_ROLE_IDS` |
 | `slack` | `SlackConfig` | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APP_TOKEN`, `SLACK_SOCKET_MODE` |
@@ -54,6 +54,9 @@ The `Config` type groups settings into nested sub-configs:
 | `autoUpdate` | auto-update config | `AUTO_UPDATE_ENABLED`, `AUTO_UPDATE_INTERVAL_HOURS`, `AUTO_UPDATE_IDLE_TIMEOUT_MIN`, `AUTO_UPDATE_CHANNEL`, `AUTO_UPDATE_NOTIFY`, `AUTO_UPDATE_AUTO_RESTART` |
 
 - `PROVIDER_CHAIN` - comma-separated provider names for fallback ordering
+- `OPENAI_AUTH_MODE` - `api-key` (default) or `chatgpt-subscription`; when set to subscription mode Strada reuses the local Codex/ChatGPT login instead of the OpenAI platform API key
+- `OPENAI_CHATGPT_AUTH_FILE` - optional auth session file path for OpenAI subscription mode; defaults to `~/.codex/auth.json`
+- `OPENAI_SUBSCRIPTION_ACCESS_TOKEN` / `OPENAI_SUBSCRIPTION_ACCOUNT_ID` - optional manual overrides for the Codex/ChatGPT subscription session
 - `EMBEDDING_PROVIDER` - system-wide embedding selection for RAG/memory. This is independent from `PROVIDER_CHAIN`; for example, conversation can run on `openai` while embeddings use `gemini`, or vice versa.
 - `PLUGIN_DIRS` - comma-separated directory paths for plugin loading
 - `STRADA_CORE_REPO_URL` / `STRADA_MODULES_REPO_URL` - official git remotes used when the agent offers to install missing Strada packages
@@ -67,7 +70,7 @@ The `Config` type groups settings into nested sub-configs:
 ### Validation Helpers
 
 - `validateProjectPath(path)` resolves symlinks via `realpathSync`, checks `isDirectory()`, returns `Result<string, string>`
-- `hasRequiredApiKeys(config)` checks that at least one usable provider is configured, or that every provider named in `PROVIDER_CHAIN` has its required key
+- `hasRequiredApiKeys(config)` checks that at least one usable provider is configured, or that every provider named in `PROVIDER_CHAIN` has its required key/subscription auth
 - `checkChannelConfig(config, channelType)` validates channel-specific requirements:
   - Telegram: requires bot token and non-empty allowed user IDs
   - Discord: requires bot token and either user or role allowlists

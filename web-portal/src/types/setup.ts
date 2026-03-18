@@ -1,3 +1,12 @@
+export interface ProviderAuthModeDef {
+  id: string
+  label: string
+  description: string
+  requiresSecret?: boolean
+  secretLabel?: string
+  secretPlaceholder?: string
+}
+
 export interface ProviderDef {
   id: string
   name: string
@@ -6,6 +15,7 @@ export interface ProviderDef {
   recommended?: boolean
   embeddingRecommended?: boolean
   helpUrl: string
+  authModes?: ProviderAuthModeDef[]
 }
 
 export interface PresetDef {
@@ -41,6 +51,7 @@ export interface WizardState {
   selectedPreset: string | null
   checkedProviders: Set<string>
   providerKeys: Record<string, string>
+  providerAuthModes: Record<string, string>
   projectPath: string
   pathValid: boolean | null
   pathError: string | null

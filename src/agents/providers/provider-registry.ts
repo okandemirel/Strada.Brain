@@ -1,6 +1,7 @@
 import type { IAIProvider } from "./provider.interface.js";
 import { ClaudeProvider } from "./claude.js";
 import { OpenAIProvider } from "./openai.js";
+import type { OpenAIAuthMode } from "../../config/config.js";
 import { OllamaProvider } from "./ollama.js";
 import { FallbackChainProvider } from "./fallback-chain.js";
 import { GeminiProvider } from "./gemini.js";
@@ -18,11 +19,13 @@ import { getLogger } from "../../utils/logger.js";
  * Maps provider names to their dedicated class constructors.
  * Each class extends OpenAIProvider with provider-specific defaults.
  */
-const PROVIDER_CLASS_MAP: Record<
-  string,
-  new (apiKey: string, model?: string, baseUrl?: string) => OpenAIProvider
-> = {
-  openai: OpenAIProvider,
+type OpenAICompatibleProviderConstructor = new (
+  apiKey: string,
+  model?: string,
+  baseUrl?: string,
+) => OpenAIProvider;
+
+const PROVIDER_CLASS_MAP: Record<string, OpenAICompatibleProviderConstructor> = {
   gemini: GeminiProvider,
   deepseek: DeepSeekProvider,
   qwen: QwenProvider,
@@ -102,10 +105,34 @@ export interface ProviderConfig {
   name: string;
   /** API key (not needed for Ollama) */
   apiKey?: string;
+  /** OpenAI auth mode */
+  openaiAuthMode?: OpenAIAuthMode;
+  /** Optional local Codex auth.json path for ChatGPT/Codex subscription access */
+  openaiChatgptAuthFile?: string;
+  /** Optional manual ChatGPT/Codex access token override */
+  openaiSubscriptionAccessToken?: string;
+  /** Optional ChatGPT workspace/account id override */
+  openaiSubscriptionAccountId?: string;
   /** Override model */
   model?: string;
   /** Override base URL */
   baseUrl?: string;
+}
+
+export interface ProviderCredential {
+  apiKey?: string;
+  openaiAuthMode?: OpenAIAuthMode;
+  openaiChatgptAuthFile?: string;
+  openaiSubscriptionAccessToken?: string;
+  openaiSubscriptionAccountId?: string;
+}
+
+export type ProviderCredentialMap = Record<string, ProviderCredential | undefined>;
+
+function hasOpenAISubscriptionCredential(config: ProviderConfig): boolean {
+  return config.openaiAuthMode === "chatgpt-subscription"
+    || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
+    || Boolean(config.openaiChatgptAuthFile);
 }
 
 /**
@@ -123,6 +150,29 @@ export function createProvider(config: ProviderConfig): IAIProvider {
     return new OllamaProvider(
       config.model ?? "llama3.3",
       config.baseUrl ?? "http://localhost:11434",
+    );
+  }
+
+  if (name === "openai") {
+    if (!config.apiKey && !hasOpenAISubscriptionCredential(config)) {
+      throw new Error("OpenAI provider requires an API key or ChatGPT/Codex subscription auth");
+    }
+    const auth = hasOpenAISubscriptionCredential(config)
+      ? {
+          mode: "chatgpt-subscription" as const,
+          accessToken: config.openaiSubscriptionAccessToken,
+          accountId: config.openaiSubscriptionAccountId,
+          authFile: config.openaiChatgptAuthFile,
+        }
+      : {
+          mode: "api-key" as const,
+          apiKey: config.apiKey!,
+        };
+    return new OpenAIProvider(
+      auth,
+      config.model ?? PROVIDER_PRESETS["openai"]!.defaultModel,
+      config.baseUrl ?? PROVIDER_PRESETS["openai"]!.baseUrl,
+      PROVIDER_PRESETS["openai"]!.label,
     );
   }
 
@@ -161,7 +211,7 @@ export function createProvider(config: ProviderConfig): IAIProvider {
  */
 export function buildProviderChain(
   providerNames: string[],
-  apiKeys: Record<string, string | undefined>,
+  credentials: ProviderCredentialMap,
   overrides?: { models?: Record<string, string>; baseUrls?: Record<string, string> },
 ): IAIProvider {
   const logger = getLogger();
@@ -170,16 +220,30 @@ export function buildProviderChain(
   for (const name of providerNames) {
     const trimmed = name.trim().toLowerCase();
     try {
+      const credential = credentials[trimmed] ?? {};
       const provider = createProvider({
         name: trimmed,
-        apiKey: apiKeys[trimmed],
+        apiKey: credential.apiKey,
+        openaiAuthMode: credential.openaiAuthMode,
+        openaiChatgptAuthFile: credential.openaiChatgptAuthFile,
+        openaiSubscriptionAccessToken: credential.openaiSubscriptionAccessToken,
+        openaiSubscriptionAccountId: credential.openaiSubscriptionAccountId,
         model: overrides?.models?.[trimmed],
         baseUrl: overrides?.baseUrls?.[trimmed],
       });
       providers.push(provider);
 
       const preset = PROVIDER_PRESETS[trimmed];
-      const keyPrefix = apiKeys[trimmed]?.slice(0, 6);
+      const keyPrefix = credential.apiKey?.slice(0, 6)
+        ?? (hasOpenAISubscriptionCredential({
+          name: trimmed,
+          openaiAuthMode: credential.openaiAuthMode,
+          openaiChatgptAuthFile: credential.openaiChatgptAuthFile,
+          openaiSubscriptionAccessToken: credential.openaiSubscriptionAccessToken,
+          openaiSubscriptionAccountId: credential.openaiSubscriptionAccountId,
+        })
+          ? "(subscription)"
+          : undefined);
       logger.info(`Provider ready: ${provider.name}`, {
         model: overrides?.models?.[trimmed] ?? preset?.defaultModel ?? "default",
         keyPrefix: keyPrefix ? `${keyPrefix}...` : "(none)",

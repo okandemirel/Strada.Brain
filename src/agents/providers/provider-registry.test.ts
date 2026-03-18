@@ -78,6 +78,17 @@ describe("createProvider", () => {
     expect(() => createProvider({ name: "openai" })).toThrow("requires an API key");
   });
 
+  it("accepts OpenAI ChatGPT/Codex subscription auth without an API key", () => {
+    const provider = createProvider({
+      name: "openai",
+      openaiAuthMode: "chatgpt-subscription",
+      openaiChatgptAuthFile: "~/.codex/auth.json",
+    });
+
+    expect(provider).toBeInstanceOf(OpenAIProvider);
+    expect(provider.name).toBe("OpenAI");
+  });
+
   it("uses correct label for OpenAI provider", () => {
     const provider = createProvider({ name: "openai", apiKey: "sk-test" });
     expect(provider.name).toBe("OpenAI");
@@ -106,14 +117,14 @@ describe("createProvider", () => {
 
 describe("buildProviderChain", () => {
   it("builds single provider", () => {
-    const provider = buildProviderChain(["claude"], { claude: "sk-test" });
+    const provider = buildProviderChain(["claude"], { claude: { apiKey: "sk-test" } });
     expect(provider.name).toBe("claude");
   });
 
   it("builds fallback chain from multiple providers", () => {
     const provider = buildProviderChain(["claude", "deepseek"], {
-      claude: "sk-ant",
-      deepseek: "sk-deep",
+      claude: { apiKey: "sk-ant" },
+      deepseek: { apiKey: "sk-deep" },
     });
     expect(provider.name).toBe("chain(claude→DeepSeek)");
   });
@@ -121,7 +132,7 @@ describe("buildProviderChain", () => {
   it("skips providers with missing keys", () => {
     const provider = buildProviderChain(
       ["claude", "openai", "deepseek"],
-      { claude: "sk-ant" }, // openai and deepseek keys missing
+      { claude: { apiKey: "sk-ant" } }, // openai and deepseek keys missing
     );
     // Only claude should remain (single provider, no chain)
     expect(provider.name).toBe("claude");
@@ -134,7 +145,18 @@ describe("buildProviderChain", () => {
   });
 
   it("includes ollama without API key", () => {
-    const provider = buildProviderChain(["claude", "ollama"], { claude: "sk-ant" });
+    const provider = buildProviderChain(["claude", "ollama"], { claude: { apiKey: "sk-ant" } });
     expect(provider.name).toBe("chain(claude→ollama)");
+  });
+
+  it("builds OpenAI from ChatGPT/Codex subscription credentials", () => {
+    const provider = buildProviderChain(["openai"], {
+      openai: {
+        openaiAuthMode: "chatgpt-subscription",
+        openaiChatgptAuthFile: "~/.codex/auth.json",
+      },
+    });
+
+    expect(provider.name).toBe("OpenAI");
   });
 });

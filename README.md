@@ -46,7 +46,7 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 ### Prerequisites
 
 - **Node.js 20+** and npm
-- At least one supported AI provider configured (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), or an `ollama`-only `PROVIDER_CHAIN`
+- At least one supported AI provider configured (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), an OpenAI ChatGPT/Codex subscription session (`OPENAI_AUTH_MODE=chatgpt-subscription`), or an `ollama`-only `PROVIDER_CHAIN`
 - A **Unity project** (the path you give the agent). Strada.Core is recommended for full framework-aware assistance; without it, Strada.Brain still runs with reduced Strada-specific guidance.
 
 ### 1. Install
@@ -521,8 +521,10 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 | `GEMINI_API_KEY` | Google Gemini | `gemini-pro` |
 | `OLLAMA_BASE_URL` | Ollama (local) | `llama3` |
 | `PROVIDER_CHAIN` | Fallback order | e.g. `claude,kimi,deepseek,ollama` |
+| `OPENAI_AUTH_MODE` | OpenAI auth mode | `api-key` (default) or `chatgpt-subscription` |
+| `OPENAI_CHATGPT_AUTH_FILE` | Optional Codex auth session file | defaults to `~/.codex/auth.json` when `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
-**Provider chain:** Set `PROVIDER_CHAIN` to a comma-separated list of provider names. The system tries each in order, falling back on failure. Example: `PROVIDER_CHAIN=kimi,deepseek,claude` uses Kimi first, DeepSeek if Kimi fails, then Claude.
+**Provider chain:** Set `PROVIDER_CHAIN` to a comma-separated list of provider names. Strada stays the control plane and uses this chain to choose the primary execution worker plus fallbacks on failure. Example: `PROVIDER_CHAIN=kimi,deepseek,claude` uses Kimi first, DeepSeek if Kimi fails, then Claude. `openai` can be backed by either `OPENAI_API_KEY` or a local ChatGPT/Codex subscription session.
 
 ### Chat Channels
 

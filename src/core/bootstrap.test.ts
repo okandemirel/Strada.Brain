@@ -389,7 +389,10 @@ describe("initializeAIProvider", () => {
 
     expect(buildProviderChain).toHaveBeenCalledWith(
       ["gemini"],
-      expect.objectContaining({ gemini: "gem-key", kimi: undefined }),
+      expect.objectContaining({
+        gemini: expect.objectContaining({ apiKey: "gem-key" }),
+        kimi: expect.objectContaining({ apiKey: undefined }),
+      }),
       expect.any(Object),
     );
     expect(result.notices).toContain("Unavailable AI providers were skipped: kimi.");
@@ -406,7 +409,9 @@ describe("initializeAIProvider", () => {
 
     expect(buildProviderChain).toHaveBeenCalledWith(
       ["gemini"],
-      expect.objectContaining({ gemini: "gem-key" }),
+      expect.objectContaining({
+        gemini: expect.objectContaining({ apiKey: "gem-key" }),
+      }),
       expect.any(Object),
     );
     expect(result.notices).toContain(

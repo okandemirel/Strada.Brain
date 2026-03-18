@@ -35,6 +35,8 @@ const KNOWN_EMBEDDING_PROVIDERS = new Set([
   "fireworks", "qwen", "gemini", "ollama",
 ]);
 
+const KNOWN_OPENAI_AUTH_MODES = new Set(["api-key", "chatgpt-subscription"]);
+
 const PROVIDER_ENV_KEYS = [
   "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
   "QWEN_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY",
@@ -354,9 +356,16 @@ export class SetupWizard {
 
     // At least one provider API key must be present (Ollama excluded — no key needed)
     const hasProvider =
-      PROVIDER_ENV_KEYS.some((k) => config[k]) || config.PROVIDER_CHAIN?.includes("ollama");
+      PROVIDER_ENV_KEYS.some((k) => config[k])
+      || config.PROVIDER_CHAIN?.includes("ollama")
+      || config.OPENAI_AUTH_MODE === "chatgpt-subscription";
     if (!hasProvider) {
       this.json(res, 400, { success: false, error: "At least one AI provider key is required" });
+      return;
+    }
+
+    if (config.OPENAI_AUTH_MODE && !KNOWN_OPENAI_AUTH_MODES.has(String(config.OPENAI_AUTH_MODE))) {
+      this.json(res, 400, { success: false, error: "Invalid OPENAI_AUTH_MODE value" });
       return;
     }
 
@@ -381,6 +390,12 @@ export class SetupWizard {
     // Write all provider API keys that are present
     for (const key of PROVIDER_ENV_KEYS) {
       if (config[key]) lines.push(`${key}=${sanitizeEnvValue(config[key])}`);
+    }
+    if (config.OPENAI_AUTH_MODE) {
+      lines.push(`OPENAI_AUTH_MODE=${sanitizeEnvValue(config.OPENAI_AUTH_MODE)}`);
+    }
+    if (config.OPENAI_CHATGPT_AUTH_FILE) {
+      lines.push(`OPENAI_CHATGPT_AUTH_FILE=${sanitizeEnvValue(config.OPENAI_CHATGPT_AUTH_FILE)}`);
     }
 
     // Write provider chain for multi-provider fallback (validate names)

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type {
   IAIProvider,
   ConversationMessage,
@@ -15,6 +16,8 @@ import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-
 
 const MAX_RETRIES = 3;
 export const MAX_SSE_BUFFER_BYTES = 1 * 1024 * 1024; // 1 MB
+export const OPENAI_CHATGPT_AUTH_DEFAULT_FILE = "~/.codex/auth.json";
+export const OPENAI_CHATGPT_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
 
 /** Maps OpenAI finish_reason values to internal stop reasons */
 export const OPENAI_STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
@@ -24,6 +27,25 @@ export const OPENAI_STOP_REASON_MAP: Record<string, ProviderResponse["stopReason
 
 /** Regex to match <reasoning> blocks injected by providers like DeepSeek/MiniMax */
 const REASONING_BLOCK_RE = /<reasoning>\s*\n[\s\S]*?\n\s*<\/reasoning>\s*\n*/g;
+
+export type OpenAIProviderAuth =
+  | { mode?: "api-key"; apiKey: string }
+  | {
+      mode: "chatgpt-subscription";
+      accessToken?: string;
+      accountId?: string;
+      authFile?: string;
+    };
+
+interface ResolvedChatGptAuth {
+  accessToken: string;
+  accountId: string;
+}
+
+type ChatGptSubscriptionAuth = Extract<
+  OpenAIProviderAuth,
+  { mode: "chatgpt-subscription" }
+>;
 
 /** Strip <reasoning> blocks from assistant messages before replay */
 export function stripReasoningBlocks(messages: OpenAIMessage[]): void {
@@ -51,20 +73,20 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     thinkingSupported: false,
     specialFeatures: ["function_calling", "json_mode"],
   };
-  protected readonly apiKey: string;
+  protected readonly auth: OpenAIProviderAuth;
   protected readonly model: string;
   protected readonly baseUrl: string;
 
   constructor(
-    apiKey: string,
+    auth: string | OpenAIProviderAuth,
     model = "gpt-5.2",
     baseUrl = "https://api.openai.com/v1",
     label = "OpenAI",
   ) {
     this.name = label;
-    this.apiKey = apiKey;
+    this.auth = typeof auth === "string" ? { mode: "api-key", apiKey: auth } : auth;
     this.model = model;
-    this.baseUrl = baseUrl;
+    this.baseUrl = this.isChatGptSubscriptionMode() ? OPENAI_CHATGPT_RESPONSES_BASE_URL : baseUrl;
   }
 
   async chat(
@@ -72,6 +94,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
   ): Promise<ProviderResponse> {
+    if (this.isChatGptSubscriptionMode()) {
+      return this.chatViaChatGptResponses(systemPrompt, messages, tools);
+    }
+
     const logger = getLogger();
 
     const openaiMessages = this.buildMessages(systemPrompt, messages);
@@ -89,7 +115,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       `${this.baseUrl}/chat/completions`,
       {
         method: "POST",
-        headers: this.buildHeaders(),
+        headers: await this.buildHeaders(),
         body: JSON.stringify(body),
       },
     );
@@ -104,6 +130,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     tools: ToolDefinition[],
     onChunk: StreamCallback,
   ): Promise<ProviderResponse> {
+    if (this.isChatGptSubscriptionMode()) {
+      return this.chatViaChatGptResponses(systemPrompt, messages, tools, onChunk);
+    }
+
     const logger = getLogger();
 
     const openaiMessages = this.buildMessages(systemPrompt, messages);
@@ -122,7 +152,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       `${this.baseUrl}/chat/completions`,
       {
         method: "POST",
-        headers: this.buildHeaders(),
+        headers: await this.buildHeaders(),
         body: JSON.stringify(body),
       },
     );
@@ -235,6 +265,152 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     };
   }
 
+  private async chatViaChatGptResponses(
+    systemPrompt: string,
+    messages: ConversationMessage[],
+    tools: ToolDefinition[],
+    onChunk?: StreamCallback,
+  ): Promise<ProviderResponse> {
+    const logger = getLogger();
+    const response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
+      method: "POST",
+      headers: await this.buildHeaders(),
+      body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
+    });
+
+    logger.debug(`${this.name} ChatGPT/Codex subscription API call`, {
+      model: this.model,
+      messageCount: messages.length,
+      toolCount: tools.length,
+    });
+
+    if (!response.body) {
+      throw new Error(`${this.name} subscription streaming response has no body`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+    const toolCallAccumulator = new Map<string, { id: string; name: string; arguments: string }>();
+    let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+
+    const processFrame = (frame: string): void => {
+      const parsed = this.parseChatGptSseFrame(frame);
+      if (!parsed) return;
+
+      const { eventName, data } = parsed;
+      if (eventName === "response.output_text.delta" && typeof data.delta === "string") {
+        text += data.delta;
+        onChunk?.(data.delta);
+        return;
+      }
+
+      if (eventName === "response.output_item.added" && data.item?.type === "function_call") {
+        toolCallAccumulator.set(data.item.id, {
+          id: data.item.call_id ?? data.item.id,
+          name: data.item.name ?? "",
+          arguments: data.item.arguments ?? "",
+        });
+        return;
+      }
+
+      if (
+        eventName === "response.function_call_arguments.delta"
+        && typeof data.item_id === "string"
+        && typeof data.delta === "string"
+      ) {
+        const existing = toolCallAccumulator.get(data.item_id);
+        if (existing) {
+          existing.arguments += data.delta;
+        } else {
+          toolCallAccumulator.set(data.item_id, {
+            id: data.item_id,
+            name: "",
+            arguments: data.delta,
+          });
+        }
+        return;
+      }
+
+      if (eventName === "response.output_item.done" && data.item?.type === "function_call") {
+        toolCallAccumulator.set(data.item.id, {
+          id: data.item.call_id ?? data.item.id,
+          name: data.item.name ?? "",
+          arguments: data.item.arguments ?? "",
+        });
+        return;
+      }
+
+      if (eventName === "response.completed" && data.response) {
+        usage = {
+          inputTokens: data.response.usage?.input_tokens ?? 0,
+          outputTokens: data.response.usage?.output_tokens ?? 0,
+          totalTokens: data.response.usage?.total_tokens ?? 0,
+        };
+
+        if (!text) {
+          text = this.extractChatGptResponseText(data.response.output);
+        }
+
+        for (const outputItem of data.response.output ?? []) {
+          if (outputItem.type !== "function_call") continue;
+          toolCallAccumulator.set(outputItem.id, {
+            id: outputItem.call_id,
+            name: outputItem.name,
+            arguments: outputItem.arguments ?? "",
+          });
+        }
+      }
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (buffer.trim()) {
+            processFrame(buffer);
+          }
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        if (buffer.length > MAX_SSE_BUFFER_BYTES) {
+          reader.cancel();
+          throw new Error(`${this.name} SSE buffer overflow — stream appears malformed`);
+        }
+
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+
+        for (const frame of frames) {
+          processFrame(frame);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.values())
+      .filter((call) => call.id && call.name)
+      .map((call) => {
+        let input: import("../../types/index.js").JsonObject;
+        try {
+          input = JSON.parse(call.arguments) as import("../../types/index.js").JsonObject;
+        } catch {
+          input = { _rawArguments: call.arguments };
+        }
+        return { id: call.id, name: call.name, input };
+      });
+
+    return {
+      text,
+      toolCalls,
+      stopReason: toolCalls.length > 0 ? "tool_use" : "end_turn",
+      usage,
+    };
+  }
+
   protected buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
     const result: OpenAIMessage[] = [{ role: "system", content: systemPrompt }];
 
@@ -319,10 +495,19 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
    * Build HTTP headers for API requests.
    * Subclasses can override to add provider-specific headers (e.g., User-Agent).
    */
-  protected buildHeaders(): Record<string, string> {
+  protected async buildHeaders(): Promise<Record<string, string>> {
+    if (!this.isChatGptSubscriptionMode()) {
+      return {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${(this.auth as { apiKey: string }).apiKey}`,
+      };
+    }
+
+    const auth = this.resolveChatGptAuth();
     return {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${this.apiKey}`,
+      Authorization: `Bearer ${auth.accessToken}`,
+      "ChatGPT-Account-Id": auth.accountId,
     };
   }
 
@@ -362,9 +547,13 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   async healthCheck(): Promise<boolean> {
     const logger = getLogger();
     try {
+      if (this.isChatGptSubscriptionMode()) {
+        this.resolveChatGptAuth();
+        return true;
+      }
       const response = await fetch(`${this.baseUrl}/models`, {
         method: "GET",
-        headers: { Authorization: `Bearer ${this.apiKey}` },
+        headers: await this.buildHeaders(),
         signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) {
@@ -382,9 +571,12 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
   async listModels(): Promise<string[]> {
     try {
+      if (this.isChatGptSubscriptionMode()) {
+        return [this.model];
+      }
       const response = await fetch(`${this.baseUrl}/models`, {
         method: "GET",
-        headers: { Authorization: `Bearer ${this.apiKey}` },
+        headers: await this.buildHeaders(),
         signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) return [this.model];
@@ -438,6 +630,185 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         totalTokens: (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0),
       },
     };
+  }
+
+  private isChatGptSubscriptionMode(): boolean {
+    return this.auth.mode === "chatgpt-subscription";
+  }
+
+  private getChatGptSubscriptionAuth(): ChatGptSubscriptionAuth {
+    if (!this.isChatGptSubscriptionMode()) {
+      throw new Error(`${this.name} is not configured for ChatGPT/Codex subscription auth`);
+    }
+    return this.auth as ChatGptSubscriptionAuth;
+  }
+
+  private resolveChatGptAuth(): ResolvedChatGptAuth {
+    const authConfig = this.getChatGptSubscriptionAuth();
+
+    if (authConfig.accessToken && authConfig.accountId) {
+      return {
+        accessToken: authConfig.accessToken,
+        accountId: authConfig.accountId,
+      };
+    }
+
+    const authFile = this.expandHomePath(authConfig.authFile ?? OPENAI_CHATGPT_AUTH_DEFAULT_FILE);
+    const parsed = JSON.parse(readFileSync(authFile, "utf8")) as {
+      tokens?: { access_token?: string; account_id?: string };
+    };
+    const accessToken = parsed.tokens?.access_token;
+    const accountId = parsed.tokens?.account_id;
+    if (!accessToken || !accountId) {
+      throw new Error(
+        `${this.name} ChatGPT/Codex subscription auth file does not contain access_token/account_id`,
+      );
+    }
+    return { accessToken, accountId };
+  }
+
+  private expandHomePath(pathValue: string): string {
+    if (pathValue.startsWith("~/")) {
+      return `${process.env["HOME"] ?? ""}/${pathValue.slice(2)}`;
+    }
+    return pathValue;
+  }
+
+  private buildChatGptResponsesRequest(
+    systemPrompt: string,
+    messages: ConversationMessage[],
+    tools: ToolDefinition[],
+  ): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model: this.model,
+      instructions: systemPrompt,
+      input: this.buildChatGptInput(messages),
+      store: false,
+      stream: true,
+    };
+
+    if (tools.length > 0) {
+      body["tools"] = tools.map((tool) => ({
+        type: "function",
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.input_schema,
+      }));
+      body["tool_choice"] = "auto";
+    }
+
+    return body;
+  }
+
+  private buildChatGptInput(messages: ConversationMessage[]): ChatGptInputItem[] {
+    const items: ChatGptInputItem[] = [];
+
+    for (const msg of messages) {
+      if (msg.role === "assistant") {
+        if (msg.content) {
+          items.push({
+            role: "assistant",
+            content: [{ type: "input_text", text: msg.content }],
+          });
+        }
+        if (msg.tool_calls) {
+          for (const toolCall of msg.tool_calls) {
+            items.push({
+              type: "function_call",
+              call_id: toolCall.id,
+              name: toolCall.name,
+              arguments: JSON.stringify(toolCall.input),
+            });
+          }
+        }
+        continue;
+      }
+
+      if (typeof msg.content === "string") {
+        items.push({
+          role: "user",
+          content: [{ type: "input_text", text: msg.content }],
+        });
+        continue;
+      }
+
+      if (!Array.isArray(msg.content)) {
+        continue;
+      }
+
+      const userContent: ChatGptInputContentPart[] = [];
+      for (const block of msg.content as MessageContent[]) {
+        if (block.type === "text") {
+          userContent.push({ type: "input_text", text: block.text });
+          continue;
+        }
+
+        if (block.type === "image") {
+          const imageUrl = block.source.type === "base64"
+            ? `data:${block.source.media_type};base64,${block.source.data}`
+            : block.source.url;
+          userContent.push({ type: "input_image", image_url: imageUrl });
+          continue;
+        }
+
+        if (block.type === "tool_result") {
+          items.push({
+            type: "function_call_output",
+            call_id: block.tool_use_id,
+            output: typeof block.content === "string"
+              ? block.content
+              : JSON.stringify(block.content),
+          });
+        }
+      }
+
+      if (userContent.length > 0) {
+        items.push({ role: "user", content: userContent });
+      }
+    }
+
+    return items;
+  }
+
+  private parseChatGptSseFrame(frame: string): { eventName: string; data: ChatGptSseEventData } | null {
+    const lines = frame
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .filter(Boolean);
+
+    let eventName = "";
+    const dataLines: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+
+    if (!eventName || dataLines.length === 0) {
+      return null;
+    }
+
+    try {
+      return { eventName, data: JSON.parse(dataLines.join("\n")) as ChatGptSseEventData };
+    } catch {
+      return null;
+    }
+  }
+
+  private extractChatGptResponseText(output: ChatGptOutputItem[] | undefined): string {
+    if (!output) return "";
+    const texts: string[] = [];
+    for (const item of output) {
+      if (item.type !== "message") continue;
+      for (const part of item.content ?? []) {
+        if (part.type === "output_text" && typeof part.text === "string") {
+          texts.push(part.text);
+        }
+      }
+    }
+    return texts.join("");
   }
 }
 
@@ -496,5 +867,74 @@ interface StreamSSEChunk {
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
+  };
+}
+
+interface ChatGptInputTextPart {
+  type: "input_text";
+  text: string;
+}
+
+interface ChatGptInputImagePart {
+  type: "input_image";
+  image_url: string;
+}
+
+type ChatGptInputContentPart = ChatGptInputTextPart | ChatGptInputImagePart;
+
+type ChatGptInputItem =
+  | {
+      role: "user" | "assistant";
+      content: ChatGptInputContentPart[];
+    }
+  | {
+      type: "function_call";
+      call_id: string;
+      name: string;
+      arguments: string;
+    }
+  | {
+      type: "function_call_output";
+      call_id: string;
+      output: string;
+    };
+
+interface ChatGptOutputTextPart {
+  type: "output_text";
+  text: string;
+}
+
+type ChatGptOutputItem =
+  | {
+      id: string;
+      type: "message";
+      role: "assistant";
+      content?: ChatGptOutputTextPart[];
+    }
+  | {
+      id: string;
+      type: "function_call";
+      call_id: string;
+      name: string;
+      arguments?: string;
+    };
+
+interface ChatGptSseEventData {
+  delta?: string;
+  item_id?: string;
+  item?: {
+    id: string;
+    type: string;
+    call_id?: string;
+    name?: string;
+    arguments?: string;
+  };
+  response?: {
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+    };
+    output?: ChatGptOutputItem[];
   };
 }

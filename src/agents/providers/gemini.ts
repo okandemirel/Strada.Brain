@@ -142,7 +142,7 @@ export class GeminiProvider extends OpenAIProvider {
 
     const response = await this.fetchWithRetry(
       `${this.baseUrl}/chat/completions`,
-      { method: "POST", headers: this.buildHeaders(), body: JSON.stringify(body) },
+      { method: "POST", headers: await this.buildHeaders(), body: JSON.stringify(body) },
     );
 
     let text = "";

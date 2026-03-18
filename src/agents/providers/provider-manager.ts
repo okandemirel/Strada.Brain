@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { IAIProvider } from "./provider.interface.js";
 import type { ProviderCapabilities } from "./provider.interface.js";
 import { buildProviderChain, createProvider, PROVIDER_PRESETS } from "./provider-registry.js";
+import type { ProviderCredentialMap } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import { getLogger } from "../../utils/logger.js";
 import { LRUCache } from "../../common/lru-cache.js";
@@ -51,7 +52,7 @@ export class ProviderManager {
 
   constructor(
     private readonly defaultProvider: IAIProvider,
-    private readonly apiKeys: Record<string, string | undefined>,
+    private readonly providerCredentials: ProviderCredentialMap,
     private readonly modelOverrides?: Record<string, string>,
     preferencesDbPath?: string,
     private readonly defaultProviderOrder: readonly string[] = [],
@@ -96,7 +97,7 @@ export class ProviderManager {
     if (cached) return cached;
 
     try {
-      const provider = buildProviderChain(order, this.apiKeys, {
+      const provider = buildProviderChain(order, this.providerCredentials, {
         models: model ? { ...this.modelOverrides, [primaryName]: model } : this.modelOverrides,
       });
       this.providerCache.set(cacheKey, provider);
@@ -164,7 +165,11 @@ export class ProviderManager {
     try {
       const provider = createProvider({
         name: normalizedName,
-        apiKey: this.apiKeys[normalizedName],
+        apiKey: this.providerCredentials[normalizedName]?.apiKey,
+        openaiAuthMode: this.providerCredentials[normalizedName]?.openaiAuthMode,
+        openaiChatgptAuthFile: this.providerCredentials[normalizedName]?.openaiChatgptAuthFile,
+        openaiSubscriptionAccessToken: this.providerCredentials[normalizedName]?.openaiSubscriptionAccessToken,
+        openaiSubscriptionAccountId: this.providerCredentials[normalizedName]?.openaiSubscriptionAccountId,
         model: model ?? this.modelOverrides?.[normalizedName],
       });
       this.primaryProviderCache.set(cacheKey, provider);
@@ -400,9 +405,21 @@ export class ProviderManager {
   isAvailable(providerName: string): boolean {
     if (providerName === "ollama") return this.ollamaVerified;
     if (providerName === "claude" || providerName === "anthropic") {
-      return !!(this.apiKeys["claude"] || this.apiKeys["anthropic"]);
+      return !!(
+        this.providerCredentials["claude"]?.apiKey
+        || this.providerCredentials["anthropic"]?.apiKey
+      );
     }
-    return !!this.apiKeys[providerName];
+    if (providerName === "openai") {
+      const credential = this.providerCredentials["openai"];
+      return Boolean(
+        credential?.apiKey
+        || credential?.openaiAuthMode === "chatgpt-subscription"
+        || (credential?.openaiSubscriptionAccessToken && credential?.openaiSubscriptionAccountId)
+        || credential?.openaiChatgptAuthFile,
+      );
+    }
+    return !!this.providerCredentials[providerName]?.apiKey;
   }
 
   /** Mark Ollama as verified-reachable (called by bootstrap after health check). */

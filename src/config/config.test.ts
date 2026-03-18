@@ -65,6 +65,10 @@ describe("loadConfig", () => {
     delete process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"];
     delete process.env["LLM_STREAM_STALL_TIMEOUT_MS"];
     delete process.env["UNITY_PROJECT_PATH"];
+    delete process.env["OPENAI_AUTH_MODE"];
+    delete process.env["OPENAI_CHATGPT_AUTH_FILE"];
+    delete process.env["OPENAI_SUBSCRIPTION_ACCESS_TOKEN"];
+    delete process.env["OPENAI_SUBSCRIPTION_ACCOUNT_ID"];
     delete process.env["STRADA_CORE_REPO_URL"];
     delete process.env["STRADA_MODULES_REPO_URL"];
     delete process.env["STRADA_MCP_PATH"];
@@ -238,6 +242,35 @@ describe("loadConfig", () => {
     const config = loadConfig();
 
     expect(config.modelIntelligence.providerSourcesPath).toBe("/opt/strada/provider-sources.json");
+  });
+
+  it("accepts OpenAI ChatGPT/Codex subscription auth without an OpenAI API key", () => {
+    setEnv({
+      ANTHROPIC_API_KEY: undefined,
+      OPENAI_AUTH_MODE: "chatgpt-subscription",
+      OPENAI_CHATGPT_AUTH_FILE: "~/.codex/auth.json",
+    });
+
+    const config = loadConfig();
+
+    expect(config.openaiAuthMode).toBe("chatgpt-subscription");
+    expect(config.openaiChatgptAuthFile).toBe("~/.codex/auth.json");
+    expect(config.openaiApiKey).toBeUndefined();
+  });
+
+  it("loads manual OpenAI subscription token overrides into runtime config", () => {
+    setEnv({
+      ANTHROPIC_API_KEY: undefined,
+      OPENAI_AUTH_MODE: "chatgpt-subscription",
+      OPENAI_SUBSCRIPTION_ACCESS_TOKEN: "access-token",
+      OPENAI_SUBSCRIPTION_ACCOUNT_ID: "account-id",
+    });
+
+    const config = loadConfig();
+
+    expect(config.openaiAuthMode).toBe("chatgpt-subscription");
+    expect(config.openaiSubscriptionAccessToken).toBe("access-token");
+    expect(config.openaiSubscriptionAccountId).toBe("account-id");
   });
 
   it("loads task routing env vars into runtime config", () => {

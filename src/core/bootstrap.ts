@@ -15,6 +15,7 @@ import { AuthManager } from "../security/auth.js";
 import { configureAuthManager } from "../security/auth-hardened.js";
 import { ClaudeProvider } from "../agents/providers/claude.js";
 import { buildProviderChain } from "../agents/providers/provider-registry.js";
+import type { ProviderCredentialMap } from "../agents/providers/provider-registry.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { SoulLoader } from "../agents/soul/index.js";
@@ -1039,6 +1040,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           stradaConfig: config.strada,
           parentTools: toolRegistry.getAllTools(),
           apiKeys: collectApiKeys(config),
+          providerCredentials: collectProviderCredentials(config),
         });
 
         // Inject delegation tool factory into AgentManager
@@ -1488,6 +1490,35 @@ function hasUsableProviderConfig(name: string, apiKeys: Record<string, string | 
   return !!apiKeys[name];
 }
 
+function collectProviderCredentials(config: Config): ProviderCredentialMap {
+  return {
+    claude: { apiKey: config.anthropicApiKey },
+    anthropic: { apiKey: config.anthropicApiKey },
+    openai: {
+      apiKey: config.openaiApiKey,
+      openaiAuthMode: config.openaiAuthMode,
+      openaiChatgptAuthFile: config.openaiChatgptAuthFile,
+      openaiSubscriptionAccessToken: config.openaiSubscriptionAccessToken,
+      openaiSubscriptionAccountId: config.openaiSubscriptionAccountId,
+    },
+    deepseek: { apiKey: config.deepseekApiKey },
+    qwen: { apiKey: config.qwenApiKey },
+    kimi: { apiKey: config.kimiApiKey },
+    minimax: { apiKey: config.minimaxApiKey },
+    groq: { apiKey: config.groqApiKey },
+    mistral: { apiKey: config.mistralApiKey },
+    together: { apiKey: config.togetherApiKey },
+    fireworks: { apiKey: config.fireworksApiKey },
+    gemini: { apiKey: config.geminiApiKey },
+  };
+}
+
+function hasConfiguredOpenAISubscription(config: Config): boolean {
+  return config.openaiAuthMode === "chatgpt-subscription"
+    || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
+    || Boolean(config.openaiChatgptAuthFile);
+}
+
 function detectConfiguredProviderNames(apiKeys: Record<string, string | undefined>): string[] {
   const names: string[] = [];
 
@@ -1520,6 +1551,7 @@ export async function initializeAIProvider(
   logger: winston.Logger,
 ): Promise<ProviderInitResult> {
   const apiKeys = collectApiKeys(config);
+  const providerCredentials = collectProviderCredentials(config);
   const notices: string[] = [];
 
   let defaultProvider: IAIProvider;
@@ -1528,7 +1560,11 @@ export async function initializeAIProvider(
   // 1) Explicit provider chain
   if (config.providerChain) {
     const requestedNames = normalizeProviderNames(config.providerChain);
-    const usableNames = requestedNames.filter((name) => hasUsableProviderConfig(name, apiKeys));
+    const usableNames = requestedNames.filter((name) =>
+      name === "openai" && hasConfiguredOpenAISubscription(config)
+        ? true
+        : hasUsableProviderConfig(name, apiKeys),
+    );
     const unavailableNames = requestedNames.filter((name) => !usableNames.includes(name));
 
     if (unavailableNames.length > 0) {
@@ -1541,12 +1577,15 @@ export async function initializeAIProvider(
 
     if (usableNames.length > 0) {
       defaultProviderOrder = usableNames;
-      defaultProvider = buildProviderChain(usableNames, apiKeys, {
+      defaultProvider = buildProviderChain(usableNames, providerCredentials, {
         models: config.providerModels,
       });
       logger.info("AI provider chain initialized", { chain: usableNames });
     } else {
       const detectedNames = detectConfiguredProviderNames(apiKeys);
+      if (hasConfiguredOpenAISubscription(config) && !detectedNames.includes("openai")) {
+        detectedNames.unshift("openai");
+      }
       if (detectedNames.length === 0) {
         throw new AppError(
           "No AI provider configured. Please set at least one provider API key.",
@@ -1563,7 +1602,7 @@ export async function initializeAIProvider(
       });
 
       defaultProviderOrder = detectedNames;
-      defaultProvider = buildProviderChain(detectedNames, apiKeys, {
+      defaultProvider = buildProviderChain(detectedNames, providerCredentials, {
         models: config.providerModels,
       });
       logger.info("AI provider auto-detected from available keys", { chain: detectedNames });
@@ -1580,6 +1619,9 @@ export async function initializeAIProvider(
     const detectedNames = Object.entries(apiKeys)
       .filter(([name, key]) => name !== "claude" && name !== "anthropic" && key)
       .map(([name]) => name);
+    if (hasConfiguredOpenAISubscription(config) && !detectedNames.includes("openai")) {
+      detectedNames.unshift("openai");
+    }
 
     if (detectedNames.length === 0) {
       throw new AppError(
@@ -1589,7 +1631,7 @@ export async function initializeAIProvider(
     }
 
     defaultProviderOrder = detectedNames;
-    defaultProvider = buildProviderChain(detectedNames, apiKeys, {
+    defaultProvider = buildProviderChain(detectedNames, providerCredentials, {
       models: config.providerModels,
     });
     logger.info("AI provider auto-detected from available keys", { chain: detectedNames });
@@ -1607,7 +1649,7 @@ export async function initializeAIProvider(
 
   const providerManager = new ProviderManager(
     defaultProvider,
-    apiKeys,
+    providerCredentials,
     config.providerModels,
     config.memory.dbPath,
     defaultProviderOrder,

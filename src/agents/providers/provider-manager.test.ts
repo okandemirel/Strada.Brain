@@ -79,7 +79,7 @@ describe("ProviderManager", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(
       defaultProvider,
-      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
       { qwen: "qwen-max", kimi: "kimi-for-coding" },
       "/tmp/provider-manager-test",
       ["qwen", "kimi"],
@@ -93,7 +93,7 @@ describe("ProviderManager", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(
       defaultProvider,
-      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
       { qwen: "qwen-max", kimi: "kimi-for-coding" },
       "/tmp/provider-manager-test",
       ["qwen", "kimi"],
@@ -113,7 +113,7 @@ describe("ProviderManager", () => {
     preferenceState.set("chat-1", { providerName: "kimi", model: "kimi-long-context" });
     const manager = new ProviderManager(
       defaultProvider,
-      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
       { qwen: "qwen-max", kimi: "kimi-for-coding" },
       "/tmp/provider-manager-test",
       ["qwen", "kimi"],
@@ -123,7 +123,7 @@ describe("ProviderManager", () => {
 
     expect(buildProviderChainMock).toHaveBeenCalledWith(
       ["kimi", "qwen"],
-      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
       {
         models: {
           qwen: "qwen-max",
@@ -138,7 +138,7 @@ describe("ProviderManager", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(
       defaultProvider,
-      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
       { qwen: "qwen-max", kimi: "kimi-for-coding" },
       "/tmp/provider-manager-test",
       ["qwen", "kimi"],
@@ -148,7 +148,7 @@ describe("ProviderManager", () => {
 
     expect(buildProviderChainMock).toHaveBeenCalledWith(
       ["kimi", "qwen"],
-      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
       {
         models: {
           qwen: "qwen-max",
@@ -168,7 +168,7 @@ describe("ProviderManager", () => {
 
     const manager = new ProviderManager(
       defaultProvider,
-      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
       { qwen: "qwen-max", kimi: "kimi-for-coding" },
       "/tmp/provider-manager-test",
       ["qwen", "kimi"],
@@ -181,7 +181,7 @@ describe("ProviderManager", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(
       defaultProvider,
-      { qwen: "qwen-key", kimi: "kimi-key" },
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
       { qwen: "qwen-max", kimi: "kimi-for-coding" },
       "/tmp/provider-manager-test",
       ["qwen", "kimi"],

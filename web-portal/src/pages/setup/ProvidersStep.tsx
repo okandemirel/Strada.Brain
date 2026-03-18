@@ -6,7 +6,9 @@ interface ProvidersStepProps {
   checkedProviders: Set<string>
   toggleProvider: (id: string) => void
   providerKeys: Record<string, string>
+  providerAuthModes: Record<string, string>
   setProviderKey: (id: string, key: string) => void
+  setProviderAuthMode: (id: string, mode: string) => void
   onNext: () => void
   onBack: () => void
 }
@@ -74,12 +76,14 @@ export default function ProvidersStep({
   checkedProviders,
   toggleProvider,
   providerKeys,
+  providerAuthModes,
   setProviderKey,
+  setProviderAuthMode,
   onNext,
   onBack,
 }: ProvidersStepProps) {
-  const providersNeedingKeys = PROVIDERS.filter(
-    (p) => checkedProviders.has(p.id) && p.envKey !== null,
+  const providerSettingsProviders = PROVIDERS.filter(
+    (p) => checkedProviders.has(p.id) && (p.envKey !== null || (p.authModes?.length ?? 0) > 0),
   )
 
   return (
@@ -97,34 +101,68 @@ export default function ProvidersStep({
         toggleProvider={toggleProvider}
       />
 
-      {providersNeedingKeys.length > 0 && (
+      {providerSettingsProviders.length > 0 && (
         <div className="provider-keys">
-          <h3 className="section-label">API Keys</h3>
-          {providersNeedingKeys.map((provider) => (
+          <h3 className="section-label">Provider Access</h3>
+          {providerSettingsProviders.map((provider) => {
+            const selectedAuthMode = providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id ?? 'api-key'
+            const requiresSecret = provider.id !== 'openai' || selectedAuthMode !== 'chatgpt-subscription'
+            return (
             <div key={provider.id} className="provider-key-field">
-              <label htmlFor={`key-${provider.id}`}>
-                {provider.name}
-                {provider.helpUrl && (
-                  <a
-                    href={provider.helpUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="key-help-link"
-                  >
-                    Get key
-                  </a>
-                )}
-              </label>
-              <input
-                id={`key-${provider.id}`}
-                type="password"
-                placeholder={provider.placeholder ?? ''}
-                value={providerKeys[provider.id] ?? ''}
-                onChange={(e) => setProviderKey(provider.id, e.target.value)}
-                autoComplete="off"
-              />
+              {provider.authModes && provider.authModes.length > 1 && (
+                <div className="provider-auth-modes" style={{ marginBottom: '0.7rem' }}>
+                  {provider.authModes.map((mode) => (
+                    <label key={mode.id} className="provider-option" style={{ display: 'block', marginBottom: '0.45rem' }}>
+                      <input
+                        type="radio"
+                        name={`auth-mode-${provider.id}`}
+                        checked={(providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id) === mode.id}
+                        onChange={() => setProviderAuthMode(provider.id, mode.id)}
+                      />
+                      <div className="provider-card">
+                        <span className="provider-name">{mode.label}</span>
+                        <span className="provider-desc" style={{ fontSize: '0.9rem', opacity: 0.8 }}>{mode.description}</span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {requiresSecret && (
+                <>
+                  <label htmlFor={`key-${provider.id}`}>
+                    {provider.authModes?.find((mode) => mode.id === selectedAuthMode)?.secretLabel ?? provider.name}
+                    {provider.helpUrl && (
+                      <a
+                        href={provider.helpUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="key-help-link"
+                      >
+                        Get key
+                      </a>
+                    )}
+                  </label>
+                  <input
+                    id={`key-${provider.id}`}
+                    type="password"
+                    placeholder={
+                      provider.authModes?.find((mode) => mode.id === selectedAuthMode)?.secretPlaceholder
+                      ?? provider.placeholder
+                      ?? ''
+                    }
+                    value={providerKeys[provider.id] ?? ''}
+                    onChange={(e) => setProviderKey(provider.id, e.target.value)}
+                    autoComplete="off"
+                  />
+                </>
+              )}
+              {!requiresSecret && (
+                <p className="step-subtitle" style={{ marginTop: '0.25rem' }}>
+                  Strada will use the local Codex/ChatGPT subscription session available on this machine.
+                </p>
+              )}
             </div>
-          ))}
+          )})}
         </div>
       )}
 

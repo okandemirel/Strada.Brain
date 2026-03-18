@@ -30,6 +30,7 @@ import type {
 } from "./delegation-types.js";
 import type { DelegationLog } from "./delegation-log.js";
 import type { TierRouter } from "./tier-router.js";
+import type { ProviderCredentialMap } from "../../providers/provider-registry.js";
 import { createProvider } from "../../providers/provider-registry.js";
 import { ProviderManager } from "../../providers/provider-manager.js";
 import { Orchestrator } from "../../orchestrator.js";
@@ -54,6 +55,7 @@ export interface DelegationManagerOptions {
   readonly stradaConfig?: Partial<StradaDependencyConfig>;
   readonly parentTools: ITool[];
   readonly apiKeys: Record<string, string | undefined>;
+  readonly providerCredentials?: ProviderCredentialMap;
 }
 
 // =============================================================================
@@ -268,13 +270,21 @@ export class DelegationManager {
 
     // Resolve provider for this tier
     const providerConfig = this.opts.tierRouter.resolveProviderConfig(tier);
+    const providerCredential = this.opts.providerCredentials?.[providerConfig.name];
     const provider = createProvider({
       name: providerConfig.name,
-      apiKey: this.opts.apiKeys[providerConfig.name],
+      apiKey: providerCredential?.apiKey ?? this.opts.apiKeys[providerConfig.name],
+      openaiAuthMode: providerCredential?.openaiAuthMode,
+      openaiChatgptAuthFile: providerCredential?.openaiChatgptAuthFile,
+      openaiSubscriptionAccessToken: providerCredential?.openaiSubscriptionAccessToken,
+      openaiSubscriptionAccountId: providerCredential?.openaiSubscriptionAccountId,
       model: providerConfig.model,
     });
 
-    const providerManager = new ProviderManager(provider, this.opts.apiKeys);
+    const providerManager = new ProviderManager(
+      provider,
+      this.opts.providerCredentials ?? {},
+    );
     const subAgentTools = this.buildSubAgentTools(request.depth);
 
     const systemPrompt =

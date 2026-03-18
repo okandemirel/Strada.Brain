@@ -9,6 +9,7 @@ export function useSetupWizard() {
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null)
   const [checkedProviders, setCheckedProviders] = useState<Set<string>>(new Set(['claude']))
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({})
+  const [providerAuthModes, setProviderAuthModes] = useState<Record<string, string>>({ openai: 'api-key' })
   const [projectPath, setProjectPathState] = useState('')
   const [pathValid, setPathValid] = useState<boolean | null>(null)
   const [pathError, setPathError] = useState<string | null>(null)
@@ -70,12 +71,21 @@ export function useSetupWizard() {
       case 2: {
         if (checkedProviders.size === 0) return false
         return Array.from(checkedProviders).some((id) =>
-          id === 'ollama' || (providerKeys[id] ?? '').trim().length > 0,
+          id === 'ollama'
+          || (id === 'openai' && providerAuthModes[id] === 'chatgpt-subscription')
+          || (providerKeys[id] ?? '').trim().length > 0,
         )
       }
       case 4: {
         if (!ragEnabled || embeddingProvider === 'auto' || embeddingProvider === 'ollama') return true
-        if (checkedProviders.has(embeddingProvider)) return true
+        if (
+          checkedProviders.has(embeddingProvider)
+          && !(embeddingProvider === 'openai'
+            && providerAuthModes.openai === 'chatgpt-subscription'
+            && !(providerKeys.openai ?? '').trim())
+        ) {
+          return true
+        }
         return (providerKeys[embeddingProvider] ?? '').trim().length > 0
       }
       case 3:
@@ -83,7 +93,7 @@ export function useSetupWizard() {
       default:
         return true
     }
-  }, [step, checkedProviders, providerKeys, projectPath, ragEnabled, embeddingProvider])
+  }, [step, checkedProviders, providerKeys, providerAuthModes, projectPath, ragEnabled, embeddingProvider])
 
   const nextStep = useCallback(() => {
     if (validateCurrentStep() && step < 5) {
@@ -126,6 +136,10 @@ export function useSetupWizard() {
 
   const setProviderKey = useCallback((id: string, key: string) => {
     setProviderKeys((prev) => ({ ...prev, [id]: key }))
+  }, [])
+
+  const setProviderAuthMode = useCallback((id: string, mode: string) => {
+    setProviderAuthModes((prev) => ({ ...prev, [id]: mode }))
   }, [])
 
   const setProjectPath = useCallback((path: string) => {
@@ -226,15 +240,20 @@ export function useSetupWizard() {
     // Add provider API keys
     for (const id of chain) {
       const provider = PROVIDER_MAP[id]
+      if (id === 'openai') {
+        config.OPENAI_AUTH_MODE = providerAuthModes.openai === 'chatgpt-subscription'
+          ? 'chatgpt-subscription'
+          : 'api-key'
+      }
       if (provider?.envKey) {
         const key = (providerKeys[id] ?? '').trim()
-        if (key) {
+        if (key && !(id === 'openai' && providerAuthModes.openai === 'chatgpt-subscription')) {
           config[provider.envKey] = key
         }
       }
     }
 
-    if (ragEnabled && embeddingProvider && embeddingProvider !== 'auto' && !chain.includes(embeddingProvider)) {
+    if (ragEnabled && embeddingProvider && embeddingProvider !== 'auto') {
       const embeddingProviderDef = PROVIDER_MAP[embeddingProvider]
       if (embeddingProviderDef?.envKey) {
         const embeddingKey = (providerKeys[embeddingProvider] ?? '').trim()
@@ -306,7 +325,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget])
 
   return {
     // State
@@ -316,6 +335,7 @@ export function useSetupWizard() {
     selectedPreset,
     checkedProviders,
     providerKeys,
+    providerAuthModes,
     projectPath,
     pathValid,
     pathError,
@@ -338,6 +358,7 @@ export function useSetupWizard() {
     selectPreset,
     toggleProvider,
     setProviderKey,
+    setProviderAuthMode,
     setProjectPath,
     validatePath,
     setChannel,

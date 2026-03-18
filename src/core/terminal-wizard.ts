@@ -33,8 +33,9 @@ const PROVIDER_ENV_KEY_MAP: Record<string, string> = {
 
 export interface WizardAnswers {
   unityProjectPath: string;
-  apiKey: string;
+  apiKey?: string;
   provider: string;
+  openaiAuthMode?: "api-key" | "chatgpt-subscription";
   embeddingProvider: string;
   embeddingApiKey?: string;
   channel: string;
@@ -137,21 +138,31 @@ export function generateEnvContent(answers: WizardAnswers): string {
   lines.push(`UNITY_PROJECT_PATH="${sanitizeEnvValue(answers.unityProjectPath)}"`);
   lines.push("");
 
-  const sanitizedKey = sanitizeEnvValue(answers.apiKey);
+  const sanitizedKey = answers.apiKey ? sanitizeEnvValue(answers.apiKey) : "";
   const primaryEnvKey = PROVIDER_ENV_KEY_MAP[answers.provider];
   if (answers.provider === "claude") {
-    lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
+    if (answers.apiKey) lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=claude");
   } else if (answers.provider === "openai") {
-    lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
+    lines.push(`OPENAI_AUTH_MODE=${answers.openaiAuthMode ?? "api-key"}`);
+    if (answers.apiKey) lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=openai");
   } else if (answers.provider === "gemini") {
-    lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
+    if (answers.apiKey) lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=gemini");
   }
 
   if (answers.embeddingProvider && answers.embeddingProvider !== "auto") {
-    if (answers.embeddingProvider !== "ollama" && answers.embeddingProvider !== answers.provider) {
+    if (
+      answers.embeddingProvider === "openai"
+      && answers.provider === "openai"
+      && answers.openaiAuthMode === "chatgpt-subscription"
+    ) {
+      const embeddingKey = sanitizeEnvValue(answers.embeddingApiKey ?? "");
+      if (embeddingKey) {
+        lines.push(`OPENAI_API_KEY="${embeddingKey}"`);
+      }
+    } else if (answers.embeddingProvider !== "ollama" && answers.embeddingProvider !== answers.provider) {
       const embeddingEnvKey = PROVIDER_ENV_KEY_MAP[answers.embeddingProvider];
       const embeddingKey = sanitizeEnvValue(answers.embeddingApiKey ?? "");
       if (embeddingEnvKey && embeddingKey) {
@@ -270,18 +281,62 @@ export async function runTerminalWizard(): Promise<void> {
       validateUnityPath,
     );
 
-    const apiKey = await askWithRetry(
+    const providerAnswer = await askWithRetry(
       rl,
-      "? AI Provider API key (Claude/OpenAI/Gemini): ",
+      "? Primary AI provider (claude/openai/gemini) [default: claude]: ",
       (input) => {
-        if (!input || input.trim().length < 8) {
-          return { valid: false, error: "API key seems too short." };
+        const value = input.trim().toLowerCase()
+        if (!value) return { valid: true }
+        if (!["claude", "openai", "gemini"].includes(value)) {
+          return { valid: false, error: "Supported providers: claude, openai, gemini." }
         }
-        return { valid: true };
+        return { valid: true }
       },
     );
+    const provider = providerAnswer.trim().toLowerCase() || "claude";
 
-    const provider = detectProvider(apiKey.trim());
+    let openaiAuthMode: "api-key" | "chatgpt-subscription" | undefined;
+    let apiKey: string | undefined;
+    if (provider === "openai") {
+      const authModeAnswer = await askWithRetry(
+        rl,
+        "? OpenAI auth mode (api-key/chatgpt-subscription) [default: api-key]: ",
+        (input) => {
+          const normalized = input.trim().toLowerCase()
+          if (!normalized) return { valid: true }
+          if (normalized !== "api-key" && normalized !== "chatgpt-subscription") {
+            return { valid: false, error: "Supported modes: api-key, chatgpt-subscription." }
+          }
+          return { valid: true }
+        },
+      );
+      openaiAuthMode = (authModeAnswer.trim().toLowerCase() || "api-key") as "api-key" | "chatgpt-subscription";
+      if (openaiAuthMode === "api-key") {
+        apiKey = await askWithRetry(
+          rl,
+          "? OpenAI API key: ",
+          (input) => {
+            if (!input || input.trim().length < 8) {
+              return { valid: false, error: "API key seems too short." };
+            }
+            return { valid: true };
+          },
+        );
+      } else {
+        console.log("  Using local Codex/ChatGPT subscription auth from ~/.codex/auth.json")
+      }
+    } else {
+      apiKey = await askWithRetry(
+        rl,
+        `? ${provider === "claude" ? "Claude" : "Gemini"} API key: `,
+        (input) => {
+          if (!input || input.trim().length < 8) {
+            return { valid: false, error: "API key seems too short." };
+          }
+          return { valid: true };
+        },
+      );
+    }
     const defaultEmbeddingProvider = getDefaultEmbeddingProvider(provider);
     const embeddingAnswer = await askWithRetry(
       rl,
@@ -330,8 +385,9 @@ export async function runTerminalWizard(): Promise<void> {
 
     const envContent = generateEnvContent({
       unityProjectPath: unityPath,
-      apiKey: apiKey.trim(),
+      apiKey: apiKey?.trim(),
       provider,
+      openaiAuthMode,
       embeddingProvider,
       embeddingApiKey: embeddingApiKey?.trim(),
       channel,

@@ -205,4 +205,52 @@ describe("OpenAIProvider", () => {
     const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
     expect(body.tools).toBeUndefined();
   });
+
+  it("supports ChatGPT/Codex subscription auth for streaming responses", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          [
+            'event: response.output_text.delta',
+            'data: {"delta":"pong"}',
+            "",
+            'event: response.completed',
+            'data: {"response":{"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4},"output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"pong"}]}]}}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      body: stream,
+      text: async () => "",
+      headers: new Headers(),
+    });
+
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: "access-token",
+      accountId: "account-id",
+    });
+
+    const result = await provider.chat("system", [{ role: "user", content: "ping" }], []);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://chatgpt.com/backend-api/codex/responses",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer access-token",
+          "ChatGPT-Account-Id": "account-id",
+        }),
+      }),
+    );
+    expect(result.text).toBe("pong");
+    expect(result.toolCalls).toEqual([]);
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 1, totalTokens: 4 });
+  });
 });

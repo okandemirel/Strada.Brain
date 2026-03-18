@@ -5,6 +5,7 @@ interface ReviewStepProps {
   selectedPreset: string | null
   checkedProviders: Set<string>
   providerKeys: Record<string, string>
+  providerAuthModes: Record<string, string>
   projectPath: string
   channel: string
   language: string
@@ -29,6 +30,7 @@ export default function ReviewStep({
   selectedPreset,
   checkedProviders,
   providerKeys,
+  providerAuthModes,
   projectPath,
   channel,
   language,
@@ -78,13 +80,20 @@ export default function ReviewStep({
         {Array.from(checkedProviders)
           .filter((id) => {
             const provider = PROVIDER_MAP[id]
+            if (id === 'openai' && providerAuthModes.openai === 'chatgpt-subscription') {
+              return (providerKeys[id] ?? '').trim().length > 0
+            }
             return provider?.envKey && (providerKeys[id] ?? '').trim().length > 0
           })
           .map((id) => {
             const provider = PROVIDER_MAP[id]
             return (
               <div key={id} className="review-item">
-                <span className="review-label">{provider.name} Key</span>
+                <span className="review-label">
+                  {id === 'openai' && providerAuthModes.openai === 'chatgpt-subscription'
+                    ? 'OpenAI Embedding Key'
+                    : `${provider.name} Key`}
+                </span>
                 <span className="review-value mono">
                   {maskKey(providerKeys[id])}
                 </span>
@@ -116,6 +125,17 @@ export default function ReviewStep({
           <span className="review-label">Provider Chain</span>
           <span className="review-value">{providerChain || 'None selected'}</span>
         </div>
+
+        {checkedProviders.has('openai') && (
+          <div className="review-item">
+            <span className="review-label">OpenAI Auth</span>
+            <span className="review-value">
+              {providerAuthModes.openai === 'chatgpt-subscription'
+                ? 'ChatGPT/Codex subscription'
+                : 'API key'}
+            </span>
+          </div>
+        )}
 
         <div className="review-item">
           <span className="review-label">Project Path</span>
