@@ -10,6 +10,7 @@ import { DelegationManager } from "./delegation-manager.js";
 import type { DelegationManagerOptions } from "./delegation-manager.js";
 import { DelegationLog } from "./delegation-log.js";
 import { TierRouter } from "./tier-router.js";
+import { createProvider } from "../../providers/provider-registry.js";
 import type {
   DelegationConfig,
   DelegationRequest,
@@ -43,6 +44,18 @@ vi.mock("../../orchestrator.js", () => {
 
 vi.mock("../../providers/provider-registry.js", () => {
   return {
+    PROVIDER_PRESETS: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-5.2",
+        label: "OpenAI",
+      },
+      deepseek: {
+        baseUrl: "https://api.deepseek.com/v1",
+        defaultModel: "deepseek-chat",
+        label: "DeepSeek",
+      },
+    },
     createProvider: vi.fn().mockReturnValue({
       name: "mock-provider",
       chat: vi.fn(),
@@ -178,6 +191,21 @@ describe("DelegationManager", () => {
   let manager: DelegationManager;
 
   beforeEach(() => {
+    vi.mocked(createProvider).mockReset();
+    vi.mocked(createProvider).mockImplementation((config: { name: string; model?: string }) => ({
+      name: config.name,
+      capabilities: {
+        maxTokens: 8192,
+        streaming: true,
+        structuredStreaming: false,
+        toolCalling: true,
+        vision: false,
+        systemPrompt: true,
+      },
+      chat: vi.fn(),
+      chatWithTools: vi.fn(),
+    }) as never);
+
     // Reset the orchestrator mock handler for each test
     orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
       // Default: immediately send response through the capture channel
@@ -394,6 +422,130 @@ describe("DelegationManager", () => {
       };
 
       await expect(manager.delegate(request)).rejects.toThrow("Premium failed");
+    });
+  });
+
+  describe("dynamic tier fallback", () => {
+    it("falls back to a viable configured provider when the tier spec is unavailable", async () => {
+      const fallbackConfig: DelegationConfig = {
+        ...TEST_CONFIG,
+        tiers: {
+          ...TEST_TIER_MAP,
+          cheap: "claude:claude-sonnet-4-6-20250514",
+        },
+      };
+
+      vi.mocked(createProvider).mockImplementation((config: { name: string; model?: string }) => {
+        if (config.name === "claude") {
+          throw new Error("Claude provider requires an API key");
+        }
+        return {
+          name: config.name,
+          capabilities: {
+            maxTokens: 8192,
+            streaming: true,
+            structuredStreaming: false,
+            toolCalling: true,
+            vision: false,
+            systemPrompt: true,
+            thinkingSupported: config.name === "deepseek",
+          },
+          chat: vi.fn(),
+          chatWithTools: vi.fn(),
+        } as never;
+      });
+
+      const fallbackManager = new DelegationManager(
+        buildManagerOpts({
+          config: fallbackConfig,
+          delegationLog,
+          apiKeys: { deepseek: "test-key" },
+          providerCredentials: { deepseek: { apiKey: "test-key" } },
+        }),
+      );
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await fallbackManager.delegate(request);
+
+      expect(result.metadata.model).toBe("deepseek-chat");
+      expect(vi.mocked(createProvider)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "deepseek",
+          model: "deepseek-chat",
+        }),
+      );
+    });
+
+    it("supports auto tier routing for premium delegation", async () => {
+      const autoConfig: DelegationConfig = {
+        ...TEST_CONFIG,
+        tiers: {
+          ...TEST_TIER_MAP,
+          premium: "auto",
+        },
+      };
+
+      vi.mocked(createProvider).mockImplementation((config: { name: string; model?: string }) => {
+        const capabilityMap: Record<string, { maxTokens: number; thinkingSupported?: boolean; toolCalling: boolean }> = {
+          deepseek: { maxTokens: 8192, thinkingSupported: false, toolCalling: true },
+          openai: { maxTokens: 64000, thinkingSupported: true, toolCalling: true },
+        };
+        const capabilities = capabilityMap[config.name] ?? { maxTokens: 8192, toolCalling: true };
+        return {
+          name: config.name,
+          capabilities: {
+            maxTokens: capabilities.maxTokens,
+            streaming: true,
+            structuredStreaming: false,
+            toolCalling: capabilities.toolCalling,
+            vision: false,
+            systemPrompt: true,
+            thinkingSupported: capabilities.thinkingSupported,
+            contextWindow: capabilities.maxTokens * 2,
+          },
+          chat: vi.fn(),
+          chatWithTools: vi.fn(),
+        } as never;
+      });
+
+      const autoManager = new DelegationManager(
+        buildManagerOpts({
+          config: autoConfig,
+          delegationLog,
+          apiKeys: { deepseek: "test-key", openai: "test-key" },
+          providerCredentials: {
+            deepseek: { apiKey: "test-key" },
+            openai: { apiKey: "test-key" },
+          },
+        }),
+      );
+
+      const request: DelegationRequest = {
+        type: "premium_task",
+        task: "Handle a frontier-quality task",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await autoManager.delegate(request);
+
+      expect(result.metadata.model).toBe("gpt-5.2");
+      expect(vi.mocked(createProvider)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "openai",
+          model: "gpt-5.2",
+        }),
+      );
     });
   });
 

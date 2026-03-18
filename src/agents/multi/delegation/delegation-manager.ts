@@ -31,9 +31,11 @@ import type {
 import type { DelegationLog } from "./delegation-log.js";
 import type { TierRouter } from "./tier-router.js";
 import type { ProviderCredentialMap } from "../../providers/provider-registry.js";
-import { createProvider } from "../../providers/provider-registry.js";
+import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-registry.js";
 import { ProviderManager } from "../../providers/provider-manager.js";
 import { Orchestrator } from "../../orchestrator.js";
+import { getProviderIntelligenceSnapshot, type ProviderWorkload } from "../../providers/provider-knowledge.js";
+import { HARDCODED_MODELS } from "../../providers/model-intelligence.js";
 
 // =============================================================================
 // OPTIONS
@@ -69,6 +71,30 @@ interface ActiveDelegation {
   readonly type: string;
   readonly startedAt: number;
 }
+
+interface ResolvedDelegationProviderConfig {
+  readonly name: string;
+  readonly model: string;
+}
+
+const HARDCODED_MODEL_LOOKUP = {
+  getModelInfo(modelId: string) {
+    const info = HARDCODED_MODELS.get(modelId);
+    if (!info) {
+      return undefined;
+    }
+    return {
+      contextWindow: info.contextWindow,
+      maxOutputTokens: info.maxOutputTokens,
+      inputPricePerMillion: info.inputPricePerMillion,
+      outputPricePerMillion: info.outputPricePerMillion,
+      supportsVision: info.supportsVision,
+      supportsThinking: info.supportsThinking,
+      supportsToolCalling: info.supportsToolCalling,
+      supportsStreaming: info.supportsStreaming,
+    };
+  },
+};
 
 // =============================================================================
 // CAPTURE CHANNEL
@@ -269,7 +295,7 @@ export class DelegationManager {
     const startTime = Date.now();
 
     // Resolve provider for this tier
-    const providerConfig = this.opts.tierRouter.resolveProviderConfig(tier);
+    const providerConfig = this.resolveDelegationProviderConfig(tier, typeConfig);
     const providerCredential = this.opts.providerCredentials?.[providerConfig.name];
     const provider = createProvider({
       name: providerConfig.name,
@@ -448,6 +474,239 @@ export class DelegationManager {
       throw new Error(`Unknown delegation type: "${type}"`);
     }
     return typeConfig;
+  }
+
+  private resolveDelegationProviderConfig(
+    tier: ModelTier,
+    typeConfig: DelegationTypeConfig,
+  ): ResolvedDelegationProviderConfig {
+    const configured = this.opts.tierRouter.resolveProviderConfig(tier);
+    const normalizedName = configured.name.trim().toLowerCase();
+
+    if (normalizedName && normalizedName !== "auto" && this.isDelegationProviderAvailable(normalizedName)) {
+      return {
+        name: normalizedName,
+        model: configured.model || this.getDefaultModelForProvider(normalizedName),
+      };
+    }
+
+    const dynamic = this.resolveDynamicProviderConfig(tier, typeConfig);
+    if (dynamic) {
+      return dynamic;
+    }
+
+    return {
+      name: normalizedName,
+      model: configured.model || this.getDefaultModelForProvider(normalizedName),
+    };
+  }
+
+  private resolveDynamicProviderConfig(
+    tier: ModelTier,
+    typeConfig: DelegationTypeConfig,
+  ): ResolvedDelegationProviderConfig | null {
+    const candidates = this.buildDelegationCandidates();
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const workload = this.inferDelegationWorkload(typeConfig.name, tier);
+    const ranked = candidates
+      .map((candidate) => ({
+        candidate,
+        score: this.scoreDelegationCandidate(tier, workload, candidate),
+      }))
+      .sort((left, right) => right.score - left.score);
+
+    const top = ranked[0]?.candidate;
+    if (!top) {
+      return null;
+    }
+
+    return {
+      name: top.name,
+      model: top.model,
+    };
+  }
+
+  private buildDelegationCandidates(): Array<{
+    name: string;
+    model: string;
+    provider: ReturnType<typeof createProvider>;
+  }> {
+    const names = new Set<string>();
+
+    for (const name of Object.keys(this.opts.providerCredentials ?? {})) {
+      const normalized = name.trim().toLowerCase();
+      if (!normalized || normalized === "anthropic") continue;
+      if (this.isDelegationProviderAvailable(normalized)) {
+        names.add(normalized);
+      }
+    }
+
+    names.add("ollama");
+
+    const candidates: Array<{
+      name: string;
+      model: string;
+      provider: ReturnType<typeof createProvider>;
+    }> = [];
+
+    for (const name of names) {
+      try {
+        const credential = this.opts.providerCredentials?.[name];
+        const model = this.getDefaultModelForProvider(name);
+        const provider = createProvider({
+          name,
+          apiKey: credential?.apiKey ?? this.opts.apiKeys[name],
+          openaiAuthMode: credential?.openaiAuthMode,
+          openaiChatgptAuthFile: credential?.openaiChatgptAuthFile,
+          openaiSubscriptionAccessToken: credential?.openaiSubscriptionAccessToken,
+          openaiSubscriptionAccountId: credential?.openaiSubscriptionAccountId,
+          model,
+        });
+        candidates.push({
+          name,
+          model,
+          provider,
+        });
+      } catch {
+        // Skip unusable candidates and keep scanning for a viable worker.
+      }
+    }
+
+    return candidates;
+  }
+
+  private getDefaultModelForProvider(name: string): string {
+    for (const spec of Object.values(this.opts.config.tiers)) {
+      const normalized = spec.trim();
+      if (!normalized) continue;
+      const colon = normalized.indexOf(":");
+      if (colon === -1) continue;
+      const providerName = normalized.slice(0, colon).trim().toLowerCase();
+      const model = normalized.slice(colon + 1).trim();
+      if (providerName === name && model) {
+        return model;
+      }
+    }
+
+    if (name === "claude" || name === "anthropic") {
+      return "claude-sonnet-4-6-20250514";
+    }
+    if (name === "ollama") {
+      return "llama3.3";
+    }
+    return PROVIDER_PRESETS[name]?.defaultModel ?? "default";
+  }
+
+  private isDelegationProviderAvailable(name: string): boolean {
+    if (name === "ollama") {
+      return true;
+    }
+    if (name === "claude" || name === "anthropic") {
+      return Boolean(
+        this.opts.providerCredentials?.claude?.apiKey
+        || this.opts.providerCredentials?.anthropic?.apiKey
+        || this.opts.apiKeys.claude
+        || this.opts.apiKeys.anthropic,
+      );
+    }
+    if (name === "openai") {
+      const credential = this.opts.providerCredentials?.openai;
+      return Boolean(
+        credential?.apiKey
+        || credential?.openaiAuthMode === "chatgpt-subscription"
+        || credential?.openaiChatgptAuthFile
+        || (credential?.openaiSubscriptionAccessToken && credential?.openaiSubscriptionAccountId)
+        || this.opts.apiKeys.openai,
+      );
+    }
+    return Boolean(this.opts.providerCredentials?.[name]?.apiKey || this.opts.apiKeys[name]);
+  }
+
+  private inferDelegationWorkload(typeName: string, tier: ModelTier): ProviderWorkload {
+    const normalized = typeName.trim().toLowerCase();
+    if (normalized.includes("review")) return "review";
+    if (normalized.includes("analysis")) return "analysis";
+    if (normalized.includes("document")) return "documentation";
+    if (normalized.includes("implement") || normalized.includes("code")) return "implementation";
+    if (normalized.includes("debug")) return "debugging";
+    if (normalized.includes("plan")) return "planning";
+
+    switch (tier) {
+      case "cheap":
+        return "documentation";
+      case "standard":
+        return "implementation";
+      case "premium":
+        return "planning";
+      default:
+        return "coordination";
+    }
+  }
+
+  private scoreDelegationCandidate(
+    tier: ModelTier,
+    workload: ProviderWorkload,
+    candidate: {
+      name: string;
+      model: string;
+      provider: ReturnType<typeof createProvider>;
+    },
+  ): number {
+    const snapshot = getProviderIntelligenceSnapshot(
+      candidate.name,
+      candidate.model,
+      HARDCODED_MODEL_LOOKUP,
+      candidate.provider.capabilities,
+      candidate.provider.name,
+    );
+    const workloadScore = snapshot.workloadScores[workload] ?? 0.5;
+    const contextScore = Math.min(snapshot.contextWindow / 1_000_000, 1);
+    const reasoningScore = snapshot.capabilities.supportsThinking ? 1 : 0.45;
+    const toolScore = snapshot.capabilities.supportsToolCalling ? 1 : 0.25;
+    const cheapness = this.getCheapnessScore(snapshot, candidate.name);
+    const maxOutputScore = Math.min(
+      (HARDCODED_MODEL_LOOKUP.getModelInfo(candidate.model)?.maxOutputTokens ?? 8_000) / 64_000,
+      1,
+    );
+
+    if (tier === "local") {
+      const localBonus = candidate.name === "ollama" ? 1 : 0;
+      return (localBonus * 0.7) + (cheapness * 0.2) + (workloadScore * 0.1);
+    }
+
+    if (tier === "cheap") {
+      return (cheapness * 0.45) + (workloadScore * 0.35) + (toolScore * 0.2);
+    }
+
+    if (tier === "premium") {
+      return (workloadScore * 0.35) + (reasoningScore * 0.2) + (contextScore * 0.15) + (toolScore * 0.1) + (maxOutputScore * 0.2);
+    }
+
+    return (workloadScore * 0.4) + (reasoningScore * 0.2) + (toolScore * 0.2) + (cheapness * 0.2);
+  }
+
+  private getCheapnessScore(
+    snapshot: ReturnType<typeof getProviderIntelligenceSnapshot>,
+    providerName: string,
+  ): number {
+    if (providerName === "ollama") {
+      return 1;
+    }
+    const totalPrice =
+      (snapshot.economics.inputPricePerMillion ?? 0) +
+      (snapshot.economics.outputPricePerMillion ?? 0);
+
+    if (snapshot.economics.inputPricePerMillion === undefined && snapshot.economics.outputPricePerMillion === undefined) {
+      return 0.5;
+    }
+    if (totalPrice <= 1) return 1;
+    if (totalPrice <= 4) return 0.8;
+    if (totalPrice <= 10) return 0.6;
+    if (totalPrice <= 20) return 0.35;
+    return 0.2;
   }
 
   /**
