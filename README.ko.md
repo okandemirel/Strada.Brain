@@ -92,6 +92,7 @@ Strada가 패키지된 npm/tarball 릴리스로 설치되면 런타임 설정은
 
 마법사는 Unity 프로젝트 경로, AI 공급자 API 키, 기본 채널, 언어를 묻습니다. `./strada setup` 은 이제 기본적으로 **Web Browser** 를 우선하며, 더 빠른 텍스트 흐름을 명시적으로 원할 때만 **Terminal** 을 선택하면 됩니다.
 웹 마법사에서 저장이 끝나면 Strada 는 같은 URL 에서 메인 웹 앱으로 핸드오프하므로 전환 중 새로고침해도 죽은 setup 페이지로 떨어지지 않습니다.
+RAG 가 켜져 있지만 사용할 수 있는 embedding provider 가 없으면 마법사는 이제 review 단계까지는 진행시켜 주지만, 유효한 embedding provider 를 고르거나 RAG 를 끌 때까지 Save 는 계속 막혀 있습니다.
 첫 setup 이 끝나면 서브커맨드 없는 `./strada` 가 스마트 런처가 됩니다.
 - 첫 사용에는 config 가 없으면 setup 을 자동으로 엽니다
 - 그 뒤에는 web / CLI / daemon / setup / doctor 를 고를 수 있는 터미널 패널을 보여줍니다

@@ -173,6 +173,11 @@ export default function ChannelRagStep({
             <p className="rag-info" style={{ marginTop: '0.65rem' }}>
               This is a system-wide memory/RAG choice. It does not change which provider Strada uses for conversation turns.
             </p>
+            {ragEnabled && !embeddingProviderName && (
+              <p className="rag-info warning" style={{ marginTop: '0.55rem' }}>
+                You can still continue to review, but setup will stay blocked until you pick a valid embedding provider or disable RAG.
+              </p>
+            )}
             {openaiEmbeddingNeedsApiKey && (
               <p className="rag-info warning" style={{ marginTop: '0.55rem' }}>
                 OpenAI ChatGPT/Codex subscription auth covers conversation only. OpenAI embeddings still require an OpenAI API key.

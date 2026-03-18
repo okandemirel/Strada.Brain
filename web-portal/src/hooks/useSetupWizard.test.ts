@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  getSetupReviewBlockingReason,
   hasAutoEmbeddingCandidate,
   hasUsableEmbeddingCredential,
   hasUsableResponseCredential,
@@ -15,5 +16,25 @@ describe('useSetupWizard helpers', () => {
     expect(hasAutoEmbeddingCandidate(new Set(['kimi']), { kimi: 'sk-kimi' })).toBe(false)
     expect(hasAutoEmbeddingCandidate(new Set(['kimi', 'gemini']), { kimi: 'sk-kimi', gemini: 'gem-key' })).toBe(true)
     expect(hasAutoEmbeddingCandidate(new Set(['ollama']), {})).toBe(true)
+  })
+
+  it('explains why save is blocked when rag has no usable embedding provider', () => {
+    expect(
+      getSetupReviewBlockingReason(true, 'auto', new Set(['kimi']), { kimi: 'sk-kimi' }, {}),
+    ).toContain('no embedding-capable provider')
+
+    expect(
+      getSetupReviewBlockingReason(
+        true,
+        'openai',
+        new Set(['openai']),
+        {},
+        { openai: 'chatgpt-subscription' },
+      ),
+    ).toContain('does not cover embeddings')
+
+    expect(
+      getSetupReviewBlockingReason(true, 'gemini', new Set(['kimi']), {}, {}),
+    ).toContain('Gemini embeddings need a usable API key')
   })
 })

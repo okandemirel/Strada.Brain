@@ -92,6 +92,7 @@ Si `./strada setup --web` detecte une version de Node trop ancienne pour constru
 
 L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de fournisseur IA, votre canal par d&eacute;faut et votre langue. `./strada setup` privilegie maintenant **Navigateur Web** par d&eacute;faut ; choisissez **Terminal** seulement si vous voulez explicitement le flux texte le plus rapide.
 Une fois l'assistant web enregistr&eacute;, Strada bascule vers l'application web principale sur la m&ecirc;me URL afin qu'un refresh pendant la transition ne vous laisse pas sur une page de setup morte.
+Si le RAG est activ&eacute; sans fournisseur d'embeddings utilisable, l'assistant vous laisse maintenant aller jusqu'&agrave; l'&eacute;tape de revue ; en revanche Save reste bloqu&eacute; tant que vous n'avez pas choisi un fournisseur d'embeddings valide ou d&eacute;sactiv&eacute; le RAG.
 Apr&egrave;s le premier setup r&eacute;ussi, `./strada` sans sous-commande devient votre launcher intelligent :
 - au premier usage, il ouvre automatiquement le setup si la config manque
 - ensuite, il affiche un panneau terminal pour choisir web, CLI, daemon, setup ou doctor

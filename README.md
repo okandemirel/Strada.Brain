@@ -90,6 +90,7 @@ If `./strada setup --web` detects an older Node runtime that cannot build the fu
 
 The wizard asks for your Unity project path, AI provider API key, default channel, and language. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
 After you save the web wizard, Strada hands off to the main web app on the same URL so refreshes can survive the transition instead of dropping you onto a dead setup page.
+If RAG is enabled without a usable embedding provider, the wizard now lets you continue to the review step but keeps Save blocked until you choose a valid embedding provider or disable RAG.
 
 After the first successful setup, running `./strada` with no subcommand becomes your smart launcher:
 - first use: opens setup automatically if config is missing

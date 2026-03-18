@@ -92,6 +92,7 @@ Wenn `./strada setup --web` eine aeltere Node-Version erkennt, die das volle Por
 
 Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. `./strada setup` bevorzugt jetzt standardmaessig den **Web-Browser**; waehlen Sie **Terminal** nur dann, wenn Sie den schnelleren Text-Flow bewusst moechten.
 Sobald Sie im Web-Assistenten speichern, uebergibt Strada auf derselben URL an die eigentliche Web-App, damit ein Refresh waehrend des Uebergangs nicht auf einer toten Setup-Seite landet.
+Wenn RAG aktiviert ist, aber kein nutzbarer Embedding-Provider konfiguriert wurde, laesst der Assistent Sie jetzt bis zum Review-Schritt weitergehen; Speichern bleibt jedoch blockiert, bis Sie einen gueltigen Embedding-Provider waehlen oder RAG deaktivieren.
 Nach dem ersten erfolgreichen Setup wird `./strada` ohne Subcommand zum smarten Launcher:
 - beim ersten Start oeffnet es das Setup automatisch, falls die Config fehlt
 - spaeter zeigt es ein Terminal-Panel fuer Web, CLI, Daemon, Setup oder Doctor

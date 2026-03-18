@@ -17,6 +17,8 @@ interface ReviewStepProps {
   autonomyHours: number
   saveStatus: SaveStatus
   saveError: string | null
+  canSave: boolean
+  saveBlockingReason: string | null
   onBack: () => void
   onSave: () => void
 }
@@ -42,6 +44,8 @@ export default function ReviewStep({
   autonomyHours,
   saveStatus,
   saveError,
+  canSave,
+  saveBlockingReason,
   onBack,
   onSave,
 }: ReviewStepProps) {
@@ -68,6 +72,7 @@ export default function ReviewStep({
   const hasEmbeddingProvider = Boolean(effectiveEmbeddingProviderId)
 
   const isSaving = saveStatus === 'saving' || saveStatus === 'polling'
+  const isSaveDisabled = isSaving || !canSave
 
   return (
     <div className="step">
@@ -174,11 +179,17 @@ export default function ReviewStep({
           </div>
         )}
 
-        {ragEnabled && !hasEmbeddingProvider && (
-          <div className="save-message error" style={{ marginTop: 0 }}>
-            RAG needs a real embedding-capable provider. Add Gemini, OpenAI API key, Mistral, Together, Fireworks, Qwen, or Ollama before saving.
-          </div>
-        )}
+      {ragEnabled && !hasEmbeddingProvider && (
+        <div className="save-message error" style={{ marginTop: 0 }}>
+          RAG needs a real embedding-capable provider. Add Gemini, OpenAI API key, Mistral, Together, Fireworks, Qwen, or Ollama before saving.
+        </div>
+      )}
+
+      {!canSave && saveBlockingReason && (
+        <div className="save-message error" style={{ marginTop: ragEnabled && !hasEmbeddingProvider ? '0.75rem' : 0 }}>
+          {saveBlockingReason}
+        </div>
+      )}
 
         <div className="review-item">
           <span className="review-label">Language</span>
@@ -220,7 +231,7 @@ export default function ReviewStep({
         <button className="btn btn-secondary" onClick={onBack} disabled={isSaving}>
           Back
         </button>
-        <button className="btn btn-primary" onClick={onSave} disabled={isSaving}>
+        <button className="btn btn-primary" onClick={onSave} disabled={isSaveDisabled}>
           {isSaving ? 'Saving...' : 'Save Configuration'}
         </button>
       </div>

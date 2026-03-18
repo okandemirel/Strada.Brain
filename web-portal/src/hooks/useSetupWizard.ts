@@ -31,6 +31,33 @@ export function hasAutoEmbeddingCandidate(
   )
 }
 
+export function getSetupReviewBlockingReason(
+  ragEnabled: boolean,
+  embeddingProvider: string,
+  checkedProviders: Set<string>,
+  providerKeys: Record<string, string>,
+  providerAuthModes: Record<string, string>,
+): string | null {
+  if (!ragEnabled) return null
+
+  if (embeddingProvider === 'auto') {
+    return hasAutoEmbeddingCandidate(checkedProviders, providerKeys)
+      ? null
+      : 'RAG is enabled, but no embedding-capable provider is currently configured. Choose Gemini, OpenAI, Mistral, Together, Fireworks, Qwen, or Ollama for embeddings, or disable RAG before saving.'
+  }
+
+  if (hasUsableEmbeddingCredential(embeddingProvider, providerKeys)) {
+    return null
+  }
+
+  if (embeddingProvider === 'openai' && providerAuthModes.openai === 'chatgpt-subscription') {
+    return 'OpenAI conversation subscription does not cover embeddings. Add an OpenAI API key for embeddings or choose another embedding provider.'
+  }
+
+  const providerName = PROVIDER_MAP[embeddingProvider]?.name ?? embeddingProvider
+  return `${providerName} embeddings need a usable API key before setup can be saved.`
+}
+
 export function useSetupWizard() {
   const [setupAvailability, setSetupAvailability] = useState<'checking' | 'available' | 'unavailable'>('checking')
   const [setupUnavailableReason, setSetupUnavailableReason] = useState<string | null>(null)
@@ -57,6 +84,13 @@ export function useSetupWizard() {
   const csrfTokenRef = useRef<string>('')
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const mountedRef = useRef(true)
+  const reviewBlockingReason = getSetupReviewBlockingReason(
+    ragEnabled,
+    embeddingProvider,
+    checkedProviders,
+    providerKeys,
+    providerAuthModes,
+  )
 
   // Fetch CSRF token on mount
   useEffect(() => {
@@ -104,21 +138,14 @@ export function useSetupWizard() {
         )
       }
       case 4: {
-        if (!ragEnabled) return true
-        if (embeddingProvider === 'auto') {
-          return hasAutoEmbeddingCandidate(checkedProviders, providerKeys)
-        }
-        if (checkedProviders.has(embeddingProvider)) {
-          return hasUsableEmbeddingCredential(embeddingProvider, providerKeys)
-        }
-        return hasUsableEmbeddingCredential(embeddingProvider, providerKeys)
+        return true
       }
       case 3:
         return projectPath.trim().length > 0
       default:
         return true
     }
-  }, [step, checkedProviders, providerKeys, providerAuthModes, projectPath, ragEnabled, embeddingProvider])
+  }, [step, checkedProviders, providerKeys, providerAuthModes, projectPath])
 
   const nextStep = useCallback(() => {
     if (validateCurrentStep() && step < 5) {
@@ -233,6 +260,12 @@ export function useSetupWizard() {
   const save = useCallback(async () => {
     setSaveStatus('saving')
     setSaveError(null)
+
+    if (reviewBlockingReason) {
+      setSaveStatus('error')
+      setSaveError(reviewBlockingReason)
+      return
+    }
 
     // Build config object
     const config: Record<string, string> = {
@@ -350,7 +383,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason])
 
   return {
     // State
@@ -375,6 +408,8 @@ export function useSetupWizard() {
     daemonBudget,
     saveStatus,
     saveError,
+    reviewBlockingReason,
+    canSave: !reviewBlockingReason,
 
     // Methods
     nextStep,

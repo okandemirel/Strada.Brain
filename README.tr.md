@@ -92,6 +92,7 @@ Strada paketlenmis bir npm/tarball surumunden kuruldugunda runtime config'i vars
 
 Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. `./strada setup` artik varsayilan olarak **Web Tarayicisi** yolunu tercih eder; daha hizli metin akisina bilincli olarak ihtiyaciniz varsa **Terminal** secin.
 Web sihirbazinda kaydetme tamamlandiginda Strada ayni URL uzerinden ana web uygulamasina devreder; boylece refresh gecisi olu setup sayfasina dusmez.
+RAG acik ama kullanilabilir bir embedding provider yoksa sihirbaz artik review adimina gecmenize izin verir; ancak gecerli bir embedding provider secene kadar veya RAG'i kapatana kadar Save bloklu kalir.
 Ilk basarili kurulumdan sonra `./strada` komutu artik akilli launcher olur:
 - ilk kullanimda config yoksa setup'i otomatik acar
 - sonraki kullanimlarda web, CLI, daemon, setup veya doctor secimi yapabileceginiz terminal paneli gosterir
