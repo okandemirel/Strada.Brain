@@ -162,7 +162,7 @@ should_run_from_source() {
 
   for arg in "$@"; do
     case "$arg" in
-      setup|doctor|--help|-h|--version|-V|--web|--terminal)
+      start|setup|doctor|--help|-h|--version|-V|--web|--terminal)
         return 0
         ;;
     esac

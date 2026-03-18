@@ -680,45 +680,55 @@ export async function runTerminalWizard(
             console.log("\n  Strada could not finish the automatic Node.js upgrade flow.");
             console.log("  Please upgrade to Node.js 22 manually, then rerun `strada setup --web`.\n");
           }
-        } else {
+          return;
+        }
+        const termFallback = await rl.question(
+          "  Web setup requires Node.js 20.19+. Continue with terminal setup instead? [Y/n]: ",
+        );
+        if (termFallback.trim().toLowerCase() === "n") {
           intentionalClose = true;
           rl.close();
+          return;
         }
-        return;
-      }
-
-      if (!webAssets.ready) {
+        useWebWizard = false;
+      } else if (!webAssets.ready) {
         console.log("  Unable to prepare the web setup bundle right now.");
-        console.log("  Fix the build issue and rerun `strada setup --web`; Strada will keep web as the primary setup path.\n");
+        const termFallback = await rl.question(
+          "  Continue with terminal setup instead? [Y/n]: ",
+        );
+        if (termFallback.trim().toLowerCase() === "n") {
+          console.log("\n  Fix the build issue and rerun `strada setup --web`.\n");
+          intentionalClose = true;
+          rl.close();
+          return;
+        }
+        useWebWizard = false;
+      } else {
         intentionalClose = true;
         rl.close();
+        const requestedPort = process.env["SETUP_WIZARD_PORT"]
+          ? parseInt(process.env["SETUP_WIZARD_PORT"], 10)
+          : 3000;
+        const port = await findAvailableSetupWizardPort(requestedPort);
+        const { SetupWizard } = await import("./setup-wizard.js");
+        const wizard = new SetupWizard({ port });
+        const url = buildSetupAccessUrl(port);
+        if (port !== requestedPort) {
+          console.log(
+            `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on ${url} instead.`,
+          );
+        }
+        await wizard.listen();
+        await waitForSetupUrlReady(url);
+        console.log(`\n\uD83C\uDF10 Opening setup at ${url}...`);
+        console.log(`   (Open this URL in your browser if it didn't open automatically)\n`);
+        openBrowser(url);
+        await wizard.waitForCompletion();
+        await wizard.shutdown();
+        console.log(`\nConfiguration saved. Launching Strada web app at http://${SETUP_HOST}:${port}/ ...\n`);
+        handoffToMainWebAppAfterSetup();
         return;
       }
-
-      intentionalClose = true;
-      rl.close();
-      const requestedPort = process.env["SETUP_WIZARD_PORT"]
-        ? parseInt(process.env["SETUP_WIZARD_PORT"], 10)
-        : 3000;
-      const port = await findAvailableSetupWizardPort(requestedPort);
-      const { SetupWizard } = await import("./setup-wizard.js");
-      const wizard = new SetupWizard({ port });
-      const url = buildSetupAccessUrl(port);
-      if (port !== requestedPort) {
-        console.log(
-          `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on ${url} instead.`,
-        );
-      }
-      await wizard.listen();
-      await waitForSetupUrlReady(url);
-      console.log(`\n\uD83C\uDF10 Opening setup at ${url}...`);
-      console.log(`   (Open this URL in your browser if it didn't open automatically)\n`);
-      openBrowser(url);
-      await wizard.waitForCompletion();
-      await wizard.shutdown();
-      console.log(`\nConfiguration saved. Launching Strada web app at http://${SETUP_HOST}:${port}/ ...\n`);
-      handoffToMainWebAppAfterSetup();
-      return;
     }
 
     console.log("");
@@ -731,59 +741,71 @@ export async function runTerminalWizard(
       validateUnityPath,
     );
 
-    const primaryProviderAnswer = await askWithRetry(
+    const providerAnswer = await askWithRetry(
       rl,
-      `? Primary response provider (${RESPONSE_PROVIDER_CHOICES.join("/")}) [default: claude]: `,
+      `? Response providers — comma-separated for multi-provider chain (${RESPONSE_PROVIDER_CHOICES.join("/")})\n  [default: claude]: `,
       (input) => {
         const normalized = input.trim().toLowerCase();
         if (!normalized) return { valid: true };
-        if (!isValidResponseProvider(normalized)) {
-          return {
-            valid: false,
-            error: `Unsupported provider "${normalized}". Supported providers: ${RESPONSE_PROVIDER_CHOICES.join(", ")}.`,
-          };
+        const parts = normalized.split(",").map((p) => p.trim()).filter(Boolean);
+        for (const part of parts) {
+          if (!isValidResponseProvider(part)) {
+            return {
+              valid: false,
+              error: `Unsupported provider "${part}". Supported providers: ${RESPONSE_PROVIDER_CHOICES.join(", ")}.`,
+            };
+          }
+        }
+        const unique = new Set(parts);
+        if (unique.size !== parts.length) {
+          return { valid: false, error: "Duplicate providers in chain." };
         }
         return { valid: true };
       },
     );
-    const providerChain = [primaryProviderAnswer.trim().toLowerCase() || "claude"];
+    const normalizedProviders = providerAnswer.trim().toLowerCase();
+    const providerChain = normalizedProviders
+      ? normalizedProviders.split(",").map((p) => p.trim()).filter(Boolean)
+      : ["claude"];
 
-    while (true) {
-      const remainingProviders = getRemainingResponseProviderChoices(providerChain);
-      if (remainingProviders.length === 0) {
-        break;
+    if (providerChain.length === 1) {
+      while (true) {
+        const remainingProviders = getRemainingResponseProviderChoices(providerChain);
+        if (remainingProviders.length === 0) {
+          break;
+        }
+
+        const addMoreAnswer = await rl.question(
+          "? Add another response provider for fallback / multi-agent orchestration? [y/N]: ",
+        );
+        const normalizedAddMore = addMoreAnswer.trim().toLowerCase();
+        if (normalizedAddMore !== "y" && normalizedAddMore !== "yes") {
+          break;
+        }
+
+        const additionalProvider = await askWithRetry(
+          rl,
+          `? Additional response provider (${remainingProviders.join("/")}) : `,
+          (input) => {
+            const normalized = input.trim().toLowerCase();
+            if (!normalized) {
+              return { valid: false, error: "Choose one provider to add." };
+            }
+            if (!isValidResponseProvider(normalized)) {
+              return {
+                valid: false,
+                error: `Unsupported provider "${normalized}". Supported providers: ${remainingProviders.join(", ")}.`,
+              };
+            }
+            if (providerChain.includes(normalized)) {
+              return { valid: false, error: `${normalized} is already in the response chain.` };
+            }
+            return { valid: true };
+          },
+        );
+
+        providerChain.push(additionalProvider.trim().toLowerCase());
       }
-
-      const addMoreAnswer = await rl.question(
-        "? Add another response provider for fallback / multi-agent orchestration? [y/N]: ",
-      );
-      const normalizedAddMore = addMoreAnswer.trim().toLowerCase();
-      if (normalizedAddMore !== "y" && normalizedAddMore !== "yes") {
-        break;
-      }
-
-      const additionalProvider = await askWithRetry(
-        rl,
-        `? Additional response provider (${remainingProviders.join("/")}) : `,
-        (input) => {
-          const normalized = input.trim().toLowerCase();
-          if (!normalized) {
-            return { valid: false, error: "Choose one provider to add." };
-          }
-          if (!isValidResponseProvider(normalized)) {
-            return {
-              valid: false,
-              error: `Unsupported provider "${normalized}". Supported providers: ${remainingProviders.join(", ")}.`,
-            };
-          }
-          if (providerChain.includes(normalized)) {
-            return { valid: false, error: `${normalized} is already in the response chain.` };
-          }
-          return { valid: true };
-        },
-      );
-
-      providerChain.push(additionalProvider.trim().toLowerCase());
     }
 
     if (providerChain.length > 1) {
@@ -928,6 +950,17 @@ export async function runTerminalWizard(
       },
     );
     const language = langAnswer.trim().toLowerCase() || "en";
+
+    const sep = "\u2501".repeat(34);
+    console.log("\n" + sep);
+    console.log("  Configuration Summary");
+    console.log(sep);
+    console.log(`  Unity project:   ${unityPath}`);
+    console.log(`  Provider chain:  ${providerChain.join(" -> ")}`);
+    console.log(`  Embedding:       ${embeddingProvider}`);
+    console.log(`  Channel:         ${channel}`);
+    console.log(`  Language:        ${language}`);
+    console.log(sep);
 
     const envPath = path.join(process.cwd(), ".env");
     if (fs.existsSync(envPath)) {
