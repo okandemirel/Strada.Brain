@@ -147,6 +147,8 @@ strada supervise --channel web
 ./strada install-command  # bare `strada` 명령을 사용자용으로 설치
 strada                    # install-command 이후의 스마트 런처
 strada --daemon           # 저장된 기본 채널을 daemon 모드로 시작
+strada --web              # 웹 채널을 열거나 새 머신에서 웹 우선 설정을 이어감
+strada --terminal         # 터미널 채널을 열거나 새 머신에서 터미널 설정을 강제함
 ./strada setup --web      # 웹 마법사를 바로 열기
 ./strada setup --terminal # 터미널 마법사를 바로 사용
 ./strada doctor           # 설치/build/config 준비 상태 확인

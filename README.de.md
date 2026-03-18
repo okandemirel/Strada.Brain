@@ -147,6 +147,8 @@ strada supervise --channel web
 ./strada install-command  # Benutzerlokalen bare `strada`-Befehl installieren
 strada                    # Smarter Launcher nach install-command
 strada --daemon           # Gespeicherten Standardkanal im Daemon-Modus starten
+strada --web              # Web-Kanal oeffnen oder auf einer frischen Maschine web-gefuertetes Setup fortsetzen
+strada --terminal         # Terminal-Kanal oeffnen oder auf einer frischen Maschine Terminal-Setup erzwingen
 ./strada setup --web      # Browser-Assistent direkt starten
 ./strada setup --terminal # Terminal-Assistent direkt verwenden
 ./strada doctor           # Installations-/Build-/Config-Bereitschaft pruefen

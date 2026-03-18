@@ -100,6 +100,8 @@ describe("docs consistency", () => {
       expect(content).toContain("./strada doctor");
       expect(content).toContain("./strada                  #");
       expect(content).toContain("strada --daemon");
+      expect(content).toContain("strada --web");
+      expect(content).toContain("strada --terminal");
       expect(content).toContain("nvm");
       expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
     }
@@ -124,6 +126,8 @@ describe("docs consistency", () => {
     expect(englishReadme).toContain("ENOENT ... /Strada/package.json");
     expect(englishReadme).toContain("./strada                  # Canonical source-checkout launcher");
     expect(englishReadme).toContain("strada --daemon");
+    expect(englishReadme).toContain("strada --web");
+    expect(englishReadme).toContain("strada --terminal");
     expect(englishReadme).toContain("./strada setup --web");
     expect(englishReadme).toContain("./strada doctor");
     expect(englishReadme).toContain("prefers **Web Browser** by default");

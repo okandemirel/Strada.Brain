@@ -160,14 +160,15 @@ should_run_from_source() {
     return 0
   fi
 
-  case "${1:-}" in
-    setup|doctor|--help|-h|--version|-V)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  for arg in "$@"; do
+    case "$arg" in
+      setup|doctor|--help|-h|--version|-V|--web|--terminal)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
 }
 
 if [ "${1:-}" = "install-command" ]; then
@@ -181,9 +182,11 @@ if should_run_from_source "$@"; then
   ensure_source_checkout
   export STRADA_INSTALL_ROOT="$ROOT_DIR"
   export STRADA_SOURCE_CHECKOUT="true"
+  export STRADA_LAUNCHER_PATH="$ROOT_DIR/strada"
   exec node --import tsx "$SOURCE_ENTRY" "$@"
 fi
 
 ensure_prepared
 export STRADA_INSTALL_ROOT="$ROOT_DIR"
+export STRADA_LAUNCHER_PATH="$ROOT_DIR/strada"
 exec node "$DIST_ENTRY" "$@"

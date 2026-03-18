@@ -147,6 +147,8 @@ strada supervise --channel web
 ./strada install-command  # Instala un comando bare `strada` para el usuario
 strada                    # Launcher inteligente despues de install-command
 strada --daemon           # Inicia el canal por defecto en modo daemon
+strada --web              # Abre el canal web o continua la configuracion web en una maquina nueva
+strada --terminal         # Abre el canal de terminal o fuerza la configuracion en terminal en una maquina nueva
 ./strada setup --web      # Abre directamente el asistente web
 ./strada setup --terminal # Usa directamente el asistente de terminal
 ./strada doctor           # Verifica instalacion/build/config

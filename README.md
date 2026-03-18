@@ -151,6 +151,8 @@ strada
 ./strada install-command  # Install a user-local bare `strada` command
 strada                    # Smart launcher after install-command
 strada --daemon           # Start the configured default channel in daemon mode
+strada --web              # Open the web channel, or continue web-first setup on a fresh machine
+strada --terminal         # Open the terminal channel, or force terminal setup on a fresh machine
 ./strada setup --web      # Launch the browser wizard directly
 ./strada setup --terminal # Use the terminal wizard directly
 ./strada doctor           # Verify install/build/config readiness

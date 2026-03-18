@@ -147,6 +147,8 @@ strada supervise --channel web
 ./strada install-command  # 为用户安装 bare `strada` 命令
 strada                    # install-command 之后的智能启动器
 strada --daemon           # 以 daemon 模式启动已保存的默认通道
+strada --web              # 打开 Web 通道，或在新机器上继续 Web 优先安装
+strada --terminal         # 打开终端通道，或在新机器上强制使用终端安装
 ./strada setup --web      # 直接打开 Web 向导
 ./strada setup --terminal # 直接使用终端向导
 ./strada doctor           # 检查安装 / build / config 准备情况

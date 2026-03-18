@@ -53,6 +53,7 @@ program
 program
   .option("--daemon", "Run the selected launch target in daemon mode")
   .option("--web", "Open or resume Strada through the local web channel")
+  .option("--terminal", "Open Strada in the terminal (or use terminal setup if not configured)")
   .option("--cli", "Open Strada in the interactive CLI")
   .option("--telegram", "Start the Telegram channel directly")
   .option("--discord", "Start the Discord channel directly")
@@ -373,18 +374,20 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
 }
 
 async function runRootLauncher(options: RootLaunchOptions): Promise<void> {
-  const defaultChannel = getConfiguredDefaultChannel();
-  const quickAction = resolveQuickLaunchAction(options);
-  if (quickAction) {
-    await runLauncherAction(quickAction);
-    return;
-  }
-
   const configResult = loadConfigSafe();
   if (configResult.kind === "err") {
     console.log("First-time setup is required before Strada can start.\n");
     const { runTerminalWizard } = await import("./core/terminal-wizard.js");
-    await runTerminalWizard();
+    await runTerminalWizard({
+      mode: options.web ? "web" : options.terminal ? "terminal" : undefined,
+    });
+    return;
+  }
+
+  const defaultChannel = getConfiguredDefaultChannel();
+  const quickAction = resolveQuickLaunchAction(options);
+  if (quickAction) {
+    await runLauncherAction(quickAction);
     return;
   }
 

@@ -147,6 +147,8 @@ strada supervise --channel web
 ./strada install-command  # bare `strada` コマンドをユーザー用にインストール
 strada                    # install-command 後のスマートランチャー
 strada --daemon           # 保存済みの既定チャネルをデーモンモードで起動
+strada --web              # Web チャネルを開く、または新しいマシンで Web 優先セットアップを続行
+strada --terminal         # Terminal チャネルを開く、または新しいマシンで Terminal セットアップを強制
 ./strada setup --web      # Web ウィザードを直接起動
 ./strada setup --terminal # Terminal ウィザードを直接使用
 ./strada doctor           # インストール / build / config の準備状態を確認

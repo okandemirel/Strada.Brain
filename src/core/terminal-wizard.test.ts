@@ -187,26 +187,45 @@ describe("resolveNvmDir", () => {
 });
 
 describe("buildWebSetupUpgradeShellScript", () => {
-  it("relaunches Strada web setup through the upgraded node runtime", () => {
-    const script = buildWebSetupUpgradeShellScript(
-      "/Users/test/.nvm",
-      "/Users/test/Strada.Brain",
-      ["--import", "tsx", "src/index.ts", "setup", "--web"],
-    );
+  it("relaunches Strada web setup through the launcher after upgrading node", () => {
+    const originalInstallRoot = process.env["STRADA_INSTALL_ROOT"];
+    const originalSourceCheckout = process.env["STRADA_SOURCE_CHECKOUT"];
+    const originalLauncherPath = process.env["STRADA_LAUNCHER_PATH"];
+    process.env["STRADA_INSTALL_ROOT"] = "/Users/test/Strada.Brain";
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
+    process.env["STRADA_LAUNCHER_PATH"] = "/Users/test/Strada.Brain/strada";
 
-    expect(script).toContain("ORIGINAL_HOME=\"$HOME\"");
-    expect(script).toContain("STRADA_TMP_HOME=$(mktemp -d");
-    expect(script).toContain("export HOME=\"$STRADA_TMP_HOME\"");
-    expect(script).toContain("grep -Evi '^\\s*(prefix|globalconfig)\\s*=' \"$ORIGINAL_HOME/.npmrc\" > \"$HOME/.npmrc\" || true");
-    expect(script).toContain("unset NPM_CONFIG_PREFIX npm_config_prefix NPM_CONFIG_GLOBALCONFIG npm_config_globalconfig NPM_CONFIG_USERCONFIG npm_config_userconfig");
-    expect(script).toContain("nvm use --delete-prefix 'v");
-    expect(script).toContain("nvm install 22");
-    expect(script).toContain("nvm use --delete-prefix 22 --silent >/dev/null");
-    expect(script).toContain("STRADA_NODE_PATH=\"$(nvm which 22)\"");
-    expect(script).toContain("export PATH=\"$(dirname \"$STRADA_NODE_PATH\"):$PATH\"");
-    expect(script).toContain("export HOME=\"$ORIGINAL_HOME\"");
-    expect(script).toContain("cd '/Users/test/Strada.Brain'");
-    expect(script).toContain("exec 'node' '--import' 'tsx' 'src/index.ts' 'setup' '--web'");
+    try {
+      const script = buildWebSetupUpgradeShellScript(
+        "/Users/test/.nvm",
+        "/Users/test/Strada.Brain",
+        ["/Users/test/Strada.Brain/strada", "setup", "--web"],
+      );
+
+      expect(script).toContain("ORIGINAL_HOME=\"$HOME\"");
+      expect(script).toContain("STRADA_TMP_HOME=$(mktemp -d");
+      expect(script).toContain("export HOME=\"$STRADA_TMP_HOME\"");
+      expect(script).toContain("grep -Evi '^\\s*(prefix|globalconfig)\\s*=' \"$ORIGINAL_HOME/.npmrc\" > \"$HOME/.npmrc\" || true");
+      expect(script).toContain("unset NPM_CONFIG_PREFIX npm_config_prefix NPM_CONFIG_GLOBALCONFIG npm_config_globalconfig NPM_CONFIG_USERCONFIG npm_config_userconfig");
+      expect(script).toContain("export STRADA_INSTALL_ROOT='/Users/test/Strada.Brain'");
+      expect(script).toContain("export STRADA_SOURCE_CHECKOUT='true'");
+      expect(script).toContain("export STRADA_LAUNCHER_PATH='/Users/test/Strada.Brain/strada'");
+      expect(script).toContain("nvm use --delete-prefix 'v");
+      expect(script).toContain("nvm install 22");
+      expect(script).toContain("nvm use --delete-prefix 22 --silent >/dev/null");
+      expect(script).toContain("STRADA_NODE_PATH=\"$(nvm which 22)\"");
+      expect(script).toContain("export PATH=\"$(dirname \"$STRADA_NODE_PATH\"):$PATH\"");
+      expect(script).toContain("export HOME=\"$ORIGINAL_HOME\"");
+      expect(script).toContain("cd '/Users/test/Strada.Brain'");
+      expect(script).toContain("exec '/Users/test/Strada.Brain/strada' 'setup' '--web'");
+    } finally {
+      if (originalInstallRoot === undefined) delete process.env["STRADA_INSTALL_ROOT"];
+      else process.env["STRADA_INSTALL_ROOT"] = originalInstallRoot;
+      if (originalSourceCheckout === undefined) delete process.env["STRADA_SOURCE_CHECKOUT"];
+      else process.env["STRADA_SOURCE_CHECKOUT"] = originalSourceCheckout;
+      if (originalLauncherPath === undefined) delete process.env["STRADA_LAUNCHER_PATH"];
+      else process.env["STRADA_LAUNCHER_PATH"] = originalLauncherPath;
+    }
   });
 });
 

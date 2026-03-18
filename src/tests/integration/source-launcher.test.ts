@@ -72,5 +72,7 @@ describe("source launcher install-command", () => {
       encoding: "utf8",
     });
     expect(helpOutput).toContain("Usage: strada");
+    expect(helpOutput).toContain("--web");
+    expect(helpOutput).toContain("--terminal");
   });
 });

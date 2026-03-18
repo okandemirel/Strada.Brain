@@ -22,6 +22,11 @@ describe("launcher", () => {
       channelType: "web",
       daemonMode: false,
     });
+    expect(resolveQuickLaunchAction({ terminal: true })).toEqual({
+      kind: "start",
+      channelType: "cli",
+      daemonMode: false,
+    });
     expect(resolveQuickLaunchAction({ cli: true, daemon: true })).toEqual({
       kind: "start",
       channelType: "cli",

@@ -150,6 +150,8 @@ strada
 ./strada install-command  # Kullanici-local bare `strada` komutunu kur
 strada                    # install-command sonrasinda akilli launcher
 strada --daemon           # Kayitli varsayilan kanali daemon modunda baslat
+strada --web              # Web kanalini ac veya yeni makinada web-oncelikli kuruluma devam et
+strada --terminal         # Terminal kanalini ac veya yeni makinada terminal kurulumunu zorla
 ./strada setup --web      # Web sihirbazini dogrudan ac
 ./strada setup --terminal # Terminal sihirbazini dogrudan kullan
 ./strada doctor           # Kurulum/build/config hazirligini dogrula

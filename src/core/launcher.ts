@@ -6,6 +6,7 @@ import { CHANNEL_DEFAULTS, type SupportedChannelType } from "../common/constants
 export interface RootLaunchOptions {
   readonly daemon?: boolean;
   readonly web?: boolean;
+  readonly terminal?: boolean;
   readonly cli?: boolean;
   readonly telegram?: boolean;
   readonly discord?: boolean;
@@ -40,6 +41,7 @@ const QUICK_LAUNCH_FLAGS: ReadonlyArray<{
   readonly channelType: SupportedChannelType;
 }> = [
   { option: "web", channelType: "web" },
+  { option: "terminal", channelType: "cli" },
   { option: "cli", channelType: "cli" },
   { option: "telegram", channelType: "telegram" },
   { option: "discord", channelType: "discord" },

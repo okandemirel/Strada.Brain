@@ -430,7 +430,9 @@ export function getSuggestedNodeUpgradeCommand(
 export function buildWebSetupUpgradeShellScript(
   nvmDir: string,
   cwd: string = process.env["STRADA_INSTALL_ROOT"] ?? process.cwd(),
-  execArgs: string[] = [...process.execArgv, process.argv[1] ?? "", "setup", "--web"],
+  relaunchCommand: string[] = process.env["STRADA_LAUNCHER_PATH"]
+    ? [process.env["STRADA_LAUNCHER_PATH"], "setup", "--web"]
+    : ["node", ...process.execArgv, process.argv[1] ?? "", "setup", "--web"],
 ): string {
   return [
     "set -e",
@@ -444,6 +446,15 @@ export function buildWebSetupUpgradeShellScript(
     "fi",
     "unset NPM_CONFIG_PREFIX npm_config_prefix NPM_CONFIG_GLOBALCONFIG npm_config_globalconfig NPM_CONFIG_USERCONFIG npm_config_userconfig",
     `export NVM_DIR=${shellEscape(nvmDir)}`,
+    process.env["STRADA_INSTALL_ROOT"]
+      ? `export STRADA_INSTALL_ROOT=${shellEscape(process.env["STRADA_INSTALL_ROOT"])}`
+      : "",
+    process.env["STRADA_SOURCE_CHECKOUT"] === "true"
+      ? "export STRADA_SOURCE_CHECKOUT='true'"
+      : "",
+    process.env["STRADA_LAUNCHER_PATH"]
+      ? `export STRADA_LAUNCHER_PATH=${shellEscape(process.env["STRADA_LAUNCHER_PATH"])}`
+      : "",
     ". \"$NVM_DIR/nvm.sh\"",
     `nvm use --delete-prefix ${shellEscape(`v${process.versions.node}`)} --silent >/dev/null || true`,
     "nvm install 22",
@@ -458,8 +469,8 @@ export function buildWebSetupUpgradeShellScript(
     "rm -rf \"$STRADA_TMP_HOME\"",
     "trap - EXIT",
     `cd ${shellEscape(cwd)}`,
-    `exec ${buildShellCommand(["node", ...execArgs.filter(Boolean)])}`,
-  ].join("\n");
+    `exec ${buildShellCommand(relaunchCommand.filter(Boolean))}`,
+  ].filter(Boolean).join("\n");
 }
 
 function continueWebSetupAfterNodeUpgrade(nvmDir: string): boolean {
