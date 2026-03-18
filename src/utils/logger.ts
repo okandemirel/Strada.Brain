@@ -5,7 +5,7 @@ import TransportStream from "winston-transport";
 // Log ring buffer — captures recent entries for the /api/logs dashboard endpoint
 // ---------------------------------------------------------------------------
 
-interface LogEntry {
+export interface LogEntry {
   timestamp: string;
   level: string;
   message: string;

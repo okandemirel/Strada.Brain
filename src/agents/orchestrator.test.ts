@@ -8,6 +8,13 @@ import { DMPolicy } from "../security/dm-policy.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { buildGoalTreeFromBlock } from "../goals/types.js";
 
+const mockLogRingBuffer: Array<{
+  timestamp: string;
+  level: string;
+  message: string;
+  meta?: Record<string, unknown>;
+}> = [];
+
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
     info: vi.fn(),
@@ -15,6 +22,7 @@ vi.mock("../utils/logger.js", () => ({
     error: vi.fn(),
     debug: vi.fn(),
   }),
+  getLogRingBuffer: () => [...mockLogRingBuffer],
 }));
 
 vi.mock("./context/strada-knowledge.js", () => ({
@@ -107,6 +115,7 @@ describe("Orchestrator", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    mockLogRingBuffer.length = 0;
 
     mockProvider = createMockProvider();
     mockChannel = createMockChannel();
@@ -1029,6 +1038,23 @@ describe("Orchestrator", () => {
         toolCalls: [],
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "Conformance and completion review passed.",
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "clean",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
       });
 
     const promise = conformanceOrch.handleMessage({
@@ -1041,7 +1067,7 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    expect(mockProvider.chat).toHaveBeenCalledTimes(5);
+    expect(mockProvider.chat).toHaveBeenCalledTimes(6);
     const gatedMessages = mockProvider.chat.mock.calls[3]?.[1] as Array<{ role: string; content: unknown }>;
     const gateMessage = gatedMessages.find(
       (message) =>
@@ -1053,6 +1079,124 @@ describe("Orchestrator", () => {
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
       "chat-conformance",
       expect.stringContaining("Conformance confirmed"),
+    );
+  });
+
+  it("blocks completion until Strada reviews recent log errors and a clean follow-up verification passes", async () => {
+    const shellTool = createMockTool("shell_exec");
+    shellTool.execute.mockImplementation(async (input: Record<string, unknown>) => ({
+      content: `$ ${String(input["command"] ?? "")}\nExit code: 0`,
+    }));
+
+    const reviewOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool, shellTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Plan: implement the fix",
+        toolCalls: [{ id: "tc-review-write", name: "file_write", input: { path: "src/runtime/reviewer.ts" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Running verification",
+        toolCalls: [{ id: "tc-review-verify", name: "shell_exec", input: { command: "npm run test:unit" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockImplementationOnce(async () => {
+        mockLogRingBuffer.push({
+          timestamp: new Date(Date.now()).toISOString(),
+          level: "error",
+          message: "Unhandled runtime error after verification",
+          meta: { chatId: "chat-review" },
+        });
+        return {
+          text: "Implementation complete.\nDONE",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 10, outputTokens: 20 },
+        };
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "continue",
+          summary: "Recent runtime error is still open.",
+          findings: ["Console error appeared after the worker claimed completion."],
+          requiredActions: ["Inspect the log output, fix the issue, and rerun verification."],
+          reviews: {
+            security: "clean",
+            code: "issues",
+            simplify: "clean",
+          },
+          logStatus: "issues",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Fixing the logged runtime issue",
+        toolCalls: [{ id: "tc-review-reverify", name: "shell_exec", input: { command: "npm run typecheck:src" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "All fixed.\nDONE",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "Completion review passed after the log-driven fix and clean verification.",
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "clean",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const promise = reviewOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-review",
+      userId: "user1",
+      text: "Fix the runtime issue and don't finish until logs are clean",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(mockProvider.chat).toHaveBeenCalledTimes(7);
+    const gatedMessages = mockProvider.chat.mock.calls[4]?.[1] as Array<{ role: string; content: unknown }>;
+    const gateMessage = gatedMessages.find(
+      (message) =>
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.includes("[COMPLETION REVIEW REQUIRED]"),
+    );
+    expect(String(gateMessage?.content ?? "")).toContain("Console error appeared after the worker claimed completion.");
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-review",
+      expect.stringContaining("All fixed"),
     );
   });
 
@@ -2437,6 +2581,23 @@ describe("Orchestrator", () => {
           toolCalls: [],
           stopReason: "end_turn",
           usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            decision: "approve",
+            summary: "Completion review passed after a clean verification.",
+            findings: [],
+            requiredActions: [],
+            reviews: {
+              security: "clean",
+              code: "clean",
+              simplify: "clean",
+            },
+            logStatus: "clean",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
         });
 
       mockProvider.chat = chatSpy;
@@ -2451,7 +2612,7 @@ describe("Orchestrator", () => {
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      expect(chatSpy).toHaveBeenCalledTimes(4);
+      expect(chatSpy).toHaveBeenCalledTimes(5);
       const gatedMessages = chatSpy.mock.calls[2]?.[1] as Array<{ role: string; content: unknown }>;
       const gateMessage = gatedMessages.find((message) =>
         message.role === "user" &&
@@ -3302,7 +3463,24 @@ describe("Orchestrator", () => {
         .mockResolvedValueOnce(firstToolCall)
         .mockResolvedValueOnce(recoveryToolCall)
         .mockResolvedValueOnce(verifyToolCall)
-        .mockResolvedValueOnce(doneResponse);
+        .mockResolvedValueOnce(doneResponse)
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            decision: "approve",
+            summary: "Recovery path is complete and verified.",
+            findings: [],
+            requiredActions: [],
+            reviews: {
+              security: "clean",
+              code: "clean",
+              simplify: "clean",
+            },
+            logStatus: "clean",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
 
       const promise = orchWithBuild.handleMessage({
         channelType: "cli",

@@ -28,7 +28,11 @@ import { runAutomaticMigration } from "../memory/unified/migration.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
-import { resolveEmbeddingProvider, collectApiKeys } from "../rag/embeddings/embedding-resolver.js";
+import {
+  resolveEmbeddingProvider,
+  collectApiKeys,
+  describeEmbeddingResolutionFailure,
+} from "../rag/embeddings/embedding-resolver.js";
 import { RateLimiter } from "../security/rate-limiter.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import type { DIContainer } from "./di-container.js";
@@ -1938,7 +1942,7 @@ export async function resolveAndCacheEmbeddings(
   try {
     const resolution = resolveEmbeddingProvider(config);
     if (!resolution) {
-      const notice = `Embeddings unavailable: no compatible embedding provider found for ${consumerLabel}.`;
+      const notice = describeEmbeddingResolutionFailure(config, consumerLabel);
       logger.warn("Embeddings: no compatible embedding provider found", { consumers: embeddingConsumers });
       return {
         notice,

@@ -131,8 +131,12 @@ function formatDecisionTime(timestamp: number): string {
 // ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
-  const { switchProvider, toggleAutonomous, sessionId } = useWS()
+  const { switchProvider, toggleAutonomous, sessionId, profileId } = useWS()
   const chatId = sessionId ?? 'default'
+  const identityQuery = new URLSearchParams({
+    chatId,
+    ...(profileId ? { userId: profileId, conversationId: profileId } : {}),
+  }).toString()
 
   // --- Autonomous Mode ---
   const [autoStatus, setAutoStatus] = useState<AutonomousStatus | null>(null)
@@ -166,7 +170,7 @@ export default function SettingsPage() {
 
   // --- Fetch autonomous status ---
   const fetchAutonomous = useCallback(() => {
-    fetchJson<AutonomousStatus>(`/api/user/autonomous?chatId=${encodeURIComponent(chatId)}`)
+    fetchJson<AutonomousStatus>(`/api/user/autonomous?${identityQuery}`)
       .then((data) => {
         setAutoStatus(data ?? { enabled: false })
         setAutoLoading(false)
@@ -175,13 +179,13 @@ export default function SettingsPage() {
         setAutoStatus({ enabled: false })
         setAutoLoading(false)
       })
-  }, [chatId])
+  }, [identityQuery])
 
   // --- Fetch providers ---
   const fetchProviders = useCallback(() => {
     Promise.allSettled([
       fetchJson<{ providers: ProviderInfo[] }>('/api/providers/available'),
-      fetchJson<{ active: ActiveProvider | null; executionPool?: ProviderInfo[] | null }>(`/api/providers/active?chatId=${encodeURIComponent(chatId)}`),
+      fetchJson<{ active: ActiveProvider | null; executionPool?: ProviderInfo[] | null }>(`/api/providers/active?${identityQuery}`),
       fetchJson<{ status: EmbeddingStatus }>('/api/rag/status'),
     ]).then((results) => {
       const [availResult, activeResult, embeddingResult] = results
@@ -203,7 +207,7 @@ export default function SettingsPage() {
     }).catch(() => {
       setModelLoading(false)
     })
-  }, [chatId])
+  }, [identityQuery])
 
   // --- Fetch routing preset ---
   const fetchRouting = useCallback(() => {
@@ -251,6 +255,7 @@ export default function SettingsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chatId,
+          ...(profileId ? { userId: profileId, conversationId: profileId } : {}),
           enabled: nextEnabled,
           hours: nextEnabled ? autoDuration : undefined,
         }),
@@ -276,7 +281,7 @@ export default function SettingsPage() {
       fetchAutonomous()
       setAutoToggling(false)
     }, 1500)
-  }, [autoStatus?.enabled, autoDuration, autoToggling, chatId, toggleAutonomous, fetchAutonomous])
+  }, [autoStatus?.enabled, autoDuration, autoToggling, chatId, profileId, toggleAutonomous, fetchAutonomous])
 
   const handleDurationChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value, 10)

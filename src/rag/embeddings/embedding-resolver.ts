@@ -17,6 +17,17 @@ export interface EmbeddingResolution {
   source: string;
 }
 
+const EMBEDDING_PROVIDER_ENV_KEYS: Readonly<Record<string, string | null>> = {
+  openai: "OPENAI_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  together: "TOGETHER_API_KEY",
+  fireworks: "FIREWORKS_API_KEY",
+  qwen: "QWEN_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  ollama: null,
+};
+
 /** Build a map of provider name -> API key from config. */
 export function collectApiKeys(config: Config): Record<string, string | undefined> {
   return {
@@ -95,6 +106,59 @@ const AUTO_FALLBACK_ORDER = [
   "gemini", "openai", "deepseek", "mistral",
   "together", "fireworks", "qwen", "ollama",
 ] as const;
+
+export function describeEmbeddingResolutionFailure(config: Config, consumersLabel: string): string {
+  const providerName = config.rag.provider;
+  const apiKeys = collectApiKeys(config);
+
+  if (providerName !== "auto") {
+    const preset = EMBEDDING_PRESETS[providerName];
+    if (!preset?.supported) {
+      return `Embeddings unavailable for ${consumersLabel}: EMBEDDING_PROVIDER=${providerName} does not support embeddings.`;
+    }
+    if (providerName === "ollama") {
+      return `Embeddings unavailable for ${consumersLabel}: Ollama embeddings are configured but the local Ollama endpoint is not usable.`;
+    }
+    const envKey = EMBEDDING_PROVIDER_ENV_KEYS[providerName];
+    return `Embeddings unavailable for ${consumersLabel}: EMBEDDING_PROVIDER=${providerName} requires ${envKey ?? "a matching credential"}.`;
+  }
+
+  const chainNames = config.providerChain
+    ? config.providerChain.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+    : [];
+  const supportedInChain = chainNames.filter((name) => EMBEDDING_PRESETS[name]?.supported);
+  const missingCredentialsInChain = supportedInChain.filter((name) => name !== "ollama" && !apiKeys[name]);
+
+  if (supportedInChain.length === 0) {
+    const chainLabel = chainNames.length > 0 ? chainNames.join(", ") : "(empty)";
+    return (
+      `Embeddings unavailable for ${consumersLabel}: PROVIDER_CHAIN only contains non-embedding providers (${chainLabel}). ` +
+      "Configure an embedding-capable provider such as Gemini, OpenAI, Mistral, Together, Fireworks, Qwen, or Ollama."
+    );
+  }
+
+  if (missingCredentialsInChain.length > 0) {
+    const missingKeys = missingCredentialsInChain
+      .map((name) => EMBEDDING_PROVIDER_ENV_KEYS[name])
+      .filter((envKey): envKey is string => Boolean(envKey));
+    return (
+      `Embeddings unavailable for ${consumersLabel}: embedding-capable providers in PROVIDER_CHAIN are missing credentials (${missingCredentialsInChain.join(", ")}). ` +
+      `Add ${missingKeys.join(", ")} or set EMBEDDING_PROVIDER=ollama for local embeddings.`
+    );
+  }
+
+  const standaloneCandidates = AUTO_FALLBACK_ORDER
+    .filter((name) => name !== "ollama" && !supportedInChain.includes(name))
+    .filter((name) => Boolean(apiKeys[name]));
+  if (standaloneCandidates.length === 0) {
+    return (
+      `Embeddings unavailable for ${consumersLabel}: no standalone embedding credential is configured outside the response chain. ` +
+      "Add GEMINI_API_KEY or OPENAI_API_KEY, or configure local Ollama embeddings."
+    );
+  }
+
+  return `Embeddings unavailable for ${consumersLabel}: no usable embedding-capable provider could be initialized.`;
+}
 
 /**
  * Resolve which embedding provider to use.

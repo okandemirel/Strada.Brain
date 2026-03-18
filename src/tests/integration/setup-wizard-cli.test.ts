@@ -38,6 +38,19 @@ describe("Terminal Wizard Integration", () => {
     expect(written).toContain("STREAMING_ENABLED=true");
   });
 
+  it("should generate config for non-default response providers", () => {
+    const content = generateEnvContent({
+      unityProjectPath: os.homedir(),
+      apiKey: "sk-deepseek-test-key",
+      provider: "deepseek",
+      channel: "cli",
+      language: "en",
+    });
+
+    expect(content).toContain('DEEPSEEK_API_KEY="sk-deepseek-test-key"');
+    expect(content).toContain("PROVIDER_CHAIN=deepseek");
+  });
+
   it("should detect all provider types correctly", () => {
     expect(detectProvider("sk-ant-api03-test")).toBe("claude");
     expect(detectProvider("sk-proj-abc123")).toBe("openai");

@@ -1,14 +1,12 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
 describe("AutoUpdater", () => {
-  const originalCwd = process.cwd;
   const tmpDirs: string[] = [];
 
   afterEach(() => {
-    process.cwd = originalCwd;
     for (const dir of tmpDirs) {
       try {
         fs.rmSync(dir, { recursive: true });
@@ -20,7 +18,6 @@ describe("AutoUpdater", () => {
   function makeTmpDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-test-"));
     tmpDirs.push(dir);
-    process.cwd = () => dir;
     return dir;
   }
 
@@ -33,29 +30,40 @@ describe("AutoUpdater", () => {
         mockConfig(),
         mockRegistry(),
         mockExecutor(),
+        { installRoot: dir },
       );
       expect(updater.detectInstallMethod()).toBe("git");
     });
 
-    it("should detect npm-local when no .git and node_modules exists", async () => {
+    it("should detect npm-local when install root is outside the global npm root", async () => {
       const dir = makeTmpDir();
-      fs.mkdirSync(path.join(dir, "node_modules"));
       const { AutoUpdater } = await import("../../core/auto-updater.js");
       const updater = new AutoUpdater(
         mockConfig(),
         mockRegistry(),
         mockExecutor(),
+        {
+          installRoot: dir,
+          globalNpmRootResolver: () => path.join(dir, "global-node-modules"),
+        },
       );
       expect(updater.detectInstallMethod()).toBe("npm-local");
     });
 
-    it("should detect npm-global when no .git and no node_modules", async () => {
-      makeTmpDir();
+    it("should detect npm-global when install root lives under the global npm root", async () => {
+      const dir = makeTmpDir();
+      const globalRoot = path.join(dir, "global-node-modules");
+      const installRoot = path.join(globalRoot, "strada-brain");
+      fs.mkdirSync(installRoot, { recursive: true });
       const { AutoUpdater } = await import("../../core/auto-updater.js");
       const updater = new AutoUpdater(
         mockConfig(),
         mockRegistry(),
         mockExecutor(),
+        {
+          installRoot,
+          globalNpmRootResolver: () => globalRoot,
+        },
       );
       expect(updater.detectInstallMethod()).toBe("npm-global");
     });
@@ -94,6 +102,7 @@ describe("AutoUpdater", () => {
         mockConfig(),
         mockRegistry(),
         mockExecutor(),
+        { installRoot: dir },
       );
 
       expect(updater.acquireLock()).toBe(true);
@@ -121,6 +130,7 @@ describe("AutoUpdater", () => {
         mockConfig(),
         mockRegistry(),
         mockExecutor(),
+        { installRoot: dir },
       );
       expect(updater.acquireLock()).toBe(false);
     });
@@ -138,6 +148,7 @@ describe("AutoUpdater", () => {
         mockConfig(),
         mockRegistry(),
         mockExecutor(),
+        { installRoot: dir },
       );
       expect(updater.acquireLock()).toBe(true);
       updater.releaseLock();
@@ -159,6 +170,7 @@ describe("AutoUpdater", () => {
         mockConfig(),
         mockRegistry(),
         mockExecutor(),
+        { installRoot: dir },
       );
       expect(updater.acquireLock()).toBe(true);
       updater.releaseLock();
@@ -167,12 +179,13 @@ describe("AutoUpdater", () => {
 
   describe("shutdown", () => {
     it("should shutdown cleanly without errors", async () => {
-      makeTmpDir();
+      const dir = makeTmpDir();
       const { AutoUpdater } = await import("../../core/auto-updater.js");
       const updater = new AutoUpdater(
         mockConfig(),
         mockRegistry(),
         mockExecutor(),
+        { installRoot: dir },
       );
       expect(() => updater.shutdown()).not.toThrow();
     });

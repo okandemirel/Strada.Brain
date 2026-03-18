@@ -48,30 +48,49 @@ Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosy
 ### On Kosullar
 
 - **Node.js 20+** ve npm
-- Bir **Anthropic API anahtari** (Claude) -- diger saglayicilar istege baglidir
-- **Strada.Core cercevesine sahip bir Unity projesi** (ajana verdiginiz yol)
+- En az bir desteklenen AI saglayici kimligi (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` vb.), bir OpenAI ChatGPT/Codex subscription oturumu (`OPENAI_AUTH_MODE=chatgpt-subscription`) veya yalnizca `ollama` kullanan bir `PROVIDER_CHAIN`
+- Bir **Unity projesi** (ajana verdiginiz yol). Tam Strada-ozel yardim icin Strada.Core onerilir.
 
 ### 1. Kurulum
 
 ```bash
-# Global kurulum (onerilen)
-npm install -g strada-brain
-
-# Veya kaynaktan klonlayın
+# Kaynaktan klonlayin (su an icin kanonik kurulum yolu)
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
-npm install --prefix web-portal
+npm run bootstrap
+
+# Lokal source checkout yardimcilari (global link gerekmez)
+npm run setup:web
+npm run setup:terminal
+
+# Isterseniz bu checkout'tan `strada` / `strada-brain` komutlarini globale baglayin
+npm link
 ```
+
+`strada-brain` paketi su anda public npm registry'de yayinli degil; bu nedenle `npm install -g strada-brain` komutu `E404` verir. Registry yayini gelene kadar yukaridaki kaynak checkout akisini kullanin.
 
 ### 2. Yapilandirma
 
 ```bash
 # Etkilesimli kurulum sihirbazi (terminal veya web tarayicisi)
 strada setup
+
+# Secim ekranini atlayip dogrudan istediginiz setup yuzeyine gidin
+strada setup --web
+strada setup --terminal
 ```
 
 Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. Hizli kurulum icin **Terminal** secin veya tam ayarlar UI'si icin **Web Tarayicisi** secin.
+Kurulumdan sonra, ajani baslatmadan once hazirlik kontrolu calistirin:
+
+```bash
+# Source checkout icinden
+npm run doctor
+
+# CLI'yi globale bagladiysaniz
+strada doctor
+```
 
 Alternatif olarak, `.env` dosyasini manuel olarak olusturun:
 
@@ -107,6 +126,9 @@ strada supervise --channel web
 
 ```bash
 strada setup              # Etkilesimli kurulum sihirbazi
+strada setup --web        # Web sihirbazini dogrudan ac
+strada setup --terminal   # Terminal sihirbazini dogrudan kullan
+strada doctor             # Kurulum/build/config hazirligini dogrula
 strada start              # Ajani baslat
 strada supervise          # Otomatik yeniden baslatma destegi ile calistir
 strada update             # Guncellemeleri kontrol et ve uygula
@@ -129,7 +151,7 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 
 ### 6. Oto-Guncelleme
 
-Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugunda uygular. Kurulum yontemini (npm global, npm yerel veya git klonu) tespit eder ve uygun guncelleme stratejisini kullanir.
+Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugunda uygular. Kaynak checkout ve `npm link` kurulumlari guncellemeleri git uzerinden alir. npm tabanli guncelleme komutlari ise ancak public npm yayini oldugunda kullanilabilir.
 
 | Degisken | Varsayilan | Aciklama |
 |----------|---------|-------------|

@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ChannelActivityRegistry } from "./channel-activity-registry.js";
 
 const VERSION_CHECK_TIMEOUT = 30_000;
@@ -33,10 +34,17 @@ interface LockContent {
   timestamp: number;
 }
 
+interface AutoUpdaterOptions {
+  installRoot?: string;
+  globalNpmRootResolver?: () => string | null;
+}
+
 export class AutoUpdater {
   private readonly config: AutoUpdateConfig;
   private readonly registry: ChannelActivityRegistry;
   private readonly executor: BackgroundExecutorLike;
+  private readonly installRoot: string;
+  private readonly globalNpmRootResolver?: () => string | null;
   private installMethod: InstallMethod | null = null;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private pendingVersion: string | null = null;
@@ -47,10 +55,18 @@ export class AutoUpdater {
     config: { autoUpdate: AutoUpdateConfig },
     registry: ChannelActivityRegistry,
     executor: BackgroundExecutorLike,
+    options: AutoUpdaterOptions = {},
   ) {
     this.config = config.autoUpdate;
     this.registry = registry;
     this.executor = executor;
+    this.installRoot = options.installRoot ?? AutoUpdater.resolveInstallRoot();
+    this.globalNpmRootResolver = options.globalNpmRootResolver;
+  }
+
+  static resolveInstallRoot(moduleUrl: string = import.meta.url): string {
+    const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+    return path.resolve(moduleDir, "..", "..");
   }
 
   getChannel(): "stable" | "latest" {
@@ -63,15 +79,43 @@ export class AutoUpdater {
 
   detectInstallMethod(): InstallMethod {
     if (this.installMethod) return this.installMethod;
-    const cwd = process.cwd();
-    if (fs.existsSync(path.join(cwd, ".git"))) {
+    if (fs.existsSync(path.join(this.installRoot, ".git"))) {
       this.installMethod = "git";
-    } else if (fs.existsSync(path.join(cwd, "node_modules"))) {
-      this.installMethod = "npm-local";
     } else {
-      this.installMethod = "npm-global";
+      const globalRoot = this.resolveGlobalNpmRoot();
+      if (globalRoot && AutoUpdater.isWithinPath(this.installRoot, globalRoot)) {
+        this.installMethod = "npm-global";
+      } else {
+        this.installMethod = "npm-local";
+      }
     }
     return this.installMethod;
+  }
+
+  private resolveGlobalNpmRoot(): string | null {
+    if (this.globalNpmRootResolver) {
+      return this.globalNpmRootResolver();
+    }
+
+    try {
+      const result = spawnSync("npm", ["root", "-g"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      if (result.status === 0 && typeof result.stdout === "string") {
+        const trimmed = result.stdout.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      }
+    } catch {
+      // Best-effort detection only.
+    }
+
+    return null;
+  }
+
+  private static isWithinPath(targetPath: string, parentPath: string): boolean {
+    const relative = path.relative(parentPath, targetPath);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
   }
 
   static parseVersionFromOutput(output: string): string | null {
@@ -92,7 +136,7 @@ export class AutoUpdater {
 
   getCurrentVersion(): string {
     try {
-      const pkgPath = path.join(process.cwd(), "package.json");
+      const pkgPath = path.join(this.installRoot, "package.json");
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
         version?: string;
       };
@@ -106,9 +150,10 @@ export class AutoUpdater {
     cmd: string,
     args: string[],
     timeoutMs: number,
+    cwd?: string,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
-      const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], cwd });
       let stdoutData = "";
       let stderrData = "";
 
@@ -147,14 +192,16 @@ export class AutoUpdater {
           "git",
           ["fetch", "origin", "main"],
           VERSION_CHECK_TIMEOUT,
+          this.installRoot,
         );
         // Ensure local ref is resolved (side-effect: validates git state)
-        await this.spawnWithTimeout("git", ["rev-parse", "HEAD"], VERSION_CHECK_TIMEOUT);
+        await this.spawnWithTimeout("git", ["rev-parse", "HEAD"], VERSION_CHECK_TIMEOUT, this.installRoot);
         const remoteRev = (
           await this.spawnWithTimeout(
             "git",
             ["rev-parse", "origin/main"],
             VERSION_CHECK_TIMEOUT,
+            this.installRoot,
           )
         ).trim();
         // Check if origin/main has commits we don't have (remote is ahead)
@@ -163,6 +210,7 @@ export class AutoUpdater {
             "git",
             ["rev-list", "--count", `HEAD..origin/main`],
             VERSION_CHECK_TIMEOUT,
+            this.installRoot,
           )
         ).trim();
         return {
@@ -204,6 +252,7 @@ export class AutoUpdater {
             "git",
             ["rev-parse", "HEAD"],
             VERSION_CHECK_TIMEOUT,
+            this.installRoot,
           )
         ).trim();
         try {
@@ -211,17 +260,19 @@ export class AutoUpdater {
             "git",
             ["pull", "origin", "main"],
             UPDATE_TIMEOUT,
+            this.installRoot,
           );
-          await this.spawnWithTimeout("npm", ["run", "build"], UPDATE_TIMEOUT);
+          await this.spawnWithTimeout("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
         } catch (buildErr) {
           try {
             await this.spawnWithTimeout(
               "git",
               ["reset", "--hard", prePullSha],
               VERSION_CHECK_TIMEOUT,
+              this.installRoot,
             );
             // Restore old dependencies after source rollback
-            await this.spawnWithTimeout("npm", ["install"], UPDATE_TIMEOUT);
+            await this.spawnWithTimeout("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
           } catch {
             // Rollback failed — nothing we can do
           }
@@ -231,7 +282,7 @@ export class AutoUpdater {
         const args = method === "npm-global"
           ? ["install", "-g", `strada-brain@${this.config.channel}`]
           : ["install", `strada-brain@${this.config.channel}`];
-        await this.spawnWithTimeout("npm", args, UPDATE_TIMEOUT);
+        await this.spawnWithTimeout("npm", args, UPDATE_TIMEOUT, method === "npm-local" ? this.installRoot : undefined);
       }
 
       return true;
@@ -241,7 +292,7 @@ export class AutoUpdater {
   }
 
   private getLockPath(): string {
-    return path.join(process.cwd(), ".strada-update.lock");
+    return path.join(this.installRoot, ".strada-update.lock");
   }
 
   acquireLock(): boolean {

@@ -10,6 +10,10 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "bootstrap": "npm install --prefix web-portal && npm run build",
+    "doctor": "node --import tsx src/index.ts doctor",
+    "setup:web": "node --import tsx src/index.ts setup --web",
+    "setup:terminal": "node --import tsx src/index.ts setup --terminal",
     "build": "npm run build:portal && tsc && rm -rf dist/channels/web/static && cp -r web-portal/dist dist/channels/web/static",
     "build:portal": "npm --prefix web-portal run build",
     "lint:src": "eslint src/",

@@ -133,6 +133,36 @@ function buildResponse(body) {
   const responseFormatInstructionMatch = systemPrompt.match(/^Response Format Instruction:\s*(.+)$/m);
   const preferredResponseFormatInstruction = responseFormatInstructionMatch?.[1]?.trim();
 
+  if (normalizedSystemPrompt.includes("completion reviewer")) {
+    const hasTouchedFiles = !/touched files:\s*\(none\)/i.test(lastUserText);
+    const hasOpenFailures = !/recent unresolved failures:\s*\(none\)/i.test(lastUserText);
+    const hasLogIssues = !/recent log issues since the latest clean verification:\s*\(none\)/i.test(lastUserText);
+
+    return buildChatCompletion({
+      text: JSON.stringify({
+        decision: hasOpenFailures || hasLogIssues ? "continue" : "approve",
+        summary:
+          hasOpenFailures || hasLogIssues
+            ? "Completion review found unresolved failure or log evidence."
+            : "Completion review passed with clean evidence.",
+        findings: [
+          ...(hasOpenFailures ? ["Recent failures still appear open."] : []),
+          ...(hasLogIssues ? ["Recent log issues still appear open."] : []),
+        ],
+        requiredActions: [
+          ...(hasOpenFailures ? ["Resolve the open failure path and rerun verification."] : []),
+          ...(hasLogIssues ? ["Inspect the console/log issues and confirm they are cleared."] : []),
+        ],
+        reviews: {
+          security: hasTouchedFiles ? "clean" : "not_applicable",
+          code: hasTouchedFiles ? "clean" : "not_applicable",
+          simplify: hasTouchedFiles ? "clean" : "not_applicable",
+        },
+        logStatus: hasLogIssues ? "issues" : "clean",
+      }),
+    });
+  }
+
   if (normalizedUserText.includes("my name is codextester")) {
     return buildChatCompletion({
       text: "Nice to meet you, CodexTester.",

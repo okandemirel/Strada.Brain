@@ -48,29 +48,49 @@ Strada.Brain 是一个通过聊天频道与您对话的 AI 代理。您描述您
 ### 前提条件
 
 - **Node.js 20+** 和 npm
-- 一个 **Anthropic API 密钥**（Claude）——其他提供商为可选
-- 一个包含 **Strada.Core 框架的 Unity 项目**（您提供给代理的路径）
+- 至少一个受支持的 AI 提供商凭据（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY` 等），一个 OpenAI ChatGPT/Codex subscription 会话（`OPENAI_AUTH_MODE=chatgpt-subscription`），或者仅使用 `ollama` 的 `PROVIDER_CHAIN`
+- 一个 **Unity 项目**（您提供给代理的路径）。如果希望获得完整的 Strada 框架感知帮助，建议配合 Strada.Core。
 
 ### 1. 安装
 
 ```bash
-# 全局安装（推荐）
-npm install -g strada-brain
-
-# 或从源代码克隆
+# 从源码克隆（当前的规范安装方式）
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
+npm run bootstrap
+
+# 源码 checkout 的本地辅助命令（不做 global link 也能用）
+npm run setup:web
+npm run setup:terminal
+
+# 可选：从这个 checkout 全局链接 `strada` / `strada-brain`
+npm link
 ```
+
+`strada-brain` 目前还没有发布到 public npm registry，所以 `npm install -g strada-brain` 现在会返回 `E404`。在 npm 公共发布出现之前，请使用上面的源码 checkout 流程。
 
 ### 2. 设置
 
 ```bash
 # 交互式设置向导（终端或 Web 浏览器）
 strada setup
+
+# 跳过选择步骤，直接进入你想要的 setup 界面
+strada setup --web
+strada setup --terminal
 ```
 
 向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。选择**终端**进行快速设置，或选择 **Web 浏览器**进行完整配置 UI。
+设置完成后，在启动代理之前先做一次 readiness 检查：
+
+```bash
+# 在源码 checkout 内
+npm run doctor
+
+# 或者已经全局 link 后
+strada doctor
+```
 
 或者，手动创建 `.env`：
 
@@ -106,6 +126,9 @@ strada supervise --channel web
 
 ```bash
 strada setup              # 交互式设置向导
+strada setup --web        # 直接打开 Web 向导
+strada setup --terminal   # 直接使用终端向导
+strada doctor             # 检查安装 / build / config 准备情况
 strada start              # 启动代理
 strada supervise          # 带自动重启的监督
 strada update             # 检查并应用更新
@@ -128,7 +151,7 @@ strada version-info       # 显示版本、安装方法、更新状态
 
 ### 6. 自动更新
 
-Strada.Brain 每天自动检查更新，在空闲时应用更新。它会检测安装方法（npm 全局、npm 本地或 git 克隆）并使用相应的更新策略。
+Strada.Brain 每天自动检查更新，在空闲时应用更新。源码 checkout 和 `npm link` 安装会通过 git 更新。基于 npm 的更新命令只有在 public npm release 存在时才适用。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|

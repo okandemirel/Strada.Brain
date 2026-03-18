@@ -382,6 +382,40 @@ describe("initializeMemory", () => {
     }));
   });
 
+  it("reports an actionable notice when the response chain has no embedding-capable provider", async () => {
+    resolveEmbeddingProviderMock.mockReturnValue(null);
+    const config = createTestConfig({
+      backend: "agentdb",
+      ragEnabled: true,
+      enabled: true,
+      providerChain: "kimi",
+    });
+
+    const result = await resolveAndCacheEmbeddings(config, logger);
+
+    expect(result.cachedProvider).toBeUndefined();
+    expect(result.status.usingHashFallback).toBe(true);
+    expect(result.status.notice).toContain("PROVIDER_CHAIN only contains non-embedding providers (kimi)");
+    expect(result.status.notice).toContain("Configure an embedding-capable provider such as Gemini");
+  });
+
+  it("reports which credential is missing when the chain includes an embedding-capable provider", async () => {
+    resolveEmbeddingProviderMock.mockReturnValue(null);
+    const config = createTestConfig({
+      backend: "agentdb",
+      ragEnabled: true,
+      enabled: true,
+      providerChain: "gemini,kimi",
+    });
+
+    const result = await resolveAndCacheEmbeddings(config, logger);
+
+    expect(result.cachedProvider).toBeUndefined();
+    expect(result.status.usingHashFallback).toBe(true);
+    expect(result.status.notice).toContain("embedding-capable providers in PROVIDER_CHAIN are missing credentials (gemini)");
+    expect(result.status.notice).toContain("GEMINI_API_KEY");
+  });
+
   describe("legacy memory migration", () => {
     it("should call runAutomaticMigration after successful AgentDB init", async () => {
       const config = createTestConfig({ backend: "agentdb" });

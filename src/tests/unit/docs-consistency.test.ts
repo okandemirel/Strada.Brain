@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -44,21 +44,6 @@ const localizedControlPlanePhrases: Record<(typeof localizedReadmes)[number], st
   "README.zh.md": "Strada 仍然是控制平面",
 };
 
-const historicalDocs = [
-  "docs/audit/2026-03-17-full-audit.md",
-  "docs/remediation/2026-03-17-p0-plan.md",
-  "docs/superpowers/plans/2026-03-14-media-sharing.md",
-  "docs/superpowers/plans/2026-03-15-memory-architecture-overhaul.md",
-  "docs/superpowers/plans/2026-03-16-agent-core-phase1-phase2.md",
-  "docs/superpowers/plans/2026-03-16-multi-provider-orchestration.md",
-  "docs/superpowers/plans/2026-03-16-setup-wizard-auto-update.md",
-  "docs/superpowers/specs/2026-03-14-soul-md-system-design.md",
-  "docs/superpowers/specs/2026-03-15-memory-architecture-overhaul-design.md",
-  "docs/superpowers/specs/2026-03-16-agent-core-design.md",
-  "docs/superpowers/specs/2026-03-16-multi-provider-orchestration-design.md",
-  "docs/superpowers/specs/2026-03-16-setup-wizard-auto-update-design.md",
-] as const;
-
 const deprecatedEnvPatterns = [
   /`DISCORD_CLIENT_ID`/u,
   /`DEPLOYMENT_ENABLED`/u,
@@ -93,13 +78,6 @@ describe("docs consistency", () => {
     );
   });
 
-  it("marks historical docs as non-authoritative snapshots", () => {
-    for (const relativePath of historicalDocs) {
-      const content = readRepoFile(relativePath);
-      expect(content).toMatch(/not the (?:authoritative source|source of truth) for current runtime behavior or env defaults/u);
-    }
-  });
-
   it("marks localized READMEs as translations that defer to the English canonical README", () => {
     for (const relativePath of localizedReadmes) {
       const content = readRepoFile(relativePath);
@@ -112,11 +90,35 @@ describe("docs consistency", () => {
       expect(content).toContain("OPENAI_API_KEY");
       expect(content).toContain(localizedProviderChainPhrases[relativePath]);
       expect(content).toContain(localizedControlPlanePhrases[relativePath]);
+      expect(content).toContain("npm link");
+      expect(content).toContain("setup:web");
+      expect(content).toContain("setup:terminal");
+      expect(content).toContain("strada doctor");
+      expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
     }
   });
 
-  it("keeps the setup wizard historical plan aligned with the current dashboard port", () => {
-    const content = readRepoFile("docs/superpowers/plans/2026-03-16-setup-wizard-auto-update.md");
-    expect(content).toContain('lines.push("DASHBOARD_PORT=3100");');
+  it("keeps install docs aligned with the source-first release path", () => {
+    const englishReadme = readRepoFile("README.md");
+    expect(englishReadme).toContain("npm run bootstrap");
+    expect(englishReadme).toContain("npm run setup:web");
+    expect(englishReadme).toContain("npm run setup:terminal");
+    expect(englishReadme).toContain("strada setup --web");
+    expect(englishReadme).toContain("strada doctor");
+    expect(englishReadme).toContain("npm link");
+    expect(englishReadme).toContain("not currently published on the public npm registry");
+    expect(englishReadme).not.toMatch(/# Global install \(recommended\)\s+npm install -g strada-brain/u);
+  });
+
+  it("keeps the docs folder free of historical plan/spec snapshot directories", () => {
+    expect(existsSync(path.join(REPO_ROOT, "docs", "audit"))).toBe(false);
+    expect(existsSync(path.join(REPO_ROOT, "docs", "remediation"))).toBe(false);
+    expect(existsSync(path.join(REPO_ROOT, "docs", "superpowers"))).toBe(false);
+  });
+
+  it("states that docs only keep authoritative product documentation", () => {
+    const docsGuide = readRepoFile("docs/README.md");
+    expect(docsGuide).toContain("intentionally small");
+    expect(docsGuide).toContain("If a behavior matters today");
   });
 });

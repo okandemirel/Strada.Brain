@@ -20,22 +20,28 @@ const VERIFICATION_SHELL_COMMAND_RE = /\b(?:test|build|check|lint|typecheck|veri
 
 export interface VerificationState {
   readonly pendingFiles: ReadonlySet<string>;
+  readonly touchedFiles: ReadonlySet<string>;
   readonly hasCompilableChanges: boolean;
   readonly lastBuildOk: boolean | null;
+  readonly lastVerificationAt: number | null;
 }
 
 // ─── Verifier ───────────────────────────────────────────────────────────────────
 
 export class SelfVerification {
   private pendingFiles = new Set<string>();
+  private touchedFiles = new Set<string>();
   private hasCompilableChanges = false;
   private lastBuildOk: boolean | null = null;
+  private lastVerificationAt: number | null = null;
 
   /** Reset for new task. */
   reset(): void {
     this.pendingFiles = new Set();
+    this.touchedFiles = new Set();
     this.hasCompilableChanges = false;
     this.lastBuildOk = null;
+    this.lastVerificationAt = null;
   }
 
   /**
@@ -52,6 +58,7 @@ export class SelfVerification {
         const file = extractFilePath(executedTool.input);
         if (file) {
           this.pendingFiles.add(file);
+          this.touchedFiles.add(file);
           const dotIdx = file.lastIndexOf(".");
           if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
             this.hasCompilableChanges = true;
@@ -63,6 +70,7 @@ export class SelfVerification {
       if (isVerificationTool(executedTool.toolName, executedTool.input)) {
         const ok = !executedTool.isError;
         this.lastBuildOk = ok;
+        this.lastVerificationAt = Date.now();
         if (ok) {
           this.pendingFiles.clear();
           this.hasCompilableChanges = false;
@@ -76,6 +84,10 @@ export class SelfVerification {
    */
   needsVerification(): boolean {
     return this.hasCompilableChanges && this.lastBuildOk !== true;
+  }
+
+  hasTouchedFiles(): boolean {
+    return this.touchedFiles.size > 0;
   }
 
   /**
@@ -98,8 +110,10 @@ export class SelfVerification {
   getState(): VerificationState {
     return {
       pendingFiles: new Set(this.pendingFiles),
+      touchedFiles: new Set(this.touchedFiles),
       hasCompilableChanges: this.hasCompilableChanges,
       lastBuildOk: this.lastBuildOk,
+      lastVerificationAt: this.lastVerificationAt,
     };
   }
 }

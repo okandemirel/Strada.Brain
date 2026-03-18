@@ -239,6 +239,43 @@ describe("WebChannel dashboard proxy", () => {
     expect(res.statusCode).toBe(403);
     expect(JSON.parse(res.body)).toEqual({ error: "Forbidden" });
   });
+
+  it("forwards trusted origin metadata for mutable proxied requests", async () => {
+    const channel = new WebChannel();
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/user/autonomous",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        referer: "http://127.0.0.1:3000/settings",
+      },
+      body: JSON.stringify({ chatId: "default", enabled: true, hours: 4 }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = (channel as unknown as {
+      proxyToDashboard: (req: unknown, res: unknown, url: string) => Promise<void>;
+    }).proxyToDashboard(req, res, "/api/user/autonomous");
+    req.emitBody();
+    await promise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      headers: expect.objectContaining({
+        Origin: "http://127.0.0.1:3000",
+        Referer: "http://127.0.0.1:3000/settings",
+      }),
+    });
+    expect(res.statusCode).toBe(200);
+  });
 });
 
 describe("WebChannel inbound message limits", () => {

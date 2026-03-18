@@ -7,10 +7,8 @@ import { ChannelActivityRegistry } from "../../core/channel-activity-registry.js
 
 describe("AutoUpdater Integration", () => {
   const tmpDirs: string[] = [];
-  const originalCwd = process.cwd;
 
   afterEach(() => {
-    process.cwd = originalCwd;
     for (const dir of tmpDirs) {
       try { fs.rmSync(dir, { recursive: true }); } catch {}
     }
@@ -20,7 +18,6 @@ describe("AutoUpdater Integration", () => {
   function makeTmpDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "strada-upd-"));
     tmpDirs.push(dir);
-    process.cwd = () => dir;
     return dir;
   }
 
@@ -59,15 +56,34 @@ describe("AutoUpdater Integration", () => {
 
   it("should detect install method based on directory contents", () => {
     const dir = makeTmpDir();
+    const globalRoot = path.join(dir, "global-node-modules");
+    const installRoot = path.join(globalRoot, "strada-brain");
+    fs.mkdirSync(installRoot, { recursive: true });
 
-    // No .git, no node_modules -> npm-global
+    // Install root under the global npm root -> npm-global
     const registry = new ChannelActivityRegistry();
-    let updater = new AutoUpdater(mockAutoUpdateConfig, registry, { hasRunningTasks: () => false });
+    let updater = new AutoUpdater(
+      mockAutoUpdateConfig,
+      registry,
+      { hasRunningTasks: () => false },
+      {
+        installRoot,
+        globalNpmRootResolver: () => globalRoot,
+      },
+    );
     expect(updater.detectInstallMethod()).toBe("npm-global");
 
     // Add .git -> git
-    fs.mkdirSync(path.join(dir, ".git"));
-    updater = new AutoUpdater(mockAutoUpdateConfig, new ChannelActivityRegistry(), { hasRunningTasks: () => false });
+    fs.mkdirSync(path.join(installRoot, ".git"));
+    updater = new AutoUpdater(
+      mockAutoUpdateConfig,
+      new ChannelActivityRegistry(),
+      { hasRunningTasks: () => false },
+      {
+        installRoot,
+        globalNpmRootResolver: () => globalRoot,
+      },
+    );
     expect(updater.detectInstallMethod()).toBe("git");
   });
 });

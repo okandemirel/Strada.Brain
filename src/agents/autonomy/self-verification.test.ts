@@ -20,6 +20,8 @@ describe("SelfVerification", () => {
 
     expect(verifier.needsVerification()).toBe(false);
     expect(verifier.getState().pendingFiles.size).toBe(0);
+    expect(verifier.getState().touchedFiles.has("Assets/Test.cs")).toBe(true);
+    expect(verifier.getState().lastVerificationAt).not.toBeNull();
   });
 
   it("treats generic Unity verification tools as valid clean signals", () => {
@@ -40,6 +42,7 @@ describe("SelfVerification", () => {
 
     expect(verifier.needsVerification()).toBe(false);
     expect(verifier.getState().pendingFiles.size).toBe(0);
+    expect(verifier.getState().touchedFiles.has("Assets/Gameplay/TestSystem.cs")).toBe(true);
   });
 
   it("tracks nested batch_execute mutations and verification results", () => {
@@ -67,5 +70,26 @@ describe("SelfVerification", () => {
 
     expect(verifier.needsVerification()).toBe(false);
     expect(verifier.getState().pendingFiles.size).toBe(0);
+    expect(verifier.getState().touchedFiles.has("Assets/Gameplay/BatchedSystem.cs")).toBe(true);
+  });
+
+  it("retains touched files across clean verification for completion review", () => {
+    const verifier = new SelfVerification();
+
+    verifier.track("file_write", { path: "src/runtime/reviewer.ts" }, {
+      toolCallId: "tc-write",
+      content: "written",
+      isError: false,
+    });
+    verifier.track("shell_exec", { command: "npm run lint:src" }, {
+      toolCallId: "tc-lint",
+      content: "$ npm run lint:src\nExit code: 0",
+      isError: false,
+    });
+
+    const state = verifier.getState();
+    expect(state.pendingFiles.size).toBe(0);
+    expect(state.touchedFiles.has("src/runtime/reviewer.ts")).toBe(true);
+    expect(verifier.hasTouchedFiles()).toBe(true);
   });
 });

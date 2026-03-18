@@ -130,9 +130,28 @@ program
 program
   .command("setup")
   .description("Interactive setup wizard for first-time configuration")
-  .action(async () => {
+  .option("--web", "Launch the browser wizard directly", false)
+  .option("--terminal", "Use the terminal wizard directly", false)
+  .action(async (opts: { web?: boolean; terminal?: boolean }) => {
+    if (opts.web && opts.terminal) {
+      console.error("Choose either --web or --terminal, not both.");
+      process.exit(1);
+    }
     const { runTerminalWizard } = await import("./core/terminal-wizard.js");
-    await runTerminalWizard();
+    await runTerminalWizard({
+      mode: opts.web ? "web" : opts.terminal ? "terminal" : undefined,
+    });
+  });
+
+program
+  .command("doctor")
+  .description("Check install, build, config, and embedding readiness")
+  .action(async () => {
+    const { runDoctorCommand } = await import("./core/setup-doctor.js");
+    const exitCode = await runDoctorCommand();
+    if (exitCode !== 0) {
+      process.exit(exitCode);
+    }
   });
 
 program

@@ -49,4 +49,32 @@ describe("generateEnvContent", () => {
     expect(content).toContain("PROVIDER_CHAIN=openai");
     expect(content).toContain('OPENAI_API_KEY="sk-proj-openai-embed-key"');
   });
+
+  it("supports other response providers without falling back to Claude/Gemini-only logic", () => {
+    const content = generateEnvContent({
+      unityProjectPath: "/Users/test/MyGame",
+      provider: "deepseek",
+      apiKey: "sk-deepseek-key",
+      embeddingProvider: "auto",
+      channel: "cli",
+      language: "en",
+    });
+
+    expect(content).toContain('DEEPSEEK_API_KEY="sk-deepseek-key"');
+    expect(content).toContain("PROVIDER_CHAIN=deepseek");
+  });
+
+  it("supports Ollama as a keyless local provider", () => {
+    const content = generateEnvContent({
+      unityProjectPath: "/Users/test/MyGame",
+      provider: "ollama",
+      embeddingProvider: "ollama",
+      channel: "cli",
+      language: "en",
+    });
+
+    expect(content).toContain("PROVIDER_CHAIN=ollama");
+    expect(content).toContain("EMBEDDING_PROVIDER=ollama");
+    expect(content).not.toContain("OLLAMA_API_KEY");
+  });
 });

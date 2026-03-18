@@ -12,6 +12,7 @@ vi.mock("./utils/logger.js", () => ({
     error: vi.fn(),
     debug: vi.fn(),
   }),
+  getLogRingBuffer: () => [],
 }));
 
 vi.mock("./agents/context/strada-knowledge.js", () => ({

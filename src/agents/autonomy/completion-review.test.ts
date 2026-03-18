@@ -1,0 +1,104 @@
+import { describe, expect, it } from "vitest";
+import { AgentPhase, type AgentState } from "../agent-state.js";
+import {
+  buildCompletionReviewGate,
+  collectCompletionReviewEvidence,
+  hasOpenReviewFindings,
+  parseCompletionReviewDecision,
+  shouldRunCompletionReview,
+} from "./completion-review.js";
+
+function createState(overrides: Partial<AgentState> = {}): AgentState {
+  return {
+    phase: AgentPhase.EXECUTING,
+    taskDescription: "Fix runtime issue",
+    iteration: 2,
+    plan: "Investigate logs and fix the failure",
+    stepResults: [],
+    failedApproaches: [],
+    reflectionCount: 0,
+    lastReflection: null,
+    consecutiveErrors: 0,
+    learnedInsights: [],
+    ...overrides,
+  };
+}
+
+describe("completion-review", () => {
+  it("keeps only chat-scoped warn/error logs after the latest clean verification", () => {
+    const verificationAt = Date.parse("2026-03-18T10:00:10.000Z");
+    const evidence = collectCompletionReviewEvidence({
+      state: createState(),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["src/runtime/reviewer.ts"]),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: verificationAt,
+      },
+      chatId: "chat-123",
+      taskStartedAtMs: Date.parse("2026-03-18T10:00:00.000Z"),
+      logEntries: [
+        {
+          timestamp: "2026-03-18T10:00:05.000Z",
+          level: "error",
+          message: "too early",
+          meta: { chatId: "chat-123" },
+        },
+        {
+          timestamp: "2026-03-18T10:00:12.000Z",
+          level: "info",
+          message: "not severe",
+          meta: { chatId: "chat-123" },
+        },
+        {
+          timestamp: "2026-03-18T10:00:13.000Z",
+          level: "warn",
+          message: "keep me",
+          meta: { chatId: "chat-123" },
+        },
+        {
+          timestamp: "2026-03-18T10:00:14.000Z",
+          level: "error",
+          message: "other chat",
+          meta: { chatId: "chat-456" },
+        },
+      ],
+    });
+
+    expect(evidence.recentLogIssues).toHaveLength(1);
+    expect(evidence.recentLogIssues[0]?.message).toBe("keep me");
+    expect(shouldRunCompletionReview(evidence)).toBe(true);
+  });
+
+  it("parses json review decisions and builds a gate prompt", () => {
+    const decision = parseCompletionReviewDecision(`\`\`\`json
+{"decision":"continue","summary":"Logs still show runtime problems.","findings":["Unhandled error remained in console output."],"requiredActions":["Inspect the console output and rerun verification."],"reviews":{"security":"clean","code":"issues","simplify":"clean"},"logStatus":"issues"}
+\`\`\``);
+    expect(hasOpenReviewFindings(decision)).toBe(true);
+
+    const gate = buildCompletionReviewGate(decision, {
+      touchedFiles: ["src/runtime/reviewer.ts"],
+      recentFailures: [],
+      recentLogIssues: [
+        {
+          timestamp: "2026-03-18T10:00:13.000Z",
+          level: "error",
+          message: "Unhandled error remained in console output.",
+          meta: { chatId: "chat-123" },
+        },
+      ],
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["src/runtime/reviewer.ts"]),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: Date.parse("2026-03-18T10:00:10.000Z"),
+      },
+    });
+
+    expect(gate).toContain("[COMPLETION REVIEW REQUIRED]");
+    expect(gate).toContain("Unhandled error remained in console output.");
+    expect(gate).toContain("Security review: clean");
+  });
+});

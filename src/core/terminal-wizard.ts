@@ -18,18 +18,45 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 
 const MAX_RETRIES = 3;
+const RESPONSE_PROVIDER_CHOICES = [
+  "claude", "openai", "deepseek", "kimi", "qwen", "gemini",
+  "groq", "mistral", "together", "fireworks", "minimax", "ollama",
+] as const;
 const EMBEDDING_PROVIDER_CHOICES = [
   "auto", "gemini", "openai", "mistral", "together", "fireworks", "qwen", "ollama",
 ] as const;
+const CHANNEL_CHOICES = ["web", "telegram", "discord", "slack", "whatsapp", "cli"] as const;
+const LANGUAGE_CHOICES = ["en", "tr", "ja", "ko", "zh", "de", "es", "fr"] as const;
 const PROVIDER_ENV_KEY_MAP: Record<string, string> = {
   claude: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+  kimi: "KIMI_API_KEY",
+  qwen: "QWEN_API_KEY",
   gemini: "GEMINI_API_KEY",
+  groq: "GROQ_API_KEY",
   mistral: "MISTRAL_API_KEY",
   together: "TOGETHER_API_KEY",
   fireworks: "FIREWORKS_API_KEY",
-  qwen: "QWEN_API_KEY",
+  minimax: "MINIMAX_API_KEY",
 };
+const PROVIDER_LABELS: Record<string, string> = {
+  claude: "Claude",
+  openai: "OpenAI",
+  deepseek: "DeepSeek",
+  kimi: "Kimi",
+  qwen: "Qwen",
+  gemini: "Gemini",
+  groq: "Groq",
+  mistral: "Mistral",
+  together: "Together",
+  fireworks: "Fireworks",
+  minimax: "MiniMax",
+  ollama: "Ollama",
+};
+const DEFAULT_EMBEDDING_PROVIDERS = new Set([
+  "gemini", "openai", "mistral", "together", "fireworks", "qwen", "ollama",
+]);
 
 export interface WizardAnswers {
   unityProjectPath: string;
@@ -111,18 +138,27 @@ function isValidEmbeddingProvider(value: string): boolean {
 }
 
 function getDefaultEmbeddingProvider(provider: string): string {
-  return provider === "gemini" || provider === "openai" ? provider : "auto";
+  return DEFAULT_EMBEDDING_PROVIDERS.has(provider) ? provider : "auto";
 }
 
 function getEmbeddingProviderLabel(provider: string): string {
-  return provider === "ollama" ? "Ollama"
-    : provider === "gemini" ? "Gemini"
-    : provider === "openai" ? "OpenAI"
-    : provider === "mistral" ? "Mistral"
-    : provider === "together" ? "Together"
-    : provider === "fireworks" ? "Fireworks"
-    : provider === "qwen" ? "Qwen"
-    : provider;
+  return PROVIDER_LABELS[provider] ?? provider;
+}
+
+function getResponseProviderLabel(provider: string): string {
+  return PROVIDER_LABELS[provider] ?? provider;
+}
+
+function isValidResponseProvider(value: string): boolean {
+  return RESPONSE_PROVIDER_CHOICES.includes(value as typeof RESPONSE_PROVIDER_CHOICES[number]);
+}
+
+function isValidChannel(value: string): boolean {
+  return CHANNEL_CHOICES.includes(value as typeof CHANNEL_CHOICES[number]);
+}
+
+function isValidLanguage(value: string): boolean {
+  return LANGUAGE_CHOICES.includes(value as typeof LANGUAGE_CHOICES[number]);
 }
 
 /**
@@ -140,17 +176,13 @@ export function generateEnvContent(answers: WizardAnswers): string {
 
   const sanitizedKey = answers.apiKey ? sanitizeEnvValue(answers.apiKey) : "";
   const primaryEnvKey = PROVIDER_ENV_KEY_MAP[answers.provider];
-  if (answers.provider === "claude") {
-    if (answers.apiKey) lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
-    lines.push("PROVIDER_CHAIN=claude");
-  } else if (answers.provider === "openai") {
+  if (answers.provider === "openai") {
     lines.push(`OPENAI_AUTH_MODE=${answers.openaiAuthMode ?? "api-key"}`);
     if (answers.apiKey) lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
-    lines.push("PROVIDER_CHAIN=openai");
-  } else if (answers.provider === "gemini") {
+  } else if (answers.provider !== "ollama") {
     if (answers.apiKey) lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
-    lines.push("PROVIDER_CHAIN=gemini");
   }
+  lines.push(`PROVIDER_CHAIN=${answers.provider}`);
 
   if (answers.embeddingProvider && answers.embeddingProvider !== "auto") {
     if (
@@ -236,7 +268,9 @@ function openBrowser(url: string): void {
  * Writes a .env file with the collected configuration.
  * Alternatively, launches the web-based SetupWizard if the user prefers.
  */
-export async function runTerminalWizard(): Promise<void> {
+export async function runTerminalWizard(
+  options?: { mode?: "terminal" | "web" },
+): Promise<void> {
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
   let intentionalClose = false;
@@ -252,12 +286,17 @@ export async function runTerminalWizard(): Promise<void> {
     console.log("\u2501".repeat(30));
     console.log("");
 
-    console.log("? Setup method:");
-    console.log("  1) Terminal (quick setup)");
-    console.log("  2) Web Browser (full setup)");
-    const method = await rl.question("  Choose [1/2] (default: 1): ");
+    let useWebWizard = options?.mode === "web";
+    if (!options?.mode) {
+      console.log("? Setup method:");
+      console.log("  1) Terminal (quick setup)");
+      console.log("  2) Web Browser (full setup)");
+      console.log("     Tip: next time you can jump straight in with `strada setup --web`.");
+      const method = await rl.question("  Choose [1/2] (default: 1): ");
+      useWebWizard = method.trim() === "2";
+    }
 
-    if (method.trim() === "2") {
+    if (useWebWizard) {
       intentionalClose = true;
       rl.close();
       const port = process.env["SETUP_WIZARD_PORT"]
@@ -274,6 +313,8 @@ export async function runTerminalWizard(): Promise<void> {
     }
 
     console.log("");
+    console.log("  Terminal setup supports every built-in response provider.");
+    console.log("  You can still switch workers later from Strada's dashboard or routing commands.\n");
 
     const unityPath = await askWithRetry(
       rl,
@@ -283,12 +324,12 @@ export async function runTerminalWizard(): Promise<void> {
 
     const providerAnswer = await askWithRetry(
       rl,
-      "? Primary AI provider (claude/openai/gemini) [default: claude]: ",
+      `? Primary AI provider (${RESPONSE_PROVIDER_CHOICES.join("/")}) [default: claude]: `,
       (input) => {
         const value = input.trim().toLowerCase()
         if (!value) return { valid: true }
-        if (!["claude", "openai", "gemini"].includes(value)) {
-          return { valid: false, error: "Supported providers: claude, openai, gemini." }
+        if (!isValidResponseProvider(value)) {
+          return { valid: false, error: `Supported providers: ${RESPONSE_PROVIDER_CHOICES.join(", ")}.` }
         }
         return { valid: true }
       },
@@ -327,16 +368,20 @@ export async function runTerminalWizard(): Promise<void> {
         console.log("  Note: this covers OpenAI conversation turns only, not OpenAI embeddings or API quota.")
       }
     } else {
-      apiKey = await askWithRetry(
-        rl,
-        `? ${provider === "claude" ? "Claude" : "Gemini"} API key: `,
-        (input) => {
-          if (!input || input.trim().length < 8) {
-            return { valid: false, error: "API key seems too short." };
-          }
-          return { valid: true };
-        },
-      );
+      if (provider === "ollama") {
+        console.log("  Ollama selected. No API key is required for the local response worker.");
+      } else {
+        apiKey = await askWithRetry(
+          rl,
+          `? ${getResponseProviderLabel(provider)} API key: `,
+          (input) => {
+            if (!input || input.trim().length < 8) {
+              return { valid: false, error: "API key seems too short." };
+            }
+            return { valid: true };
+          },
+        );
+      }
     }
     const defaultEmbeddingProvider = getDefaultEmbeddingProvider(provider);
     const embeddingAnswer = await askWithRetry(
@@ -381,11 +426,33 @@ export async function runTerminalWizard(): Promise<void> {
       );
     }
 
-    const channelAnswer = await rl.question("? Default channel (web): ");
-    const channel = channelAnswer.trim() || "web";
+    const channelAnswer = await askWithRetry(
+      rl,
+      `? Default channel (${CHANNEL_CHOICES.join("/")}) [default: web]: `,
+      (input) => {
+        const normalized = input.trim().toLowerCase();
+        if (!normalized) return { valid: true };
+        if (!isValidChannel(normalized)) {
+          return { valid: false, error: `Supported channels: ${CHANNEL_CHOICES.join(", ")}.` };
+        }
+        return { valid: true };
+      },
+    );
+    const channel = channelAnswer.trim().toLowerCase() || "web";
 
-    const langAnswer = await rl.question("? Language (en): ");
-    const language = langAnswer.trim() || "en";
+    const langAnswer = await askWithRetry(
+      rl,
+      `? Language (${LANGUAGE_CHOICES.join("/")}) [default: en]: `,
+      (input) => {
+        const normalized = input.trim().toLowerCase();
+        if (!normalized) return { valid: true };
+        if (!isValidLanguage(normalized)) {
+          return { valid: false, error: `Supported languages: ${LANGUAGE_CHOICES.join(", ")}.` };
+        }
+        return { valid: true };
+      },
+    );
+    const language = langAnswer.trim().toLowerCase() || "en";
 
     const envPath = path.join(process.cwd(), ".env");
     if (fs.existsSync(envPath)) {
@@ -411,7 +478,9 @@ export async function runTerminalWizard(): Promise<void> {
 
     fs.writeFileSync(envPath, envContent, { encoding: "utf-8", mode: 0o600 });
 
-    console.log(`\n\u2705 .env created! Run \`strada start\` to begin.\n`);
+    console.log("\n\u2705 .env created!");
+    console.log("   Next: run `strada doctor` (or `npm run doctor` from the source checkout).");
+    console.log("   Then start Strada with `strada start`.\n");
     intentionalClose = true;
     rl.close();
   } catch (err) {

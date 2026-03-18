@@ -48,29 +48,49 @@ Nouveau dans cette version : Strada.Brain int&egrave;gre d&eacute;sormais un **A
 ### Pr&eacute;requis
 
 - **Node.js 20+** et npm
-- Une **cl&eacute; API Anthropic** (Claude) -- les autres fournisseurs sont optionnels
-- Un **projet Unity** avec le framework Strada.Core (le chemin que vous donnez &agrave; l'agent)
+- Au moins un identifiant compatible de fournisseur IA (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), une session OpenAI ChatGPT/Codex subscription (`OPENAI_AUTH_MODE=chatgpt-subscription`) ou une `PROVIDER_CHAIN` basee uniquement sur `ollama`
+- Un **projet Unity** (le chemin donn&eacute; &agrave; l'agent). Strada.Core est recommand&eacute; pour une assistance pleinement consciente du framework.
 
 ### 1. Installation
 
 ```bash
-# Installation globale (recommand&eacute;e)
-npm install -g strada-brain
-
-# Ou cloner &agrave; partir du source
+# Cloner depuis la source (chemin d'installation canonique pour l'instant)
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
+npm run bootstrap
+
+# Helpers locaux du checkout source (sans lien global obligatoire)
+npm run setup:web
+npm run setup:terminal
+
+# Optionnel : exposer `strada` / `strada-brain` globalement depuis ce checkout
+npm link
 ```
+
+`strada-brain` n'est pas encore publi&eacute; sur le registre npm public. `npm install -g strada-brain` renverra donc `E404` pour le moment. En attendant une publication npm, utilisez le flux source ci-dessus.
 
 ### 2. Configuration
 
 ```bash
 # Assistant de configuration interactif (terminal ou navigateur web)
 strada setup
+
+# Sauter le choix initial et ouvrir directement la surface de setup voulue
+strada setup --web
+strada setup --terminal
 ```
 
 L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de fournisseur IA, votre canal par d&eacute;faut et votre langue. Choisissez **Terminal** pour une configuration rapide ou **Navigateur Web** pour l'interface compl&egrave;te.
+Apr&egrave;s le setup, lancez un contr&ocirc;le de readiness avant de d&eacute;marrer l'agent :
+
+```bash
+# Depuis le checkout source
+npm run doctor
+
+# Ou si le CLI est li&eacute; globalement
+strada doctor
+```
 
 Alternativement, cr&eacute;ez `.env` manuellement :
 
@@ -106,6 +126,9 @@ strada supervise --channel web
 
 ```bash
 strada setup              # Assistant de configuration interactif
+strada setup --web        # Ouvrir directement l'assistant web
+strada setup --terminal   # Utiliser directement l'assistant terminal
+strada doctor             # V&eacute;rifier installation/build/config
 strada start              # D&eacute;marrer l'agent
 strada supervise          # Ex&eacute;cuter avec superviseur de red&eacute;marrage automatique
 strada update             # V&eacute;rifier et appliquer les mises &agrave; jour
@@ -128,7 +151,7 @@ Une fois lanc&eacute;, envoyez un message via votre canal configur&eacute; :
 
 ### 6. Mise &agrave; jour Automatique
 
-Strada.Brain v&eacute;rifie automatiquement les mises &agrave; jour quotidiennement et les applique en cas d'inactivit&eacute;. Il d&eacute;tecte sa m&eacute;thode d'installation (npm global, npm local ou git clone) et utilise la strat&eacute;gie de mise &agrave; jour appropri&eacute;e.
+Strada.Brain v&eacute;rifie automatiquement les mises &agrave; jour quotidiennement et les applique en cas d'inactivit&eacute;. Les checkouts source et les installations `npm link` se mettent &agrave; jour via git. Les commandes de mise &agrave; jour bas&eacute;es sur npm ne s'appliquent qu'une fois une publication npm publique disponible.
 
 | Variable | Par d&eacute;faut | Description |
 |----------|---------|-------------|

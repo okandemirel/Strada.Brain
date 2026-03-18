@@ -846,10 +846,18 @@ export class WebChannel
         "Pragma": "no-cache",
       };
       const authHeader = this.getSingleHeader(req.headers.authorization);
+      const originHeader = this.getSingleHeader(req.headers.origin);
+      const refererHeader = this.getSingleHeader(req.headers.referer);
       if (authHeader) {
         proxyHeaders["Authorization"] = authHeader;
       } else if (this.options.dashboardAuthToken) {
         proxyHeaders["Authorization"] = `Bearer ${this.options.dashboardAuthToken}`;
+      }
+      if (originHeader && isAllowedOrigin(originHeader)) {
+        proxyHeaders["Origin"] = originHeader;
+      }
+      if (refererHeader && isAllowedOrigin(refererHeader)) {
+        proxyHeaders["Referer"] = refererHeader;
       }
 
       const fetchOpts: RequestInit = {

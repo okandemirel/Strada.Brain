@@ -31,7 +31,7 @@ import type { StradaDepsStatus } from "../config/strada-deps.js";
 import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
-import { getLogger } from "../utils/logger.js";
+import { getLogger, getLogRingBuffer } from "../utils/logger.js";
 import { AgentPhase, createInitialState, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
 import { buildPlanningPrompt, buildReflectionPrompt, buildReplanningPrompt, buildExecutionContext } from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
@@ -49,7 +49,18 @@ import {
   getRecommendedMaxMessages,
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
-import { ErrorRecoveryEngine, TaskPlanner, SelfVerification } from "./autonomy/index.js";
+import {
+  COMPLETION_REVIEW_SYSTEM_PROMPT,
+  ErrorRecoveryEngine,
+  TaskPlanner,
+  SelfVerification,
+  buildCompletionReviewGate,
+  buildCompletionReviewRequest,
+  collectCompletionReviewEvidence,
+  hasOpenReviewFindings,
+  parseCompletionReviewDecision,
+  shouldRunCompletionReview,
+} from "./autonomy/index.js";
 import { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
 import { WRITE_OPERATIONS, isVerificationToolName } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
@@ -1371,6 +1382,7 @@ export class Orchestrator {
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
     const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
+    const taskStartedAtMs = Date.now();
     stradaConformance.trackPrompt(prompt);
     let toolTurnAffinity: SupervisorAssignment | null = null;
 
@@ -1443,9 +1455,17 @@ export class Orchestrator {
           const decision = parseReflectionDecision(response.text);
 
           if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-            const completionGate =
-              getCompletionGatePrompt(bgAgentState, selfVerification, response.text) ??
-              stradaConformance.getPrompt();
+            const completionGate = await this.resolveCompletionGate({
+              chatId,
+              prompt,
+              state: bgAgentState,
+              draft: response.text,
+              selfVerification,
+              stradaConformance,
+              strategy: executionStrategy,
+              taskStartedAtMs,
+              usageHandler: options.onUsage ?? this.onUsage,
+            });
             if (completionGate) {
               bgAgentState = {
                 ...bgAgentState,
@@ -1533,9 +1553,17 @@ export class Orchestrator {
 
         // Final response — return text
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-          const completionGate =
-            getCompletionGatePrompt(bgAgentState, selfVerification, response.text) ??
-            stradaConformance.getPrompt();
+          const completionGate = await this.resolveCompletionGate({
+            chatId,
+            prompt,
+            state: bgAgentState,
+            draft: response.text,
+            selfVerification,
+            stradaConformance,
+            strategy: executionStrategy,
+            taskStartedAtMs,
+            usageHandler: options.onUsage ?? this.onUsage,
+          });
           if (completionGate) {
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
@@ -2063,6 +2091,7 @@ export class Orchestrator {
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
     const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
+    const taskStartedAtMs = Date.now();
     // ────────────────────────────────────────────────────────────────────
 
     // ─── PAOR State Machine ──────────────────────────────────────────────
@@ -2173,9 +2202,17 @@ export class Orchestrator {
         const decision = parseReflectionDecision(response.text);
 
         if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-          const completionGate =
-            getCompletionGatePrompt(agentState, selfVerification, response.text) ??
-            stradaConformance.getPrompt();
+          const completionGate = await this.resolveCompletionGate({
+            chatId,
+            prompt: lastUserMessage,
+            state: agentState,
+            draft: response.text,
+            selfVerification,
+            stradaConformance,
+            strategy: executionStrategy,
+            taskStartedAtMs,
+            usageHandler: this.onUsage,
+          });
           if (completionGate) {
             agentState = {
               ...agentState,
@@ -2340,9 +2377,17 @@ export class Orchestrator {
       // (streaming already sent it, so skip for streamed end_turn)
       if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
         // ─── Verification gate: catch unverified exits ──────────────────
-        const completionGate =
-          getCompletionGatePrompt(agentState, selfVerification, response.text) ??
-          stradaConformance.getPrompt();
+        const completionGate = await this.resolveCompletionGate({
+          chatId,
+          prompt: lastUserMessage,
+          state: agentState,
+          draft: response.text,
+          selfVerification,
+          stradaConformance,
+          strategy: executionStrategy,
+          taskStartedAtMs,
+          usageHandler: this.onUsage,
+        });
         if (completionGate) {
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
@@ -3162,6 +3207,78 @@ export class Orchestrator {
     });
   }
 
+  private async resolveCompletionGate(params: {
+    chatId: string;
+    prompt: string;
+    state: AgentState;
+    draft: string | null | undefined;
+    selfVerification: SelfVerification;
+    stradaConformance: StradaConformanceGuard;
+    strategy: SupervisorExecutionStrategy;
+    taskStartedAtMs: number;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }): Promise<string | null> {
+    const staticGate = getCompletionGatePrompt(params.state, params.selfVerification, params.draft);
+    if (staticGate) {
+      return staticGate;
+    }
+
+    const conformanceGate = params.stradaConformance.getPrompt();
+    if (conformanceGate) {
+      return conformanceGate;
+    }
+
+    if (isTerminalFailureReport(params.draft)) {
+      return null;
+    }
+
+    const evidence = collectCompletionReviewEvidence({
+      state: params.state,
+      verificationState: params.selfVerification.getState(),
+      logEntries: typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [],
+      chatId: params.chatId,
+      taskStartedAtMs: params.taskStartedAtMs,
+    });
+    if (!shouldRunCompletionReview(evidence)) {
+      return null;
+    }
+
+    const reviewer = params.strategy.reviewer;
+    try {
+      const reviewResponse = await reviewer.provider.chat(
+        `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
+        [{
+          role: "user",
+          content: buildCompletionReviewRequest({
+            prompt: params.prompt,
+            draft: params.draft ?? "",
+            state: params.state,
+            evidence,
+          }),
+        }],
+        [],
+      );
+      this.recordAuxiliaryUsage(
+        reviewer.providerName,
+        reviewResponse.usage,
+        params.usageHandler,
+      );
+      const decision = parseCompletionReviewDecision(reviewResponse.text);
+      if (!hasOpenReviewFindings(decision)) {
+        return null;
+      }
+      return buildCompletionReviewGate(decision, evidence);
+    } catch (error) {
+      getLogger().warn("Completion review provider failed", {
+        chatId: params.chatId,
+        provider: reviewer.providerName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return buildCompletionReviewGate(null, evidence);
+  }
+
   private isSafeShellFallback(command: string): boolean {
     const normalized = command.replace(/\s+/g, " ").trim();
     if (!normalized || normalized.includes("|") || normalized.includes(";") || normalized.includes("||")) {
@@ -3349,6 +3466,7 @@ export class Orchestrator {
         this.metrics?.recordToolCall(tc.name, Date.now() - toolStart, false);
         const errMsg = error instanceof Error ? error.message : "Unknown error";
         logger.error("Tool execution error", {
+          chatId,
           tool: tc.name,
           error: errMsg,
         });

@@ -90,6 +90,32 @@ describe("TerminalWizard", () => {
       });
       expect(content).toContain('GEMINI_API_KEY="AIza-test"');
     });
+
+    it("should support additional response providers such as DeepSeek", async () => {
+      const { generateEnvContent } = await import("../../core/terminal-wizard.js");
+      const content = generateEnvContent({
+        unityProjectPath: "/Users/test/MyGame",
+        apiKey: "sk-deepseek-test",
+        provider: "deepseek",
+        channel: "cli",
+        language: "en",
+      });
+      expect(content).toContain('DEEPSEEK_API_KEY="sk-deepseek-test"');
+      expect(content).toContain("PROVIDER_CHAIN=deepseek");
+    });
+
+    it("should support keyless Ollama response workers", async () => {
+      const { generateEnvContent } = await import("../../core/terminal-wizard.js");
+      const content = generateEnvContent({
+        unityProjectPath: "/Users/test/MyGame",
+        provider: "ollama",
+        embeddingProvider: "ollama",
+        channel: "cli",
+        language: "en",
+      });
+      expect(content).toContain("PROVIDER_CHAIN=ollama");
+      expect(content).not.toContain("OLLAMA_API_KEY");
+    });
   });
 
   describe("detectProvider", () => {

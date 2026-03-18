@@ -52,24 +52,44 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 ### 1. Install
 
 ```bash
-# Global install (recommended)
-npm install -g strada-brain
-
-# Or clone from source
+# Clone from source (currently the canonical install path)
 git clone https://github.com/okandemirel/strada-brain.git
 cd strada-brain
 npm install
-npm install --prefix web-portal
+npm run bootstrap
+
+# Local source-checkout helpers (no global link required)
+npm run setup:web
+npm run setup:terminal
+
+# Optional: expose `strada` / `strada-brain` globally from this checkout
+npm link
 ```
+
+`strada-brain` is not currently published on the public npm registry, so `npm install -g strada-brain` will return `E404`. Until a registry release exists, use the source checkout flow above.
 
 ### 2. Setup
 
 ```bash
 # Interactive setup wizard (terminal or web browser)
 strada setup
+
+# Skip the chooser and jump straight into one setup surface
+strada setup --web
+strada setup --terminal
 ```
 
 The wizard asks for your Unity project path, AI provider API key, default channel, and language. Choose **Terminal** for quick setup or **Web Browser** for the full configuration UI.
+
+After setup, run a readiness check before you start the agent:
+
+```bash
+# From the source checkout
+npm run doctor
+
+# Or, if you linked the CLI globally
+strada doctor
+```
 
 Alternatively, create `.env` manually:
 
@@ -106,6 +126,9 @@ strada supervise --channel web
 
 ```bash
 strada setup              # Interactive setup wizard
+strada setup --web        # Launch the browser wizard directly
+strada setup --terminal   # Use the terminal wizard directly
+strada doctor             # Verify install/build/config readiness
 strada start              # Start the agent
 strada supervise          # Run with auto-restart supervisor
 strada update             # Check and apply updates
@@ -128,7 +151,7 @@ Once running, send a message through your configured channel:
 
 ### 5. Auto-Update
 
-Strada.Brain automatically checks for updates daily and applies them when idle. It detects its installation method (npm global, npm local, or git clone) and uses the appropriate update strategy.
+Strada.Brain automatically checks for updates daily and applies them when idle. Source checkouts and `npm link` installs update through git. npm-based update commands only apply after a public npm release exists.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

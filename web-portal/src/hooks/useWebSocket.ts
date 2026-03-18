@@ -50,6 +50,7 @@ export interface UseWebSocketReturn {
   confirmation: ConfirmationState | null
   isTyping: boolean
   sessionId: string | null
+  profileId: string | null
   sendMessage: (text: string, attachments?: Attachment[]) => boolean
   sendConfirmation: (confirmId: string, option: string) => void
   switchProvider: (provider: string, model?: string) => boolean
@@ -68,6 +69,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null)
   const [isTyping, setIsTyping] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(() => readStoredChatId())
+  const [profileId, setProfileId] = useState<string | null>(() => readStoredProfileId())
 
   const wsRef = useRef<WebSocket | null>(null)
   const chatIdRef = useRef<string | null>(readStoredChatId())
@@ -98,6 +100,7 @@ export function useWebSocket(): UseWebSocketReturn {
     profileIdRef.current = nextProfileId
     profileTokenRef.current = profileToken?.trim() || profileTokenRef.current
     setSessionId(chatId)
+    setProfileId(nextProfileId)
     localStorage.setItem(CHAT_ID_STORAGE_KEY, chatId)
     localStorage.setItem(PROFILE_ID_STORAGE_KEY, nextProfileId)
     localStorage.removeItem(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY)
@@ -376,6 +379,7 @@ export function useWebSocket(): UseWebSocketReturn {
     confirmation,
     isTyping,
     sessionId,
+    profileId,
     sendMessage,
     sendConfirmation,
     switchProvider,
