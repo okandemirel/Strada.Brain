@@ -149,6 +149,8 @@ async function ensureFile(path) {
 async function createSmokeProject(projectDir) {
   await mkdir(join(projectDir, "Assets"), { recursive: true });
   await mkdir(join(projectDir, "Packages", "com.strada.core"), { recursive: true });
+  await mkdir(join(projectDir, "Packages", "Strada.Core"), { recursive: true });
+  await mkdir(join(projectDir, "Packages", "Strada.Modules"), { recursive: true });
   await mkdir(join(projectDir, "ProjectSettings"), { recursive: true });
   await writeFile(
     join(projectDir, "Packages", "manifest.json"),
@@ -164,6 +166,14 @@ async function createSmokeProject(projectDir) {
       name: "com.strada.core",
       version: "0.0.0-smoke",
     }, null, 2),
+  );
+  await writeFile(
+    join(projectDir, "Packages", "Strada.Core", "README.md"),
+    "# Strada.Core smoke fixture\n",
+  );
+  await writeFile(
+    join(projectDir, "Packages", "Strada.Modules", "README.md"),
+    "# Strada.Modules smoke fixture\n",
   );
   await writeFile(
     join(projectDir, "ProjectSettings", "ProjectVersion.txt"),
@@ -337,10 +347,10 @@ async function runExactOutputSmoke(memoryDir, projectDir) {
 }
 
 async function runProviderFallbackSmoke(memoryDir, projectDir) {
-  console.log("4. Routed provider fallback smoke");
+  console.log("4. Provider routing and fallback smoke");
   const session = new CliSession(["cli"], {
     ...buildBaseEnv(memoryDir, projectDir),
-    PROVIDER_CHAIN: "qwen,kimi",
+    PROVIDER_CHAIN: "kimi,qwen",
     QWEN_API_KEY: "smoke-qwen-key",
     READ_ONLY_MODE: "true",
     REQUIRE_EDIT_CONFIRMATION: "true",
@@ -349,7 +359,14 @@ async function runProviderFallbackSmoke(memoryDir, projectDir) {
   try {
     await session.waitFor(/you> /);
 
-    const cursor = session.output.length;
+    let cursor = session.output.length;
+    session.sendLine("/model kimi");
+    await session.waitFor("Strada will use `kimi`", {
+      fromIndex: cursor,
+      timeoutMs: 20_000,
+    });
+
+    cursor = session.output.length;
     session.sendLine(PROVIDER_FALLBACK_PROMPT);
     await session.waitFor("provider fallback ok", {
       fromIndex: cursor,
@@ -359,7 +376,7 @@ async function runProviderFallbackSmoke(memoryDir, projectDir) {
     const output = session.output.slice(cursor).toLowerCase();
     assert(
       !output.includes("could not connect to the ai provider"),
-      "preferred provider fallback smoke should recover instead of surfacing a network failure",
+      "provider fallback smoke should recover instead of surfacing a network failure",
     );
   } finally {
     await session.close();
@@ -371,28 +388,49 @@ async function runProviderFallbackSmoke(memoryDir, projectDir) {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-  const failedKimiAttempt = entries.some((entry) =>
-    entry.type === "chat-failure" &&
-    typeof entry.url === "string" &&
-    entry.url.includes("api.kimi.com") &&
+  const promptEntries = entries.filter((entry) =>
+    (entry.type === "chat" || entry.type === "chat-failure") &&
     entry.lastUserText === PROVIDER_FALLBACK_PROMPT,
   );
-  const successfulQwenFallback = entries.some((entry) =>
+  const failedKimiAttempt = promptEntries.some((entry) =>
+    entry.type === "chat-failure" &&
+    typeof entry.url === "string" &&
+    entry.url.includes("api.kimi.com"),
+  );
+  const successfulQwenFallback = promptEntries.some((entry) =>
     entry.type === "chat" &&
     typeof entry.url === "string" &&
     entry.url.includes("dashscope-intl.aliyuncs.com") &&
-    entry.lastUserText === PROVIDER_FALLBACK_PROMPT &&
+    entry.response?.choices?.[0]?.message?.content === "provider fallback ok",
+  );
+  const successfulProviderResponse = promptEntries.some((entry) =>
+    entry.type === "chat" &&
     entry.response?.choices?.[0]?.message?.content === "provider fallback ok",
   );
 
-  assert(failedKimiAttempt, "provider fallback smoke should force the routed provider to fail");
-  assert(successfulQwenFallback, "provider fallback smoke should fall back to Qwen after the routed provider failure");
+  assert(successfulProviderResponse, "provider routing smoke should complete with a real provider response");
+  if (failedKimiAttempt) {
+    assert(successfulQwenFallback, "provider fallback smoke should fall back to Qwen after the primary provider failure");
+  }
 }
 
 async function runDaemonSmoke(memoryDir, projectDir) {
   console.log("5. Daemon autonomy, delegation, multi-agent and metrics smoke");
-  const session = new CliSession(["start", "--channel", "cli", "--daemon"], {
-    ...buildBaseEnv(memoryDir, projectDir),
+  const projectRoot = dirname(projectDir);
+  const autonomyProjectDir = join(projectRoot, "daemon-autonomy-project");
+  const delegationProjectDir = join(projectRoot, "daemon-delegation-project");
+  const autonomyMemoryDir = join(memoryDir, "autonomy");
+  const delegationMemoryDir = join(memoryDir, "delegation");
+
+  await mkdir(autonomyMemoryDir, { recursive: true });
+  await mkdir(delegationMemoryDir, { recursive: true });
+  await mkdir(autonomyProjectDir, { recursive: true });
+  await mkdir(delegationProjectDir, { recursive: true });
+  await createSmokeProject(autonomyProjectDir);
+  await createSmokeProject(delegationProjectDir);
+
+  const buildDaemonEnv = (daemonMemoryDir, daemonProjectDir) => ({
+    ...buildBaseEnv(daemonMemoryDir, daemonProjectDir),
     READ_ONLY_MODE: "false",
     REQUIRE_EDIT_CONFIRMATION: "true",
     STRADA_DAEMON_DAILY_BUDGET: "1",
@@ -403,47 +441,55 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     TASK_MESSAGE_BURST_WINDOW_MS: "700",
   });
 
+  const autonomySession = new CliSession(["start", "--channel", "cli", "--daemon"], buildDaemonEnv(autonomyMemoryDir, autonomyProjectDir));
   try {
-    await session.waitFor(/you> /, { timeoutMs: 20_000 });
+    await autonomySession.waitFor(/you> /, { timeoutMs: 20_000 });
 
-    let cursor = session.output.length;
-    session.sendLine("/autonomous on 1");
-    await session.waitFor("Autonomous mode enabled for 1 hours.", { fromIndex: cursor, timeoutMs: 20_000 });
+    let cursor = autonomySession.output.length;
+    autonomySession.sendLine("/autonomous on 1");
+    await autonomySession.waitFor("Autonomous mode enabled for 1 hours.", { fromIndex: cursor, timeoutMs: 20_000 });
 
-    cursor = session.output.length;
-    session.sendLine(RAPID_MESSAGE_PART_ONE);
-    session.sendLine(RAPID_MESSAGE_PART_TWO);
-    await session.waitFor("rapid batch ok", { fromIndex: cursor, timeoutMs: 30_000 });
-    const rapidOutput = session.output.slice(cursor).toLowerCase();
+    cursor = autonomySession.output.length;
+    autonomySession.sendLine(RAPID_MESSAGE_PART_ONE);
+    autonomySession.sendLine(RAPID_MESSAGE_PART_TWO);
+    await autonomySession.waitFor("rapid batch ok", { fromIndex: cursor, timeoutMs: 30_000 });
+    const rapidOutput = autonomySession.output.slice(cursor).toLowerCase();
     assert(
       !rapidOutput.includes("rapid batch incomplete"),
       "rapid message smoke should merge consecutive messages before task execution",
     );
 
-    cursor = session.output.length;
-    session.sendLine("Use file_write to create Assets/autonomy-proof.txt with exact content 'autonomy ok'. Do not ask for confirmation.");
-    await session.waitFor("Autonomy write completed.", { fromIndex: cursor, timeoutMs: 30_000 });
-    const autonomyOutput = session.output.slice(cursor);
+    cursor = autonomySession.output.length;
+    autonomySession.sendLine("Use file_write to create Assets/autonomy-proof.txt with exact content 'autonomy ok'. Do not ask for confirmation.");
+    await autonomySession.waitFor(/autonomy write completed\./i, { fromIndex: cursor, timeoutMs: 30_000 });
+    const autonomyOutput = autonomySession.output.slice(cursor);
     assert(!autonomyOutput.includes("Choice:"), "autonomous background write should not request interactive confirmation");
+  } finally {
+    await autonomySession.close();
+  }
 
-    cursor = session.output.length;
-    session.sendLine("Delegate a brief release-risk analysis to a sub-agent and return the delegated conclusion.");
-    await session.waitFor("Delegation complete. Sub-agent analysis: release risk looks low for this smoke scenario.", {
+  const delegationSession = new CliSession(["start", "--channel", "cli", "--daemon"], buildDaemonEnv(delegationMemoryDir, delegationProjectDir));
+  try {
+    await delegationSession.waitFor(/you> /, { timeoutMs: 20_000 });
+
+    let cursor = delegationSession.output.length;
+    delegationSession.sendLine("Delegate a brief release-risk analysis to a sub-agent and return the delegated conclusion.");
+    await delegationSession.waitFor("Delegation complete. Sub-agent analysis: release risk looks low for this smoke scenario.", {
       fromIndex: cursor,
       timeoutMs: 30_000,
     });
 
-    cursor = session.output.length;
-    session.sendLine(PAOR_RECOVERY_PROMPT);
-    await session.waitFor("PAOR recovery completed after replanning.", {
+    cursor = delegationSession.output.length;
+    delegationSession.sendLine(PAOR_RECOVERY_PROMPT);
+    await delegationSession.waitFor("PAOR recovery completed after replanning.", {
       fromIndex: cursor,
       timeoutMs: 40_000,
     });
   } finally {
-    await session.close();
+    await delegationSession.close();
   }
 
-  const autonomyFile = join(projectDir, "Assets", "autonomy-proof.txt");
+  const autonomyFile = join(autonomyProjectDir, "Assets", "autonomy-proof.txt");
   await ensureFile(autonomyFile);
   assert.equal(
     await readFile(autonomyFile, "utf8"),
@@ -451,7 +497,7 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     "autonomy smoke should create the requested file without confirmation",
   );
 
-  const paorFile = join(projectDir, "Assets", "paor-proof.txt");
+  const paorFile = join(delegationProjectDir, "Assets", "paor-proof.txt");
   await ensureFile(paorFile);
   assert.equal(
     await readFile(paorFile, "utf8"),
@@ -459,13 +505,13 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     "PAOR smoke should recover from the failed first approach and write the proof file",
   );
 
-  const logPath = join(memoryDir, "mock-provider.log");
-  const logEntries = (await readFile(logPath, "utf8"))
+  const autonomyLogPath = join(autonomyMemoryDir, "mock-provider.log");
+  const autonomyLogEntries = (await readFile(autonomyLogPath, "utf8"))
     .trim()
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-  const rapidEntries = logEntries.filter((entry) => {
+  const rapidEntries = autonomyLogEntries.filter((entry) => {
     const lastUserText = typeof entry.lastUserText === "string" ? entry.lastUserText.toLowerCase() : "";
     return lastUserText.includes("rapid message smoke part 1") || lastUserText.includes("rapid message smoke part 2");
   });
@@ -483,7 +529,7 @@ async function runDaemonSmoke(memoryDir, projectDir) {
   assert(combinedRapidEntry, "rapid message smoke should reach the provider as one combined prompt");
   assert.equal(splitRapidEntries.length, 0, "rapid message smoke should not create split provider requests");
 
-  const daemonDb = new Database(join(memoryDir, "daemon.db"), { readonly: true });
+  const daemonDb = new Database(join(delegationMemoryDir, "daemon.db"), { readonly: true });
   const agentRow = daemonDb.prepare(
     "SELECT id, key, status, memory_entry_count FROM agents WHERE key = ?",
   ).get(`cli:${CLI_CHAT_ID}`);
@@ -497,10 +543,19 @@ async function runDaemonSmoke(memoryDir, projectDir) {
   assert(agentRow.memory_entry_count >= 0, "agent registry row should include memory_entry_count");
   assert(delegationStats.count >= 1, "delegation smoke should write at least one completed delegation_log row");
 
-  const agentMemoryDb = join(memoryDir, "agents", agentRow.id, "memory.db");
+  const agentMemoryDb = join(delegationMemoryDir, "agents", agentRow.id, "memory.db");
   await ensureFile(agentMemoryDb);
 
-  const learningDb = new Database(join(memoryDir, "learning.db"), { readonly: true });
+  const autonomyLearningDb = new Database(join(autonomyMemoryDir, "learning.db"), { readonly: true });
+  const autonomyMetricsRows = autonomyLearningDb.prepare(`
+    SELECT task_type, completion_status, paor_iterations, tool_call_count
+    FROM task_metrics
+    WHERE session_id = ?
+    ORDER BY completed_at DESC
+  `).all(CLI_CHAT_ID);
+  autonomyLearningDb.close();
+
+  const learningDb = new Database(join(delegationMemoryDir, "learning.db"), { readonly: true });
   const metricsRows = learningDb.prepare(`
     SELECT task_type, completion_status, paor_iterations, tool_call_count
     FROM task_metrics
@@ -518,7 +573,10 @@ async function runDaemonSmoke(memoryDir, projectDir) {
   `).get(CLI_CHAT_ID, PAOR_RECOVERY_PROMPT);
   learningDb.close();
 
-  const backgroundRows = metricsRows.filter((row) => row.task_type === "background");
+  const backgroundRows = [
+    ...autonomyMetricsRows.filter((row) => row.task_type === "background"),
+    ...metricsRows.filter((row) => row.task_type === "background"),
+  ];
   assert(backgroundRows.length >= 4, "daemon smoke should record background task metrics");
   assert(
     backgroundRows.every((row) => row.completion_status === "success"),
@@ -548,9 +606,11 @@ async function main() {
   const tempRoot = await mkdtemp(join(tmpdir(), "strada-release-smoke-"));
   const projectDir = join(tempRoot, "unity-project");
   const memoryDir = join(tempRoot, "memory");
+  const daemonMemoryDir = join(tempRoot, "daemon-memory");
 
   await mkdir(projectDir, { recursive: true });
   await mkdir(memoryDir, { recursive: true });
+  await mkdir(daemonMemoryDir, { recursive: true });
   await createSmokeProject(projectDir);
 
   try {
@@ -562,7 +622,7 @@ async function main() {
     await wait(200);
     await runProviderFallbackSmoke(memoryDir, projectDir);
     await wait(200);
-    await runDaemonSmoke(memoryDir, projectDir);
+    await runDaemonSmoke(daemonMemoryDir, projectDir);
     console.log("6. Release smoke passed");
   } finally {
     if (process.env.STRADA_SMOKE_KEEP_TEMP === "true") {

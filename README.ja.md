@@ -75,6 +75,8 @@ cd Strada.Brain
 
 `strada-brain` はまだ public npm registry に公開されていないため、`npm install -g strada-brain` は現在 `E404` になります。npm 公開が行われるまでは、上の source checkout 手順を使ってください。
 
+Strada を npm/tarball のパッケージ版からインストールした場合、ランタイム設定はカレントディレクトリではなく既定で `~/.strada` に保存されます。別の app home が必要なら `STRADA_HOME=/custom/path` で上書きできます。
+
 ### 2. 設定
 
 ```bash
@@ -86,7 +88,9 @@ cd Strada.Brain
 ./strada setup --terminal
 ```
 
-ウィザードでは、Unity プロジェクトパス、AI プロバイダー API キー、デフォルトチャネル、言語が尋ねられます。**ターミナル** を選択すれば迅速なセットアップが、**Web ブラウザ** を選択すれば完全な設定 UI が表示されます。
+`./strada setup --web` がフル Web ポータルをビルドできない古い Node を検出した場合でも、Strada は Web を第一候補のまま扱います。`nvm` が使えるなら承認後に互換 Node をインストールしてそのまま Web セットアップへ戻り、使えない場合でも Node のダウンロード/アップグレード導線を案内して黙ってターミナルセットアップへ落としません。
+
+ウィザードでは、Unity プロジェクトパス、AI プロバイダー API キー、デフォルトチャネル、言語が尋ねられます。`./strada setup` は現在 **Web ブラウザ** を既定で優先し、より速いテキスト中心フローを明示的に使いたいときだけ **ターミナル** を選びます。
 最初のセットアップ完了後は、サブコマンドなしの `./strada` がスマートランチャーになります。
 - 初回は config がなければ自動で setup を開く
 - 以後は web / CLI / daemon / setup / doctor を選べるターミナルパネルを表示する

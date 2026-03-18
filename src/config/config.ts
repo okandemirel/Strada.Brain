@@ -13,6 +13,7 @@ import { z } from "zod";
 import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
+import { resolveDotenvPath } from "../common/runtime-paths.js";
 import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
 import type { DaemonConfig } from "../daemon/daemon-types.js";
@@ -22,7 +23,7 @@ import type { DelegationConfig } from "../agents/multi/delegation/delegation-typ
 import type { DeploymentConfig } from "../daemon/deployment/deployment-types.js";
 import { getPreset } from "./presets.js";
 
-dotenv.config();
+dotenv.config({ path: resolveDotenvPath({ moduleUrl: import.meta.url }) });
 
 // =============================================================================
 // ENVIRONMENT VARIABLE TYPES

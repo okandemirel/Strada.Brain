@@ -75,6 +75,8 @@ Eger bir gun `npm` komutunu manuel calistirmaniz gerekirse bunu `package.json` d
 
 `strada-brain` paketi su anda public npm registry'de yayinli degil; bu nedenle `npm install -g strada-brain` komutu `E404` verir. Registry yayini gelene kadar yukaridaki kaynak checkout akisini kullanin.
 
+Strada paketlenmis bir npm/tarball surumunden kuruldugunda runtime config'i varsayilan olarak aktif dizine baglanmak yerine `~/.strada` altinda tutar. Farkli bir app home gerekiyorsa `STRADA_HOME=/ozel/yol` ile ezebilirsiniz.
+
 ### 2. Yapilandirma
 
 ```bash
@@ -86,7 +88,9 @@ Eger bir gun `npm` komutunu manuel calistirmaniz gerekirse bunu `package.json` d
 ./strada setup --terminal
 ```
 
-Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. Hizli kurulum icin **Terminal** secin veya tam ayarlar UI'si icin **Web Tarayicisi** secin.
+`./strada setup --web`, tam portal paketi icin yeterli olmayan daha eski bir Node surumu gorurse web yolunu birincil tutar: `nvm` varsa onayinizla uyumlu Node surumunu kurup sizi dogrudan web setup'a geri sokabilir; yoksa Node yukleme/yukseltme akisina yonlendirir ve sizi sessizce terminal setup'a dusurmek yerine tekrar web setup'a dondurur.
+
+Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. `./strada setup` artik varsayilan olarak **Web Tarayicisi** yolunu tercih eder; daha hizli metin akisina bilincli olarak ihtiyaciniz varsa **Terminal** secin.
 Ilk basarili kurulumdan sonra `./strada` komutu artik akilli launcher olur:
 - ilk kullanimda config yoksa setup'i otomatik acar
 - sonraki kullanimlarda web, CLI, daemon, setup veya doctor secimi yapabileceginiz terminal paneli gosterir

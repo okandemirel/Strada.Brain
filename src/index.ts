@@ -16,6 +16,7 @@ import { createContainer } from "./core/di-container.js";
 import { shouldEnableDaemonMode } from "./core/daemon-mode.js";
 import { SetupWizard } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
+import { initializeRuntimeEnvironment } from "./common/runtime-paths.js";
 import { CHANNEL_DEFAULTS, type SupportedChannelType } from "./common/constants.js";
 import { runMetricsCommand } from "./metrics/metrics-cli.js";
 import { registerDaemonCommands } from "./daemon/daemon-cli.js";
@@ -28,6 +29,8 @@ import {
 } from "./core/launcher.js";
 
 // Setup global error handlers
+initializeRuntimeEnvironment({ moduleUrl: import.meta.url });
+
 setupGlobalErrorHandlers(
   (error) => {
     const logger = createLogger("error", "strada-brain-error.log");

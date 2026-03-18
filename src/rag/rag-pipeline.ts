@@ -216,14 +216,40 @@ export class RAGPipeline implements IRAGPipeline {
     // Embed all chunk contents in a single batch.
     const texts = chunks.map((c) => c.content);
     const embeddingResult = await this.embeddingProvider.embed(texts);
+    const logger = getLogger();
+    const entries: VectorEntry[] = [];
+    let skippedChunkCount = 0;
 
-    const entries: VectorEntry[] = chunks.map((chunk, i) => ({
-      id: chunk.id,
-      vector: embeddingResult.embeddings[i]!,
-      chunk,
-      addedAt: Date.now(),
-      accessCount: 0,
-    }));
+    for (const [index, chunk] of chunks.entries()) {
+      const vector = embeddingResult.embeddings[index];
+      if (!Array.isArray(vector) || vector.length === 0) {
+        skippedChunkCount += 1;
+        continue;
+      }
+
+      entries.push({
+        id: chunk.id,
+        vector,
+        chunk,
+        addedAt: Date.now(),
+        accessCount: 0,
+      });
+    }
+
+    if (entries.length === 0) {
+      throw new Error(
+        `Embedding provider returned no valid vectors for ${chunks.length} chunk(s) in ${relative(process.cwd(), filePath) || filePath}`,
+      );
+    }
+
+    if (skippedChunkCount > 0) {
+      logger.warn("[RAGPipeline] Skipping chunk(s) with missing embeddings", {
+        filePath,
+        totalChunks: chunks.length,
+        indexedChunks: entries.length,
+        skippedChunks: skippedChunkCount,
+      });
+    }
 
     // Upsert to both stores for consistency
     if (this.hnswStore) {
@@ -238,7 +264,7 @@ export class RAGPipeline implements IRAGPipeline {
     
     this.fileHashes.set(filePath, contentHash);
 
-    return chunks.length;
+    return entries.length;
   }
 
   async removeFile(filePath: string): Promise<void> {
@@ -324,6 +350,9 @@ export class RAGPipeline implements IRAGPipeline {
     } else {
       const embeddingResult = await this.embeddingProvider.embed([query]);
       queryVector = embeddingResult.embeddings[0]!;
+      if (!Array.isArray(queryVector) || queryVector.length === 0) {
+        throw new Error("Embedding provider returned no query vector");
+      }
     }
 
     // Determine which store to use for search

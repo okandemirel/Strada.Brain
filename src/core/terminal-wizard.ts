@@ -65,6 +65,9 @@ const PACKAGED_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../channels/web/
 
 export interface WizardAnswers {
   unityProjectPath: string;
+  providerChain?: string[];
+  providerCredentials?: Record<string, string | undefined>;
+  providerAuthModes?: Record<string, "api-key" | "chatgpt-subscription" | undefined>;
   apiKey?: string;
   provider: string;
   openaiAuthMode?: "api-key" | "chatgpt-subscription";
@@ -83,7 +86,7 @@ export interface ValidationResult {
  * Validate that a Unity project path is absolute, exists, is a directory,
  * and resides inside the user's home directory.
  */
-export function validateUnityPath(inputPath: string): ValidationResult {
+export function validateUnityPath(inputPath: string, homeDir: string = os.homedir()): ValidationResult {
   if (!inputPath || inputPath.trim() === "") {
     return { valid: false, error: "Path cannot be empty." };
   }
@@ -101,8 +104,15 @@ export function validateUnityPath(inputPath: string): ValidationResult {
     return { valid: false, error: `Path does not exist: ${trimmed}` };
   }
 
-  const homedir = os.homedir();
-  if (resolved !== homedir && !resolved.startsWith(homedir + "/")) {
+  const homedir = homeDir;
+  let resolvedHome = homedir;
+  try {
+    resolvedHome = fs.realpathSync(homedir);
+  } catch {
+    resolvedHome = homedir;
+  }
+
+  if (resolved !== resolvedHome && !resolved.startsWith(resolvedHome + "/")) {
     return { valid: false, error: `Path must be inside your home directory (${homedir}).` };
   }
 
@@ -142,10 +152,6 @@ function isValidEmbeddingProvider(value: string): boolean {
   return EMBEDDING_PROVIDER_CHOICES.includes(value as typeof EMBEDDING_PROVIDER_CHOICES[number]);
 }
 
-function getDefaultEmbeddingProvider(provider: string): string {
-  return DEFAULT_EMBEDDING_PROVIDERS.has(provider) ? provider : "auto";
-}
-
 function getEmbeddingProviderLabel(provider: string): string {
   return PROVIDER_LABELS[provider] ?? provider;
 }
@@ -156,6 +162,45 @@ function getResponseProviderLabel(provider: string): string {
 
 function isValidResponseProvider(value: string): boolean {
   return RESPONSE_PROVIDER_CHOICES.includes(value as typeof RESPONSE_PROVIDER_CHOICES[number]);
+}
+
+function parseProviderChain(input: string): string[] {
+  return input
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function getNormalizedProviderChain(answers: WizardAnswers): string[] {
+  const configuredChain = answers.providerChain?.map((value) => value.trim().toLowerCase()).filter(Boolean) ?? [];
+  if (configuredChain.length > 0) {
+    return [...new Set(configuredChain)];
+  }
+  return [answers.provider.trim().toLowerCase()];
+}
+
+function getProviderAuthMode(
+  answers: WizardAnswers,
+  providerName: string,
+): "api-key" | "chatgpt-subscription" | undefined {
+  return answers.providerAuthModes?.[providerName] ?? (
+    providerName === "openai" ? answers.openaiAuthMode : undefined
+  );
+}
+
+function getProviderCredential(answers: WizardAnswers, providerName: string): string | undefined {
+  return answers.providerCredentials?.[providerName] ?? (
+    providerName === answers.provider ? answers.apiKey : undefined
+  );
+}
+
+function getDefaultEmbeddingProviderForChain(providerChain: readonly string[]): string {
+  for (const provider of providerChain) {
+    if (DEFAULT_EMBEDDING_PROVIDERS.has(provider)) {
+      return provider;
+    }
+  }
+  return "auto";
 }
 
 function isValidChannel(value: string): boolean {
@@ -179,27 +224,41 @@ export function generateEnvContent(answers: WizardAnswers): string {
   lines.push(`UNITY_PROJECT_PATH="${sanitizeEnvValue(answers.unityProjectPath)}"`);
   lines.push("");
 
-  const sanitizedKey = answers.apiKey ? sanitizeEnvValue(answers.apiKey) : "";
-  const primaryEnvKey = PROVIDER_ENV_KEY_MAP[answers.provider];
-  if (answers.provider === "openai") {
-    lines.push(`OPENAI_AUTH_MODE=${answers.openaiAuthMode ?? "api-key"}`);
-    if (answers.apiKey) lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
-  } else if (answers.provider !== "ollama") {
-    if (answers.apiKey) lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
+  const providerChain = getNormalizedProviderChain(answers);
+  for (const providerName of providerChain) {
+    const envKey = PROVIDER_ENV_KEY_MAP[providerName];
+    const authMode = getProviderAuthMode(answers, providerName);
+    const credential = getProviderCredential(answers, providerName);
+    const sanitizedCredential = credential ? sanitizeEnvValue(credential) : "";
+
+    if (providerName === "openai") {
+      lines.push(`OPENAI_AUTH_MODE=${authMode ?? "api-key"}`);
+      if ((authMode ?? "api-key") === "api-key" && sanitizedCredential) {
+        lines.push(`${envKey}="${sanitizedCredential}"`);
+      }
+      continue;
+    }
+
+    if (providerName !== "ollama" && envKey && sanitizedCredential) {
+      lines.push(`${envKey}="${sanitizedCredential}"`);
+    }
   }
-  lines.push(`PROVIDER_CHAIN=${answers.provider}`);
+  lines.push(`PROVIDER_CHAIN=${providerChain.join(",")}`);
 
   if (answers.embeddingProvider && answers.embeddingProvider !== "auto") {
     if (
       answers.embeddingProvider === "openai"
-      && answers.provider === "openai"
-      && answers.openaiAuthMode === "chatgpt-subscription"
+      && providerChain.includes("openai")
+      && getProviderAuthMode(answers, "openai") === "chatgpt-subscription"
     ) {
       const embeddingKey = sanitizeEnvValue(answers.embeddingApiKey ?? "");
       if (embeddingKey) {
         lines.push(`OPENAI_API_KEY="${embeddingKey}"`);
       }
-    } else if (answers.embeddingProvider !== "ollama" && answers.embeddingProvider !== answers.provider) {
+    } else if (
+      answers.embeddingProvider !== "ollama" &&
+      !providerChain.includes(answers.embeddingProvider)
+    ) {
       const embeddingEnvKey = PROVIDER_ENV_KEY_MAP[answers.embeddingProvider];
       const embeddingKey = sanitizeEnvValue(answers.embeddingApiKey ?? "");
       if (embeddingEnvKey && embeddingKey) {
@@ -296,11 +355,21 @@ async function canBindLocalhostPort(port: number): Promise<boolean> {
 
 export async function findAvailableSetupWizardPort(
   preferredPort: number,
-  maxAttempts = 20,
+  maxAttempts = 1000,
   canUsePort: (port: number) => Promise<boolean> = canBindLocalhostPort,
+  fallbackPorts: readonly number[] = [5050, 5100, 5173, 8080, 8787, 9000, 9100, 10000, 12000, 18080],
 ): Promise<number> {
   for (let offset = 0; offset < maxAttempts; offset += 1) {
     const candidate = preferredPort + offset;
+    if (await canUsePort(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const candidate of fallbackPorts) {
+    if (candidate >= preferredPort && candidate < preferredPort + maxAttempts) {
+      continue;
+    }
     if (await canUsePort(candidate)) {
       return candidate;
     }
@@ -311,8 +380,8 @@ export async function findAvailableSetupWizardPort(
   );
 }
 
-function nodeSupportsWebPortalBuild(): boolean {
-  const [rawMajor = 0, rawMinor = 0] = process.versions.node
+export function nodeSupportsWebPortalBuild(nodeVersion: string = process.versions.node): boolean {
+  const [rawMajor = 0, rawMinor = 0] = nodeVersion
     .split(".")
     .map((part) => Number.parseInt(part, 10));
   const major = Number.isFinite(rawMajor) ? rawMajor : 0;
@@ -328,16 +397,104 @@ function hasWebSetupAssets(): boolean {
     || fs.existsSync(path.join(PACKAGED_WEB_SETUP_STATIC_DIR, "index.html"));
 }
 
-function ensureWebSetupAssetsReady(): boolean {
+export function resolveNvmDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+): string | null {
+  const candidates = [env["NVM_DIR"], path.join(homeDir, ".nvm")].filter(Boolean) as string[];
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, "nvm.sh"))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildShellCommand(parts: string[]): string {
+  return parts.map((part) => shellEscape(part)).join(" ");
+}
+
+export function getSuggestedNodeUpgradeCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+): string | null {
+  return resolveNvmDir(env, homeDir)
+    ? "nvm install 22 && nvm use --delete-prefix 22 --silent"
+    : null;
+}
+
+export function buildWebSetupUpgradeShellScript(
+  nvmDir: string,
+  cwd: string = process.cwd(),
+  execArgs: string[] = [...process.execArgv, process.argv[1] ?? "", "setup", "--web"],
+): string {
+  return [
+    "set -e",
+    `export NVM_DIR=${shellEscape(nvmDir)}`,
+    ". \"$NVM_DIR/nvm.sh\"",
+    "nvm install 22",
+    "nvm use --delete-prefix 22 --silent >/dev/null",
+    `cd ${shellEscape(cwd)}`,
+    `exec ${buildShellCommand(["node", ...execArgs.filter(Boolean)])}`,
+  ].join("\n");
+}
+
+function continueWebSetupAfterNodeUpgrade(nvmDir: string): boolean {
+  const shellScript = buildWebSetupUpgradeShellScript(nvmDir);
+  const result = spawnSync("bash", ["-lc", shellScript], {
+    stdio: "inherit",
+    cwd: process.cwd(),
+    env: { ...process.env, NVM_DIR: nvmDir },
+  });
+
+  return result.status === 0;
+}
+
+async function promptForWebSetupUpgrade(
+  rl: readline.Interface,
+): Promise<"rerun" | "manual-upgrade"> {
+  console.log(
+    `\n  Web setup needs Node.js 20.19+ or 22.12+ to build the full portal experience. Current Node: ${process.versions.node}.`,
+  );
+  const nvmDir = resolveNvmDir();
+  const suggestedCommand = getSuggestedNodeUpgradeCommand();
+  if (nvmDir && suggestedCommand) {
+    console.log(`  Strada can install a compatible Node.js with nvm and continue directly to web setup.`);
+    console.log(`  It will run: ${suggestedCommand}`);
+    const answer = await rl.question("  Install the required Node.js version now and continue to web setup? [Y/n]: ");
+    const normalized = answer.trim().toLowerCase();
+    if (!normalized || normalized === "y" || normalized === "yes") {
+      console.log("");
+      console.log("  Installing the required Node.js version and relaunching Strada web setup...\n");
+      return "rerun";
+    }
+  } else {
+    console.log("  Suggested upgrade path: install Node.js 22 LTS from nodejs.org.");
+  }
+
+  const answer = await rl.question("  Open the Node.js download page now? [Y/n]: ");
+  const normalized = answer.trim().toLowerCase();
+  if (!normalized || normalized === "y" || normalized === "yes") {
+    openBrowser("https://nodejs.org/en/download");
+  }
+
+  console.log("");
+  console.log("  After upgrading Node.js, run `strada setup --web` (or `./strada setup --web`) again.");
+  console.log("  Web remains the primary setup flow; Strada will not silently switch you to terminal setup.\n");
+  return "manual-upgrade";
+}
+
+function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolean } {
   if (hasWebSetupAssets()) {
-    return true;
+    return { ready: true, needsNodeUpgrade: false };
   }
 
   if (!nodeSupportsWebPortalBuild()) {
-    console.log(
-      `\n  Web setup needs Node.js 20.19+ or 22.12+ to build the portal assets. Current Node: ${process.versions.node}.`,
-    );
-    return false;
+    return { ready: false, needsNodeUpgrade: true };
   }
 
   if (!fs.existsSync(path.join(process.cwd(), "web-portal", "node_modules"))) {
@@ -347,7 +504,7 @@ function ensureWebSetupAssetsReady(): boolean {
       cwd: process.cwd(),
     });
     if (installResult.status !== 0) {
-      return false;
+      return { ready: false, needsNodeUpgrade: false };
     }
   }
 
@@ -356,7 +513,10 @@ function ensureWebSetupAssetsReady(): boolean {
     stdio: "inherit",
     cwd: process.cwd(),
   });
-  return buildResult.status === 0 && hasWebSetupAssets();
+  return {
+    ready: buildResult.status === 0 && hasWebSetupAssets(),
+    needsNodeUpgrade: false,
+  };
 }
 
 /**
@@ -387,18 +547,43 @@ export async function runTerminalWizard(
     let useWebWizard = options?.mode === "web";
     if (!options?.mode) {
       console.log("? Setup method:");
-      console.log("  1) Terminal (quick setup)");
-      console.log("  2) Web Browser (full setup)");
+      console.log("  1) Web Browser (recommended)");
+      console.log("  2) Terminal");
       console.log("     Tip: next time you can jump straight in with `strada setup --web`.");
       const method = await rl.question("  Choose [1/2] (default: 1): ");
-      useWebWizard = method.trim() === "2";
+      useWebWizard = method.trim() !== "2";
     }
 
     if (useWebWizard) {
-      if (!ensureWebSetupAssetsReady()) {
-        console.log("  Falling back to terminal setup.\n");
-        useWebWizard = false;
-      } else {
+      const webAssets = ensureWebSetupAssetsReady();
+      if (!webAssets.ready && webAssets.needsNodeUpgrade) {
+        const upgradeAction = await promptForWebSetupUpgrade(rl);
+        if (upgradeAction === "rerun") {
+          intentionalClose = true;
+          rl.close();
+          const nvmDir = resolveNvmDir();
+          if (!nvmDir) {
+            throw new Error("Strada could not locate nvm after approval. Please install Node.js 22 manually.");
+          }
+          if (!continueWebSetupAfterNodeUpgrade(nvmDir)) {
+            console.log("\n  Strada could not finish the automatic Node.js upgrade flow.");
+            console.log("  Please upgrade to Node.js 22 manually, then rerun `strada setup --web`.\n");
+          }
+        } else {
+          intentionalClose = true;
+          rl.close();
+        }
+        return;
+      }
+
+      if (!webAssets.ready) {
+        console.log("  Unable to prepare the web setup bundle right now.");
+        console.log("  Fix the build issue and rerun `strada setup --web`; Strada will keep web as the primary setup path.\n");
+        intentionalClose = true;
+        rl.close();
+        return;
+      }
+
       intentionalClose = true;
       rl.close();
       const requestedPort = process.env["SETUP_WIZARD_PORT"]
@@ -419,7 +604,6 @@ export async function runTerminalWizard(
       openBrowser(url);
       await wizard.waitForCompletion();
       return;
-      }
     }
 
     console.log("");
@@ -434,66 +618,83 @@ export async function runTerminalWizard(
 
     const providerAnswer = await askWithRetry(
       rl,
-      `? Primary AI provider (${RESPONSE_PROVIDER_CHOICES.join("/")}) [default: claude]: `,
+      `? Response provider chain (${RESPONSE_PROVIDER_CHOICES.join(", ")}) [default: claude]: `,
       (input) => {
-        const value = input.trim().toLowerCase()
-        if (!value) return { valid: true }
-        if (!isValidResponseProvider(value)) {
-          return { valid: false, error: `Supported providers: ${RESPONSE_PROVIDER_CHOICES.join(", ")}.` }
+        const normalized = input.trim().toLowerCase();
+        if (!normalized) return { valid: true };
+        const chain = parseProviderChain(normalized);
+        if (chain.length === 0) {
+          return { valid: false, error: "Enter at least one provider name." };
         }
-        return { valid: true }
+        const invalid = chain.find((providerId) => !isValidResponseProvider(providerId));
+        if (invalid) {
+          return {
+            valid: false,
+            error: `Unsupported provider "${invalid}". Supported providers: ${RESPONSE_PROVIDER_CHOICES.join(", ")}.`,
+          };
+        }
+        return { valid: true };
       },
     );
-    const provider = providerAnswer.trim().toLowerCase() || "claude";
+    const providerChain = parseProviderChain(providerAnswer.trim().toLowerCase() || "claude");
+    const provider = providerChain[0] ?? "claude";
+    const providerCredentials: Record<string, string | undefined> = {};
+    const providerAuthModes: Record<string, "api-key" | "chatgpt-subscription" | undefined> = {};
 
-    let openaiAuthMode: "api-key" | "chatgpt-subscription" | undefined;
-    let apiKey: string | undefined;
-    if (provider === "openai") {
-      const authModeAnswer = await askWithRetry(
+    for (const providerName of providerChain) {
+      if (providerName === "openai") {
+        const authModeAnswer = await askWithRetry(
+          rl,
+          `? OpenAI auth mode for ${providerName} (api-key/chatgpt-subscription) [default: api-key]: `,
+          (input) => {
+            const normalized = input.trim().toLowerCase();
+            if (!normalized) return { valid: true };
+            if (normalized !== "api-key" && normalized !== "chatgpt-subscription") {
+              return { valid: false, error: "Supported modes: api-key, chatgpt-subscription." };
+            }
+            return { valid: true };
+          },
+        );
+        const authMode = (authModeAnswer.trim().toLowerCase() || "api-key") as "api-key" | "chatgpt-subscription";
+        providerAuthModes[providerName] = authMode;
+        if (authMode === "api-key") {
+          providerCredentials[providerName] = await askWithRetry(
+            rl,
+            "? OpenAI API key: ",
+            (input) => {
+              if (!input || input.trim().length < 8) {
+                return { valid: false, error: "API key seems too short." };
+              }
+              return { valid: true };
+            },
+          );
+        } else {
+          console.log("  Using local Codex/ChatGPT subscription auth from ~/.codex/auth.json");
+          console.log("  Note: this covers OpenAI conversation turns only, not OpenAI embeddings or API quota.");
+        }
+        continue;
+      }
+
+      if (providerName === "ollama") {
+        console.log("  Ollama selected in the response chain. No API key is required for the local response worker.");
+        continue;
+      }
+
+      providerCredentials[providerName] = await askWithRetry(
         rl,
-        "? OpenAI auth mode (api-key/chatgpt-subscription) [default: api-key]: ",
+        `? ${getResponseProviderLabel(providerName)} API key: `,
         (input) => {
-          const normalized = input.trim().toLowerCase()
-          if (!normalized) return { valid: true }
-          if (normalized !== "api-key" && normalized !== "chatgpt-subscription") {
-            return { valid: false, error: "Supported modes: api-key, chatgpt-subscription." }
+          if (!input || input.trim().length < 8) {
+            return { valid: false, error: "API key seems too short." };
           }
-          return { valid: true }
+          return { valid: true };
         },
       );
-      openaiAuthMode = (authModeAnswer.trim().toLowerCase() || "api-key") as "api-key" | "chatgpt-subscription";
-      if (openaiAuthMode === "api-key") {
-        apiKey = await askWithRetry(
-          rl,
-          "? OpenAI API key: ",
-          (input) => {
-            if (!input || input.trim().length < 8) {
-              return { valid: false, error: "API key seems too short." };
-            }
-            return { valid: true };
-          },
-        );
-      } else {
-        console.log("  Using local Codex/ChatGPT subscription auth from ~/.codex/auth.json")
-        console.log("  Note: this covers OpenAI conversation turns only, not OpenAI embeddings or API quota.")
-      }
-    } else {
-      if (provider === "ollama") {
-        console.log("  Ollama selected. No API key is required for the local response worker.");
-      } else {
-        apiKey = await askWithRetry(
-          rl,
-          `? ${getResponseProviderLabel(provider)} API key: `,
-          (input) => {
-            if (!input || input.trim().length < 8) {
-              return { valid: false, error: "API key seems too short." };
-            }
-            return { valid: true };
-          },
-        );
-      }
     }
-    const defaultEmbeddingProvider = getDefaultEmbeddingProvider(provider);
+
+    const openaiAuthMode = providerAuthModes["openai"];
+    const apiKey = providerCredentials[provider];
+    const defaultEmbeddingProvider = getDefaultEmbeddingProviderForChain(providerChain);
     const embeddingAnswer = await askWithRetry(
       rl,
       `? Embedding provider (${EMBEDDING_PROVIDER_CHOICES.join("/")}) [default: ${defaultEmbeddingProvider}]: `,
@@ -509,10 +710,18 @@ export async function runTerminalWizard(
     const embeddingProvider = embeddingAnswer.trim().toLowerCase() || defaultEmbeddingProvider;
 
     let embeddingApiKey: string | undefined;
-    if (embeddingProvider === "openai" && provider === "openai" && openaiAuthMode === "chatgpt-subscription") {
+    if (
+      embeddingProvider === "openai" &&
+      providerChain.includes("openai") &&
+      providerAuthModes["openai"] === "chatgpt-subscription"
+    ) {
       console.log("  OpenAI embeddings still require an OpenAI API key when conversation uses subscription auth.")
     }
-    if (embeddingProvider !== "auto" && embeddingProvider !== "ollama" && embeddingProvider !== provider) {
+    if (
+      embeddingProvider !== "auto" &&
+      embeddingProvider !== "ollama" &&
+      !providerChain.includes(embeddingProvider)
+    ) {
       embeddingApiKey = await askWithRetry(
         rl,
         `? ${getEmbeddingProviderLabel(embeddingProvider)} embedding API key: `,
@@ -523,7 +732,11 @@ export async function runTerminalWizard(
           return { valid: true };
         },
       );
-    } else if (embeddingProvider === "openai" && provider === "openai" && openaiAuthMode === "chatgpt-subscription") {
+    } else if (
+      embeddingProvider === "openai" &&
+      providerChain.includes("openai") &&
+      providerAuthModes["openai"] === "chatgpt-subscription"
+    ) {
       embeddingApiKey = await askWithRetry(
         rl,
         "? OpenAI embedding API key: ",
@@ -577,6 +790,9 @@ export async function runTerminalWizard(
 
     const envContent = generateEnvContent({
       unityProjectPath: unityPath,
+      providerChain,
+      providerCredentials,
+      providerAuthModes,
       apiKey: apiKey?.trim(),
       provider,
       openaiAuthMode,

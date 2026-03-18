@@ -17,6 +17,7 @@ vi.mock("../utils/logger.js", () => ({
 function createMockOrchestrator() {
   return {
     runBackgroundTask: vi.fn().mockResolvedValue("task done"),
+    synthesizeGoalExecutionResult: vi.fn().mockResolvedValue("task done"),
   };
 }
 
@@ -396,6 +397,47 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
         rootId: goalTree.rootId,
         taskDescription: "Root task",
         timestamp: expect.any(Number),
+      }),
+    );
+  });
+
+  it("synthesizes a final user-facing result after decomposed execution", async () => {
+    const goalTree = buildTestGoalTree();
+    const task = createTestTask(goalTree, {
+      prompt: "Reply with only: final synthesized ok",
+    });
+
+    mockOrch.runBackgroundTask
+      .mockResolvedValueOnce("Sub-goal worker draft A")
+      .mockResolvedValueOnce("Sub-goal worker draft B");
+    mockOrch.synthesizeGoalExecutionResult.mockResolvedValue("final synthesized ok");
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "final synthesized ok");
+    }, { timeout: 5000 });
+
+    expect(mockOrch.synthesizeGoalExecutionResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "Reply with only: final synthesized ok",
+        chatId: task.chatId,
       }),
     );
   });

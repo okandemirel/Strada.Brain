@@ -998,6 +998,75 @@ export class Orchestrator {
     }
   }
 
+  async synthesizeGoalExecutionResult(params: {
+    prompt: string;
+    goalTree: GoalTree;
+    executionResult: import("../goals/goal-executor.js").ExecutionResult;
+    chatId: string;
+    conversationId?: string;
+    userId?: string;
+    onUsage?: (usage: TaskUsageEvent) => void;
+  }): Promise<string> {
+    const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId);
+    const fallbackProvider = this.providerManager.getProvider(identityKey);
+    const strategy = this.buildSupervisorExecutionStrategy(params.prompt, identityKey, fallbackProvider);
+    const synthesisProvider = strategy.synthesizer.provider;
+    const rawDraft = params.executionResult.results
+      .filter((result) => result.result)
+      .map((result) => `## Sub-goal: ${result.task}\n\n${result.result}`)
+      .join("\n\n---\n\n");
+
+    if (!rawDraft.trim()) {
+      return "";
+    }
+
+    const verifiedSteps = params.executionResult.results
+      .map((result) => {
+        if (result.result) {
+          return `- [OK] ${result.task}: ${result.result}`;
+        }
+        return `- [FAIL] ${result.task}: ${result.error ?? "Unknown failure"}`;
+      })
+      .join("\n");
+
+    const synthesisRequest = [
+      "Create the final user-facing response for this completed decomposed task.",
+      "",
+      `Original user request:\n${params.prompt}`,
+      "",
+      `Goal summary:\n${summarizeTree(params.goalTree)}`,
+      "",
+      verifiedSteps ? `Verified sub-goal outcomes:\n${verifiedSteps}` : "Verified sub-goal outcomes:\n(none)",
+      "",
+      `Raw sub-goal draft:\n${rawDraft}`,
+      "",
+      "Requirements:",
+      "- Respond as Strada's final user-facing answer, not as an internal sub-goal worker.",
+      "- Do not expose internal sub-goal headers, plan scaffolding, or decomposition notes.",
+      "- Preserve only verified facts from the provided execution evidence.",
+      "- If the original request asks for an exact visible output literal, obey it.",
+    ].join("\n");
+
+    try {
+      const synthesisResponse = await synthesisProvider.chat(
+        `${this.systemPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(strategy, strategy.synthesizer)}`,
+        [{ role: "user", content: synthesisRequest }],
+        [],
+      );
+      this.recordProviderUsage(
+        strategy.synthesizer.providerName,
+        synthesisResponse.usage,
+        params.onUsage,
+      );
+      return applyVisibleResponseContract(
+        params.prompt,
+        this.stripInternalDecisionMarkers(synthesisResponse.text) || rawDraft,
+      );
+    } catch {
+      return applyVisibleResponseContract(params.prompt, rawDraft);
+    }
+  }
+
   /**
    * Dynamically add a tool to the orchestrator's available tools.
    * Used by chain synthesis to make composite tools available to the LLM.

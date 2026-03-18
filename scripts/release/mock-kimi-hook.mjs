@@ -117,6 +117,41 @@ function buildChatCompletion({ text = "", toolCalls = [] }) {
   };
 }
 
+function extractSynthesisResult(normalizedUserText) {
+  if (!normalizedUserText.includes("create the final user-facing response for this completed decomposed task.")) {
+    return null;
+  }
+
+  const exactLiteralMatch = normalizedUserText.match(
+    /original user request:\n[\s\S]*?reply with only:\s*"([^"\n]+)"/i,
+  );
+  if (exactLiteralMatch?.[1]) {
+    return exactLiteralMatch[1];
+  }
+
+  const verifiedSectionMatch = normalizedUserText.match(
+    /verified sub-goal outcomes:\n([\s\S]*?)\n\nraw sub-goal draft:/i,
+  );
+  if (!verifiedSectionMatch?.[1]) {
+    return "mock ok";
+  }
+
+  const verifiedLines = verifiedSectionMatch[1]
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- [ok] "));
+
+  for (let index = verifiedLines.length - 1; index >= 0; index -= 1) {
+    const line = verifiedLines[index];
+    const separator = line.lastIndexOf(": ");
+    if (separator >= 0) {
+      return line.slice(separator + 2).trim();
+    }
+  }
+
+  return "mock ok";
+}
+
 function buildResponse(body) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   const systemPrompt = getSystemPrompt(messages);
@@ -132,6 +167,13 @@ function buildResponse(body) {
   const preferredAssistantName = assistantNameMatch?.[1]?.trim();
   const responseFormatInstructionMatch = systemPrompt.match(/^Response Format Instruction:\s*(.+)$/m);
   const preferredResponseFormatInstruction = responseFormatInstructionMatch?.[1]?.trim();
+  const synthesisResult = extractSynthesisResult(normalizedUserText);
+
+  if (synthesisResult) {
+    return buildChatCompletion({
+      text: synthesisResult,
+    });
+  }
 
   if (normalizedSystemPrompt.includes("completion reviewer")) {
     const hasTouchedFiles = !/touched files:\s*\(none\)/i.test(lastUserText);

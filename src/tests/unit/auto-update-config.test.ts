@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { loadConfig, resetConfigCache } from "../../config/config.js";
 
 vi.mock("node:fs", () => ({
+  existsSync: vi.fn(() => true),
   realpathSync: vi.fn((p: string) => p),
   statSync: vi.fn(() => ({ isDirectory: () => true })),
 }));

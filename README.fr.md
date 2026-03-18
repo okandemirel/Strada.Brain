@@ -75,6 +75,8 @@ Si vous sautez `./strada install-command`, continuez a utiliser `./Strada.Brain/
 
 `strada-brain` n'est pas encore publi&eacute; sur le registre npm public. `npm install -g strada-brain` renverra donc `E404` pour le moment. En attendant une publication npm, utilisez le flux source ci-dessus.
 
+Quand Strada est installe depuis une version npm/tarball empaquetee, sa configuration runtime est stockee par defaut dans `~/.strada` au lieu de dependre du dossier courant. Utilisez `STRADA_HOME=/chemin/personnalise` si vous voulez un autre app home.
+
 ### 2. Configuration
 
 ```bash
@@ -86,7 +88,9 @@ Si vous sautez `./strada install-command`, continuez a utiliser `./Strada.Brain/
 ./strada setup --terminal
 ```
 
-L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de fournisseur IA, votre canal par d&eacute;faut et votre langue. Choisissez **Terminal** pour une configuration rapide ou **Navigateur Web** pour l'interface compl&egrave;te.
+Si `./strada setup --web` detecte une version de Node trop ancienne pour construire le portail complet, Strada garde le web comme chemin principal : si `nvm` est disponible, Strada peut installer une version compatible de Node avec votre accord puis revenir directement au setup web ; sinon, il vous guide vers le telechargement/la mise a niveau et ne retombe jamais silencieusement sur le terminal.
+
+L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de fournisseur IA, votre canal par d&eacute;faut et votre langue. `./strada setup` privilegie maintenant **Navigateur Web** par d&eacute;faut ; choisissez **Terminal** seulement si vous voulez explicitement le flux texte le plus rapide.
 Apr&egrave;s le premier setup r&eacute;ussi, `./strada` sans sous-commande devient votre launcher intelligent :
 - au premier usage, il ouvre automatiquement le setup si la config manque
 - ensuite, il affiche un panneau terminal pour choisir web, CLI, daemon, setup ou doctor

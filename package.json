@@ -4,6 +4,20 @@
   "description": "AI-powered Unity development assistant for Strada.Core framework projects",
   "type": "module",
   "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "README.tr.md",
+    "README.de.md",
+    "README.es.md",
+    "README.fr.md",
+    "README.ja.md",
+    "README.ko.md",
+    "README.zh.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "icon"
+  ],
   "bin": {
     "strada": "./dist/index.js",
     "strada-brain": "./dist/index.js"
@@ -14,6 +28,8 @@
     "doctor": "node --import tsx src/index.ts doctor",
     "setup:web": "node --import tsx src/index.ts setup --web",
     "setup:terminal": "node --import tsx src/index.ts setup --terminal",
+    "prepack": "npm run build",
+    "pack:dry-run": "npm pack --dry-run",
     "build": "npm run build:portal && tsc && rm -rf dist/channels/web/static && cp -r web-portal/dist dist/channels/web/static",
     "build:portal": "npm --prefix web-portal run build",
     "lint:src": "eslint src/",
@@ -51,7 +67,7 @@
   "author": "Strada.Brain Team",
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -67,9 +83,12 @@
     "glob": "^11.0.0",
     "grammy": "^1.35.0",
     "hnswlib-node": "^3.0.0",
+    "picomatch": "^4.0.3",
     "playwright": "^1.58.2",
     "prom-client": "^15.1.3",
+    "tsx": "^4.19.0",
     "winston": "^3.17.0",
+    "winston-transport": "^4.9.0",
     "ws": "^8.19.0",
     "zod": "^3.24.0"
   },
@@ -81,7 +100,6 @@
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
     "eslint": "^9.16.0",
-    "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   }

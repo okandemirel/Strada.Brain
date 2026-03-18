@@ -75,6 +75,8 @@ cd Strada.Brain
 
 `strada-brain` 目前还没有发布到 public npm registry，所以 `npm install -g strada-brain` 现在会返回 `E404`。在 npm 公共发布出现之前，请使用上面的源码 checkout 流程。
 
+当 Strada 通过打包后的 npm/tarball 版本安装时，它会默认把运行时配置保存在 `~/.strada`，而不是依赖当前工作目录。如果你需要不同的 app home，可以使用 `STRADA_HOME=/custom/path` 覆盖它。
+
 ### 2. 设置
 
 ```bash
@@ -86,7 +88,9 @@ cd Strada.Brain
 ./strada setup --terminal
 ```
 
-向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。选择**终端**进行快速设置，或选择 **Web 浏览器**进行完整配置 UI。
+如果 `./strada setup --web` 检测到过旧的 Node 版本而无法构建完整 Web 门户，Strada 仍然会把 Web 作为第一优先路径：如果系统里有 `nvm`，Strada 会在你确认后安装兼容的 Node 版本并直接回到 Web setup；否则它会引导你完成下载/升级流程，而不会悄悄降级到终端 setup。
+
+向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。`./strada setup` 现在默认优先 **Web 浏览器**；只有在你明确想走更快的纯文本流程时，才选择 **终端**。
 第一次 setup 完成后，不带子命令的 `./strada` 会变成你的智能启动器：
 - 第一次使用时如果没有 config，会自动进入 setup
 - 之后会显示一个终端面板，让你选择 web、CLI、daemon、setup 或 doctor

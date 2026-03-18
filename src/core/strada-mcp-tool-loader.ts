@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { tsImport } from "tsx/esm/api";
 import type { Config } from "../config/config.js";
 import { detectStradaMcp, type StradaMcpInstall } from "../config/strada-deps.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
@@ -136,6 +135,7 @@ async function importFirstAvailable<T>(paths: string[]): Promise<T> {
 
     try {
       if (candidate.endsWith(".ts")) {
+        const { tsImport } = await import("tsx/esm/api");
         return await tsImport(candidate, import.meta.url) as T;
       }
       return await import(pathToFileURL(candidate).href) as T;

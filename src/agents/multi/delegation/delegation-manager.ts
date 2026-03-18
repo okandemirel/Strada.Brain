@@ -58,6 +58,7 @@ export interface DelegationManagerOptions {
   readonly parentTools: ITool[];
   readonly apiKeys: Record<string, string | undefined>;
   readonly providerCredentials?: ProviderCredentialMap;
+  readonly preferencesDbPath?: string;
 }
 
 // =============================================================================
@@ -310,6 +311,8 @@ export class DelegationManager {
     const providerManager = new ProviderManager(
       provider,
       this.opts.providerCredentials ?? {},
+      undefined,
+      this.opts.preferencesDbPath,
     );
     const subAgentTools = this.buildSubAgentTools(request.depth);
 

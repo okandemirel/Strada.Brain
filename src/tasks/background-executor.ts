@@ -27,6 +27,7 @@ import type {
   CriticalityEvaluator,
   OnFailureBudgetExceeded,
   FailureReport,
+  ExecutionResult,
 } from "../goals/goal-executor.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
 import { calculateProgress, renderProgressBar } from "../goals/goal-progress.js";
@@ -70,6 +71,18 @@ interface DecomposedExecutionResult {
   success: boolean;
   error?: string;
   aborted: boolean;
+}
+
+interface GoalResultSynthesizer {
+  synthesizeGoalExecutionResult?: (params: {
+    prompt: string;
+    goalTree: GoalTree;
+    executionResult: ExecutionResult;
+    chatId: string;
+    conversationId?: string;
+    userId?: string;
+    onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
+  }) => Promise<string>;
 }
 
 export interface BackgroundExecutorOptions {
@@ -674,10 +687,37 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
     }
 
     // Combine results
-    const output = result.results
+    const rawOutput = result.results
       .filter(r => r.result)
       .map(r => `## Sub-goal: ${r.task}\n\n${r.result}`)
       .join("\n\n---\n\n");
+
+    let output = rawOutput;
+    const synthesizer = taskOrchestrator as GoalResultSynthesizer;
+    if (
+      !hasFailed &&
+      rawOutput &&
+      typeof synthesizer.synthesizeGoalExecutionResult === "function"
+    ) {
+      try {
+        const synthesized = await synthesizer.synthesizeGoalExecutionResult({
+          prompt: task.prompt,
+          goalTree: result.tree,
+          executionResult: result,
+          chatId: task.chatId,
+          conversationId: task.conversationId,
+          userId: task.userId,
+          onUsage: this.buildUsageRecorder(task),
+        });
+        if (synthesized.trim()) {
+          output = synthesized;
+        }
+      } catch (error) {
+        logger.debug("Goal result synthesis failed, falling back to raw sub-goal output", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     return {
       output,

@@ -75,6 +75,8 @@ Wenn Sie `./strada install-command` ueberspringen, verwenden Sie den Checkout we
 
 `strada-brain` ist derzeit nicht in der öffentlichen npm-Registry veröffentlicht. Deshalb liefert `npm install -g strada-brain` aktuell `E404`. Bis es eine Registry-Veröffentlichung gibt, nutze bitte den obigen Source-Checkout-Weg.
 
+Wenn Strada aus einer paketierten npm-/Tarball-Version installiert wird, liegt die Laufzeitkonfiguration standardmaessig unter `~/.strada` statt im aktuellen Arbeitsverzeichnis. Mit `STRADA_HOME=/eigener/pfad` koennen Sie ein anderes App-Home erzwingen.
+
 ### 2. Setup
 
 ```bash
@@ -86,7 +88,9 @@ Wenn Sie `./strada install-command` ueberspringen, verwenden Sie den Checkout we
 ./strada setup --terminal
 ```
 
-Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. Waehlen Sie **Terminal** fuer schnelles Setup oder **Web-Browser** fuer die vollstaendige Konfigurationsflaeche.
+Wenn `./strada setup --web` eine aeltere Node-Version erkennt, die das volle Portal-Bundle nicht bauen kann, bleibt Web der primaere Weg: Wenn `nvm` verfuegbar ist, kann Strada nach Ihrer Zustimmung eine kompatible Node-Version installieren und direkt zum Web-Setup zurueckkehren; andernfalls fuehrt es Sie durch den Upgrade/Download-Pfad und faellt nicht still auf das Terminal-Setup zurueck.
+
+Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. `./strada setup` bevorzugt jetzt standardmaessig den **Web-Browser**; waehlen Sie **Terminal** nur dann, wenn Sie den schnelleren Text-Flow bewusst moechten.
 Nach dem ersten erfolgreichen Setup wird `./strada` ohne Subcommand zum smarten Launcher:
 - beim ersten Start oeffnet es das Setup automatisch, falls die Config fehlt
 - spaeter zeigt es ein Terminal-Panel fuer Web, CLI, Daemon, Setup oder Doctor

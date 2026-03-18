@@ -73,6 +73,8 @@ If you ever run `npm` manually, do it from the repository root, the folder that 
 
 `strada-brain` is not currently published on the public npm registry, so `npm install -g strada-brain` will return `E404`. Until a registry release exists, use the source checkout flow above.
 
+When Strada is installed from a packaged npm/tarball release, it keeps its runtime config in `~/.strada` by default instead of depending on the current working directory. Override this with `STRADA_HOME=/custom/path` when you need a different app home.
+
 ### 2. Setup
 
 ```bash
@@ -84,7 +86,9 @@ If you ever run `npm` manually, do it from the repository root, the folder that 
 ./strada setup --terminal
 ```
 
-The wizard asks for your Unity project path, AI provider API key, default channel, and language. Choose **Terminal** for quick setup or **Web Browser** for the full configuration UI.
+If `./strada setup --web` detects an older Node runtime that cannot build the full portal bundle, Strada keeps web as the primary path: when `nvm` is available it can install a compatible Node.js version for you and continue directly into web setup after you approve it; otherwise it opens the upgrade/download path and sends you back to web setup instead of silently dropping to terminal setup.
+
+The wizard asks for your Unity project path, AI provider API key, default channel, and language. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
 
 After the first successful setup, running `./strada` with no subcommand becomes your smart launcher:
 - first use: opens setup automatically if config is missing

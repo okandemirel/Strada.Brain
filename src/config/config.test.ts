@@ -3,6 +3,8 @@ import { loadConfig, resetConfigCache, validateConfig } from "./config.js";
 import { realpathSync, statSync } from "node:fs";
 
 vi.mock("node:fs", () => ({
+  existsSync: vi.fn(() => true),
+  mkdirSync: vi.fn(),
   realpathSync: vi.fn((p: string) => p),
   statSync: vi.fn(() => ({ isDirectory: () => true })),
 }));

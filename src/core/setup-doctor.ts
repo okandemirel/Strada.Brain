@@ -1,6 +1,7 @@
 /* eslint-disable no-console -- doctor command is a user-facing diagnostic CLI */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveRuntimePaths } from "../common/runtime-paths.js";
 import { loadConfigSafe, type Config } from "../config/config.js";
 import { resolveEmbeddingProvider, describeEmbeddingResolutionFailure } from "../rag/embeddings/embedding-resolver.js";
 import { AutoUpdater } from "./auto-updater.js";
@@ -72,8 +73,9 @@ function summarizeResponseWorker(config: Config): string {
 }
 
 export function collectDoctorReport(options: DoctorOptions = {}): DoctorReport {
-  const installRoot = options.installRoot ?? AutoUpdater.resolveInstallRoot();
-  const configRoot = options.configRoot ?? process.cwd();
+  const runtimePaths = resolveRuntimePaths({ moduleUrl: import.meta.url });
+  const installRoot = options.installRoot ?? runtimePaths.installRoot;
+  const configRoot = options.configRoot ?? runtimePaths.configRoot;
   const configResult = options.configResult ?? (loadConfigSafe() as ConfigResult);
   const nodeVersion = options.nodeVersion ?? process.versions.node;
   const checks: DoctorCheck[] = [];

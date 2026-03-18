@@ -69,7 +69,7 @@ export class ProviderManager {
     preferencesDbPath?: string,
     private readonly defaultProviderOrder: readonly string[] = [],
   ) {
-    const dbPath = preferencesDbPath ?? join(process.cwd(), ".strada-memory");
+    const dbPath = preferencesDbPath ?? process.env["MEMORY_DB_PATH"] ?? join(process.cwd(), ".strada-memory");
     this.preferences = new ProviderPreferenceStore(
       join(dbPath, "provider-preferences.db"),
     );

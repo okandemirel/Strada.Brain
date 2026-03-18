@@ -76,6 +76,7 @@ describe("docs consistency", () => {
     expect(readRepoFile("src/config/README.md")).toContain(
       "It does not imply OpenAI API quota for embeddings",
     );
+    expect(readRepoFile("src/config/README.md")).toContain("STRADA_HOME");
   });
 
   it("marks localized READMEs as translations that defer to the English canonical README", () => {
@@ -99,6 +100,7 @@ describe("docs consistency", () => {
       expect(content).toContain("./strada doctor");
       expect(content).toContain("./strada                  #");
       expect(content).toContain("strada --daemon");
+      expect(content).toContain("nvm");
       expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
     }
   });
@@ -110,8 +112,11 @@ describe("docs consistency", () => {
     expect(englishReadme).toContain("./Strada.Brain/strada setup");
     expect(englishReadme).toContain("No `cd` required");
     expect(englishReadme).toContain("updates your shell profile automatically");
+    expect(englishReadme).toContain("~/.strada");
+    expect(englishReadme).toContain("STRADA_HOME");
     expect(englishReadme).toContain("./strada setup --web");
     expect(englishReadme).toContain("Node.js 20.19+");
+    expect(englishReadme).toContain("nvm");
     expect(englishReadme).toContain("./strada setup --terminal");
     expect(englishReadme).toContain("git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain");
     expect(englishReadme).toContain("repository root");
@@ -120,6 +125,7 @@ describe("docs consistency", () => {
     expect(englishReadme).toContain("strada --daemon");
     expect(englishReadme).toContain("./strada setup --web");
     expect(englishReadme).toContain("./strada doctor");
+    expect(englishReadme).toContain("prefers **Web Browser** by default");
     expect(englishReadme).toContain("bare `strada` command");
     expect(englishReadme).toContain("not currently published on the public npm registry");
     expect(englishReadme).not.toMatch(/# Global install \(recommended\)\s+npm install -g strada-brain/u);

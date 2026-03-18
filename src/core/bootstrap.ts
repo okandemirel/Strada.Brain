@@ -1057,6 +1057,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           parentTools: toolRegistry.getAllTools(),
           apiKeys: collectApiKeys(config),
           providerCredentials: collectProviderCredentials(config),
+          preferencesDbPath: config.memory.dbPath,
         });
 
         // Inject delegation tool factory into AgentManager

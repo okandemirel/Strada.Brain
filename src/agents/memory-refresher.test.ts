@@ -31,6 +31,7 @@ import { TypedEventBus } from "../core/event-bus.js";
 
 // Mock node:fs for config loadConfig tests
 vi.mock("node:fs", () => ({
+  existsSync: vi.fn(() => true),
   realpathSync: vi.fn((p: string) => p),
   statSync: vi.fn(() => ({ isDirectory: () => true })),
 }));

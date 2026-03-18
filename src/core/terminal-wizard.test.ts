@@ -1,5 +1,16 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { findAvailableSetupWizardPort, generateEnvContent } from "./terminal-wizard.js";
+import {
+  buildWebSetupUpgradeShellScript,
+  findAvailableSetupWizardPort,
+  generateEnvContent,
+  getSuggestedNodeUpgradeCommand,
+  nodeSupportsWebPortalBuild,
+  validateUnityPath,
+  resolveNvmDir,
+} from "./terminal-wizard.js";
 
 describe("generateEnvContent", () => {
   it("uses EMBEDDING_PROVIDER for Gemini and aligns dashboard port defaults", () => {
@@ -77,6 +88,31 @@ describe("generateEnvContent", () => {
     expect(content).toContain("EMBEDDING_PROVIDER=ollama");
     expect(content).not.toContain("OLLAMA_API_KEY");
   });
+
+  it("supports a multi-provider response chain with independent embedding credentials", () => {
+    const content = generateEnvContent({
+      unityProjectPath: "/Users/test/MyGame",
+      provider: "openai",
+      providerChain: ["openai", "gemini", "qwen"],
+      providerCredentials: {
+        gemini: "AIza-gemini-response-key",
+        qwen: "sk-qwen-key",
+      },
+      providerAuthModes: {
+        openai: "chatgpt-subscription",
+      },
+      embeddingProvider: "openai",
+      embeddingApiKey: "sk-proj-openai-embed-key",
+      channel: "web",
+      language: "en",
+    });
+
+    expect(content).toContain("PROVIDER_CHAIN=openai,gemini,qwen");
+    expect(content).toContain("OPENAI_AUTH_MODE=chatgpt-subscription");
+    expect(content).toContain('GEMINI_API_KEY="AIza-gemini-response-key"');
+    expect(content).toContain('QWEN_API_KEY="sk-qwen-key"');
+    expect(content).toContain('OPENAI_API_KEY="sk-proj-openai-embed-key"');
+  });
 });
 
 describe("findAvailableSetupWizardPort", () => {
@@ -94,5 +130,87 @@ describe("findAvailableSetupWizardPort", () => {
       async (port) => !busyPorts.has(port),
     );
     expect(resolvedPort).toBe(4102);
+  });
+
+  it("falls back to a secondary port list when the preferred range is exhausted", async () => {
+    const resolvedPort = await findAvailableSetupWizardPort(
+      4100,
+      2,
+      async (port) => port === 5050,
+    );
+    expect(resolvedPort).toBe(5050);
+  });
+});
+
+describe("nodeSupportsWebPortalBuild", () => {
+  it("rejects Node versions below the web portal minimum", () => {
+    expect(nodeSupportsWebPortalBuild("20.17.0")).toBe(false);
+    expect(nodeSupportsWebPortalBuild("22.11.0")).toBe(false);
+  });
+
+  it("accepts supported Node LTS versions for the web portal", () => {
+    expect(nodeSupportsWebPortalBuild("20.19.0")).toBe(true);
+    expect(nodeSupportsWebPortalBuild("22.12.0")).toBe(true);
+    expect(nodeSupportsWebPortalBuild("23.0.0")).toBe(true);
+  });
+});
+
+describe("resolveNvmDir", () => {
+  it("detects nvm from the explicit environment override", () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-nvm-home-"));
+    const nvmDir = path.join(tempHome, "custom-nvm");
+    mkdirSync(nvmDir, { recursive: true });
+    writeFileSync(path.join(nvmDir, "nvm.sh"), "#!/bin/sh\n");
+
+    try {
+      expect(resolveNvmDir({ NVM_DIR: nvmDir }, tempHome)).toBe(nvmDir);
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to ~/.nvm when available", () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-nvm-home-"));
+    const nvmDir = path.join(tempHome, ".nvm");
+    mkdirSync(nvmDir, { recursive: true });
+    writeFileSync(path.join(nvmDir, "nvm.sh"), "#!/bin/sh\n");
+
+    try {
+      expect(resolveNvmDir({}, tempHome)).toBe(nvmDir);
+      expect(getSuggestedNodeUpgradeCommand({}, tempHome)).toBe(
+        "nvm install 22 && nvm use --delete-prefix 22 --silent",
+      );
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildWebSetupUpgradeShellScript", () => {
+  it("relaunches Strada web setup through the upgraded node runtime", () => {
+    const script = buildWebSetupUpgradeShellScript(
+      "/Users/test/.nvm",
+      "/Users/test/Strada.Brain",
+      ["--import", "tsx", "src/index.ts", "setup", "--web"],
+    );
+
+    expect(script).toContain("nvm install 22");
+    expect(script).toContain("nvm use --delete-prefix 22 --silent >/dev/null");
+    expect(script).toContain("cd '/Users/test/Strada.Brain'");
+    expect(script).toContain("exec 'node' '--import' 'tsx' 'src/index.ts' 'setup' '--web'");
+  });
+});
+
+describe("validateUnityPath", () => {
+  it("accepts temp paths when HOME resolves through a symlinked tmp directory", () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-home-"));
+    const projectDir = path.join(tempHome, "Projects", "MyGame");
+    mkdirSync(projectDir, { recursive: true });
+
+    try {
+      expect(validateUnityPath(projectDir, tempHome)).toEqual({ valid: true });
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 });
