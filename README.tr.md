@@ -95,6 +95,7 @@ Ilk tarayici acilisi acik bir setup bayragi da tasir; boylece cache'te kalmis es
 Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. `./strada setup` artik varsayilan olarak **Web Tarayicisi** yolunu tercih eder; daha hizli metin akisina bilincli olarak ihtiyaciniz varsa **Terminal** secin.
 Terminal setup, tek bir istemde virgule ayrilmis provider'lari kabul eder (ornegin `kimi,deepseek`) ya da bunlari tek tek etkilesimli olarak girebilirsiniz. "Baska eklensin mi?" dongusu yalnizca tek bir provider girildiginde gosterilir. Embedding provider secimi ayri kalir.
 Web sihirbazinda kaydetme tamamlandiginda Strada ayni URL uzerinden ana web uygulamasina devreder; boylece refresh gecisi olu setup sayfasina dusmez.
+Bu ilk devir sirasinda Strada onboarding turunu ve ilk autonomy tercihini de ilk chat oturumuna uygular; boylece acilis konusmasi ve Settings ekrani sihirbazda sectiginiz durumla hemen uyusur.
 RAG acik ama kullanilabilir bir embedding provider yoksa sihirbaz artik review adimina gecmenize izin verir; ancak gecerli bir embedding provider secene kadar veya RAG'i kapatana kadar Save bloklu kalir.
 Ilk basarili kurulumdan sonra `./strada` komutu artik akilli launcher olur:
 - ilk kullanimda config yoksa setup'i otomatik acar

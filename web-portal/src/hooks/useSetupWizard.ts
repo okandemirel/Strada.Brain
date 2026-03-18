@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { SaveStatus } from '../types/setup'
 import { PRESETS, PROVIDER_MAP, CHANNELS, EMBEDDING_CAPABLE } from '../types/setup-constants'
+import { buildPostSetupBootstrap, FIRST_RUN_STORAGE_KEY, POST_SETUP_BOOTSTRAP_STORAGE_KEY } from './useWebSocket'
 
 const SETUP_AVAILABILITY_MAX_ATTEMPTS = 25
 const SETUP_AVAILABILITY_RETRY_MS = 1000
@@ -415,7 +416,11 @@ export function useSetupWizard() {
             if (!mountedRef.current) return
             setSaveStatus('success')
             setTimeout(() => {
-              localStorage.setItem('strada-firstRun', '1')
+              localStorage.setItem(FIRST_RUN_STORAGE_KEY, '1')
+              localStorage.setItem(
+                POST_SETUP_BOOTSTRAP_STORAGE_KEY,
+                JSON.stringify(buildPostSetupBootstrap(autonomyEnabled, autonomyHours)),
+              )
               window.location.href = '/'
             }, 500)
           }

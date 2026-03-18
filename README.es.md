@@ -95,6 +95,7 @@ Ese primer arranque en el navegador tambien lleva una marca explicita de setup, 
 El asistente te pide la ruta de tu proyecto Unity, la clave de API del proveedor de IA, el canal por defecto e idioma. `./strada setup` ahora prioriza **Navegador Web** por defecto; elige **Terminal** solo si quieres de forma explicita el flujo de texto mas rapido.
 El setup de terminal acepta proveedores separados por comas en un solo prompt (p. ej. `kimi,deepseek`) para fallback u orquestacion multiagente, o puedes agregarlos uno a uno de forma interactiva. El bucle "¿Agregar otro?" solo aparece cuando se introduce un unico proveedor. La eleccion del proveedor de embeddings se mantiene separada.
 Cuando guardas el asistente web, Strada entrega el control a la aplicacion web principal en la misma URL para que un refresh durante la transicion no te deje en una pagina de setup muerta.
+En esa primera transicion Strada tambien reaplica el turno de onboarding y la eleccion inicial de autonomia en la primera sesion de chat, para que la conversacion inicial y la pantalla de Settings reflejen de inmediato lo elegido en el asistente.
 Si RAG esta activado pero no hay un proveedor de embeddings utilizable, el asistente ahora te deja avanzar hasta la revision; aun asi Save queda bloqueado hasta que elijas un proveedor de embeddings valido o desactives RAG.
 Despues del primer setup correcto, `./strada` sin subcomando se convierte en tu launcher inteligente:
 - en el primer uso abre setup automaticamente si falta la config

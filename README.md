@@ -93,6 +93,7 @@ That first-run browser open also carries an explicit setup flag, so a stale cach
 The wizard asks for your Unity project path, AI provider API key, default channel, and language. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
 Terminal setup accepts comma-separated providers in a single prompt (e.g. `kimi,deepseek`) for fallback / multi-agent orchestration, or you can add them one at a time interactively. The "Add another?" loop only appears when a single provider is entered. The embedding provider choice stays separate.
 After you save the web wizard, Strada hands off to the main web app on the same URL so refreshes can survive the transition instead of dropping you onto a dead setup page.
+That first handoff also replays Strada's onboarding turn and your initial autonomy choice into the first chat session, so the opening conversation and Settings screen immediately reflect what you chose in the wizard.
 If RAG is enabled without a usable embedding provider, the wizard now lets you continue to the review step but keeps Save blocked until you choose a valid embedding provider or disable RAG.
 
 After the first successful setup, running `./strada` with no subcommand becomes your smart launcher:

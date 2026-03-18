@@ -1,5 +1,7 @@
+import { FIRST_RUN_STORAGE_KEY } from '../hooks/useWebSocket'
+
 export default function EmptyState() {
-  const isFirstRun = localStorage.getItem('strada-firstRun') === '1'
+  const isFirstRun = localStorage.getItem(FIRST_RUN_STORAGE_KEY) === '1'
 
   return (
     <div className="empty-state">
