@@ -17,3 +17,5 @@ coverage/
 .strada-memory/
 src/channels/web/static/*
 !src/channels/web/static/index.html
+!src/channels/web/static/fallback.css
+!src/channels/web/static/fallback.js

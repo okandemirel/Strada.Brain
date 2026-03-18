@@ -4,108 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Strada Brain</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: #0d0d0f;
-      color: #e2e8f0;
-      font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 2rem;
-    }
-    .card {
-      max-width: 560px;
-      width: 100%;
-      border: 1px solid #1e293b;
-      border-radius: 12px;
-      padding: 2.5rem 2rem;
-      background: #111318;
-    }
-    .logo {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      margin-bottom: 2rem;
-    }
-    .logo-icon { font-size: 2rem; }
-    .logo-text {
-      font-size: 1.25rem;
-      font-weight: 700;
-      color: #67e8f9;
-      letter-spacing: 0.02em;
-    }
-    .logo-sub {
-      font-size: 0.75rem;
-      color: #64748b;
-      margin-top: 0.1rem;
-    }
-    .status {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.8rem;
-      color: #94a3b8;
-      margin-bottom: 2rem;
-    }
-    .dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: #f59e0b;
-      animation: pulse 1.8s ease-in-out infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.3; }
-    }
-    h2 {
-      font-size: 1rem;
-      color: #f1f5f9;
-      margin-bottom: 0.75rem;
-    }
-    p {
-      font-size: 0.875rem;
-      color: #94a3b8;
-      line-height: 1.6;
-      margin-bottom: 1.25rem;
-    }
-    .section { margin-bottom: 1.75rem; }
-    code, .cmd {
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 6px;
-      padding: 0.15em 0.45em;
-      font-size: 0.82em;
-      color: #67e8f9;
-    }
-    .cmd-block {
-      background: #0f172a;
-      border: 1px solid #1e3a5f;
-      border-radius: 8px;
-      padding: 0.85rem 1rem;
-      margin-top: 0.5rem;
-      font-size: 0.8rem;
-      color: #67e8f9;
-      line-height: 1.8;
-    }
-    .cmd-block .comment { color: #475569; }
-    .divider {
-      border: none;
-      border-top: 1px solid #1e293b;
-      margin: 1.5rem 0;
-    }
-    .node-req {
-      background: #1c1a10;
-      border: 1px solid #78350f;
-      border-radius: 8px;
-      padding: 0.85rem 1rem;
-      font-size: 0.8rem;
-      color: #fbbf24;
-      line-height: 1.7;
-    }
-  </style>
+  <link rel="stylesheet" href="/fallback.css" />
 </head>
 <body>
   <div class="card">
@@ -130,7 +29,7 @@
       </p>
       <div class="node-req">
         Required: Node.js 20.19+ or 22.12+<br>
-        Installed: <span id="node-ver">unknown</span>
+        Installed: <span id="node-ver">run node -v to check</span>
       </div>
     </div>
 
@@ -158,29 +57,12 @@
 
     <hr class="divider" />
 
-    <p style="font-size:0.78rem; color:#475569; margin-bottom:0">
+    <p class="footer">
       Once configured, start Strada with <code>./strada start</code>.
       The full portal becomes available after a successful build.
     </p>
   </div>
 
-  <script>
-    // Show current Node.js version if available via server-injected header
-    // (fails silently when portal isn't built — acceptable degradation)
-    try {
-      const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-      const ws = new WebSocket(proto + location.host + '/ws');
-      ws.onopen = () => {
-        document.getElementById('status-text').textContent = 'Server running — see terminal for next steps';
-        document.querySelector('.dot').style.background = '#22c55e';
-      };
-      ws.onerror = () => {};
-    } catch (_) {}
-
-    // Try to read Node version from meta tag injected by server (not always present)
-    const nv = document.querySelector('meta[name="x-node-version"]');
-    if (nv) document.getElementById('node-ver').textContent = nv.content;
-    else document.getElementById('node-ver').textContent = 'run node -v to check';
-  </script>
+  <script src="/fallback.js"></script>
 </body>
 </html>
