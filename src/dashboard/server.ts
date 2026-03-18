@@ -379,6 +379,7 @@ export class DashboardServer {
 
   // Provider router for agent activity / routing decisions
   private providerRouter?: DashboardProviderRouter;
+  private startupNotices: string[] = [];
 
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
@@ -496,6 +497,7 @@ export class DashboardServer {
     dashboardToken?: string;
     identityManager?: IdentityStateManager;
     capabilityManifest?: string;
+    startupNotices?: string[];
     daemonStorage?: DaemonStorage;
     historyDepth?: number;
     triggerFireRetentionDays?: number;
@@ -522,6 +524,9 @@ export class DashboardServer {
     }
     if (ctx.capabilityManifest !== undefined) {
       this.capabilityManifest = ctx.capabilityManifest;
+    }
+    if (ctx.startupNotices) {
+      this.startupNotices = [...new Set(ctx.startupNotices.filter(Boolean))];
     }
     if (ctx.daemonStorage) {
       this.daemonStorage = ctx.daemonStorage;
@@ -741,6 +746,7 @@ export class DashboardServer {
             identity: fallbackIdentity,
             capabilityManifest: this.capabilityManifest ?? null,
             triggerHistory: [],
+            startupNotices: this.startupNotices,
           }));
           return;
         }
@@ -797,6 +803,7 @@ export class DashboardServer {
           identity,
           capabilityManifest: this.capabilityManifest ?? null,
           triggerHistory,
+          startupNotices: this.startupNotices,
         }));
         return;
       }

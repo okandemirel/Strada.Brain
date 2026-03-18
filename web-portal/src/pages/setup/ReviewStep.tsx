@@ -161,7 +161,7 @@ export default function ReviewStep({
           <span className="review-value">
             {!ragEnabled && 'Disabled'}
             {ragEnabled && hasEmbeddingProvider && 'Enabled'}
-            {ragEnabled && !hasEmbeddingProvider && 'Enabled (no embedding provider)'}
+            {ragEnabled && !hasEmbeddingProvider && 'Blocked (no embedding provider)'}
           </span>
         </div>
 
@@ -171,6 +171,12 @@ export default function ReviewStep({
             <span className="review-value">
               {effectiveEmbeddingProviderName ?? 'None selected'}
             </span>
+          </div>
+        )}
+
+        {ragEnabled && !hasEmbeddingProvider && (
+          <div className="save-message error" style={{ marginTop: 0 }}>
+            RAG needs a real embedding-capable provider. Add Gemini, OpenAI API key, Mistral, Together, Fireworks, Qwen, or Ollama before saving.
           </div>
         )}
 

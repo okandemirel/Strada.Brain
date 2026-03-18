@@ -52,6 +52,16 @@ const CHANNEL_ENV_KEYS = [
 
 const KNOWN_CHANNELS = new Set(["web", "telegram", "discord", "slack", "whatsapp", "cli"]);
 
+const EMBEDDING_PROVIDER_ENV_KEYS: Record<string, string | null> = {
+  openai: "OPENAI_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  together: "TOGETHER_API_KEY",
+  fireworks: "FIREWORKS_API_KEY",
+  qwen: "QWEN_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  ollama: null,
+};
+
 /** Security headers sent with every HTTP response. */
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -81,6 +91,46 @@ function sanitizeEnvValue(value: unknown): string {
   if (typeof value !== "string") return '""';
   const stripped = value.replace(/[\r\n]/g, "");
   return `"${stripped.replace(/"/g, '\\"')}"`;
+}
+
+export function hasConfiguredEmbeddingCandidate(config: Record<string, unknown>): boolean {
+  const explicitProvider = typeof config.EMBEDDING_PROVIDER === "string" ? config.EMBEDDING_PROVIDER : "auto";
+
+  if (explicitProvider !== "auto") {
+    const envKey = EMBEDDING_PROVIDER_ENV_KEYS[explicitProvider];
+    if (envKey === null) {
+      return true;
+    }
+    if (!envKey) {
+      return false;
+    }
+    return typeof config[envKey] === "string" && String(config[envKey]).trim().length > 0;
+  }
+
+  const providerChain = typeof config.PROVIDER_CHAIN === "string"
+    ? config.PROVIDER_CHAIN.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  for (const provider of providerChain) {
+    const envKey = EMBEDDING_PROVIDER_ENV_KEYS[provider];
+    if (envKey === undefined) {
+      continue;
+    }
+    if (envKey === null) {
+      return true;
+    }
+    if (typeof config[envKey] === "string" && String(config[envKey]).trim().length > 0) {
+      return true;
+    }
+  }
+
+  for (const envKey of Object.values(EMBEDDING_PROVIDER_ENV_KEYS)) {
+    if (envKey && typeof config[envKey] === "string" && String(config[envKey]).trim().length > 0) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export class SetupWizard {
@@ -424,6 +474,14 @@ export class SetupWizard {
         return;
       }
       lines.push("", "# RAG (Code Search)", `EMBEDDING_PROVIDER=${sanitizeEnvValue(config.EMBEDDING_PROVIDER)}`);
+    }
+
+    if (config.RAG_ENABLED !== "false" && !hasConfiguredEmbeddingCandidate(config)) {
+      this.json(res, 400, {
+        success: false,
+        error: "RAG requires an embedding-capable provider with a usable credential (or Ollama).",
+      });
+      return;
     }
 
     // Language preference (default: en)

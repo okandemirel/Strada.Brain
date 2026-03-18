@@ -1,10 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { HttpClientTool } from "./http-client.js";
 import type { ToolContext } from "./tool.interface.js";
-import { createLogger } from "../../utils/logger.js";
 
-// Initialize logger for tests
-createLogger("error", "/tmp/strada-test.log");
+vi.mock("../../utils/logger.js", () => ({
+  getLogger: () => ({
+    error: vi.fn(),
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
 
 const TEST_PORT = 8766;
 
@@ -200,7 +205,7 @@ describe("HttpClientTool with server", () => {
         readOnly: false,
       };
     } catch {
-      console.log("Could not start test server, skipping integration tests");
+      server = null;
     }
   }, 30000);
 

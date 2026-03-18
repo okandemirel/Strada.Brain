@@ -23,7 +23,6 @@ describe("DashboardServer", () => {
       return true;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'EPERM') {
-        console.warn('Skipping: EPERM on server.start()');
         return false;
       }
       throw err;
@@ -707,6 +706,33 @@ describe("DashboardServer", () => {
       expect(data.capabilityManifest).toBe("## Agent Capabilities\nGoal decomposition, learning, etc.");
     });
 
+    it("includes startup notices when set", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const mockLoop = createMockHeartbeatLoop();
+      const mockRegistry = createMockTriggerRegistry();
+
+      server.setDaemonContext({
+        heartbeatLoop: mockLoop as never,
+        registry: mockRegistry as never,
+        startupNotices: [
+          "Unavailable AI providers were skipped: gemini.",
+          "Instinct embeddings disabled: learning continues with lexical matching only.",
+        ],
+      });
+      if (!await safeStart(server)) return;
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/daemon`);
+      const data = await res.json();
+
+      expect(data.startupNotices).toEqual([
+        "Unavailable AI providers were skipped: gemini.",
+        "Instinct embeddings disabled: learning continues with lexical matching only.",
+      ]);
+    });
+
     it("includes triggerHistory from trigger registry metadata", async () => {
       const metrics = new MetricsCollector();
       server = new DashboardServer(0, metrics, () => undefined);
@@ -772,6 +798,7 @@ describe("DashboardServer", () => {
       const data = await res.json();
 
       expect(data.capabilityManifest).toBeNull();
+      expect(data.startupNotices).toEqual([]);
     });
 
     it("dashboard HTML includes identity section and trigger history table", async () => {

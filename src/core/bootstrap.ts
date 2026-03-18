@@ -1248,6 +1248,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         dashboardToken: config.websocketDashboard.authToken,
         identityManager,
         capabilityManifest: buildCapabilityManifest(),
+        startupNotices: [...new Set(startupNotices)],
         daemonStorage,
         historyDepth: 10,
         triggerFireRetentionDays: daemonConfig.triggerFireRetentionDays,
@@ -1305,6 +1306,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     dashboard.setDaemonContext({
       identityManager,
       dashboardToken: config.websocketDashboard.authToken,
+      startupNotices: [...new Set(startupNotices)],
     });
   }
 

@@ -60,6 +60,7 @@ interface DaemonStatus {
   triggers: Array<{ name: string; type: string; state: string; circuitState: string; nextRun: string | null }>
   budget: { usedUsd: number; limitUsd: number; pct: number }
   approvalQueue: Array<{ id: string; toolName: string; triggerName?: string; status: string }>
+  startupNotices?: string[]
 }
 
 interface VoiceSettings {
@@ -526,6 +527,26 @@ export default function SettingsPage() {
                     </span>
                   </div>
                 )}
+
+                {daemonStatus.startupNotices && daemonStatus.startupNotices.length > 0 && (
+                  <div style={{ marginTop: 16, display: 'grid', gap: 8 }}>
+                    <div className="admin-stat-row" style={{ marginBottom: 0 }}>
+                      <span className="admin-stat-label">Startup Notices</span>
+                      <span className="admin-stat-value">{daemonStatus.startupNotices.length}</span>
+                    </div>
+                    {daemonStatus.startupNotices.map((notice, index) => (
+                      <div
+                        key={`${notice}-${index}`}
+                        className="settings-provider-card"
+                        style={{ textAlign: 'left', padding: '12px 14px', cursor: 'default' }}
+                      >
+                        <div className="settings-hint" style={{ margin: 0 }}>
+                          {notice}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -533,6 +554,21 @@ export default function SettingsPage() {
                   Daemon mode enables autonomous background execution with scheduled triggers,
                   file watchers, and webhooks.
                 </div>
+                {daemonStatus?.startupNotices && daemonStatus.startupNotices.length > 0 && (
+                  <div style={{ marginTop: 16, display: 'grid', gap: 8 }}>
+                    {daemonStatus.startupNotices.map((notice, index) => (
+                      <div
+                        key={`${notice}-${index}`}
+                        className="settings-provider-card"
+                        style={{ textAlign: 'left', padding: '12px 14px', cursor: 'default' }}
+                      >
+                        <div className="settings-hint" style={{ margin: 0 }}>
+                          {notice}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="settings-hint" style={{ marginTop: 6 }}>
                   Enable Daemon Mode in the Setup Wizard or start with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>--daemon</code> flag.
                 </div>

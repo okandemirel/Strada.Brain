@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
-import { SetupWizard } from "./setup-wizard.js";
+import { SetupWizard, hasConfiguredEmbeddingCandidate } from "./setup-wizard.js";
 
 describe("SetupWizard path validation", () => {
   it("re-validates the project path during save using the resolved home-directory path", async () => {
@@ -28,5 +28,27 @@ describe("SetupWizard path validation", () => {
       valid: false,
       error: "Path must be inside your home directory",
     });
+  });
+
+  it("detects when RAG lacks an embedding-capable provider", () => {
+    expect(hasConfiguredEmbeddingCandidate({
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+    })).toBe(false);
+
+    expect(hasConfiguredEmbeddingCandidate({
+      PROVIDER_CHAIN: "kimi,gemini",
+      KIMI_API_KEY: "sk-kimi",
+      GEMINI_API_KEY: "gem-key",
+    })).toBe(true);
+
+    expect(hasConfiguredEmbeddingCandidate({
+      EMBEDDING_PROVIDER: "openai",
+      OPENAI_AUTH_MODE: "chatgpt-subscription",
+    })).toBe(false);
+
+    expect(hasConfiguredEmbeddingCandidate({
+      EMBEDDING_PROVIDER: "ollama",
+    })).toBe(true);
   });
 });

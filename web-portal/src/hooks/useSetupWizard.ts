@@ -1,6 +1,35 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { SaveStatus } from '../types/setup'
-import { PRESETS, PROVIDER_MAP, CHANNELS } from '../types/setup-constants'
+import { PRESETS, PROVIDER_MAP, CHANNELS, EMBEDDING_CAPABLE } from '../types/setup-constants'
+
+export function hasUsableResponseCredential(
+  providerId: string,
+  providerKeys: Record<string, string>,
+  providerAuthModes: Record<string, string>,
+): boolean {
+  if (providerId === 'ollama') return true
+  if (providerId === 'openai' && providerAuthModes[providerId] === 'chatgpt-subscription') {
+    return true
+  }
+  return (providerKeys[providerId] ?? '').trim().length > 0
+}
+
+export function hasUsableEmbeddingCredential(
+  providerId: string,
+  providerKeys: Record<string, string>,
+): boolean {
+  if (providerId === 'ollama') return true
+  return (providerKeys[providerId] ?? '').trim().length > 0
+}
+
+export function hasAutoEmbeddingCandidate(
+  checkedProviders: Set<string>,
+  providerKeys: Record<string, string>,
+): boolean {
+  return Array.from(checkedProviders).some((providerId) =>
+    EMBEDDING_CAPABLE.has(providerId) && hasUsableEmbeddingCredential(providerId, providerKeys),
+  )
+}
 
 export function useSetupWizard() {
   const [setupAvailability, setSetupAvailability] = useState<'checking' | 'available' | 'unavailable'>('checking')
@@ -71,22 +100,18 @@ export function useSetupWizard() {
       case 2: {
         if (checkedProviders.size === 0) return false
         return Array.from(checkedProviders).some((id) =>
-          id === 'ollama'
-          || (id === 'openai' && providerAuthModes[id] === 'chatgpt-subscription')
-          || (providerKeys[id] ?? '').trim().length > 0,
+          hasUsableResponseCredential(id, providerKeys, providerAuthModes),
         )
       }
       case 4: {
-        if (!ragEnabled || embeddingProvider === 'auto' || embeddingProvider === 'ollama') return true
-        if (
-          checkedProviders.has(embeddingProvider)
-          && !(embeddingProvider === 'openai'
-            && providerAuthModes.openai === 'chatgpt-subscription'
-            && !(providerKeys.openai ?? '').trim())
-        ) {
-          return true
+        if (!ragEnabled) return true
+        if (embeddingProvider === 'auto') {
+          return hasAutoEmbeddingCandidate(checkedProviders, providerKeys)
         }
-        return (providerKeys[embeddingProvider] ?? '').trim().length > 0
+        if (checkedProviders.has(embeddingProvider)) {
+          return hasUsableEmbeddingCredential(embeddingProvider, providerKeys)
+        }
+        return hasUsableEmbeddingCredential(embeddingProvider, providerKeys)
       }
       case 3:
         return projectPath.trim().length > 0
