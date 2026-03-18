@@ -84,5 +84,9 @@ export const EMBEDDING_PROVIDERS = [
   { id: 'auto', name: 'Auto (detect from providers)' },
   { id: 'gemini', name: 'Gemini' },
   { id: 'openai', name: 'OpenAI' },
+  { id: 'mistral', name: 'Mistral' },
+  { id: 'together', name: 'Together' },
+  { id: 'fireworks', name: 'Fireworks' },
+  { id: 'qwen', name: 'Qwen' },
   { id: 'ollama', name: 'Ollama' },
 ]

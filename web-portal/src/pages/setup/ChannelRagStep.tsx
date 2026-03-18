@@ -12,6 +12,8 @@ interface ChannelRagStepProps {
   embeddingProvider: string
   setEmbeddingProvider: (provider: string) => void
   checkedProviders: Set<string>
+  providerKeys: Record<string, string>
+  setProviderKey: (id: string, key: string) => void
   daemonEnabled: boolean
   setDaemonEnabled: (enabled: boolean) => void
   autonomyEnabled: boolean
@@ -36,6 +38,8 @@ export default function ChannelRagStep({
   embeddingProvider,
   setEmbeddingProvider,
   checkedProviders,
+  providerKeys,
+  setProviderKey,
   daemonEnabled,
   setDaemonEnabled,
   autonomyEnabled,
@@ -48,8 +52,19 @@ export default function ChannelRagStep({
   onBack,
 }: ChannelRagStepProps) {
   const selectedChannel = CHANNELS.find((c) => c.id === channel)
-  const embeddingProviderId = Array.from(checkedProviders).find((id) => EMBEDDING_CAPABLE.has(id))
-  const embeddingProviderName = embeddingProviderId ? PROVIDER_MAP[embeddingProviderId]?.name : null
+  const autoDetectedEmbeddingProviderId = Array.from(checkedProviders).find((id) => EMBEDDING_CAPABLE.has(id))
+  const selectedEmbeddingProviderId =
+    embeddingProvider !== 'auto' ? embeddingProvider : autoDetectedEmbeddingProviderId
+  const embeddingProviderName = selectedEmbeddingProviderId
+    ? (PROVIDER_MAP[selectedEmbeddingProviderId]?.name ?? EMBEDDING_PROVIDERS.find((ep) => ep.id === selectedEmbeddingProviderId)?.name ?? selectedEmbeddingProviderId)
+    : null
+  const explicitEmbeddingProvider =
+    embeddingProvider !== 'auto' ? PROVIDER_MAP[embeddingProvider] ?? null : null
+  const needsDedicatedEmbeddingKey = Boolean(
+    ragEnabled &&
+    explicitEmbeddingProvider?.envKey &&
+    !checkedProviders.has(embeddingProvider),
+  )
 
   return (
     <div className="step">
@@ -123,8 +138,8 @@ export default function ChannelRagStep({
         </label>
         <p className={`rag-info${!ragEnabled || !embeddingProviderName ? ' warning' : ''}`}>
           {!ragEnabled && 'RAG is disabled. Code search will not be available.'}
-          {ragEnabled && embeddingProviderName && `\u2713 RAG enabled \u2014 will use ${embeddingProviderName} for embeddings.`}
-          {ragEnabled && !embeddingProviderName && checkedProviders.size > 0 && '\u26A0 Your selected providers don\'t support embeddings. Go back and add Ollama (free, local) or Gemini to enable RAG code search.'}
+          {ragEnabled && embeddingProviderName && `\u2713 RAG enabled \u2014 will use ${embeddingProviderName} for embeddings, independently from the response provider chain.`}
+          {ragEnabled && !embeddingProviderName && checkedProviders.size > 0 && '\u26A0 Your current response providers don\'t support embeddings. Select Gemini, OpenAI, or Ollama as the embedding provider to enable RAG code search.'}
           {ragEnabled && !embeddingProviderName && checkedProviders.size === 0 && '\u26A0 RAG enabled \u2014 embedding provider will be auto-detected from your providers.'}
         </p>
 
@@ -142,6 +157,25 @@ export default function ChannelRagStep({
                 </option>
               ))}
             </select>
+            <p className="rag-info" style={{ marginTop: '0.65rem' }}>
+              This is a system-wide memory/RAG choice. It does not change which provider Strada uses for conversation turns.
+            </p>
+            {needsDedicatedEmbeddingKey && explicitEmbeddingProvider?.envKey && explicitEmbeddingProvider.placeholder && (
+              <div className="channel-field" style={{ marginTop: '0.85rem' }}>
+                <label htmlFor="embeddingProviderKey">{explicitEmbeddingProvider.name} Embedding API Key</label>
+                <input
+                  id="embeddingProviderKey"
+                  type="text"
+                  placeholder={explicitEmbeddingProvider.placeholder}
+                  value={providerKeys[embeddingProvider] ?? ''}
+                  onChange={(e) => setProviderKey(embeddingProvider, e.target.value)}
+                  autoComplete="off"
+                />
+                <p className="rag-info" style={{ marginTop: '0.55rem' }}>
+                  This key is used only for embeddings. It does not add {explicitEmbeddingProvider.name} to the response provider chain.
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

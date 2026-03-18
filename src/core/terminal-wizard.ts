@@ -18,11 +18,25 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 
 const MAX_RETRIES = 3;
+const EMBEDDING_PROVIDER_CHOICES = [
+  "auto", "gemini", "openai", "mistral", "together", "fireworks", "qwen", "ollama",
+] as const;
+const PROVIDER_ENV_KEY_MAP: Record<string, string> = {
+  claude: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  together: "TOGETHER_API_KEY",
+  fireworks: "FIREWORKS_API_KEY",
+  qwen: "QWEN_API_KEY",
+};
 
 export interface WizardAnswers {
   unityProjectPath: string;
   apiKey: string;
   provider: string;
+  embeddingProvider: string;
+  embeddingApiKey?: string;
   channel: string;
   language: string;
 }
@@ -91,6 +105,25 @@ export function detectProvider(apiKey: string): string {
   return "claude";
 }
 
+function isValidEmbeddingProvider(value: string): boolean {
+  return EMBEDDING_PROVIDER_CHOICES.includes(value as typeof EMBEDDING_PROVIDER_CHOICES[number]);
+}
+
+function getDefaultEmbeddingProvider(provider: string): string {
+  return provider === "gemini" || provider === "openai" ? provider : "auto";
+}
+
+function getEmbeddingProviderLabel(provider: string): string {
+  return provider === "ollama" ? "Ollama"
+    : provider === "gemini" ? "Gemini"
+    : provider === "openai" ? "OpenAI"
+    : provider === "mistral" ? "Mistral"
+    : provider === "together" ? "Together"
+    : provider === "fireworks" ? "Fireworks"
+    : provider === "qwen" ? "Qwen"
+    : provider;
+}
+
 /**
  * Generate .env file content from wizard answers.
  */
@@ -105,16 +138,27 @@ export function generateEnvContent(answers: WizardAnswers): string {
   lines.push("");
 
   const sanitizedKey = sanitizeEnvValue(answers.apiKey);
+  const primaryEnvKey = PROVIDER_ENV_KEY_MAP[answers.provider];
   if (answers.provider === "claude") {
-    lines.push(`ANTHROPIC_API_KEY="${sanitizedKey}"`);
+    lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=claude");
   } else if (answers.provider === "openai") {
-    lines.push(`OPENAI_API_KEY="${sanitizedKey}"`);
+    lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=openai");
   } else if (answers.provider === "gemini") {
-    lines.push(`GEMINI_API_KEY="${sanitizedKey}"`);
+    lines.push(`${primaryEnvKey}="${sanitizedKey}"`);
     lines.push("PROVIDER_CHAIN=gemini");
-    lines.push("EMBEDDING_PROVIDER=gemini");
+  }
+
+  if (answers.embeddingProvider && answers.embeddingProvider !== "auto") {
+    if (answers.embeddingProvider !== "ollama" && answers.embeddingProvider !== answers.provider) {
+      const embeddingEnvKey = PROVIDER_ENV_KEY_MAP[answers.embeddingProvider];
+      const embeddingKey = sanitizeEnvValue(answers.embeddingApiKey ?? "");
+      if (embeddingEnvKey && embeddingKey) {
+        lines.push(`${embeddingEnvKey}="${embeddingKey}"`);
+      }
+    }
+    lines.push(`EMBEDDING_PROVIDER=${answers.embeddingProvider}`);
   }
   lines.push("");
 
@@ -238,6 +282,34 @@ export async function runTerminalWizard(): Promise<void> {
     );
 
     const provider = detectProvider(apiKey.trim());
+    const defaultEmbeddingProvider = getDefaultEmbeddingProvider(provider);
+    const embeddingAnswer = await askWithRetry(
+      rl,
+      `? Embedding provider (${EMBEDDING_PROVIDER_CHOICES.join("/")}) [default: ${defaultEmbeddingProvider}]: `,
+      (input) => {
+        const normalized = input.trim().toLowerCase();
+        if (!normalized) return { valid: true };
+        if (!isValidEmbeddingProvider(normalized)) {
+          return { valid: false, error: "Unsupported embedding provider." };
+        }
+        return { valid: true };
+      },
+    );
+    const embeddingProvider = embeddingAnswer.trim().toLowerCase() || defaultEmbeddingProvider;
+
+    let embeddingApiKey: string | undefined;
+    if (embeddingProvider !== "auto" && embeddingProvider !== "ollama" && embeddingProvider !== provider) {
+      embeddingApiKey = await askWithRetry(
+        rl,
+        `? ${getEmbeddingProviderLabel(embeddingProvider)} embedding API key: `,
+        (input) => {
+          if (!input || input.trim().length < 8) {
+            return { valid: false, error: "API key seems too short." };
+          }
+          return { valid: true };
+        },
+      );
+    }
 
     const channelAnswer = await rl.question("? Default channel (web): ");
     const channel = channelAnswer.trim() || "web";
@@ -260,6 +332,8 @@ export async function runTerminalWizard(): Promise<void> {
       unityProjectPath: unityPath,
       apiKey: apiKey.trim(),
       provider,
+      embeddingProvider,
+      embeddingApiKey: embeddingApiKey?.trim(),
       channel,
       language,
     });

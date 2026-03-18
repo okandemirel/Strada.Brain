@@ -28,6 +28,8 @@ All providers implement `IAIProvider`. Streaming providers additionally implemen
 
 Default models are no longer documented here as static truth; runtime resolves them from `provider-registry.ts`, live model intelligence, and any configured model overrides. The dashboard/model selector reads the same shared catalog the orchestrator uses.
 
+Provider selection is a Strada policy decision, not a direct chat target. Strada remains the control plane for every turn, then assigns planner/executor/reviewer/synthesizer work to providers. A user-selected provider/model sets the primary execution worker, while routing and synthesis may still involve other providers.
+
 `FallbackChainProvider` tries providers in order, swallows errors from non-last providers. Built via `buildProviderChain()` from `PROVIDER_CHAIN` env var.
 
 `PROVIDER_PRESETS` in `provider-registry.ts` maps names to `{ baseUrl, defaultModel }` for: openai, deepseek, qwen, kimi, minimax, groq, mistral, together, fireworks, gemini.

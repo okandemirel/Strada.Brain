@@ -217,6 +217,8 @@ describe("DashboardServer", () => {
           providerName: "kimi",
           model: "kimi-for-coding",
           isDefault: false,
+          selectionMode: "strada-primary-worker",
+          executionPolicyNote: "Strada remains the control plane. This selection sets the primary execution worker; planning, review, and synthesis may still route to other providers.",
         }),
         setPreference: async () => {},
       },
@@ -245,6 +247,8 @@ describe("DashboardServer", () => {
       providerName: "kimi",
       model: "kimi-for-coding",
       isDefault: false,
+      selectionMode: "strada-primary-worker",
+      executionPolicyNote: expect.stringContaining("Strada remains the control plane"),
     }));
   });
 

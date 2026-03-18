@@ -221,6 +221,8 @@ interface DashboardProviderManager {
     providerName?: string;
     model?: string;
     isDefault?: boolean;
+    selectionMode?: "strada-primary-worker";
+    executionPolicyNote?: string;
   } | null;
   setPreference(chatId: string, provider: string, model?: string): Promise<void>;
 }

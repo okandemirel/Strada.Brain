@@ -48,9 +48,22 @@ export default function ReviewStep({
     .map((id) => PROVIDER_MAP[id]?.name ?? id)
     .join(', ')
 
-  const hasEmbeddingProvider = Array.from(checkedProviders).some((id) =>
+  const autoDetectedEmbeddingProviderId = Array.from(checkedProviders).find((id) =>
     EMBEDDING_CAPABLE.has(id),
   )
+  const effectiveEmbeddingProviderId =
+    embeddingProvider !== 'auto' ? embeddingProvider : autoDetectedEmbeddingProviderId
+  const effectiveEmbeddingProviderName = effectiveEmbeddingProviderId
+    ? (EMBEDDING_PROVIDERS.find((ep) => ep.id === effectiveEmbeddingProviderId)?.name
+      ?? PROVIDER_MAP[effectiveEmbeddingProviderId]?.name
+      ?? effectiveEmbeddingProviderId)
+    : null
+  const explicitEmbeddingProviderKey =
+    effectiveEmbeddingProviderId &&
+    !checkedProviders.has(effectiveEmbeddingProviderId)
+      ? providerKeys[effectiveEmbeddingProviderId]
+      : undefined
+  const hasEmbeddingProvider = Boolean(effectiveEmbeddingProviderId)
 
   const isSaving = saveStatus === 'saving' || saveStatus === 'polling'
 
@@ -78,6 +91,19 @@ export default function ReviewStep({
               </div>
             )
           })}
+
+        {effectiveEmbeddingProviderId &&
+          !checkedProviders.has(effectiveEmbeddingProviderId) &&
+          explicitEmbeddingProviderKey &&
+          explicitEmbeddingProviderKey.trim().length > 0 &&
+          PROVIDER_MAP[effectiveEmbeddingProviderId]?.name && (
+            <div className="review-item">
+              <span className="review-label">{PROVIDER_MAP[effectiveEmbeddingProviderId]!.name} Embedding Key</span>
+              <span className="review-value mono">
+                {maskKey(explicitEmbeddingProviderKey)}
+              </span>
+            </div>
+          )}
 
         <div className="review-item">
           <span className="review-label">Preset</span>
@@ -114,7 +140,7 @@ export default function ReviewStep({
           <div className="review-item">
             <span className="review-label">Embedding Provider</span>
             <span className="review-value">
-              {EMBEDDING_PROVIDERS.find((ep) => ep.id === embeddingProvider)?.name ?? embeddingProvider}
+              {effectiveEmbeddingProviderName ?? 'None selected'}
             </span>
           </div>
         )}

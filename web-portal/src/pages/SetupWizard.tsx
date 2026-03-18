@@ -85,6 +85,8 @@ export default function SetupWizard() {
             embeddingProvider={wiz.embeddingProvider}
             setEmbeddingProvider={wiz.setEmbeddingProvider}
             checkedProviders={wiz.checkedProviders}
+            providerKeys={wiz.providerKeys}
+            setProviderKey={wiz.setProviderKey}
             daemonEnabled={wiz.daemonEnabled}
             setDaemonEnabled={wiz.setDaemonEnabled}
             autonomyEnabled={wiz.autonomyEnabled}

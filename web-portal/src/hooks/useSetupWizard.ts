@@ -73,12 +73,17 @@ export function useSetupWizard() {
           id === 'ollama' || (providerKeys[id] ?? '').trim().length > 0,
         )
       }
+      case 4: {
+        if (!ragEnabled || embeddingProvider === 'auto' || embeddingProvider === 'ollama') return true
+        if (checkedProviders.has(embeddingProvider)) return true
+        return (providerKeys[embeddingProvider] ?? '').trim().length > 0
+      }
       case 3:
         return projectPath.trim().length > 0
       default:
         return true
     }
-  }, [step, checkedProviders, providerKeys, projectPath])
+  }, [step, checkedProviders, providerKeys, projectPath, ragEnabled, embeddingProvider])
 
   const nextStep = useCallback(() => {
     if (validateCurrentStep() && step < 5) {
@@ -225,6 +230,16 @@ export function useSetupWizard() {
         const key = (providerKeys[id] ?? '').trim()
         if (key) {
           config[provider.envKey] = key
+        }
+      }
+    }
+
+    if (ragEnabled && embeddingProvider && embeddingProvider !== 'auto' && !chain.includes(embeddingProvider)) {
+      const embeddingProviderDef = PROVIDER_MAP[embeddingProvider]
+      if (embeddingProviderDef?.envKey) {
+        const embeddingKey = (providerKeys[embeddingProvider] ?? '').trim()
+        if (embeddingKey) {
+          config[embeddingProviderDef.envKey] = embeddingKey
         }
       }
     }

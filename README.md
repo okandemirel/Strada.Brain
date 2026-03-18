@@ -218,6 +218,8 @@ Strada.Brain automatically checks for updates daily and applies them when idle. 
 12. **Learning** -- tool results flow through TypedEventBus to the learning pipeline for immediate pattern storage
 13. **Response sent** to the user through the channel (streaming if supported)
 
+**Provider/model selection semantics:** Strada is always the agent talking to the user. Choosing a provider/model does not bypass Strada or send your message directly to that provider. Instead, it sets Strada's primary execution worker; planning, review, synthesis, routing, and fallback can still use other providers when the orchestrator decides it is better.
+
 ---
 
 ## Memory System

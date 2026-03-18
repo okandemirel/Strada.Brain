@@ -54,6 +54,7 @@ The `Config` type groups settings into nested sub-configs:
 | `autoUpdate` | auto-update config | `AUTO_UPDATE_ENABLED`, `AUTO_UPDATE_INTERVAL_HOURS`, `AUTO_UPDATE_IDLE_TIMEOUT_MIN`, `AUTO_UPDATE_CHANNEL`, `AUTO_UPDATE_NOTIFY`, `AUTO_UPDATE_AUTO_RESTART` |
 
 - `PROVIDER_CHAIN` - comma-separated provider names for fallback ordering
+- `EMBEDDING_PROVIDER` - system-wide embedding selection for RAG/memory. This is independent from `PROVIDER_CHAIN`; for example, conversation can run on `openai` while embeddings use `gemini`, or vice versa.
 - `PLUGIN_DIRS` - comma-separated directory paths for plugin loading
 - `STRADA_CORE_REPO_URL` / `STRADA_MODULES_REPO_URL` - official git remotes used when the agent offers to install missing Strada packages
 - `STRADA_MCP_PATH` - optional absolute/local path that pins Strada.MCP discovery to a specific checkout before sibling/global detection
