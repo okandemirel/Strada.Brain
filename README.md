@@ -526,6 +526,8 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 
 **Provider chain:** Set `PROVIDER_CHAIN` to a comma-separated list of provider names. Strada stays the control plane and uses this chain to choose the primary execution worker plus fallbacks on failure. Example: `PROVIDER_CHAIN=kimi,deepseek,claude` uses Kimi first, DeepSeek if Kimi fails, then Claude. `openai` can be backed by either `OPENAI_API_KEY` or a local ChatGPT/Codex subscription session.
 
+**Important:** `OPENAI_AUTH_MODE=chatgpt-subscription` only covers OpenAI conversation turns inside Strada. It does not grant OpenAI API billing or embeddings quota. If you choose `EMBEDDING_PROVIDER=openai`, you still need an `OPENAI_API_KEY`.
+
 ### Chat Channels
 
 **Web:**

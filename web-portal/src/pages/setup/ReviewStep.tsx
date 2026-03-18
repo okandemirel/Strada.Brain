@@ -137,6 +137,15 @@ export default function ReviewStep({
           </div>
         )}
 
+        {checkedProviders.has('openai') && providerAuthModes.openai === 'chatgpt-subscription' && (
+          <div className="review-item">
+            <span className="review-label">OpenAI Subscription Scope</span>
+            <span className="review-value">
+              Conversation only. OpenAI embeddings still require an API key.
+            </span>
+          </div>
+        )}
+
         <div className="review-item">
           <span className="review-label">Project Path</span>
           <span className="review-value mono">{projectPath || 'Not set'}</span>

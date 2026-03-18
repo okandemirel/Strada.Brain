@@ -64,6 +64,15 @@ describe("docs consistency", () => {
     }
   });
 
+  it("documents that OpenAI subscription auth does not cover embeddings quota", () => {
+    expect(readRepoFile("README.md")).toContain(
+      "It does not grant OpenAI API billing or embeddings quota.",
+    );
+    expect(readRepoFile("src/config/README.md")).toContain(
+      "It does not imply OpenAI API quota for embeddings",
+    );
+  });
+
   it("marks historical docs as non-authoritative snapshots", () => {
     for (const relativePath of historicalDocs) {
       const content = readRepoFile(relativePath);
@@ -77,6 +86,8 @@ describe("docs consistency", () => {
       expect(content).toMatch(/\[README\.md\]\(README\.md\)/u);
       expect(content).toMatch(/translation|ceviri|uebersetzung|traduccion|traduction|翻訳|번역|翻译/ui);
       expect(content).not.toMatch(/76\s*(?:tools?|arac|outils?|herramientas|ツール|개 도구|工具)/iu);
+      expect(content).toContain("OPENAI_AUTH_MODE");
+      expect(content).toContain("chatgpt-subscription");
     }
   });
 

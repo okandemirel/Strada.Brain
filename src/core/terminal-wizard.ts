@@ -324,6 +324,7 @@ export async function runTerminalWizard(): Promise<void> {
         );
       } else {
         console.log("  Using local Codex/ChatGPT subscription auth from ~/.codex/auth.json")
+        console.log("  Note: this covers OpenAI conversation turns only, not OpenAI embeddings or API quota.")
       }
     } else {
       apiKey = await askWithRetry(
@@ -353,10 +354,24 @@ export async function runTerminalWizard(): Promise<void> {
     const embeddingProvider = embeddingAnswer.trim().toLowerCase() || defaultEmbeddingProvider;
 
     let embeddingApiKey: string | undefined;
+    if (embeddingProvider === "openai" && provider === "openai" && openaiAuthMode === "chatgpt-subscription") {
+      console.log("  OpenAI embeddings still require an OpenAI API key when conversation uses subscription auth.")
+    }
     if (embeddingProvider !== "auto" && embeddingProvider !== "ollama" && embeddingProvider !== provider) {
       embeddingApiKey = await askWithRetry(
         rl,
         `? ${getEmbeddingProviderLabel(embeddingProvider)} embedding API key: `,
+        (input) => {
+          if (!input || input.trim().length < 8) {
+            return { valid: false, error: "API key seems too short." };
+          }
+          return { valid: true };
+        },
+      );
+    } else if (embeddingProvider === "openai" && provider === "openai" && openaiAuthMode === "chatgpt-subscription") {
+      embeddingApiKey = await askWithRetry(
+        rl,
+        "? OpenAI embedding API key: ",
         (input) => {
           if (!input || input.trim().length < 8) {
             return { valid: false, error: "API key seems too short." };

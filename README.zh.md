@@ -497,7 +497,7 @@ npm run dev -- daemon --channel web
 
 ### AI 提供商
 
-任何 OpenAI 兼容的提供商均可使用。以下所有提供商已实现，只需 API 密钥即可激活。
+任何 OpenAI 兼容的提供商均可使用。以下所有提供商都已实现；大多数通过 API 密钥激活，而 OpenAI 也可以复用这台机器上的本地 ChatGPT/Codex 订阅会话来处理对话回合。
 
 | 变量 | 提供商 | 默认模型 |
 |------|--------|----------|
@@ -514,8 +514,12 @@ npm run dev -- daemon --channel web
 | `GEMINI_API_KEY` | Google Gemini | `gemini-pro` |
 | `OLLAMA_BASE_URL` | Ollama（本地） | `llama3` |
 | `PROVIDER_CHAIN` | 故障转移顺序 | 例如 `claude,kimi,deepseek,ollama` |
+| `OPENAI_AUTH_MODE` | OpenAI 认证模式 | `api-key`（默认）或 `chatgpt-subscription` |
+| `OPENAI_CHATGPT_AUTH_FILE` | 可选 Codex 会话文件 | 当 `OPENAI_AUTH_MODE=chatgpt-subscription` 时默认使用 `~/.codex/auth.json` |
 
-**提供商链：** 将 `PROVIDER_CHAIN` 设置为以逗号分隔的提供商名称列表。系统按顺序尝试每个提供商，失败时自动切换到下一个。示例：`PROVIDER_CHAIN=kimi,deepseek,claude` 首先使用 Kimi，Kimi 失败则使用 DeepSeek，然后是 Claude。
+**提供商链：** 将 `PROVIDER_CHAIN` 设置为以逗号分隔的提供商名称列表。Strada 仍然是控制平面，并使用这条链来选择主执行 worker 及其故障回退。示例：`PROVIDER_CHAIN=kimi,deepseek,claude` 首先使用 Kimi，Kimi 失败则使用 DeepSeek，然后是 Claude。
+
+**重要：** `OPENAI_AUTH_MODE=chatgpt-subscription` 只覆盖 Strada 内的 OpenAI 对话回合，不会提供 OpenAI API 或 embeddings 配额。如果你选择 `EMBEDDING_PROVIDER=openai`，仍然需要 `OPENAI_API_KEY`。
 
 ### 聊天频道
 

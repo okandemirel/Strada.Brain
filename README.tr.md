@@ -457,7 +457,7 @@ Tum yapilandirma ortam degiskenleri araciligiyla yapilir. Tam liste icin `.env.e
 
 ### AI Saglayicilari
 
-OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten uygulanmistir ve etkinlestirmek icin yalnizca bir API anahtari gerektirir.
+OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten uygulanmistir; cogunlugu API anahtari ile etkinlesir, OpenAI ise bu makinedeki yerel ChatGPT/Codex abonelik oturumunu konusma icin yeniden kullanabilir.
 
 | Degisken | Saglayici | Varsayilan Model |
 |----------|-----------|------------------|
@@ -474,8 +474,12 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `GEMINI_API_KEY` | Google Gemini | `gemini-pro` |
 | `OLLAMA_BASE_URL` | Ollama (yerel) | `llama3` |
 | `PROVIDER_CHAIN` | Yedekleme sirasi | orn. `claude,kimi,deepseek,ollama` |
+| `OPENAI_AUTH_MODE` | OpenAI kimlik dogrulama modu | `api-key` (varsayilan) veya `chatgpt-subscription` |
+| `OPENAI_CHATGPT_AUTH_FILE` | Opsiyonel Codex oturum dosyasi | `OPENAI_AUTH_MODE=chatgpt-subscription` iken varsayilan `~/.codex/auth.json` |
 
-**Saglayici zinciri:** `PROVIDER_CHAIN` degiskenini virgule ayrilmis saglayici adlari listesi olarak ayarlayin. Sistem her birini sirayla dener, basarisizlik durumunda siradakine gecer. Ornek: `PROVIDER_CHAIN=kimi,deepseek,claude` once Kimi'yi kullanir, Kimi basarisiz olursa DeepSeek, sonra Claude.
+**Saglayici zinciri:** `PROVIDER_CHAIN` degiskenini virgule ayrilmis saglayici adlari listesi olarak ayarlayin. Strada control-plane olarak kalir ve bu sirayi birincil execution worker ile fallback secimi icin kullanir. Ornek: `PROVIDER_CHAIN=kimi,deepseek,claude` once Kimi'yi kullanir, Kimi basarisiz olursa DeepSeek, sonra Claude.
+
+**Onemli:** `OPENAI_AUTH_MODE=chatgpt-subscription` sadece Strada icindeki OpenAI konusma turlari icin gecerli olur. OpenAI API veya embedding kotasi saglamaz. `EMBEDDING_PROVIDER=openai` secersen yine `OPENAI_API_KEY` gerekir.
 
 ### Sohbet Kanallari
 

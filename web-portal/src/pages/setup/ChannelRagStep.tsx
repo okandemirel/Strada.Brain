@@ -62,6 +62,10 @@ export default function ChannelRagStep({
     : null
   const explicitEmbeddingProvider =
     embeddingProvider !== 'auto' ? PROVIDER_MAP[embeddingProvider] ?? null : null
+  const openaiEmbeddingNeedsApiKey =
+    ragEnabled &&
+    selectedEmbeddingProviderId === 'openai' &&
+    providerAuthModes.openai === 'chatgpt-subscription'
   const needsDedicatedEmbeddingKey = Boolean(
     ragEnabled &&
     explicitEmbeddingProvider?.envKey &&
@@ -169,6 +173,11 @@ export default function ChannelRagStep({
             <p className="rag-info" style={{ marginTop: '0.65rem' }}>
               This is a system-wide memory/RAG choice. It does not change which provider Strada uses for conversation turns.
             </p>
+            {openaiEmbeddingNeedsApiKey && (
+              <p className="rag-info warning" style={{ marginTop: '0.55rem' }}>
+                OpenAI ChatGPT/Codex subscription auth covers conversation only. OpenAI embeddings still require an OpenAI API key.
+              </p>
+            )}
             {needsDedicatedEmbeddingKey && explicitEmbeddingProvider?.envKey && explicitEmbeddingProvider.placeholder && (
               <div className="channel-field" style={{ marginTop: '0.85rem' }}>
                 <label htmlFor="embeddingProviderKey">{explicitEmbeddingProvider.name} Embedding API Key</label>
@@ -183,6 +192,11 @@ export default function ChannelRagStep({
                 <p className="rag-info" style={{ marginTop: '0.55rem' }}>
                   This key is used only for embeddings. It does not add {explicitEmbeddingProvider.name} to the response provider chain.
                 </p>
+                {embeddingProvider === 'openai' && providerAuthModes.openai === 'chatgpt-subscription' && (
+                  <p className="rag-info warning" style={{ marginTop: '0.45rem' }}>
+                    Subscription login is not used for this embedding request path.
+                  </p>
+                )}
               </div>
             )}
           </div>

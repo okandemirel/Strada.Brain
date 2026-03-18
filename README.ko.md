@@ -497,7 +497,7 @@ npm run dev -- daemon --channel web
 
 ### AI 공급자
 
-OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자는 모두 구현되어 있으며 API 키만 설정하면 활성화됩니다.
+OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자는 모두 구현되어 있으며, 대부분은 API 키로 활성화됩니다. OpenAI는 이 머신의 로컬 ChatGPT/Codex 구독 세션을 대화용으로 재사용할 수도 있습니다.
 
 | 변수 | 공급자 | 기본 모델 |
 |------|--------|-----------|
@@ -514,8 +514,12 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 | `GEMINI_API_KEY` | Google Gemini | `gemini-pro` |
 | `OLLAMA_BASE_URL` | Ollama (로컬) | `llama3` |
 | `PROVIDER_CHAIN` | 폴백 순서 | 예: `claude,kimi,deepseek,ollama` |
+| `OPENAI_AUTH_MODE` | OpenAI 인증 모드 | `api-key`(기본값) 또는 `chatgpt-subscription` |
+| `OPENAI_CHATGPT_AUTH_FILE` | 선택적 Codex 인증 파일 | `OPENAI_AUTH_MODE=chatgpt-subscription`일 때 기본값은 `~/.codex/auth.json` |
 
-**공급자 체인:** `PROVIDER_CHAIN`에 공급자 이름을 쉼표로 구분하여 설정합니다. 시스템은 순서대로 시도하며, 실패 시 다음으로 폴백합니다. 예: `PROVIDER_CHAIN=kimi,deepseek,claude`는 Kimi를 먼저 사용하고, Kimi가 실패하면 DeepSeek, 그다음 Claude를 사용합니다.
+**공급자 체인:** `PROVIDER_CHAIN`에 공급자 이름을 쉼표로 구분하여 설정합니다. Strada는 계속 컨트롤 플레인으로 남고, 이 순서를 주 실행 워커와 폴백 선택에 사용합니다. 예: `PROVIDER_CHAIN=kimi,deepseek,claude`는 Kimi를 먼저 사용하고, Kimi가 실패하면 DeepSeek, 그다음 Claude를 사용합니다.
+
+**중요:** `OPENAI_AUTH_MODE=chatgpt-subscription`은 Strada 내부의 OpenAI 대화 턴에만 적용됩니다. OpenAI API나 임베딩 쿼터를 제공하지 않습니다. `EMBEDDING_PROVIDER=openai`를 사용하려면 여전히 `OPENAI_API_KEY`가 필요합니다.
 
 ### 채팅 채널
 

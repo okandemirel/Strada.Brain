@@ -497,7 +497,7 @@ Toute la configuration se fait via des variables d'environnement. Consultez `.en
 
 ### Fournisseurs d'IA
 
-Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous sont d&eacute;j&agrave; impl&eacute;ment&eacute;s et n'ont besoin que d'une cl&eacute; API pour &ecirc;tre activ&eacute;s.
+Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous sont d&eacute;j&agrave; impl&eacute;ment&eacute;s&nbsp;; la plupart s'activent avec une cl&eacute; API, et OpenAI peut aussi r&eacute;utiliser l'abonnement local ChatGPT/Codex de cette machine pour les conversations.
 
 | Variable | Fournisseur | Mod&egrave;le par D&eacute;faut |
 |----------|-------------|-------------------|
@@ -514,8 +514,12 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `GEMINI_API_KEY` | Google Gemini | `gemini-pro` |
 | `OLLAMA_BASE_URL` | Ollama (local) | `llama3` |
 | `PROVIDER_CHAIN` | Ordre de basculement | ex. `claude,kimi,deepseek,ollama` |
+| `OPENAI_AUTH_MODE` | Mode d'authentification OpenAI | `api-key` (par d&eacute;faut) ou `chatgpt-subscription` |
+| `OPENAI_CHATGPT_AUTH_FILE` | Fichier de session Codex optionnel | `~/.codex/auth.json` par d&eacute;faut quand `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
-**Cha&icirc;ne de fournisseurs :** D&eacute;finissez `PROVIDER_CHAIN` avec une liste de noms de fournisseurs s&eacute;par&eacute;s par des virgules. Le syst&egrave;me essaie chacun dans l'ordre, basculant en cas d'&eacute;chec. Exemple : `PROVIDER_CHAIN=kimi,deepseek,claude` utilise Kimi en premier, DeepSeek si Kimi &eacute;choue, puis Claude.
+**Cha&icirc;ne de fournisseurs :** D&eacute;finissez `PROVIDER_CHAIN` avec une liste de noms de fournisseurs s&eacute;par&eacute;s par des virgules. Strada reste le plan de contr&ocirc;le et s'en sert pour choisir le worker principal et les fallbacks. Exemple : `PROVIDER_CHAIN=kimi,deepseek,claude` utilise Kimi en premier, DeepSeek si Kimi &eacute;choue, puis Claude.
+
+**Important :** `OPENAI_AUTH_MODE=chatgpt-subscription` couvre uniquement les tours de conversation OpenAI dans Strada. Cela ne donne pas de quota API ni embeddings OpenAI. Si vous choisissez `EMBEDDING_PROVIDER=openai`, il vous faut toujours `OPENAI_API_KEY`.
 
 ### Canaux de Chat
 

@@ -57,6 +57,7 @@ The `Config` type groups settings into nested sub-configs:
 - `OPENAI_AUTH_MODE` - `api-key` (default) or `chatgpt-subscription`; when set to subscription mode Strada reuses the local Codex/ChatGPT login instead of the OpenAI platform API key
 - `OPENAI_CHATGPT_AUTH_FILE` - optional auth session file path for OpenAI subscription mode; defaults to `~/.codex/auth.json`
 - `OPENAI_SUBSCRIPTION_ACCESS_TOKEN` / `OPENAI_SUBSCRIPTION_ACCOUNT_ID` - optional manual overrides for the Codex/ChatGPT subscription session
+- OpenAI subscription auth is conversation-only. It does not imply OpenAI API quota for embeddings; `EMBEDDING_PROVIDER=openai` still requires `OPENAI_API_KEY`.
 - `EMBEDDING_PROVIDER` - system-wide embedding selection for RAG/memory. This is independent from `PROVIDER_CHAIN`; for example, conversation can run on `openai` while embeddings use `gemini`, or vice versa.
 - `PLUGIN_DIRS` - comma-separated directory paths for plugin loading
 - `STRADA_CORE_REPO_URL` / `STRADA_MODULES_REPO_URL` - official git remotes used when the agent offers to install missing Strada packages

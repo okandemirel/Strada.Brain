@@ -157,9 +157,14 @@ export default function ProvidersStep({
                 </>
               )}
               {!requiresSecret && (
-                <p className="step-subtitle" style={{ marginTop: '0.25rem' }}>
-                  Strada will use the local Codex/ChatGPT subscription session available on this machine.
-                </p>
+                <>
+                  <p className="step-subtitle" style={{ marginTop: '0.25rem' }}>
+                    Strada will use the local Codex/ChatGPT subscription session available on this machine for OpenAI conversation turns.
+                  </p>
+                  <p className="step-subtitle warning" style={{ marginTop: '0.35rem' }}>
+                    This does not grant OpenAI API or embedding quota. If you later choose OpenAI for embeddings, you still need an OpenAI API key.
+                  </p>
+                </>
               )}
             </div>
           )})}

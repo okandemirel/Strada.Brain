@@ -498,7 +498,7 @@ Toda la configuracion se realiza mediante variables de entorno. Consulta `.env.e
 
 ### Proveedores de IA
 
-Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listados a continuacion estan implementados y solo necesitan una clave de API para activarse.
+Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listados a continuacion estan implementados; la mayoria se activa con una clave de API, y OpenAI tambien puede usar la suscripcion local de ChatGPT/Codex de esta maquina para las conversaciones.
 
 | Variable | Proveedor | Modelo por Defecto |
 |----------|-----------|-------------------|
@@ -515,8 +515,12 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | `GEMINI_API_KEY` | Google Gemini | `gemini-pro` |
 | `OLLAMA_BASE_URL` | Ollama (local) | `llama3` |
 | `PROVIDER_CHAIN` | Orden de failover | ej. `claude,kimi,deepseek,ollama` |
+| `OPENAI_AUTH_MODE` | Modo de autenticacion de OpenAI | `api-key` (por defecto) o `chatgpt-subscription` |
+| `OPENAI_CHATGPT_AUTH_FILE` | Archivo opcional de sesion Codex | por defecto `~/.codex/auth.json` cuando `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
-**Cadena de proveedores:** Configura `PROVIDER_CHAIN` con una lista de nombres de proveedores separados por comas. El sistema prueba cada uno en orden, recurriendo al siguiente en caso de fallo. Ejemplo: `PROVIDER_CHAIN=kimi,deepseek,claude` usa Kimi primero, DeepSeek si Kimi falla, luego Claude.
+**Cadena de proveedores:** Configura `PROVIDER_CHAIN` con una lista de nombres de proveedores separados por comas. Strada sigue siendo el plano de control y usa esta cadena para elegir el worker principal y sus fallbacks. Ejemplo: `PROVIDER_CHAIN=kimi,deepseek,claude` usa Kimi primero, DeepSeek si Kimi falla, luego Claude.
+
+**Importante:** `OPENAI_AUTH_MODE=chatgpt-subscription` solo cubre los turnos de conversacion de OpenAI dentro de Strada. No concede cuota de API ni de embeddings de OpenAI. Si eliges `EMBEDDING_PROVIDER=openai`, sigues necesitando `OPENAI_API_KEY`.
 
 ### Canales de Chat
 
