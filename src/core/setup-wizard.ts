@@ -24,8 +24,6 @@ function resolveStaticDir(): string {
   }
   return PACKAGED_STATIC_DIR;
 }
-
-const STATIC_DIR = resolveStaticDir();
 const SETUP_QUERY_PARAM = "strada-setup";
 
 export function buildSetupAccessUrl(port: number, cacheBust: number = Date.now()): string {
@@ -37,12 +35,22 @@ export function buildSetupAccessUrl(port: number, cacheBust: number = Date.now()
 }
 
 export function injectSetupModeMarker(html: string): string {
-  if (html.includes("window.__STRADA_SETUP__")) {
+  if (html.includes('data-strada-setup="1"')) {
     return html;
   }
+
+  const withRootMarker = html.replace(
+    '<div id="root"></div>',
+    '<div id="root" data-strada-setup="1"></div>',
+  );
+
+  if (withRootMarker !== html) {
+    return withRootMarker;
+  }
+
   return html.replace(
     "</head>",
-    "    <script>window.__STRADA_SETUP__ = true;</script>\n  </head>",
+    '    <meta name="strada-setup" content="1" />\n  </head>',
   );
 }
 
@@ -272,13 +280,14 @@ export class SetupWizard {
   }
 
   private async serveStatic(url: string, res: ServerResponse): Promise<void> {
+    const staticDir = resolveStaticDir();
     const rawSegment = url.split("?")[0]!;
 
     // For known static file extensions, serve directly from STATIC_DIR
     const ext = extname(rawSegment);
     if (ext && MIME_TYPES[ext]) {
-      const candidate = resolve(join(STATIC_DIR, rawSegment));
-      const safeRoot = resolve(STATIC_DIR);
+      const candidate = resolve(join(staticDir, rawSegment));
+      const safeRoot = resolve(staticDir);
       if (!candidate.startsWith(safeRoot + "/") && candidate !== safeRoot) {
         res.writeHead(403, SECURITY_HEADERS);
         res.end("Forbidden");
@@ -296,7 +305,7 @@ export class SetupWizard {
     }
 
     // SPA fallback: serve index.html for all non-file routes (client-side routing)
-    const indexPath = join(STATIC_DIR, "index.html");
+    const indexPath = join(staticDir, "index.html");
     try {
       const data = injectSetupModeMarker(await readFile(indexPath, "utf-8"));
       res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });

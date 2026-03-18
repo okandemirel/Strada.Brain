@@ -340,10 +340,21 @@ async function waitForSetupUrlReady(
   maxAttempts = 20,
   delayMs = 150,
 ): Promise<void> {
+  const origin = new URL(url).origin;
+
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      const response = await fetch(url, { cache: "no-store" });
-      if (response.ok) {
+      const [rootResponse, csrfResponse] = await Promise.all([
+        fetch(url, { cache: "no-store" }),
+        fetch(`${origin}/api/setup/csrf`, { cache: "no-store" }),
+      ]);
+
+      if (!rootResponse.ok || !csrfResponse.ok) {
+        throw new Error("setup surface not ready yet");
+      }
+
+      const csrfPayload = await csrfResponse.json().catch(() => ({}));
+      if (typeof csrfPayload.token === "string" && csrfPayload.token.length > 0) {
         return;
       }
     } catch {
@@ -422,8 +433,27 @@ export function nodeSupportsWebPortalBuild(nodeVersion: string = process.version
 }
 
 function hasWebSetupAssets(): boolean {
-  return fs.existsSync(path.join(SOURCE_WEB_SETUP_STATIC_DIR, "index.html"))
-    || fs.existsSync(path.join(PACKAGED_WEB_SETUP_STATIC_DIR, "index.html"));
+  const candidateRoots = [SOURCE_WEB_SETUP_STATIC_DIR, PACKAGED_WEB_SETUP_STATIC_DIR];
+
+  for (const root of candidateRoots) {
+    const indexPath = path.join(root, "index.html");
+    const assetsDir = path.join(root, "assets");
+
+    if (!fs.existsSync(indexPath) || !fs.existsSync(assetsDir)) {
+      continue;
+    }
+
+    try {
+      const assetEntries = fs.readdirSync(assetsDir);
+      if (assetEntries.some((entry) => entry.endsWith(".js") || entry.endsWith(".css"))) {
+        return true;
+      }
+    } catch {
+      // Try the next candidate root.
+    }
+  }
+
+  return false;
 }
 
 export function resolveNvmDir(

@@ -54,7 +54,12 @@ describe("SetupWizard path validation", () => {
 
   it("injects setup mode into the shared portal html", () => {
     const html = injectSetupModeMarker("<html><head></head><body></body></html>");
-    expect(html).toContain("window.__STRADA_SETUP__ = true");
+    expect(html).toContain('meta name="strada-setup"');
+  });
+
+  it("prefers a DOM marker on the root element when one exists", () => {
+    const html = injectSetupModeMarker('<html><head></head><body><div id="root"></div></body></html>');
+    expect(html).toContain('data-strada-setup="1"');
   });
 
   it("builds a cache-busted setup access url that explicitly enables setup mode", () => {

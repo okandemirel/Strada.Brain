@@ -16,9 +16,12 @@ import SetupWizard from './pages/SetupWizard'
 import { detectSetupMode } from './utils/setup-mode'
 
 export default function App() {
+  const rootDatasetSetupMode = typeof document !== 'undefined'
+    ? document.getElementById('root')?.getAttribute('data-strada-setup') === '1'
+    : false
   const setupMode = typeof window !== 'undefined' && detectSetupMode(
     window.location.search,
-    Boolean((window as Window & { __STRADA_SETUP__?: boolean }).__STRADA_SETUP__),
+    rootDatasetSetupMode || Boolean((window as Window & { __STRADA_SETUP__?: boolean }).__STRADA_SETUP__),
   )
 
   if (setupMode) {
