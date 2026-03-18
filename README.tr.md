@@ -55,8 +55,8 @@ Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosy
 
 ```bash
 # Kaynaktan klonlayin (su an icin kanonik kurulum yolu)
-git clone https://github.com/okandemirel/strada-brain.git
-cd strada-brain
+git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
+cd Strada.Brain
 npm install
 npm run bootstrap
 
@@ -67,6 +67,8 @@ npm run setup:terminal
 # Her seyi `strada` komutuyla baslatmak istiyorsaniz onerilen adim
 npm link
 ```
+
+Tum `npm` komutlarini `package.json` dosyasinin bulundugu repo kokunden calistirin. `ENOENT ... /Strada/package.json` benzeri bir hata gorurseniz bir ust klasordesiniz; once `cd Strada.Brain` yapin.
 
 `strada-brain` paketi su anda public npm registry'de yayinli degil; bu nedenle `npm install -g strada-brain` komutu `E404` verir. Registry yayini gelene kadar yukaridaki kaynak checkout akisini kullanin.
 

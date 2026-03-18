@@ -55,8 +55,8 @@ Strada.Brain はチャットチャネルを通じて対話する AI エージェ
 
 ```bash
 # ソースからクローン（現時点の正規インストール手順）
-git clone https://github.com/okandemirel/strada-brain.git
-cd strada-brain
+git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
+cd Strada.Brain
 npm install
 npm run bootstrap
 
@@ -67,6 +67,8 @@ npm run setup:terminal
 # `strada` コマンドで一括起動したい場合は推奨
 npm link
 ```
+
+すべての `npm` コマンドは `package.json` があるリポジトリルートで実行してください。`ENOENT ... /Strada/package.json` のようなエラーが出た場合は一つ上の階層にいるので、先に `cd Strada.Brain` してください。
 
 `strada-brain` はまだ public npm registry に公開されていないため、`npm install -g strada-brain` は現在 `E404` になります。npm 公開が行われるまでは、上の source checkout 手順を使ってください。
 

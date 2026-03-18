@@ -53,8 +53,8 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 
 ```bash
 # Clone from source (currently the canonical install path)
-git clone https://github.com/okandemirel/strada-brain.git
-cd strada-brain
+git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
+cd Strada.Brain
 npm install
 npm run bootstrap
 
@@ -65,6 +65,8 @@ npm run setup:terminal
 # Recommended if you want to launch everything with the `strada` command
 npm link
 ```
+
+Run every `npm` command from the repository root, the folder that contains `package.json`. If you see an error like `ENOENT ... /Strada/package.json`, you are one directory too high; `cd` into `Strada.Brain` first.
 
 `strada-brain` is not currently published on the public npm registry, so `npm install -g strada-brain` will return `E404`. Until a registry release exists, use the source checkout flow above.
 

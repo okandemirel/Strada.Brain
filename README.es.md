@@ -55,8 +55,8 @@ Nuevo en esta version: Strada.Brain ahora incluye un **Agent Core** -- un motor 
 
 ```bash
 # Clona desde el codigo fuente (la via canonica por ahora)
-git clone https://github.com/okandemirel/strada-brain.git
-cd strada-brain
+git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
+cd Strada.Brain
 npm install
 npm run bootstrap
 
@@ -67,6 +67,8 @@ npm run setup:terminal
 # Recomendado si quieres abrir todo con el comando `strada`
 npm link
 ```
+
+Ejecuta todos los comandos `npm` desde la raiz del repositorio, la carpeta que contiene `package.json`. Si ves un error como `ENOENT ... /Strada/package.json`, estas un nivel por encima; entra primero en `Strada.Brain`.
 
 `strada-brain` todavia no esta publicado en el registro publico de npm, por lo que `npm install -g strada-brain` devolvera `E404`. Hasta que exista una publicacion en npm, usa el flujo de checkout de codigo fuente mostrado arriba.
 

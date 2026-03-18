@@ -96,6 +96,7 @@ describe("docs consistency", () => {
       expect(content).toContain("strada doctor");
       expect(content).toContain("strada                    #");
       expect(content).toContain("strada --daemon");
+      expect(content).toContain("cd Strada.Brain");
       expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
     }
   });
@@ -105,6 +106,10 @@ describe("docs consistency", () => {
     expect(englishReadme).toContain("npm run bootstrap");
     expect(englishReadme).toContain("npm run setup:web");
     expect(englishReadme).toContain("npm run setup:terminal");
+    expect(englishReadme).toContain("git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain");
+    expect(englishReadme).toContain("cd Strada.Brain");
+    expect(englishReadme).toContain("repository root");
+    expect(englishReadme).toContain("ENOENT ... /Strada/package.json");
     expect(englishReadme).toContain("strada                    # Smart launcher");
     expect(englishReadme).toContain("strada --daemon");
     expect(englishReadme).toContain("strada setup --web");

@@ -55,8 +55,8 @@ Nouveau dans cette version : Strada.Brain int&egrave;gre d&eacute;sormais un **A
 
 ```bash
 # Cloner depuis la source (chemin d'installation canonique pour l'instant)
-git clone https://github.com/okandemirel/strada-brain.git
-cd strada-brain
+git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
+cd Strada.Brain
 npm install
 npm run bootstrap
 
@@ -67,6 +67,8 @@ npm run setup:terminal
 # Recommande si vous voulez tout lancer via la commande `strada`
 npm link
 ```
+
+Executez toutes les commandes `npm` depuis la racine du depot, c'est-a-dire le dossier qui contient `package.json`. Si vous voyez une erreur du type `ENOENT ... /Strada/package.json`, vous etes un niveau trop haut; entrez d'abord dans `Strada.Brain`.
 
 `strada-brain` n'est pas encore publi&eacute; sur le registre npm public. `npm install -g strada-brain` renverra donc `E404` pour le moment. En attendant une publication npm, utilisez le flux source ci-dessus.
 

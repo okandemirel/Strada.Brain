@@ -55,8 +55,8 @@ Strada.Brain 是一个通过聊天频道与您对话的 AI 代理。您描述您
 
 ```bash
 # 从源码克隆（当前的规范安装方式）
-git clone https://github.com/okandemirel/strada-brain.git
-cd strada-brain
+git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
+cd Strada.Brain
 npm install
 npm run bootstrap
 
@@ -67,6 +67,8 @@ npm run setup:terminal
 # 如果你希望统一用 `strada` 命令启动，推荐执行
 npm link
 ```
+
+所有 `npm` 命令都必须在包含 `package.json` 的仓库根目录中执行。如果看到类似 `ENOENT ... /Strada/package.json` 的错误，说明你当前在上一级目录；请先执行 `cd Strada.Brain`。
 
 `strada-brain` 目前还没有发布到 public npm registry，所以 `npm install -g strada-brain` 现在会返回 `E404`。在 npm 公共发布出现之前，请使用上面的源码 checkout 流程。
 
