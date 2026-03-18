@@ -91,6 +91,7 @@ Strada paketlenmis bir npm/tarball surumunden kuruldugunda runtime config'i vars
 `./strada setup --web`, tam portal paketi icin yeterli olmayan daha eski bir Node surumu gorurse web yolunu birincil tutar: `nvm` varsa onayinizla uyumlu Node surumunu kurup sizi dogrudan web setup'a geri sokabilir; bu rehberli yukseltmeyi gecici temiz bir HOME icinde calistirarak uyumsuz `prefix` / `globalconfig` npm ayarlarinin `nvm`'i engellemesini onler. Yoksa Node yukleme/yukseltme akisina yonlendirir ve sizi sessizce terminal setup'a dusurmek yerine tekrar web setup'a dondurur.
 
 Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. `./strada setup` artik varsayilan olarak **Web Tarayicisi** yolunu tercih eder; daha hizli metin akisina bilincli olarak ihtiyaciniz varsa **Terminal** secin.
+Web sihirbazinda kaydetme tamamlandiginda Strada ayni URL uzerinden ana web uygulamasina devreder; boylece refresh gecisi olu setup sayfasina dusmez.
 Ilk basarili kurulumdan sonra `./strada` komutu artik akilli launcher olur:
 - ilk kullanimda config yoksa setup'i otomatik acar
 - sonraki kullanimlarda web, CLI, daemon, setup veya doctor secimi yapabileceginiz terminal paneli gosterir

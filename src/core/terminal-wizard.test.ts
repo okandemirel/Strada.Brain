@@ -6,6 +6,7 @@ import {
   buildWebSetupUpgradeShellScript,
   findAvailableSetupWizardPort,
   generateEnvContent,
+  getPostSetupWebLaunchCommand,
   getSuggestedNodeUpgradeCommand,
   nodeSupportsWebPortalBuild,
   validateUnityPath,
@@ -228,6 +229,28 @@ describe("buildWebSetupUpgradeShellScript", () => {
     }
   });
 });
+
+describe("getPostSetupWebLaunchCommand", () => {
+  it("prefers relaunching through the source launcher when available", () => {
+    expect(getPostSetupWebLaunchCommand({
+      STRADA_INSTALL_ROOT: "/Users/test/Strada.Brain",
+      STRADA_LAUNCHER_PATH: "/Users/test/Strada.Brain/strada",
+    })).toEqual({
+      command: "/Users/test/Strada.Brain/strada",
+      args: ["start", "--channel", "web"],
+      cwd: "/Users/test/Strada.Brain",
+    })
+  })
+
+  it("falls back to node execution when no launcher path exists", () => {
+    const command = getPostSetupWebLaunchCommand({}, "/Users/test/Strada.Brain")
+    expect(command.command).toBe("node")
+    expect(command.args.at(-3)).toBe("start")
+    expect(command.args.at(-2)).toBe("--channel")
+    expect(command.args.at(-1)).toBe("web")
+    expect(command.cwd).toBe("/Users/test/Strada.Brain")
+  })
+})
 
 describe("validateUnityPath", () => {
   it("accepts temp paths when HOME resolves through a symlinked tmp directory", () => {

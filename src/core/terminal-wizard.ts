@@ -485,6 +485,37 @@ function continueWebSetupAfterNodeUpgrade(nvmDir: string): boolean {
   return result.status === 0;
 }
 
+export function getPostSetupWebLaunchCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = env["STRADA_INSTALL_ROOT"] ?? process.cwd(),
+): { command: string; args: string[]; cwd: string } {
+  const launcherPath = env["STRADA_LAUNCHER_PATH"];
+  if (launcherPath) {
+    return {
+      command: launcherPath,
+      args: ["start", "--channel", "web"],
+      cwd,
+    };
+  }
+
+  return {
+    command: "node",
+    args: [...process.execArgv, process.argv[1] ?? "", "start", "--channel", "web"].filter(Boolean),
+    cwd,
+  };
+}
+
+function handoffToMainWebAppAfterSetup(): void {
+  const launch = getPostSetupWebLaunchCommand();
+  const child = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
+    env: process.env,
+    stdio: "ignore",
+    detached: true,
+  });
+  child.unref();
+}
+
 async function promptForWebSetupUpgrade(
   rl: readline.Interface,
 ): Promise<"rerun" | "manual-upgrade"> {
@@ -635,6 +666,9 @@ export async function runTerminalWizard(
       console.log(`   (Open this URL in your browser if it didn't open automatically)\n`);
       openBrowser(url);
       await wizard.waitForCompletion();
+      await wizard.shutdown();
+      console.log(`\nConfiguration saved. Launching Strada web app at http://${SETUP_HOST}:${port}/ ...\n`);
+      handoffToMainWebAppAfterSetup();
       return;
     }
 

@@ -91,6 +91,7 @@ Cuando Strada se instale desde una version empaquetada de npm/tarball, guardara 
 Si `./strada setup --web` detecta una version de Node demasiado antigua para construir el portal completo, Strada mantiene la web como camino principal: si `nvm` esta disponible puede instalar una version compatible de Node con tu aprobacion y volver directamente al setup web; para ello ejecuta ese upgrade guiado dentro de un HOME temporal limpio para que las opciones incompatibles de npm `prefix` / `globalconfig` no bloqueen `nvm`. Si no, te guia al flujo de descarga/actualizacion y nunca cae silenciosamente al setup de terminal.
 
 El asistente te pide la ruta de tu proyecto Unity, la clave de API del proveedor de IA, el canal por defecto e idioma. `./strada setup` ahora prioriza **Navegador Web** por defecto; elige **Terminal** solo si quieres de forma explicita el flujo de texto mas rapido.
+Cuando guardas el asistente web, Strada entrega el control a la aplicacion web principal en la misma URL para que un refresh durante la transicion no te deje en una pagina de setup muerta.
 Despues del primer setup correcto, `./strada` sin subcomando se convierte en tu launcher inteligente:
 - en el primer uso abre setup automaticamente si falta la config
 - despues muestra un panel de terminal para elegir web, CLI, daemon, setup o doctor
