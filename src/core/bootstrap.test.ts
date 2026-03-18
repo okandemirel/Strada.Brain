@@ -110,7 +110,12 @@ vi.mock("../rag/embeddings/embedding-cache.js", () => {
 });
 
 // Import the function under test
-import { initializeAIProvider, initializeMemory, resolveAndCacheEmbeddings } from "./bootstrap.js";
+import {
+  initializeAIProvider,
+  initializeMemory,
+  isTransientEmbeddingVerificationError,
+  resolveAndCacheEmbeddings,
+} from "./bootstrap.js";
 import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
 import { AgentDBAdapter } from "../memory/unified/agentdb-adapter.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
@@ -486,6 +491,20 @@ describe("initializeMemory", () => {
       // Migration should still be called after recovery
       expect(runAutomaticMigration).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("isTransientEmbeddingVerificationError", () => {
+  it("treats network-style startup failures as transient", () => {
+    expect(isTransientEmbeddingVerificationError(new Error("fetch failed"))).toBe(true);
+    expect(isTransientEmbeddingVerificationError(new Error("Gemini API error 503: upstream unavailable"))).toBe(true);
+    expect(isTransientEmbeddingVerificationError(new Error("request timed out"))).toBe(true);
+  });
+
+  it("does not treat auth and configuration failures as transient", () => {
+    expect(isTransientEmbeddingVerificationError(new Error("OpenAI API error 401: invalid_api_key"))).toBe(false);
+    expect(isTransientEmbeddingVerificationError(new Error("OpenAI API error 403: permission denied"))).toBe(false);
+    expect(isTransientEmbeddingVerificationError(new Error("OpenAI API error 404: model not found"))).toBe(false);
   });
 });
 

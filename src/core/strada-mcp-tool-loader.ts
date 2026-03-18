@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { tsImport } from "tsx/esm/api";
 import type { Config } from "../config/config.js";
 import { detectStradaMcp, type StradaMcpInstall } from "../config/strada-deps.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
@@ -126,11 +127,25 @@ function resolveModuleCandidates(pkgRoot: string, relativePath: string): string[
 }
 
 async function importFirstAvailable<T>(paths: string[]): Promise<T> {
+  let lastError: unknown;
+
   for (const candidate of paths) {
     if (!existsSync(candidate)) {
       continue;
     }
-    return import(pathToFileURL(candidate).href) as Promise<T>;
+
+    try {
+      if (candidate.endsWith(".ts")) {
+        return await tsImport(candidate, import.meta.url) as T;
+      }
+      return await import(pathToFileURL(candidate).href) as T;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
   }
 
   throw new Error(`No loadable module found. Tried: ${paths.join(", ")}`);

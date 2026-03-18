@@ -227,13 +227,24 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       logger.info("Embedding provider verified");
       embeddingStatus.verified = true;
     } catch (err) {
-      const notice = `Embedding provider unreachable, falling back to hash embeddings: ${err instanceof Error ? err.message : String(err)}`;
-      logger.warn(notice);
-      cachedEmbeddingProvider = undefined;
-      embeddingStatus.state = "degraded";
-      embeddingStatus.verified = false;
-      embeddingStatus.usingHashFallback = true;
-      embeddingStatus.notice = notice;
+      const errorMessage = getErrorMessage(err);
+      if (isTransientEmbeddingVerificationError(err)) {
+        const notice =
+          `Embedding provider could not be verified at startup (${errorMessage}). ` +
+          "Keeping live embeddings enabled and retrying on demand.";
+        logger.warn(notice);
+        embeddingStatus.verified = false;
+        embeddingStatus.usingHashFallback = false;
+        embeddingStatus.notice = notice;
+      } else {
+        const notice = `Embedding provider unreachable, falling back to hash embeddings: ${errorMessage}`;
+        logger.warn(notice);
+        cachedEmbeddingProvider = undefined;
+        embeddingStatus.state = "degraded";
+        embeddingStatus.verified = false;
+        embeddingStatus.usingHashFallback = true;
+        embeddingStatus.notice = notice;
+      }
     }
   }
 
@@ -1908,6 +1919,31 @@ interface EmbeddingResolutionResult {
     usingHashFallback: boolean;
     notice?: string;
   };
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function isTransientEmbeddingVerificationError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return [
+    "fetch failed",
+    "network",
+    "timed out",
+    "timeout",
+    "aborted",
+    "econnreset",
+    "econnrefused",
+    "enotfound",
+    "eai_again",
+    "etimedout",
+    "api error 429",
+    "api error 500",
+    "api error 502",
+    "api error 503",
+    "api error 504",
+  ].some((token) => message.includes(token));
 }
 
 function describeEmbeddingConsumers(config: Config): string[] {
