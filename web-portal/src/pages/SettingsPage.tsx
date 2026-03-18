@@ -23,6 +23,22 @@ interface ActiveProvider {
   providerName: string
   model: string
   isDefault: boolean
+  selectionMode?: 'strada-primary-worker'
+  executionPolicyNote?: string
+}
+
+interface EmbeddingStatus {
+  state: 'disabled' | 'active' | 'degraded'
+  ragEnabled: boolean
+  configuredProvider: string
+  configuredModel?: string
+  configuredDimensions?: number
+  resolvedProviderName?: string
+  resolutionSource?: string
+  activeDimensions?: number
+  verified: boolean
+  usingHashFallback: boolean
+  notice?: string
 }
 
 interface DaemonStatus {
@@ -106,6 +122,7 @@ export default function SettingsPage() {
   // --- Model Selection ---
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [activeProvider, setActiveProvider] = useState<ActiveProvider | null>(null)
+  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus | null>(null)
   const [modelLoading, setModelLoading] = useState(true)
   const [switching, setSwitching] = useState(false)
 
@@ -143,14 +160,17 @@ export default function SettingsPage() {
     Promise.allSettled([
       fetchJson<{ providers: ProviderInfo[] }>('/api/providers/available'),
       fetchJson<{ active: ActiveProvider | null }>(`/api/providers/active?chatId=${encodeURIComponent(chatId)}`),
+      fetchJson<{ status: EmbeddingStatus }>('/api/rag/status'),
     ]).then((results) => {
-      const [availResult, activeResult] = results
+      const [availResult, activeResult, embeddingResult] = results
       const availData = settledValue(availResult)
       const activeData = settledValue(activeResult)
+      const embeddingData = settledValue(embeddingResult)
       if (availData?.providers) setProviders(availData.providers)
       if (activeData?.active) setActiveProvider(activeData.active)
+      if (embeddingData?.status) setEmbeddingStatus(embeddingData.status)
       setModelLoading(false)
-      if (!availData && !activeData) {
+      if (!availData && !activeData && !embeddingData) {
         setProviders([])
       }
     }).catch(() => {
@@ -548,6 +568,44 @@ export default function SettingsPage() {
                 <span className="admin-stat-value admin-card-value mono">
                   {activeProvider.model}
                 </span>
+              </div>
+            )}
+
+            {embeddingStatus && (
+              <>
+                <div className="admin-stat-row" style={{ marginBottom: 16 }}>
+                  <span className="admin-stat-label">Embedding Provider</span>
+                  <span className="admin-stat-value admin-card-value mono">
+                    {embeddingStatus.resolvedProviderName ?? 'Hash fallback'}
+                  </span>
+                </div>
+
+                <div className="admin-stat-row" style={{ marginBottom: 16 }}>
+                  <span className="admin-stat-label">Embedding Resolution</span>
+                  <span className="admin-stat-value">
+                    {embeddingStatus.resolutionSource ?? embeddingStatus.state}
+                  </span>
+                </div>
+
+                <div className="admin-stat-row" style={{ marginBottom: 16 }}>
+                  <span className="admin-stat-label">Embedding Dimensions</span>
+                  <span className="admin-stat-value admin-card-value mono">
+                    {embeddingStatus.activeDimensions ?? embeddingStatus.configuredDimensions ?? 'n/a'}
+                  </span>
+                </div>
+
+                <div className="settings-hint" style={{ marginTop: -4, marginBottom: 16 }}>
+                  {embeddingStatus.ragEnabled
+                    ? `RAG is ${embeddingStatus.state === 'active' ? 'active' : 'degraded'}. Configured embedding provider: ${embeddingStatus.configuredProvider}.`
+                    : 'RAG is disabled.'}
+                  {embeddingStatus.notice ? ` ${embeddingStatus.notice}` : ''}
+                </div>
+              </>
+            )}
+
+            {activeProvider?.executionPolicyNote && (
+              <div className="settings-hint" style={{ marginBottom: 16 }}>
+                {activeProvider.executionPolicyNote}
               </div>
             )}
 

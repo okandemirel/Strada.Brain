@@ -212,15 +212,22 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Phase 0: Resolve embedding provider (needed by both memory and RAG)
   const embeddingResult = await resolveAndCacheEmbeddings(config, logger);
   let cachedEmbeddingProvider = embeddingResult.cachedProvider;
+  const embeddingStatus = { ...embeddingResult.status };
 
   // Verify embedding provider is actually reachable
   if (cachedEmbeddingProvider) {
     try {
       await cachedEmbeddingProvider.embed(["test"]);
       logger.info("Embedding provider verified");
+      embeddingStatus.verified = true;
     } catch (err) {
-      logger.warn(`Embedding provider unreachable, falling back to hash embeddings: ${err instanceof Error ? err.message : String(err)}`);
+      const notice = `Embedding provider unreachable, falling back to hash embeddings: ${err instanceof Error ? err.message : String(err)}`;
+      logger.warn(notice);
       cachedEmbeddingProvider = undefined;
+      embeddingStatus.state = "degraded";
+      embeddingStatus.verified = false;
+      embeddingStatus.usingHashFallback = true;
+      embeddingStatus.notice = notice;
     }
   }
 
@@ -1376,6 +1383,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         refreshCatalog: async () => providerManager.refreshModelCatalog(),
       },
       userProfileStore,
+      embeddingStatusProvider: {
+        getStatus: () => ({ ...embeddingStatus }),
+      },
       stradaDeps,
     });
   }
@@ -1819,6 +1829,19 @@ async function initializeFileMemory(
 interface EmbeddingResolutionResult {
   cachedProvider?: CachedEmbeddingProvider;
   notice?: string;
+  status: {
+    state: "disabled" | "active" | "degraded";
+    ragEnabled: boolean;
+    configuredProvider: string;
+    configuredModel?: string;
+    configuredDimensions?: number;
+    resolvedProviderName?: string;
+    resolutionSource?: string;
+    activeDimensions?: number;
+    verified: boolean;
+    usingHashFallback: boolean;
+    notice?: string;
+  };
 }
 
 /**
@@ -1831,7 +1854,18 @@ async function resolveAndCacheEmbeddings(
 ): Promise<EmbeddingResolutionResult> {
   if (!config.rag.enabled) {
     logger.info("Embeddings: RAG disabled by configuration, no embedding provider resolved");
-    return {};
+    return {
+      status: {
+        state: "disabled",
+        ragEnabled: false,
+        configuredProvider: config.rag.provider,
+        configuredModel: config.rag.model,
+        configuredDimensions: config.rag.dimensions,
+        verified: false,
+        usingHashFallback: true,
+        notice: "RAG disabled by configuration",
+      },
+    };
   }
 
   try {
@@ -1840,7 +1874,19 @@ async function resolveAndCacheEmbeddings(
       const notice =
         "RAG disabled: no compatible embedding provider found. Semantic code search is unavailable.";
       logger.warn("Embeddings: no compatible embedding provider found");
-      return { notice };
+      return {
+        notice,
+        status: {
+          state: "degraded",
+          ragEnabled: true,
+          configuredProvider: config.rag.provider,
+          configuredModel: config.rag.model,
+          configuredDimensions: config.rag.dimensions,
+          verified: false,
+          usingHashFallback: true,
+          notice,
+        },
+      };
     }
 
     logger.info(`Embeddings: using ${resolution.provider.name}`, {
@@ -1853,14 +1899,40 @@ async function resolveAndCacheEmbeddings(
     });
     await cachedProvider.initialize();
 
-    return { cachedProvider };
+    return {
+      cachedProvider,
+      status: {
+        state: "active",
+        ragEnabled: true,
+        configuredProvider: config.rag.provider,
+        configuredModel: config.rag.model,
+        configuredDimensions: config.rag.dimensions,
+        resolvedProviderName: resolution.provider.name,
+        resolutionSource: resolution.source,
+        activeDimensions: resolution.provider.dimensions,
+        verified: false,
+        usingHashFallback: false,
+      },
+    };
   } catch (error) {
     const notice =
       "RAG disabled: embedding initialization failed. Semantic code search is unavailable.";
     logger.warn("Embedding resolution failed", {
       error: error instanceof Error ? error.message : String(error),
     });
-    return { notice };
+    return {
+      notice,
+      status: {
+        state: "degraded",
+        ragEnabled: true,
+        configuredProvider: config.rag.provider,
+        configuredModel: config.rag.model,
+        configuredDimensions: config.rag.dimensions,
+        verified: false,
+        usingHashFallback: true,
+        notice,
+      },
+    };
   }
 }
 

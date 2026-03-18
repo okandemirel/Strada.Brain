@@ -233,6 +233,22 @@ interface DashboardUserProfileStore {
   isAutonomousMode(chatId: string): Promise<{ enabled: boolean; expiresAt?: number; remainingMs?: number }>;
 }
 
+interface DashboardEmbeddingStatusProvider {
+  getStatus(): {
+    state: "disabled" | "active" | "degraded";
+    ragEnabled: boolean;
+    configuredProvider: string;
+    configuredModel?: string;
+    configuredDimensions?: number;
+    resolvedProviderName?: string;
+    resolutionSource?: string;
+    activeDimensions?: number;
+    verified: boolean;
+    usingHashFallback: boolean;
+    notice?: string;
+  };
+}
+
 /**
  * Lightweight HTTP dashboard server.
  * No external dependencies — uses Node.js built-in http module.
@@ -327,6 +343,7 @@ export class DashboardServer {
   // Provider and user profile services (autonomous mode + provider switching)
   private providerManager?: DashboardProviderManager;
   private userProfileStore?: DashboardUserProfileStore;
+  private embeddingStatusProvider?: DashboardEmbeddingStatusProvider;
 
   // Provider router for agent activity / routing decisions
   private providerRouter?: DashboardProviderRouter;
@@ -412,6 +429,7 @@ export class DashboardServer {
     configSnapshot?: () => Record<string, unknown>;
     providerManager?: DashboardProviderManager;
     userProfileStore?: DashboardUserProfileStore;
+    embeddingStatusProvider?: DashboardEmbeddingStatusProvider;
     stradaDeps?: StradaDepsStatus;
   }): void {
     this.toolRegistry = services.toolRegistry ?? this.toolRegistry;
@@ -420,6 +438,7 @@ export class DashboardServer {
     this.configSnapshot = services.configSnapshot ?? this.configSnapshot;
     this.providerManager = services.providerManager ?? this.providerManager;
     this.userProfileStore = services.userProfileStore ?? this.userProfileStore;
+    this.embeddingStatusProvider = services.embeddingStatusProvider ?? this.embeddingStatusProvider;
     this.stradaDeps = services.stradaDeps ?? this.stradaDeps;
   }
 
@@ -1262,6 +1281,24 @@ export class DashboardServer {
           const active = this.providerManager.getActiveInfo(chatId);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ active }));
+        } catch (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        }
+        return;
+      }
+
+      // GET /api/rag/status -- Get runtime embedding/RAG provider status
+      if (req.method === "GET" && url === "/api/rag/status") {
+        if (!this.embeddingStatusProvider) {
+          res.writeHead(501, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Embedding status is not available" }));
+          return;
+        }
+        try {
+          const status = this.embeddingStatusProvider.getStatus();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status }));
         } catch (err) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));

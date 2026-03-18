@@ -222,6 +222,18 @@ describe("DashboardServer", () => {
         }),
         setPreference: async () => {},
       },
+      embeddingStatusProvider: {
+        getStatus: () => ({
+          state: "active",
+          ragEnabled: true,
+          configuredProvider: "auto",
+          resolvedProviderName: "Gemini:gemini-embedding-2-preview",
+          resolutionSource: "auto-fallback:gemini",
+          activeDimensions: 3072,
+          verified: true,
+          usingHashFallback: false,
+        }),
+      },
     });
     if (!await safeStart(server)) return;
 
@@ -249,6 +261,19 @@ describe("DashboardServer", () => {
       isDefault: false,
       selectionMode: "strada-primary-worker",
       executionPolicyNote: expect.stringContaining("Strada remains the control plane"),
+    }));
+
+    const ragRes = await fetch(`http://localhost:${addr.port}/api/rag/status`);
+    expect(ragRes.status).toBe(200);
+    const ragData = await ragRes.json();
+    expect(ragData.status).toEqual(expect.objectContaining({
+      state: "active",
+      configuredProvider: "auto",
+      resolvedProviderName: "Gemini:gemini-embedding-2-preview",
+      resolutionSource: "auto-fallback:gemini",
+      activeDimensions: 3072,
+      verified: true,
+      usingHashFallback: false,
     }));
   });
 
