@@ -12,9 +12,24 @@ web-portal/dist/
 coverage/
 .worktrees/
 .planning/
-.claude/settings.local.json
 .kimi/
 .strada-memory/
+*.tgz
+
+# Local AI/editor agent state and tool metadata
+.agents/
+.claude/
+.codex/
+.cursor/
+.roo/
+.windsurf/
+.opencode/
+.continue/
+.qodo/
+.kiro/
+.augment/
+.aider*
+
 src/channels/web/static/*
 !src/channels/web/static/index.html
 !src/channels/web/static/fallback.css
