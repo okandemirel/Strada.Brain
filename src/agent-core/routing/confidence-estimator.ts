@@ -7,6 +7,7 @@
  */
 
 import type { TaskClassification } from "./routing-types.js";
+import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
 
 /** Structural interface for AgentState (avoids circular import) */
 interface AgentStateRef {
@@ -15,16 +16,34 @@ interface AgentStateRef {
   readonly iteration: number;
 }
 
-/** Cost tier mapping — higher = more expensive/capable */
-const MODEL_CAPABILITY_TIER: Record<string, number> = {
-  ollama: 1, groq: 2, kimi: 3, deepseek: 3, qwen: 3,
-  mistral: 4, together: 4, fireworks: 4, minimax: 4,
-  openai: 5, gemini: 5, claude: 6,
-};
-
 const COMPLEXITY_SCORE: Record<string, number> = {
   trivial: 1, simple: 2, moderate: 3, complex: 4,
 };
+
+function inferCapabilityTier(capabilities?: ProviderCapabilities | null): number {
+  if (!capabilities) {
+    return 3;
+  }
+
+  let score = 1;
+
+  if (capabilities.toolCalling) score += 1;
+  if (capabilities.thinkingSupported) score += 1;
+  if (capabilities.contextWindow && capabilities.contextWindow >= 100_000) score += 1;
+  if (capabilities.maxTokens >= 16_000) score += 0.5;
+
+  const features = new Set(capabilities.specialFeatures ?? []);
+  if (
+    features.has("search") ||
+    features.has("reviewer") ||
+    features.has("prompt-caching") ||
+    features.has("context-caching")
+  ) {
+    score += 0.5;
+  }
+
+  return Math.min(6, Math.max(1, Math.round(score)));
+}
 
 export class ConfidenceEstimator {
   /**
@@ -34,6 +53,7 @@ export class ConfidenceEstimator {
   estimate(context: {
     task: TaskClassification;
     providerName: string;
+    providerCapabilities?: ProviderCapabilities | null;
     agentState: AgentStateRef;
     responseLength: number;
   }): number {
@@ -48,7 +68,7 @@ export class ConfidenceEstimator {
 
     // Factor 2: Complexity vs capability mismatch (weight 0.25)
     const complexity = COMPLEXITY_SCORE[context.task.complexity] ?? 2;
-    const capability = MODEL_CAPABILITY_TIER[context.providerName] ?? 3;
+    const capability = inferCapabilityTier(context.providerCapabilities);
     if (complexity > capability) {
       score -= (complexity - capability) * 0.08; // Mismatch penalty
     }

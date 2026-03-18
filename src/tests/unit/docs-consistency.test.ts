@@ -34,6 +34,16 @@ const localizedProviderChainPhrases: Record<(typeof localizedReadmes)[number], s
   "README.zh.md": "默认编排池",
 };
 
+const localizedControlPlanePhrases: Record<(typeof localizedReadmes)[number], string> = {
+  "README.de.md": "Strada bleibt die Control Plane",
+  "README.es.md": "Strada sigue siendo el plano de control",
+  "README.fr.md": "Strada reste le plan de contr&ocirc;le",
+  "README.ja.md": "Strada はコントロールプレーンのまま",
+  "README.ko.md": "Strada는 계속 컨트롤 플레인으로 남고",
+  "README.tr.md": "Strada control-plane olarak kalir",
+  "README.zh.md": "Strada 仍然是控制平面",
+};
+
 const historicalDocs = [
   "docs/audit/2026-03-17-full-audit.md",
   "docs/remediation/2026-03-17-p0-plan.md",
@@ -98,7 +108,10 @@ describe("docs consistency", () => {
       expect(content).not.toMatch(/76\s*(?:tools?|arac|outils?|herramientas|ツール|개 도구|工具)/iu);
       expect(content).toContain("OPENAI_AUTH_MODE");
       expect(content).toContain("chatgpt-subscription");
+      expect(content).toContain("EMBEDDING_PROVIDER=openai");
+      expect(content).toContain("OPENAI_API_KEY");
       expect(content).toContain(localizedProviderChainPhrases[relativePath]);
+      expect(content).toContain(localizedControlPlanePhrases[relativePath]);
     }
   });
 

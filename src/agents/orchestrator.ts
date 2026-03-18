@@ -1629,6 +1629,7 @@ export class Orchestrator {
             const bgConfidence = this.confidenceEstimator.estimate({
               task: bgTaskClass,
               providerName: currentAssignment.providerName,
+              providerCapabilities: currentProvider.capabilities,
               agentState: bgAgentState,
               responseLength: (response.text ?? "").length,
             });
@@ -2363,6 +2364,7 @@ export class Orchestrator {
               const textConfidence = this.confidenceEstimator.estimate({
                 task: textTaskClass,
                 providerName: currentAssignment.providerName,
+                providerCapabilities: currentProvider.capabilities,
                 agentState,
                 responseLength: response.text.length,
               });
@@ -2530,6 +2532,7 @@ export class Orchestrator {
           const confidence = this.confidenceEstimator.estimate({
             task: taskClass,
             providerName: currentAssignment.providerName,
+            providerCapabilities: currentProvider.capabilities,
             agentState,
             responseLength: (response.text ?? "").length,
           });

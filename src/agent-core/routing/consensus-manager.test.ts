@@ -1,9 +1,33 @@
 import { describe, it, expect, vi } from "vitest";
 import { ConfidenceEstimator } from "./confidence-estimator.js";
 import { ConsensusManager } from "./consensus-manager.js";
-import { createLogger } from "../../utils/logger.js";
+import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
 
-createLogger("error", "/dev/null");
+vi.mock("../../utils/logger.js", () => ({
+  getLogger: () => ({
+    error: vi.fn(),
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+  }),
+  createLogger: vi.fn(),
+}));
+
+function makeCapabilities(
+  overrides: Partial<ProviderCapabilities> = {},
+): ProviderCapabilities {
+  return {
+    maxTokens: 8_192,
+    streaming: true,
+    structuredStreaming: false,
+    toolCalling: true,
+    vision: false,
+    systemPrompt: true,
+    thinkingSupported: false,
+    specialFeatures: [],
+    ...overrides,
+  };
+}
 
 describe("ConfidenceEstimator", () => {
   const estimator = new ConfidenceEstimator();
@@ -12,6 +36,12 @@ describe("ConfidenceEstimator", () => {
     const score = estimator.estimate({
       task: { type: "simple-question", complexity: "trivial", criticality: "low" },
       providerName: "claude",
+      providerCapabilities: makeCapabilities({
+        thinkingSupported: true,
+        contextWindow: 200_000,
+        maxTokens: 32_000,
+        specialFeatures: ["reviewer"],
+      }),
       agentState: { consecutiveErrors: 0, stepResults: [], iteration: 1 },
       responseLength: 100,
     });
@@ -22,6 +52,11 @@ describe("ConfidenceEstimator", () => {
     const score = estimator.estimate({
       task: { type: "planning", complexity: "complex", criticality: "high" },
       providerName: "ollama",
+      providerCapabilities: makeCapabilities({
+        toolCalling: false,
+        streaming: false,
+        maxTokens: 4_096,
+      }),
       agentState: {
         consecutiveErrors: 3,
         stepResults: [
@@ -38,12 +73,23 @@ describe("ConfidenceEstimator", () => {
     const highCap = estimator.estimate({
       task: { type: "planning", complexity: "complex", criticality: "high" },
       providerName: "claude",
+      providerCapabilities: makeCapabilities({
+        thinkingSupported: true,
+        contextWindow: 200_000,
+        maxTokens: 32_000,
+        specialFeatures: ["reviewer"],
+      }),
       agentState: { consecutiveErrors: 0, stepResults: [], iteration: 1 },
       responseLength: 500,
     });
     const lowCap = estimator.estimate({
       task: { type: "planning", complexity: "complex", criticality: "high" },
       providerName: "groq",
+      providerCapabilities: makeCapabilities({
+        toolCalling: false,
+        streaming: true,
+        maxTokens: 4_096,
+      }),
       agentState: { consecutiveErrors: 0, stepResults: [], iteration: 1 },
       responseLength: 500,
     });
@@ -54,11 +100,27 @@ describe("ConfidenceEstimator", () => {
     const worst = estimator.estimate({
       task: { type: "planning", complexity: "complex", criticality: "critical" },
       providerName: "ollama",
+      providerCapabilities: makeCapabilities({
+        toolCalling: false,
+        streaming: false,
+        maxTokens: 2_048,
+      }),
       agentState: { consecutiveErrors: 5, stepResults: Array(10).fill({ success: false }), iteration: 10 },
       responseLength: 0,
     });
     expect(worst).toBeGreaterThanOrEqual(0);
     expect(worst).toBeLessThanOrEqual(1);
+  });
+
+  it("falls back to a neutral capability tier when runtime capabilities are unavailable", () => {
+    const score = estimator.estimate({
+      task: { type: "analysis", complexity: "moderate", criticality: "medium" },
+      providerName: "unknown-provider",
+      agentState: { consecutiveErrors: 0, stepResults: [], iteration: 1 },
+      responseLength: 120,
+    });
+    expect(score).toBeGreaterThan(0.3);
+    expect(score).toBeLessThan(0.9);
   });
 });
 
