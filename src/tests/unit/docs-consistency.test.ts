@@ -136,6 +136,7 @@ describe("docs consistency", () => {
     expect(existsSync(path.join(REPO_ROOT, "docs", "audit"))).toBe(false);
     expect(existsSync(path.join(REPO_ROOT, "docs", "remediation"))).toBe(false);
     expect(existsSync(path.join(REPO_ROOT, "docs", "superpowers"))).toBe(false);
+    expect(existsSync(path.join(REPO_ROOT, "docs", "analysis"))).toBe(false);
   });
 
   it("states that docs only keep authoritative product documentation", () => {

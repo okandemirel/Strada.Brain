@@ -34,16 +34,17 @@ Infrastructure
 
 ## Authentication: Two Tiers
 
-### Tier 1 — Channel Identity (`auth.ts`)
+### Tier 1 — Channel Identity (`auth.ts` + `access-policy.ts`)
 
-Pre-configured platform allowlists. No JWT involved.
+Pre-configured platform allowlists and explicit open-access flags. No JWT involved.
 
-- **Telegram:** `Set<number>` of allowed user IDs. Deny-all if empty.
-- **Discord:** `Set<string>` for user IDs + role IDs. Deny-all if empty.
-- **Slack:** `Set<string>` for user IDs + workspace IDs. **Open-all if empty.**
-- **WhatsApp:** `Set<string>` of phone numbers, checked locally in the adapter (not via AuthManager).
+- **Telegram:** `Set<number>` of allowed user IDs. Closed by default.
+- **Discord:** `Set<string>` for user IDs + role IDs. Closed by default unless one of those allowlists matches.
+- **Slack:** `Set<string>` for user IDs + workspace IDs. Open by default when both allowlists are empty.
+- **WhatsApp:** `Set<string>` of phone numbers. Open by default when the allowlist is empty.
+- **Matrix / IRC / Teams:** closed by default unless allowlists match or the explicit `*_ALLOW_OPEN_ACCESS=true` flag is set.
 
-Auth is checked at the earliest point — inside the platform event handler — before any processing.
+Auth is checked at the earliest point — inside the platform event handler — before any processing. Channel adapters use the shared access-policy helpers so empty-allowlist behavior stays consistent with the runtime configuration.
 
 ### Tier 2 — System Auth (`auth-hardened.ts`)
 

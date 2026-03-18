@@ -429,7 +429,7 @@ export function getSuggestedNodeUpgradeCommand(
 
 export function buildWebSetupUpgradeShellScript(
   nvmDir: string,
-  cwd: string = process.cwd(),
+  cwd: string = process.env["STRADA_INSTALL_ROOT"] ?? process.cwd(),
   execArgs: string[] = [...process.execArgv, process.argv[1] ?? "", "setup", "--web"],
 ): string {
   return [

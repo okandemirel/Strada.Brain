@@ -17,6 +17,21 @@ describe("runtime paths", () => {
     expect(runtimePaths.sourceCheckout).toBe(true);
   });
 
+  it("honors launcher-provided source checkout env overrides", () => {
+    const runtimePaths = resolveRuntimePaths({
+      cwd: "/Users/tester/.strada",
+      homeDir: "/Users/tester",
+      env: {
+        STRADA_INSTALL_ROOT: "/Users/tester/Strada.Brain",
+        STRADA_SOURCE_CHECKOUT: "true",
+      },
+    });
+
+    expect(runtimePaths.installRoot).toBe("/Users/tester/Strada.Brain");
+    expect(runtimePaths.sourceCheckout).toBe(true);
+    expect(runtimePaths.configRoot).toBe("/Users/tester/Strada.Brain");
+  });
+
   it("moves packaged installs into the user app home by default", () => {
     const runtimePaths = resolveRuntimePaths({
       installRoot: "/opt/strada-brain",

@@ -36,12 +36,17 @@ export function resolveStradaHome(
 }
 
 export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePaths {
-  const installRoot = options.installRoot ?? resolveInstallRoot(options.moduleUrl);
-  const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env;
+  const installRoot = options.installRoot
+    ?? env["STRADA_INSTALL_ROOT"]
+    ?? resolveInstallRoot(options.moduleUrl);
+  const cwd = options.cwd ?? process.cwd();
   const homeDir = options.homeDir ?? os.homedir();
-  const sourceCheckout = options.sourceCheckout ?? existsSync(path.join(installRoot, ".git"));
-  const configRoot = sourceCheckout ? cwd : resolveStradaHome(env, homeDir, cwd);
+  const sourceCheckout = options.sourceCheckout
+    ?? (env["STRADA_SOURCE_CHECKOUT"] === "true"
+      ? true
+      : existsSync(path.join(installRoot, ".git")));
+  const configRoot = sourceCheckout ? installRoot : resolveStradaHome(env, homeDir, cwd);
 
   return {
     installRoot,

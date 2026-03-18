@@ -179,8 +179,11 @@ cd "$ROOT_DIR"
 
 if should_run_from_source "$@"; then
   ensure_source_checkout
+  export STRADA_INSTALL_ROOT="$ROOT_DIR"
+  export STRADA_SOURCE_CHECKOUT="true"
   exec node --import tsx "$SOURCE_ENTRY" "$@"
 fi
 
 ensure_prepared
+export STRADA_INSTALL_ROOT="$ROOT_DIR"
 exec node "$DIST_ENTRY" "$@"

@@ -12,7 +12,7 @@ A capabilities/lifecycle registry for first-class internal plugins.
 - `unregister()` prevents removing a plugin while others depend on it
 - Concurrent `initializeAll()` calls are coalesced into a single run
 
-**Note:** Plugins run with full Node.js process access. No sandboxing (TODO: `vm.runInNewContext` or worker threads).
+**Security note:** Plugins run with full Node.js process access today. Treat `PLUGIN_DIRS` as trusted code inputs, not as a sandbox boundary.
 
 ## Hot Reload (`hot-reload.ts`)
 
