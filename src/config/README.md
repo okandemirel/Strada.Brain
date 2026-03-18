@@ -53,7 +53,7 @@ The `Config` type groups settings into nested sub-configs:
 | `delegation` | `DelegationConfig` | `TASK_DELEGATION_ENABLED` (default false), `AGENT_MAX_DELEGATION_DEPTH`, `AGENT_MAX_CONCURRENT_DELEGATIONS`, `DELEGATION_TIER_LOCAL`, `DELEGATION_TIER_CHEAP`, `DELEGATION_TIER_STANDARD`, `DELEGATION_TIER_PREMIUM`, `DELEGATION_VERBOSITY`, `DELEGATION_TYPES`, `DELEGATION_MAX_ITERATIONS_PER_TYPE` |
 | `autoUpdate` | auto-update config | `AUTO_UPDATE_ENABLED`, `AUTO_UPDATE_INTERVAL_HOURS`, `AUTO_UPDATE_IDLE_TIMEOUT_MIN`, `AUTO_UPDATE_CHANNEL`, `AUTO_UPDATE_NOTIFY`, `AUTO_UPDATE_AUTO_RESTART` |
 
-- `PROVIDER_CHAIN` - comma-separated provider names for fallback ordering
+- `PROVIDER_CHAIN` - comma-separated provider names for Strada's default orchestration pool and fallback ordering
 - `OPENAI_AUTH_MODE` - `api-key` (default) or `chatgpt-subscription`; when set to subscription mode Strada reuses the local Codex/ChatGPT login instead of the OpenAI platform API key
 - `OPENAI_CHATGPT_AUTH_FILE` - optional auth session file path for OpenAI subscription mode; defaults to `~/.codex/auth.json`
 - `OPENAI_SUBSCRIPTION_ACCESS_TOKEN` / `OPENAI_SUBSCRIPTION_ACCOUNT_ID` - optional manual overrides for the Codex/ChatGPT subscription session

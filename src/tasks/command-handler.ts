@@ -308,6 +308,9 @@ export class CommandHandler {
     // No args → show current
     if (!subcommand) {
       const info = this.providerManager.getActiveInfo(identityKey);
+      const executionPool = this.providerManager.listExecutionCandidates(identityKey)
+        .map((entry) => `\`${entry.name}\``)
+        .join(", ");
       const status = info.isDefault ? " (system default)" : "";
       await this.channel.sendMarkdown(
         chatId,
@@ -315,9 +318,10 @@ export class CommandHandler {
           "*Strada Execution Policy*",
           `Primary worker provider: \`${info.providerName}\``,
           `Primary worker model: \`${info.model}\`${status}`,
+          executionPool ? `Execution pool: ${executionPool}` : "",
           "",
           info.executionPolicyNote,
-        ].join("\n"),
+        ].filter(Boolean).join("\n"),
       );
       return;
     }
@@ -325,12 +329,28 @@ export class CommandHandler {
     // list / listele
     if (subcommand === "list" || subcommand === "listele") {
       const available = this.providerManager.listAvailable();
+      const executionPool = this.providerManager.listExecutionCandidates(identityKey);
       const lines = available.map(
+        (p) => `\`${p.name}\` — ${p.label} (${p.defaultModel})`,
+      );
+      const poolLines = executionPool.map(
         (p) => `\`${p.name}\` — ${p.label} (${p.defaultModel})`,
       );
       await this.channel.sendMarkdown(
         chatId,
-        `*Available Worker Providers*\n\n${lines.join("\n")}\n\nUsage: \`/model provider\` or \`/model provider/model\`\n\nStrada remains the control plane; this only changes the primary execution worker.`,
+        [
+          "*Available Worker Providers*",
+          "",
+          lines.join("\n"),
+          "",
+          "*Current Execution Pool*",
+          "",
+          poolLines.join("\n") || "(none)",
+          "",
+          "Usage: `/model provider` or `/model provider/model`",
+          "",
+          "Strada remains the control plane; this only changes the primary execution worker.",
+        ].join("\n"),
       );
       return;
     }

@@ -10,9 +10,20 @@ import type { ProviderCapabilities } from "../../agents/providers/provider.inter
 
 function createMockManager(
   providers: Array<{ name: string; label: string; defaultModel: string; capabilities?: ProviderCapabilities }>,
+  executionPools: Record<string, string[]> = {},
 ): ProviderManagerRef {
   return {
     listAvailable: () => providers.map(({ capabilities: _capabilities, ...provider }) => provider),
+    listExecutionCandidates: (identityKey?: string) => {
+      const allowed = identityKey ? executionPools[identityKey] : undefined;
+      const scopedProviders = allowed
+        ? providers.filter((provider) => allowed.includes(provider.name))
+        : providers;
+      return scopedProviders.map((provider) => ({
+        ...provider,
+        capabilities: provider.capabilities ?? null,
+      }));
+    },
     describeAvailable: () => providers.map((provider) => ({
       ...provider,
       capabilities: provider.capabilities ?? null,
@@ -243,6 +254,21 @@ describe("ProviderRouter", () => {
 
       const decision = router.resolve(codeGenTask, "reflecting");
       expect(decision.provider).toBeDefined();
+    });
+  });
+
+  describe("identity-scoped execution pools", () => {
+    it("routes within the identity-specific execution pool instead of every configured provider", () => {
+      const manager = createMockManager(MULTI_PROVIDERS, {
+        "chat-1": ["ollama", "groq"],
+      });
+      const router = new ProviderRouter(manager, "performance");
+
+      const decision = router.resolve(planningTask, undefined, { identityKey: "chat-1" });
+
+      expect(["ollama", "groq"]).toContain(decision.provider);
+      expect(decision.provider).not.toBe("claude");
+      expect(decision.provider).not.toBe("deepseek");
     });
   });
 });

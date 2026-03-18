@@ -517,7 +517,7 @@ npm run dev -- daemon --channel web
 | `OPENAI_AUTH_MODE` | OpenAI 认证模式 | `api-key`（默认）或 `chatgpt-subscription` |
 | `OPENAI_CHATGPT_AUTH_FILE` | 可选 Codex 会话文件 | 当 `OPENAI_AUTH_MODE=chatgpt-subscription` 时默认使用 `~/.codex/auth.json` |
 
-**提供商链：** 将 `PROVIDER_CHAIN` 设置为以逗号分隔的提供商名称列表。Strada 仍然是控制平面，并使用这条链来选择主执行 worker 及其故障回退。示例：`PROVIDER_CHAIN=kimi,deepseek,claude` 首先使用 Kimi，Kimi 失败则使用 DeepSeek，然后是 Claude。
+**提供商链：** 将 `PROVIDER_CHAIN` 设置为以逗号分隔的提供商名称列表。Strada 仍然是控制平面，并将这条链作为默认编排池，用于主执行 worker、supervisor 路由以及故障回退。示例：`PROVIDER_CHAIN=kimi,deepseek,claude` 首先使用 Kimi，Kimi 失败则使用 DeepSeek，然后是 Claude。
 
 **重要：** `OPENAI_AUTH_MODE=chatgpt-subscription` 只覆盖 Strada 内的 OpenAI 对话回合，不会提供 OpenAI API 或 embeddings 配额。如果你选择 `EMBEDDING_PROVIDER=openai`，仍然需要 `OPENAI_API_KEY`。
 

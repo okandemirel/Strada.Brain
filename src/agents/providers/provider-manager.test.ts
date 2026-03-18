@@ -159,6 +159,45 @@ describe("ProviderManager", () => {
     expect(provider?.name).toBe("chain(kimi->qwen)");
   });
 
+  it("limits execution candidates to the configured default chain", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      {
+        qwen: { apiKey: "qwen-key" },
+        kimi: { apiKey: "kimi-key" },
+        openai: { apiKey: "openai-key" },
+      },
+      { qwen: "qwen-max", kimi: "kimi-for-coding", openai: "gpt-5.2" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    expect(manager.listExecutionCandidates().map((entry) => entry.name)).toEqual(["qwen", "kimi"]);
+  });
+
+  it("prepends the active worker to the execution pool when selected outside the default chain", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    preferenceState.set("chat-1", { providerName: "openai", model: "gpt-5.2" });
+    const manager = new ProviderManager(
+      defaultProvider,
+      {
+        qwen: { apiKey: "qwen-key" },
+        kimi: { apiKey: "kimi-key" },
+        openai: { apiKey: "openai-key" },
+      },
+      { qwen: "qwen-max", kimi: "kimi-for-coding", openai: "gpt-5.2" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    expect(manager.listExecutionCandidates("chat-1").map((entry) => `${entry.name}:${entry.defaultModel}`)).toEqual([
+      "openai:gpt-5.2",
+      "qwen:qwen-max",
+      "kimi:kimi-for-coding",
+    ]);
+  });
+
   it("falls back to the default provider when resilient chain creation fails", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     preferenceState.set("chat-1", { providerName: "kimi" });

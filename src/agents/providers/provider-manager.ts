@@ -33,6 +33,18 @@ export interface ProviderDescriptor {
   readonly officialSnapshot: ProviderOfficialSnapshot | null;
 }
 
+export interface ProviderExecutionCandidate {
+  readonly name: string;
+  readonly label: string;
+  readonly defaultModel: string;
+  readonly contextWindow?: number;
+  readonly thinkingSupported?: boolean;
+  readonly specialFeatures?: string[];
+  readonly officialSignals?: ProviderOfficialSnapshot["signals"];
+  readonly officialSourceUrls?: string[];
+  readonly catalogUpdatedAt?: number;
+}
+
 interface ProviderModelCatalogLookup {
   getProviderModels(provider: string): Array<{ id: string }>;
   getProviderOfficialSnapshot?(provider: string): ProviderOfficialSnapshot | undefined;
@@ -348,6 +360,40 @@ export class ProviderManager {
       officialSourceUrls: officialSnapshot?.sourceUrls,
       catalogUpdatedAt: officialSnapshot?.lastUpdated,
     };
+  }
+
+  private getProviderLabel(name: string): string {
+    if (name === "claude" || name === "anthropic") {
+      return "Anthropic Claude";
+    }
+    if (name === "ollama") {
+      return "Ollama (Local)";
+    }
+    return PROVIDER_PRESETS[name]?.label ?? name;
+  }
+
+  private resolveExecutionPoolNames(chatId?: string): string[] {
+    const preferredProvider = chatId ? this.preferences.get(chatId)?.providerName : undefined;
+    const primaryName = preferredProvider?.trim().toLowerCase() || this.getDefaultPrimaryName();
+    const orderedPool = this.buildFallbackOrder(primaryName).filter((name) => this.isAvailable(name));
+
+    if (orderedPool.length > 0) {
+      return orderedPool;
+    }
+
+    return this.listAvailable().map((entry) => entry.name);
+  }
+
+  listExecutionCandidates(chatId?: string): ProviderExecutionCandidate[] {
+    const preferred = chatId ? this.preferences.get(chatId) : undefined;
+
+    return this.resolveExecutionPoolNames(chatId).map((name) => {
+      const model =
+        preferred?.providerName === name
+          ? preferred.model ?? this.getDefaultModelForProvider(name)
+          : this.getDefaultModelForProvider(name);
+      return this.buildAvailableEntry(name, this.getProviderLabel(name), model);
+    });
   }
 
   listAvailable(): Array<{

@@ -218,7 +218,7 @@ Strada.Brain automatically checks for updates daily and applies them when idle. 
 12. **Learning** -- tool results flow through TypedEventBus to the learning pipeline for immediate pattern storage
 13. **Response sent** to the user through the channel (streaming if supported)
 
-**Provider/model selection semantics:** Strada is always the agent talking to the user. Choosing a provider/model does not bypass Strada or send your message directly to that provider. Instead, it sets Strada's primary execution worker; planning, review, synthesis, routing, and fallback can still use other providers when the orchestrator decides it is better.
+**Provider/model selection semantics:** Strada is always the agent talking to the user. Choosing a provider/model does not bypass Strada or send your message directly to that provider. Instead, it sets Strada's primary execution worker. Planning, review, synthesis, routing, and fallback stay inside Strada's current orchestration pool: the configured `PROVIDER_CHAIN`, plus the actively selected worker if you temporarily switch outside that chain.
 
 ---
 
@@ -524,7 +524,7 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 | `OPENAI_AUTH_MODE` | OpenAI auth mode | `api-key` (default) or `chatgpt-subscription` |
 | `OPENAI_CHATGPT_AUTH_FILE` | Optional Codex auth session file | defaults to `~/.codex/auth.json` when `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
-**Provider chain:** Set `PROVIDER_CHAIN` to a comma-separated list of provider names. Strada stays the control plane and uses this chain to choose the primary execution worker plus fallbacks on failure. Example: `PROVIDER_CHAIN=kimi,deepseek,claude` uses Kimi first, DeepSeek if Kimi fails, then Claude. `openai` can be backed by either `OPENAI_API_KEY` or a local ChatGPT/Codex subscription session.
+**Provider chain:** Set `PROVIDER_CHAIN` to a comma-separated list of provider names. Strada stays the control plane and uses this chain as the default orchestration pool for the primary execution worker, supervisor routing, and fallback on failure. Example: `PROVIDER_CHAIN=kimi,deepseek,claude` uses Kimi first, DeepSeek if Kimi fails, then Claude. `openai` can be backed by either `OPENAI_API_KEY` or a local ChatGPT/Codex subscription session.
 
 **Important:** `OPENAI_AUTH_MODE=chatgpt-subscription` only covers OpenAI conversation turns inside Strada. It does not grant OpenAI API billing or embeddings quota. If you choose `EMBEDDING_PROVIDER=openai`, you still need an `OPENAI_API_KEY`.
 

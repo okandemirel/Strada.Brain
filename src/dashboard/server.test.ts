@@ -212,6 +212,15 @@ describe("DashboardServer", () => {
             activeModel: "kimi-for-coding",
           },
         ],
+        listExecutionCandidates: () => [
+          {
+            name: "kimi",
+            label: "Kimi (Moonshot)",
+            defaultModel: "kimi-for-coding",
+            configured: true,
+            models: ["kimi-for-coding"],
+          },
+        ],
         getActiveInfo: () => ({
           provider: "kimi",
           providerName: "kimi",
@@ -262,6 +271,12 @@ describe("DashboardServer", () => {
       selectionMode: "strada-primary-worker",
       executionPolicyNote: expect.stringContaining("Strada remains the control plane"),
     }));
+    expect(activeData.executionPool).toEqual([
+      expect.objectContaining({
+        name: "kimi",
+        defaultModel: "kimi-for-coding",
+      }),
+    ]);
 
     const ragRes = await fetch(`http://localhost:${addr.port}/api/rag/status`);
     expect(ragRes.status).toBe(200);
@@ -343,6 +358,15 @@ describe("DashboardServer", () => {
             models: ["kimi-for-coding"],
           },
         ],
+        listExecutionCandidates: () => [
+          {
+            name: "kimi",
+            label: "Kimi (Moonshot)",
+            defaultModel: "kimi-for-coding",
+            configured: true,
+            models: ["kimi-for-coding"],
+          },
+        ],
         getActiveInfo,
         setPreference,
       },
@@ -362,6 +386,13 @@ describe("DashboardServer", () => {
     );
     expect(activeRes.status).toBe(200);
     expect(getActiveInfo).toHaveBeenCalledWith("user-42");
+    const activeData = await activeRes.json();
+    expect(activeData.executionPool).toEqual([
+      expect.objectContaining({
+        name: "kimi",
+        defaultModel: "kimi-for-coding",
+      }),
+    ]);
 
     const switchRes = await fetch(`http://localhost:${addr.port}/api/providers/switch`, {
       method: "POST",

@@ -1360,6 +1360,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           configured: true,
           models: [provider.defaultModel],
         })),
+        listExecutionCandidates: (identityKey?: string) => providerManager.listExecutionCandidates(identityKey).map((provider) => ({
+          ...provider,
+          configured: true,
+          models: [provider.defaultModel],
+        })),
         listAvailableWithModels: async () => {
           const results = await providerManager.listAvailableWithModels();
           return results.map((provider) => ({
@@ -1886,41 +1891,58 @@ interface EmbeddingResolutionResult {
   };
 }
 
+function describeEmbeddingConsumers(config: Config): string[] {
+  const consumers: string[] = [];
+  if (config.rag.enabled) {
+    consumers.push("RAG");
+  }
+  if (config.memory.enabled) {
+    consumers.push("memory/learning");
+  }
+  return consumers;
+}
+
 /**
  * Resolve and cache the embedding provider independently from the RAG pipeline.
  * This allows the embedding provider to be shared with AgentDBMemory and learning.
  */
-async function resolveAndCacheEmbeddings(
+export async function resolveAndCacheEmbeddings(
   config: Config,
   logger: winston.Logger,
 ): Promise<EmbeddingResolutionResult> {
-  if (!config.rag.enabled) {
-    logger.info("Embeddings: RAG disabled by configuration, no embedding provider resolved");
+  const embeddingConsumers = describeEmbeddingConsumers(config);
+  if (embeddingConsumers.length === 0) {
+    logger.info("Embeddings: semantic subsystems disabled by configuration, no embedding provider resolved");
     return {
       status: {
         state: "disabled",
-        ragEnabled: false,
+        ragEnabled: config.rag.enabled,
         configuredProvider: config.rag.provider,
         configuredModel: config.rag.model,
         configuredDimensions: config.rag.dimensions,
         verified: false,
         usingHashFallback: true,
-        notice: "RAG disabled by configuration",
+        notice: "RAG and semantic memory are disabled by configuration",
       },
     };
   }
 
+  if (!config.rag.enabled) {
+    logger.info("Embeddings: RAG disabled, but keeping embeddings active for memory/learning");
+  }
+
+  const consumerLabel = embeddingConsumers.join(" and ");
+
   try {
     const resolution = resolveEmbeddingProvider(config);
     if (!resolution) {
-      const notice =
-        "RAG disabled: no compatible embedding provider found. Semantic code search is unavailable.";
-      logger.warn("Embeddings: no compatible embedding provider found");
+      const notice = `Embeddings unavailable: no compatible embedding provider found for ${consumerLabel}.`;
+      logger.warn("Embeddings: no compatible embedding provider found", { consumers: embeddingConsumers });
       return {
         notice,
         status: {
           state: "degraded",
-          ragEnabled: true,
+          ragEnabled: config.rag.enabled,
           configuredProvider: config.rag.provider,
           configuredModel: config.rag.model,
           configuredDimensions: config.rag.dimensions,
@@ -1945,7 +1967,7 @@ async function resolveAndCacheEmbeddings(
       cachedProvider,
       status: {
         state: "active",
-        ragEnabled: true,
+        ragEnabled: config.rag.enabled,
         configuredProvider: config.rag.provider,
         configuredModel: config.rag.model,
         configuredDimensions: config.rag.dimensions,
@@ -1957,16 +1979,16 @@ async function resolveAndCacheEmbeddings(
       },
     };
   } catch (error) {
-    const notice =
-      "RAG disabled: embedding initialization failed. Semantic code search is unavailable.";
+    const notice = `Embeddings unavailable: initialization failed for ${consumerLabel}.`;
     logger.warn("Embedding resolution failed", {
       error: error instanceof Error ? error.message : String(error),
+      consumers: embeddingConsumers,
     });
     return {
       notice,
       status: {
         state: "degraded",
-        ragEnabled: true,
+        ragEnabled: config.rag.enabled,
         configuredProvider: config.rag.provider,
         configuredModel: config.rag.model,
         configuredDimensions: config.rag.dimensions,

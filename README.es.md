@@ -518,7 +518,7 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | `OPENAI_AUTH_MODE` | Modo de autenticacion de OpenAI | `api-key` (por defecto) o `chatgpt-subscription` |
 | `OPENAI_CHATGPT_AUTH_FILE` | Archivo opcional de sesion Codex | por defecto `~/.codex/auth.json` cuando `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
-**Cadena de proveedores:** Configura `PROVIDER_CHAIN` con una lista de nombres de proveedores separados por comas. Strada sigue siendo el plano de control y usa esta cadena para elegir el worker principal y sus fallbacks. Ejemplo: `PROVIDER_CHAIN=kimi,deepseek,claude` usa Kimi primero, DeepSeek si Kimi falla, luego Claude.
+**Cadena de proveedores:** Configura `PROVIDER_CHAIN` con una lista de nombres de proveedores separados por comas. Strada sigue siendo el plano de control y usa esta cadena como pool de orquestacion por defecto para el worker principal, el routing del supervisor y sus fallbacks. Ejemplo: `PROVIDER_CHAIN=kimi,deepseek,claude` usa Kimi primero, DeepSeek si Kimi falla, luego Claude.
 
 **Importante:** `OPENAI_AUTH_MODE=chatgpt-subscription` solo cubre los turnos de conversacion de OpenAI dentro de Strada. No concede cuota de API ni de embeddings de OpenAI. Si eliges `EMBEDDING_PROVIDER=openai`, sigues necesitando `OPENAI_API_KEY`.
 

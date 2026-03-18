@@ -24,6 +24,16 @@ const localizedReadmes = [
   "README.zh.md",
 ] as const;
 
+const localizedProviderChainPhrases: Record<(typeof localizedReadmes)[number], string> = {
+  "README.de.md": "Standard-Orchestrierungspool",
+  "README.es.md": "pool de orquestacion por defecto",
+  "README.fr.md": "pool d'orchestration par d&eacute;faut",
+  "README.ja.md": "既定のオーケストレーションプール",
+  "README.ko.md": "기본 오케스트레이션 풀",
+  "README.tr.md": "varsayilan orkestrasyon havuzu",
+  "README.zh.md": "默认编排池",
+};
+
 const historicalDocs = [
   "docs/audit/2026-03-17-full-audit.md",
   "docs/remediation/2026-03-17-p0-plan.md",
@@ -88,6 +98,7 @@ describe("docs consistency", () => {
       expect(content).not.toMatch(/76\s*(?:tools?|arac|outils?|herramientas|ツール|개 도구|工具)/iu);
       expect(content).toContain("OPENAI_AUTH_MODE");
       expect(content).toContain("chatgpt-subscription");
+      expect(content).toContain(localizedProviderChainPhrases[relativePath]);
     }
   });
 

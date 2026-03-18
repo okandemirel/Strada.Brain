@@ -477,7 +477,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `OPENAI_AUTH_MODE` | OpenAI kimlik dogrulama modu | `api-key` (varsayilan) veya `chatgpt-subscription` |
 | `OPENAI_CHATGPT_AUTH_FILE` | Opsiyonel Codex oturum dosyasi | `OPENAI_AUTH_MODE=chatgpt-subscription` iken varsayilan `~/.codex/auth.json` |
 
-**Saglayici zinciri:** `PROVIDER_CHAIN` degiskenini virgule ayrilmis saglayici adlari listesi olarak ayarlayin. Strada control-plane olarak kalir ve bu sirayi birincil execution worker ile fallback secimi icin kullanir. Ornek: `PROVIDER_CHAIN=kimi,deepseek,claude` once Kimi'yi kullanir, Kimi basarisiz olursa DeepSeek, sonra Claude.
+**Saglayici zinciri:** `PROVIDER_CHAIN` degiskenini virgule ayrilmis saglayici adlari listesi olarak ayarlayin. Strada control-plane olarak kalir ve bu zinciri birincil execution worker, supervisor routing ve fallback secimi icin varsayilan orkestrasyon havuzu olarak kullanir. Ornek: `PROVIDER_CHAIN=kimi,deepseek,claude` once Kimi'yi kullanir, Kimi basarisiz olursa DeepSeek, sonra Claude.
 
 **Onemli:** `OPENAI_AUTH_MODE=chatgpt-subscription` sadece Strada icindeki OpenAI konusma turlari icin gecerli olur. OpenAI API veya embedding kotasi saglamaz. `EMBEDDING_PROVIDER=openai` secersen yine `OPENAI_API_KEY` gerekir.
 

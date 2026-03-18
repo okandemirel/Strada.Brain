@@ -25,6 +25,7 @@ interface ActiveProvider {
   isDefault: boolean
   selectionMode?: 'strada-primary-worker'
   executionPolicyNote?: string
+  executionPool?: ProviderInfo[]
 }
 
 interface RoutingDecision {
@@ -179,7 +180,7 @@ export default function SettingsPage() {
   const fetchProviders = useCallback(() => {
     Promise.allSettled([
       fetchJson<{ providers: ProviderInfo[] }>('/api/providers/available'),
-      fetchJson<{ active: ActiveProvider | null }>(`/api/providers/active?chatId=${encodeURIComponent(chatId)}`),
+      fetchJson<{ active: ActiveProvider | null; executionPool?: ProviderInfo[] | null }>(`/api/providers/active?chatId=${encodeURIComponent(chatId)}`),
       fetchJson<{ status: EmbeddingStatus }>('/api/rag/status'),
     ]).then((results) => {
       const [availResult, activeResult, embeddingResult] = results
@@ -187,7 +188,12 @@ export default function SettingsPage() {
       const activeData = settledValue(activeResult)
       const embeddingData = settledValue(embeddingResult)
       if (availData?.providers) setProviders(availData.providers)
-      if (activeData?.active) setActiveProvider(activeData.active)
+      if (activeData?.active) {
+        setActiveProvider({
+          ...activeData.active,
+          executionPool: activeData.executionPool ?? undefined,
+        })
+      }
       if (embeddingData?.status) setEmbeddingStatus(embeddingData.status)
       setModelLoading(false)
       if (!availData && !activeData && !embeddingData) {
@@ -647,6 +653,15 @@ export default function SettingsPage() {
               </div>
             )}
 
+            {activeProvider?.executionPool && activeProvider.executionPool.length > 0 && (
+              <div className="admin-stat-row" style={{ marginBottom: 16 }}>
+                <span className="admin-stat-label">Execution Pool</span>
+                <span className="admin-stat-value admin-card-value">
+                  {activeProvider.executionPool.map((provider) => provider.name).join(', ')}
+                </span>
+              </div>
+            )}
+
             {embeddingStatus && (
               <>
                 <div className="admin-stat-row" style={{ marginBottom: 16 }}>
@@ -673,7 +688,9 @@ export default function SettingsPage() {
                 <div className="settings-hint" style={{ marginTop: -4, marginBottom: 16 }}>
                   {embeddingStatus.ragEnabled
                     ? `RAG is ${embeddingStatus.state === 'active' ? 'active' : 'degraded'}. Configured embedding provider: ${embeddingStatus.configuredProvider}.`
-                    : 'RAG is disabled.'}
+                    : embeddingStatus.state === 'active'
+                      ? 'RAG is disabled, but embeddings remain active for memory and learning.'
+                      : 'RAG is disabled.'}
                   {embeddingStatus.notice ? ` ${embeddingStatus.notice}` : ''}
                 </div>
               </>

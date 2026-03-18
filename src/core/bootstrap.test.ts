@@ -11,6 +11,19 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const {
+  resolveEmbeddingProviderMock,
+  cachedEmbeddingInitializeMock,
+  cachedEmbeddingEmbedMock,
+} = vi.hoisted(() => ({
+  resolveEmbeddingProviderMock: vi.fn(),
+  cachedEmbeddingInitializeMock: vi.fn().mockResolvedValue(undefined),
+  cachedEmbeddingEmbedMock: vi.fn().mockResolvedValue({
+    embeddings: [[0.1, 0.2, 0.3]],
+    dimensions: 3,
+  }),
+}));
+
 // Mock modules before imports
 vi.mock("../memory/unified/agentdb-memory.js", () => {
   const MockAgentDBMemory = vi.fn().mockImplementation(() => ({
@@ -78,8 +91,26 @@ vi.mock("../agents/providers/claude.js", () => {
   return { ClaudeProvider: MockClaudeProvider };
 });
 
+vi.mock("../rag/embeddings/embedding-resolver.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../rag/embeddings/embedding-resolver.js")>();
+  return {
+    ...actual,
+    resolveEmbeddingProvider: resolveEmbeddingProviderMock,
+  };
+});
+
+vi.mock("../rag/embeddings/embedding-cache.js", () => {
+  const MockCachedEmbeddingProvider = vi.fn().mockImplementation((provider: { name: string; dimensions?: number }) => ({
+    name: provider.name,
+    dimensions: provider.dimensions ?? 3072,
+    initialize: cachedEmbeddingInitializeMock,
+    embed: cachedEmbeddingEmbedMock,
+  }));
+  return { CachedEmbeddingProvider: MockCachedEmbeddingProvider };
+});
+
 // Import the function under test
-import { initializeAIProvider, initializeMemory } from "./bootstrap.js";
+import { initializeAIProvider, initializeMemory, resolveAndCacheEmbeddings } from "./bootstrap.js";
 import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
 import { AgentDBAdapter } from "../memory/unified/agentdb-adapter.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
@@ -88,6 +119,7 @@ import { buildProviderChain } from "../agents/providers/provider-registry.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
 import type { Config } from "../config/config.js";
 import type * as winston from "winston";
+import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 
 // Create a mock logger
 function createMockLogger(): winston.Logger {
@@ -177,6 +209,12 @@ describe("initializeMemory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetMocksToDefaults();
+    resolveEmbeddingProviderMock.mockReset();
+    cachedEmbeddingInitializeMock.mockResolvedValue(undefined);
+    cachedEmbeddingEmbedMock.mockResolvedValue({
+      embeddings: [[0.1, 0.2, 0.3]],
+      dimensions: 3,
+    });
     logger = createMockLogger();
   });
 
@@ -296,6 +334,52 @@ describe("initializeMemory", () => {
 
     expect(result).toBeUndefined();
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("keeps embeddings active for memory when RAG is disabled", async () => {
+    resolveEmbeddingProviderMock.mockReturnValue({
+      provider: {
+        name: "Gemini:gemini-embedding-2-preview",
+        dimensions: 3072,
+      },
+      source: "auto-fallback:gemini",
+    });
+
+    const config = createTestConfig({
+      backend: "agentdb",
+      ragEnabled: false,
+      enabled: true,
+      geminiApiKey: "gemini-key",
+      providerChain: "kimi",
+    });
+    const result = await resolveAndCacheEmbeddings(config, logger);
+
+    expect(resolveEmbeddingProviderMock).toHaveBeenCalledWith(config);
+    expect(CachedEmbeddingProvider).toHaveBeenCalledTimes(1);
+    expect(result.cachedProvider).toBeDefined();
+    expect(result.status).toEqual(expect.objectContaining({
+      state: "active",
+      ragEnabled: false,
+      configuredProvider: "auto",
+      resolvedProviderName: "Gemini:gemini-embedding-2-preview",
+      resolutionSource: "auto-fallback:gemini",
+      activeDimensions: 3072,
+      usingHashFallback: false,
+    }));
+  });
+
+  it("disables embeddings only when both RAG and memory are disabled", async () => {
+    const config = createTestConfig({ enabled: false, ragEnabled: false });
+    const result = await resolveAndCacheEmbeddings(config, logger);
+
+    expect(resolveEmbeddingProviderMock).not.toHaveBeenCalled();
+    expect(result.cachedProvider).toBeUndefined();
+    expect(result.status).toEqual(expect.objectContaining({
+      state: "disabled",
+      ragEnabled: false,
+      usingHashFallback: true,
+      notice: "RAG and semantic memory are disabled by configuration",
+    }));
   });
 
   describe("legacy memory migration", () => {

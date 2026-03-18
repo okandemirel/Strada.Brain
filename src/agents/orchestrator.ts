@@ -688,6 +688,7 @@ export class Orchestrator {
     role: SupervisorRole,
     task: TaskClassification,
     phase: string | undefined,
+    identityKey: string,
     fallbackName: string,
     fallbackProvider: IAIProvider,
   ): SupervisorAssignment {
@@ -701,7 +702,7 @@ export class Orchestrator {
     }
 
     try {
-      const routed = this.providerRouter.resolve(task, phase);
+      const routed = this.providerRouter.resolve(task, phase, { identityKey });
       const resolved = this.getProviderByNameOrFallback(routed.provider, fallbackProvider);
       return this.buildStaticSupervisorAssignment(role, resolved.providerName, resolved.provider, routed.reason);
     } catch {
@@ -731,6 +732,7 @@ export class Orchestrator {
       "planner",
       { ...task, type: "planning" },
       "planning",
+      identityKey,
       selectedProviderName,
       selectedProvider,
     );
@@ -748,6 +750,7 @@ export class Orchestrator {
       "reviewer",
       { ...task, type: "code-review" },
       "reflecting",
+      identityKey,
       planner.providerName,
       planner.provider,
     );
@@ -764,6 +767,7 @@ export class Orchestrator {
       "synthesizer",
       { ...task, type: "simple-question" },
       undefined,
+      identityKey,
       reviewer.providerName,
       reviewer.provider,
     );

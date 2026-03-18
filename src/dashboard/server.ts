@@ -194,6 +194,19 @@ interface DashboardProviderManager {
     officialSourceUrls?: string[];
     catalogUpdatedAt?: number;
   }>;
+  listExecutionCandidates?(identityKey?: string): Array<{
+    name: string;
+    configured: boolean;
+    label?: string;
+    defaultModel?: string;
+    models?: string[];
+    contextWindow?: number;
+    thinkingSupported?: boolean;
+    specialFeatures?: string[];
+    officialSignals?: ProviderOfficialSnapshot["signals"];
+    officialSourceUrls?: string[];
+    catalogUpdatedAt?: number;
+  }>;
   listAvailableWithModels?(): Promise<Array<{
     name: string;
     configured: boolean;
@@ -1322,8 +1335,9 @@ export class DashboardServer {
         try {
           const identityKey = resolveDashboardIdentityKey(chatId, userId, conversationId);
           const active = this.providerManager.getActiveInfo(identityKey);
+          const executionPool = this.providerManager.listExecutionCandidates?.(identityKey) ?? null;
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ active }));
+          res.end(JSON.stringify({ active, executionPool }));
         } catch (err) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));

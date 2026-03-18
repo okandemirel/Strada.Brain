@@ -27,6 +27,12 @@ import {
 
 export interface ProviderManagerRef {
   listAvailable(): Array<{ name: string; label: string; defaultModel: string }>;
+  listExecutionCandidates?(identityKey?: string): Array<{
+    name: string;
+    label: string;
+    defaultModel: string;
+    capabilities?: ProviderCapabilities | null;
+  }>;
   describeAvailable?(): Array<{
     name: string;
     label: string;
@@ -134,8 +140,12 @@ export class ProviderRouter {
   resolve(
     task: TaskClassification,
     phase?: string,
+    options: {
+      identityKey?: string;
+      allowedProviderNames?: readonly string[];
+    } = {},
   ): RoutingDecision {
-    const available = this.getAvailableProviders();
+    const available = this.getAvailableProviders(options);
 
     // Zero overhead: single provider → return immediately
     if (available.length <= 1) {
@@ -236,7 +246,30 @@ export class ProviderRouter {
     );
   }
 
-  private getAvailableProviders(): AvailableProvider[] {
+  private getAvailableProviders(options: {
+    identityKey?: string;
+    allowedProviderNames?: readonly string[];
+  }): AvailableProvider[] {
+    const allowedNames = options.allowedProviderNames
+      ? new Set(options.allowedProviderNames.map((name) => name.trim().toLowerCase()).filter(Boolean))
+      : null;
+
+    const base =
+      this.providerManager.listExecutionCandidates?.(options.identityKey)?.map((entry) => ({
+        ...entry,
+        capabilities: entry.capabilities ?? this.providerManager.getProviderCapabilities?.(entry.name, entry.defaultModel) ?? null,
+      }))
+      ?? this.getDefaultAvailableProviders();
+
+    if (!allowedNames) {
+      return base;
+    }
+
+    const filtered = base.filter((entry) => allowedNames.has(entry.name.trim().toLowerCase()));
+    return filtered.length > 0 ? filtered : base;
+  }
+
+  private getDefaultAvailableProviders(): AvailableProvider[] {
     if (this.providerManager.describeAvailable) {
       return this.providerManager.describeAvailable();
     }
