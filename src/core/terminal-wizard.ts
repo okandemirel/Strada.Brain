@@ -63,6 +63,7 @@ const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../../web-portal/dist");
 const PACKAGED_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../channels/web/static");
 const SETUP_HOST = "127.0.0.1";
+const SETUP_QUERY_PARAM = "strada-setup";
 
 export interface WizardAnswers {
   unityProjectPath: string;
@@ -324,6 +325,33 @@ function openBrowser(url: string): void {
     console.log(`  Please open: ${url}\n`);
   });
   proc.unref();
+}
+
+function buildSetupAccessUrl(port: number): string {
+  const params = new URLSearchParams({
+    [SETUP_QUERY_PARAM]: "1",
+    t: Date.now().toString(),
+  });
+  return `http://${SETUP_HOST}:${port}/?${params.toString()}`;
+}
+
+async function waitForSetupUrlReady(
+  url: string,
+  maxAttempts = 20,
+  delayMs = 150,
+): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (response.ok) {
+        return;
+      }
+    } catch {
+      // The setup server may need a moment to expose the freshly built assets.
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
 }
 
 async function canBindLocalhostPort(port: number): Promise<boolean> {
@@ -675,13 +703,14 @@ export async function runTerminalWizard(
       const port = await findAvailableSetupWizardPort(requestedPort);
       const { SetupWizard } = await import("./setup-wizard.js");
       const wizard = new SetupWizard({ port });
-      const url = `http://${SETUP_HOST}:${port}/`;
+      const url = buildSetupAccessUrl(port);
       if (port !== requestedPort) {
         console.log(
-          `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on http://${SETUP_HOST}:${port}/ instead.`,
+          `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on ${url} instead.`,
         );
       }
       await wizard.listen();
+      await waitForSetupUrlReady(url);
       console.log(`\n\uD83C\uDF10 Opening setup at ${url}...`);
       console.log(`   (Open this URL in your browser if it didn't open automatically)\n`);
       openBrowser(url);

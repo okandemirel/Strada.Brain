@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
-import { SetupWizard, hasConfiguredEmbeddingCandidate, injectSetupModeMarker } from "./setup-wizard.js";
+import { SetupWizard, buildSetupAccessUrl, hasConfiguredEmbeddingCandidate, injectSetupModeMarker } from "./setup-wizard.js";
 
 describe("SetupWizard path validation", () => {
   it("re-validates the project path during save using the resolved home-directory path", async () => {
@@ -55,5 +55,9 @@ describe("SetupWizard path validation", () => {
   it("injects setup mode into the shared portal html", () => {
     const html = injectSetupModeMarker("<html><head></head><body></body></html>");
     expect(html).toContain("window.__STRADA_SETUP__ = true");
+  });
+
+  it("builds a cache-busted setup access url that explicitly enables setup mode", () => {
+    expect(buildSetupAccessUrl(3000, 12345)).toBe("http://127.0.0.1:3000/?strada-setup=1&t=12345");
   });
 });

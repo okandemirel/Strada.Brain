@@ -26,6 +26,15 @@ function resolveStaticDir(): string {
 }
 
 const STATIC_DIR = resolveStaticDir();
+const SETUP_QUERY_PARAM = "strada-setup";
+
+export function buildSetupAccessUrl(port: number, cacheBust: number = Date.now()): string {
+  const params = new URLSearchParams({
+    [SETUP_QUERY_PARAM]: "1",
+    t: String(cacheBust),
+  });
+  return `http://${SETUP_HOST}:${port}/?${params.toString()}`;
+}
 
 export function injectSetupModeMarker(html: string): string {
   if (html.includes("window.__STRADA_SETUP__")) {

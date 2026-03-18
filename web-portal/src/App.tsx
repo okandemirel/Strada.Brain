@@ -13,15 +13,30 @@ import PersonalityPage from './pages/PersonalityPage'
 import MemoryPage from './pages/MemoryPage'
 import SettingsPage from './pages/SettingsPage'
 import SetupWizard from './pages/SetupWizard'
+import { detectSetupMode } from './utils/setup-mode'
 
 export default function App() {
-  const setupMode = typeof window !== 'undefined' && Boolean((window as Window & { __STRADA_SETUP__?: boolean }).__STRADA_SETUP__)
+  const setupMode = typeof window !== 'undefined' && detectSetupMode(
+    window.location.search,
+    Boolean((window as Window & { __STRADA_SETUP__?: boolean }).__STRADA_SETUP__),
+  )
+
+  if (setupMode) {
+    return (
+      <ErrorBoundary>
+        <Routes>
+          <Route path="*" element={<SetupWizard />} />
+        </Routes>
+      </ErrorBoundary>
+    )
+  }
+
   return (
     <ErrorBoundary>
       <Routes>
         <Route path="/setup" element={<SetupWizard />} />
         <Route element={<AppLayout />}>
-          <Route index element={setupMode ? <SetupWizard /> : <ChatView />} />
+          <Route index element={<ChatView />} />
           <Route path="dashboard" element={<DashboardView />} />
           <Route path="config" element={<ConfigPage />} />
           <Route path="tools" element={<ToolsPage />} />
