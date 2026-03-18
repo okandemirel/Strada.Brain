@@ -51,15 +51,23 @@ import {
 } from "./providers/provider-knowledge.js";
 import {
   buildAutonomyDeflectionGate,
+  buildClarificationContinuationGate,
+  buildClarificationReviewRequest,
   COMPLETION_REVIEW_SYSTEM_PROMPT,
+  CLARIFICATION_REVIEW_SYSTEM_PROMPT,
   ErrorRecoveryEngine,
   TaskPlanner,
   SelfVerification,
   buildCompletionReviewGate,
   buildCompletionReviewRequest,
+  collectClarificationReviewEvidence,
   collectCompletionReviewEvidence,
+  formatClarificationPrompt,
   hasOpenReviewFindings,
+  parseClarificationReviewDecision,
   parseCompletionReviewDecision,
+  sanitizeClarificationReviewDecision,
+  shouldRunClarificationReview,
   shouldRunCompletionReview,
 } from "./autonomy/index.js";
 import { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
@@ -156,6 +164,10 @@ interface ToolExecutionOptions {
   taskPrompt?: string;
   sessionMessages?: ConversationMessage[];
   onUsage?: (usage: TaskUsageEvent) => void;
+  identityKey?: string;
+  strategy?: SupervisorExecutionStrategy;
+  agentState?: AgentState;
+  touchedFiles?: readonly string[];
 }
 
 interface SelfManagedWriteReview {
@@ -168,6 +180,13 @@ interface ShellCommandReviewDecision {
   reason?: string;
   taskAligned?: boolean;
   bounded?: boolean;
+}
+
+interface ClarificationIntervention {
+  kind: "none" | "continue" | "ask_user" | "blocked";
+  gate?: string;
+  message?: string;
+  input?: Record<string, unknown>;
 }
 
 type SupervisorRole = "planner" | "executor" | "reviewer" | "synthesizer";
@@ -428,15 +447,16 @@ function buildProfileParts(profile: { displayName?: string; language: string; ac
 }
 
 const FIRST_TIME_USER_PROMPT = `\n\n## First-Time User
-This is a new user you haven't met before. In your FIRST response:
-1. Introduce yourself warmly as Strada Brain unless the user's saved preferences explicitly renamed you
-2. Ask their name naturally (e.g., "What should I call you?")
-3. Ask about their preferred communication style (casual, formal, or minimal)
-4. Ask how detailed they want explanations to be (brief, moderate, or detailed)
-5. Start with the language from the Language Rule above, but if the user writes in a different language, match their language
-6. Still answer their actual question or help with what they asked
+This is a new user you haven't met before.
 
-After they tell you their name, remember it for future messages. Keep the onboarding conversational — ask these questions naturally, not as a formal checklist.\n`;
+Onboarding rules:
+1. If the user asked for concrete technical help, start solving it immediately.
+2. Do not turn onboarding into a checklist, intake form, or option menu.
+3. At most, ask one short natural follow-up about what to call them after you have already made concrete progress or given the first actionable answer.
+4. Do not ask about communication style or explanation detail in the same first technical reply unless the user explicitly asks about preferences.
+5. Start with the language from the Language Rule above, but if the user writes in a different language, match their language.
+
+Remember the user's name after they tell you. Keep onboarding minimal and non-blocking.\n`;
 
 /** Strip prompt injection patterns from stored text before injecting into system prompts. */
 function sanitizePromptInjection(text: string): string {
@@ -935,6 +955,7 @@ export class Orchestrator {
           "- Execute the current plan and use tools when needed.",
           "- Do not treat your draft as the final user-facing answer.",
           "- Leave final presentation to the synthesizer unless the orchestrator explicitly surfaces a blocker.",
+          "- If the task is still locally inspectable, do not hand it back to the user as a clarification request.",
         );
         break;
       case "reviewer":
@@ -942,6 +963,7 @@ export class Orchestrator {
           "- Evaluate progress, verification, and failure signals.",
           "- Decide whether execution should continue, replan, or complete.",
           "- Do not rewrite the whole conversation as the final user answer.",
+          "- Decide whether ambiguity is internally resolvable or truly requires user clarification.",
         );
         break;
       case "synthesizer":
@@ -949,6 +971,7 @@ export class Orchestrator {
           "- Produce the final user-facing response for the orchestrator.",
           "- Preserve verified facts and blockers only.",
           "- Never mention internal control markers or provider identities.",
+          "- Only ask the user a clarifying question when clarification review explicitly approved it.",
         );
         break;
     }
@@ -1248,6 +1271,207 @@ export class Orchestrator {
     const soulContent = this.soulLoader.getContent(channelType);
     if (!soulContent) return systemPrompt;
     return systemPrompt + `\n\n## Agent Personality\n\n${soulContent}\n`;
+  }
+
+  private getClarificationReviewAssignment(
+    identityKey: string,
+    strategy?: SupervisorExecutionStrategy,
+  ): SupervisorAssignment {
+    if (strategy) {
+      return this.buildStaticSupervisorAssignment(
+        "reviewer",
+        strategy.reviewer.providerName,
+        strategy.reviewer.modelId,
+        strategy.reviewer.provider,
+        "reviewed whether clarification should stay internal or be surfaced to the user",
+        "clarification-review",
+      );
+    }
+
+    const fallbackProvider = this.providerManager.getProvider(identityKey);
+    return this.buildStaticSupervisorAssignment(
+      "reviewer",
+      fallbackProvider.name,
+      this.resolveProviderModelId(fallbackProvider.name, identityKey),
+      fallbackProvider,
+      "reviewed whether clarification should stay internal or be surfaced to the user",
+      "clarification-review",
+    );
+  }
+
+  private async reviewClarification(params: {
+    chatId: string;
+    identityKey: string;
+    prompt: string;
+    draft: string;
+    state: AgentState;
+    touchedFiles?: readonly string[];
+    strategy?: SupervisorExecutionStrategy;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }): Promise<{
+    decision: ReturnType<typeof sanitizeClarificationReviewDecision>;
+    evidence: ReturnType<typeof collectClarificationReviewEvidence>;
+  }> {
+    const evidence = collectClarificationReviewEvidence({
+      prompt: params.prompt,
+      draft: params.draft,
+      state: params.state,
+      projectPath: this.projectPath,
+      touchedFiles: params.touchedFiles,
+    });
+    const reviewer = this.getClarificationReviewAssignment(params.identityKey, params.strategy);
+    const reviewTask = params.strategy?.task ?? this.taskClassifier.classify(params.prompt);
+    const reviewStrategy = params.strategy ?? {
+      task: reviewTask,
+      planner: reviewer,
+      executor: reviewer,
+      reviewer,
+      synthesizer: reviewer,
+      usesMultipleProviders: false,
+    };
+
+    try {
+      const reviewResponse = await reviewer.provider.chat(
+        `${this.systemPrompt}\n\n${CLARIFICATION_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(reviewStrategy, reviewer)}`,
+        [{
+          role: "user",
+          content: buildClarificationReviewRequest(evidence),
+        }],
+        [],
+      );
+      this.recordExecutionTrace({
+        identityKey: params.identityKey,
+        assignment: reviewer,
+        phase: "clarification-review",
+        source: "clarification-review",
+        task: reviewTask,
+      });
+      this.recordAuxiliaryUsage(
+        reviewer.providerName,
+        reviewResponse.usage,
+        params.usageHandler,
+      );
+      return {
+        decision: sanitizeClarificationReviewDecision(parseClarificationReviewDecision(reviewResponse.text)),
+        evidence,
+      };
+    } catch (error) {
+      getLogger().warn("Clarification review provider failed", {
+        chatId: params.chatId,
+        provider: reviewer.providerName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return {
+      decision: evidence.canInspectLocally
+        ? {
+            decision: "internal_continue",
+            reason: "Strada still has a local inspection path and should continue internally.",
+            recommendedNextAction: "Inspect local files, logs, tests, or runtime state before asking the user anything else.",
+          }
+        : {
+            decision: "blocked",
+            reason: "External clarification is still required because no local inspection path remains.",
+            blockingType: "missing_external_info",
+            question: "Please share the missing external detail needed to continue.",
+          },
+      evidence,
+    };
+  }
+
+  private async resolveDraftClarificationIntervention(params: {
+    chatId: string;
+    identityKey: string;
+    prompt: string;
+    draft: string;
+    state: AgentState;
+    strategy?: SupervisorExecutionStrategy;
+    touchedFiles?: readonly string[];
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }): Promise<ClarificationIntervention> {
+    const cleanedDraft = this.stripInternalDecisionMarkers(params.draft);
+    if (!cleanedDraft) {
+      return { kind: "none" };
+    }
+    if (!shouldRunClarificationReview(cleanedDraft)) {
+      return { kind: "none" };
+    }
+
+    const { decision, evidence } = await this.reviewClarification({
+      ...params,
+      draft: cleanedDraft,
+    });
+
+    switch (decision?.decision) {
+      case "internal_continue":
+        return {
+          kind: "continue",
+          gate: buildClarificationContinuationGate(evidence, decision),
+        };
+      case "ask_user":
+      case "blocked":
+        return {
+          kind: decision.decision,
+          message: formatClarificationPrompt(decision) ?? undefined,
+        };
+      default:
+        return { kind: "none" };
+    }
+  }
+
+  private async resolveAskUserClarificationIntervention(params: {
+    chatId: string;
+    identityKey: string;
+    toolCall: ToolCall;
+    prompt: string;
+    state: AgentState;
+    strategy?: SupervisorExecutionStrategy;
+    touchedFiles?: readonly string[];
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }): Promise<ClarificationIntervention> {
+    const question = this.normalizeInteractiveText(params.toolCall.input["question"]);
+    const context = this.normalizeInteractiveText(params.toolCall.input["context"]);
+    const options = Array.isArray(params.toolCall.input["options"])
+      ? params.toolCall.input["options"].map((option) => this.normalizeInteractiveText(option)).filter(Boolean)
+      : [];
+    const recommended = this.normalizeInteractiveText(params.toolCall.input["recommended"]);
+    const draft = [
+      context ? `Context: ${context}` : "",
+      question ? `Question: ${question}` : "",
+      options.length > 0 ? `Options: ${options.join(" | ")}` : "",
+      recommended ? `Recommended: ${recommended}` : "",
+    ].filter(Boolean).join("\n");
+
+    const { decision, evidence } = await this.reviewClarification({
+      ...params,
+      draft,
+    });
+
+    if (decision?.decision === "internal_continue") {
+      return {
+        kind: "continue",
+        gate: buildClarificationContinuationGate(evidence, decision),
+      };
+    }
+
+    if (decision?.decision === "ask_user" || decision?.decision === "blocked") {
+      const approvedQuestion = decision.question?.trim() || question;
+      const approvedOptions = decision.options?.filter((option) => option.trim().length > 0) ?? options;
+      const approvedRecommended = decision.recommendedOption?.trim() || recommended || undefined;
+
+      return {
+        kind: decision.decision,
+        input: {
+          question: approvedQuestion,
+          ...(approvedOptions.length > 0 ? { options: approvedOptions } : {}),
+          ...(approvedRecommended ? { recommended: approvedRecommended } : {}),
+          ...(decision.reason?.trim() ? { context: decision.reason.trim() } : context ? { context } : {}),
+        },
+      };
+    }
+
+    return { kind: "none" };
   }
 
   /**
@@ -1663,6 +1887,43 @@ export class Orchestrator {
           const decision = parseReflectionDecision(response.text);
 
           if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
+            const clarificationIntervention = await this.resolveDraftClarificationIntervention({
+              chatId,
+              identityKey,
+              prompt,
+              draft: response.text ?? "",
+              state: bgAgentState,
+              strategy: executionStrategy,
+              touchedFiles: [...selfVerification.getState().touchedFiles],
+              usageHandler: options.onUsage ?? this.onUsage,
+            });
+            if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
+              bgAgentState = {
+                ...bgAgentState,
+                lastReflection: response.text ?? bgAgentState.lastReflection,
+                reflectionCount: bgAgentState.reflectionCount + 1,
+                consecutiveErrors: 0,
+              };
+              bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: clarificationIntervention.gate });
+              onProgress("Clarification review kept the task internal");
+              continue;
+            }
+            if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
+              session.messages.push({ role: "assistant", content: clarificationIntervention.message });
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: bgAgentState.iteration,
+                toolCallCount: bgToolCallCount,
+                hitMaxIterations: false,
+              });
+              await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
+              return clarificationIntervention.message;
+            }
+
             const completionGate = await this.resolveCompletionGate({
               chatId,
               identityKey,
@@ -1763,6 +2024,35 @@ export class Orchestrator {
 
         // Final response — return text
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
+          const clarificationIntervention = await this.resolveDraftClarificationIntervention({
+            chatId,
+            identityKey,
+            prompt,
+            draft: response.text ?? "",
+            state: bgAgentState,
+            strategy: executionStrategy,
+            touchedFiles: [...selfVerification.getState().touchedFiles],
+            usageHandler: options.onUsage ?? this.onUsage,
+          });
+          if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: clarificationIntervention.gate });
+            continue;
+          }
+          if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
+            session.messages.push({ role: "assistant", content: clarificationIntervention.message });
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: bgAgentState.iteration,
+              toolCallCount: bgToolCallCount,
+              hitMaxIterations: false,
+            });
+            await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
+            return clarificationIntervention.message;
+          }
+
           const completionGate = await this.resolveCompletionGate({
             chatId,
             identityKey,
@@ -1834,6 +2124,10 @@ export class Orchestrator {
           taskPrompt: prompt,
           sessionMessages: session.messages,
           onUsage: options.onUsage ?? this.onUsage,
+          identityKey,
+          strategy: executionStrategy,
+          agentState: bgAgentState,
+          touchedFiles: [...selfVerification.getState().touchedFiles],
         });
         bgToolCallCount += response.toolCalls.length;
 
@@ -2431,6 +2725,42 @@ export class Orchestrator {
         const decision = parseReflectionDecision(response.text);
 
         if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
+          const clarificationIntervention = await this.resolveDraftClarificationIntervention({
+            chatId,
+            identityKey,
+            prompt: lastUserMessage,
+            draft: response.text ?? "",
+            state: agentState,
+            strategy: executionStrategy,
+            touchedFiles: [...selfVerification.getState().touchedFiles],
+            usageHandler: this.onUsage,
+          });
+          if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
+            agentState = {
+              ...agentState,
+              lastReflection: response.text ?? agentState.lastReflection,
+              reflectionCount: agentState.reflectionCount + 1,
+              consecutiveErrors: 0,
+            };
+            agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: clarificationIntervention.gate });
+            continue;
+          }
+          if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
+            session.messages.push({ role: "assistant", content: clarificationIntervention.message });
+            await this.channel.sendMarkdown(chatId, clarificationIntervention.message);
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
+            });
+            return;
+          }
+
           const completionGate = await this.resolveCompletionGate({
             chatId,
             identityKey,
@@ -2607,6 +2937,41 @@ export class Orchestrator {
       // If no tool calls, send the final text response
       // (streaming already sent it, so skip for streamed end_turn)
       if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
+        const clarificationIntervention = await this.resolveDraftClarificationIntervention({
+          chatId,
+          identityKey,
+          prompt: lastUserMessage,
+          draft: response.text ?? "",
+          state: agentState,
+          strategy: executionStrategy,
+          touchedFiles: [...selfVerification.getState().touchedFiles],
+          usageHandler: this.onUsage,
+        });
+        if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
+          if (response.text) {
+            session.messages.push({ role: "assistant", content: response.text });
+          }
+          session.messages.push({
+            role: "user",
+            content: clarificationIntervention.gate,
+          });
+          continue;
+        }
+        if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
+          session.messages.push({
+            role: "assistant",
+            content: clarificationIntervention.message,
+          });
+          await this.channel.sendMarkdown(chatId, clarificationIntervention.message);
+          this.recordMetricEnd(metricId, {
+            agentPhase: AgentPhase.COMPLETE,
+            iterations: agentState.iteration,
+            toolCallCount: agentState.stepResults.length,
+            hitMaxIterations: false,
+          });
+          return;
+        }
+
         // ─── Verification gate: catch unverified exits ──────────────────
         const completionGate = await this.resolveCompletionGate({
           chatId,
@@ -2781,6 +3146,10 @@ export class Orchestrator {
         taskPrompt: lastUserMessage,
         sessionMessages: session.messages,
         onUsage: this.onUsage,
+        identityKey,
+        strategy: executionStrategy,
+        agentState,
+        touchedFiles: [...selfVerification.getState().touchedFiles],
       });
 
       // ─── Autonomy: track + analyze results ─────────────────────────────
@@ -3663,23 +4032,57 @@ export class Orchestrator {
     };
 
     for (const tc of toolCalls) {
-      const interactiveResolution = this.resolveInteractiveToolCall(chatId, tc, mode, options.userId);
+      let activeToolCall = tc;
+      const interactiveResolution = this.resolveInteractiveToolCall(chatId, activeToolCall, mode, options.userId);
       if (interactiveResolution) {
         results.push(interactiveResolution);
         continue;
       }
 
-      const readOnlyCheck = checkReadOnlyBlock(tc.name, this.readOnly);
+      if (
+        mode === "interactive" &&
+        activeToolCall.name === "ask_user" &&
+        options.taskPrompt &&
+        options.identityKey &&
+        options.agentState
+      ) {
+        const clarificationIntervention = await this.resolveAskUserClarificationIntervention({
+          chatId,
+          identityKey: options.identityKey,
+          toolCall: activeToolCall,
+          prompt: options.taskPrompt,
+          state: options.agentState,
+          strategy: options.strategy,
+          touchedFiles: options.touchedFiles,
+          usageHandler: options.onUsage,
+        });
+        if (clarificationIntervention.kind === "continue") {
+          results.push({
+            toolCallId: activeToolCall.id,
+            content: clarificationIntervention.gate ?? "Continue internally without asking the user yet.",
+            isError: false,
+          });
+          continue;
+        }
+        if (clarificationIntervention.input) {
+          activeToolCall = {
+            ...activeToolCall,
+            input: clarificationIntervention.input as unknown as import("../types/index.js").JsonObject,
+          };
+        }
+      }
+
+      const readOnlyCheck = checkReadOnlyBlock(activeToolCall.name, this.readOnly);
       if (!readOnlyCheck.allowed) {
-        results.push(createReadOnlyToolStub(tc.name, tc.id));
+        results.push(createReadOnlyToolStub(activeToolCall.name, activeToolCall.id));
         continue;
       }
 
-      const tool = this.tools.get(tc.name);
+      const tool = this.tools.get(activeToolCall.name);
       if (!tool) {
         results.push({
-          toolCallId: tc.id,
-          content: `Error: unknown tool '${tc.name}'`,
+          toolCallId: activeToolCall.id,
+          content: `Error: unknown tool '${activeToolCall.name}'`,
           isError: true,
         });
         continue;
@@ -3687,19 +4090,19 @@ export class Orchestrator {
 
       logger.debug("Executing tool", {
         chatId,
-        tool: tc.name,
-        input: tc.input,
+        tool: activeToolCall.name,
+        input: activeToolCall.input,
       });
 
       // Confirmation flow via DMPolicy for write operations
-      if (this.requireConfirmation && this.isWriteOperation(tc.name)) {
+      if (this.requireConfirmation && this.isWriteOperation(activeToolCall.name)) {
         if (this.isSelfManagedInteractiveMode(chatId, mode, options.userId)) {
-          const review = await this.reviewSelfManagedWriteOperation(chatId, tc.name, tc.input, mode, options);
+          const review = await this.reviewSelfManagedWriteOperation(chatId, activeToolCall.name, activeToolCall.input, mode, options);
           if (!review.approved) {
             results.push(
               this.buildSelfManagedWriteRejection(
-                tc.id,
-                tc.name,
+                activeToolCall.id,
+                activeToolCall.name,
                 mode,
                 review.reason ?? "operation did not pass local safety review",
               ),
@@ -3707,25 +4110,25 @@ export class Orchestrator {
             continue;
           }
         } else {
-          const destructive = isDestructiveOperation(tc.name, tc.input);
+          const destructive = isDestructiveOperation(activeToolCall.name, activeToolCall.input);
           const sessionUserId = options.userId ?? chatId;
           const prefs = this.dmPolicy.getSessionPrefs(sessionUserId, chatId);
           const stubDiff = {
-            path: String(tc.input["path"] ?? ""),
+            path: String(activeToolCall.input["path"] ?? ""),
             content: "",
             stats: { additions: 0, deletions: 0, modifications: 0, totalChanges: 1, hunks: 1 },
             oldPath: "",
-            newPath: String(tc.input["path"] ?? ""),
+            newPath: String(activeToolCall.input["path"] ?? ""),
             diff: "",
             isNew: false,
             isDeleted: false,
             isRename: false,
           };
           if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
-            const confirmed = await this.requestWriteConfirmation(chatId, options.userId, tc.name, tc.input);
+            const confirmed = await this.requestWriteConfirmation(chatId, options.userId, activeToolCall.name, activeToolCall.input);
             if (!confirmed) {
               results.push({
-                toolCallId: tc.id,
+                toolCallId: activeToolCall.id,
                 content: "Operation cancelled by user.",
                 isError: false,
               });
@@ -3737,23 +4140,23 @@ export class Orchestrator {
 
       const toolStart = Date.now();
       try {
-        const result = await tool.execute(tc.input, toolContext);
-        this.metrics?.recordToolCall(tc.name, Date.now() - toolStart, !result.isError);
+        const result = await tool.execute(activeToolCall.input, toolContext);
+        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError);
         results.push({
-          toolCallId: tc.id,
+          toolCallId: activeToolCall.id,
           content: sanitizeToolResult(result.content),
           isError: result.isError,
         });
       } catch (error) {
-        this.metrics?.recordToolCall(tc.name, Date.now() - toolStart, false);
+        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, false);
         const errMsg = error instanceof Error ? error.message : "Unknown error";
         logger.error("Tool execution error", {
           chatId,
-          tool: tc.name,
+          tool: activeToolCall.name,
           error: errMsg,
         });
         results.push({
-          toolCallId: tc.id,
+          toolCallId: activeToolCall.id,
           content: "Tool execution failed",
           isError: true,
         });

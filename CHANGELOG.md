@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Web daemon toggle with configured/not-configured state detection
 - Interactive routing preset selector in SettingsPage
 - `/api/daemon/start`, `/api/daemon/stop` POST endpoints
-- `/api/agent-activity` GET endpoint for routing decisions
+- `/api/agent-activity` GET endpoint for routing decisions plus runtime execution traces (including clarification-review)
 - `/api/routing/preset` POST endpoint for runtime preset switching
 - AgentNotifier for proactive user notifications
 - TestResultObserver for test execution monitoring

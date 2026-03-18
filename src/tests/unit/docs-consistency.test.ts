@@ -77,6 +77,8 @@ describe("docs consistency", () => {
       "It does not imply OpenAI API quota for embeddings",
     );
     expect(readRepoFile("src/config/README.md")).toContain("STRADA_HOME");
+    expect(readRepoFile("README.md")).toContain("clarification-review");
+    expect(readRepoFile("src/agents/README.md")).toContain("Clarification Review");
   });
 
   it("marks localized READMEs as translations that defer to the English canonical README", () => {
@@ -103,6 +105,7 @@ describe("docs consistency", () => {
       expect(content).toContain("strada --web");
       expect(content).toContain("strada --terminal");
       expect(content).toContain("nvm");
+      expect(content).toContain("clarification-review");
       expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
     }
   });

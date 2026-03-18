@@ -96,6 +96,7 @@ Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve di
 Terminal setup, tek bir istemde virgule ayrilmis provider'lari kabul eder (ornegin `kimi,deepseek`) ya da bunlari tek tek etkilesimli olarak girebilirsiniz. "Baska eklensin mi?" dongusu yalnizca tek bir provider girildiginde gosterilir. Embedding provider secimi ayri kalir.
 Web sihirbazinda kaydetme tamamlandiginda Strada ayni URL uzerinden ana web uygulamasina devreder; boylece refresh gecisi olu setup sayfasina dusmez.
 Bu ilk devir sirasinda Strada onboarding turunu ve ilk autonomy tercihini de ilk chat oturumuna uygular; boylece acilis konusmasi ve Settings ekrani sihirbazda sectiginiz durumla hemen uyusur.
+Ilk gercek chat mesaji teknik bir gorevse Strada artik ise hemen baslar ve uzun bir intake akisi acmak yerine onboarding'i en fazla tek kisa takip sorusuna indirir.
 RAG acik ama kullanilabilir bir embedding provider yoksa sihirbaz artik review adimina gecmenize izin verir; ancak gecerli bir embedding provider secene kadar veya RAG'i kapatana kadar Save bloklu kalir.
 Ilk basarili kurulumdan sonra `./strada` komutu artik akilli launcher olur:
 - ilk kullanimda config yoksa setup'i otomatik acar
@@ -532,6 +533,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `OPENAI_CHATGPT_AUTH_FILE` | Opsiyonel Codex oturum dosyasi | `OPENAI_AUTH_MODE=chatgpt-subscription` iken varsayilan `~/.codex/auth.json` |
 
 **Saglayici zinciri:** `PROVIDER_CHAIN` degiskenini virgule ayrilmis saglayici adlari listesi olarak ayarlayin. Strada control-plane olarak kalir ve bu zinciri birincil execution worker, supervisor routing ve fallback secimi icin varsayilan orkestrasyon havuzu olarak kullanir. Ornek: `PROVIDER_CHAIN=kimi,deepseek,claude` once Kimi'yi kullanir, Kimi basarisiz olursa DeepSeek, sonra Claude.
+Aciklayici soru yonetimi de bu control-plane'in parcasi oldu. Bir worker kullaniciya soru onerebilir, ama Strada artik herhangi bir taslagi `ask_user` turune cevirmeden once iceride `clarification-review` asamasindan gecirir.
 
 **Onemli:** `OPENAI_AUTH_MODE=chatgpt-subscription` sadece Strada icindeki OpenAI konusma turlari icin gecerli olur. OpenAI API veya embedding kotasi saglamaz. `EMBEDDING_PROVIDER=openai` secersen yine `OPENAI_API_KEY` gerekir.
 Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik analiz donerse, "ne yapmaliyim?" diye sorarsa veya yeterli kanit olmadan genis kapsamli bir tamamlanma iddiasi kurarsa, Strada donguyu yeniden acar, ek inceleme/review turu yaptirir ve ancak sonuc dogrulandiginda ya da gercek bir dis engel kaldiginda kullaniciya doner.
@@ -683,7 +685,7 @@ Ajan, kategorilere gore duzenlenmis 40'dan fazla yerlesik araca sahiptir:
 ### Ajan Etkilesimi
 | Arac | Aciklama |
 |------|----------|
-| `ask_user` | Kullaniciya coktan secmeli ve onerilen cevapli aciklayici soru sorar |
+| `ask_user` | Kullaniciya coktan secmeli ve onerilen cevapli aciklayici soru sorar; ancak bu ancak `clarification-review` bunun gercekten gerekli oldugunu onaylarsa kullanilir |
 | `show_plan` | Yurutme planini gosterir ve kullanici onayini bekler (Onayla/Duzenle/Reddet) |
 | `switch_personality` | Ajan kisiligini calisma zamaninda degistirir (casual/formal/minimal/default) |
 
@@ -709,7 +711,7 @@ Tum sohbet kanallarinda kullanilabilir slash komutlari:
 | `/agent` | Agent Core durumunu goster |
 | `/routing` | Yonlendirme durumunu ve on ayarini goster |
 | `/routing preset <ad>` | Yonlendirme on ayarini degistir (budget/balanced/performance) |
-| `/routing info` | Mevcut kimlik icin son yonlendirme kararlarini ve gercek calisma izlerini goster |
+| `/routing info` | Mevcut kimlik icin son yonlendirme kararlarini ve planning, execution, clarification-review, review, synthesis asamalarindaki gercek calisma izlerini goster |
 
 ---
 

@@ -45,6 +45,7 @@ export type ExecutionPhase =
   | "reflecting"
   | "replanning"
   | "synthesis"
+  | "clarification-review"
   | "completion-review"
   | "consensus-review"
   | "shell-review";
@@ -52,6 +53,7 @@ export type ExecutionTraceSource =
   | "supervisor-strategy"
   | "tool-turn-affinity"
   | "synthesis"
+  | "clarification-review"
   | "completion-review"
   | "consensus-review"
   | "shell-review";

@@ -96,6 +96,7 @@ L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de f
 Le setup terminal accepte des fournisseurs separes par des virgules en une seule saisie (par ex. `kimi,deepseek`) pour le fallback ou l'orchestration multi-agent, ou vous pouvez les ajouter un par un de facon interactive. La boucle "Ajouter un autre ?" n'apparait que lorsqu'un seul fournisseur est saisi. Le choix du fournisseur d'embeddings reste separe.
 Une fois l'assistant web enregistr&eacute;, Strada bascule vers l'application web principale sur la m&ecirc;me URL afin qu'un refresh pendant la transition ne vous laisse pas sur une page de setup morte.
 Lors de ce premier basculement, Strada rejoue aussi le tour d'onboarding et le choix initial d'autonomy dans la premi&egrave;re session de chat, afin que la conversation d'ouverture et l'&eacute;cran Settings refl&egrave;tent imm&eacute;diatement ce qui a &eacute;t&eacute; choisi dans l'assistant.
+Si le premier vrai message du chat est technique, Strada commence maintenant &agrave; traiter la t&acirc;che tout de suite et limite l'onboarding &agrave; au plus une courte question de suivi au lieu d'ouvrir un questionnaire d'intake complet.
 Si le RAG est activ&eacute; sans fournisseur d'embeddings utilisable, l'assistant vous laisse maintenant aller jusqu'&agrave; l'&eacute;tape de revue ; en revanche Save reste bloqu&eacute; tant que vous n'avez pas choisi un fournisseur d'embeddings valide ou d&eacute;sactiv&eacute; le RAG.
 Apr&egrave;s le premier setup r&eacute;ussi, `./strada` sans sous-commande devient votre launcher intelligent :
 - au premier usage, il ouvre automatiquement le setup si la config manque
@@ -570,6 +571,7 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `OPENAI_CHATGPT_AUTH_FILE` | Fichier de session Codex optionnel | `~/.codex/auth.json` par d&eacute;faut quand `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
 **Cha&icirc;ne de fournisseurs :** D&eacute;finissez `PROVIDER_CHAIN` avec une liste de noms de fournisseurs s&eacute;par&eacute;s par des virgules. Strada reste le plan de contr&ocirc;le et s'en sert comme pool d'orchestration par d&eacute;faut pour le worker principal, le routage du superviseur et les fallbacks. Exemple : `PROVIDER_CHAIN=kimi,deepseek,claude` utilise Kimi en premier, DeepSeek si Kimi &eacute;choue, puis Claude.
+La clarification fait aussi partie de ce plan de contr&ocirc;le. Un worker peut proposer une question &agrave; l'utilisateur, mais Strada ex&eacute;cute d'abord une phase interne de `clarification-review` avant qu'un brouillon puisse devenir un tour `ask_user`.
 
 **Important :** `OPENAI_AUTH_MODE=chatgpt-subscription` couvre uniquement les tours de conversation OpenAI dans Strada. Cela ne donne pas de quota API ni embeddings OpenAI. Si vous choisissez `EMBEDDING_PROVIDER=openai`, il vous faut toujours `OPENAI_API_KEY`.
 Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fournisseur renvoie une analyse incomplete, demande quoi faire ensuite, ou affirme une completion large sans preuves suffisantes, Strada rouvre la boucle, relance une passe d'inspection/revue, et ne repond que lorsque le resultat est verifie ou qu'un vrai blocage externe subsiste.
@@ -721,7 +723,7 @@ L'agent dispose de plus de 40 outils int&eacute;gr&eacute;s organis&eacute;s par
 ### Interaction Agent
 | Outil | Description |
 |-------|-------------|
-| `ask_user` | Pose &agrave; l'utilisateur une question de clarification avec choix multiples et r&eacute;ponse recommand&eacute;e |
+| `ask_user` | Pose &agrave; l'utilisateur une question de clarification avec choix multiples et r&eacute;ponse recommand&eacute;e, mais seulement apr&egrave;s validation par `clarification-review` |
 | `show_plan` | Affiche le plan d'ex&eacute;cution et attend l'approbation de l'utilisateur (Approuver/Modifier/Rejeter) |
 | `switch_personality` | Change la personnalit&eacute; de l'agent &agrave; l'ex&eacute;cution (casual/formal/minimal/default) |
 
@@ -747,7 +749,7 @@ Commandes slash disponibles dans tous les canaux de chat :
 | `/agent` | Afficher le statut de l'Agent Core |
 | `/routing` | Afficher le statut du routage et le pr&eacute;r&eacute;glage |
 | `/routing preset <name>` | Changer le pr&eacute;r&eacute;glage de routage (budget/balanced/performance) |
-| `/routing info` | Afficher les d&eacute;cisions de routage r&eacute;centes et les traces d'ex&eacute;cution r&eacute;elles pour l'identit&eacute; active |
+| `/routing info` | Afficher les d&eacute;cisions de routage r&eacute;centes et les traces d'ex&eacute;cution r&eacute;elles pour l'identit&eacute; active, y compris planning, execution, clarification-review, review et synthesis |
 
 ---
 

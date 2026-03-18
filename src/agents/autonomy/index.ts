@@ -15,4 +15,22 @@ export {
   shouldRunCompletionReview,
 } from "./completion-review.js";
 export type { CompletionReviewDecision, CompletionReviewEvidence } from "./completion-review.js";
+export {
+  CLARIFICATION_REVIEW_SYSTEM_PROMPT,
+  analyzeClarificationDraft,
+  buildClarificationContinuationGate,
+  buildClarificationReviewRequest,
+  collectClarificationReviewEvidence,
+  formatClarificationPrompt,
+  parseClarificationReviewDecision,
+  sanitizeClarificationReviewDecision,
+  shouldRunClarificationReview,
+} from "./clarification-review.js";
+export type {
+  ClarificationBlockingType,
+  ClarificationDecision,
+  ClarificationDraftSignals,
+  ClarificationReviewDecision,
+  ClarificationReviewEvidence,
+} from "./clarification-review.js";
 export { MUTATION_TOOLS, VERIFY_TOOLS, WRITE_OPERATIONS, COMPILABLE_EXT, extractFilePath } from "./constants.js";

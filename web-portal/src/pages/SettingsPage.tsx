@@ -627,7 +627,7 @@ export default function SettingsPage() {
             </div>
             <div className="settings-hint">
               Strada remains the control plane. This preset biases how Strada assigns planning,
-              execution, review, and synthesis work across available providers.
+              execution, clarification review, review, and synthesis work across available providers.
               Configure with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>ROUTING_PRESET</code> or <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>/routing preset</code> command.
             </div>
 

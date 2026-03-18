@@ -96,6 +96,7 @@ El asistente te pide la ruta de tu proyecto Unity, la clave de API del proveedor
 El setup de terminal acepta proveedores separados por comas en un solo prompt (p. ej. `kimi,deepseek`) para fallback u orquestacion multiagente, o puedes agregarlos uno a uno de forma interactiva. El bucle "¿Agregar otro?" solo aparece cuando se introduce un unico proveedor. La eleccion del proveedor de embeddings se mantiene separada.
 Cuando guardas el asistente web, Strada entrega el control a la aplicacion web principal en la misma URL para que un refresh durante la transicion no te deje en una pagina de setup muerta.
 En esa primera transicion Strada tambien reaplica el turno de onboarding y la eleccion inicial de autonomia en la primera sesion de chat, para que la conversacion inicial y la pantalla de Settings reflejen de inmediato lo elegido en el asistente.
+Si el primer mensaje real del chat es tecnico, Strada ahora empieza a resolverlo de inmediato y reduce el onboarding a como mucho una sola pregunta corta de seguimiento en lugar de abrir un formulario de intake.
 Si RAG esta activado pero no hay un proveedor de embeddings utilizable, el asistente ahora te deja avanzar hasta la revision; aun asi Save queda bloqueado hasta que elijas un proveedor de embeddings valido o desactives RAG.
 Despues del primer setup correcto, `./strada` sin subcomando se convierte en tu launcher inteligente:
 - en el primer uso abre setup automaticamente si falta la config
@@ -571,6 +572,7 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | `OPENAI_CHATGPT_AUTH_FILE` | Archivo opcional de sesion Codex | por defecto `~/.codex/auth.json` cuando `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
 **Cadena de proveedores:** Configura `PROVIDER_CHAIN` con una lista de nombres de proveedores separados por comas. Strada sigue siendo el plano de control y usa esta cadena como pool de orquestacion por defecto para el worker principal, el routing del supervisor y sus fallbacks. Ejemplo: `PROVIDER_CHAIN=kimi,deepseek,claude` usa Kimi primero, DeepSeek si Kimi falla, luego Claude.
+La aclaracion tambien forma parte de ese plano de control. Un worker puede proponer una pregunta al usuario, pero Strada ahora ejecuta primero una fase interna de `clarification-review` antes de convertir cualquier borrador en un turno `ask_user`.
 
 **Importante:** `OPENAI_AUTH_MODE=chatgpt-subscription` solo cubre los turnos de conversacion de OpenAI dentro de Strada. No concede cuota de API ni de embeddings de OpenAI. Si eliges `EMBEDDING_PROVIDER=openai`, sigues necesitando `OPENAI_API_KEY`.
 Strada no le devuelve al usuario los siguientes pasos obvios. Si un proveedor devuelve un analisis incompleto, pregunta que debe hacer despues o hace una afirmacion amplia de finalizacion sin evidencia suficiente, Strada reabre el bucle, ejecuta otra pasada de inspeccion/revision y solo responde cuando el resultado esta verificado o queda un bloqueo externo real.
@@ -722,7 +724,7 @@ El agente tiene mas de 40 herramientas integradas organizadas por categoria:
 ### Interaccion del Agente
 | Herramienta | Descripcion |
 |-------------|-------------|
-| `ask_user` | Hace al usuario una pregunta de aclaracion con opciones multiples y respuesta recomendada |
+| `ask_user` | Hace al usuario una pregunta de aclaracion con opciones multiples y respuesta recomendada, pero solo despues de que `clarification-review` confirme que de verdad hace falta |
 | `show_plan` | Muestra el plan de ejecucion y espera aprobacion del usuario (Aprobar/Modificar/Rechazar) |
 | `switch_personality` | Cambia la personalidad del agente en tiempo de ejecucion (casual/formal/minimal/default) |
 
@@ -748,7 +750,7 @@ Comandos slash disponibles en todos los canales de chat:
 | `/agent` | Mostrar estado del Agent Core |
 | `/routing` | Mostrar estado de enrutamiento y preset |
 | `/routing preset <nombre>` | Cambiar preset de enrutamiento (budget/balanced/performance) |
-| `/routing info` | Mostrar decisiones de enrutamiento recientes y trazas de ejecucion reales para la identidad actual |
+| `/routing info` | Mostrar decisiones de enrutamiento recientes y trazas de ejecucion reales para la identidad actual, incluyendo planning, execution, clarification-review, review y synthesis |
 
 ---
 

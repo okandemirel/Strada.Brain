@@ -228,9 +228,9 @@ describe("ProviderRouter", () => {
         provider: "gemini",
         model: "gemini-2.5-pro",
         role: "reviewer",
-        phase: "consensus-review",
-        source: "consensus-review",
-        reason: "selected the review worker for cross-provider verification",
+        phase: "clarification-review",
+        source: "clarification-review",
+        reason: "reviewed whether a user-facing clarification was truly necessary",
         task: planningTask,
         timestamp: 2,
         identityKey: "user-2",
@@ -244,6 +244,12 @@ describe("ProviderRouter", () => {
         role: "executor",
         phase: "executing",
         source: "tool-turn-affinity",
+      }));
+      expect(traces[1]).toEqual(expect.objectContaining({
+        provider: "gemini",
+        role: "reviewer",
+        phase: "clarification-review",
+        source: "clarification-review",
       }));
       expect(router.getRecentExecutionTraces(10, "user-1")).toEqual([
         expect.objectContaining({

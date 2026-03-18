@@ -96,6 +96,7 @@ cd Strada.Brain
 终端 setup 在单个提示中接受以逗号分隔的 provider（例如 `kimi,deepseek`），用于 fallback / 多代理编排；也可以逐个交互式添加。"是否继续添加？"循环仅在输入单个 provider 时出现。embedding provider 选择保持独立。
 当你在 Web 向导里保存后，Strada 会在同一个 URL 上接管到主 Web 应用，因此切换期间刷新也不会掉回失效的 setup 页面。
 在这次首次切换里，Strada 也会把 onboarding 回合和初始 autonomy 选择重新应用到第一段聊天会话中，因此开场对话和 Settings 页面会立即反映向导里的选择。
+如果第一条真正的聊天消息就是技术任务，Strada 现在会先开始解决问题，并把 onboarding 压缩到至多一个简短的跟进问题，而不是先抛出一整套 intake 问卷。
 如果启用了 RAG 但还没有可用的 embedding provider，向导现在会允许你继续进入 review 步骤；不过在你选择有效的 embedding provider 或关闭 RAG 之前，Save 会保持阻塞。
 第一次 setup 完成后，不带子命令的 `./strada` 会变成你的智能启动器：
 - 第一次使用时如果没有 config，会自动进入 setup
@@ -570,6 +571,7 @@ npm run dev -- daemon --channel web
 | `OPENAI_CHATGPT_AUTH_FILE` | 可选 Codex 会话文件 | 当 `OPENAI_AUTH_MODE=chatgpt-subscription` 时默认使用 `~/.codex/auth.json` |
 
 **提供商链：** 将 `PROVIDER_CHAIN` 设置为以逗号分隔的提供商名称列表。Strada 仍然是控制平面，并将这条链作为默认编排池，用于主执行 worker、supervisor 路由以及故障回退。示例：`PROVIDER_CHAIN=kimi,deepseek,claude` 首先使用 Kimi，Kimi 失败则使用 DeepSeek，然后是 Claude。
+澄清也是这个控制平面的一部分。worker 可以提出一个用户问题草案，但 Strada 现在会先运行内部 `clarification-review` 阶段，再决定这个草案能否真的变成 `ask_user` 回合。
 
 **重要：** `OPENAI_AUTH_MODE=chatgpt-subscription` 只覆盖 Strada 内的 OpenAI 对话回合，不会提供 OpenAI API 或 embeddings 配额。如果你选择 `EMBEDDING_PROVIDER=openai`，仍然需要 `OPENAI_API_KEY`。
 Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返回了不完整的分析、反过来询问用户下一步该做什么，或在证据不足时声称大范围任务已经完成，Strada 会重新打开循环，再做一轮检查/评审，只有在结果已经验证完毕或确实只剩真实外部阻塞时才向用户返回。
@@ -721,7 +723,7 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 ### 代理交互
 | 工具 | 说明 |
 |------|------|
-| `ask_user` | 向用户发送带有多项选择和推荐答案的澄清问题 |
+| `ask_user` | 向用户发送带有多项选择和推荐答案的澄清问题，但只有在 `clarification-review` 确认确有必要后才会使用 |
 | `show_plan` | 显示执行计划并等待用户审批（批准/修改/拒绝） |
 | `switch_personality` | 在运行时切换代理个性（casual/formal/minimal/default） |
 
@@ -747,7 +749,7 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `/agent` | 显示 Agent Core 状态 |
 | `/routing` | 显示路由状态和预设 |
 | `/routing preset <name>` | 切换路由预设（budget/balanced/performance） |
-| `/routing info` | 显示当前身份最近的路由决策和实际执行轨迹 |
+| `/routing info` | 显示当前身份最近的路由决策，以及 planning、execution、clarification-review、review、synthesis 阶段的实际执行轨迹 |
 
 ---
 

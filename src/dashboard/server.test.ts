@@ -344,9 +344,9 @@ describe("DashboardServer", () => {
       provider: "gemini",
       model: "gemini-2.5-pro",
       role: "reviewer",
-      phase: "consensus-review",
-      source: "consensus-review",
-      reason: "selected the review worker for cross-provider verification",
+      phase: "clarification-review",
+      source: "clarification-review",
+      reason: "reviewed whether a user-facing clarification was truly necessary",
       task: { type: "code-review", complexity: "complex", criticality: "high" },
       timestamp: 456,
     }]);
@@ -368,6 +368,12 @@ describe("DashboardServer", () => {
     expect(getRecentDecisions).toHaveBeenCalledWith(20, "user-1");
     expect(getRecentExecutionTraces).toHaveBeenCalledWith(20, "user-1");
     expect(data.preset).toBe("balanced");
+    expect(data.executionTraces).toEqual([
+      expect.objectContaining({
+        phase: "clarification-review",
+        source: "clarification-review",
+      }),
+    ]);
     expect(data.routing).toEqual([
       expect.objectContaining({
         provider: "kimi",

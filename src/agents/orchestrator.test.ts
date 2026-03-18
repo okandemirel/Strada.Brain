@@ -625,6 +625,31 @@ describe("Orchestrator", () => {
     db.close();
   });
 
+  it("keeps first-run onboarding non-blocking for technical requests", async () => {
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Investigating the Unity issue now.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+
+    const promise = orch.handleMessage({
+      channelType: "web",
+      chatId: "chat-first-run-tech",
+      userId: "new-user",
+      text: "Analyze why the Unity editor crashed during level generation",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const firstPrompt = String(mockProvider.chat.mock.calls[0]?.[0] ?? "");
+    expect(firstPrompt).toContain("start solving it immediately");
+    expect(firstPrompt).toContain("At most, ask one short natural follow-up");
+    expect(firstPrompt).not.toContain("Ask about their preferred communication style");
+    expect(firstPrompt).not.toContain("Ask how detailed they want explanations");
+  });
+
   it("stores periodic session summaries under the stable profile identity", async () => {
     const db = new Database(":memory:");
     const userProfileStore = new UserProfileStore(db);
@@ -1288,6 +1313,101 @@ describe("Orchestrator", () => {
     expect(mockChannel.sendMarkdown).not.toHaveBeenCalledWith(
       "chat-autonomy-review",
       expect.stringContaining("What should I do next?"),
+    );
+  });
+
+  it("keeps interactive intake-style ask_user tool calls internal when Strada can still inspect locally", async () => {
+    const listTool = createMockTool("list_directory");
+    const askUserTool = createMockTool("ask_user");
+    const clarificationOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [askUserTool, listTool, readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Need more context before proceeding.",
+        toolCalls: [{
+          id: "tc-clarify-intake",
+          name: "ask_user",
+          input: {
+            question: "Clarify the objective you want me to act on.",
+            options: ["Fix a bug", "Add a feature", "Create a new module", "Run a project health check"],
+            recommended: "Run a project health check",
+            context: "Collect the minimum inputs to proceed.",
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "internal_continue",
+          reason: "Strada still has local project access and can inspect the Unity assets directly.",
+          recommendedNextAction: "Read the relevant asset files and continue internally.",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Continuing with direct asset inspection.",
+        toolCalls: [{ id: "tc-level-read", name: "file_read", input: { path: "Assets/Resources/Levels/Level_031.asset" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Level_031 is the problematic asset and the issue is now isolated.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "none",
+          reason: "This draft is a normal final response.",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const promise = clarificationOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-clarification-review",
+      userId: "user1",
+      text: "Analyze the Unity level assets and keep going until you know the real issue",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(askUserTool.execute).not.toHaveBeenCalled();
+    const continuationMessages = mockProvider.chat.mock.calls[2]?.[1] as Array<{ role: string; content: unknown }>;
+    expect(continuationMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_result",
+              content: expect.stringContaining("[CLARIFICATION REVIEW REQUIRED]"),
+            }),
+          ]),
+        }),
+      ]),
+    );
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-clarification-review",
+      expect.stringContaining("Level_031 is the problematic asset"),
     );
   });
 

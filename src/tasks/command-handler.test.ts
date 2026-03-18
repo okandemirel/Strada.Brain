@@ -46,6 +46,16 @@ describe("CommandHandler /routing", () => {
           task: { type: "coding", complexity: "complex", criticality: "normal" },
           timestamp: Date.now(),
         },
+        {
+          provider: "gemini",
+          model: "gemini-2.5-pro",
+          role: "reviewer",
+          phase: "clarification-review",
+          source: "clarification-review",
+          reason: "reviewed whether a proposed user question should stay internal",
+          task: { type: "bug-analysis", complexity: "complex", criticality: "high" },
+          timestamp: Date.now() + 1,
+        },
       ],
     });
 
@@ -70,6 +80,10 @@ describe("CommandHandler /routing", () => {
     expect(sendMarkdown).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("source=`tool-turn-affinity`"),
+    );
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("`clarification-review/reviewer` -> `gemini`"),
     );
     expect(sendText).not.toHaveBeenCalled();
   });

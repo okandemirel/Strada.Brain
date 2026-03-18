@@ -94,6 +94,7 @@ The wizard asks for your Unity project path, AI provider API key, default channe
 Terminal setup accepts comma-separated providers in a single prompt (e.g. `kimi,deepseek`) for fallback / multi-agent orchestration, or you can add them one at a time interactively. The "Add another?" loop only appears when a single provider is entered. The embedding provider choice stays separate.
 After you save the web wizard, Strada hands off to the main web app on the same URL so refreshes can survive the transition instead of dropping you onto a dead setup page.
 That first handoff also replays Strada's onboarding turn and your initial autonomy choice into the first chat session, so the opening conversation and Settings screen immediately reflect what you chose in the wizard.
+If the first real chat message is technical, Strada now starts solving immediately and keeps onboarding to at most one short follow-up instead of opening with a full intake questionnaire.
 If RAG is enabled without a usable embedding provider, the wizard now lets you continue to the review step but keeps Save blocked until you choose a valid embedding provider or disable RAG.
 
 After the first successful setup, running `./strada` with no subcommand becomes your smart launcher:
@@ -582,6 +583,7 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 | `OPENAI_CHATGPT_AUTH_FILE` | Optional Codex auth session file | defaults to `~/.codex/auth.json` when `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
 **Provider chain:** Set `PROVIDER_CHAIN` to a comma-separated list of provider names. Strada stays the control plane and uses this chain as the default orchestration pool for the primary execution worker, supervisor routing, and fallback on failure. Example: `PROVIDER_CHAIN=kimi,deepseek,claude` uses Kimi first, DeepSeek if Kimi fails, then Claude. `openai` can be backed by either `OPENAI_API_KEY` or a local ChatGPT/Codex subscription session.
+Clarification is also part of that control plane. Worker providers may propose a user question, but Strada now runs an internal `clarification-review` phase before any provider draft can become an `ask_user` turn.
 
 **Important:** `OPENAI_AUTH_MODE=chatgpt-subscription` only covers OpenAI conversation turns inside Strada. It does not grant OpenAI API billing or embeddings quota. If you choose `EMBEDDING_PROVIDER=openai`, you still need an `OPENAI_API_KEY`.
 
@@ -773,7 +775,7 @@ The agent has 40+ built-in tools organized by category:
 ### Agent Interaction
 | Tool | Description |
 |------|-------------|
-| `ask_user` | Ask the user a clarifying question with multiple-choice options and a recommended answer |
+| `ask_user` | Ask the user a clarifying question with multiple-choice options and a recommended answer, but only after `clarification-review` approves it as truly necessary |
 | `show_plan` | Show the execution plan and wait for user approval (Approve/Modify/Reject) |
 | `switch_personality` | Switch agent personality at runtime (casual/formal/minimal/default) |
 
@@ -799,7 +801,7 @@ Slash commands available in all chat channels:
 | `/agent` | Show Agent Core status |
 | `/routing` | Show routing status and preset |
 | `/routing preset <name>` | Switch routing preset (budget/balanced/performance) |
-| `/routing info` | Show recent routing decisions and runtime execution traces for the current identity |
+| `/routing info` | Show recent routing decisions and runtime execution traces for the current identity, including planning, execution, clarification-review, review, and synthesis phases |
 
 ---
 

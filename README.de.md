@@ -94,6 +94,7 @@ Der erste Browser-Start traegt zusaetzlich ein explizites Setup-Flag, damit selb
 
 Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. `./strada setup` bevorzugt jetzt standardmaessig den **Web-Browser**; waehlen Sie **Terminal** nur dann, wenn Sie den schnelleren Text-Flow bewusst moechten.
 Nach dem Speichern des Web-Assistenten uebergibt Strada auf derselben URL an die Haupt-App weiter und spielt dabei auch den Onboarding-Turn sowie die erste Autonomy-Auswahl in die erste Chat-Sitzung ein, damit Begruessung und Settings sofort den Wizard-Stand widerspiegeln.
+Wenn die erste echte Chat-Nachricht bereits eine technische Aufgabe ist, beginnt Strada jetzt sofort mit der Bearbeitung und reduziert das Onboarding auf hoechstens eine kurze Rueckfrage statt einen kompletten Intake-Dialog zu starten.
 Das Terminal-Setup akzeptiert kommagetrennte Provider in einer einzigen Eingabe (z. B. `kimi,deepseek`) fuer Fallback- oder Multi-Agent-Orchestrierung; alternativ koennen Sie Provider auch einzeln interaktiv eingeben. Die Schleife "Einen weiteren hinzufuegen?" erscheint nur, wenn ein einzelner Provider eingegeben wird. Die Embedding-Provider-Wahl bleibt getrennt.
 Sobald Sie im Web-Assistenten speichern, uebergibt Strada auf derselben URL an die eigentliche Web-App, damit ein Refresh waehrend des Uebergangs nicht auf einer toten Setup-Seite landet.
 Wenn RAG aktiviert ist, aber kein nutzbarer Embedding-Provider konfiguriert wurde, laesst der Assistent Sie jetzt bis zum Review-Schritt weitergehen; Speichern bleibt jedoch blockiert, bis Sie einen gueltigen Embedding-Provider waehlen oder RAG deaktivieren.
@@ -540,6 +541,7 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 | `OPENAI_CHATGPT_AUTH_FILE` | Optionale Codex-Auth-Datei | Standard: `~/.codex/auth.json` bei `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
 **Anbieter-Kette:** Setzen Sie `PROVIDER_CHAIN` auf eine kommagetrennte Liste von Anbieternamen. Strada bleibt die Control Plane und nutzt diese Kette als Standard-Orchestrierungspool fuer den primaeren Ausfuehrungs-Worker, das Supervisor-Routing und Fallbacks. Beispiel: `PROVIDER_CHAIN=kimi,deepseek,claude` verwendet Kimi zuerst, DeepSeek wenn Kimi fehlschlaegt, dann Claude.
+Auch Klaerungen laufen jetzt ueber diese Control Plane. Ein Worker darf eine Rueckfrage vorschlagen, aber Strada fuehrt zuerst intern eine `clarification-review`-Phase aus, bevor daraus ein `ask_user`-Turn werden darf.
 
 **Wichtig:** `OPENAI_AUTH_MODE=chatgpt-subscription` gilt nur fuer OpenAI-Konversationszuege in Strada. Dadurch erhalten Sie kein OpenAI-API- oder Embedding-Kontingent. Wenn Sie `EMBEDDING_PROVIDER=openai` waehlen, brauchen Sie weiterhin `OPENAI_API_KEY`.
 Strada gibt offensichtliche naechste Schritte nicht an den Benutzer zurueck. Wenn ein Provider eine unvollstaendige Analyse liefert, den Benutzer fragt, was als Naechstes zu tun ist, oder ohne genug Belege eine breite Abschlussbehauptung aufstellt, oeffnet Strada die Schleife erneut, fuehrt einen weiteren Inspektions-/Review-Durchlauf aus und antwortet erst wieder, wenn das Ergebnis verifiziert ist oder ein echter externer Blocker bleibt.
@@ -691,7 +693,7 @@ Der Agent verfuegt ueber mehr als 40 integrierte Tools, organisiert nach Kategor
 ### Agenten-Interaktion
 | Tool | Beschreibung |
 |------|-------------|
-| `ask_user` | Stellt dem Benutzer eine Klaerungsfrage mit Mehrfachauswahl und empfohlener Antwort |
+| `ask_user` | Stellt dem Benutzer eine Klaerungsfrage mit Mehrfachauswahl und empfohlener Antwort, aber erst nachdem `clarification-review` sie als wirklich notwendig freigegeben hat |
 | `show_plan` | Zeigt den Ausfuehrungsplan und wartet auf Benutzerfreigabe (Genehmigen/Aendern/Ablehnen) |
 | `switch_personality` | Wechselt die Agenten-Persoenlichkeit zur Laufzeit (casual/formal/minimal/default) |
 
@@ -717,7 +719,7 @@ Slash-Befehle, die in allen Chat-Kanaelen verfuegbar sind:
 | `/agent` | Agent-Core-Status anzeigen |
 | `/routing` | Routing-Status und Preset anzeigen |
 | `/routing preset <name>` | Routing-Preset wechseln (budget/balanced/performance) |
-| `/routing info` | Letzte Routing-Entscheidungen und Laufzeit-Ausfuehrungsspuren fuer die aktuelle Identitaet anzeigen |
+| `/routing info` | Letzte Routing-Entscheidungen und Laufzeit-Ausfuehrungsspuren fuer die aktuelle Identitaet anzeigen, inklusive Planning, Execution, Clarification-Review, Review und Synthesis |
 
 ---
 

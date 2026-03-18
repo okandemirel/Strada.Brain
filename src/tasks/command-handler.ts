@@ -791,7 +791,7 @@ export class CommandHandler {
         `Preset: \`${preset}\`\n` +
         `Available Providers: ${available.length}\n` +
         `Phase Switching: ${available.length > 1 ? "Enabled" : "N/A (single provider)"}\n\n` +
-        `Strada remains the control plane and uses this preset to bias worker assignment across planning, execution, review, and synthesis.\n\n` +
+        `Strada remains the control plane and uses this preset to bias worker assignment across planning, execution, clarification review, review, and synthesis.\n\n` +
         `Use \`/routing preset <budget|balanced|performance>\` to change.`,
       );
       return;
