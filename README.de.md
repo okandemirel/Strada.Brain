@@ -543,7 +543,7 @@ Jeder OpenAI-kompatible Anbieter funktioniert. Alle unten aufgefuehrten Anbieter
 **Anbieter-Kette:** Setzen Sie `PROVIDER_CHAIN` auf eine kommagetrennte Liste von Anbieternamen. Strada bleibt die Control Plane und nutzt diese Kette als Standard-Orchestrierungspool fuer den primaeren Ausfuehrungs-Worker, das Supervisor-Routing und Fallbacks. Beispiel: `PROVIDER_CHAIN=kimi,deepseek,claude` verwendet Kimi zuerst, DeepSeek wenn Kimi fehlschlaegt, dann Claude.
 Auch Klaerungen laufen jetzt ueber diese Control Plane. Ein Worker darf eine Rueckfrage vorschlagen, aber Strada fuehrt zuerst intern eine `clarification-review`-Phase aus, bevor daraus ein `ask_user`-Turn werden darf.
 Auch der Abschluss laeuft jetzt ueber eine interne Verifier-Pipeline. Build-Verifikation, Targeted-Repro/Failing-Path-Pruefung, Log-Review, Strada-Conformance und Completion-Review muessen sauber sein, bevor Strada fertig ist. `/routing info` und das Dashboard zeigen jetzt sowohl Laufzeitspuren als auch Phase-Outcomes (`approved`, `continued`, `replanned`, `blocked`).
-Strada fuehrt jetzt zudem pro Aufgabe ein internes execution journal und rollback memory. Replans koennen den letzten stabilen Checkpoint, erschoepfte Branches und adaptive phase scores nutzen, die ohne hardcoded Provider-Lore in das Routing zurueckfliessen.
+Strada fuehrt jetzt zudem pro Aufgabe ein internes execution journal und rollback memory. Replans koennen den letzten stabilen Checkpoint, erschoepfte Branches und adaptive phase scores nutzen, die ohne hardcoded Provider-Lore in das Routing zurueckfliessen. Diese Scores beruecksichtigen jetzt auch verifier clean rate, rollback pressure, retry count, repeated failure fingerprints und phase-local token cost.
 
 **Wichtig:** `OPENAI_AUTH_MODE=chatgpt-subscription` gilt nur fuer OpenAI-Konversationszuege in Strada. Dadurch erhalten Sie kein OpenAI-API- oder Embedding-Kontingent. Wenn Sie `EMBEDDING_PROVIDER=openai` waehlen, brauchen Sie weiterhin `OPENAI_API_KEY`.
 Strada gibt offensichtliche naechste Schritte nicht an den Benutzer zurueck. Wenn ein Provider eine unvollstaendige Analyse liefert, den Benutzer fragt, was als Naechstes zu tun ist, oder ohne genug Belege eine breite Abschlussbehauptung aufstellt, oeffnet Strada die Schleife erneut, fuehrt einen weiteren Inspektions-/Review-Durchlauf aus und antwortet erst wieder, wenn das Ergebnis verifiziert ist oder ein echter externer Blocker bleibt.
@@ -721,7 +721,7 @@ Slash-Befehle, die in allen Chat-Kanaelen verfuegbar sind:
 | `/agent` | Agent-Core-Status anzeigen |
 | `/routing` | Routing-Status und Preset anzeigen |
 | `/routing preset <name>` | Routing-Preset wechseln (budget/balanced/performance) |
-| `/routing info` | Letzte Routing-Entscheidungen, Laufzeit-Ausfuehrungsspuren, Phase-Outcomes und adaptive phase scores fuer die aktuelle Identitaet anzeigen, inklusive Planning, Execution, Clarification-Review, Review und Synthesis |
+| `/routing info` | Letzte Routing-Entscheidungen, Laufzeit-Ausfuehrungsspuren, Phase-Outcomes und adaptive phase scores fuer die aktuelle Identitaet anzeigen, inklusive verifier clean rate, rollback pressure, retry count und token-cost telemetry fuer Planning, Execution, Clarification-Review, Review und Synthesis |
 
 ---
 

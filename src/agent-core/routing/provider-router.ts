@@ -62,6 +62,11 @@ const MAX_DECISIONS = 100;
 const PHASE_SCORE_PRIOR_WEIGHT = 4;
 const PHASE_SCORE_NEUTRAL = 0.5;
 const PHASE_SCORE_BIAS_WEIGHT = 0.18;
+const PHASE_SCORE_VERIFIER_WEIGHT = 0.2;
+const PHASE_SCORE_ROLLBACK_WEIGHT = 0.12;
+const PHASE_SCORE_RETRY_WEIGHT = 0.1;
+const PHASE_SCORE_COST_WEIGHT = 0.08;
+const PHASE_SCORE_REPEAT_FAILURE_WEIGHT = 0.08;
 
 type AvailableProvider = {
   name: string;
@@ -478,7 +483,7 @@ export class ProviderRouter {
     const topFeatures = snapshot.featureTags.slice(0, 2).join(", ");
     const phaseScore = this.getProviderPhaseScore(entry.name, phase, identityKey);
     const phaseNote = phaseScore
-      ? `; phase score ${phaseScore.score.toFixed(2)} from ${phaseScore.sampleSize} runtime outcomes`
+      ? `; phase score ${phaseScore.score.toFixed(2)} from ${phaseScore.sampleSize} runtime outcomes (verifier ${phaseScore.verifierCleanRate.toFixed(2)}, rollback ${phaseScore.rollbackRate.toFixed(2)})`
       : "";
     return `${qualifier} choice for ${task.type} (${task.complexity}); ${workload} fit ${snapshot.workloadScores[workload].toFixed(2)}${topFeatures ? ` via ${topFeatures}` : ""}${phaseNote}`;
   }
@@ -540,6 +545,14 @@ export class ProviderRouter {
       replannedCount: number;
       blockedCount: number;
       failedCount: number;
+      verifierApprovedCount: number;
+      verifierContinueCount: number;
+      verifierReplanCount: number;
+      verifierSampleSize: number;
+      rollbackEvents: number;
+      totalRetryCount: number;
+      totalTokenCost: number;
+      failureFingerprints: Map<string, number>;
       latestTimestamp: number;
       latestReason: string;
     }>();
@@ -557,6 +570,14 @@ export class ProviderRouter {
         replannedCount: 0,
         blockedCount: 0,
         failedCount: 0,
+        verifierApprovedCount: 0,
+        verifierContinueCount: 0,
+        verifierReplanCount: 0,
+        verifierSampleSize: 0,
+        rollbackEvents: 0,
+        totalRetryCount: 0,
+        totalTokenCost: 0,
+        failureFingerprints: new Map<string, number>(),
         latestTimestamp: 0,
         latestReason: "",
       };
@@ -567,6 +588,19 @@ export class ProviderRouter {
       if (outcome.status === "replanned") current.replannedCount += 1;
       if (outcome.status === "blocked") current.blockedCount += 1;
       if (outcome.status === "failed") current.failedCount += 1;
+      if (outcome.telemetry?.verifierDecision === "approve") current.verifierApprovedCount += 1;
+      if (outcome.telemetry?.verifierDecision === "continue") current.verifierContinueCount += 1;
+      if (outcome.telemetry?.verifierDecision === "replan") current.verifierReplanCount += 1;
+      if (outcome.telemetry?.verifierDecision) current.verifierSampleSize += 1;
+      if (outcome.telemetry?.rollbackDepth && outcome.telemetry.rollbackDepth > 0) current.rollbackEvents += 1;
+      current.totalRetryCount += Math.max(0, outcome.telemetry?.retryCount ?? 0);
+      current.totalTokenCost += Math.max(0, outcome.telemetry?.inputTokens ?? 0) + Math.max(0, outcome.telemetry?.outputTokens ?? 0);
+      if (outcome.telemetry?.failureFingerprint) {
+        const fingerprint = outcome.telemetry.failureFingerprint.trim();
+        if (fingerprint) {
+          current.failureFingerprints.set(fingerprint, (current.failureFingerprints.get(fingerprint) ?? 0) + 1);
+        }
+      }
       if (outcome.timestamp >= current.latestTimestamp) {
         current.latestTimestamp = outcome.timestamp;
         current.latestReason = outcome.reason;
@@ -574,20 +608,71 @@ export class ProviderRouter {
       grouped.set(key, current);
     }
 
-    return [...grouped.values()]
-      .map((entry) => ({
+    const scored = [...grouped.values()].map((entry) => {
+      const verifierCleanRate =
+        entry.verifierSampleSize > 0
+          ? (
+              entry.verifierApprovedCount +
+              entry.verifierContinueCount * 0.45 +
+              entry.verifierReplanCount * 0.1
+            ) / entry.verifierSampleSize
+          : PHASE_SCORE_NEUTRAL;
+      const rollbackRate = entry.sampleSize > 0 ? entry.rollbackEvents / entry.sampleSize : 0;
+      const avgRetryCount = entry.sampleSize > 0 ? entry.totalRetryCount / entry.sampleSize : 0;
+      const avgTokenCost = entry.sampleSize > 0 ? entry.totalTokenCost / entry.sampleSize : 0;
+      const repeatedFailureCount = [...entry.failureFingerprints.values()].filter((count) => count > 1).length;
+      const outcomeScore = (
+        entry.weightedTotal + PHASE_SCORE_PRIOR_WEIGHT * PHASE_SCORE_NEUTRAL
+      ) / (entry.sampleSize + PHASE_SCORE_PRIOR_WEIGHT);
+
+      return {
         provider: entry.provider,
         role: entry.role,
         phase: entry.phase,
         sampleSize: entry.sampleSize,
-        score: (
-          entry.weightedTotal + PHASE_SCORE_PRIOR_WEIGHT * PHASE_SCORE_NEUTRAL
-        ) / (entry.sampleSize + PHASE_SCORE_PRIOR_WEIGHT),
+        outcomeScore,
         approvedCount: entry.approvedCount,
         continuedCount: entry.continuedCount,
         replannedCount: entry.replannedCount,
         blockedCount: entry.blockedCount,
         failedCount: entry.failedCount,
+        verifierSampleSize: entry.verifierSampleSize,
+        verifierCleanRate,
+        rollbackRate,
+        avgRetryCount,
+        avgTokenCost,
+        repeatedFailureCount,
+        latestTimestamp: entry.latestTimestamp,
+        latestReason: entry.latestReason,
+        identityKey,
+      };
+    });
+
+    return scored
+      .map((entry) => ({
+        provider: entry.provider,
+        role: entry.role,
+        phase: entry.phase,
+        sampleSize: entry.sampleSize,
+        score: clampScore(
+          entry.outcomeScore * (1 - PHASE_SCORE_VERIFIER_WEIGHT - PHASE_SCORE_ROLLBACK_WEIGHT - PHASE_SCORE_RETRY_WEIGHT - PHASE_SCORE_COST_WEIGHT) +
+          entry.verifierCleanRate * PHASE_SCORE_VERIFIER_WEIGHT +
+          (1 - entry.rollbackRate) * PHASE_SCORE_ROLLBACK_WEIGHT +
+          (1 - Math.min(entry.avgRetryCount / 4, 1)) * PHASE_SCORE_RETRY_WEIGHT +
+          normalizePhaseCostEfficiency(scored, entry.phase, entry.avgTokenCost) * PHASE_SCORE_COST_WEIGHT -
+          Math.min(entry.repeatedFailureCount / 3, 1) * PHASE_SCORE_REPEAT_FAILURE_WEIGHT,
+        ),
+        approvedCount: entry.approvedCount,
+        continuedCount: entry.continuedCount,
+        replannedCount: entry.replannedCount,
+        blockedCount: entry.blockedCount,
+        failedCount: entry.failedCount,
+        verifierSampleSize: entry.verifierSampleSize,
+        verifierCleanRate: entry.verifierCleanRate,
+        rollbackRate: entry.rollbackRate,
+        avgRetryCount: entry.avgRetryCount,
+        avgTokenCost: entry.avgTokenCost,
+        repeatedFailureCount: entry.repeatedFailureCount,
         latestTimestamp: entry.latestTimestamp,
         latestReason: entry.latestReason,
         identityKey,
@@ -627,4 +712,28 @@ function normalizeExecutionPhase(phase: string | undefined): ExecutionPhase | nu
     default:
       return null;
   }
+}
+
+function normalizePhaseCostEfficiency(
+  scores: ReadonlyArray<{ phase: ExecutionPhase; avgTokenCost: number }>,
+  phase: ExecutionPhase,
+  avgTokenCost: number,
+): number {
+  const phaseCosts = scores
+    .filter((entry) => entry.phase === phase)
+    .map((entry) => entry.avgTokenCost)
+    .filter((cost) => Number.isFinite(cost));
+  if (phaseCosts.length < 2) {
+    return PHASE_SCORE_NEUTRAL;
+  }
+  const min = Math.min(...phaseCosts);
+  const max = Math.max(...phaseCosts);
+  if (min === max) {
+    return PHASE_SCORE_NEUTRAL;
+  }
+  return 1 - (avgTokenCost - min) / (max - min);
+}
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }

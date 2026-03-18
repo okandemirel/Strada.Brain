@@ -77,6 +77,17 @@ export type PhaseOutcomeStatus =
   | "blocked"
   | "failed";
 
+export type VerifierDecision = "approve" | "continue" | "replan";
+
+export interface PhaseOutcomeTelemetry {
+  readonly verifierDecision?: VerifierDecision;
+  readonly retryCount?: number;
+  readonly rollbackDepth?: number;
+  readonly failureFingerprint?: string;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+}
+
 export interface PhaseOutcome {
   readonly provider: string;
   readonly model?: string;
@@ -88,6 +99,7 @@ export interface PhaseOutcome {
   readonly task: TaskClassification;
   readonly timestamp: number;
   readonly identityKey?: string;
+  readonly telemetry?: PhaseOutcomeTelemetry;
 }
 
 export interface PhaseScore {
@@ -101,6 +113,12 @@ export interface PhaseScore {
   readonly replannedCount: number;
   readonly blockedCount: number;
   readonly failedCount: number;
+  readonly verifierSampleSize: number;
+  readonly verifierCleanRate: number;
+  readonly rollbackRate: number;
+  readonly avgRetryCount: number;
+  readonly avgTokenCost: number;
+  readonly repeatedFailureCount: number;
   readonly latestTimestamp: number;
   readonly latestReason: string;
   readonly identityKey?: string;

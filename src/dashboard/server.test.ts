@@ -372,6 +372,12 @@ describe("DashboardServer", () => {
       replannedCount: 1,
       blockedCount: 0,
       failedCount: 0,
+      verifierSampleSize: 3,
+      verifierCleanRate: 0.72,
+      rollbackRate: 0.33,
+      avgRetryCount: 1.33,
+      avgTokenCost: 420,
+      repeatedFailureCount: 1,
       latestTimestamp: 790,
       latestReason: "Verifier review requested a different approach.",
     }]);
@@ -425,6 +431,7 @@ describe("DashboardServer", () => {
         provider: "reviewer",
         phase: "completion-review",
         score: 0.82,
+        verifierCleanRate: 0.72,
       }),
     ]);
   });

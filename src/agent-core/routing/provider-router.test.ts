@@ -385,6 +385,8 @@ describe("ProviderRouter", () => {
         phase: "planning",
         score: expect.any(Number),
         sampleSize: 2,
+        verifierCleanRate: expect.any(Number),
+        rollbackRate: expect.any(Number),
       }));
       expect(scoreboard.find((entry) => entry.provider === "beta")!.score).toBeGreaterThan(
         scoreboard.find((entry) => entry.provider === "alpha")!.score,
@@ -393,6 +395,97 @@ describe("ProviderRouter", () => {
       const decision = router.resolve(planningTask, "planning", { identityKey: "user-1" });
       expect(decision.provider).toBe("beta");
       expect(decision.reason).toContain("phase score");
+    });
+
+    it("penalizes rollback-heavy and verifier-dirty histories even when raw approvals look similar", () => {
+      const manager = createMockManager(PARITY_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      router.recordPhaseOutcome({
+        provider: "alpha",
+        role: "reviewer",
+        phase: "completion-review",
+        source: "completion-review",
+        status: "approved",
+        reason: "Approved, but only after several retries.",
+        task: planningTask,
+        timestamp: 1,
+        identityKey: "user-2",
+        telemetry: {
+          verifierDecision: "approve",
+          retryCount: 4,
+          rollbackDepth: 2,
+          inputTokens: 1200,
+          outputTokens: 500,
+          failureFingerprint: "same failure path",
+        },
+      });
+      router.recordPhaseOutcome({
+        provider: "alpha",
+        role: "reviewer",
+        phase: "completion-review",
+        source: "completion-review",
+        status: "replanned",
+        reason: "Verifier reopened the same failing path.",
+        task: planningTask,
+        timestamp: 2,
+        identityKey: "user-2",
+        telemetry: {
+          verifierDecision: "replan",
+          retryCount: 5,
+          rollbackDepth: 3,
+          inputTokens: 1500,
+          outputTokens: 600,
+          failureFingerprint: "same failure path",
+        },
+      });
+      router.recordPhaseOutcome({
+        provider: "beta",
+        role: "reviewer",
+        phase: "completion-review",
+        source: "completion-review",
+        status: "approved",
+        reason: "Verifier cleared the path cleanly.",
+        task: planningTask,
+        timestamp: 3,
+        identityKey: "user-2",
+        telemetry: {
+          verifierDecision: "approve",
+          retryCount: 0,
+          rollbackDepth: 0,
+          inputTokens: 400,
+          outputTokens: 200,
+        },
+      });
+      router.recordPhaseOutcome({
+        provider: "beta",
+        role: "reviewer",
+        phase: "completion-review",
+        source: "completion-review",
+        status: "approved",
+        reason: "Stayed clean on the follow-up pass.",
+        task: planningTask,
+        timestamp: 4,
+        identityKey: "user-2",
+        telemetry: {
+          verifierDecision: "approve",
+          retryCount: 0,
+          rollbackDepth: 0,
+          inputTokens: 350,
+          outputTokens: 150,
+        },
+      });
+
+      const scoreboard = router.getPhaseScoreboard(10, "user-2");
+      const alpha = scoreboard.find((entry) => entry.provider === "alpha");
+      const beta = scoreboard.find((entry) => entry.provider === "beta");
+
+      expect(alpha).toBeDefined();
+      expect(beta).toBeDefined();
+      expect(beta!.score).toBeGreaterThan(alpha!.score);
+      expect(alpha!.rollbackRate).toBeGreaterThan(beta!.rollbackRate);
+      expect(alpha!.repeatedFailureCount).toBeGreaterThan(beta!.repeatedFailureCount);
+      expect(alpha!.avgRetryCount).toBeGreaterThan(beta!.avgRetryCount);
     });
   });
 

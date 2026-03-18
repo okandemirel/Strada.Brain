@@ -98,6 +98,8 @@ import type {
   ExecutionPhase,
   ExecutionTraceSource,
   PhaseOutcomeStatus,
+  PhaseOutcomeTelemetry,
+  VerifierDecision,
 } from "../agent-core/routing/routing-types.js";
 
 const MAX_TOOL_ITERATIONS = 50;
@@ -1108,6 +1110,7 @@ export class Orchestrator {
     task: TaskClassification;
     source?: ExecutionTraceSource;
     reason?: string;
+    telemetry?: PhaseOutcomeTelemetry;
   }): void {
     this.providerRouter?.recordPhaseOutcome?.({
       provider: params.assignment.providerName,
@@ -1120,7 +1123,44 @@ export class Orchestrator {
       task: params.task,
       timestamp: Date.now(),
       identityKey: params.identityKey,
+      telemetry: params.telemetry,
     });
+  }
+
+  private buildPhaseOutcomeTelemetry(params: {
+    state?: AgentState;
+    usage?: ProviderResponse["usage"];
+    verifierDecision?: VerifierDecision;
+    failureReason?: string | null;
+  }): PhaseOutcomeTelemetry | undefined {
+    const inputTokens = params.usage?.inputTokens ?? 0;
+    const outputTokens = params.usage?.outputTokens ?? 0;
+    const retryCount = Math.max(0, params.state?.reflectionCount ?? 0);
+    const rollbackDepth = Math.max(0, params.state?.failedApproaches.length ?? 0);
+    const failureFingerprint = normalizeFailureFingerprint(
+      params.failureReason
+        ?? (params.state ? extractApproachSummary(params.state) : ""),
+    );
+
+    if (
+      !params.verifierDecision &&
+      inputTokens === 0 &&
+      outputTokens === 0 &&
+      retryCount === 0 &&
+      rollbackDepth === 0 &&
+      !failureFingerprint
+    ) {
+      return undefined;
+    }
+
+    return {
+      verifierDecision: params.verifierDecision,
+      retryCount,
+      rollbackDepth,
+      failureFingerprint: failureFingerprint || undefined,
+      inputTokens,
+      outputTokens,
+    };
   }
 
   private resolveConsensusReviewAssignment(
@@ -1228,6 +1268,9 @@ export class Orchestrator {
         status: "approved",
         task: params.strategy.task,
         reason: "Synthesis produced the final user-facing response.",
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          usage: synthesisResponse.usage,
+        }),
       });
       return applyVisibleResponseContract(
         params.prompt,
@@ -1242,6 +1285,9 @@ export class Orchestrator {
         status: "failed",
         task: params.strategy.task,
         reason: "Synthesis failed; falling back to the worker draft.",
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          failureReason: cleanedDraft,
+        }),
       });
       return applyVisibleResponseContract(params.prompt, cleanedDraft);
     }
@@ -1322,6 +1368,9 @@ export class Orchestrator {
         status: "approved",
         task: strategy.task,
         reason: "Goal synthesis produced the final user-facing response.",
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          usage: synthesisResponse.usage,
+        }),
       });
       return applyVisibleResponseContract(
         params.prompt,
@@ -1336,6 +1385,9 @@ export class Orchestrator {
         status: "failed",
         task: strategy.task,
         reason: "Goal synthesis failed; falling back to the raw execution draft.",
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          failureReason: rawDraft,
+        }),
       });
       return applyVisibleResponseContract(params.prompt, rawDraft);
     }
@@ -1473,6 +1525,9 @@ export class Orchestrator {
               : "approved",
         task: reviewTask,
         reason: decision?.reason ?? "Clarification review completed.",
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          usage: reviewResponse.usage,
+        }),
       });
       return { decision, evidence };
     } catch (error) {
@@ -1489,6 +1544,9 @@ export class Orchestrator {
         status: "failed",
         task: reviewTask,
         reason: "Clarification review provider failed; falling back to Strada-side decision.",
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          failureReason: params.draft,
+        }),
       });
     }
 
@@ -2086,6 +2144,12 @@ export class Orchestrator {
                 status: "continued",
                 task: executionStrategy.task,
                 reason: verifierIntervention.result.summary,
+                telemetry: this.buildPhaseOutcomeTelemetry({
+                  state: bgAgentState,
+                  usage: response.usage,
+                  verifierDecision: "continue",
+                  failureReason: verifierIntervention.result.summary,
+                }),
               });
               bgAgentState = {
                 ...bgAgentState,
@@ -2115,6 +2179,12 @@ export class Orchestrator {
                 status: "replanned",
                 task: executionStrategy.task,
                 reason: verifierIntervention.result.summary,
+                telemetry: this.buildPhaseOutcomeTelemetry({
+                  state: bgAgentState,
+                  usage: response.usage,
+                  verifierDecision: "replan",
+                  failureReason: verifierIntervention.result.summary,
+                }),
               });
               bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
               if (response.text) {
@@ -2144,6 +2214,11 @@ export class Orchestrator {
               status: "approved",
               task: executionStrategy.task,
               reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
+              telemetry: this.buildPhaseOutcomeTelemetry({
+                state: bgAgentState,
+                usage: response.usage,
+                verifierDecision: "approve",
+              }),
             });
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
@@ -2172,6 +2247,19 @@ export class Orchestrator {
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
+            this.recordPhaseOutcome({
+              identityKey,
+              assignment: currentAssignment,
+              phase: "reflecting",
+              status: "replanned",
+              task: executionStrategy.task,
+              reason: response.text ?? "reflection requested a new plan",
+              telemetry: this.buildPhaseOutcomeTelemetry({
+                state: bgAgentState,
+                usage: response.usage,
+                failureReason: response.text,
+              }),
+            });
             session.messages.push({ role: "user", content: "Please create a new plan." });
             onProgress("Replanning: current approach needs adjustment");
             continue;
@@ -2260,6 +2348,12 @@ export class Orchestrator {
               status: "continued",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
+              telemetry: this.buildPhaseOutcomeTelemetry({
+                state: bgAgentState,
+                usage: response.usage,
+                verifierDecision: "continue",
+                failureReason: verifierIntervention.result.summary,
+              }),
             });
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
@@ -2275,6 +2369,12 @@ export class Orchestrator {
               status: "replanned",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
+              telemetry: this.buildPhaseOutcomeTelemetry({
+                state: bgAgentState,
+                usage: response.usage,
+                verifierDecision: "replan",
+                failureReason: verifierIntervention.result.summary,
+              }),
             });
             bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
             if (response.text) {
@@ -2303,6 +2403,11 @@ export class Orchestrator {
             status: "approved",
             task: executionStrategy.task,
             reason: "Execution produced a final response after the verifier pipeline cleared the task.",
+            telemetry: this.buildPhaseOutcomeTelemetry({
+              state: bgAgentState,
+              usage: response.usage,
+              verifierDecision: "approve",
+            }),
           });
 
           // ─── Metrics: record success ────────────────────────────────
@@ -3043,6 +3148,12 @@ export class Orchestrator {
               status: "continued",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
+              telemetry: this.buildPhaseOutcomeTelemetry({
+                state: agentState,
+                usage: response.usage,
+                verifierDecision: "continue",
+                failureReason: verifierIntervention.result.summary,
+              }),
             });
             agentState = {
               ...agentState,
@@ -3071,6 +3182,12 @@ export class Orchestrator {
               status: "replanned",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
+              telemetry: this.buildPhaseOutcomeTelemetry({
+                state: agentState,
+                usage: response.usage,
+                verifierDecision: "replan",
+                failureReason: verifierIntervention.result.summary,
+              }),
             });
             agentState = this.transitionToVerifierReplan(agentState, response.text);
             if (response.text) {
@@ -3100,6 +3217,11 @@ export class Orchestrator {
             status: "approved",
             task: executionStrategy.task,
             reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
+            telemetry: this.buildPhaseOutcomeTelemetry({
+              state: agentState,
+              usage: response.usage,
+              verifierDecision: "approve",
+            }),
           });
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
@@ -3166,6 +3288,19 @@ export class Orchestrator {
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
           }
+          this.recordPhaseOutcome({
+            identityKey,
+            assignment: currentAssignment,
+            phase: "reflecting",
+            status: "replanned",
+            task: executionStrategy.task,
+            reason: response.text ?? "reflection requested a new plan",
+            telemetry: this.buildPhaseOutcomeTelemetry({
+              state: agentState,
+              usage: response.usage,
+              failureReason: response.text,
+            }),
+          });
           session.messages.push({ role: "user", content: "Please create a new plan." });
           continue;
         }
@@ -3299,6 +3434,12 @@ export class Orchestrator {
             status: "continued",
             task: executionStrategy.task,
             reason: verifierIntervention.result.summary,
+            telemetry: this.buildPhaseOutcomeTelemetry({
+              state: agentState,
+              usage: response.usage,
+              verifierDecision: "continue",
+              failureReason: verifierIntervention.result.summary,
+            }),
           });
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
@@ -3318,6 +3459,12 @@ export class Orchestrator {
             status: "replanned",
             task: executionStrategy.task,
             reason: verifierIntervention.result.summary,
+            telemetry: this.buildPhaseOutcomeTelemetry({
+              state: agentState,
+              usage: response.usage,
+              verifierDecision: "replan",
+              failureReason: verifierIntervention.result.summary,
+            }),
           });
           agentState = this.transitionToVerifierReplan(agentState, response.text);
           if (response.text) {
@@ -3415,14 +3562,19 @@ export class Orchestrator {
             });
             await this.channel.sendMarkdown(chatId, finalText);
           }
-          this.recordPhaseOutcome({
-            identityKey,
-            assignment: currentAssignment,
-            phase: this.toExecutionPhase(agentState.phase),
-            status: "approved",
-            task: executionStrategy.task,
-            reason: "Execution produced a final response after the verifier pipeline cleared the task.",
-          });
+        this.recordPhaseOutcome({
+          identityKey,
+          assignment: currentAssignment,
+          phase: this.toExecutionPhase(agentState.phase),
+          status: "approved",
+          task: executionStrategy.task,
+          reason: "Execution produced a final response after the verifier pipeline cleared the task.",
+          telemetry: this.buildPhaseOutcomeTelemetry({
+            state: agentState,
+            usage: response.usage,
+            verifierDecision: "approve",
+          }),
+        });
         } else {
           // LLM returned empty response — send fallback to user
           const lang = profile?.language ?? this.defaultLanguage;
@@ -4310,6 +4462,12 @@ export class Orchestrator {
         status: this.toPhaseOutcomeStatus(result.decision),
         task: params.strategy.task,
         reason: result.summary,
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          usage: reviewResponse.usage,
+          verifierDecision: result.decision,
+          state: params.state,
+          failureReason: params.draft,
+        }),
       });
       return {
         kind: result.decision === "replan" ? "replan" : result.decision === "continue" ? "continue" : "approve",
@@ -4330,6 +4488,10 @@ export class Orchestrator {
         status: "failed",
         task: params.strategy.task,
         reason: "Completion review provider failed; falling back to conservative verifier gate.",
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          state: params.state,
+          failureReason: params.draft,
+        }),
       });
     }
 
@@ -4415,6 +4577,9 @@ export class Orchestrator {
           status: "approved",
           task: reviewTask,
           reason: decision.reason || "Shell review approved the autonomous command.",
+          telemetry: this.buildPhaseOutcomeTelemetry({
+            usage: response.usage,
+          }),
         });
         return { approved: true, reason: decision.reason };
       }
@@ -4428,6 +4593,10 @@ export class Orchestrator {
           status: "blocked",
           task: reviewTask,
           reason: decision.reason || "Shell review rejected the autonomous command.",
+          telemetry: this.buildPhaseOutcomeTelemetry({
+            usage: response.usage,
+            failureReason: command,
+          }),
         });
         return { approved: false, reason: decision.reason || "shell review rejected the command" };
       }
@@ -4440,6 +4609,9 @@ export class Orchestrator {
         status: "failed",
         task: reviewTask,
         reason: "Shell review provider failed; falling back to bounded local heuristics.",
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          failureReason: command,
+        }),
       });
       // Fall back to local bounded-command heuristics below.
     }
@@ -5179,6 +5351,17 @@ function mergeLearnedInsights(
     }
   }
   return [...merged].slice(-12);
+}
+
+function normalizeFailureFingerprint(text: string | null | undefined): string {
+  if (!text) {
+    return "";
+  }
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .slice(0, 180);
 }
 
 /** Sanitize tool input for learning events: cap size, strip API keys */

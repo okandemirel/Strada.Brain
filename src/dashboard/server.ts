@@ -207,6 +207,12 @@ interface DashboardProviderRouter {
     replannedCount: number;
     blockedCount: number;
     failedCount: number;
+    verifierSampleSize: number;
+    verifierCleanRate: number;
+    rollbackRate: number;
+    avgRetryCount: number;
+    avgTokenCost: number;
+    repeatedFailureCount: number;
     latestTimestamp: number;
     latestReason: string;
   }>;

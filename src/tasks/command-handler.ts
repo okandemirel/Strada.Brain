@@ -845,7 +845,7 @@ export class CommandHandler {
       }
       if (phaseScores.length > 0) {
         const lines = phaseScores.map((entry) =>
-          `\`${entry.phase}/${entry.role}\` -> \`${entry.provider}\` score=\`${entry.score.toFixed(2)}\` samples=\`${entry.sampleSize}\` approved=\`${entry.approvedCount}\` continued=\`${entry.continuedCount}\` replanned=\`${entry.replannedCount}\` failed=\`${entry.failedCount}\``
+          `\`${entry.phase}/${entry.role}\` -> \`${entry.provider}\` score=\`${entry.score.toFixed(2)}\` samples=\`${entry.sampleSize}\` verifier=\`${entry.verifierCleanRate.toFixed(2)}\` rollback=\`${entry.rollbackRate.toFixed(2)}\` retries=\`${entry.avgRetryCount.toFixed(2)}\` cost=\`${Math.round(entry.avgTokenCost)}\` repeats=\`${entry.repeatedFailureCount}\` approved=\`${entry.approvedCount}\` continued=\`${entry.continuedCount}\` replanned=\`${entry.replannedCount}\` failed=\`${entry.failedCount}\``
         );
         sections.push(`*Adaptive Phase Scores*\n\n${lines.join("\n")}`);
       }

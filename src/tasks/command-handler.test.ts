@@ -80,11 +80,17 @@ describe("CommandHandler /routing", () => {
           approvedCount: 2,
           continuedCount: 0,
           replannedCount: 1,
-          blockedCount: 0,
-          failedCount: 0,
-          latestTimestamp: Date.now() + 3,
-          latestReason: "Verifier review requested a new approach.",
-        },
+        blockedCount: 0,
+        failedCount: 0,
+        verifierSampleSize: 3,
+        verifierCleanRate: 0.72,
+        rollbackRate: 0.33,
+        avgRetryCount: 1.33,
+        avgTokenCost: 420,
+        repeatedFailureCount: 1,
+        latestTimestamp: Date.now() + 3,
+        latestReason: "Verifier review requested a new approach.",
+      },
       ],
     });
 
@@ -129,6 +135,10 @@ describe("CommandHandler /routing", () => {
     expect(sendMarkdown).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("score=`0.82`"),
+    );
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("verifier=`0.72`"),
     );
     expect(sendText).not.toHaveBeenCalled();
   });

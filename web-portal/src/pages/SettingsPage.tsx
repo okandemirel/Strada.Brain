@@ -81,6 +81,12 @@ interface PhaseScore {
   replannedCount: number
   blockedCount: number
   failedCount: number
+  verifierSampleSize: number
+  verifierCleanRate: number
+  rollbackRate: number
+  avgRetryCount: number
+  avgTokenCost: number
+  repeatedFailureCount: number
   latestTimestamp: number
   latestReason: string
 }
@@ -810,6 +816,13 @@ export default function SettingsPage() {
                       </div>
                       <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
                         <span className="settings-provider-id">samples {score.sampleSize}</span>
+                        <span className="settings-provider-model">verifier {score.verifierCleanRate.toFixed(2)}</span>
+                        <span className="settings-provider-model">rollback {score.rollbackRate.toFixed(2)}</span>
+                        <span className="settings-provider-model">retry {score.avgRetryCount.toFixed(2)}</span>
+                        <span className="settings-provider-model">cost {Math.round(score.avgTokenCost)}</span>
+                        <span className="settings-provider-model">repeats {score.repeatedFailureCount}</span>
+                      </div>
+                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
                         <span className="settings-provider-model">approved {score.approvedCount}</span>
                         <span className="settings-provider-model">continued {score.continuedCount}</span>
                         <span className="settings-provider-model">replanned {score.replannedCount}</span>
