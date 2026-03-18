@@ -197,6 +197,11 @@ const ULTRATHINK_ENABLE_RE =
   /(?:\bultrathink\b|\bultra\s+think\b|\bdeep(?:er)?\s+think(?:ing)?\b|\bderin\s+düş(?:ün|un)\b|\bçok\s+derin\s+düş(?:ün|un)\b)/iu;
 const ULTRATHINK_DISABLE_RE =
   /(?:\bultrathink\b|\bultra\s+think\b).*\b(?:kapat|kapa|disable|turn\s+off|off|devre\s+dışı|devre\s+disi)\b/iu;
+const EXACT_RESPONSE_LITERAL_PATTERNS = [
+  /\b(?:say|write|reply|respond|answer|output)\s+exactly\s*[:\-]\s*["“]?([^"\n]+?)["”]?\s*$/iu,
+  /\b(?:reply|respond|answer|output|write)\s+(?:with\s+)?only\s*[:\-]\s*["“]?([^"\n]+?)["”]?\s*$/iu,
+  /\b(?:yalnızca|yalnizca|sadece)\s*[:\-]\s*["“]?([^"\n]+?)["”]?\s*(?:yaz|söyle|soyle|cevap\s+ver|yanıtla)?\s*$/iu,
+] as const;
 
 interface NaturalLanguageDirectiveUpdates {
   language?: string;
@@ -227,6 +232,37 @@ function trimDirectiveTail(raw: string): string {
     .replace(/[.,!?;:]+$/g, "")
     .replace(/\b(?:olsun|olacak|be|is)$/iu, "")
     .trim();
+}
+
+function extractExactResponseLiteral(prompt: string): string | undefined {
+  for (const pattern of EXACT_RESPONSE_LITERAL_PATTERNS) {
+    const captured = prompt.match(pattern)?.[1];
+    if (!captured) {
+      continue;
+    }
+    const literal = sanitizePreferenceText(captured, 120)
+      .replace(/^["“”'`]+|["“”'`]+$/g, "")
+      .trim();
+    if (literal.length > 0) {
+      return literal;
+    }
+  }
+  return undefined;
+}
+
+function buildExactResponseDirective(prompt: string): string {
+  const literal = extractExactResponseLiteral(prompt);
+  if (!literal) {
+    return "";
+  }
+  return [
+    "",
+    "## STRICT RESPONSE CONTRACT",
+    `The user requested an exact output literal: "${literal}"`,
+    "- The visible final answer must be exactly that literal.",
+    "- Do not add extra words, quotes, markdown, prefixes, suffixes, or explanations.",
+    "",
+  ].join("\n");
 }
 
 function getStringPreference(preferences: Record<string, unknown>, key: string, maxLength = 160): string | undefined {
@@ -886,6 +922,7 @@ export class Orchestrator {
     usageHandler?: (usage: TaskUsageEvent) => void;
   }): Promise<string> {
     const cleanedDraft = this.stripInternalDecisionMarkers(params.draft);
+    const exactLiteral = extractExactResponseLiteral(params.prompt);
     if (!cleanedDraft) {
       return "";
     }
@@ -913,6 +950,12 @@ export class Orchestrator {
       "- Mention blockers if any remain.",
       "- Remove internal workflow markers.",
       "- Keep the answer directly usable for the user.",
+      ...(exactLiteral
+        ? [
+            `- The user requested this exact visible output literal: "${exactLiteral}".`,
+            "- Return exactly that literal if it is consistent with the verified execution evidence.",
+          ]
+        : []),
     ].join("\n");
 
     try {
@@ -1073,6 +1116,9 @@ export class Orchestrator {
 
     // 2. Soul personality injection (with optional persona override)
     let systemPrompt = langDirective + this.injectSoulPersonality(this.systemPrompt, params.channelType, params.personaContent);
+
+    // 2.5. Exact literal-output requests need a hard response contract.
+    systemPrompt += buildExactResponseDirective(params.prompt);
 
     // 3. Autonomous mode directive
     if (this.dmPolicy?.isAutonomousActive(params.chatId, params.userId)) {

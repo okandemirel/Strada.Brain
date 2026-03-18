@@ -222,6 +222,84 @@ describe("Orchestrator", () => {
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-supervisor", "Supervisor final answer");
   });
 
+  it("injects an exact response contract into orchestrated worker prompts for literal-output requests", async () => {
+    const plannerProvider = createNamedProvider("planner");
+    const executorProvider = createNamedProvider("executor");
+    const reviewerProvider = createNamedProvider("reviewer");
+    const synthProvider = createNamedProvider("synth");
+
+    plannerProvider.chat.mockResolvedValueOnce({
+      text: "Plan:\n1. Finish the task",
+      toolCalls: [{ id: "tc-plan", name: "file_read", input: { path: "test.cs" } }],
+      stopReason: "tool_use",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+    executorProvider.chat.mockResolvedValueOnce({
+      text: "Atlas\nDONE",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 12, outputTokens: 18 },
+    });
+    synthProvider.chat.mockResolvedValueOnce({
+      text: "Atlas",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 9, outputTokens: 11 },
+    });
+
+    const providers = new Map([
+      ["planner", plannerProvider],
+      ["executor", executorProvider],
+      ["reviewer", reviewerProvider],
+      ["synth", synthProvider],
+    ]);
+
+    const routedOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => executorProvider,
+        getProviderByName: (name: string) => providers.get(name) ?? null,
+        getActiveInfo: () => ({ providerName: "executor", model: "default", isDefault: false }),
+        listAvailable: () => [...providers.keys()].map((name) => ({ name, label: name, defaultModel: "default" })),
+        shutdown: vi.fn(),
+      } as any,
+      providerRouter: {
+        resolve: (task: { type: string }, phase?: string) => {
+          if (phase === "reflecting" || task.type === "code-review") {
+            return { provider: "reviewer", reason: "review fit", task, timestamp: Date.now() };
+          }
+          if (task.type === "planning") {
+            return { provider: "planner", reason: "planning fit", task, timestamp: Date.now() };
+          }
+          if (task.type === "simple-question") {
+            return { provider: "synth", reason: "synthesis fit", task, timestamp: Date.now() };
+          }
+          return { provider: "executor", reason: "execution fit", task, timestamp: Date.now() };
+        },
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    const promise = routedOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-exact-output",
+      userId: "user1",
+      text: 'Reply with only: "Atlas"',
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("## STRICT RESPONSE CONTRACT");
+    expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain('The user requested an exact output literal: "Atlas"');
+    expect(synthProvider.chat.mock.calls[0]?.[0]).toContain("## STRICT RESPONSE CONTRACT");
+    expect(synthProvider.chat.mock.calls[0]?.[0]).toContain('The user requested an exact output literal: "Atlas"');
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-exact-output", "Atlas");
+  });
+
   it("pins the active tool-turn provider after execution starts to preserve provider-specific tool context", async () => {
     const plannerProvider = createNamedProvider("planner");
     const executorProvider = createNamedProvider("executor");

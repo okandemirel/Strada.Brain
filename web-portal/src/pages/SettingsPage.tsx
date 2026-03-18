@@ -27,6 +27,17 @@ interface ActiveProvider {
   executionPolicyNote?: string
 }
 
+interface RoutingDecision {
+  provider: string
+  reason: string
+  task: {
+    type: string
+    complexity: string
+    criticality: string
+  }
+  timestamp: number
+}
+
 interface EmbeddingStatus {
   state: 'disabled' | 'active' | 'degraded'
   ragEnabled: boolean
@@ -105,6 +116,14 @@ function toPercent(pct: number): number {
   return pct * 100
 }
 
+function formatDecisionTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) return 'recently'
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -133,6 +152,7 @@ export default function SettingsPage() {
 
   // --- Routing Preset ---
   const [routingPreset, setRoutingPreset] = useState<string>('balanced')
+  const [routingDecisions, setRoutingDecisions] = useState<RoutingDecision[]>([])
   const [routingLoading, setRoutingLoading] = useState(true)
   const [routingSwitching, setRoutingSwitching] = useState(false)
 
@@ -180,12 +200,16 @@ export default function SettingsPage() {
 
   // --- Fetch routing preset ---
   const fetchRouting = useCallback(() => {
-    fetchJson<{ routing: unknown[]; preset?: string }>('/api/agent-activity')
+    fetchJson<{ routing: RoutingDecision[]; preset?: string }>('/api/agent-activity')
       .then((data) => {
         if (data?.preset) setRoutingPreset(data.preset)
+        setRoutingDecisions(Array.isArray(data?.routing) ? data.routing.slice(0, 6) : [])
         setRoutingLoading(false)
       })
-      .catch(() => setRoutingLoading(false))
+      .catch(() => {
+        setRoutingDecisions([])
+        setRoutingLoading(false)
+      })
   }, [])
 
   // --- Fetch daemon status ---
@@ -294,6 +318,8 @@ export default function SettingsPage() {
         providerName: matched.name,
         model: matched.defaultModel,
         isDefault: false,
+        selectionMode: 'strada-primary-worker',
+        executionPolicyNote: activeProvider?.executionPolicyNote,
       })
     }
 
@@ -301,7 +327,7 @@ export default function SettingsPage() {
       fetchProviders()
       setSwitching(false)
     }, 1500)
-  }, [switching, switchProvider, providers, fetchProviders])
+  }, [activeProvider?.executionPolicyNote, switching, switchProvider, providers, fetchProviders])
 
   const handleVoiceInputToggle = useCallback(() => {
     setVoice((prev) => {
@@ -512,7 +538,7 @@ export default function SettingsPage() {
 
       {/* ===== Routing ===== */}
       <div className="admin-section">
-        <div className="admin-section-title">Provider Routing</div>
+        <div className="admin-section-title">Strada Execution Policy</div>
 
         {routingLoading ? (
           <div className="page-loading" style={{ height: 80 }}>Loading...</div>
@@ -535,16 +561,55 @@ export default function SettingsPage() {
               </div>
             </div>
             <div className="settings-hint">
-              Provider routing automatically selects the best AI provider for each task type.
+              Strada remains the control plane. This preset biases how Strada assigns planning,
+              execution, review, and synthesis work across available providers.
               Configure with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>ROUTING_PRESET</code> or <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>/routing preset</code> command.
             </div>
+
+            {routingDecisions.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
+                  <span className="admin-stat-label">Recent Worker Decisions</span>
+                  <span className="admin-stat-value">{routingDecisions.length}</span>
+                </div>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {routingDecisions.map((decision, index) => (
+                    <div
+                      key={`${decision.provider}-${decision.timestamp}-${index}`}
+                      className="settings-provider-card"
+                      style={{
+                        textAlign: 'left',
+                        padding: '12px 14px',
+                        cursor: 'default',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                          {decision.task.type}{' -> '}{decision.provider}
+                        </div>
+                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                          {formatDecisionTime(decision.timestamp)}
+                        </div>
+                      </div>
+                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
+                        <span className="settings-provider-id">{decision.task.complexity}</span>
+                        <span className="settings-provider-model">{decision.task.criticality}</span>
+                      </div>
+                      <div className="settings-hint" style={{ margin: 0 }}>
+                        {decision.reason}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
 
       {/* ===== Model Selection ===== */}
       <div className="admin-section">
-        <div className="admin-section-title">Model Selection</div>
+        <div className="admin-section-title">Primary Worker</div>
 
         {modelLoading ? (
           <div className="page-loading" style={{ height: 80 }}>Loading providers...</div>
@@ -552,7 +617,7 @@ export default function SettingsPage() {
           <>
             {activeProvider && (
               <div className="admin-stat-row" style={{ marginBottom: 16 }}>
-                <span className="admin-stat-label">Active Provider</span>
+                <span className="admin-stat-label">Primary Execution Worker</span>
                 <span className="admin-stat-value">
                   {activeProvider.providerName}
                   {activeProvider.isDefault && (
@@ -564,9 +629,20 @@ export default function SettingsPage() {
 
             {activeProvider?.model && (
               <div className="admin-stat-row" style={{ marginBottom: 16 }}>
-                <span className="admin-stat-label">Model</span>
+                <span className="admin-stat-label">Worker Model</span>
                 <span className="admin-stat-value admin-card-value mono">
                   {activeProvider.model}
+                </span>
+              </div>
+            )}
+
+            {activeProvider?.selectionMode && (
+              <div className="admin-stat-row" style={{ marginBottom: 16 }}>
+                <span className="admin-stat-label">Selection Mode</span>
+                <span className="admin-stat-value">
+                  {activeProvider.selectionMode === 'strada-primary-worker'
+                    ? 'Strada primary worker'
+                    : activeProvider.selectionMode}
                 </span>
               </div>
             )}
@@ -609,6 +685,11 @@ export default function SettingsPage() {
               </div>
             )}
 
+            <div className="settings-hint" style={{ marginBottom: 16 }}>
+              Changing this does not turn Strada into a direct provider chat. It only changes the
+              main worker Strada prefers for implementation-heavy turns.
+            </div>
+
             {providers.length > 0 ? (
               <div className="settings-provider-grid">
                 {providers.map((p) => {
@@ -625,7 +706,7 @@ export default function SettingsPage() {
                         <span className="settings-provider-id">{p.name}</span>
                         <span className="settings-provider-model">{p.defaultModel}</span>
                       </div>
-                      {isActive && <span className="settings-provider-active-tag">Active</span>}
+                      {isActive && <span className="settings-provider-active-tag">Primary</span>}
                     </button>
                   )
                 })}
