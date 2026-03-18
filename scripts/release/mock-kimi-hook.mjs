@@ -272,7 +272,55 @@ function buildResponse(body) {
     });
   }
 
-  if (conversationText.includes("paor recovery smoke")) {
+  const isAnalysisContinuationTurn =
+    normalizedUserText.includes("analysis continuation smoke") ||
+    normalizedUserText.includes("[autonomy required]") ||
+    normalizedToolResult.includes("contents of 'assets/resources/levels'") ||
+    normalizedToolResult.includes("file: assets/resources/levels/level_031.asset");
+
+  if (isAnalysisContinuationTurn) {
+    if (normalizedToolResult.includes("file: assets/resources/levels/level_031.asset")) {
+      return buildChatCompletion({
+        text: "analysis continuation ok",
+      });
+    }
+
+    if (normalizedUserText.includes("[autonomy required]")) {
+      return buildChatCompletion({
+        text: "The directory check was not enough. Inspecting the concrete level asset now.",
+        toolCalls: [
+          makeToolCall("tool-analysis-read", "file_read", {
+            path: "Assets/Resources/Levels/Level_031.asset",
+          }),
+        ],
+      });
+    }
+
+    if (normalizedToolResult.includes("contents of 'assets/resources/levels'")) {
+      return buildChatCompletion({
+        text: "I checked the directory and Level_031 may still be wrong. What should I do next?",
+      });
+    }
+
+    return buildChatCompletion({
+      text: "Starting with a directory-level inspection.",
+      toolCalls: [
+        makeToolCall("tool-analysis-list", "list_directory", {
+          path: "Assets/Resources/Levels",
+        }),
+      ],
+    });
+  }
+
+  const isPaorRecoveryTurn =
+    normalizedUserText.includes("paor recovery smoke") ||
+    normalizedUserText.includes("## reflection phase") ||
+    normalizedUserText.includes("please create a new plan.") ||
+    normalizedToolResult.includes("assets/paor-proof.txt") ||
+    normalizedToolResult.includes("assets/missing-proof.txt") ||
+    normalizedToolResult.includes("test -f assets/paor-proof.txt");
+
+  if (isPaorRecoveryTurn) {
     if (normalizedUserText.includes("## reflection phase")) {
       return buildChatCompletion({
         text: [

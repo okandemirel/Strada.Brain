@@ -12,6 +12,8 @@ const HOOK_PATH = join(ROOT, "scripts", "release", "mock-kimi-hook.mjs");
 const PAOR_RECOVERY_PROMPT =
   "Run the PAOR recovery smoke: let the initial approach fail, then replan and create Assets/paor-proof.txt with exact content 'paor ok'.";
 const PROVIDER_FALLBACK_PROMPT = "Run the provider fallback smoke and say exactly: provider fallback ok.";
+const ANALYSIS_CONTINUATION_PROMPT =
+  "Run the analysis continuation smoke: inspect Assets/Resources/Levels, do not hand the next step back to the user, directly inspect Level_031 if needed, and say exactly: analysis continuation ok.";
 const RAPID_MESSAGE_PART_ONE = "Rapid message smoke part 1: keep this request together.";
 const RAPID_MESSAGE_PART_TWO = "Rapid message smoke part 2: say exactly rapid batch ok.";
 const CLI_CHAT_ID = "cli-local";
@@ -148,6 +150,7 @@ async function ensureFile(path) {
 
 async function createSmokeProject(projectDir) {
   await mkdir(join(projectDir, "Assets"), { recursive: true });
+  await mkdir(join(projectDir, "Assets", "Resources", "Levels"), { recursive: true });
   await mkdir(join(projectDir, "Packages", "com.strada.core"), { recursive: true });
   await mkdir(join(projectDir, "Packages", "Strada.Core"), { recursive: true });
   await mkdir(join(projectDir, "Packages", "Strada.Modules"), { recursive: true });
@@ -178,6 +181,21 @@ async function createSmokeProject(projectDir) {
   await writeFile(
     join(projectDir, "ProjectSettings", "ProjectVersion.txt"),
     "m_EditorVersion: 6000.0.67f1\n",
+  );
+  await writeFile(
+    join(projectDir, "Assets", "Resources", "Levels", "Level_031.asset"),
+    [
+      "%YAML 1.1",
+      "%TAG !u! tag:unity3d.com,2011:",
+      "--- !u!114 &11400000",
+      "MonoBehaviour:",
+      "  m_Name: Level_031",
+      "  _theme: Castle",
+      "  _difficulty: 0",
+      "  _parMoves: 5",
+      "  _activeMechanics: []",
+      "",
+    ].join("\n"),
   );
 }
 
@@ -492,6 +510,18 @@ async function runDaemonSmoke(memoryDir, projectDir) {
       fromIndex: cursor,
       timeoutMs: 40_000,
     });
+
+    cursor = delegationSession.output.length;
+    delegationSession.sendLine(ANALYSIS_CONTINUATION_PROMPT);
+    await delegationSession.waitFor("analysis continuation ok", {
+      fromIndex: cursor,
+      timeoutMs: 40_000,
+    });
+    const analysisOutput = delegationSession.output.slice(cursor);
+    assert(
+      !/what should i do next\?/i.test(analysisOutput),
+      "analysis continuation smoke should not surface a provider draft that hands the next step back to the user",
+    );
   } finally {
     await delegationSession.close();
   }
@@ -607,6 +637,33 @@ async function runDaemonSmoke(memoryDir, projectDir) {
     paorMetric.tool_call_count >= 3,
     "PAOR recovery smoke should record the failed read, recovery write, and final verification command",
   );
+
+  const delegationLogPath = join(delegationMemoryDir, "mock-provider.log");
+  const delegationEntries = (await readFile(delegationLogPath, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const analysisEntries = delegationEntries.filter((entry) =>
+    (entry.type === "chat" || entry.type === "chat-failure") &&
+    typeof entry.lastUserText === "string" &&
+    (entry.lastUserText.includes("analysis continuation smoke") ||
+      entry.lastUserText.includes("[AUTONOMY REQUIRED]")),
+  );
+  const listedLevels = analysisEntries.some((entry) =>
+    JSON.stringify(entry.response ?? {}).includes("\"name\":\"list_directory\""),
+  );
+  const inspectedLevelAsset = analysisEntries.some((entry) =>
+    JSON.stringify(entry.response ?? {}).includes("\"name\":\"file_read\"") &&
+    JSON.stringify(entry.response ?? {}).includes("Level_031.asset"),
+  );
+  const autonomyReopened = analysisEntries.some((entry) =>
+    typeof entry.lastUserText === "string" && entry.lastUserText.includes("[AUTONOMY REQUIRED]"),
+  );
+
+  assert(listedLevels, "analysis continuation smoke should begin with a directory inspection");
+  assert(autonomyReopened, "analysis continuation smoke should reopen the loop after the provider deflects");
+  assert(inspectedLevelAsset, "analysis continuation smoke should directly inspect the flagged asset before concluding");
 }
 
 async function main() {
