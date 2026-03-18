@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateEnvContent } from "./terminal-wizard.js";
+import { findAvailableSetupWizardPort, generateEnvContent } from "./terminal-wizard.js";
 
 describe("generateEnvContent", () => {
   it("uses EMBEDDING_PROVIDER for Gemini and aligns dashboard port defaults", () => {
@@ -76,5 +76,23 @@ describe("generateEnvContent", () => {
     expect(content).toContain("PROVIDER_CHAIN=ollama");
     expect(content).toContain("EMBEDDING_PROVIDER=ollama");
     expect(content).not.toContain("OLLAMA_API_KEY");
+  });
+});
+
+describe("findAvailableSetupWizardPort", () => {
+  it("returns the preferred port when it is free", async () => {
+    await expect(
+      findAvailableSetupWizardPort(4100, 1, async () => true),
+    ).resolves.toBe(4100);
+  });
+
+  it("falls forward when the preferred port is already in use", async () => {
+    const busyPorts = new Set([4100, 4101]);
+    const resolvedPort = await findAvailableSetupWizardPort(
+      4100,
+      5,
+      async (port) => !busyPorts.has(port),
+    );
+    expect(resolvedPort).toBe(4102);
   });
 });

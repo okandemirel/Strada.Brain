@@ -55,18 +55,16 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 # Clone from source (currently the canonical install path)
 git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 cd Strada.Brain
-npm install
-npm run bootstrap
 
-# Local source-checkout helpers (no global link required)
-npm run setup:web
-npm run setup:terminal
-
-# Recommended if you want to launch everything with the `strada` command
-npm link
+# Optional but recommended: install a user-local `strada` command
+./strada install-command
 ```
 
-Run every `npm` command from the repository root, the folder that contains `package.json`. If you see an error like `ENOENT ... /Strada/package.json`, you are one directory too high; `cd` into `Strada.Brain` first.
+`./strada` is the canonical source-checkout launcher. On first run it prepares the local checkout automatically, so normal setup no longer requires manual `npm install`, `npm run bootstrap`, or `npm link`.
+
+If you skip `./strada install-command`, keep using `./strada ...` from the repository root. Once installed, bare `strada ...` works from anywhere.
+
+If you ever run `npm` manually, do it from the repository root, the folder that contains `package.json`. If you see an error like `ENOENT ... /Strada/package.json`, you are one directory too high; `cd` into `Strada.Brain` first.
 
 `strada-brain` is not currently published on the public npm registry, so `npm install -g strada-brain` will return `E404`. Until a registry release exists, use the source checkout flow above.
 
@@ -74,16 +72,16 @@ Run every `npm` command from the repository root, the folder that contains `pack
 
 ```bash
 # Interactive setup wizard (terminal or web browser)
-strada setup
+./strada setup
 
 # Skip the chooser and jump straight into one setup surface
-strada setup --web
-strada setup --terminal
+./strada setup --web
+./strada setup --terminal
 ```
 
 The wizard asks for your Unity project path, AI provider API key, default channel, and language. Choose **Terminal** for quick setup or **Web Browser** for the full configuration UI.
 
-After the first successful setup, running `strada` with no subcommand becomes your smart launcher:
+After the first successful setup, running `./strada` with no subcommand becomes your smart launcher:
 - first use: opens setup automatically if config is missing
 - later uses: shows a terminal launcher so you can choose web, CLI, daemon mode, setup, or doctor
 
@@ -91,9 +89,9 @@ After setup, run a readiness check before you start the agent:
 
 ```bash
 # From the source checkout
-npm run doctor
+./strada doctor
 
-# Or, if you linked the CLI globally
+# Or, after installing the user-local command
 strada doctor
 ```
 
@@ -109,45 +107,49 @@ JWT_SECRET=<generate with: openssl rand -hex 64>
 ### 3. Run
 
 ```bash
-# Smart launcher: first run setup if needed, otherwise choose how to open Strada
+# Smart launcher from the source checkout
+./strada
+
+# Bare command after `./strada install-command`
 strada
 
 # Start your configured default channel directly in daemon mode
-strada --daemon
+./strada --daemon
 
 # Start with default web channel
-strada start
+./strada start
 
 # Interactive CLI mode (fastest way to test)
-strada start --channel cli
+./strada start --channel cli
 
 # Daemon mode (24/7 autonomous operation with proactive triggers)
-strada start --channel web --daemon
+./strada start --channel web --daemon
 
 # Other chat channels
-strada start --channel telegram
-strada start --channel discord
-strada start --channel slack
-strada start --channel whatsapp
+./strada start --channel telegram
+./strada start --channel discord
+./strada start --channel slack
+./strada start --channel whatsapp
 
 # Always-on supervisor with auto-restart
-strada supervise --channel web
+./strada supervise --channel web
 ```
 
 ### 4. CLI Commands
 
 ```bash
-strada                    # Smart launcher (setup on first run, launcher panel afterwards)
+./strada                  # Canonical source-checkout launcher
+./strada install-command  # Install a user-local bare `strada` command
+strada                    # Smart launcher after install-command
 strada --daemon           # Start the configured default channel in daemon mode
-strada setup              # Interactive setup wizard
-strada setup --web        # Launch the browser wizard directly
-strada setup --terminal   # Use the terminal wizard directly
-strada doctor             # Verify install/build/config readiness
-strada start              # Start the agent
-strada supervise          # Run with auto-restart supervisor
-strada update             # Check and apply updates
-strada update --check     # Check for updates without applying
-strada version-info       # Show version, install method, update status
+./strada setup --web      # Launch the browser wizard directly
+./strada setup --terminal # Use the terminal wizard directly
+./strada doctor           # Verify install/build/config readiness
+./strada start            # Start the agent
+./strada supervise        # Run with auto-restart supervisor
+./strada update           # Check and apply updates
+./strada update --check   # Check for updates without applying
+./strada version-info     # Show version, install method, update status
 ```
 
 ### 4. Talk to It
@@ -165,7 +167,7 @@ Once running, send a message through your configured channel:
 
 ### 5. Auto-Update
 
-Strada.Brain automatically checks for updates daily and applies them when idle. Source checkouts and `npm link` installs update through git. npm-based update commands only apply after a public npm release exists.
+Strada.Brain automatically checks for updates daily and applies them when idle. Source checkouts and `./strada install-command` installs update through git. npm-based update commands only apply after a public npm release exists.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

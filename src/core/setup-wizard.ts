@@ -145,6 +145,16 @@ export class SetupWizard {
 
   /** Starts the wizard and resolves when the user completes setup. */
   async start(): Promise<void> {
+    await this.listen();
+    await this.waitForCompletion();
+  }
+
+  /** Starts listening and resolves once the HTTP server is ready. */
+  async listen(): Promise<void> {
+    if (this.server) {
+      return;
+    }
+
     this.server = createServer((req, res) => this.handleRequest(req, res));
 
     await new Promise<void>((resolve, reject) => {
@@ -153,8 +163,10 @@ export class SetupWizard {
     });
 
     console.log(`Setup wizard running at http://localhost:${this.port}`);
+  }
 
-    // Wait until config is saved
+  /** Resolves when the user completes the setup flow and saves config. */
+  async waitForCompletion(): Promise<void> {
     await new Promise<void>((resolve) => {
       this.onComplete = resolve;
     });

@@ -57,18 +57,14 @@ Neu in dieser Version: Strada.Brain verfuegt jetzt ueber einen **Agent Core** --
 # Aus dem Quellcode klonen (derzeit der kanonische Installationsweg)
 git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 cd Strada.Brain
-npm install
-npm run bootstrap
 
-# Lokale Helfer fuer den Source-Checkout (kein globaler Link noetig)
-npm run setup:web
-npm run setup:terminal
-
-# Empfohlen, wenn Sie alles ueber den `strada`-Befehl starten moechten
-npm link
+# Optional, aber empfohlen: einen benutzerlokalen `strada`-Befehl installieren
+./strada install-command
 ```
 
 Fuehren Sie alle `npm` Befehle im Repository-Root aus, also in dem Ordner mit `package.json`. Wenn Sie einen Fehler wie `ENOENT ... /Strada/package.json` sehen, sind Sie eine Ebene zu hoch; wechseln Sie zuerst nach `Strada.Brain`.
+
+`./strada` ist der kanonische Launcher fuer den Source-Checkout. Beim ersten Start bereitet er den Checkout automatisch vor, sodass der normale Setup-Weg kein `npm link` mehr braucht.
 
 `strada-brain` ist derzeit nicht in der öffentlichen npm-Registry veröffentlicht. Deshalb liefert `npm install -g strada-brain` aktuell `E404`. Bis es eine Registry-Veröffentlichung gibt, nutze bitte den obigen Source-Checkout-Weg.
 
@@ -76,24 +72,24 @@ Fuehren Sie alle `npm` Befehle im Repository-Root aus, also in dem Ordner mit `p
 
 ```bash
 # Interaktiver Setup-Assistent (Terminal oder Web-Browser)
-strada setup
+./strada setup
 
 # Den Auswahlschritt ueberspringen und direkt die gewuenschte Setup-Oberflaeche starten
-strada setup --web
-strada setup --terminal
+./strada setup --web
+./strada setup --terminal
 ```
 
 Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. Waehlen Sie **Terminal** fuer schnelles Setup oder **Web-Browser** fuer die vollstaendige Konfigurationsflaeche.
-Nach dem ersten erfolgreichen Setup wird `strada` ohne Subcommand zum smarten Launcher:
+Nach dem ersten erfolgreichen Setup wird `./strada` ohne Subcommand zum smarten Launcher:
 - beim ersten Start oeffnet es das Setup automatisch, falls die Config fehlt
 - spaeter zeigt es ein Terminal-Panel fuer Web, CLI, Daemon, Setup oder Doctor
 Fuehren Sie danach einen Bereitschaftscheck aus, bevor Sie den Agenten starten:
 
 ```bash
 # Im Source-Checkout
-npm run doctor
+./strada doctor
 
-# Oder nach globalem Link
+# Oder nach `./strada install-command`
 strada doctor
 ```
 
@@ -136,17 +132,18 @@ strada supervise --channel web
 ### 4. CLI-Befehle
 
 ```bash
-strada                    # Smarter Launcher (beim ersten Mal Setup, danach Launcher-Panel)
+./strada                  # Kanonischer Launcher fuer den Source-Checkout
+./strada install-command  # Benutzerlokalen bare `strada`-Befehl installieren
+strada                    # Smarter Launcher nach install-command
 strada --daemon           # Gespeicherten Standardkanal im Daemon-Modus starten
-strada setup              # Interaktiver Setup-Assistent
-strada setup --web        # Browser-Assistent direkt starten
-strada setup --terminal   # Terminal-Assistent direkt verwenden
-strada doctor             # Installations-/Build-/Config-Bereitschaft pruefen
-strada start              # Agent starten
-strada supervise          # Mit Auto-Restart-Supervisor ausfuehren
-strada update             # Auf Updates pruefen und anwenden
-strada update --check     # Auf Updates pruefen ohne anzuwenden
-strada version-info       # Version, Installationsmethode und Update-Status anzeigen
+./strada setup --web      # Browser-Assistent direkt starten
+./strada setup --terminal # Terminal-Assistent direkt verwenden
+./strada doctor           # Installations-/Build-/Config-Bereitschaft pruefen
+./strada start            # Agent starten
+./strada supervise        # Mit Auto-Restart-Supervisor ausfuehren
+./strada update           # Auf Updates pruefen und anwenden
+./strada update --check   # Auf Updates pruefen ohne anzuwenden
+./strada version-info     # Version, Installationsmethode und Update-Status anzeigen
 ```
 
 ### 5. Kommunizieren
@@ -164,7 +161,7 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 
 ### 6. Automatische Updates
 
-Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn der Agent untaeutig ist. Source-Checkouts und `npm link`-Installationen aktualisieren sich ueber git. npm-basierte Update-Befehle gelten erst, sobald eine öffentliche npm-Veroeffentlichung existiert.
+Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn der Agent untaeutig ist. Source-Checkouts und `./strada install-command`-Installationen aktualisieren sich ueber git. npm-basierte Update-Befehle gelten erst, sobald eine öffentliche npm-Veroeffentlichung existiert.
 
 | Variable | Standard | Beschreibung |
 |----------|----------|-------------|

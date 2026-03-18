@@ -16,6 +16,7 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 
 const MAX_RETRIES = 3;
 const RESPONSE_PROVIDER_CHOICES = [
@@ -261,6 +262,51 @@ function openBrowser(url: string): void {
   proc.unref();
 }
 
+async function canBindLocalhostPort(port: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const server = createServer();
+    let settled = false;
+
+    const cleanup = () => {
+      server.removeAllListeners();
+    };
+
+    const settle = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    server.once("error", () => {
+      server.close(() => settle(false));
+    });
+
+    server.listen(port, "localhost", () => {
+      server.close(() => {
+        settle(true);
+      });
+    });
+  });
+}
+
+export async function findAvailableSetupWizardPort(
+  preferredPort: number,
+  maxAttempts = 20,
+  canUsePort: (port: number) => Promise<boolean> = canBindLocalhostPort,
+): Promise<number> {
+  for (let offset = 0; offset < maxAttempts; offset += 1) {
+    const candidate = preferredPort + offset;
+    if (await canUsePort(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    `Could not find an available setup wizard port after checking ${maxAttempts} ports starting at ${preferredPort}.`,
+  );
+}
+
 /**
  * Run the interactive terminal setup wizard.
  *
@@ -299,16 +345,23 @@ export async function runTerminalWizard(
     if (useWebWizard) {
       intentionalClose = true;
       rl.close();
-      const port = process.env["SETUP_WIZARD_PORT"]
+      const requestedPort = process.env["SETUP_WIZARD_PORT"]
         ? parseInt(process.env["SETUP_WIZARD_PORT"], 10)
         : 3000;
+      const port = await findAvailableSetupWizardPort(requestedPort);
       const { SetupWizard } = await import("./setup-wizard.js");
       const wizard = new SetupWizard({ port });
       const url = `http://localhost:${port}/setup`;
+      if (port !== requestedPort) {
+        console.log(
+          `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on http://localhost:${port}/setup instead.`,
+        );
+      }
+      await wizard.listen();
       console.log(`\n\uD83C\uDF10 Opening setup at ${url}...`);
       console.log(`   (Open this URL in your browser if it didn't open automatically)\n`);
       openBrowser(url);
-      await wizard.start();
+      await wizard.waitForCompletion();
       return;
     }
 
@@ -479,8 +532,10 @@ export async function runTerminalWizard(
     fs.writeFileSync(envPath, envContent, { encoding: "utf-8", mode: 0o600 });
 
     console.log("\n\u2705 .env created!");
-    console.log("   Next: run `strada doctor` (or `npm run doctor` from the source checkout).");
-    console.log("   Then start Strada with `strada start`.\n");
+    console.log("   Source checkout next steps:");
+    console.log("   1) Run `./strada doctor` from this repo root.");
+    console.log("   2) If you want the bare `strada` command everywhere, run `./strada install-command` once.");
+    console.log("   3) Then use either `strada doctor` / `strada start` or keep using `./strada ...`.\n");
     intentionalClose = true;
     rl.close();
   } catch (err) {

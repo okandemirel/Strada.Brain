@@ -90,11 +90,11 @@ describe("docs consistency", () => {
       expect(content).toContain("OPENAI_API_KEY");
       expect(content).toContain(localizedProviderChainPhrases[relativePath]);
       expect(content).toContain(localizedControlPlanePhrases[relativePath]);
-      expect(content).toContain("npm link");
-      expect(content).toContain("setup:web");
-      expect(content).toContain("setup:terminal");
-      expect(content).toContain("strada doctor");
-      expect(content).toContain("strada                    #");
+      expect(content).toContain("./strada install-command");
+      expect(content).toContain("./strada setup --web");
+      expect(content).toContain("./strada setup --terminal");
+      expect(content).toContain("./strada doctor");
+      expect(content).toContain("./strada                  #");
       expect(content).toContain("strada --daemon");
       expect(content).toContain("cd Strada.Brain");
       expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
@@ -103,18 +103,18 @@ describe("docs consistency", () => {
 
   it("keeps install docs aligned with the source-first release path", () => {
     const englishReadme = readRepoFile("README.md");
-    expect(englishReadme).toContain("npm run bootstrap");
-    expect(englishReadme).toContain("npm run setup:web");
-    expect(englishReadme).toContain("npm run setup:terminal");
+    expect(englishReadme).toContain("./strada install-command");
+    expect(englishReadme).toContain("./strada setup --web");
+    expect(englishReadme).toContain("./strada setup --terminal");
     expect(englishReadme).toContain("git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain");
     expect(englishReadme).toContain("cd Strada.Brain");
     expect(englishReadme).toContain("repository root");
     expect(englishReadme).toContain("ENOENT ... /Strada/package.json");
-    expect(englishReadme).toContain("strada                    # Smart launcher");
+    expect(englishReadme).toContain("./strada                  # Canonical source-checkout launcher");
     expect(englishReadme).toContain("strada --daemon");
-    expect(englishReadme).toContain("strada setup --web");
-    expect(englishReadme).toContain("strada doctor");
-    expect(englishReadme).toContain("npm link");
+    expect(englishReadme).toContain("./strada setup --web");
+    expect(englishReadme).toContain("./strada doctor");
+    expect(englishReadme).toContain("bare `strada` command");
     expect(englishReadme).toContain("not currently published on the public npm registry");
     expect(englishReadme).not.toMatch(/# Global install \(recommended\)\s+npm install -g strada-brain/u);
   });

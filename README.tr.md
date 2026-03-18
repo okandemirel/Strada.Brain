@@ -57,18 +57,16 @@ Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosy
 # Kaynaktan klonlayin (su an icin kanonik kurulum yolu)
 git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 cd Strada.Brain
-npm install
-npm run bootstrap
 
-# Lokal source checkout yardimcilari (global link gerekmez)
-npm run setup:web
-npm run setup:terminal
-
-# Her seyi `strada` komutuyla baslatmak istiyorsaniz onerilen adim
-npm link
+# Opsiyonel ama onerilen adim: kullanici-local `strada` komutunu kur
+./strada install-command
 ```
 
-Tum `npm` komutlarini `package.json` dosyasinin bulundugu repo kokunden calistirin. `ENOENT ... /Strada/package.json` benzeri bir hata gorurseniz bir ust klasordesiniz; once `cd Strada.Brain` yapin.
+`./strada` kaynak checkout icin kanonik launcher'dir. Ilk calistirmada gerekli hazirligi kendi yapar; normal kurulumda artik manuel `npm install`, `npm run bootstrap` veya `npm link` gerekmez.
+
+`./strada install-command` atlanirsa repo kokunden `./strada ...` kullanmaya devam edin. Kurulduktan sonra yalniz `strada ...` komutu her yerden calisir.
+
+Eger bir gun `npm` komutunu manuel calistirmaniz gerekirse bunu `package.json` dosyasinin bulundugu repo kokunden yapin. `ENOENT ... /Strada/package.json` benzeri bir hata gorurseniz bir ust klasordesiniz; once `cd Strada.Brain` yapin.
 
 `strada-brain` paketi su anda public npm registry'de yayinli degil; bu nedenle `npm install -g strada-brain` komutu `E404` verir. Registry yayini gelene kadar yukaridaki kaynak checkout akisini kullanin.
 
@@ -76,24 +74,24 @@ Tum `npm` komutlarini `package.json` dosyasinin bulundugu repo kokunden calistir
 
 ```bash
 # Etkilesimli kurulum sihirbazi (terminal veya web tarayicisi)
-strada setup
+./strada setup
 
 # Secim ekranini atlayip dogrudan istediginiz setup yuzeyine gidin
-strada setup --web
-strada setup --terminal
+./strada setup --web
+./strada setup --terminal
 ```
 
 Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. Hizli kurulum icin **Terminal** secin veya tam ayarlar UI'si icin **Web Tarayicisi** secin.
-Ilk basarili kurulumdan sonra `strada` komutu artik akilli launcher olur:
+Ilk basarili kurulumdan sonra `./strada` komutu artik akilli launcher olur:
 - ilk kullanimda config yoksa setup'i otomatik acar
 - sonraki kullanimlarda web, CLI, daemon, setup veya doctor secimi yapabileceginiz terminal paneli gosterir
 Kurulumdan sonra, ajani baslatmadan once hazirlik kontrolu calistirin:
 
 ```bash
 # Source checkout icinden
-npm run doctor
+./strada doctor
 
-# CLI'yi globale bagladiysaniz
+# Kullanici-local komutu kurduysaniz
 strada doctor
 ```
 
@@ -108,45 +106,49 @@ JWT_SECRET=<su sekilde olusturun: openssl rand -hex 64>
 ### 3. Calistirma
 
 ```bash
-# Akilli launcher: gerekirse setup acilir, degilse Strada'yi nasil acacaginizi sorar
+# Source checkout icinden akilli launcher
+./strada
+
+# `./strada install-command` sonrasinda yalniz komut
 strada
 
 # Kayitli varsayilan kanali dogrudan daemon modunda baslat
-strada --daemon
+./strada --daemon
 
 # Varsayilan web kanali ile baslatin
-strada start
+./strada start
 
 # Etkilesimli CLI modu (test etmenin en hizli yolu)
-strada start --channel cli
+./strada start --channel cli
 
 # Daemon modu (proaktif tetikleyicilerle 7/24 otonom calisma)
-strada start --channel web --daemon
+./strada start --channel web --daemon
 
 # Diger sohbet kanallari ile
-strada start --channel telegram
-strada start --channel discord
-strada start --channel slack
-strada start --channel whatsapp
+./strada start --channel telegram
+./strada start --channel discord
+./strada start --channel slack
+./strada start --channel whatsapp
 
 # Otomatik yeniden baslatma destekli her zaman acik denetcisi
-strada supervise --channel web
+./strada supervise --channel web
 ```
 
 ### 4. CLI Komutlari
 
 ```bash
-strada                    # Akilli launcher (ilk calisinda setup, sonrasinda terminal paneli)
+./strada                  # Kaynak checkout icin kanonik launcher
+./strada install-command  # Kullanici-local bare `strada` komutunu kur
+strada                    # install-command sonrasinda akilli launcher
 strada --daemon           # Kayitli varsayilan kanali daemon modunda baslat
-strada setup              # Etkilesimli kurulum sihirbazi
-strada setup --web        # Web sihirbazini dogrudan ac
-strada setup --terminal   # Terminal sihirbazini dogrudan kullan
-strada doctor             # Kurulum/build/config hazirligini dogrula
-strada start              # Ajani baslat
-strada supervise          # Otomatik yeniden baslatma destegi ile calistir
-strada update             # Guncellemeleri kontrol et ve uygula
-strada update --check     # Guncellemeleri kontrol et (uygula)
-strada version-info       # Surum, kurulum yontemi ve guncelleme durumunu goster
+./strada setup --web      # Web sihirbazini dogrudan ac
+./strada setup --terminal # Terminal sihirbazini dogrudan kullan
+./strada doctor           # Kurulum/build/config hazirligini dogrula
+./strada start            # Ajani baslat
+./strada supervise        # Otomatik yeniden baslatma destegi ile calistir
+./strada update           # Guncellemeleri kontrol et ve uygula
+./strada update --check   # Guncellemeleri kontrol et (uygulama)
+./strada version-info     # Surum, kurulum yontemi ve guncelleme durumunu goster
 ```
 
 ### 5. Konusmaya Baslayin
@@ -164,7 +166,7 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 
 ### 6. Oto-Guncelleme
 
-Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugunda uygular. Kaynak checkout ve `npm link` kurulumlari guncellemeleri git uzerinden alir. npm tabanli guncelleme komutlari ise ancak public npm yayini oldugunda kullanilabilir.
+Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugunda uygular. Kaynak checkout ve `./strada install-command` kurulumlari guncellemeleri git uzerinden alir. npm tabanli guncelleme komutlari ise ancak public npm yayini oldugunda kullanilabilir.
 
 | Degisken | Varsayilan | Aciklama |
 |----------|---------|-------------|

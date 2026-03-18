@@ -57,18 +57,14 @@ Strada.Brain 是一个通过聊天频道与您对话的 AI 代理。您描述您
 # 从源码克隆（当前的规范安装方式）
 git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 cd Strada.Brain
-npm install
-npm run bootstrap
 
-# 源码 checkout 的本地辅助命令（不做 global link 也能用）
-npm run setup:web
-npm run setup:terminal
-
-# 如果你希望统一用 `strada` 命令启动，推荐执行
-npm link
+# 可选但推荐：安装一个用户本地的 `strada` 命令
+./strada install-command
 ```
 
 所有 `npm` 命令都必须在包含 `package.json` 的仓库根目录中执行。如果看到类似 `ENOENT ... /Strada/package.json` 的错误，说明你当前在上一级目录；请先执行 `cd Strada.Brain`。
+
+`./strada` 是源码 checkout 的规范 launcher。首次运行时它会自动准备本地 checkout，所以常规 setup 已经不再需要手动 `npm link`。
 
 `strada-brain` 目前还没有发布到 public npm registry，所以 `npm install -g strada-brain` 现在会返回 `E404`。在 npm 公共发布出现之前，请使用上面的源码 checkout 流程。
 
@@ -76,24 +72,24 @@ npm link
 
 ```bash
 # 交互式设置向导（终端或 Web 浏览器）
-strada setup
+./strada setup
 
 # 跳过选择步骤，直接进入你想要的 setup 界面
-strada setup --web
-strada setup --terminal
+./strada setup --web
+./strada setup --terminal
 ```
 
 向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。选择**终端**进行快速设置，或选择 **Web 浏览器**进行完整配置 UI。
-第一次 setup 完成后，不带子命令的 `strada` 会变成你的智能启动器：
+第一次 setup 完成后，不带子命令的 `./strada` 会变成你的智能启动器：
 - 第一次使用时如果没有 config，会自动进入 setup
 - 之后会显示一个终端面板，让你选择 web、CLI、daemon、setup 或 doctor
 设置完成后，在启动代理之前先做一次 readiness 检查：
 
 ```bash
 # 在源码 checkout 内
-npm run doctor
+./strada doctor
 
-# 或者已经全局 link 后
+# 或者在 `./strada install-command` 之后
 strada doctor
 ```
 
@@ -136,17 +132,18 @@ strada supervise --channel web
 ### 4. CLI 命令
 
 ```bash
-strada                    # 智能启动器（首次进入 setup，之后显示启动面板）
+./strada                  # 源码 checkout 的规范 launcher
+./strada install-command  # 为用户安装 bare `strada` 命令
+strada                    # install-command 之后的智能启动器
 strada --daemon           # 以 daemon 模式启动已保存的默认通道
-strada setup              # 交互式设置向导
-strada setup --web        # 直接打开 Web 向导
-strada setup --terminal   # 直接使用终端向导
-strada doctor             # 检查安装 / build / config 准备情况
-strada start              # 启动代理
-strada supervise          # 带自动重启的监督
-strada update             # 检查并应用更新
-strada update --check     # 检查更新而不应用
-strada version-info       # 显示版本、安装方法、更新状态
+./strada setup --web      # 直接打开 Web 向导
+./strada setup --terminal # 直接使用终端向导
+./strada doctor           # 检查安装 / build / config 准备情况
+./strada start            # 启动代理
+./strada supervise        # 带自动重启的监督
+./strada update           # 检查并应用更新
+./strada update --check   # 检查更新而不应用
+./strada version-info     # 显示版本、安装方法、更新状态
 ```
 
 ### 5. 与它对话
@@ -164,7 +161,7 @@ strada version-info       # 显示版本、安装方法、更新状态
 
 ### 6. 自动更新
 
-Strada.Brain 每天自动检查更新，在空闲时应用更新。源码 checkout 和 `npm link` 安装会通过 git 更新。基于 npm 的更新命令只有在 public npm release 存在时才适用。
+Strada.Brain 每天自动检查更新，在空闲时应用更新。源码 checkout 和 `./strada install-command` 安装会通过 git 更新。基于 npm 的更新命令只有在 public npm release 存在时才适用。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|

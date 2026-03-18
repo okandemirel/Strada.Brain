@@ -198,13 +198,15 @@ export default function ReviewStep({
 
       {saveStatus === 'success' && (
         <div className="save-message success">
-          Configuration saved. Redirecting...
+          Configuration saved. Redirecting... If this is a source checkout, run `./strada
+          install-command` once before expecting the bare `strada` command to exist globally.
         </div>
       )}
 
       {saveStatus === 'polling' && (
         <div className="save-message polling">
-          Configuration saved. Waiting for server to restart...
+          Configuration saved. Waiting for server to restart... Source checkouts can keep using
+          `./strada ...` until `./strada install-command` is installed.
         </div>
       )}
 

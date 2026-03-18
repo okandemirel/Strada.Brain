@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+PACKAGE_JSON="$ROOT_DIR/package.json"
+DIST_ENTRY="$ROOT_DIR/dist/index.js"
+
+escape_for_double_quotes() {
+  printf '%s' "$1" | sed 's/[\\"]/\\&/g'
+}
+
+print_missing_node() {
+  echo "Strada requires Node.js 20+."
+  echo "Install Node.js, then run ./strada again."
+}
+
+ensure_prepared() {
+  if ! command -v node >/dev/null 2>&1; then
+    print_missing_node
+    exit 1
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "Strada requires npm so it can prepare the local checkout."
+    exit 1
+  fi
+
+  if [ ! -f "$PACKAGE_JSON" ]; then
+    echo "Could not find package.json in $ROOT_DIR"
+    echo "Run this launcher from the Strada.Brain repository root."
+    exit 1
+  fi
+
+  if [ ! -d "$ROOT_DIR/node_modules" ]; then
+    echo "Preparing Strada dependencies..."
+    (cd "$ROOT_DIR" && npm install)
+  fi
+
+  if [ ! -f "$DIST_ENTRY" ]; then
+    echo "Preparing Strada build..."
+    (cd "$ROOT_DIR" && npm run bootstrap)
+  fi
+}
+
+install_command() {
+  local install_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
+  local wrapper_path="$install_dir/strada"
+  local alias_path="$install_dir/strada-brain"
+  local escaped_root
+  escaped_root="$(escape_for_double_quotes "$ROOT_DIR")"
+
+  mkdir -p "$install_dir"
+
+  cat >"$wrapper_path" <<EOF
+#!/bin/sh
+exec "$escaped_root/strada" "\$@"
+EOF
+  chmod +x "$wrapper_path"
+  cp "$wrapper_path" "$alias_path"
+  chmod +x "$alias_path"
+
+  echo "Installed user-local Strada commands:"
+  echo "  $wrapper_path"
+  echo "  $alias_path"
+
+  case ":${PATH:-}:" in
+    *":$install_dir:"*)
+      echo "Your PATH already includes $install_dir"
+      ;;
+    *)
+      echo ""
+      echo "Add it to your PATH, then restart the shell:"
+      echo "  export PATH=\"$install_dir:\$PATH\""
+      ;;
+  esac
+}
+
+if [ "${1:-}" = "install-command" ]; then
+  install_command
+  exit 0
+fi
+
+ensure_prepared
+exec node "$DIST_ENTRY" "$@"
