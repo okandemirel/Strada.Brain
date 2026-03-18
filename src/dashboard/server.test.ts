@@ -350,11 +350,23 @@ describe("DashboardServer", () => {
       task: { type: "code-review", complexity: "complex", criticality: "high" },
       timestamp: 456,
     }]);
+    const getRecentPhaseOutcomes = vi.fn(() => [{
+      provider: "reviewer",
+      model: "review-model",
+      role: "reviewer",
+      phase: "completion-review",
+      source: "completion-review",
+      status: "replanned",
+      reason: "Verifier review requested a different approach.",
+      task: { type: "code-review", complexity: "complex", criticality: "high" },
+      timestamp: 789,
+    }]);
     server.setProviderRouter({
       getPreset: () => "balanced",
       setPreset: () => {},
       getRecentDecisions,
       getRecentExecutionTraces,
+      getRecentPhaseOutcomes,
     });
 
     if (!await safeStart(server)) return;
@@ -367,9 +379,11 @@ describe("DashboardServer", () => {
     const data = await res.json();
     expect(getRecentDecisions).toHaveBeenCalledWith(20, "user-1");
     expect(getRecentExecutionTraces).toHaveBeenCalledWith(20, "user-1");
+    expect(getRecentPhaseOutcomes).toHaveBeenCalledWith(20, "user-1");
     expect(data.preset).toBe("balanced");
-    expect(data.executionTraces).toEqual([
+    expect(data.execution).toEqual([
       expect.objectContaining({
+        provider: "gemini",
         phase: "clarification-review",
         source: "clarification-review",
       }),
@@ -380,13 +394,14 @@ describe("DashboardServer", () => {
         task: expect.objectContaining({ type: "planning" }),
       }),
     ]);
-    expect(data.execution).toEqual([
+    expect(data.outcomes).toEqual([
       expect.objectContaining({
-        provider: "gemini",
-        model: "gemini-2.5-pro",
+        provider: "reviewer",
+        model: "review-model",
         role: "reviewer",
-        phase: "consensus-review",
-        source: "consensus-review",
+        phase: "completion-review",
+        source: "completion-review",
+        status: "replanned",
       }),
     ]);
   });

@@ -57,6 +57,19 @@ describe("CommandHandler /routing", () => {
           timestamp: Date.now() + 1,
         },
       ],
+      getRecentPhaseOutcomes: () => [
+        {
+          provider: "reviewer",
+          model: "review-model",
+          role: "reviewer",
+          phase: "completion-review",
+          source: "completion-review",
+          status: "replanned",
+          reason: "Verifier review requested a new approach.",
+          task: { type: "code-review", complexity: "complex", criticality: "high" },
+          timestamp: Date.now() + 2,
+        },
+      ],
     });
 
     await handler.handle("chat-1", "routing", ["info"], "user-1");
@@ -85,6 +98,14 @@ describe("CommandHandler /routing", () => {
       "chat-1",
       expect.stringContaining("`clarification-review/reviewer` -> `gemini`"),
     );
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("*Recent Phase Outcomes*"),
+    );
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("status=`replanned`"),
+    );
     expect(sendText).not.toHaveBeenCalled();
   });
 
@@ -105,6 +126,7 @@ describe("CommandHandler /routing", () => {
       setPreset: () => {},
       getRecentDecisions: () => [],
       getRecentExecutionTraces: () => [],
+      getRecentPhaseOutcomes: () => [],
     });
 
     await handler.handle("chat-1", "routing", ["info"], "user-1");

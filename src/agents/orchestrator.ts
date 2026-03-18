@@ -53,25 +53,25 @@ import {
   buildAutonomyDeflectionGate,
   buildClarificationContinuationGate,
   buildClarificationReviewRequest,
-  COMPLETION_REVIEW_SYSTEM_PROMPT,
   CLARIFICATION_REVIEW_SYSTEM_PROMPT,
+  COMPLETION_REVIEW_SYSTEM_PROMPT,
   ErrorRecoveryEngine,
   TaskPlanner,
   SelfVerification,
-  buildCompletionReviewGate,
-  buildCompletionReviewRequest,
   collectClarificationReviewEvidence,
-  collectCompletionReviewEvidence,
+  buildVerifierPipelineReviewRequest,
   formatClarificationPrompt,
-  hasOpenReviewFindings,
-  parseClarificationReviewDecision,
+  finalizeVerifierPipelineReview,
+  isTerminalFailureReport,
   parseCompletionReviewDecision,
+  parseClarificationReviewDecision,
+  planVerifierPipeline,
   sanitizeClarificationReviewDecision,
   shouldRunClarificationReview,
-  shouldRunCompletionReview,
+  type VerifierPipelineResult,
 } from "./autonomy/index.js";
 import { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
-import { WRITE_OPERATIONS, isVerificationToolName } from "./autonomy/constants.js";
+import { WRITE_OPERATIONS } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
 import {
   checkReadOnlyBlock,
@@ -96,6 +96,7 @@ import type {
   TaskClassification,
   ExecutionPhase,
   ExecutionTraceSource,
+  PhaseOutcomeStatus,
 } from "../agent-core/routing/routing-types.js";
 
 const MAX_TOOL_ITERATIONS = 50;
@@ -187,6 +188,12 @@ interface ClarificationIntervention {
   gate?: string;
   message?: string;
   input?: Record<string, unknown>;
+}
+
+interface VerifierIntervention {
+  kind: "approve" | "continue" | "replan";
+  gate?: string;
+  result: VerifierPipelineResult;
 }
 
 type SupervisorRole = "planner" | "executor" | "reviewer" | "synthesizer";
@@ -1024,6 +1031,46 @@ export class Orchestrator {
     }
   }
 
+  private toPhaseOutcomeStatus(
+    decision: "approve" | "continue" | "replan",
+  ): PhaseOutcomeStatus {
+    switch (decision) {
+      case "approve":
+        return "approved";
+      case "replan":
+        return "replanned";
+      case "continue":
+      default:
+        return "continued";
+    }
+  }
+
+  private transitionToVerifierReplan(state: AgentState, reflectionText?: string | null): AgentState {
+    const enrichedState: AgentState = {
+      ...state,
+      failedApproaches: [...state.failedApproaches, extractApproachSummary(state)],
+      lastReflection: reflectionText ?? state.lastReflection,
+      reflectionCount: state.reflectionCount + 1,
+      consecutiveErrors: 0,
+    };
+
+    if (enrichedState.phase === AgentPhase.REFLECTING) {
+      return transitionPhase(enrichedState, AgentPhase.REPLANNING);
+    }
+
+    if (enrichedState.phase === AgentPhase.EXECUTING) {
+      return transitionPhase(
+        transitionPhase(enrichedState, AgentPhase.REFLECTING),
+        AgentPhase.REPLANNING,
+      );
+    }
+
+    return {
+      ...enrichedState,
+      phase: AgentPhase.REPLANNING,
+    };
+  }
+
   private resolveExecutionTraceSource(
     assignment: SupervisorAssignment,
     fallback: ExecutionTraceSource = "supervisor-strategy",
@@ -1045,6 +1092,29 @@ export class Orchestrator {
       role: params.assignment.role,
       phase: params.phase,
       source: params.source ?? this.resolveExecutionTraceSource(params.assignment),
+      reason: params.reason ?? params.assignment.reason,
+      task: params.task,
+      timestamp: Date.now(),
+      identityKey: params.identityKey,
+    });
+  }
+
+  private recordPhaseOutcome(params: {
+    identityKey: string;
+    assignment: SupervisorAssignment;
+    phase: ExecutionPhase;
+    status: PhaseOutcomeStatus;
+    task: TaskClassification;
+    source?: ExecutionTraceSource;
+    reason?: string;
+  }): void {
+    this.providerRouter?.recordPhaseOutcome?.({
+      provider: params.assignment.providerName,
+      model: params.assignment.modelId,
+      role: params.assignment.role,
+      phase: params.phase,
+      source: params.source ?? this.resolveExecutionTraceSource(params.assignment),
+      status: params.status,
       reason: params.reason ?? params.assignment.reason,
       task: params.task,
       timestamp: Date.now(),
@@ -1149,11 +1219,29 @@ export class Orchestrator {
         synthesisResponse.usage,
         params.usageHandler,
       );
+      this.recordPhaseOutcome({
+        identityKey: params.identityKey,
+        assignment: params.strategy.synthesizer,
+        phase: "synthesis",
+        source: "synthesis",
+        status: "approved",
+        task: params.strategy.task,
+        reason: "Synthesis produced the final user-facing response.",
+      });
       return applyVisibleResponseContract(
         params.prompt,
         this.stripInternalDecisionMarkers(synthesisResponse.text) || cleanedDraft,
       );
     } catch {
+      this.recordPhaseOutcome({
+        identityKey: params.identityKey,
+        assignment: params.strategy.synthesizer,
+        phase: "synthesis",
+        source: "synthesis",
+        status: "failed",
+        task: params.strategy.task,
+        reason: "Synthesis failed; falling back to the worker draft.",
+      });
       return applyVisibleResponseContract(params.prompt, cleanedDraft);
     }
   }
@@ -1225,11 +1313,29 @@ export class Orchestrator {
         synthesisResponse.usage,
         params.onUsage,
       );
+      this.recordPhaseOutcome({
+        identityKey,
+        assignment: strategy.synthesizer,
+        phase: "synthesis",
+        source: "synthesis",
+        status: "approved",
+        task: strategy.task,
+        reason: "Goal synthesis produced the final user-facing response.",
+      });
       return applyVisibleResponseContract(
         params.prompt,
         this.stripInternalDecisionMarkers(synthesisResponse.text) || rawDraft,
       );
     } catch {
+      this.recordPhaseOutcome({
+        identityKey,
+        assignment: strategy.synthesizer,
+        phase: "synthesis",
+        source: "synthesis",
+        status: "failed",
+        task: strategy.task,
+        reason: "Goal synthesis failed; falling back to the raw execution draft.",
+      });
       return applyVisibleResponseContract(params.prompt, rawDraft);
     }
   }
@@ -1351,15 +1457,37 @@ export class Orchestrator {
         reviewResponse.usage,
         params.usageHandler,
       );
-      return {
-        decision: sanitizeClarificationReviewDecision(parseClarificationReviewDecision(reviewResponse.text)),
-        evidence,
-      };
+      const decision = sanitizeClarificationReviewDecision(parseClarificationReviewDecision(reviewResponse.text));
+      this.recordPhaseOutcome({
+        identityKey: params.identityKey,
+        assignment: reviewer,
+        phase: "clarification-review",
+        source: "clarification-review",
+        status: decision?.decision === "ask_user"
+          ? "blocked"
+          : decision?.decision === "blocked"
+            ? "blocked"
+            : decision?.decision === "internal_continue"
+              ? "continued"
+              : "approved",
+        task: reviewTask,
+        reason: decision?.reason ?? "Clarification review completed.",
+      });
+      return { decision, evidence };
     } catch (error) {
       getLogger().warn("Clarification review provider failed", {
         chatId: params.chatId,
         provider: reviewer.providerName,
         error: error instanceof Error ? error.message : String(error),
+      });
+      this.recordPhaseOutcome({
+        identityKey: params.identityKey,
+        assignment: reviewer,
+        phase: "clarification-review",
+        source: "clarification-review",
+        status: "failed",
+        task: reviewTask,
+        reason: "Clarification review provider failed; falling back to Strada-side decision.",
       });
     }
 
@@ -1924,7 +2052,7 @@ export class Orchestrator {
               return clarificationIntervention.message;
             }
 
-            const completionGate = await this.resolveCompletionGate({
+            const verifierIntervention = await this.resolveVerifierIntervention({
               chatId,
               identityKey,
               prompt,
@@ -1936,7 +2064,15 @@ export class Orchestrator {
               taskStartedAtMs,
               usageHandler: options.onUsage ?? this.onUsage,
             });
-            if (completionGate) {
+            if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+              this.recordPhaseOutcome({
+                identityKey,
+                assignment: currentAssignment,
+                phase: "reflecting",
+                status: "continued",
+                task: executionStrategy.task,
+                reason: verifierIntervention.result.summary,
+              });
               bgAgentState = {
                 ...bgAgentState,
                 lastReflection: response.text ?? bgAgentState.lastReflection,
@@ -1947,8 +2083,25 @@ export class Orchestrator {
               if (response.text) {
                 session.messages.push({ role: "assistant", content: response.text });
               }
-              session.messages.push({ role: "user", content: completionGate });
+              session.messages.push({ role: "user", content: verifierIntervention.gate });
               onProgress("Verification required before completion");
+              continue;
+            }
+            if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+              this.recordPhaseOutcome({
+                identityKey,
+                assignment: currentAssignment,
+                phase: "reflecting",
+                status: "replanned",
+                task: executionStrategy.task,
+                reason: verifierIntervention.result.summary,
+              });
+              bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: verifierIntervention.gate });
+              onProgress("Verifier pipeline requested a replan");
               continue;
             }
 
@@ -1964,6 +2117,14 @@ export class Orchestrator {
             if (finalText) {
               session.messages.push({ role: "assistant", content: finalText });
             }
+            this.recordPhaseOutcome({
+              identityKey,
+              assignment: currentAssignment,
+              phase: "reflecting",
+              status: "approved",
+              task: executionStrategy.task,
+              reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
+            });
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
               iterations: bgAgentState.iteration,
@@ -2053,7 +2214,7 @@ export class Orchestrator {
             return clarificationIntervention.message;
           }
 
-          const completionGate = await this.resolveCompletionGate({
+          const verifierIntervention = await this.resolveVerifierIntervention({
             chatId,
             identityKey,
             prompt,
@@ -2065,11 +2226,35 @@ export class Orchestrator {
             taskStartedAtMs,
             usageHandler: options.onUsage ?? this.onUsage,
           });
-          if (completionGate) {
+          if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+            this.recordPhaseOutcome({
+              identityKey,
+              assignment: currentAssignment,
+              phase: this.toExecutionPhase(bgAgentState.phase),
+              status: "continued",
+              task: executionStrategy.task,
+              reason: verifierIntervention.result.summary,
+            });
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
-            session.messages.push({ role: "user", content: completionGate });
+            session.messages.push({ role: "user", content: verifierIntervention.gate });
+            continue;
+          }
+          if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+            this.recordPhaseOutcome({
+              identityKey,
+              assignment: currentAssignment,
+              phase: this.toExecutionPhase(bgAgentState.phase),
+              status: "replanned",
+              task: executionStrategy.task,
+              reason: verifierIntervention.result.summary,
+            });
+            bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: verifierIntervention.gate });
             continue;
           }
 
@@ -2085,6 +2270,14 @@ export class Orchestrator {
           if (finalText) {
             session.messages.push({ role: "assistant", content: finalText });
           }
+          this.recordPhaseOutcome({
+            identityKey,
+            assignment: currentAssignment,
+            phase: this.toExecutionPhase(bgAgentState.phase),
+            status: "approved",
+            task: executionStrategy.task,
+            reason: "Execution produced a final response after the verifier pipeline cleared the task.",
+          });
 
           // ─── Metrics: record success ────────────────────────────────
           this.recordMetricEnd(metricId, {
@@ -2200,6 +2393,17 @@ export class Orchestrator {
                     source: "consensus-review",
                     task: bgTaskClass,
                     reason: bgReviewAssignment.reason,
+                  });
+                  this.recordPhaseOutcome({
+                    identityKey,
+                    assignment: bgReviewAssignment,
+                    phase: "consensus-review",
+                    source: "consensus-review",
+                    status: bgConsensusResult.agreed ? "approved" : "continued",
+                    task: bgTaskClass,
+                    reason: bgConsensusResult.reasoning?.trim() || (bgConsensusResult.agreed
+                      ? "Consensus review agreed with the current path."
+                      : "Consensus review found a disagreement and kept execution open."),
                   });
 
                   if (!bgConsensusResult.agreed) {
@@ -2761,7 +2965,7 @@ export class Orchestrator {
             return;
           }
 
-          const completionGate = await this.resolveCompletionGate({
+          const verifierIntervention = await this.resolveVerifierIntervention({
             chatId,
             identityKey,
             prompt: lastUserMessage,
@@ -2773,7 +2977,15 @@ export class Orchestrator {
             taskStartedAtMs,
             usageHandler: this.onUsage,
           });
-          if (completionGate) {
+          if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+            this.recordPhaseOutcome({
+              identityKey,
+              assignment: currentAssignment,
+              phase: "reflecting",
+              status: "continued",
+              task: executionStrategy.task,
+              reason: verifierIntervention.result.summary,
+            });
             agentState = {
               ...agentState,
               lastReflection: response.text ?? agentState.lastReflection,
@@ -2784,7 +2996,23 @@ export class Orchestrator {
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
-            session.messages.push({ role: "user", content: completionGate });
+            session.messages.push({ role: "user", content: verifierIntervention.gate });
+            continue;
+          }
+          if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+            this.recordPhaseOutcome({
+              identityKey,
+              assignment: currentAssignment,
+              phase: "reflecting",
+              status: "replanned",
+              task: executionStrategy.task,
+              reason: verifierIntervention.result.summary,
+            });
+            agentState = this.transitionToVerifierReplan(agentState, response.text);
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: verifierIntervention.gate });
             continue;
           }
 
@@ -2801,6 +3029,14 @@ export class Orchestrator {
             session.messages.push({ role: "assistant", content: finalText });
             await this.channel.sendMarkdown(chatId, finalText);
           }
+          this.recordPhaseOutcome({
+            identityKey,
+            assignment: currentAssignment,
+            phase: "reflecting",
+            status: "approved",
+            task: executionStrategy.task,
+            reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
+          });
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
             iterations: agentState.iteration,
@@ -2973,7 +3209,7 @@ export class Orchestrator {
         }
 
         // ─── Verification gate: catch unverified exits ──────────────────
-        const completionGate = await this.resolveCompletionGate({
+        const verifierIntervention = await this.resolveVerifierIntervention({
           chatId,
           identityKey,
           prompt: lastUserMessage,
@@ -2985,16 +3221,44 @@ export class Orchestrator {
           taskStartedAtMs,
           usageHandler: this.onUsage,
         });
-        if (completionGate) {
+        if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+          this.recordPhaseOutcome({
+            identityKey,
+            assignment: currentAssignment,
+            phase: this.toExecutionPhase(agentState.phase),
+            status: "continued",
+            task: executionStrategy.task,
+            reason: verifierIntervention.result.summary,
+          });
           if (response.text) {
             session.messages.push({ role: "assistant", content: response.text });
           }
           session.messages.push({
             role: "user",
-            content: completionGate,
+            content: verifierIntervention.gate,
           });
           logger.debug("Verification gate triggered", { chatId, iteration });
           continue; // send back to LLM with verification reminder
+        }
+        if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+          this.recordPhaseOutcome({
+            identityKey,
+            assignment: currentAssignment,
+            phase: this.toExecutionPhase(agentState.phase),
+            status: "replanned",
+            task: executionStrategy.task,
+            reason: verifierIntervention.result.summary,
+          });
+          agentState = this.transitionToVerifierReplan(agentState, response.text);
+          if (response.text) {
+            session.messages.push({ role: "assistant", content: response.text });
+          }
+          session.messages.push({
+            role: "user",
+            content: verifierIntervention.gate,
+          });
+          logger.debug("Verifier pipeline triggered replan", { chatId, iteration });
+          continue;
         }
         // ────────────────────────────────────────────────────────────────
 
@@ -3036,6 +3300,17 @@ export class Orchestrator {
                       task: textTaskClass,
                       reason: textReviewAssignment.reason,
                     });
+                    this.recordPhaseOutcome({
+                      identityKey,
+                      assignment: textReviewAssignment,
+                      phase: "consensus-review",
+                      source: "consensus-review",
+                      status: textConsensus.agreed ? "approved" : "continued",
+                      task: textTaskClass,
+                      reason: textConsensus.reasoning?.trim() || (textConsensus.agreed
+                        ? "Consensus review agreed with the current path."
+                        : "Consensus review found a disagreement and kept execution open."),
+                    });
                     if (!textConsensus.agreed) {
                       logger.warn("Consensus disagreement (text-only, critical)", {
                         chatId,
@@ -3070,6 +3345,14 @@ export class Orchestrator {
             });
             await this.channel.sendMarkdown(chatId, finalText);
           }
+          this.recordPhaseOutcome({
+            identityKey,
+            assignment: currentAssignment,
+            phase: this.toExecutionPhase(agentState.phase),
+            status: "approved",
+            task: executionStrategy.task,
+            reason: "Execution produced a final response after the verifier pipeline cleared the task.",
+          });
         } else {
           // LLM returned empty response — send fallback to user
           const lang = profile?.language ?? this.defaultLanguage;
@@ -3226,6 +3509,17 @@ export class Orchestrator {
                   source: "consensus-review",
                   task: taskClass,
                   reason: reviewAssignment.reason,
+                });
+                this.recordPhaseOutcome({
+                  identityKey,
+                  assignment: reviewAssignment,
+                  phase: "consensus-review",
+                  source: "consensus-review",
+                  status: consensusResult.agreed ? "approved" : "continued",
+                  task: taskClass,
+                  reason: consensusResult.reasoning?.trim() || (consensusResult.agreed
+                    ? "Consensus review agreed with the current path."
+                    : "Consensus review found a disagreement and kept execution open."),
                 });
 
                 if (!consensusResult.agreed) {
@@ -3829,7 +4123,7 @@ export class Orchestrator {
     });
   }
 
-  private async resolveCompletionGate(params: {
+  private async resolveVerifierIntervention(params: {
     chatId: string;
     identityKey: string;
     prompt: string;
@@ -3840,35 +4134,52 @@ export class Orchestrator {
     strategy: SupervisorExecutionStrategy;
     taskStartedAtMs: number;
     usageHandler?: (usage: TaskUsageEvent) => void;
-  }): Promise<string | null> {
-    const staticGate = getCompletionGatePrompt(params.state, params.selfVerification, params.draft);
-    if (staticGate) {
-      return staticGate;
-    }
-
+  }): Promise<VerifierIntervention> {
+    const verificationState = params.selfVerification.getState();
+    const logEntries = typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [];
+    const buildVerificationGate = params.selfVerification.needsVerification()
+      ? params.selfVerification.getPrompt()
+      : null;
     const conformanceGate = params.stradaConformance.getPrompt();
-    if (conformanceGate) {
-      return conformanceGate;
-    }
-
-    if (isTerminalFailureReport(params.draft)) {
-      return null;
-    }
-
-    const evidence = collectCompletionReviewEvidence({
+    const plan = planVerifierPipeline({
+      prompt: params.prompt,
+      draft: params.draft ?? "",
       state: params.state,
-      verificationState: params.selfVerification.getState(),
-      logEntries: typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [],
+      task: params.strategy.task,
+      verificationState,
+      buildVerificationGate,
+      conformanceGate,
+      logEntries,
       chatId: params.chatId,
       taskStartedAtMs: params.taskStartedAtMs,
     });
-    const autonomyDeflectionGate = buildAutonomyDeflectionGate(params.draft ?? "", evidence);
+    const autonomyDeflectionGate = buildAutonomyDeflectionGate(params.draft ?? "", plan.evidence);
     if (autonomyDeflectionGate) {
-      return autonomyDeflectionGate;
+      return {
+        kind: "continue",
+        gate: autonomyDeflectionGate,
+        result: {
+          decision: "continue",
+          gate: autonomyDeflectionGate,
+          summary: "The current draft still deflects execution back to the user.",
+          checks: plan.checks,
+          evidence: plan.evidence,
+        },
+      };
     }
 
-    if (!shouldRunCompletionReview(evidence, params.draft ?? "")) {
-      return null;
+    if (!plan.reviewRequired) {
+      return {
+        kind: plan.initialDecision === "replan" ? "replan" : plan.initialDecision === "continue" ? "continue" : "approve",
+        gate: plan.gate,
+        result: {
+          decision: plan.initialDecision,
+          gate: plan.gate,
+          summary: plan.summary,
+          checks: plan.checks,
+          evidence: plan.evidence,
+        },
+      };
     }
 
     const reviewer = params.strategy.reviewer;
@@ -3877,11 +4188,11 @@ export class Orchestrator {
         `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
         [{
           role: "user",
-          content: buildCompletionReviewRequest({
+          content: buildVerifierPipelineReviewRequest({
             prompt: params.prompt,
             draft: params.draft ?? "",
             state: params.state,
-            evidence,
+            plan,
           }),
         }],
         [],
@@ -3898,20 +4209,47 @@ export class Orchestrator {
         reviewResponse.usage,
         params.usageHandler,
       );
-      const decision = parseCompletionReviewDecision(reviewResponse.text);
-      if (!hasOpenReviewFindings(decision)) {
-        return null;
-      }
-      return buildCompletionReviewGate(decision, evidence);
+      const result = finalizeVerifierPipelineReview(
+        plan,
+        parseCompletionReviewDecision(reviewResponse.text),
+      );
+      this.recordPhaseOutcome({
+        identityKey: params.identityKey,
+        assignment: reviewer,
+        phase: "completion-review",
+        source: "completion-review",
+        status: this.toPhaseOutcomeStatus(result.decision),
+        task: params.strategy.task,
+        reason: result.summary,
+      });
+      return {
+        kind: result.decision === "replan" ? "replan" : result.decision === "continue" ? "continue" : "approve",
+        gate: result.gate,
+        result,
+      };
     } catch (error) {
       getLogger().warn("Completion review provider failed", {
         chatId: params.chatId,
         provider: reviewer.providerName,
         error: error instanceof Error ? error.message : String(error),
       });
+      this.recordPhaseOutcome({
+        identityKey: params.identityKey,
+        assignment: reviewer,
+        phase: "completion-review",
+        source: "completion-review",
+        status: "failed",
+        task: params.strategy.task,
+        reason: "Completion review provider failed; falling back to conservative verifier gate.",
+      });
     }
 
-    return buildCompletionReviewGate(null, evidence);
+    const fallbackResult = finalizeVerifierPipelineReview(plan, null);
+    return {
+      kind: fallbackResult.decision === "replan" ? "replan" : fallbackResult.decision === "continue" ? "continue" : "approve",
+      gate: fallbackResult.gate,
+      result: fallbackResult,
+    };
   }
 
   private isSafeShellFallback(command: string): boolean {
@@ -3980,13 +4318,40 @@ export class Orchestrator {
       const decision = this.parseShellReviewDecision(response.text);
 
       if (decision?.decision === "approve" && decision.taskAligned !== false && decision.bounded !== false) {
+        this.recordPhaseOutcome({
+          identityKey,
+          assignment: reviewAssignment,
+          phase: "shell-review",
+          source: "shell-review",
+          status: "approved",
+          task: reviewTask,
+          reason: decision.reason || "Shell review approved the autonomous command.",
+        });
         return { approved: true, reason: decision.reason };
       }
 
       if (decision?.decision === "reject" || decision?.taskAligned === false || decision?.bounded === false) {
+        this.recordPhaseOutcome({
+          identityKey,
+          assignment: reviewAssignment,
+          phase: "shell-review",
+          source: "shell-review",
+          status: "blocked",
+          task: reviewTask,
+          reason: decision.reason || "Shell review rejected the autonomous command.",
+        });
         return { approved: false, reason: decision.reason || "shell review rejected the command" };
       }
     } catch {
+      this.recordPhaseOutcome({
+        identityKey,
+        assignment: reviewAssignment,
+        phase: "shell-review",
+        source: "shell-review",
+        status: "failed",
+        task: reviewTask,
+        reason: "Shell review provider failed; falling back to bounded local heuristics.",
+      });
       // Fall back to local bounded-command heuristics below.
     }
 
@@ -4693,135 +5058,12 @@ function parseReflectionDecision(text: string | null | undefined): ReflectionDec
   return "CONTINUE";
 }
 
-function getCompletionGatePrompt(
-  state: AgentState,
-  selfVerification: SelfVerification,
-  responseText?: string | null,
-): string | null {
-  if (selfVerification.needsVerification()) {
-    return selfVerification.getPrompt();
-  }
-  return buildUnresolvedFailurePrompt(state, responseText);
-}
-
-function buildUnresolvedFailurePrompt(state: AgentState, responseText?: string | null): string | null {
-  const lastFailureIndex = findLastFailureIndex(state.stepResults);
-  if (lastFailureIndex === -1) {
-    return null;
-  }
-
-  const stepsAfterLastFailure = state.stepResults.slice(lastFailureIndex + 1);
-  if (stepsAfterLastFailure.some(isCleanVerificationStep)) {
-    return null;
-  }
-
-  if (isTerminalFailureReport(responseText)) {
-    return null;
-  }
-
-  const recentFailures = state.stepResults
-    .filter((step) => !step.success)
-    .slice(-3)
-    .map((step) => `- ${step.toolName}: ${step.summary}`)
-    .join("\n");
-
-  return (
-    "[UNRESOLVED FAILURES] Recent failures are still open:\n" +
-    recentFailures +
-    "\nDo not declare the task done yet. Return to the failing path, apply the remaining fix, run the relevant verification command/tool, and finish only after a clean result."
-  );
-}
-
-function isTerminalFailureReport(text: string | null | undefined): boolean {
-  if (!text) {
-    return false;
-  }
-
-  const normalized = text.toLowerCase();
-  const failurePatterns = [
-    /\bfailed\b/,
-    /\bfailure\b/,
-    /\berror\b/,
-    /\btimed out\b/,
-    /\btimeout\b/,
-    /\bmanual\b/,
-    /\bintervention\b/,
-    /\bunable\b/,
-    /\bcannot\b/,
-    /\bcan'?t\b/,
-    /\bcould not\b/,
-    /\bcouldn'?t\b/,
-    /\brequires?\b/,
-    /\bblocked\b/,
-    /\bcorrupted\b/,
-    /\bnot found\b/,
-    /\bmissing\b/,
-  ];
-  const successPatterns = [
-    /\bfixed\b/,
-    /\bresolved\b/,
-    /\bsuccessful\b/,
-    /\bsucceeded\b/,
-    /\bcompleted\b/,
-    /\bcomplete\b/,
-    /\bverified clean\b/,
-    /\ball set\b/,
-  ];
-  const continuationPatterns = [
-    /^\s*\*{0,2}\s*continue\b/,
-    /\blet me\b/,
-    /\bi(?:'ll| will)\b/,
-    /\banaly[sz]e\b/,
-    /\binvestigat(?:e|ing)\b/,
-    /\btry again\b/,
-    /\breplan\b/,
-  ];
-
-  const mentionsFailure = failurePatterns.some((pattern) => pattern.test(normalized));
-  const claimsSuccess = successPatterns.some((pattern) => pattern.test(normalized));
-  const keepsWorking = continuationPatterns.some((pattern) => pattern.test(normalized));
-  return mentionsFailure && !claimsSuccess && !keepsWorking;
-}
-
 function shouldSurfaceTerminalFailureFromReflection(response: ProviderResponse): boolean {
   return (
     response.stopReason === "end_turn" &&
     response.toolCalls.length === 0 &&
     isTerminalFailureReport(response.text)
   );
-}
-
-function findLastFailureIndex(stepResults: readonly StepResult[]): number {
-  for (let index = stepResults.length - 1; index >= 0; index--) {
-    if (!stepResults[index]!.success) {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function isCleanVerificationStep(step: StepResult): boolean {
-  if (!step.success) {
-    return false;
-  }
-  if (isVerificationToolName(step.toolName)) {
-    return true;
-  }
-  if (step.toolName !== "shell_exec") {
-    return false;
-  }
-
-  const command = extractShellCommand(step.summary);
-  return command !== null && isVerificationShellCommand(command);
-}
-
-function extractShellCommand(summary: string): string | null {
-  const match = summary.match(/^\$\s+(.+)$/mu);
-  return match?.[1]?.trim() || null;
-}
-
-function isVerificationShellCommand(command: string): boolean {
-  return /\b(?:test|build|check|lint|typecheck|verify|compile|tsc|eslint|vitest|jest|pytest)\b/iu.test(command);
 }
 
 function extractApproachSummary(state: AgentState): string {

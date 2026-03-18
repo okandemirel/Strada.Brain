@@ -78,7 +78,10 @@ describe("docs consistency", () => {
     );
     expect(readRepoFile("src/config/README.md")).toContain("STRADA_HOME");
     expect(readRepoFile("README.md")).toContain("clarification-review");
+    expect(readRepoFile("README.md")).toContain("verifier pipeline");
+    expect(readRepoFile("README.md")).toContain("phase outcomes");
     expect(readRepoFile("src/agents/README.md")).toContain("Clarification Review");
+    expect(readRepoFile("src/agents/README.md")).toContain("Verifier Pipeline");
   });
 
   it("marks localized READMEs as translations that defer to the English canonical README", () => {
@@ -106,6 +109,8 @@ describe("docs consistency", () => {
       expect(content).toContain("strada --terminal");
       expect(content).toContain("nvm");
       expect(content).toContain("clarification-review");
+      expect(content).toMatch(/phase outcomes|phase outcome|phase-outcomes|Phase-Outcomes/iu);
+      expect(content).toContain("`approved`, `continued`, `replanned`, `blocked`");
       expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
     }
   });

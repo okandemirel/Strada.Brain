@@ -258,6 +258,53 @@ describe("ProviderRouter", () => {
         }),
       ]);
     });
+
+    it("records phase outcomes separately from execution traces", () => {
+      const manager = createMockManager(MULTI_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      router.recordPhaseOutcome({
+        provider: "reviewer",
+        model: "review-model",
+        role: "reviewer",
+        phase: "completion-review",
+        source: "completion-review",
+        status: "replanned",
+        reason: "Verifier review requested a new approach.",
+        task: planningTask,
+        timestamp: 3,
+        identityKey: "user-1",
+      });
+      router.recordPhaseOutcome({
+        provider: "synth",
+        model: "synth-model",
+        role: "synthesizer",
+        phase: "synthesis",
+        source: "synthesis",
+        status: "approved",
+        reason: "Synthesis produced the final response.",
+        task: codeGenTask,
+        timestamp: 4,
+        identityKey: "user-2",
+      });
+
+      expect(router.getRecentPhaseOutcomes(10)).toEqual([
+        expect.objectContaining({
+          provider: "reviewer",
+          status: "replanned",
+        }),
+        expect.objectContaining({
+          provider: "synth",
+          status: "approved",
+        }),
+      ]);
+      expect(router.getRecentPhaseOutcomes(10, "user-1")).toEqual([
+        expect.objectContaining({
+          provider: "reviewer",
+          identityKey: "user-1",
+        }),
+      ]);
+    });
   });
 
   describe("preset switching", () => {

@@ -584,6 +584,7 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 
 **Provider chain:** Set `PROVIDER_CHAIN` to a comma-separated list of provider names. Strada stays the control plane and uses this chain as the default orchestration pool for the primary execution worker, supervisor routing, and fallback on failure. Example: `PROVIDER_CHAIN=kimi,deepseek,claude` uses Kimi first, DeepSeek if Kimi fails, then Claude. `openai` can be backed by either `OPENAI_API_KEY` or a local ChatGPT/Codex subscription session.
 Clarification is also part of that control plane. Worker providers may propose a user question, but Strada now runs an internal `clarification-review` phase before any provider draft can become an `ask_user` turn.
+Completion now runs through an internal verifier pipeline as well. Build verification, targeted repro / failing-path checks, log review, Strada conformance, and completion review must clear before Strada can finish. `/routing info` and the dashboard now show both runtime execution traces and phase outcomes (`approved`, `continued`, `replanned`, `blocked`).
 
 **Important:** `OPENAI_AUTH_MODE=chatgpt-subscription` only covers OpenAI conversation turns inside Strada. It does not grant OpenAI API billing or embeddings quota. If you choose `EMBEDDING_PROVIDER=openai`, you still need an `OPENAI_API_KEY`.
 
@@ -801,7 +802,7 @@ Slash commands available in all chat channels:
 | `/agent` | Show Agent Core status |
 | `/routing` | Show routing status and preset |
 | `/routing preset <name>` | Switch routing preset (budget/balanced/performance) |
-| `/routing info` | Show recent routing decisions and runtime execution traces for the current identity, including planning, execution, clarification-review, review, and synthesis phases |
+| `/routing info` | Show recent routing decisions, runtime execution traces, and phase outcomes for the current identity, including planning, execution, clarification-review, review, and synthesis phases |
 
 ---
 

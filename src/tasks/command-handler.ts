@@ -13,7 +13,7 @@ import type { ProviderManager } from "../agents/providers/provider-manager.js";
 import type { DMPolicy } from "../security/dm-policy.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "../agents/soul/index.js";
-import type { ExecutionTrace, RoutingDecision } from "../agent-core/routing/routing-types.js";
+import type { ExecutionTrace, PhaseOutcome, RoutingDecision } from "../agent-core/routing/routing-types.js";
 
 /** Structural interface for ProviderRouter to avoid circular dependency */
 interface ProviderRouterRef {
@@ -21,6 +21,7 @@ interface ProviderRouterRef {
   setPreset(p: string): void;
   getRecentDecisions(n: number, identityKey?: string): RoutingDecision[];
   getRecentExecutionTraces?(n: number, identityKey?: string): ExecutionTrace[];
+  getRecentPhaseOutcomes?(n: number, identityKey?: string): PhaseOutcome[];
 }
 
 /** Structural interface for HeartbeatLoop to avoid circular dependency */
@@ -814,7 +815,8 @@ export class CommandHandler {
       const identityKey = this.getIdentityKey(chatId, userId);
       const decisions = this.providerRouter?.getRecentDecisions?.(10, identityKey) ?? [];
       const executionTraces = this.providerRouter?.getRecentExecutionTraces?.(10, identityKey) ?? [];
-      if (decisions.length === 0 && executionTraces.length === 0) {
+      const phaseOutcomes = this.providerRouter?.getRecentPhaseOutcomes?.(10, identityKey) ?? [];
+      if (decisions.length === 0 && executionTraces.length === 0 && phaseOutcomes.length === 0) {
         await this.channel.sendText(chatId, "No routing decisions recorded yet.");
         return;
       }
@@ -831,6 +833,13 @@ export class CommandHandler {
           return `\`${trace.phase}/${trace.role}\` -> \`${trace.provider}\`${modelPart} source=\`${trace.source}\` (${trace.reason})`;
         });
         sections.push(`*Recent Runtime Execution*\n\n${lines.join("\n")}`);
+      }
+      if (phaseOutcomes.length > 0) {
+        const lines = phaseOutcomes.map((outcome) => {
+          const modelPart = outcome.model ? ` model=\`${outcome.model}\`` : "";
+          return `\`${outcome.phase}/${outcome.role}\` -> \`${outcome.provider}\`${modelPart} status=\`${outcome.status}\` source=\`${outcome.source}\` (${outcome.reason})`;
+        });
+        sections.push(`*Recent Phase Outcomes*\n\n${lines.join("\n")}`);
       }
       await this.channel.sendMarkdown(chatId, sections.join("\n\n"));
       return;

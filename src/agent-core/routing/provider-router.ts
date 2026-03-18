@@ -13,6 +13,7 @@ import type {
   RoutingDecision,
   TaskType,
   ExecutionTrace,
+  PhaseOutcome,
 } from "./routing-types.js";
 import { ROUTING_PRESETS } from "./routing-presets.js";
 import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
@@ -84,6 +85,7 @@ export class ProviderRouter {
   private presetName: string;
   private readonly decisions: RoutingDecision[] = [];
   private readonly executionTraces: ExecutionTrace[] = [];
+  private readonly phaseOutcomes: PhaseOutcome[] = [];
   private lastExecutingProvider: string | undefined;
   private readonly modelIntelligence?: ModelIntelligenceLookup;
 
@@ -225,6 +227,20 @@ export class ProviderRouter {
     const relevant = identityKey
       ? this.executionTraces.filter((trace) => trace.identityKey === identityKey)
       : this.executionTraces;
+    return relevant.slice(-n);
+  }
+
+  recordPhaseOutcome(outcome: PhaseOutcome): void {
+    this.phaseOutcomes.push(outcome);
+    if (this.phaseOutcomes.length > MAX_DECISIONS) {
+      this.phaseOutcomes.splice(0, this.phaseOutcomes.length - MAX_DECISIONS);
+    }
+  }
+
+  getRecentPhaseOutcomes(n: number, identityKey?: string): PhaseOutcome[] {
+    const relevant = identityKey
+      ? this.phaseOutcomes.filter((outcome) => outcome.identityKey === identityKey)
+      : this.phaseOutcomes;
     return relevant.slice(-n);
   }
 

@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Multi-Provider Routing**: Task-aware dynamic provider selection with TaskClassifier (heuristic), ProviderRouter with configurable presets (budget/balanced/performance), PAOR phase switching across providers
 - **Confidence-Based Consensus**: ConfidenceEstimator (heuristic scoring from PAOR state) + ConsensusManager (review/re-execute strategies, fail-safe on errors)
 - **Autonomous Agent Overhaul**: 3-layer autonomous bypass (system prompt injection, ask_user/show_plan tool auto-resolve, DaemonSecurityPolicy override with time-based expiry)
+- **Verifier Pipeline**: explicit build/log/targeted-repro/conformance/completion-review pipeline with verifier-driven continue vs replan outcomes
 - **PAOR Unification**: Removed TaskPlanner conflicting PLANNING_PROMPT, background tasks now use full PAOR (reflect/replan), extracted shared buildSystemPromptWithContext()
 - **Strada.MCP Detection**: Automatic detection of sibling Strada.MCP installation with system prompt awareness (76 tools)
 - **TierRouter Facade**: ProviderRouter wraps TierRouter as internal sub-component for delegation compatibility
@@ -26,7 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Web daemon toggle with configured/not-configured state detection
 - Interactive routing preset selector in SettingsPage
 - `/api/daemon/start`, `/api/daemon/stop` POST endpoints
-- `/api/agent-activity` GET endpoint for routing decisions plus runtime execution traces (including clarification-review)
+- `/api/agent-activity` GET endpoint for routing decisions, runtime execution traces, and phase outcomes (including clarification-review)
 - `/api/routing/preset` POST endpoint for runtime preset switching
 - AgentNotifier for proactive user notifications
 - TestResultObserver for test execution monitoring

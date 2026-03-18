@@ -70,6 +70,26 @@ export interface ExecutionTrace {
   readonly identityKey?: string;
 }
 
+export type PhaseOutcomeStatus =
+  | "approved"
+  | "continued"
+  | "replanned"
+  | "blocked"
+  | "failed";
+
+export interface PhaseOutcome {
+  readonly provider: string;
+  readonly model?: string;
+  readonly role: ExecutionRole;
+  readonly phase: ExecutionPhase;
+  readonly source: ExecutionTraceSource;
+  readonly status: PhaseOutcomeStatus;
+  readonly reason: string;
+  readonly task: TaskClassification;
+  readonly timestamp: number;
+  readonly identityKey?: string;
+}
+
 export interface OriginalOutput {
   readonly text?: string;
   readonly toolCalls?: Array<{ name: string; input: Record<string, unknown> }>;

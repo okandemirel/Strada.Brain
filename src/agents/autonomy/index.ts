@@ -33,4 +33,19 @@ export type {
   ClarificationReviewDecision,
   ClarificationReviewEvidence,
 } from "./clarification-review.js";
+export {
+  buildVerifierPipelineReviewRequest,
+  finalizeVerifierPipelineReview,
+  isTerminalFailureReport,
+  planVerifierPipeline,
+} from "./verifier-pipeline.js";
+export type {
+  VerifierCheck,
+  VerifierCheckStatus,
+  VerifierName,
+  VerifierPipelineDecision,
+  VerifierPipelineEvidence,
+  VerifierPipelinePlan,
+  VerifierPipelineResult,
+} from "./verifier-pipeline.js";
 export { MUTATION_TOOLS, VERIFY_TOOLS, WRITE_OPERATIONS, COMPILABLE_EXT, extractFilePath } from "./constants.js";

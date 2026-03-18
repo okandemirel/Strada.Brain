@@ -572,6 +572,7 @@ npm run dev -- daemon --channel web
 
 **提供商链：** 将 `PROVIDER_CHAIN` 设置为以逗号分隔的提供商名称列表。Strada 仍然是控制平面，并将这条链作为默认编排池，用于主执行 worker、supervisor 路由以及故障回退。示例：`PROVIDER_CHAIN=kimi,deepseek,claude` 首先使用 Kimi，Kimi 失败则使用 DeepSeek，然后是 Claude。
 澄清也是这个控制平面的一部分。worker 可以提出一个用户问题草案，但 Strada 现在会先运行内部 `clarification-review` 阶段，再决定这个草案能否真的变成 `ask_user` 回合。
+完成判定现在也要经过内部 verifier pipeline。build verification、targeted repro / failing-path 检查、log review、Strada conformance 和 completion review 都必须清理干净，Strada 才会结束。`/routing info` 和 dashboard 现在除了 runtime execution traces 之外，也会显示 phase outcomes (`approved`, `continued`, `replanned`, `blocked`)。
 
 **重要：** `OPENAI_AUTH_MODE=chatgpt-subscription` 只覆盖 Strada 内的 OpenAI 对话回合，不会提供 OpenAI API 或 embeddings 配额。如果你选择 `EMBEDDING_PROVIDER=openai`，仍然需要 `OPENAI_API_KEY`。
 Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返回了不完整的分析、反过来询问用户下一步该做什么，或在证据不足时声称大范围任务已经完成，Strada 会重新打开循环，再做一轮检查/评审，只有在结果已经验证完毕或确实只剩真实外部阻塞时才向用户返回。
@@ -749,7 +750,7 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `/agent` | 显示 Agent Core 状态 |
 | `/routing` | 显示路由状态和预设 |
 | `/routing preset <name>` | 切换路由预设（budget/balanced/performance） |
-| `/routing info` | 显示当前身份最近的路由决策，以及 planning、execution、clarification-review、review、synthesis 阶段的实际执行轨迹 |
+| `/routing info` | 显示当前身份最近的路由决策、runtime execution traces，以及 planning、execution、clarification-review、review、synthesis 阶段的 phase outcomes |
 
 ---
 

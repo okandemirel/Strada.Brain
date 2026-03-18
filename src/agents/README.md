@@ -31,6 +31,7 @@ Default models are no longer documented here as static truth; runtime resolves t
 Provider selection is a Strada policy decision, not a direct chat target. Strada remains the control plane for every turn, then assigns planner/executor/reviewer/synthesizer work to providers. A user-selected provider/model sets the primary execution worker, while routing and synthesis may still involve other providers. Runtime execution traces expose which provider/model actually handled each phase and review pass.
 Strada is also expected to keep driving the task until it has enough evidence. If a worker returns an incomplete analysis, throws the next step back to the user, or makes a broad completion claim without enough support, Strada reopens the loop, routes another review/inspection pass, and only returns once the result is verified or a real external blocker remains.
 Clarification is no longer a default user-facing intake step. Workers may still propose a question, but the orchestrator now routes those drafts through an internal `clarification-review` phase first. `ask_user` is treated as a last-resort interaction after Strada has exhausted local inspection, review, and verification paths.
+Completion is now governed by an explicit verifier pipeline. Build verification, targeted repro / failing-path checks, log review, Strada.Core / Strada.Modules conformance, and completion review are evaluated as a single control-plane decision before the orchestrator can finish. Runtime traces still show who executed each phase, and phase outcomes now show whether that phase was approved, continued, replanned, blocked, or failed.
 
 `FallbackChainProvider` tries providers in order, swallows errors from non-last providers. Built via `buildProviderChain()` from `PROVIDER_CHAIN` env var.
 
@@ -67,6 +68,7 @@ The autonomy layer now also includes:
 
 - **Clarification Review** — Decides whether a worker draft should stay internal (`internal_continue`) or whether Strada really needs a concise user clarification
 - **Completion Review** — Forces security/code/simplify review plus log/error verification before a worker can self-certify completion
+- **Verifier Pipeline** — Aggregates build verification, targeted repro, log review, conformance, and completion-review results into a single continue/replan/approve control-plane outcome
 
 ## Plugins (`plugins/plugin-loader.ts`)
 

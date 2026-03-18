@@ -54,6 +54,22 @@ interface ExecutionTrace {
   timestamp: number
 }
 
+interface PhaseOutcome {
+  provider: string
+  model?: string
+  role: string
+  phase: string
+  source: string
+  status: string
+  reason: string
+  task: {
+    type: string
+    complexity: string
+    criticality: string
+  }
+  timestamp: number
+}
+
 interface EmbeddingStatus {
   state: 'disabled' | 'active' | 'degraded'
   ragEnabled: boolean
@@ -175,6 +191,7 @@ export default function SettingsPage() {
   const [routingPreset, setRoutingPreset] = useState<string>('balanced')
   const [routingDecisions, setRoutingDecisions] = useState<RoutingDecision[]>([])
   const [executionTraces, setExecutionTraces] = useState<ExecutionTrace[]>([])
+  const [phaseOutcomes, setPhaseOutcomes] = useState<PhaseOutcome[]>([])
   const [routingLoading, setRoutingLoading] = useState(true)
   const [routingSwitching, setRoutingSwitching] = useState(false)
 
@@ -227,16 +244,18 @@ export default function SettingsPage() {
 
   // --- Fetch routing preset ---
   const fetchRouting = useCallback(() => {
-    fetchJson<{ routing: RoutingDecision[]; execution?: ExecutionTrace[]; preset?: string }>(`/api/agent-activity?${identityQuery}`)
+    fetchJson<{ routing: RoutingDecision[]; execution?: ExecutionTrace[]; outcomes?: PhaseOutcome[]; preset?: string }>(`/api/agent-activity?${identityQuery}`)
       .then((data) => {
         if (data?.preset) setRoutingPreset(data.preset)
         setRoutingDecisions(Array.isArray(data?.routing) ? data.routing.slice(0, 6) : [])
         setExecutionTraces(Array.isArray(data?.execution) ? data.execution.slice(-6).reverse() : [])
+        setPhaseOutcomes(Array.isArray(data?.outcomes) ? data.outcomes.slice(-6).reverse() : [])
         setRoutingLoading(false)
       })
       .catch(() => {
         setRoutingDecisions([])
         setExecutionTraces([])
+        setPhaseOutcomes([])
         setRoutingLoading(false)
       })
   }, [identityQuery])
@@ -702,6 +721,47 @@ export default function SettingsPage() {
                       </div>
                       <div className="settings-hint" style={{ margin: 0 }}>
                         {trace.reason}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {phaseOutcomes.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
+                  <span className="admin-stat-label">Recent Phase Outcomes</span>
+                  <span className="admin-stat-value">{phaseOutcomes.length}</span>
+                </div>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {phaseOutcomes.map((outcome, index) => (
+                    <div
+                      key={`${outcome.provider}-${outcome.phase}-${outcome.role}-${outcome.timestamp}-${index}`}
+                      className="settings-provider-card"
+                      style={{
+                        textAlign: 'left',
+                        padding: '12px 14px',
+                        cursor: 'default',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                          {outcome.phase}{' / '}{outcome.role}{' -> '}{outcome.provider}
+                        </div>
+                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                          {formatDecisionTime(outcome.timestamp)}
+                        </div>
+                      </div>
+                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
+                        <span className="settings-provider-id">{outcome.status}</span>
+                        <span className="settings-provider-model">{outcome.source}</span>
+                        {outcome.model && (
+                          <span className="settings-provider-model">{outcome.model}</span>
+                        )}
+                      </div>
+                      <div className="settings-hint" style={{ margin: 0 }}>
+                        {outcome.reason}
                       </div>
                     </div>
                   ))}

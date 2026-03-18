@@ -534,6 +534,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 
 **Saglayici zinciri:** `PROVIDER_CHAIN` degiskenini virgule ayrilmis saglayici adlari listesi olarak ayarlayin. Strada control-plane olarak kalir ve bu zinciri birincil execution worker, supervisor routing ve fallback secimi icin varsayilan orkestrasyon havuzu olarak kullanir. Ornek: `PROVIDER_CHAIN=kimi,deepseek,claude` once Kimi'yi kullanir, Kimi basarisiz olursa DeepSeek, sonra Claude.
 Aciklayici soru yonetimi de bu control-plane'in parcasi oldu. Bir worker kullaniciya soru onerebilir, ama Strada artik herhangi bir taslagi `ask_user` turune cevirmeden once iceride `clarification-review` asamasindan gecirir.
+Tamamlama da artik dahili bir verifier pipeline uzerinden gecer. Build verification, targeted repro / failing-path kontrolleri, log review, Strada conformance ve completion review temiz olmadan Strada isi bitirmez. `/routing info` ve dashboard artik hem runtime execution trace'lerini hem de phase outcome'lari (`approved`, `continued`, `replanned`, `blocked`) gosterir.
 
 **Onemli:** `OPENAI_AUTH_MODE=chatgpt-subscription` sadece Strada icindeki OpenAI konusma turlari icin gecerli olur. OpenAI API veya embedding kotasi saglamaz. `EMBEDDING_PROVIDER=openai` secersen yine `OPENAI_API_KEY` gerekir.
 Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik analiz donerse, "ne yapmaliyim?" diye sorarsa veya yeterli kanit olmadan genis kapsamli bir tamamlanma iddiasi kurarsa, Strada donguyu yeniden acar, ek inceleme/review turu yaptirir ve ancak sonuc dogrulandiginda ya da gercek bir dis engel kaldiginda kullaniciya doner.
@@ -711,7 +712,7 @@ Tum sohbet kanallarinda kullanilabilir slash komutlari:
 | `/agent` | Agent Core durumunu goster |
 | `/routing` | Yonlendirme durumunu ve on ayarini goster |
 | `/routing preset <ad>` | Yonlendirme on ayarini degistir (budget/balanced/performance) |
-| `/routing info` | Mevcut kimlik icin son yonlendirme kararlarini ve planning, execution, clarification-review, review, synthesis asamalarindaki gercek calisma izlerini goster |
+| `/routing info` | Mevcut kimlik icin son yonlendirme kararlarini, runtime execution trace'lerini ve planning, execution, clarification-review, review, synthesis asamalarindaki phase outcome'lari goster |
 
 ---
 
