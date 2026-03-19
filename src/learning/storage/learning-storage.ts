@@ -296,6 +296,12 @@ export class LearningStorage {
         // Column already exists — expected after first migration
       }
     }
+    this.db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_trajectories_task_run_id ON trajectories(task_run_id, created_at DESC)",
+    ).run();
+    this.db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_trajectories_chat_task_run_id ON trajectories(chat_id, task_run_id, created_at DESC)",
+    ).run();
 
     // Phase 13: instinct_scopes table for project-scope filtering
     this.db.prepare(`CREATE TABLE IF NOT EXISTS instinct_scopes (
@@ -1044,6 +1050,18 @@ export class LearningStorage {
   getTrajectory(id: string): Trajectory | null {
     this.ensureConnection();
     const row = this.db!.prepare("SELECT * FROM trajectories WHERE id = ?").get(id) as TrajectoryRow | undefined;
+    return row ? this.rowToTrajectory(row) : null;
+  }
+
+  getTrajectoryByTaskRun(taskRunId: string, chatId?: string): Trajectory | null {
+    this.ensureConnection();
+    const row = chatId
+      ? this.db!.prepare(
+        "SELECT * FROM trajectories WHERE task_run_id = ? AND chat_id = ? ORDER BY created_at DESC LIMIT 1",
+      ).get(taskRunId, chatId) as TrajectoryRow | undefined
+      : this.db!.prepare(
+        "SELECT * FROM trajectories WHERE task_run_id = ? ORDER BY created_at DESC LIMIT 1",
+      ).get(taskRunId) as TrajectoryRow | undefined;
     return row ? this.rowToTrajectory(row) : null;
   }
 

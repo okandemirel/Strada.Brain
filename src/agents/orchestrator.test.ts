@@ -1,13 +1,20 @@
 import { Orchestrator } from "./orchestrator.js";
 import Database from "better-sqlite3";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import type { IEventEmitter, LearningEventMap, ToolResultEvent } from "../core/event-bus.js";
 import { ShowPlanTool } from "./tools/show-plan.js";
 import { AskUserTool } from "./tools/ask-user.js";
 import { DMPolicy } from "../security/dm-policy.js";
+import { LearningStorage } from "../learning/storage/learning-storage.js";
+import type { Trajectory } from "../learning/types.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { TaskExecutionStore } from "../memory/unified/task-execution-store.js";
 import { buildGoalTreeFromBlock } from "../goals/types.js";
+import { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
+import type { SessionId, TimestampMs, ToolName } from "../types/index.js";
 
 const mockLogRingBuffer: Array<{
   timestamp: string;
@@ -111,6 +118,55 @@ function getToolResultBlock(callArgs: any[] | undefined): any {
     m.role === "user" && Array.isArray(m.content)
   );
   return toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
+}
+
+function createReplayTrajectory(params: {
+  id: string;
+  chatId: string;
+  taskRunId: string;
+  taskDescription: string;
+  branchSummary: string;
+  verifierSummary: string;
+  learnedInsights: string[];
+  projectWorldFingerprint: string;
+  createdAt: number;
+}): Trajectory {
+  return {
+    id: params.id as `traj_${string}`,
+    sessionId: "session-replay" as SessionId,
+    chatId: params.chatId,
+    taskRunId: params.taskRunId,
+    taskDescription: params.taskDescription,
+    steps: [{
+      stepNumber: 1,
+      toolName: "file_read" as ToolName,
+      input: {},
+      result: {
+        kind: "success",
+        output: "ok",
+      },
+      timestamp: params.createdAt as TimestampMs,
+      durationMs: 0 as any,
+    }],
+    outcome: {
+      success: true,
+      totalSteps: 3,
+      hadErrors: false,
+      errorCount: 0,
+      durationMs: 1000 as any,
+      completionRate: 0.8 as any,
+      replayContext: {
+        projectWorldFingerprint: params.projectWorldFingerprint,
+        projectWorldSummary: "root=/tmp/test-project | modules=Castle",
+        branchSummary: params.branchSummary,
+        verifierSummary: params.verifierSummary,
+        learnedInsights: params.learnedInsights,
+      },
+    },
+    appliedInstinctIds: [],
+    createdAt: params.createdAt as TimestampMs,
+    processed: false,
+  };
 }
 
 describe("Orchestrator", () => {
@@ -863,63 +919,102 @@ describe("Orchestrator", () => {
     expect(prompt).toContain("Replay warning (same project/world context)");
   });
 
-  it("builds trajectory replay context from task execution memory and project/world memory", async () => {
+  it("builds trajectory replay context from exact task replay context and project/world memory", async () => {
     const db = new Database(":memory:");
     const taskExecutionStore = new TaskExecutionStore(db);
     taskExecutionStore.updateExecutionSnapshot("user-replay", {
-      branchSummary: "stable checkpoint: inspected Level_031 asset import path",
-      verifierSummary: "runtime replay still required before final completion",
-      learnedInsights: ["Avoid trusting serialized YAML alone."],
+      branchSummary: "latest mixed-chat summary should stay a coarse fallback only",
+      verifierSummary: "generic verifier memory",
+      learnedInsights: ["Latest snapshot is not exact replay chronology."],
     });
+    const replayStorageDir = mkdtempSync(join(tmpdir(), "orchestrator-replay-"));
+    const replayStorage = new LearningStorage(join(replayStorageDir, "learning.db"));
+    try {
+      replayStorage.initialize();
+      replayStorage.createTrajectoryImmediate(createReplayTrajectory({
+        id: "traj-current",
+        chatId: "chat-replay",
+        taskRunId: "taskrun-current",
+        taskDescription: "Fix Unity editor crash during level generation",
+        branchSummary: "stable checkpoint: inspected Level_031 asset import path",
+        verifierSummary: "runtime replay still required before final completion",
+        learnedInsights: ["Avoid trusting serialized YAML alone."],
+        projectWorldFingerprint: "root tmp test project modules castle",
+        createdAt: 400,
+      }));
+      replayStorage.createTrajectoryImmediate(createReplayTrajectory({
+        id: "traj-other-task",
+        chatId: "chat-replay",
+        taskRunId: "taskrun-other",
+        taskDescription: "Fix a different level import path bug",
+        branchSummary: "stable checkpoint: inspected Level_032 asset import path",
+        verifierSummary: "runtime replay for Level_032 still pending",
+        learnedInsights: ["Different task in same chat should stay isolated."],
+        projectWorldFingerprint: "root tmp test project modules castle",
+        createdAt: 410,
+      }));
+      replayStorage.createTrajectoryImmediate(createReplayTrajectory({
+        id: "traj-other-chat",
+        chatId: "chat-other",
+        taskRunId: "taskrun-current",
+        taskDescription: "Same taskRunId in another chat should not leak",
+        branchSummary: "foreign chat replay branch",
+        verifierSummary: "foreign chat verifier summary",
+        learnedInsights: ["Chat scope must be respected during exact replay lookup."],
+        projectWorldFingerprint: "root tmp test project modules castle",
+        createdAt: 420,
+      }));
+      const replayRetriever = new TrajectoryReplayRetriever(replayStorage);
 
-    const mockMemMgr = {
-      getCachedAnalysis: vi.fn().mockResolvedValue({
-        kind: "ok",
-        value: {
-          kind: "some",
+      const mockMemMgr = {
+        getCachedAnalysis: vi.fn().mockResolvedValue({
+          kind: "ok",
           value: {
-            modules: [{
-              name: "Castle",
-              className: "CastleModuleConfig",
-              filePath: "Assets/Modules/Castle/CastleModuleConfig.cs",
-              namespace: "Game.Castle",
+            kind: "some",
+            value: {
+              modules: [{
+                name: "Castle",
+                className: "CastleModuleConfig",
+                filePath: "Assets/Modules/Castle/CastleModuleConfig.cs",
+                namespace: "Game.Castle",
+                systems: [],
+                services: [],
+                dependencies: [],
+                lineNumber: 1,
+              }],
               systems: [],
+              components: [],
               services: [],
+              mediators: [],
+              controllers: [],
+              events: [],
               dependencies: [],
-              lineNumber: 1,
-            }],
-            systems: [],
-            components: [],
-            services: [],
-            mediators: [],
-            controllers: [],
-            events: [],
-            dependencies: [],
-            asmdefs: [],
-            prefabs: [],
-            scenes: [],
-            csFileCount: 12,
-            analyzedAt: new Date("2026-03-19T00:00:00.000Z"),
+              asmdefs: [],
+              prefabs: [],
+              scenes: [],
+              csFileCount: 12,
+              analyzedAt: new Date("2026-03-19T00:00:00.000Z"),
+            },
           },
-        },
-      }),
-    };
+        }),
+      };
 
-    const replayOrch = new Orchestrator({
-      providerManager: {
-        getProvider: () => mockProvider,
-        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
-        shutdown: vi.fn(),
-      } as any,
-      tools: [readTool, writeTool],
-      channel: mockChannel,
-      projectPath: "/tmp/test-project",
-      readOnly: false,
-      requireConfirmation: true,
-      memoryManager: mockMemMgr as any,
-      taskExecutionStore,
-      providerRouter: {
-        getRecentExecutionTraces: vi.fn(() => [
+      const replayOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool, writeTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: true,
+        memoryManager: mockMemMgr as any,
+        taskExecutionStore,
+        trajectoryReplayRetriever: replayRetriever,
+        providerRouter: {
+          getRecentExecutionTraces: vi.fn(() => [
           {
             provider: "kimi",
             model: "kimi-k2",
@@ -1042,30 +1137,131 @@ describe("Orchestrator", () => {
               rollbackDepth: 0,
             },
           },
-        ]),
-      } as any,
-    });
+          ]),
+        } as any,
+      });
 
-    const replayContext = await replayOrch.buildTrajectoryReplayContext({
-      chatId: "chat-replay",
-      userId: "user-replay",
-      sinceTimestamp: 200,
-      taskRunId: "taskrun-current",
-    });
+      const replayContext = await replayOrch.buildTrajectoryReplayContext({
+        chatId: "chat-replay",
+        userId: "user-replay",
+        sinceTimestamp: 200,
+        taskRunId: "taskrun-current",
+      });
 
-    expect(replayContext?.projectWorldFingerprint).toContain("castle");
-    expect(replayContext?.branchSummary).toContain("Level_031");
-    expect(replayContext?.verifierSummary).toContain("runtime replay");
-    expect(replayContext?.learnedInsights).toEqual(["Avoid trusting serialized YAML alone."]);
-    expect(replayContext?.phaseTelemetry).toEqual([
-      expect.objectContaining({
-        phase: "planning",
-        provider: "kimi",
-        status: "approved",
-        verifierDecision: "approve",
-      }),
-    ]);
-    db.close();
+      expect(replayContext?.projectWorldFingerprint).toContain("castle");
+      expect(replayContext?.branchSummary).toContain("Level_031");
+      expect(replayContext?.branchSummary).not.toContain("Level_032");
+      expect(replayContext?.verifierSummary).toContain("runtime replay");
+      expect(replayContext?.verifierSummary).not.toContain("foreign chat");
+      expect(replayContext?.learnedInsights).toEqual(["Avoid trusting serialized YAML alone."]);
+      expect(replayContext?.phaseTelemetry).toEqual([
+        expect.objectContaining({
+          phase: "planning",
+          provider: "kimi",
+          status: "approved",
+          verifierDecision: "approve",
+        }),
+      ]);
+    } finally {
+      replayStorage.close();
+      rmSync(replayStorageDir, { recursive: true, force: true });
+      db.close();
+    }
+  });
+
+  it("does not fall back to coarse task execution memory when an exact task replay has no replay context", async () => {
+    const db = new Database(":memory:");
+    const taskExecutionStore = new TaskExecutionStore(db);
+    taskExecutionStore.updateExecutionSnapshot("user-replay", {
+      branchSummary: "coarse branch summary should not leak",
+      verifierSummary: "coarse verifier summary should not leak",
+      learnedInsights: ["Coarse snapshot should stay isolated from exact replay lookups."],
+    });
+    const replayStorageDir = mkdtempSync(join(tmpdir(), "orchestrator-replay-empty-"));
+    const replayStorage = new LearningStorage(join(replayStorageDir, "learning.db"));
+    try {
+      replayStorage.initialize();
+      replayStorage.createTrajectoryImmediate({
+        id: "traj-no-replay" as `traj_${string}`,
+        sessionId: "session-replay" as SessionId,
+        chatId: "chat-replay",
+        taskRunId: "taskrun-current",
+        taskDescription: "Fix Unity editor crash during level generation",
+        steps: [{
+          stepNumber: 1,
+          toolName: "file_read" as ToolName,
+          input: {},
+          result: { kind: "success", output: "ok" },
+          timestamp: 500 as TimestampMs,
+          durationMs: 0 as any,
+        }],
+        outcome: {
+          success: true,
+          totalSteps: 1,
+          hadErrors: false,
+          errorCount: 0,
+          durationMs: 10 as any,
+          completionRate: 1 as any,
+        },
+        appliedInstinctIds: [],
+        createdAt: 500 as TimestampMs,
+        processed: false,
+      });
+      const replayRetriever = new TrajectoryReplayRetriever(replayStorage);
+      const mockMemMgr = {
+        getCachedAnalysis: vi.fn().mockResolvedValue({
+          kind: "ok",
+          value: {
+            kind: "some",
+            value: {
+              modules: [],
+              systems: [],
+              components: [],
+              services: [],
+              mediators: [],
+              controllers: [],
+              events: [],
+              dependencies: [],
+              asmdefs: [],
+              prefabs: [],
+              scenes: [],
+              csFileCount: 0,
+              analyzedAt: new Date("2026-03-19T00:00:00.000Z"),
+            },
+          },
+        }),
+      };
+      const replayOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool, writeTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: true,
+        memoryManager: mockMemMgr as any,
+        taskExecutionStore,
+        trajectoryReplayRetriever: replayRetriever,
+      });
+
+      const replayContext = await replayOrch.buildTrajectoryReplayContext({
+        chatId: "chat-replay",
+        userId: "user-replay",
+        taskRunId: "taskrun-current",
+      });
+
+      expect(replayContext?.projectWorldFingerprint).toContain("test project");
+      expect(replayContext?.branchSummary).toBeUndefined();
+      expect(replayContext?.verifierSummary).toBeUndefined();
+      expect(replayContext?.learnedInsights).toEqual([]);
+    } finally {
+      replayStorage.close();
+      rmSync(replayStorageDir, { recursive: true, force: true });
+      db.close();
+    }
   });
 
   it("falls back to chat-scoped summaries when a session mixes multiple participants", async () => {

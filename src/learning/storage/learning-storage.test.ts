@@ -152,6 +152,29 @@ describe("LearningStorage", () => {
       expect(retrieved?.taskRunId).toBe("taskrun_level_031");
     });
 
+    it("should retrieve trajectories by taskRunId with optional chat scoping", () => {
+      storage.createTrajectoryImmediate({
+        ...createTestTrajectory(),
+        id: randomUUID(),
+        chatId: "chat-current" as any,
+        taskRunId: "taskrun_shared",
+        createdAt: 100,
+      });
+      storage.createTrajectoryImmediate({
+        ...createTestTrajectory(),
+        id: randomUUID(),
+        chatId: "chat-other" as any,
+        taskRunId: "taskrun_shared",
+        createdAt: 200,
+      });
+
+      const scoped = storage.getTrajectoryByTaskRun("taskrun_shared", "chat-current");
+      const unscoped = storage.getTrajectoryByTaskRun("taskrun_shared");
+
+      expect(scoped?.chatId).toBe("chat-current");
+      expect(unscoped?.chatId).toBe("chat-other");
+    });
+
     it("should get unprocessed trajectories", () => {
       const unprocessed = createTestTrajectory();
       const processed = { ...createTestTrajectory(), id: randomUUID(), processed: true };

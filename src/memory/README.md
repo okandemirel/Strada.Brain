@@ -2,9 +2,10 @@
 
 Persistent conversation memory with text search and vector retrieval. The memory system stores past conversations, project analyses, and notes, making them available to the agent as context for future interactions.
 Runtime memory is now explicitly split by role: user profile memory, task execution memory, and project/world memory.
+Task execution memory is only a `latest snapshot` for the active identity. It is not the `persisted chronology` for an exact task run.
 Project/world memory is surfaced to the orchestrator as its own prompt layer built from the active project root and cached project analysis. That same world-memory anchor now also feeds rollback/replan memory and adaptive provider scoring, while semantic retrieval continues to inject live relevant memories separately.
 Cross-session `execution replay` also consumes that anchor: learning trajectories now carry project/world-aware recovery summaries so the next similar task can reuse prior success/failure branches without inventing a second persistence layer.
-Those trajectories now also persist phase/provider telemetry plus chat-scoped `taskRunId` correlation, so replay and adaptive routing can separate concurrent tasks inside the same chat instead of mixing their runtime history.
+Those trajectories now also persist phase/provider telemetry plus chat-scoped `taskRunId` correlation, so replay and adaptive routing can separate concurrent tasks inside the same chat instead of mixing their runtime history. Exact task chronology lives in those replay trajectories and contexts keyed by `taskRunId`.
 
 ## Active Backend: AgentDBMemory
 
@@ -67,7 +68,7 @@ When no embedding provider is configured, `generateEmbedding()` uses a character
 |------|---------|
 | `memory.interface.ts` | `IMemoryManager`, entry types, retrieval options |
 | `unified/agentdb-memory.ts` | Active production backend (SQLite + HNSW) |
-| `unified/task-execution-store.ts` | Task execution memory: session summaries, open items, verifier memory, rollback context |
+| `unified/task-execution-store.ts` | Task execution memory: latest snapshot of session summaries, open items, verifier memory, rollback context |
 | `../agents/context/strada-knowledge.ts` | Project/world memory section builder (project root + cached analysis summary) |
 | `unified/unified-memory.interface.ts` | `IUnifiedMemory`, tier enum, HNSW types |
 | `unified/consolidation-engine.ts` | Idle-driven memory consolidation (v3.0) |

@@ -1,5 +1,5 @@
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
-import type { Trajectory } from "../learning/types.js";
+import type { Trajectory, TrajectoryReplayContext } from "../learning/types.js";
 import {
   buildTrajectoryReplayMatch,
   normalizeTrajectoryReplayText,
@@ -8,6 +8,11 @@ import {
 export interface TrajectoryReplayInsightResult {
   readonly insights: string[];
   readonly matchedTrajectoryIds: string[];
+}
+
+export interface TaskRunReplayContextResult {
+  readonly found: boolean;
+  readonly replayContext: TrajectoryReplayContext | null;
 }
 
 interface ReplayCandidate {
@@ -74,6 +79,17 @@ export class TrajectoryReplayRetriever {
     }
 
     return { insights, matchedTrajectoryIds };
+  }
+
+  getReplayContextForTaskRun(params: {
+    taskRunId: string;
+    chatId?: string;
+  }): TaskRunReplayContextResult {
+    const trajectory = this.storage.getTrajectoryByTaskRun(params.taskRunId, params.chatId);
+    return {
+      found: trajectory !== null,
+      replayContext: trajectory?.outcome.replayContext ?? null,
+    };
   }
 
   private scoreTrajectory(

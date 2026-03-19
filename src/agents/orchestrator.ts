@@ -5654,6 +5654,14 @@ export class Orchestrator {
       params.conversationId,
     );
     const taskExecutionMemory = this.taskExecutionStore?.getMemory(identityKey) ?? null;
+    const exactReplayMatch = params.taskRunId
+      ? (this.trajectoryReplayRetriever?.getReplayContextForTaskRun({
+        taskRunId: params.taskRunId,
+        chatId: params.chatId,
+      }) ?? null)
+      : null;
+    const exactReplayContext = exactReplayMatch?.replayContext ?? null;
+    const hasExactReplayMatch = exactReplayMatch?.found ?? false;
     const projectWorldLayer = await this.buildProjectWorldMemoryLayer();
     const phaseTelemetry = this.buildTrajectoryPhaseReplayTelemetry(
       params.chatId,
@@ -5662,24 +5670,35 @@ export class Orchestrator {
       params.taskRunId,
     );
 
-    const learnedInsights = (taskExecutionMemory?.learnedInsights ?? []).slice(0, 4);
+    const learnedInsightsSource = hasExactReplayMatch
+      ? (exactReplayContext?.learnedInsights ?? [])
+      : (exactReplayContext?.learnedInsights ?? taskExecutionMemory?.learnedInsights ?? []);
+    const learnedInsights = learnedInsightsSource.slice(0, 4);
+    const branchSummary = hasExactReplayMatch
+      ? exactReplayContext?.branchSummary
+      : (exactReplayContext?.branchSummary ?? taskExecutionMemory?.branchSummary);
+    const verifierSummary = hasExactReplayMatch
+      ? exactReplayContext?.verifierSummary
+      : (exactReplayContext?.verifierSummary ?? taskExecutionMemory?.verifierSummary);
     if (
       !projectWorldLayer
-      && !taskExecutionMemory?.branchSummary
-      && !taskExecutionMemory?.verifierSummary
+      && !exactReplayContext?.projectWorldFingerprint
+      && !branchSummary
+      && !verifierSummary
       && learnedInsights.length === 0
       && phaseTelemetry.length === 0
+      && !(exactReplayContext?.phaseTelemetry?.length)
     ) {
       return null;
     }
 
     return {
-      projectWorldFingerprint: projectWorldLayer?.fingerprint,
-      projectWorldSummary: projectWorldLayer?.summary,
-      branchSummary: taskExecutionMemory?.branchSummary,
-      verifierSummary: taskExecutionMemory?.verifierSummary,
+      projectWorldFingerprint: exactReplayContext?.projectWorldFingerprint ?? projectWorldLayer?.fingerprint,
+      projectWorldSummary: exactReplayContext?.projectWorldSummary ?? projectWorldLayer?.summary,
+      branchSummary,
+      verifierSummary,
       learnedInsights,
-      phaseTelemetry,
+      phaseTelemetry: phaseTelemetry.length > 0 ? phaseTelemetry : (exactReplayContext?.phaseTelemetry ?? []),
     };
   }
 

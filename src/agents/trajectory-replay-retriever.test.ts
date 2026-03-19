@@ -25,6 +25,8 @@ describe("TrajectoryReplayRetriever", () => {
   it("surfaces success and failure replay insights for the same world context", () => {
     storage.createTrajectoryImmediate(createTrajectory({
       id: "traj_success",
+      chatId: "chat-levels",
+      taskRunId: "taskrun-level-031",
       taskDescription: "Fix Unity level generation crash in Level_031",
       success: true,
       branchSummary: "inspected Level_031 asset serialization and runtime import path",
@@ -35,6 +37,8 @@ describe("TrajectoryReplayRetriever", () => {
     }));
     storage.createTrajectoryImmediate(createTrajectory({
       id: "traj_failure",
+      chatId: "chat-levels",
+      taskRunId: "taskrun-level-100",
       taskDescription: "Analyze why Unity editor crashes while creating 100 levels",
       success: false,
       branchSummary: "assuming asset YAML alone proved runtime correctness",
@@ -45,6 +49,8 @@ describe("TrajectoryReplayRetriever", () => {
     }));
     storage.createTrajectoryImmediate(createTrajectory({
       id: "traj_other_world",
+      chatId: "chat-dashboard",
+      taskRunId: "taskrun-dashboard",
       taskDescription: "Fix web socket reconnect loop in dashboard",
       success: true,
       branchSummary: "dashboard socket retry path",
@@ -68,10 +74,53 @@ describe("TrajectoryReplayRetriever", () => {
     expect(result.insights.join("\n")).toContain("Replay warning");
     expect(result.insights.join("\n")).not.toContain("dashboard socket retry path");
   });
+
+  it("retrieves exact replay context with chat-scoped taskRunId isolation", () => {
+    storage.createTrajectoryImmediate(createTrajectory({
+      id: "traj_current_chat",
+      chatId: "chat-replay",
+      taskRunId: "taskrun-shared",
+      taskDescription: "Fix Level_031 runtime import path",
+      success: true,
+      branchSummary: "current chat Level_031 branch",
+      verifierSummary: "current chat verifier memory",
+      learnedInsights: ["Current chat replay should win."],
+      projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+      createdAt: Date.now() - 2_000,
+    }));
+    storage.createTrajectoryImmediate(createTrajectory({
+      id: "traj_other_chat",
+      chatId: "chat-other",
+      taskRunId: "taskrun-shared",
+      taskDescription: "Different chat should not leak",
+      success: true,
+      branchSummary: "foreign branch",
+      verifierSummary: "foreign verifier",
+      learnedInsights: ["Foreign chat replay should stay isolated."],
+      projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+      createdAt: Date.now() - 1_000,
+    }));
+
+    const retriever = new TrajectoryReplayRetriever(storage);
+    const scoped = retriever.getReplayContextForTaskRun({
+      taskRunId: "taskrun-shared",
+      chatId: "chat-replay",
+    });
+    const unscoped = retriever.getReplayContextForTaskRun({
+      taskRunId: "taskrun-shared",
+    });
+
+    expect(scoped.found).toBe(true);
+    expect(scoped.replayContext?.branchSummary).toContain("Level_031");
+    expect(scoped.replayContext?.verifierSummary).toContain("current chat");
+    expect(unscoped.replayContext?.branchSummary).toContain("foreign branch");
+  });
 });
 
 function createTrajectory(params: {
   id: string;
+  chatId: string;
+  taskRunId: string;
   taskDescription: string;
   success: boolean;
   branchSummary: string;
@@ -83,6 +132,8 @@ function createTrajectory(params: {
   return {
     id: params.id as `traj_${string}`,
     sessionId: "session-1" as SessionId,
+    chatId: params.chatId,
+    taskRunId: params.taskRunId,
     taskDescription: params.taskDescription,
     steps: [{
       stepNumber: 1,
