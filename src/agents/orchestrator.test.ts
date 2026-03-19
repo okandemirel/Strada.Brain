@@ -1096,6 +1096,8 @@ describe("Orchestrator", () => {
             taskRunId: "taskrun-current",
             telemetry: {
               verifierDecision: "approve",
+              phaseVerdict: "clean",
+              phaseVerdictScore: 1,
               retryCount: 0,
               rollbackDepth: 0,
             },
@@ -1169,6 +1171,8 @@ describe("Orchestrator", () => {
           provider: "kimi",
           status: "approved",
           verifierDecision: "approve",
+          phaseVerdict: "clean",
+          phaseVerdictScore: 1,
         }),
       ]);
     } finally {

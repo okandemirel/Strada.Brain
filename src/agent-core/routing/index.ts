@@ -1,4 +1,5 @@
 export * from "./routing-types.js";
+export * from "./phase-verdict.js";
 export { TaskClassifier } from "./task-classifier.js";
 export { ProviderRouter } from "./provider-router.js";
 export type { TierRouterRef } from "./provider-router.js";

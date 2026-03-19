@@ -4,6 +4,7 @@ import {
   buildTrajectoryReplayMatch,
   normalizeTrajectoryReplayText,
 } from "../../learning/trajectory-replay-match.js";
+import { scorePhaseVerdictFallback } from "./phase-verdict.js";
 import type { ExecutionPhase } from "./routing-types.js";
 
 export interface TrajectoryPhaseSignal {
@@ -202,7 +203,7 @@ export class TrajectoryPhaseSignalRetriever {
 }
 
 function scoreCandidate(candidate: ReplayPhaseCandidate): number {
-  const statusScore = scoreReplayStatus(candidate.phaseTelemetry);
+  const statusScore = candidate.phaseTelemetry.phaseVerdictScore ?? scoreReplayStatus(candidate.phaseTelemetry);
   const verdictAdjustedScore = candidate.verdictScore === undefined
     ? statusScore
     : statusScore * (1 - VERDICT_BLEND_WEIGHT) + clamp(candidate.verdictScore) * VERDICT_BLEND_WEIGHT;
@@ -211,20 +212,7 @@ function scoreCandidate(candidate: ReplayPhaseCandidate): number {
 }
 
 function scoreReplayStatus(phaseTelemetry: TrajectoryPhaseReplay): number {
-  switch (phaseTelemetry.status) {
-    case "approved":
-      return phaseTelemetry.verifierDecision === "approve" ? 1 : 0.9;
-    case "continued":
-      return phaseTelemetry.verifierDecision === "continue" ? 0.7 : 0.62;
-    case "replanned":
-      return phaseTelemetry.verifierDecision === "replan" ? 0.2 : 0.25;
-    case "blocked":
-      return 0.12;
-    case "failed":
-      return 0;
-    default:
-      return 0.55;
-  }
+  return scorePhaseVerdictFallback(phaseTelemetry.status, phaseTelemetry.verifierDecision);
 }
 
 function clamp(value: number): number {
@@ -232,10 +220,16 @@ function clamp(value: number): number {
 }
 
 function isSuccessfulReplayPhase(phaseTelemetry: TrajectoryPhaseReplay): boolean {
+  if (phaseTelemetry.phaseVerdict === "clean" || phaseTelemetry.phaseVerdict === "retry") {
+    return true;
+  }
   return phaseTelemetry.status === "approved" || phaseTelemetry.status === "continued";
 }
 
 function isFailedReplayPhase(phaseTelemetry: TrajectoryPhaseReplay): boolean {
+  if (phaseTelemetry.phaseVerdict === "failure") {
+    return true;
+  }
   return phaseTelemetry.status === "replanned"
     || phaseTelemetry.status === "blocked"
     || phaseTelemetry.status === "failed";

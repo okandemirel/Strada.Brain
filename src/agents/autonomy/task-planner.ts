@@ -219,6 +219,8 @@ export class TaskPlanner {
           source: phase.source,
           status: phase.status,
           verifierDecision: phase.verifierDecision,
+          phaseVerdict: phase.phaseVerdict,
+          phaseVerdictScore: phase.phaseVerdictScore,
           retryCount: typeof phase.retryCount === "number" ? Math.max(0, phase.retryCount) : undefined,
           rollbackDepth: typeof phase.rollbackDepth === "number" ? Math.max(0, phase.rollbackDepth) : undefined,
           timestamp: phase.timestamp,

@@ -95,9 +95,12 @@ export type PhaseOutcomeStatus =
   | "failed";
 
 export type VerifierDecision = "approve" | "continue" | "replan";
+export type PhaseVerdict = "clean" | "retry" | "failure";
 
 export interface PhaseOutcomeTelemetry {
   readonly verifierDecision?: VerifierDecision;
+  readonly phaseVerdict?: PhaseVerdict;
+  readonly phaseVerdictScore?: number;
   readonly retryCount?: number;
   readonly rollbackDepth?: number;
   readonly failureFingerprint?: string;
@@ -135,6 +138,8 @@ export interface PhaseScore {
   readonly failedCount: number;
   readonly verifierSampleSize: number;
   readonly verifierCleanRate: number;
+  readonly verdictSampleSize: number;
+  readonly verdictScore: number;
   readonly rollbackRate: number;
   readonly avgRetryCount: number;
   readonly avgTokenCost: number;

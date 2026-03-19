@@ -66,6 +66,7 @@ const MAX_DECISIONS = 100;
 const PHASE_SCORE_PRIOR_WEIGHT = 4;
 const PHASE_SCORE_NEUTRAL = 0.5;
 const PHASE_SCORE_BIAS_WEIGHT = 0.18;
+const PHASE_SCORE_VERDICT_WEIGHT = 0.14;
 const PHASE_SCORE_VERIFIER_WEIGHT = 0.2;
 const PHASE_SCORE_ROLLBACK_WEIGHT = 0.12;
 const PHASE_SCORE_RETRY_WEIGHT = 0.1;
@@ -753,6 +754,8 @@ export class ProviderRouter {
       verifierContinueCount: number;
       verifierReplanCount: number;
       verifierSampleSize: number;
+      verdictSampleSize: number;
+      verdictWeightedTotal: number;
       rollbackEvents: number;
       totalRetryCount: number;
       totalTokenCost: number;
@@ -779,6 +782,8 @@ export class ProviderRouter {
         verifierContinueCount: 0,
         verifierReplanCount: 0,
         verifierSampleSize: 0,
+        verdictSampleSize: 0,
+        verdictWeightedTotal: 0,
         rollbackEvents: 0,
         totalRetryCount: 0,
         totalTokenCost: 0,
@@ -788,7 +793,7 @@ export class ProviderRouter {
         latestReason: "",
       };
       current.sampleSize += 1;
-      current.weightedTotal += scorePhaseOutcome(outcome.status);
+      current.weightedTotal += outcome.telemetry?.phaseVerdictScore ?? scorePhaseOutcome(outcome.status);
       if (outcome.status === "approved") current.approvedCount += 1;
       if (outcome.status === "continued") current.continuedCount += 1;
       if (outcome.status === "replanned") current.replannedCount += 1;
@@ -798,6 +803,10 @@ export class ProviderRouter {
       if (outcome.telemetry?.verifierDecision === "continue") current.verifierContinueCount += 1;
       if (outcome.telemetry?.verifierDecision === "replan") current.verifierReplanCount += 1;
       if (outcome.telemetry?.verifierDecision) current.verifierSampleSize += 1;
+      if (typeof outcome.telemetry?.phaseVerdictScore === "number") {
+        current.verdictSampleSize += 1;
+        current.verdictWeightedTotal += clampScore(outcome.telemetry.phaseVerdictScore);
+      }
       if (outcome.telemetry?.rollbackDepth && outcome.telemetry.rollbackDepth > 0) current.rollbackEvents += 1;
       current.totalRetryCount += Math.max(0, outcome.telemetry?.retryCount ?? 0);
       current.totalTokenCost += Math.max(0, outcome.telemetry?.inputTokens ?? 0) + Math.max(0, outcome.telemetry?.outputTokens ?? 0);
@@ -829,6 +838,9 @@ export class ProviderRouter {
               entry.verifierReplanCount * 0.1
             ) / entry.verifierSampleSize
           : PHASE_SCORE_NEUTRAL;
+      const verdictScore = entry.verdictSampleSize > 0
+        ? entry.verdictWeightedTotal / entry.verdictSampleSize
+        : PHASE_SCORE_NEUTRAL;
       const rollbackRate = entry.sampleSize > 0 ? entry.rollbackEvents / entry.sampleSize : 0;
       const avgRetryCount = entry.sampleSize > 0 ? entry.totalRetryCount / entry.sampleSize : 0;
       const avgTokenCost = entry.sampleSize > 0 ? entry.totalTokenCost / entry.sampleSize : 0;
@@ -851,6 +863,8 @@ export class ProviderRouter {
         failedCount: entry.failedCount,
         verifierSampleSize: entry.verifierSampleSize,
         verifierCleanRate,
+        verdictSampleSize: entry.verdictSampleSize,
+        verdictScore,
         rollbackRate,
         avgRetryCount,
         avgTokenCost,
@@ -869,7 +883,8 @@ export class ProviderRouter {
         phase: entry.phase,
         sampleSize: entry.sampleSize,
         score: clampScore(
-          entry.outcomeScore * (1 - PHASE_SCORE_VERIFIER_WEIGHT - PHASE_SCORE_ROLLBACK_WEIGHT - PHASE_SCORE_RETRY_WEIGHT - PHASE_SCORE_COST_WEIGHT) +
+          entry.outcomeScore * (1 - PHASE_SCORE_VERDICT_WEIGHT - PHASE_SCORE_VERIFIER_WEIGHT - PHASE_SCORE_ROLLBACK_WEIGHT - PHASE_SCORE_RETRY_WEIGHT - PHASE_SCORE_COST_WEIGHT) +
+          entry.verdictScore * PHASE_SCORE_VERDICT_WEIGHT +
           entry.verifierCleanRate * PHASE_SCORE_VERIFIER_WEIGHT +
           (1 - entry.rollbackRate) * PHASE_SCORE_ROLLBACK_WEIGHT +
           (1 - Math.min(entry.avgRetryCount / 4, 1)) * PHASE_SCORE_RETRY_WEIGHT +
@@ -884,6 +899,8 @@ export class ProviderRouter {
         failedCount: entry.failedCount,
         verifierSampleSize: entry.verifierSampleSize,
         verifierCleanRate: entry.verifierCleanRate,
+        verdictSampleSize: entry.verdictSampleSize,
+        verdictScore: entry.verdictScore,
         rollbackRate: entry.rollbackRate,
         avgRetryCount: entry.avgRetryCount,
         avgTokenCost: entry.avgTokenCost,

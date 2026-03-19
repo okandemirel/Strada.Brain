@@ -72,6 +72,7 @@ import {
   planVerifierPipeline,
   sanitizeClarificationReviewDecision,
   shouldRunClarificationReview,
+  InteractionPolicyStateMachine,
   userExplicitlyAskedForPlan,
   type VerifierPipelineResult,
 } from "./autonomy/index.js";
@@ -99,6 +100,7 @@ import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/
 import type { TrajectoryPhaseReplay, TrajectoryReplayContext } from "../learning/index.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
+import { derivePhaseVerdict } from "../agent-core/routing/phase-verdict.js";
 import type {
   TaskClassification,
   ExecutionTrace,
@@ -133,7 +135,6 @@ const PLAN_EXECUTABLE_PATTERN = /\b(analy(?:se|ze)|inspect|read|search|trace|rep
 const PERMISSION_QUESTION_PATTERN = /\b(approve|approval|permission|okay|ok(?:ay)? to|should i|may i|can i|do you want me to|confirm|proceed|continue|go ahead|allowed)\b/i;
 const AUTO_APPROVE_OPTION_PATTERN = /\b(approve|approved|continue|proceed|yes|ok|okay|go ahead|accept)\b/i;
 const AUTO_REJECT_OPTION_PATTERN = /\b(reject|deny|cancel|stop|no)\b/i;
-const PLAN_APPROVAL_MESSAGE_RE = /^(?:\s*)(?:approve|approved|go ahead|proceed|continue|yes|ok|okay|looks good|ship it|tamam|devam|uygun)(?:\b|[.!])/iu;
 const NATURAL_LANGUAGE_AUTONOMOUS_HOURS = 24;
 const SAFE_SHELL_SEGMENT_PATTERN =
   /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck)\b)|npx\s+(?:vitest|eslint|tsc)\b|git\s+(?:status|diff|log|show|branch|rev-parse)\b|(?:rg|ls|pwd|cat|head|tail|find|sed|wc|stat|grep|test)\b|(?:vitest|eslint|tsc)\b)/i;
@@ -275,11 +276,6 @@ interface NaturalLanguageDirectiveUpdates {
     enabled: boolean;
     expiresAt?: number;
   };
-}
-
-interface PendingPlanReview {
-  readonly requestedAt: number;
-  readonly reason: string;
 }
 
 function sanitizePreferenceText(raw: string, maxLength = 160): string {
@@ -601,7 +597,7 @@ export class Orchestrator {
   private depsSetupComplete: boolean = false;
   private readonly pendingDepsPrompt = new Map<string, boolean>();
   private readonly pendingModulesPrompt = new Map<string, boolean>();
-  private readonly pendingPlanReviews = new Map<string, PendingPlanReview>();
+  private readonly interactionPolicy = new InteractionPolicyStateMachine();
   private readonly instinctRetriever: InstinctRetriever | null;
   private readonly trajectoryReplayRetriever: TrajectoryReplayRetriever | null;
   private readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
@@ -1186,6 +1182,7 @@ export class Orchestrator {
     telemetry?: PhaseOutcomeTelemetry;
     taskRunId?: string;
   }): void {
+    const telemetry = this.buildPhaseOutcomeVerdictTelemetry(params.status, params.telemetry);
     this.providerRouter?.recordPhaseOutcome?.({
       provider: params.assignment.providerName,
       model: params.assignment.modelId,
@@ -1199,7 +1196,7 @@ export class Orchestrator {
       identityKey: params.identityKey,
       chatId: params.chatId,
       taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
-      telemetry: params.telemetry,
+      telemetry,
     });
   }
 
@@ -1238,6 +1235,21 @@ export class Orchestrator {
       projectWorldFingerprint: params.projectWorldFingerprint || undefined,
       inputTokens,
       outputTokens,
+    };
+  }
+
+  private buildPhaseOutcomeVerdictTelemetry(
+    status: PhaseOutcomeStatus,
+    telemetry?: PhaseOutcomeTelemetry,
+  ): PhaseOutcomeTelemetry | undefined {
+    const verdict = derivePhaseVerdict(status, telemetry?.verifierDecision);
+    if (!telemetry && !verdict) {
+      return undefined;
+    }
+    return {
+      ...telemetry,
+      phaseVerdict: verdict?.label ?? telemetry?.phaseVerdict,
+      phaseVerdictScore: verdict?.score ?? telemetry?.phaseVerdictScore,
     };
   }
 
@@ -2975,13 +2987,12 @@ export class Orchestrator {
     this.metrics?.recordMessage();
     this.metrics?.setActiveSessions(this.sessions.size);
     const identityKey = resolveIdentityKey(chatId, userId, conversationId);
-    const pendingPlanReview = this.getPendingPlanReview(chatId);
-    if (pendingPlanReview && this.isPlanApprovalMessage(text)) {
-      this.clearPendingPlanReview(chatId);
+    const clearedPlanReview = this.interactionPolicy.noteUserMessage(chatId, text);
+    if (clearedPlanReview) {
       logger.info("Cleared pending plan review after explicit user approval", {
         chatId,
         userId,
-        reason: pendingPlanReview.reason,
+        reason: clearedPlanReview.reason,
       });
     }
 
@@ -4449,25 +4460,6 @@ export class Orchestrator {
     return sections.join("\n");
   }
 
-  private setPendingPlanReview(chatId: string, reason: string): void {
-    this.pendingPlanReviews.set(chatId, {
-      requestedAt: Date.now(),
-      reason,
-    });
-  }
-
-  private clearPendingPlanReview(chatId: string): void {
-    this.pendingPlanReviews.delete(chatId);
-  }
-
-  private getPendingPlanReview(chatId: string): PendingPlanReview | undefined {
-    return this.pendingPlanReviews.get(chatId);
-  }
-
-  private isPlanApprovalMessage(text: string): boolean {
-    return PLAN_APPROVAL_MESSAGE_RE.test(text.trim());
-  }
-
   private async resolveInteractiveToolCall(
     chatId: string,
     toolCall: ToolCall,
@@ -4480,7 +4472,7 @@ export class Orchestrator {
       if (explicitPlanReview) {
         const planText = this.formatRequestedPlan(toolCall.input);
         if (!planText) {
-          this.setPendingPlanReview(chatId, "user explicitly asked to review a plan first");
+          this.interactionPolicy.requirePlanReview(chatId, "user explicitly asked to review a plan first");
           return {
             toolCallId: toolCall.id,
             content:
@@ -4491,7 +4483,7 @@ export class Orchestrator {
           };
         }
 
-        this.setPendingPlanReview(chatId, "user explicitly asked to review a plan first");
+        this.interactionPolicy.requirePlanReview(chatId, "user explicitly asked to review a plan first");
 
         if (mode === "interactive" && this.channel && supportsInteractivity(this.channel)) {
           const response = await this.channel.requestConfirmation({
@@ -4511,7 +4503,7 @@ export class Orchestrator {
           }
 
           if (response === "Approve") {
-            this.clearPendingPlanReview(chatId);
+            this.interactionPolicy.clear(chatId);
             return { toolCallId: toolCall.id, content: "Plan approved by user. Proceed with execution." };
           }
 
@@ -5052,13 +5044,13 @@ export class Orchestrator {
         continue;
       }
 
-      const pendingPlanReview = this.getPendingPlanReview(chatId);
-      if (pendingPlanReview && this.isWriteOperation(activeToolCall.name)) {
+      const pendingWriteBlock = this.interactionPolicy.getWriteBlock(chatId, activeToolCall.name);
+      if (pendingWriteBlock) {
         results.push({
           toolCallId: activeToolCall.id,
           content:
             `Plan approval is still required before '${activeToolCall.name}' can run. ` +
-            `Reason: ${pendingPlanReview.reason}. Revise or reshow the plan, or wait for the user to approve it first.`,
+            `Reason: ${pendingWriteBlock.reason}. Revise or reshow the plan, or wait for the user to approve it first.`,
           isError: true,
         });
         continue;
@@ -5734,13 +5726,7 @@ export class Orchestrator {
         keyed.set(key, this.toTrajectoryPhaseReplay(outcome));
         continue;
       }
-      keyed.set(key, {
-        ...existing,
-        status: outcome.status,
-        verifierDecision: outcome.telemetry?.verifierDecision,
-        retryCount: outcome.telemetry?.retryCount,
-        rollbackDepth: outcome.telemetry?.rollbackDepth,
-      });
+      keyed.set(key, this.mergeReplayOutcome(existing, outcome));
     }
 
     return [...keyed.values()]
@@ -5759,9 +5745,26 @@ export class Orchestrator {
       source: event.source,
       status: "status" in event ? event.status : undefined,
       verifierDecision: "telemetry" in event ? event.telemetry?.verifierDecision : undefined,
+      phaseVerdict: "telemetry" in event ? event.telemetry?.phaseVerdict : undefined,
+      phaseVerdictScore: "telemetry" in event ? event.telemetry?.phaseVerdictScore : undefined,
       retryCount: "telemetry" in event ? event.telemetry?.retryCount : undefined,
       rollbackDepth: "telemetry" in event ? event.telemetry?.rollbackDepth : undefined,
       timestamp: event.timestamp,
+    };
+  }
+
+  private mergeReplayOutcome(
+    existing: TrajectoryPhaseReplay,
+    outcome: PhaseOutcome,
+  ): TrajectoryPhaseReplay {
+    return {
+      ...existing,
+      status: outcome.status,
+      verifierDecision: outcome.telemetry?.verifierDecision,
+      phaseVerdict: outcome.telemetry?.phaseVerdict,
+      phaseVerdictScore: outcome.telemetry?.phaseVerdictScore,
+      retryCount: outcome.telemetry?.retryCount,
+      rollbackDepth: outcome.telemetry?.rollbackDepth,
     };
   }
 

@@ -19,6 +19,7 @@ import type {
   ExecutionPhase,
   ExecutionRole,
   ExecutionTraceSource,
+  PhaseVerdict,
   PhaseOutcomeStatus,
   VerifierDecision,
 } from "../agent-core/routing/routing-types.js";
@@ -349,6 +350,10 @@ export interface TrajectoryPhaseReplay {
   readonly status?: PhaseOutcomeStatus;
   /** Latest verifier decision attached to the phase, when available */
   readonly verifierDecision?: VerifierDecision;
+  /** Explicit phase-local verdict label captured from runtime review state */
+  readonly phaseVerdict?: PhaseVerdict;
+  /** Explicit phase-local verdict score (0..1) captured from runtime review state */
+  readonly phaseVerdictScore?: number;
   /** Retry pressure seen at the point this phase outcome was recorded */
   readonly retryCount?: number;
   /** Rollback pressure seen at the point this phase outcome was recorded */

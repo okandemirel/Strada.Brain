@@ -50,4 +50,6 @@ export type {
   VerifierPipelineResult,
 } from "./verifier-pipeline.js";
 export { ExecutionJournal } from "./execution-journal.js";
+export { InteractionPolicyStateMachine } from "./interaction-policy.js";
+export type { InteractionGateKind, InteractionGateState, InteractionWriteBlock } from "./interaction-policy.js";
 export { MUTATION_TOOLS, VERIFY_TOOLS, WRITE_OPERATIONS, COMPILABLE_EXT, extractFilePath } from "./constants.js";

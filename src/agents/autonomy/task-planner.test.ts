@@ -130,6 +130,8 @@ describe("TaskPlanner", () => {
           source: "supervisor-strategy",
           status: "approved",
           verifierDecision: "approve",
+          phaseVerdict: "clean",
+          phaseVerdictScore: 1,
           timestamp: Date.now(),
         }],
       });
@@ -151,6 +153,8 @@ describe("TaskPlanner", () => {
           phase: "planning",
           provider: "kimi",
           status: "approved",
+          phaseVerdict: "clean",
+          phaseVerdictScore: 1,
         }),
       ]);
 
