@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **CLI Setup Wizard**: `strada setup` command with interactive terminal-based quick setup or web browser full setup. Asks for Unity project path, API key, channel, and language. Writes `.env` with owner-only permissions (0o600)
 - **Auto-Update System**: Automatic version detection and self-updating for npm (global/local) and git installations. Checks daily, applies updates during idle periods. Configurable via `AUTO_UPDATE_*` env vars
+- **Source Launcher Uninstall + Binding Refresh**: source installs now support `strada uninstall` / `./strada uninstall` with optional `--purge-config`, and git auto-update now rewrites installed bare-command wrappers so they keep following the active checkout
 - **CLI Commands**: `strada update` (manual update), `strada update --check` (check only), `strada version-info` (version + install method + update status), `strada setup` (setup wizard)
 - **Global CLI Install**: `npm install -g strada-brain` registers `strada` and `strada-brain` commands via bin field
 - **ChannelActivityRegistry**: Per-channel activity tracking for idle detection and cross-channel notification delivery
@@ -38,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Structured Closure Review**: completion review now persists `verified` / `partial` / `unverified` closure state plus open investigations, so "build fixed but runtime hypotheses remain" stays internal in both interactive and daemon execution until the real issue is verified or honestly blocked
 - **Visibility Boundary Repair**: user-visible replies now pass through a single fail-closed interaction boundary, worker tool pools exclude control-plane-only tools plus bridge-gated MCP actions, and searchable conversation memory persists only the visible transcript instead of raw worker drafts / verifier gates
 - **Runtime Self-Improvement Artifacts**: high-confidence instincts now materialize runtime-first `skill`, `workflow`, and `knowledge_patch` artifacts in `shadow` state, promote to `active` only after verifier-backed clean evaluations, and expose lifecycle telemetry through `/routing info`, the dashboard, and the settings UI
+- **Windows Install/Setup Parity**: source checkouts now have shared cross-platform launcher logic behind `strada`, `strada.ps1`, and `strada.cmd`; packaged installs default to `%LOCALAPPDATA%\Strada` on Windows; `install-command`, build, setup, and doctor guidance are now platform-aware instead of POSIX-only
 - **PAOR Unification**: Removed TaskPlanner conflicting PLANNING_PROMPT, background tasks now use full PAOR (reflect/replan), extracted shared buildSystemPromptWithContext()
 - **Strada.MCP Detection**: Automatic detection of sibling Strada.MCP installation with system prompt awareness (76 tools)
 - **TierRouter Facade**: ProviderRouter wraps TierRouter as internal sub-component for delegation compatibility

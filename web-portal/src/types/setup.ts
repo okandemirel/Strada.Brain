@@ -1,3 +1,12 @@
+import type { SetupProviderFailure as ProviderPreflightFailure } from '../../../src/common/setup-contract.ts'
+import type { SetupBootstrapViewStatus } from '../../../src/common/setup-state.ts'
+
+export type {
+  SetupBootstrapState,
+  SetupStatusResponse,
+} from '../../../src/common/setup-contract.ts'
+export type { ProviderPreflightFailure }
+
 export interface ProviderAuthModeDef {
   id: string
   label: string
@@ -44,21 +53,14 @@ export interface BrowseResult {
   error?: string
 }
 
-export type SaveStatus = 'idle' | 'saving' | 'saved' | 'booting' | 'success' | 'error'
+export type SaveStatus = 'idle' | 'saving' | SetupBootstrapViewStatus
 
-export type SetupBootstrapState = 'collecting' | 'saved' | 'booting' | 'ready' | 'failed'
-
-export interface ProviderPreflightFailure {
-  providerId: string
-  providerName: string
-  detail: string
-}
-
-export interface SetupStatusResponse {
-  state: SetupBootstrapState
-  detail?: string
-  readyUrl?: string
+export interface SetupSaveResponse {
+  success?: boolean
+  error?: string
+  handoff?: boolean
   providerFailures?: ProviderPreflightFailure[]
+  providerWarnings?: ProviderPreflightFailure[]
 }
 
 export interface WizardState {
@@ -76,4 +78,5 @@ export interface WizardState {
   ragEnabled: boolean
   saveStatus: SaveStatus
   saveError: string | null
+  saveWarning: string | null
 }

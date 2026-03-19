@@ -65,6 +65,13 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 cd Strada.Brain
 ```
 
+```powershell
+# Windows PowerShell Source-Checkout
+git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
+.\Strada.Brain\strada.ps1 install-command
+.\Strada.Brain\strada.ps1 setup
+```
+
 Fuehren Sie alle `npm` Befehle im Repository-Root aus, also in dem Ordner mit `package.json`. Wenn Sie einen Fehler wie `ENOENT ... /Strada/package.json` sehen, sind Sie eine Ebene zu hoch; wechseln Sie zuerst nach `Strada.Brain` oder fuehren Sie den Befehl als `cd Strada.Brain && ...` aus.
 
 `./strada` ist der kanonische Launcher fuer den Source-Checkout. Beim ersten Start bereitet er den Checkout automatisch vor, sodass der normale Setup-Weg kein `npm link` mehr braucht.
@@ -72,10 +79,13 @@ Fuehren Sie alle `npm` Befehle im Repository-Root aus, also in dem Ordner mit `p
 Wenn Sie `./strada install-command` ueberspringen, verwenden Sie den Checkout weiter ueber `./Strada.Brain/strada ...` aus dem Elternordner oder `./strada ...` im Repository-Root. Nach der Installation funktioniert `strada ...` von ueberall.
 
 `./strada install-command` aktualisiert auch Ihr Shell-Profil automatisch, damit neue Terminals `strada` ohne manuelle PATH-Aenderung finden.
+Unter Windows verwenden Sie `.\strada.ps1` aus dem Checkout. `install-command` schreibt `strada.cmd` und `strada.ps1` nach `%LOCALAPPDATA%\Strada\bin` und aktualisiert den Benutzer-PATH.
+
+Wenn Sie den benutzerlokalen Befehl spaeter entfernen moechten, fuehren Sie `strada uninstall` aus (oder `./strada uninstall` / `.\strada.ps1 uninstall` direkt aus dem Checkout). Mit `--purge-config` entfernt Strada zusaetzlich repo-lokale Runtime-Dateien wie `.env`, `.strada-memory`, `.whatsapp-session`, Logs und `HEARTBEAT.md`. Das Repository-Checkout selbst wird dabei niemals automatisch geloescht.
 
 `strada-brain` ist derzeit nicht in der öffentlichen npm-Registry veröffentlicht. Deshalb liefert `npm install -g strada-brain` aktuell `E404`. Bis es eine Registry-Veröffentlichung gibt, nutze bitte den obigen Source-Checkout-Weg.
 
-Wenn Strada aus einer paketierten npm-/Tarball-Version installiert wird, liegt die Laufzeitkonfiguration standardmaessig unter `~/.strada` statt im aktuellen Arbeitsverzeichnis. Mit `STRADA_HOME=/eigener/pfad` koennen Sie ein anderes App-Home erzwingen.
+Wenn Strada aus einer paketierten npm-/Tarball-Version installiert wird, liegt die Laufzeitkonfiguration standardmaessig unter `~/.strada` (macOS/Linux) bzw. `%LOCALAPPDATA%\Strada` (Windows) statt im aktuellen Arbeitsverzeichnis. Mit `STRADA_HOME=/eigener/pfad` koennen Sie ein anderes App-Home erzwingen.
 
 ### 2. Setup
 
@@ -88,7 +98,15 @@ Wenn Strada aus einer paketierten npm-/Tarball-Version installiert wird, liegt d
 ./strada setup --terminal
 ```
 
+```powershell
+# Windows PowerShell Source-Checkout
+.\strada.ps1 setup
+.\strada.ps1 setup --web
+.\strada.ps1 setup --terminal
+```
+
 Wenn `./strada setup --web` eine aeltere Node-Version erkennt, die das volle Portal-Bundle nicht bauen kann, bleibt Web der primaere Weg: Wenn `nvm` verfuegbar ist, kann Strada nach Ihrer Zustimmung eine kompatible Node-Version installieren und direkt zum Web-Setup zurueckkehren; dabei laeuft das gefuehrte Upgrade in einem temporaeren sauberen HOME, damit inkompatible npm-Einstellungen wie `prefix` / `globalconfig` `nvm` nicht blockieren. Andernfalls fuehrt es Sie durch den Upgrade/Download-Pfad. Falls Sie das Upgrade ablehnen, fragt Strada explizit, ob Sie stattdessen mit dem Terminal-Setup fortfahren moechten.
+Unter Windows bevorzugt derselbe Flow `nvm-windows`, danach `winget`, und faellt erst danach auf den direkten Node-Download zurueck. Der angezeigte Rerun-Befehl ist dann `.\strada.ps1 setup --web`.
 Wenn Node 22 bereits in `nvm` installiert ist, verwendet Strada diese Laufzeit erneut, statt sie nochmals herunterzuladen. Der Web-Setup-Flow oeffnet auf der lokalen Root-URL und behaelt dieselbe URL auch beim Handoff an die Haupt-App.
 Der erste Browser-Start traegt zusaetzlich ein explizites Setup-Flag, damit selbst ein veralteter gecachter Portal-Tab wieder im Setup-Assistenten landet statt auf einer toten "Not Found"-Seite.
 Wenn der erste Web-Handoff mit dem Neustart kollidiert, versucht Strada diesen Start jetzt automatisch erneut. Sobald die Konfiguration gespeichert ist, haelt Strada die Handoff-Seite unter derselben URL offen, bis die Haupt-App bereit ist; Setup also nicht erneut starten.
@@ -151,15 +169,32 @@ strada start --channel whatsapp
 strada supervise --channel web
 ```
 
+```powershell
+# Windows PowerShell Source-Launcher
+.\strada.ps1
+.\strada.ps1 --daemon
+.\strada.ps1 start
+.\strada.ps1 start --channel cli
+.\strada.ps1 start --channel web --daemon
+```
+
 ### 4. CLI-Befehle
 
 ```bash
 ./strada                  # Kanonischer Launcher fuer den Source-Checkout
+.\strada.ps1             # Windows PowerShell Source-Launcher
+strada.cmd               # Windows-Companion fuer die Eingabeaufforderung
 ./strada install-command  # Benutzerlokalen bare `strada`-Befehl installieren
+./strada uninstall        # Installierten bare-Befehl und verwaltete PATH/Profile-Aenderungen entfernen
+.\strada.ps1 uninstall   # Dasselbe aus dem Windows-Checkout
+strada uninstall --purge-config # Auch repo-lokale Runtime-Dateien von Strada entfernen
 strada                    # Smarter Launcher nach install-command
 strada --daemon           # Gespeicherten Standardkanal im Daemon-Modus starten
 strada --web              # Web-Kanal oeffnen oder auf einer frischen Maschine web-gefuertetes Setup fortsetzen
 strada --terminal         # Terminal-Kanal oeffnen oder auf einer frischen Maschine Terminal-Setup erzwingen
+.\strada.ps1 setup --web # Browser-Assistent direkt ueber PowerShell starten
+.\strada.ps1 setup --terminal # Terminal-Assistent direkt ueber PowerShell starten
+.\strada.ps1 doctor      # Bereitschafscheck ueber PowerShell
 ./strada setup --web      # Browser-Assistent direkt starten
 ./strada setup --terminal # Terminal-Assistent direkt verwenden
 ./strada doctor           # Installations-/Build-/Config-Bereitschaft pruefen
@@ -185,7 +220,7 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 
 ### 6. Automatische Updates
 
-Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn der Agent untaeutig ist. Source-Checkouts und `./strada install-command`-Installationen aktualisieren sich ueber git. npm-basierte Update-Befehle gelten erst, sobald eine öffentliche npm-Veroeffentlichung existiert.
+Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn der Agent untaeutig ist. Source-Checkouts und `./strada install-command`-Installationen aktualisieren sich ueber git. Nach einer erfolgreichen git-Aktualisierung schreibt Strada auch die installierten bare-command-Wrapper neu, damit `strada` weiterhin auf das aktuelle Checkout zeigt. npm-basierte Update-Befehle gelten erst, sobald eine öffentliche npm-Veroeffentlichung existiert.
 
 | Variable | Standard | Beschreibung |
 |----------|----------|-------------|

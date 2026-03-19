@@ -1,17 +1,22 @@
 import { useState, useEffect } from 'react'
 
-interface ConfigData {
-  config: Record<string, unknown>
+interface ConfigEntry {
+  key: string
+  value: unknown
+  category: string
+  tier: 'core' | 'advanced' | 'experimental'
+  description: string
 }
 
-const CATEGORY_RULES: ReadonlyArray<[string, string[]]> = [
-  ['Providers', ['provider', 'api_key']],
-  ['Channels', ['channel', 'telegram', 'discord', 'slack', 'whatsapp']],
-  ['Security', ['security', 'rate', 'limit']],
-  ['RAG', ['rag', 'embedding']],
-  ['Multi-Agent', ['agent', 'delegation']],
-  ['Learning', ['goal', 'learning']],
-]
+interface ConfigData {
+  config: Record<string, unknown>
+  entries?: ConfigEntry[]
+  summary?: {
+    core: number
+    advanced: number
+    experimental: number
+  }
+}
 
 export default function ConfigPage() {
   const [data, setData] = useState<ConfigData | null>(null)
@@ -31,27 +36,47 @@ export default function ConfigPage() {
   if (error) return <div className="page-error">Error: {error}</div>
   if (!data) return <div className="page-loading">Loading configuration...</div>
 
-  const entries = Object.entries(data.config).filter(([key]) =>
-    key.toLowerCase().includes(filter.toLowerCase())
+  const normalizedFilter = filter.toLowerCase()
+  const fallbackEntries: ConfigEntry[] = Object.entries(data.config).map(([key, value]) => ({
+    key,
+    value,
+    category: 'System',
+    tier: 'advanced',
+    description: 'General runtime configuration.',
+  }))
+  const rawEntries = data.entries ?? fallbackEntries
+  const filteredEntries = rawEntries.filter((entry) =>
+    entry.key.toLowerCase().includes(normalizedFilter) ||
+    entry.category.toLowerCase().includes(normalizedFilter) ||
+    entry.description.toLowerCase().includes(normalizedFilter)
   )
 
-  const groups: Record<string, [string, unknown][]> = {}
-  for (const entry of entries) {
-    const lk = entry[0].toLowerCase()
-    let category = 'System'
-    for (const [cat, keywords] of CATEGORY_RULES) {
-      if (keywords.some(kw => lk.includes(kw))) {
-        category = cat
-        break
-      }
-    }
-    if (!groups[category]) groups[category] = []
-    groups[category].push(entry)
+  const groups: Record<string, ConfigEntry[]> = {}
+  for (const entry of filteredEntries) {
+    if (!groups[entry.category]) groups[entry.category] = []
+    groups[entry.category].push(entry)
   }
+  const groupedEntries = Object.entries(groups)
 
   return (
     <div className="admin-page">
       <h2>Configuration</h2>
+      {data.summary && (
+        <div className="admin-stat-grid" style={{ marginBottom: 16 }}>
+          <div className="admin-stat-card">
+            <span className="admin-stat-label">Core</span>
+            <span className="admin-stat-value">{data.summary.core}</span>
+          </div>
+          <div className="admin-stat-card">
+            <span className="admin-stat-label">Advanced</span>
+            <span className="admin-stat-value">{data.summary.advanced}</span>
+          </div>
+          <div className="admin-stat-card">
+            <span className="admin-stat-label">Experimental</span>
+            <span className="admin-stat-value">{data.summary.experimental}</span>
+          </div>
+        </div>
+      )}
       <input
         className="admin-search"
         type="text"
@@ -59,21 +84,40 @@ export default function ConfigPage() {
         value={filter}
         onChange={e => setFilter(e.target.value)}
       />
-      {Object.entries(groups).map(([category, items]) => (
-        <div key={category} className="config-group">
-          <h3>{category}</h3>
+      {groupedEntries.length === 0 ? (
+        <div className="config-group">
           <table className="admin-table">
             <tbody>
-              {items.map(([key, value]) => (
-                <tr key={key}>
-                  <td className="config-key">{key}</td>
-                  <td className="config-value">{String(value)}</td>
-                </tr>
-              ))}
+              <tr>
+                <td className="config-key">No matching settings</td>
+                <td className="config-value">Adjust the filter to inspect this category.</td>
+              </tr>
             </tbody>
           </table>
         </div>
-      ))}
+      ) : (
+        groupedEntries.map(([category, items]) => (
+          <div key={category} className="config-group">
+            <h3>{category}</h3>
+            <table className="admin-table">
+              <tbody>
+                {items.map((entry) => (
+                  <tr key={entry.key}>
+                    <td className="config-key">
+                      <div>{entry.key}</div>
+                      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>{entry.description}</div>
+                    </td>
+                    <td className="config-value">
+                      <div>{String(entry.value)}</div>
+                      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>Tier: {entry.tier}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))
+      )}
     </div>
   )
 }

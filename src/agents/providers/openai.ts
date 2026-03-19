@@ -9,7 +9,7 @@ import type {
   IStreamingProvider,
 } from "./provider.interface.js";
 import type { MessageContent, AssistantMessage } from "./provider-core.interface.js";
-import { getLogger } from "../../utils/logger.js";
+import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
 import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-retry.js";
 import {
@@ -547,7 +547,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    const logger = getLogger();
+    const logger = getLoggerSafe();
     try {
       if (this.isChatGptSubscriptionMode()) {
         const authConfig = this.getChatGptSubscriptionAuth();
@@ -736,7 +736,6 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       ],
       store: false,
       stream: true,
-      max_output_tokens: 1,
     };
   }
 

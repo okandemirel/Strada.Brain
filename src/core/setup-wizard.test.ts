@@ -1,13 +1,70 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
 import { homedir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { preflightResponseProvidersMock } = vi.hoisted(() => ({
+  preflightResponseProvidersMock: vi.fn().mockResolvedValue({
+    passedProviderIds: ["kimi"],
+    failures: [],
+  }),
+}));
+
+vi.mock("./response-provider-preflight.js", () => ({
+  preflightResponseProviders: preflightResponseProvidersMock,
+}));
+
 import {
   SetupWizard,
+  buildSetupEnvLines,
   buildSetupAccessUrl,
   hasConfiguredEmbeddingCandidate,
   injectSetupModeMarker,
 } from "./setup-wizard.js";
 
 describe("SetupWizard path validation", () => {
+  const originalCwd = process.cwd();
+  const tmpDirs: string[] = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    preflightResponseProvidersMock.mockResolvedValue({
+      passedProviderIds: ["kimi"],
+      failures: [],
+    });
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    for (const dir of tmpDirs) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup for temporary fixtures.
+      }
+    }
+    tmpDirs.length = 0;
+  });
+
+  const makeResponse = () => {
+    let statusCode = 0;
+    let body = "";
+    return {
+      response: {
+        writeHead: (status: number) => {
+          statusCode = status;
+          return undefined;
+        },
+        end: (chunk?: string | Buffer) => {
+          body = typeof chunk === "string" ? chunk : chunk?.toString("utf-8") ?? "";
+          return undefined;
+        },
+      },
+      read: () => ({ statusCode, body }),
+    };
+  };
+
   it("re-validates the project path during save using the resolved home-directory path", async () => {
     const wizard = new SetupWizard();
 
@@ -71,27 +128,29 @@ describe("SetupWizard path validation", () => {
     expect(buildSetupAccessUrl(3000, 12345)).toBe("http://127.0.0.1:3000/?strada-setup=1&t=12345");
   });
 
+  it("writes autonomy defaults only when setup enabled autonomy", () => {
+    const enabledLines = buildSetupEnvLines({
+      PROVIDER_CHAIN: "claude",
+      ANTHROPIC_API_KEY: "sk-ant",
+      AUTONOMOUS_DEFAULT_ENABLED: "true",
+      AUTONOMOUS_DEFAULT_HOURS: "48",
+    }, homedir(), 3000);
+
+    expect(enabledLines).toContain("AUTONOMOUS_DEFAULT_ENABLED=true");
+    expect(enabledLines).toContain("AUTONOMOUS_DEFAULT_HOURS=48");
+
+    const disabledLines = buildSetupEnvLines({
+      PROVIDER_CHAIN: "claude",
+      ANTHROPIC_API_KEY: "sk-ant",
+      AUTONOMOUS_DEFAULT_HOURS: "48",
+    }, homedir(), 3000);
+
+    expect(disabledLines.some((line) => line.includes("AUTONOMOUS_DEFAULT_"))).toBe(false);
+  });
+
   it("rejects repeated setup API calls and serves a handoff page once configuration has been saved", async () => {
     const wizard = new SetupWizard({ port: 0 });
     wizard.markBootstrapStarting();
-
-    const makeResponse = () => {
-      let statusCode = 0;
-      let body = "";
-      return {
-        response: {
-          writeHead: (status: number) => {
-            statusCode = status;
-            return undefined;
-          },
-          end: (chunk?: string | Buffer) => {
-            body = typeof chunk === "string" ? chunk : chunk?.toString("utf-8") ?? "";
-            return undefined;
-          },
-        },
-        read: () => ({ statusCode, body }),
-      };
-    };
 
     const csrf = makeResponse();
     await (wizard as unknown as {
@@ -113,24 +172,6 @@ describe("SetupWizard path validation", () => {
     const wizard = new SetupWizard({ port: 0 });
     wizard.markBootstrapFailed("OpenAI preflight failed.");
 
-    const makeResponse = () => {
-      let statusCode = 0;
-      let body = "";
-      return {
-        response: {
-          writeHead: (status: number) => {
-            statusCode = status;
-            return undefined;
-          },
-          end: (chunk?: string | Buffer) => {
-            body = typeof chunk === "string" ? chunk : chunk?.toString("utf-8") ?? "";
-            return undefined;
-          },
-        },
-        read: () => ({ statusCode, body }),
-      };
-    };
-
     const status = makeResponse();
     await (wizard as unknown as {
       handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
@@ -146,5 +187,100 @@ describe("SetupWizard path validation", () => {
     }).handleRequest({ url: "/?strada-setup=1&retry=1", method: "GET" }, retryPage.response);
     expect(retryPage.read().statusCode).toBe(200);
     expect(retryPage.read().body).toContain('data-strada-setup="1"');
+  });
+
+  it("saves configuration with provider warnings instead of rejecting the setup", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+
+    preflightResponseProvidersMock.mockResolvedValue({
+      passedProviderIds: [],
+      failures: [{
+        providerId: "kimi",
+        providerName: "Kimi (Moonshot)",
+        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+      }],
+    });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const config = {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+    };
+
+    (wizard as unknown as {
+      readBody: (req: unknown) => Promise<string>;
+      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
+    }).readBody = async () => JSON.stringify(config);
+
+    const saveResponse = makeResponse();
+    await (wizard as unknown as {
+      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
+    }).handleSaveConfig({}, saveResponse.response);
+
+    expect(saveResponse.read().statusCode).toBe(200);
+    expect(JSON.parse(saveResponse.read().body)).toEqual({
+      success: true,
+      providerWarnings: [{
+        providerId: "kimi",
+        providerName: "Kimi (Moonshot)",
+        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+      }],
+    });
+
+    const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
+    expect(envContent).toContain('PROVIDER_CHAIN="kimi"');
+    expect(envContent).toContain('KIMI_API_KEY="sk-kimi"');
+  });
+
+  it("preserves provider warnings across setup bootstrap status transitions", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+
+    preflightResponseProvidersMock.mockResolvedValue({
+      passedProviderIds: [],
+      failures: [{
+        providerId: "kimi",
+        providerName: "Kimi (Moonshot)",
+        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+      }],
+    });
+
+    const wizard = new SetupWizard({ port: 0 });
+    (wizard as unknown as {
+      readBody: (req: unknown) => Promise<string>;
+      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
+    }).readBody = async () => JSON.stringify({
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+    });
+
+    const saveResponse = makeResponse();
+    await (wizard as unknown as {
+      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
+    }).handleSaveConfig({}, saveResponse.response);
+
+    wizard.markBootstrapStarting("Strada is starting the main web app.");
+
+    const status = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({ url: "/api/setup/status", method: "GET" }, status.response);
+
+    expect(JSON.parse(status.read().body)).toEqual({
+      state: "booting",
+      detail: "Strada is starting the main web app.",
+      providerWarnings: [{
+        providerId: "kimi",
+        providerName: "Kimi (Moonshot)",
+        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+      }],
+    });
   });
 });

@@ -7,6 +7,9 @@
  */
 
 import { Command } from "commander";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import * as path from "node:path";
 import * as dotenv from "dotenv";
 import { loadConfig, loadConfigSafe, resetConfigCache } from "./config/config.js";
 import { createLogger } from "./utils/logger.js";
@@ -29,7 +32,7 @@ import {
 } from "./core/launcher.js";
 
 // Setup global error handlers
-initializeRuntimeEnvironment({ moduleUrl: import.meta.url });
+const runtimePaths = initializeRuntimeEnvironment({ moduleUrl: import.meta.url });
 
 setupGlobalErrorHandlers(
   (error) => {
@@ -209,6 +212,36 @@ program
     } catch (err) {
       console.error(`❌ Update failed: ${(err as Error).message}`);
       process.exit(1);
+    }
+  });
+
+program
+  .command("uninstall")
+  .description("Remove installed bare-command bindings and optionally purge repo-local runtime state")
+  .option("--purge-config", "Also remove repo-local .env, memory, logs, and other runtime files", false)
+  .action(async (opts: { purgeConfig?: boolean }) => {
+    const sourceLauncherPath = path.join(runtimePaths.installRoot, "scripts", "source-launcher.mjs");
+    if (!existsSync(sourceLauncherPath)) {
+      console.error("Source launcher not found in this install. Manual cleanup is required.");
+      process.exit(1);
+    }
+
+    const args = [sourceLauncherPath, "uninstall-command"];
+    if (opts.purgeConfig) {
+      args.push("--purge-config");
+    }
+
+    const result = spawnSync(process.execPath, args, {
+      cwd: runtimePaths.installRoot,
+      stdio: "inherit",
+      env: process.env,
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+    if ((result.status ?? 0) !== 0) {
+      process.exit(result.status ?? 1);
     }
   });
 

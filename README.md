@@ -63,17 +63,26 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 cd Strada.Brain
 ```
 
-`./strada` is the canonical source-checkout launcher. On first run it prepares the local checkout automatically, so normal setup no longer requires manual `npm install`, `npm run bootstrap`, or `npm link`.
+```powershell
+# Windows PowerShell source checkout
+git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
+.\Strada.Brain\strada.ps1 install-command
+.\Strada.Brain\strada.ps1 setup
+```
+
+`./strada` is the canonical source-checkout launcher on macOS/Linux. On Windows, use `.\strada.ps1` from the checkout root, with `strada.cmd` as the companion wrapper for Command Prompt and bare-PATH launches. On first run the source launcher prepares the local checkout automatically, so normal setup no longer requires manual `npm install`, `npm run bootstrap`, or `npm link`.
 
 If you skip `./strada install-command`, keep using `./Strada.Brain/strada ...` from the parent folder or `./strada ...` from the repository root. Once installed, bare `strada ...` works from anywhere.
 
-`./strada install-command` also updates your shell profile automatically so future terminals pick up the `strada` command without a manual PATH edit.
+On macOS/Linux, `./strada install-command` updates your shell profile automatically so future terminals pick up the `strada` command without a manual PATH edit. On Windows, `.\strada.ps1 install-command` installs `strada.cmd` and `strada.ps1` into `%LOCALAPPDATA%\Strada\bin` and updates the user PATH.
+
+To remove the user-local command later, run `strada uninstall` (or `./strada uninstall` / `.\strada.ps1 uninstall` from the checkout). Add `--purge-config` to also remove repo-local runtime state such as `.env`, `.strada-memory`, `.whatsapp-session`, logs, and `HEARTBEAT.md`. The repository checkout itself is never deleted automatically.
 
 If you ever run `npm` manually, do it from the repository root, the folder that contains `package.json`. If you see an error like `ENOENT ... /Strada/package.json`, you are one directory too high; either `cd Strada.Brain` first or prefix the command with `cd Strada.Brain && ...`.
 
 `strada-brain` is not currently published on the public npm registry, so `npm install -g strada-brain` will return `E404`. Until a registry release exists, use the source checkout flow above.
 
-When Strada is installed from a packaged npm/tarball release, it keeps its runtime config in `~/.strada` by default instead of depending on the current working directory. Override this with `STRADA_HOME=/custom/path` when you need a different app home.
+When Strada is installed from a packaged npm/tarball release, it keeps its runtime config in `~/.strada` by default on macOS/Linux and `%LOCALAPPDATA%\Strada` on Windows instead of depending on the current working directory. Override this with `STRADA_HOME=/custom/path` when you need a different app home.
 
 ### 2. Setup
 
@@ -86,7 +95,14 @@ When Strada is installed from a packaged npm/tarball release, it keeps its runti
 ./strada setup --terminal
 ```
 
-If `./strada setup --web` detects an older Node runtime that cannot build the full portal bundle, Strada keeps web as the primary path: when `nvm` is available it can install a compatible Node.js version for you and continue directly into web setup after you approve it, running that guided upgrade inside a temporary clean HOME so incompatible `prefix` / `globalconfig` npm settings do not block `nvm`; otherwise it opens the upgrade/download path. If you decline the upgrade, Strada offers to continue with terminal setup instead.
+```powershell
+# Windows PowerShell source checkout
+.\strada.ps1 setup
+.\strada.ps1 setup --web
+.\strada.ps1 setup --terminal
+```
+
+If `./strada setup --web` detects an older Node runtime that cannot build the full portal bundle, Strada keeps web as the primary path. On macOS/Linux it prefers `nvm` and can relaunch setup for you after the upgrade, running that guided flow inside a temporary clean HOME so incompatible `prefix` / `globalconfig` npm settings do not block `nvm`. On Windows it prefers `nvm-windows`, then `winget`, then the direct Node download path, and it always shows the exact rerun command for `.\strada.ps1 setup --web`. If you decline the upgrade, Strada offers to continue with terminal setup instead.
 If Node 22 is already installed in `nvm`, Strada reuses that runtime instead of downloading it again. The setup browser flow opens on the root local URL and stays on that same URL when it hands off to the main app.
 That first-run browser open also carries an explicit setup flag, so a stale cached portal tab still resolves into the setup wizard instead of a dead "Not Found" page.
 If the first web handoff races the restart, Strada now retries that launch automatically before surfacing an error. Once the config is saved, Strada keeps the handoff page alive on the same URL until the main app is ready, so do not re-run setup.
@@ -114,6 +130,11 @@ After setup, run a readiness check before you start the agent:
 strada doctor
 ```
 
+```powershell
+# Windows PowerShell source checkout
+.\strada.ps1 doctor
+```
+
 For git/source installs, `strada doctor` treats a missing `dist/` folder as a warning when the source launcher is already usable. It now shows the exact repo-root `npm run bootstrap` command only when you want packaged build artifacts.
 
 Alternatively, create `.env` manually:
@@ -130,6 +151,9 @@ JWT_SECRET=<generate with: openssl rand -hex 64>
 ```bash
 # Smart launcher from the source checkout
 ./strada
+
+# Windows PowerShell source launcher
+.\strada.ps1
 
 # Bare command after `./strada install-command`
 strada
@@ -160,14 +184,23 @@ strada
 
 ```bash
 ./strada                  # Canonical source-checkout launcher
+.\strada.ps1             # Canonical Windows PowerShell source-checkout launcher
+strada.cmd               # Windows Command Prompt companion launcher inside the checkout
 ./strada install-command  # Install a user-local bare `strada` command
+.\strada.ps1 install-command # Windows source-checkout bare-command install
+./strada uninstall        # Remove the installed bare command and managed PATH/profile changes
+.\strada.ps1 uninstall    # Windows source-checkout bare-command uninstall
+strada uninstall --purge-config # Also remove repo-local runtime state created by Strada
 strada                    # Smart launcher after install-command
 strada --daemon           # Start the configured default channel in daemon mode
 strada --web              # Open the web channel, or continue web-first setup on a fresh machine
 strada --terminal         # Open the terminal channel, or force terminal setup on a fresh machine
 ./strada setup --web      # Launch the browser wizard directly
 ./strada setup --terminal # Use the terminal wizard directly
+.\strada.ps1 setup --web  # Windows PowerShell browser wizard
+.\strada.ps1 setup --terminal # Windows PowerShell terminal wizard
 ./strada doctor           # Verify install/build/config readiness
+.\strada.ps1 doctor       # Windows PowerShell readiness check
 ./strada start            # Start the agent
 ./strada supervise        # Run with auto-restart supervisor
 ./strada update           # Check and apply updates
@@ -190,7 +223,7 @@ Once running, send a message through your configured channel:
 
 ### 5. Auto-Update
 
-Strada.Brain automatically checks for updates daily and applies them when idle. Source checkouts and `./strada install-command` installs update through git. npm-based update commands only apply after a public npm release exists.
+Strada.Brain automatically checks for updates daily and applies them when idle. Source checkouts and `./strada install-command` installs update through git. After a successful git auto-update, Strada also refreshes the installed bare-command wrappers so `strada` keeps following the current checkout. npm-based update commands only apply after a public npm release exists.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

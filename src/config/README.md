@@ -30,7 +30,7 @@ The `Config` type groups settings into nested sub-configs:
 
 | Sub-config | Interface | Key env vars |
 |------------|-----------|-------------|
-| runtime home | launcher/runtime | `STRADA_HOME` overrides the packaged-install app home (`~/.strada`). Source checkouts still keep `.env` and related runtime files in the repository root. |
+| runtime home | launcher/runtime | `STRADA_HOME` overrides the packaged-install app home (`~/.strada` on macOS/Linux, `%LOCALAPPDATA%\Strada` on Windows). Source checkouts still keep `.env` and related runtime files in the repository root. |
 | AI providers | top-level fields | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, etc. At least one usable hosted credential is required unless `PROVIDER_CHAIN` only uses local providers such as `ollama`; OpenAI can also authenticate via `OPENAI_AUTH_MODE=chatgpt-subscription` plus the local Codex auth session file. |
 | `telegram` | `TelegramConfig` | `TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_IDS` |
 | `discord` | `DiscordConfig` | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `ALLOWED_DISCORD_USER_IDS`, `ALLOWED_DISCORD_ROLE_IDS` |

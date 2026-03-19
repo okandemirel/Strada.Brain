@@ -8,6 +8,12 @@ vi.mock("../../utils/logger.js", () => ({
     error: vi.fn(),
     debug: vi.fn(),
   }),
+  getLoggerSafe: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
 }));
 
 const mockFetch = vi.fn();
@@ -363,8 +369,8 @@ describe("OpenAIProvider", () => {
       model: "gpt-5.2",
       store: false,
       stream: true,
-      max_output_tokens: 1,
     });
+    expect(body.max_output_tokens).toBeUndefined();
     expect(cancel).toHaveBeenCalled();
   });
 

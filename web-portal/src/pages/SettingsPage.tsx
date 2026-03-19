@@ -1,7 +1,9 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useWS } from '../hooks/useWS'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import { fetchJson, settledValue } from '../utils/api'
+import { resolveSettingsIdentity, shouldRefetchIdentityScopedSettings } from './settings-identity'
+import type { BootReport } from '../../../src/common/capability-contract.ts'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -140,6 +142,10 @@ interface DaemonStatus {
   startupNotices?: string[]
 }
 
+interface BootReportResponse {
+  bootReport: BootReport | null
+}
+
 interface VoiceSettings {
   inputEnabled: boolean
   outputEnabled: boolean
@@ -209,11 +215,9 @@ function formatDecisionTime(timestamp: number): string {
 
 export default function SettingsPage() {
   const { switchProvider, toggleAutonomous, sessionId, profileId } = useWS()
-  const chatId = sessionId ?? 'default'
-  const identityQuery = new URLSearchParams({
-    chatId,
-    ...(profileId ? { userId: profileId, conversationId: profileId } : {}),
-  }).toString()
+  const settingsIdentity = resolveSettingsIdentity(sessionId, profileId)
+  const identityQuery = settingsIdentity?.query ?? null
+  const identityQueryRef = useRef<string | null>(identityQuery)
 
   // --- Autonomous Mode ---
   const [autoStatus, setAutoStatus] = useState<AutonomousStatus | null>(null)
@@ -232,6 +236,8 @@ export default function SettingsPage() {
   const [daemonStatus, setDaemonStatus] = useState<DaemonStatus | null>(null)
   const [daemonLoading, setDaemonLoading] = useState(true)
   const [daemonToggling, setDaemonToggling] = useState(false)
+  const [bootReport, setBootReport] = useState<BootReport | null>(null)
+  const [bootLoading, setBootLoading] = useState(true)
 
   // --- Routing Preset ---
   const [routingPreset, setRoutingPreset] = useState<string>('balanced')
@@ -251,6 +257,7 @@ export default function SettingsPage() {
 
   // --- Fetch autonomous status ---
   const fetchAutonomous = useCallback(() => {
+    if (!identityQuery) return Promise.resolve()
     fetchJson<AutonomousStatus>(`/api/user/autonomous?${identityQuery}`)
       .then((data) => {
         setAutoStatus(data ?? { enabled: false })
@@ -264,6 +271,7 @@ export default function SettingsPage() {
 
   // --- Fetch providers ---
   const fetchProviders = useCallback(() => {
+    if (!identityQuery) return Promise.resolve()
     Promise.allSettled([
       fetchJson<{ providers: ProviderInfo[] }>('/api/providers/available'),
       fetchJson<{ active: ActiveProvider | null; executionPool?: ProviderInfo[] | null }>(`/api/providers/active?${identityQuery}`),
@@ -292,6 +300,7 @@ export default function SettingsPage() {
 
   // --- Fetch routing preset ---
   const fetchRouting = useCallback(() => {
+    if (!identityQuery) return Promise.resolve()
     fetchJson<{ routing: RoutingDecision[]; execution?: ExecutionTrace[]; outcomes?: PhaseOutcome[]; phaseScores?: PhaseScore[]; artifacts?: RuntimeArtifact[]; preset?: string }>(`/api/agent-activity?${identityQuery}`)
       .then((data) => {
         if (data?.preset) setRoutingPreset(data.preset)
@@ -325,15 +334,52 @@ export default function SettingsPage() {
       })
   }, [])
 
-  useAutoRefresh(fetchAutonomous, { intervalMs: 30000 })
-  useAutoRefresh(fetchProviders, { intervalMs: 30000 })
+  const fetchBootReport = useCallback(() => {
+    fetchJson<BootReportResponse>('/api/system/boot')
+      .then((data) => {
+        setBootReport(data?.bootReport ?? null)
+        setBootLoading(false)
+      })
+      .catch(() => {
+        setBootReport(null)
+        setBootLoading(false)
+      })
+  }, [])
+
+  useEffect(() => {
+    const previousQuery = identityQueryRef.current
+    if (!identityQuery) {
+      identityQueryRef.current = null
+      setAutoLoading(true)
+      setModelLoading(true)
+      setRoutingLoading(true)
+      return
+    }
+
+    if (!shouldRefetchIdentityScopedSettings(previousQuery, identityQuery)) {
+      identityQueryRef.current = identityQuery
+      return
+    }
+
+    identityQueryRef.current = identityQuery
+    setAutoLoading(true)
+    setModelLoading(true)
+    setRoutingLoading(true)
+    void fetchAutonomous()
+    void fetchProviders()
+    void fetchRouting()
+  }, [identityQuery, fetchAutonomous, fetchProviders, fetchRouting])
+
+  useAutoRefresh(fetchAutonomous, { intervalMs: 30000, enabled: Boolean(settingsIdentity) })
+  useAutoRefresh(fetchProviders, { intervalMs: 30000, enabled: Boolean(settingsIdentity) })
   useAutoRefresh(fetchDaemon, { intervalMs: 10000 })
-  useAutoRefresh(fetchRouting, { intervalMs: 30000 })
+  useAutoRefresh(fetchRouting, { intervalMs: 30000, enabled: Boolean(settingsIdentity) })
+  useAutoRefresh(fetchBootReport, { intervalMs: 30000 })
 
   // --- Handlers ---
 
   const handleAutoToggle = useCallback(async () => {
-    if (autoToggling) return
+    if (autoToggling || !settingsIdentity) return
     const nextEnabled = !autoStatus?.enabled
     setAutoToggling(true)
 
@@ -343,8 +389,8 @@ export default function SettingsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          chatId,
-          ...(profileId ? { userId: profileId, conversationId: profileId } : {}),
+          chatId: settingsIdentity.chatId,
+          ...(settingsIdentity.profileId ? { userId: settingsIdentity.profileId, conversationId: settingsIdentity.profileId } : {}),
           enabled: nextEnabled,
           hours: nextEnabled ? autoDuration : undefined,
         }),
@@ -370,7 +416,7 @@ export default function SettingsPage() {
       fetchAutonomous()
       setAutoToggling(false)
     }, 1500)
-  }, [autoStatus?.enabled, autoDuration, autoToggling, chatId, profileId, toggleAutonomous, fetchAutonomous])
+  }, [autoStatus?.enabled, autoDuration, autoToggling, settingsIdentity, toggleAutonomous, fetchAutonomous])
 
   const handleDurationChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value, 10)
@@ -471,6 +517,67 @@ export default function SettingsPage() {
   return (
     <div className="admin-page">
       <h2>Settings</h2>
+
+      <div className="admin-section">
+        <div className="admin-section-title">Recovery Surface</div>
+        {bootLoading ? (
+          <div className="page-loading" style={{ height: 80 }}>Loading...</div>
+        ) : bootReport ? (
+          <>
+            <div className="admin-stat-row">
+              <span className="admin-stat-label">Protected Channels</span>
+              <span className="admin-stat-value">{bootReport.goldenPath.channels.join(', ')}</span>
+            </div>
+            <div className="admin-stat-row">
+              <span className="admin-stat-label">Recommended Preset</span>
+              <span className="admin-stat-value">{bootReport.goldenPath.recommendedPreset}</span>
+            </div>
+            <table className="admin-table" style={{ marginTop: 16 }}>
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th>Status</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bootReport.stages.map((stage) => (
+                  <tr key={stage.id}>
+                    <td>{stage.label}</td>
+                    <td>{stage.status}</td>
+                    <td>{stage.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <table className="admin-table" style={{ marginTop: 16 }}>
+              <thead>
+                <tr>
+                  <th>Capability</th>
+                  <th>Tier</th>
+                  <th>Status</th>
+                  <th>Truth</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bootReport.capabilities.map((capability) => (
+                  <tr key={capability.id}>
+                    <td>
+                      <div>{capability.name}</div>
+                      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>{capability.detail}</div>
+                    </td>
+                    <td>{capability.tier}</td>
+                    <td>{capability.status}</td>
+                    <td>{capability.truth}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ) : (
+          <div className="page-loading" style={{ height: 80 }}>Boot report unavailable.</div>
+        )}
+      </div>
 
       {/* ===== Autonomous Mode ===== */}
       <div className="admin-section">

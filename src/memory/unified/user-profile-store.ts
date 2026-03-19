@@ -24,6 +24,54 @@ export interface UserProfile {
   lastSeenAt: number;
 }
 
+export interface AutonomousDefaultOptions {
+  enabled: boolean;
+  hours: number;
+  now?: number;
+}
+
+type AutonomousModeStore = Pick<UserProfileStore, "isAutonomousMode" | "setAutonomousMode"> & {
+  getProfile?: (chatId: string) => { preferences?: Record<string, unknown> } | null;
+};
+
+const AUTONOMOUS_MIN_HOURS = 1;
+const AUTONOMOUS_MAX_HOURS = 168;
+const AUTONOMOUS_FALLBACK_HOURS = 24;
+
+function sanitizeAutonomousDefaultHours(hours: number): number {
+  if (!Number.isFinite(hours)) {
+    return AUTONOMOUS_FALLBACK_HOURS;
+  }
+
+  return Math.min(
+    AUTONOMOUS_MAX_HOURS,
+    Math.max(AUTONOMOUS_MIN_HOURS, Math.trunc(hours)),
+  );
+}
+
+export async function resolveAutonomousModeWithDefault(
+  store: AutonomousModeStore,
+  chatId: string,
+  defaults?: AutonomousDefaultOptions,
+): Promise<{ enabled: boolean; expiresAt?: number; remainingMs?: number }> {
+  if (typeof store.getProfile === "function") {
+    const profile = store.getProfile(chatId);
+    const prefs = profile?.preferences ?? {};
+    const hasExplicitAutonomousMode = Object.prototype.hasOwnProperty.call(
+      prefs,
+      "autonomousMode",
+    );
+
+    if (!hasExplicitAutonomousMode && defaults?.enabled) {
+      const hours = sanitizeAutonomousDefaultHours(defaults.hours);
+      const now = defaults.now ?? Date.now();
+      await store.setAutonomousMode(chatId, true, now + hours * 3600_000);
+    }
+  }
+
+  return store.isAutonomousMode(chatId);
+}
+
 /** Row shape returned by SQLite SELECT */
 interface UserProfileRow {
   chat_id: string;

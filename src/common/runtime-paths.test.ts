@@ -39,6 +39,7 @@ describe("runtime paths", () => {
       cwd: "/Users/tester/projects",
       homeDir: "/Users/tester",
       env: {},
+      platform: "darwin",
     });
 
     expect(runtimePaths.configRoot).toBe(path.join("/Users/tester", ".strada"));
@@ -48,7 +49,29 @@ describe("runtime paths", () => {
       cwd: "/Users/tester/projects",
       homeDir: "/Users/tester",
       env: {},
+      platform: "darwin",
     })).toBe(path.join("/Users/tester", ".strada", ".env"));
+  });
+
+  it("uses %LOCALAPPDATA%\\\\Strada for packaged installs on Windows", () => {
+    const runtimePaths = resolveRuntimePaths({
+      installRoot: "C:\\Strada\\app",
+      sourceCheckout: false,
+      cwd: "C:\\Users\\tester\\projects",
+      homeDir: "C:\\Users\\tester",
+      env: { LOCALAPPDATA: "C:\\Users\\tester\\AppData\\Local" },
+      platform: "win32",
+    });
+
+    expect(runtimePaths.configRoot).toBe(path.join("C:\\Users\\tester\\AppData\\Local", "Strada"));
+    expect(resolveDotenvPath({
+      installRoot: "C:\\Strada\\app",
+      sourceCheckout: false,
+      cwd: "C:\\Users\\tester\\projects",
+      homeDir: "C:\\Users\\tester",
+      env: { LOCALAPPDATA: "C:\\Users\\tester\\AppData\\Local" },
+      platform: "win32",
+    })).toBe(path.join("C:\\Users\\tester\\AppData\\Local", "Strada", ".env"));
   });
 
   it("honors STRADA_HOME overrides for packaged installs", () => {

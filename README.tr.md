@@ -65,17 +65,27 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 cd Strada.Brain
 ```
 
+```powershell
+# Windows PowerShell source checkout
+git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
+.\Strada.Brain\strada.ps1 install-command
+.\Strada.Brain\strada.ps1 setup
+```
+
 `./strada` kaynak checkout icin kanonik launcher'dir. Ilk calistirmada gerekli hazirligi kendi yapar; normal kurulumda artik manuel `npm install`, `npm run bootstrap` veya `npm link` gerekmez.
 
 `./strada install-command` atlanirsa parent klasorden `./Strada.Brain/strada ...` veya repo kokunden `./strada ...` kullanmaya devam edin. Kurulduktan sonra yalniz `strada ...` komutu her yerden calisir.
 
 `./strada install-command`, gelecekte acilacak terminallerin `strada` komutunu dogrudan gormesi icin shell profilinizi de otomatik gunceller; ayrica PATH export yazmaniz gerekmez.
+Windows'ta checkout icinden `.\strada.ps1` kullanilir. `install-command`, `strada.cmd` ve `strada.ps1` dosyalarini `%LOCALAPPDATA%\Strada\bin` altina yazar ve kullanici PATH'ini gunceller.
+
+Kullanici-local komutu kaldirmak icin daha sonra `strada uninstall` (veya checkout icinden `./strada uninstall` / `.\strada.ps1 uninstall`) calistirin. `--purge-config` eklerseniz `.env`, `.strada-memory`, `.whatsapp-session`, loglar ve `HEARTBEAT.md` gibi repo-ici runtime dosyalari da temizlenir. Repository checkout'unun kendisi otomatik olarak silinmez.
 
 Eger bir gun `npm` komutunu manuel calistirmaniz gerekirse bunu `package.json` dosyasinin bulundugu repo kokunden yapin. `ENOENT ... /Strada/package.json` benzeri bir hata gorurseniz bir ust klasordesiniz; once `cd Strada.Brain` yapin veya komutu `cd Strada.Brain && ...` ile calistirin.
 
 `strada-brain` paketi su anda public npm registry'de yayinli degil; bu nedenle `npm install -g strada-brain` komutu `E404` verir. Registry yayini gelene kadar yukaridaki kaynak checkout akisini kullanin.
 
-Strada paketlenmis bir npm/tarball surumunden kuruldugunda runtime config'i varsayilan olarak aktif dizine baglanmak yerine `~/.strada` altinda tutar. Farkli bir app home gerekiyorsa `STRADA_HOME=/ozel/yol` ile ezebilirsiniz.
+Strada paketlenmis bir npm/tarball surumunden kuruldugunda runtime config'i varsayilan olarak macOS/Linux'ta `~/.strada`, Windows'ta `%LOCALAPPDATA%\Strada` altinda tutulur. Farkli bir app home gerekiyorsa `STRADA_HOME=/ozel/yol` ile ezebilirsiniz.
 
 ### 2. Yapilandirma
 
@@ -88,7 +98,15 @@ Strada paketlenmis bir npm/tarball surumunden kuruldugunda runtime config'i vars
 ./strada setup --terminal
 ```
 
+```powershell
+# Windows PowerShell source checkout
+.\strada.ps1 setup
+.\strada.ps1 setup --web
+.\strada.ps1 setup --terminal
+```
+
 `./strada setup --web`, tam portal paketi icin yeterli olmayan daha eski bir Node surumu gorurse web yolunu birincil tutar: `nvm` varsa onayinizla uyumlu Node surumunu kurup sizi dogrudan web setup'a geri sokabilir; bu rehberli yukseltmeyi gecici temiz bir HOME icinde calistirarak uyumsuz `prefix` / `globalconfig` npm ayarlarinin `nvm`'i engellemesini onler. Yoksa Node yukleme/yukseltme akisina yonlendirir. Yukseltmeyi reddederseniz Strada, terminal setup ile devam etmek isteyip istemediginizi acikca sorar.
+Windows'ta ayni akis once `nvm-windows`, sonra `winget`, en son da dogrudan Node indirme yolunu kullanir. Bu durumda gosterilen yeniden calistirma komutu `.\strada.ps1 setup --web` olur.
 Node 22 `nvm` icinde zaten kuruluysa Strada yeniden indirmek yerine o kurulumu tekrar kullanir. Web setup akisi root local URL uzerinden acilir ve ana uygulamaya devredilirken de ayni URL korunur.
 Ilk tarayici acilisi acik bir setup bayragi da tasir; boylece cache'te kalmis eski bir portal sekmesi bile olu bir "Not Found" sayfasina dusmek yerine setup sihirbazina gider.
 Ilk web handoff restart ile yarisirsa Strada artik bu acilisi otomatik olarak tekrar dener. Config kaydedildikten sonra Strada ana uygulama hazir olana kadar ayni URL'de handoff ekranini ayakta tutar; setup'i tekrar calistirmayin.
@@ -155,15 +173,32 @@ strada
 ./strada supervise --channel web
 ```
 
+```powershell
+# Windows PowerShell source launcher
+.\strada.ps1
+.\strada.ps1 --daemon
+.\strada.ps1 start
+.\strada.ps1 start --channel cli
+.\strada.ps1 start --channel web --daemon
+```
+
 ### 4. CLI Komutlari
 
 ```bash
 ./strada                  # Kaynak checkout icin kanonik launcher
+.\strada.ps1             # Windows PowerShell source launcher
+strada.cmd               # Windows Command Prompt yardimci launcher'i
 ./strada install-command  # Kullanici-local bare `strada` komutunu kur
+./strada uninstall        # Kurulmus bare komutu ve yonetilen PATH/profile degisikliklerini kaldir
+.\strada.ps1 uninstall   # Windows checkout icinden bare komutu kaldir
+strada uninstall --purge-config # Strada'nin olusturdugu repo-ici runtime dosyalarini da temizle
 strada                    # install-command sonrasinda akilli launcher
 strada --daemon           # Kayitli varsayilan kanali daemon modunda baslat
 strada --web              # Web kanalini ac veya yeni makinada web-oncelikli kuruluma devam et
 strada --terminal         # Terminal kanalini ac veya yeni makinada terminal kurulumunu zorla
+.\strada.ps1 setup --web # Windows PowerShell ile web sihirbazini dogrudan ac
+.\strada.ps1 setup --terminal # Windows PowerShell ile terminal sihirbazini ac
+.\strada.ps1 doctor      # Windows PowerShell ile kurulum/build/config hazirligini dogrula
 ./strada setup --web      # Web sihirbazini dogrudan ac
 ./strada setup --terminal # Terminal sihirbazini dogrudan kullan
 ./strada doctor           # Kurulum/build/config hazirligini dogrula
@@ -189,7 +224,7 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 
 ### 6. Oto-Guncelleme
 
-Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugunda uygular. Kaynak checkout ve `./strada install-command` kurulumlari guncellemeleri git uzerinden alir. npm tabanli guncelleme komutlari ise ancak public npm yayini oldugunda kullanilabilir.
+Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugunda uygular. Kaynak checkout ve `./strada install-command` kurulumlari guncellemeleri git uzerinden alir. Basarili bir git oto-guncellemesinden sonra Strada, bare `strada` wrapper'larini da yeniden yazar; boylece komut guncel checkout'u izlemeye devam eder. npm tabanli guncelleme komutlari ise ancak public npm yayini oldugunda kullanilabilir.
 
 | Degisken | Varsayilan | Aciklama |
 |----------|---------|-------------|

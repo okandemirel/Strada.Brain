@@ -1,4 +1,4 @@
-export const SETUP_QUERY_PARAM = 'strada-setup'
+import { SETUP_QUERY_PARAM } from '../../../src/common/setup-contract.ts'
 
 export function detectSetupMode(
   search: string,

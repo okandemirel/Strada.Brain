@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin } from "../../security/origin-validation.js";
 import { validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
+import { SETUP_QUERY_PARAM } from "../../common/setup-contract.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
 import type {
   IChannelAdapter,
@@ -77,7 +78,6 @@ const MIME_TYPES: Record<string, string> = {
 const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("static/", import.meta.url));
 const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../../web-portal/dist");
-const SETUP_QUERY_PARAM = "strada-setup";
 const SETUP_CACHE_BUST_PARAM = "t";
 
 function resolveStaticDir(): string {

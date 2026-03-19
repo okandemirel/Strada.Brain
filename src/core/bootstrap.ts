@@ -53,6 +53,16 @@ import {
   DEFAULT_RATE_LIMITS,
   LEARNING_DEFAULTS,
 } from "../common/constants.js";
+import {
+  finalizeChannelStartupStage,
+  initializeKnowledgeStage,
+  initializeOpsMonitoringStage,
+  initializeProviderRuntimeStage,
+  type EmbeddingResolutionResult,
+  type LearningResult,
+  type ProviderInitResult,
+  type RAGResult,
+} from "./bootstrap-stages.js";
 import type * as winston from "winston";
 
 // Channel imports
@@ -80,7 +90,6 @@ import { TaskPlanner } from "../agents/autonomy/task-planner.js";
 import { InstinctRetriever } from "../agents/instinct-retriever.js";
 import { TrajectoryReplayRetriever } from "../agents/trajectory-replay-retriever.js";
 import { MetricsStorage } from "../metrics/metrics-storage.js";
-import { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import { GoalStorage, GoalDecomposer, detectInterruptedTrees } from "../goals/index.js";
 import type { GoalExecutorConfig } from "../goals/index.js";
 import type { GoalTree } from "../goals/types.js";
@@ -158,6 +167,7 @@ export interface BootstrapResult {
   agentManager?: AgentManagerType;
   activityRegistry?: ChannelActivityRegistry;
   autoUpdater?: AutoUpdater;
+  bootReport?: import("../common/capability-contract.js").BootReport;
 }
 
 /**
@@ -225,125 +235,61 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     })();
   }
 
-  // Initialize security
-  const auth = initializeAuth(config, channelType, logger);
-
-  // Phase 0: Resolve embedding provider (needed by both memory and RAG)
-  const embeddingResult = await resolveAndCacheEmbeddings(config, logger);
-  let cachedEmbeddingProvider = embeddingResult.cachedProvider;
-  const embeddingStatus = { ...embeddingResult.status };
-
-  // Verify embedding provider is actually reachable
-  if (cachedEmbeddingProvider) {
-    try {
-      await cachedEmbeddingProvider.embed(["test"]);
-      logger.info("Embedding provider verified");
-      embeddingStatus.verified = true;
-    } catch (err) {
-      const errorMessage = getErrorMessage(err);
-      if (isTransientEmbeddingVerificationError(err)) {
-        const notice =
-          `Embedding provider could not be verified at startup (${errorMessage}). ` +
-          "Keeping live embeddings enabled and retrying on demand.";
-        logger.warn(notice);
-        embeddingStatus.verified = false;
-        embeddingStatus.usingHashFallback = false;
-        embeddingStatus.notice = notice;
-      } else {
-        const notice = `Embedding provider unreachable, falling back to hash embeddings: ${errorMessage}`;
-        logger.warn(notice);
-        cachedEmbeddingProvider = undefined;
-        embeddingStatus.state = "degraded";
-        embeddingStatus.verified = false;
-        embeddingStatus.usingHashFallback = true;
-        embeddingStatus.notice = notice;
-      }
-    }
-  }
-
-  // Phase 1: Initialize independent services in parallel
-  const [providerInit, memoryManager, channel] = await Promise.all([
-    initializeAIProvider(config, logger),
-    initializeMemory(config, logger, cachedEmbeddingProvider),
-    initializeChannel(channelType, config, auth, logger),
-  ]);
+  const {
+    providerInit,
+    memoryManager,
+    channel,
+    cachedEmbeddingProvider,
+    embeddingStatus,
+    startupNotices: runtimeStageNotices,
+  } = await initializeProviderRuntimeStage({
+    channelType,
+    config,
+    logger,
+  }, {
+    initializeAuth,
+    resolveAndCacheEmbeddings,
+    initializeAIProvider,
+    initializeMemory,
+    initializeChannel,
+    isTransientEmbeddingVerificationError,
+  });
   const providerManager = providerInit.manager;
-  const startupNotices = [...providerInit.notices];
   const activityRegistry = new ChannelActivityRegistry();
-  if (embeddingResult.notice) {
-    startupNotices.push(embeddingResult.notice);
-  }
 
-  // Phase 2: RAG pipeline (reuses the already-resolved embedding provider)
-  const ragResult = await initializeRAG(config, logger, cachedEmbeddingProvider);
-  const ragPipeline = ragResult.pipeline;
-  if (ragResult.notice) {
-    startupNotices.push(ragResult.notice);
-  }
-
-  // Phase 3: Learning system (depends on cachedEmbeddingProvider from RAG)
-  const learningResult = await initializeLearning(config, logger, cachedEmbeddingProvider);
-  startupNotices.push(...learningResult.notices);
+  const {
+    ragPipeline,
+    learningResult,
+    startupNotices,
+  } = await initializeKnowledgeStage({
+    config,
+    logger,
+    cachedEmbeddingProvider,
+    startupNotices: runtimeStageNotices,
+  }, {
+    initializeRAG,
+    initializeLearning,
+  });
 
   // Initialize tools (registry created here, initialized after metricsStorage below)
   const toolRegistry = new ToolRegistry(config.pluginDirs);
 
-  // Initialize metrics and dashboard
   const metrics = new MetricsCollector();
-
-  const dashboard = await initializeDashboard(config, metrics, memoryManager, logger);
-
-  const stoppableServers: Array<{ stop(): Promise<void> | void }> = [];
-
-  if (config.websocketDashboard.enabled) {
-    const { WebSocketDashboardServer } = await import("../dashboard/websocket-server.js");
-    const wsDashboard = new WebSocketDashboardServer({
-      port: config.websocketDashboard.port,
-      authToken: config.websocketDashboard.authToken,
-      allowedOrigins: config.websocketDashboard.allowedOrigins,
-      metrics,
-      getMemoryStats: () => memoryManager?.getStats(),
-    });
-    await wsDashboard.start();
-    stoppableServers.push(wsDashboard);
-    if (!config.websocketDashboard.authToken) {
-      logger.info("WebSocket dashboard enabled without static auth token; using generated same-process auth token");
-    }
-    logger.info("WebSocket dashboard started", { port: config.websocketDashboard.port });
-  }
-
-  if (config.prometheus.enabled) {
-    const { PrometheusMetrics } = await import("../dashboard/prometheus.js");
-    const prometheus = new PrometheusMetrics(
-      config.prometheus.port,
-      metrics,
-      () => memoryManager?.getStats(),
-    );
-    await prometheus.start();
-    stoppableServers.push(prometheus);
-    logger.warn("SECURITY: Prometheus metrics endpoint has no authentication — restrict access at network level");
-    logger.info("Prometheus metrics started", { port: config.prometheus.port });
-  }
-
-  // Initialize rate limiter
-  const rateLimiter = initializeRateLimiter(config, logger);
-
-  // InstinctRetriever created below after identity and metrics are initialized
-
-  // Initialize metrics storage for agent performance tracking (EVAL-01, EVAL-02, EVAL-03)
-  let metricsStorage: MetricsStorage | undefined;
-  let metricsRecorder: MetricsRecorder | undefined;
-  try {
-    const metricsDbPath = join(config.memory.dbPath, "learning.db");
-    metricsStorage = new MetricsStorage(metricsDbPath);
-    metricsStorage.initialize();
-    metricsRecorder = new MetricsRecorder(metricsStorage);
-    logger.info("Metrics storage initialized", { dbPath: metricsDbPath });
-  } catch (error) {
-    logger.warn("Metrics storage initialization failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  const {
+    dashboard,
+    stoppableServers,
+    rateLimiter,
+    metricsStorage,
+    metricsRecorder,
+  } = await initializeOpsMonitoringStage({
+    config,
+    logger,
+    metrics,
+    memoryManager,
+  }, {
+    initializeDashboard,
+    initializeRateLimiter,
+  });
 
   // Initialize identity persistence (IDENT-01)
   let identityManager: IdentityStateManager | undefined;
@@ -621,6 +567,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     dmPolicy,
     sessionSummarizer,
     userProfileStore,
+    autonomousDefaultEnabled: config.autonomousDefaultEnabled,
+    autonomousDefaultHours: config.autonomousDefaultHours,
     taskExecutionStore,
     runtimeArtifactManager,
     toolMetadataByName: toolRegistry.getMetadataMap(),
@@ -758,6 +706,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     soulLoader,
     runtimeArtifactManager,
     projectScopeFingerprint,
+    undefined,
+    {
+      autonomousDefaultEnabled: config.autonomousDefaultEnabled,
+      autonomousDefaultHours: config.autonomousDefaultHours,
+    },
   );
   // Wire providerRouter to command handler for /routing command
   if (providerRouter) {
@@ -1404,17 +1357,21 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Setup cleanup
   const cleanupInterval = setupCleanup(orchestrator);
 
-  // Start channel
-  if (beforeChannelConnect) {
-    await beforeChannelConnect();
-  }
-  await channel.connect();
-  logger.info("Strada Brain is running!");
-  if (startupNotices.length > 0) {
-    logger.warn("Startup capability notices", {
-      notices: [...new Set(startupNotices)],
-    });
-  }
+  const bootReport = await finalizeChannelStartupStage({
+    beforeChannelConnect,
+    channel,
+    logger,
+    config,
+    channelType,
+    daemonMode: Boolean(options.daemonMode),
+    providerHealthy: providerInit.healthCheckPassed,
+    embeddingStatus,
+    deploymentWired: Boolean(daemonContext?.deploymentExecutor),
+    alertingWired: false,
+    backupWired: false,
+    startupNotices,
+    moduleUrl: import.meta.url,
+  });
 
   // Wire identity manager to dashboard even without daemon mode
   if (dashboard && identityManager && !dashboard["identityManager"]) {
@@ -1511,6 +1468,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         getStatus: () => ({ ...embeddingStatus }),
       },
       stradaDeps,
+      bootReport,
     });
   }
 
@@ -1530,6 +1488,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     agentManager,
     activityRegistry,
     autoUpdater,
+    bootReport,
     shutdown: createShutdownHandler({
       dashboard,
       ragPipeline,
@@ -1584,11 +1543,6 @@ function initializeAuth(config: Config, channelType: string, logger: winston.Log
   });
 }
 
-interface ProviderInitResult {
-  manager: ProviderManager;
-  notices: string[];
-}
-
 export async function initializeAIProvider(
   config: Config,
   logger: winston.Logger,
@@ -1596,6 +1550,7 @@ export async function initializeAIProvider(
   const apiKeys = collectApiKeys(config);
   const providerCredentials = collectProviderCredentials(config);
   const notices: string[] = [];
+  let healthCheckPassed: boolean | undefined;
 
   let defaultProvider: IAIProvider;
   let defaultProviderOrder: string[] = [];
@@ -1688,9 +1643,9 @@ export async function initializeAIProvider(
 
   // Run health check (non-blocking — warn only)
   if (defaultProvider.healthCheck) {
-    const healthy = await defaultProvider.healthCheck();
-    const logMethod = healthy ? "info" : "warn";
-    const message = healthy
+    healthCheckPassed = await defaultProvider.healthCheck();
+    const logMethod = healthCheckPassed ? "info" : "warn";
+    const message = healthCheckPassed
       ? "AI provider health check passed"
       : "AI provider health check failed — API may be unreachable or key invalid";
     logger[logMethod](message, { name: defaultProvider.name });
@@ -1723,6 +1678,7 @@ export async function initializeAIProvider(
   return {
     manager: providerManager,
     notices,
+    healthCheckPassed,
   };
 }
 
@@ -1917,24 +1873,6 @@ async function initializeFileMemory(
   }
 }
 
-interface EmbeddingResolutionResult {
-  cachedProvider?: CachedEmbeddingProvider;
-  notice?: string;
-  status: {
-    state: "disabled" | "active" | "degraded";
-    ragEnabled: boolean;
-    configuredProvider: string;
-    configuredModel?: string;
-    configuredDimensions?: number;
-    resolvedProviderName?: string;
-    resolutionSource?: string;
-    activeDimensions?: number;
-    verified: boolean;
-    usingHashFallback: boolean;
-    notice?: string;
-  };
-}
-
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -2069,12 +2007,6 @@ export async function resolveAndCacheEmbeddings(
   }
 }
 
-interface RAGResult {
-  pipeline?: IRAGPipeline;
-  cachedProvider?: CachedEmbeddingProvider;
-  notice?: string;
-}
-
 async function initializeRAG(
   config: Config,
   logger: winston.Logger,
@@ -2164,17 +2096,6 @@ async function initializeRAG(
     });
     return { notice };
   }
-}
-
-interface LearningResult {
-  pipeline?: LearningPipeline;
-  storage?: LearningStorage;
-  patternMatcher?: PatternMatcher;
-  taskPlanner: TaskPlanner;
-  errorRecovery: ErrorRecoveryEngine;
-  eventBus?: IEventBus<LearningEventMap>;
-  learningQueue?: LearningQueue;
-  notices: string[];
 }
 
 async function initializeLearning(config: Config, logger: winston.Logger, embeddingProvider?: CachedEmbeddingProvider): Promise<LearningResult> {

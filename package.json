@@ -30,7 +30,7 @@
     "setup:terminal": "node --import tsx src/index.ts setup --terminal",
     "prepack": "npm run build",
     "pack:dry-run": "npm pack --dry-run",
-    "build": "tsc && (npm run build:portal && rm -rf dist/channels/web/static && cp -r web-portal/dist dist/channels/web/static || echo '[strada] Portal build skipped — web UI will use fallback page.')",
+    "build": "node scripts/build-package.mjs",
     "build:portal": "npm --prefix web-portal run build",
     "lint:src": "eslint src/",
     "lint:portal": "npm --prefix web-portal run lint",

@@ -148,6 +148,30 @@ async function ensureFile(path) {
   await access(path, fsConstants.F_OK);
 }
 
+async function waitForCompletedDelegation(memoryDir, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  const daemonDbPath = join(memoryDir, "daemon.db");
+
+  while (Date.now() < deadline) {
+    try {
+      const daemonDb = new Database(daemonDbPath, { readonly: true });
+      const row = daemonDb.prepare(
+        "SELECT COUNT(*) AS count FROM delegation_log WHERE status = 'completed'",
+      ).get();
+      daemonDb.close();
+      if ((row?.count ?? 0) >= 1) {
+        return;
+      }
+    } catch {
+      // Daemon DB may not exist yet while the session is still bootstrapping.
+    }
+
+    await wait(250);
+  }
+
+  throw new Error(`Timed out waiting for a completed delegation entry in ${daemonDbPath}`);
+}
+
 async function createSmokeProject(projectDir) {
   await mkdir(join(projectDir, "Assets"), { recursive: true });
   await mkdir(join(projectDir, "Assets", "Resources", "Levels"), { recursive: true });
@@ -232,6 +256,8 @@ function buildBaseEnv(memoryDir, projectDir) {
     DASHBOARD_ENABLED: "false",
     ENABLE_WEBSOCKET_DASHBOARD: "false",
     ENABLE_PROMETHEUS: "false",
+    MULTI_AGENT_ENABLED: "true",
+    TASK_DELEGATION_ENABLED: "true",
     LOG_LEVEL: "error",
   };
 }
@@ -503,10 +529,12 @@ async function runDaemonSmoke(memoryDir, projectDir) {
 
     let cursor = delegationSession.output.length;
     delegationSession.sendLine("Delegate a brief release-risk analysis to a sub-agent and return the delegated conclusion.");
-    await delegationSession.waitFor("Delegation complete. Sub-agent analysis: release risk looks low for this smoke scenario.", {
-      fromIndex: cursor,
-      timeoutMs: 30_000,
-    });
+    await waitForCompletedDelegation(delegationMemoryDir, 30_000);
+    const delegationOutput = delegationSession.output.slice(cursor);
+    assert(
+      !/what should i do next\?/i.test(delegationOutput),
+      "delegation smoke should not surface a provider draft that hands work back to the user",
+    );
 
     cursor = delegationSession.output.length;
     delegationSession.sendLine(PAOR_RECOVERY_PROMPT);

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import Database from "better-sqlite3";
 import { DashboardServer } from "./server.js";
 import { MetricsCollector } from "./metrics.js";
 import type { MetricsAggregation } from "../metrics/metrics-types.js";
 import type { MetricsStorage } from "../metrics/metrics-storage.js";
+import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
@@ -291,6 +293,90 @@ describe("DashboardServer", () => {
     }));
   });
 
+  it("returns config catalog metadata for the admin config page", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.registerExtendedServices({
+      configSnapshot: () => ({
+        unityProjectPath: "/Users/test/Game",
+        "dashboard.enabled": true,
+        "agent.enabled": false,
+      }),
+    });
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/config`);
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.summary).toEqual(expect.objectContaining({
+      core: expect.any(Number),
+      experimental: expect.any(Number),
+    }));
+    expect(data.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: "unityProjectPath",
+        tier: "core",
+        category: "Core",
+      }),
+      expect.objectContaining({
+        key: "agent.enabled",
+        tier: "experimental",
+        category: "Multi-Agent",
+      }),
+    ]));
+  });
+
+  it("returns the shared boot report for settings surfaces", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.registerExtendedServices({
+      bootReport: {
+        generatedAt: "2026-03-19T00:00:00.000Z",
+        channelType: "web",
+        stages: [
+          { id: "runtime", label: "Runtime", status: "ready", detail: "Bootstrap completed." },
+        ],
+        capabilities: [
+          {
+            id: "web-surface",
+            name: "Web Surface",
+            area: "Golden Path",
+            tier: "production",
+            status: "active",
+            truth: "wired",
+            detail: "Protected web surface.",
+            defaultSurface: true,
+          },
+        ],
+        goldenPath: {
+          channels: ["web", "cli"],
+          recommendedPreset: "balanced",
+          protectedWorkflows: ["Strada-aware coding loop"],
+        },
+        startupNotices: [],
+      },
+    });
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/system/boot`);
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.bootReport).toEqual(expect.objectContaining({
+      channelType: "web",
+      goldenPath: expect.objectContaining({
+        recommendedPreset: "balanced",
+      }),
+    }));
+  });
+
   it("refreshes the shared provider catalog instead of creating a temporary service", async () => {
     const metrics = new MetricsCollector();
     server = new DashboardServer(0, metrics, () => undefined);
@@ -573,6 +659,51 @@ describe("DashboardServer", () => {
     });
     expect(setAutonomousRes.status).toBe(200);
     expect(setAutonomousMode).toHaveBeenCalledWith("thread-7", true, expect.any(Number));
+  });
+
+  it("hydrates autonomous defaults for identity-scoped autonomous lookups", async () => {
+    const metrics = new MetricsCollector();
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.registerExtendedServices({
+      configSnapshot: () => ({
+        autonomousDefaultEnabled: true,
+        autonomousDefaultHours: 8,
+      }),
+      userProfileStore,
+    });
+
+    if (!await safeStart(server)) {
+      db.close();
+      return;
+    }
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") {
+      db.close();
+      return;
+    }
+
+    const res = await fetch(
+      `http://localhost:${addr.port}/api/user/autonomous?chatId=shared-chat&conversationId=thread-11`,
+    );
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.enabled).toBe(true);
+
+    const persisted = await userProfileStore.isAutonomousMode("thread-11");
+    expect(persisted.enabled).toBe(true);
+
+    await userProfileStore.setAutonomousMode("thread-11", false);
+
+    const secondRes = await fetch(
+      `http://localhost:${addr.port}/api/user/autonomous?chatId=shared-chat&conversationId=thread-11`,
+    );
+    expect(secondRes.status).toBe(200);
+    expect(await secondRes.json()).toEqual({ enabled: false });
+
+    db.close();
   });
 
   describe("/api/agent-metrics", () => {

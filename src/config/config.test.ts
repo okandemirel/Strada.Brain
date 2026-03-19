@@ -113,6 +113,8 @@ describe("loadConfig", () => {
     delete process.env["STRADA_DAEMON_BACKOFF_MAX"];
     delete process.env["STRADA_DAEMON_FAILURE_THRESHOLD"];
     delete process.env["STRADA_DAEMON_IDLE_PAUSE"];
+    delete process.env["AUTONOMOUS_DEFAULT_ENABLED"];
+    delete process.env["AUTONOMOUS_DEFAULT_HOURS"];
     // Clear chain resilience env vars
     delete process.env["CHAIN_ROLLBACK_ENABLED"];
     delete process.env["CHAIN_PARALLEL_ENABLED"];
@@ -738,6 +740,18 @@ describe("loadConfig", () => {
 
       delete process.env[legacyIntervalKey];
       delete process.env[legacyTimezoneKey];
+    });
+
+    it("parses autonomous defaults", () => {
+      setEnv({
+        AUTONOMOUS_DEFAULT_ENABLED: "true",
+        AUTONOMOUS_DEFAULT_HOURS: "36",
+      });
+
+      const config = loadConfig();
+
+      expect(config.autonomousDefaultEnabled).toBe(true);
+      expect(config.autonomousDefaultHours).toBe(36);
     });
   });
 

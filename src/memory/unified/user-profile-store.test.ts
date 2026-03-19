@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { UserProfileStore } from "./user-profile-store.js";
+import { UserProfileStore, resolveAutonomousModeWithDefault } from "./user-profile-store.js";
 import type { UserProfile } from "./user-profile-store.js";
 
 describe("UserProfileStore", () => {
@@ -194,6 +194,48 @@ describe("UserProfileStore", () => {
       expect(profile).not.toBeNull();
       expect(profile!.language).toBe("en");
       expect(profile!.activePersona).toBe("default");
+    });
+  });
+
+  describe("resolveAutonomousModeWithDefault", () => {
+    it("hydrates autonomous mode for a new identity when defaults are enabled", async () => {
+      const baseNow = Date.now() + 60_000;
+      const result = await resolveAutonomousModeWithDefault(store, "new-auto-chat", {
+        enabled: true,
+        hours: 12,
+        now: baseNow,
+      });
+
+      expect(result.enabled).toBe(true);
+      expect(result.expiresAt).toBe(baseNow + 12 * 3600_000);
+      expect(store.getProfile("new-auto-chat")?.preferences.autonomousMode).toBe(true);
+    });
+
+    it("does not override an explicit disabled autonomy preference", async () => {
+      await store.setAutonomousMode("chat-explicit-off", false);
+
+      const result = await resolveAutonomousModeWithDefault(store, "chat-explicit-off", {
+        enabled: true,
+        hours: 24,
+        now: Date.now() + 60_000,
+      });
+
+      expect(result).toEqual({ enabled: false });
+      expect(store.getProfile("chat-explicit-off")?.preferences.autonomousMode).toBe(false);
+    });
+
+    it("preserves an explicit enabled autonomy preference and expiry", async () => {
+      const expiresAt = Date.now() + 6 * 3600_000;
+      await store.setAutonomousMode("chat-explicit-on", true, expiresAt);
+
+      const result = await resolveAutonomousModeWithDefault(store, "chat-explicit-on", {
+        enabled: true,
+        hours: 48,
+        now: Date.now() + 60_000,
+      });
+
+      expect(result.enabled).toBe(true);
+      expect(result.expiresAt).toBe(expiresAt);
     });
   });
 

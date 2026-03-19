@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { ProviderPreflightFailure, SaveStatus, SetupStatusResponse } from '../types/setup'
+import type { ProviderPreflightFailure, SaveStatus, SetupSaveResponse, SetupStatusResponse } from '../types/setup'
 import { PRESETS, PROVIDER_MAP, CHANNELS, EMBEDDING_CAPABLE } from '../types/setup-constants'
 import { buildPostSetupBootstrap, FIRST_RUN_STORAGE_KEY, POST_SETUP_BOOTSTRAP_STORAGE_KEY } from './useWebSocket'
+import { isSetupStatusResponse } from '../../../src/common/setup-contract.ts'
+import { deriveSetupBootstrapView, transitionSetupStatus } from '../../../src/common/setup-state.ts'
 
 const SETUP_AVAILABILITY_MAX_ATTEMPTS = 25
 const SETUP_AVAILABILITY_RETRY_MS = 1000
@@ -69,7 +71,7 @@ export type SetupSurfaceProbe =
   | { kind: 'redirect' }
   | { kind: 'retry' }
 
-function formatProviderFailures(failures: ProviderPreflightFailure[] | undefined): string | null {
+function formatProviderIssues(failures: ProviderPreflightFailure[] | undefined): string | null {
   if (!failures || failures.length === 0) return null
   return failures.map((failure) => `${failure.providerName}: ${failure.detail}`).join(' ')
 }
@@ -84,11 +86,11 @@ export async function readSetupBootstrapStatus(
     }
 
     const data = await res.json().catch(() => null)
-    if (!data || typeof data !== 'object' || typeof data.state !== 'string') {
+    if (!isSetupStatusResponse(data)) {
       return null
     }
 
-    return data as SetupStatusResponse
+    return data
   } catch {
     return null
   }
@@ -155,6 +157,7 @@ export function useSetupWizard() {
   const [saveCommitted, setSaveCommitted] = useState(false)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveWarning, setSaveWarning] = useState<string | null>(null)
   const [bootstrapDetail, setBootstrapDetail] = useState<string | null>(null)
 
   const csrfTokenRef = useRef<string>('')
@@ -345,9 +348,35 @@ export function useSetupWizard() {
     setDaemonBudgetState(budget)
   }, [])
 
+  const applySetupBootstrapStatus = useCallback((status: SetupStatusResponse) => {
+    const bootstrapView = deriveSetupBootstrapView(status)
+    if (!bootstrapView) {
+      return false
+    }
+
+    setSaveStatus(bootstrapView.saveStatus)
+    setBootstrapDetail(bootstrapView.detail)
+
+    if (bootstrapView.saveStatus === 'error') {
+      setSaveError(bootstrapView.detail)
+      return true
+    }
+
+    setSaveError(null)
+
+    if (bootstrapView.saveStatus === 'success') {
+      setTimeout(() => {
+        window.location.href = bootstrapView.readyUrl || '/'
+      }, 250)
+    }
+
+    return true
+  }, [])
+
   const save = useCallback(async () => {
     setSaveStatus('saving')
     setSaveError(null)
+    setSaveWarning(null)
     setSaveCommitted(false)
     setBootstrapDetail(null)
 
@@ -378,6 +407,7 @@ export function useSetupWizard() {
       config.STRADA_DAEMON_DAILY_BUDGET = String(daemonBudget)
     }
     if (autonomyEnabled) {
+      config.AUTONOMOUS_DEFAULT_ENABLED = 'true'
       config.AUTONOMOUS_DEFAULT_HOURS = String(autonomyHours)
     }
 
@@ -428,17 +458,25 @@ export function useSetupWizard() {
         body: JSON.stringify(config),
       })
 
-      const body = await res.json().catch(() => ({}))
+      const body = await res.json().catch(() => ({})) as SetupSaveResponse
       if (!res.ok) {
         if (res.status === 409 && body && typeof body === 'object' && body.handoff === true) {
           setSaveCommitted(true)
-          setSaveStatus('booting')
-          setBootstrapDetail(typeof body.error === 'string' ? body.error : 'Configuration already saved. Strada is still starting.')
+          applySetupBootstrapStatus(transitionSetupStatus(
+            { state: 'saved' },
+            {
+              type: 'bootstrap_starting',
+              detail: typeof body.error === 'string'
+                ? body.error
+                : 'Configuration already saved. Strada is still starting.',
+            },
+          ))
         } else {
-          const providerFailureMessage = formatProviderFailures(body.providerFailures)
+          const providerFailureMessage = formatProviderIssues(body.providerFailures)
           throw new Error(providerFailureMessage ?? body.error ?? `Save failed (${res.status})`)
         }
       } else {
+        const providerWarningMessage = formatProviderIssues(body.providerWarnings)
         localStorage.setItem(FIRST_RUN_STORAGE_KEY, '1')
         localStorage.setItem(
           POST_SETUP_BOOTSTRAP_STORAGE_KEY,
@@ -446,8 +484,15 @@ export function useSetupWizard() {
         )
 
         setSaveCommitted(true)
-        setSaveStatus('saved')
-        setBootstrapDetail('Configuration accepted. Starting Strada on this same URL.')
+        setSaveWarning(providerWarningMessage)
+        applySetupBootstrapStatus(transitionSetupStatus(
+          { state: 'collecting' },
+          {
+            type: 'config_saved',
+            detail: 'Configuration accepted. Starting Strada on this same URL.',
+            providerWarnings: body.providerWarnings,
+          },
+        ))
       }
 
       let attempts = 0
@@ -462,33 +507,15 @@ export function useSetupWizard() {
         try {
           const setupStatus = await readSetupBootstrapStatus(fetch)
           if (setupStatus) {
-            if (setupStatus.state === 'saved') {
-              setSaveStatus('saved')
-              setBootstrapDetail(setupStatus.detail ?? 'Configuration accepted. Waiting for Strada to begin booting.')
-              return
+            const providerWarningMessage = formatProviderIssues(setupStatus.providerWarnings)
+            if (providerWarningMessage) {
+              setSaveWarning(providerWarningMessage)
             }
 
-            if (setupStatus.state === 'booting') {
-              setSaveStatus('booting')
-              setBootstrapDetail(setupStatus.detail ?? 'Strada is starting the main web app.')
-              return
-            }
-
-            if (setupStatus.state === 'failed') {
-              if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
-              setSaveStatus('error')
-              setBootstrapDetail(setupStatus.detail ?? null)
-              setSaveError(setupStatus.detail ?? 'Strada could not finish starting. Re-open setup and fix the configuration.')
-              return
-            }
-
-            if (setupStatus.state === 'ready') {
-              if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
-              setSaveStatus('success')
-              setBootstrapDetail(setupStatus.detail ?? 'Strada is ready. Redirecting now.')
-              setTimeout(() => {
-                window.location.href = setupStatus.readyUrl || '/'
-              }, 250)
+            if (applySetupBootstrapStatus(setupStatus)) {
+              if (setupStatus.state === 'failed' || setupStatus.state === 'ready') {
+                if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
+              }
               return
             }
           }
@@ -499,11 +526,10 @@ export function useSetupWizard() {
           if (healthData.status === 'ok') {
             if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
             if (!mountedRef.current) return
-            setSaveStatus('success')
-            setBootstrapDetail('Strada is ready. Redirecting now.')
-            setTimeout(() => {
-              window.location.href = '/'
-            }, 250)
+            applySetupBootstrapStatus(transitionSetupStatus(
+              { state: 'booting' },
+              { type: 'bootstrap_ready', readyUrl: '/' },
+            ))
           }
         } catch {
           // Same-port handoff can briefly reject requests while the app replaces the wizard.
@@ -512,15 +538,20 @@ export function useSetupWizard() {
         if (attempts >= SETUP_BOOTSTRAP_MAX_ATTEMPTS) {
           if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
           if (!mountedRef.current) return
-          setSaveStatus('error')
-          setSaveError('Configuration was saved, but Strada did not expose a ready or failed bootstrap state in time. Re-open setup and inspect the startup error.')
+          applySetupBootstrapStatus(transitionSetupStatus(
+            { state: 'booting' },
+            {
+              type: 'bootstrap_failed',
+              detail: 'Configuration was saved, but Strada did not expose a ready or failed bootstrap state in time. Re-open setup and inspect the startup error.',
+            },
+          ))
         }
       }, SETUP_BOOTSTRAP_POLL_MS)
     } catch (err) {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason, applySetupBootstrapStatus])
 
   return {
     // State
@@ -545,6 +576,7 @@ export function useSetupWizard() {
     daemonBudget,
     saveStatus,
     saveError,
+    saveWarning,
     bootstrapDetail,
     saveCommitted,
     reviewBlockingReason,

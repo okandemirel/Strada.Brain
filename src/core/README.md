@@ -2,6 +2,8 @@
 
 Application bootstrap, dependency injection, and tool registration. These files wire every subsystem together at startup, including the truthful worker tool surface that Strada exposes to internal providers.
 
+The source-checkout launcher is now cross-platform. `strada` remains the thin POSIX wrapper, while `strada.ps1` and `strada.cmd` delegate into the same no-dependency Node launcher core in `scripts/source-launcher.mjs`. That shared core owns source-checkout preparation, `install-command`, `uninstall`, wrapper generation, and the source-vs-dist launch decision so setup/doctor behavior stays aligned across macOS/Linux and Windows.
+
 ## Bootstrap (`bootstrap.ts`)
 
 The main entry point that replaces a monolithic `startBrain()`. The exported `bootstrap()` function accepts `BootstrapOptions` (channel type, config, optional DI container) and returns a `BootstrapResult` with the orchestrator, channel, container, and a `shutdown()` handler.
@@ -105,11 +107,13 @@ A minimal HTTP server that runs during first-time configuration when no valid `.
 - **Request size limit:** Request body limited to 64KB to prevent memory exhaustion
 - **Static file containment:** Serves only files from `../channels/web/static/`, with normalized path checks preventing escape
 
-**Supported Configuration Keys:**
+**Supported Configuration Contract:**
 
-- Required: `ANTHROPIC_API_KEY`, `UNITY_PROJECT_PATH`
-- Optional: `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_IDS`, `DISCORD_BOT_TOKEN`
+- Required: `UNITY_PROJECT_PATH` plus at least one usable response worker selection
+- Provider-specific: setup accepts API-key providers, OpenAI `chatgpt-subscription`, and multi-provider response chains, but every selected response worker must pass real preflight before save can complete
+- Optional channel/auth settings: web/CLI defaults, Telegram/Discord/other channel credentials when the chosen setup flow collects them
 - Auto-populated defaults: `STREAMING_ENABLED=true`, `REQUIRE_EDIT_CONFIRMATION=true`, `LOG_LEVEL=info`
+- Failure reporting: invalid response workers are returned as structured provider failures instead of being silently dropped from the generated config
 
 ## Key Files
 
@@ -118,4 +122,5 @@ A minimal HTTP server that runs during first-time configuration when no valid `.
 | `bootstrap.ts` | Application startup sequence, service wiring, shutdown handler |
 | `di-container.ts` | String-keyed DI container with singleton/transient/scoped lifecycles and circular dependency detection |
 | `setup-wizard.ts` | Minimal HTTP server for first-time `.env` configuration with security hardening |
+| `terminal-wizard.ts` | Terminal/web setup flow, platform-aware Node upgrade guidance, and post-save launch handoff |
 | `tool-registry.ts` | Tool registration, categorization, metadata, plugin loading, and filtered registry creation |

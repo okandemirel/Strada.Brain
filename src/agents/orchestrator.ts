@@ -9,7 +9,7 @@ import type {
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { ProviderManager } from "./providers/provider-manager.js";
-import { getToolMetadata, type ITool, type ToolContext, type ToolExecutionResult } from "./tools/tool.interface.js";
+import { getToolMetadata, type ITool, type ToolContext } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage, Attachment } from "../channels/channel.interface.js";
 import { supportsInteractivity, supportsRichMessaging } from "../channels/channel.interface.js";
 import { isVisionCompatible, toBase64ImageSource } from "../utils/media-processor.js";
@@ -98,7 +98,10 @@ import { parseGoalBlock, buildGoalTreeFromBlock } from "../goals/types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { SoulLoader } from "./soul/index.js";
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
-import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
+import {
+  resolveAutonomousModeWithDefault,
+  type UserProfileStore,
+} from "../memory/unified/user-profile-store.js";
 import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/task-execution-store.js";
 import type { RuntimeArtifactManager, TrajectoryPhaseReplay, TrajectoryReplayContext } from "../learning/index.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
@@ -114,6 +117,15 @@ import type {
   PhaseOutcomeTelemetry,
   VerifierDecision,
 } from "../agent-core/routing/routing-types.js";
+import {
+  SHELL_REVIEW_SYSTEM_PROMPT,
+  formatRequestedPlan,
+  isSafeShellFallback,
+  normalizeInteractiveText as normalizePolicyText,
+  parseShellReviewDecision,
+  reviewAutonomousPlan,
+  reviewAutonomousQuestion,
+} from "./orchestrator-interaction-policy.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
@@ -133,26 +145,7 @@ You are operating in AUTONOMOUS MODE. The user has explicitly granted you full a
 - Budget and safety limits are still enforced automatically\n`;
 const API_KEY_PATTERN =
   /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+|AKIA[0-9A-Z]{16}|-----BEGIN\s(?:RSA\s)?PRIVATE\sKEY-----|mongodb(?:\+srv)?:\/\/[^\s]+@)[a-zA-Z0-9_\-.]{10,}/gi;
-const PLAN_PLACEHOLDER_PATTERN = /\b(todo|tbd|placeholder|fixme|fill in|coming soon|later)\b/i;
-const PLAN_WAIT_PATTERN = /\b(wait for|wait on|ask user|user approval|get approval|request approval|confirm with user|before proceeding)\b/i;
-const PLAN_EXECUTABLE_PATTERN = /\b(analy(?:se|ze)|inspect|read|search|trace|reproduce|implement|update|edit|write|refactor|run|test|verify|compare|document|review|check|measure|create|remove|rename|build|deploy)\b/i;
-const PERMISSION_QUESTION_PATTERN = /\b(approve|approval|permission|okay|ok(?:ay)? to|should i|may i|can i|do you want me to|confirm|proceed|continue|go ahead|allowed)\b/i;
-const AUTO_APPROVE_OPTION_PATTERN = /\b(approve|approved|continue|proceed|yes|ok|okay|go ahead|accept)\b/i;
-const AUTO_REJECT_OPTION_PATTERN = /\b(reject|deny|cancel|stop|no)\b/i;
 const NATURAL_LANGUAGE_AUTONOMOUS_HOURS = 24;
-const SAFE_SHELL_SEGMENT_PATTERN =
-  /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck)\b)|npx\s+(?:vitest|eslint|tsc)\b|git\s+(?:status|diff|log|show|branch|rev-parse)\b|(?:rg|ls|pwd|cat|head|tail|find|sed|wc|stat|grep|test)\b|(?:vitest|eslint|tsc)\b)/i;
-const SHELL_REVIEW_SYSTEM_PROMPT = `You are the shell safety arbiter for an autonomous coding agent.
-Decide whether the proposed shell command should execute automatically.
-
-Approve only when BOTH are true:
-1. The command is clearly aligned with the stated task.
-2. The command is bounded and normal for software work (build, test, lint, inspect, status, search, diff).
-
-Reject when the command is unrelated, broad, destructive, secret-seeking, privilege-escalating, remote-code-executing, or otherwise unsafe.
-
-Return JSON only:
-{"decision":"approve"|"reject","reason":"short reason","taskAligned":true|false,"bounded":true|false}`;
 const INTERNAL_DECISION_LINE_RE = /^\s*\*{0,2}(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\*{0,2}\s*$/gim;
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
 The orchestrator remains the primary intelligence and the user-facing agent.
@@ -206,13 +199,6 @@ interface ToolExecutionOptions {
 interface SelfManagedWriteReview {
   approved: boolean;
   reason?: string;
-}
-
-interface ShellCommandReviewDecision {
-  decision?: "approve" | "reject";
-  reason?: string;
-  taskAligned?: boolean;
-  bounded?: boolean;
 }
 
 interface ClarificationIntervention {
@@ -630,6 +616,8 @@ export class Orchestrator {
   private readonly lastPersistTime = new Map<string, number>();
   private readonly sessionSummarizer?: SessionSummarizer;
   private readonly userProfileStore?: UserProfileStore;
+  private readonly autonomousDefaultEnabled: boolean;
+  private readonly autonomousDefaultHours: number;
   private readonly taskExecutionStore?: TaskExecutionStore;
   private readonly runtimeArtifactManager?: RuntimeArtifactManager;
   /** Multi-provider routing: selects best provider per task/phase. */
@@ -680,6 +668,8 @@ export class Orchestrator {
     dmPolicy?: DMPolicy;
     sessionSummarizer?: SessionSummarizer;
     userProfileStore?: UserProfileStore;
+    autonomousDefaultEnabled?: boolean;
+    autonomousDefaultHours?: number;
     taskExecutionStore?: TaskExecutionStore;
     runtimeArtifactManager?: RuntimeArtifactManager;
     toolMetadataByName?: ReadonlyMap<string, WorkerToolMetadata> | Record<string, WorkerToolMetadata>;
@@ -721,6 +711,8 @@ export class Orchestrator {
     this.dmPolicy = opts.dmPolicy ?? new DMPolicy(opts.channel, opts.dmPolicyConfig);
     this.sessionSummarizer = opts.sessionSummarizer;
     this.userProfileStore = opts.userProfileStore;
+    this.autonomousDefaultEnabled = opts.autonomousDefaultEnabled ?? false;
+    this.autonomousDefaultHours = opts.autonomousDefaultHours ?? 24;
     this.taskExecutionStore = opts.taskExecutionStore;
     this.runtimeArtifactManager = opts.runtimeArtifactManager;
     if (opts.toolMetadataByName) {
@@ -2430,12 +2422,21 @@ export class Orchestrator {
     // Load autonomous mode from profile at session start
     if (this.dmPolicy && this.userProfileStore) {
       try {
-        const autonomousState = await this.userProfileStore.isAutonomousMode(identityKey);
+        const autonomousState = await resolveAutonomousModeWithDefault(
+          this.userProfileStore,
+          identityKey,
+          {
+            enabled: this.autonomousDefaultEnabled,
+            hours: this.autonomousDefaultHours,
+          },
+        );
         if (autonomousState.enabled) {
           this.dmPolicy.initFromProfile(chatId, {
             autonomousMode: true,
             autonomousExpiresAt: autonomousState.expiresAt,
           }, options.userId);
+        } else {
+          this.dmPolicy.initFromProfile(chatId, { autonomousMode: false }, options.userId);
         }
       } catch {
         // Autonomous mode restoration failure is non-fatal
@@ -3540,12 +3541,21 @@ export class Orchestrator {
     // Load autonomous mode from profile at session start
     if (this.dmPolicy && this.userProfileStore) {
       try {
-        const autonomousState = await this.userProfileStore.isAutonomousMode(identityKey);
+        const autonomousState = await resolveAutonomousModeWithDefault(
+          this.userProfileStore,
+          identityKey,
+          {
+            enabled: this.autonomousDefaultEnabled,
+            hours: this.autonomousDefaultHours,
+          },
+        );
         if (autonomousState.enabled) {
           this.dmPolicy.initFromProfile(chatId, {
             autonomousMode: true,
             autonomousExpiresAt: autonomousState.expiresAt,
           }, userId);
+        } else {
+          this.dmPolicy.initFromProfile(chatId, { autonomousMode: false }, userId);
         }
       } catch {
         // Autonomous mode restoration failure is non-fatal
@@ -4993,144 +5003,7 @@ export class Orchestrator {
   }
 
   private normalizeInteractiveText(value: unknown): string {
-    return String(value ?? "").replace(/\s+/g, " ").trim();
-  }
-
-  private pickAutonomousChoice(options: string[], recommended?: string): string {
-    const normalizedRecommended = recommended?.trim().toLowerCase();
-    if (normalizedRecommended) {
-      const recommendedMatch = options.find((option) => option.toLowerCase() === normalizedRecommended);
-      if (recommendedMatch) {
-        return recommendedMatch;
-      }
-    }
-
-    const preferred = options.find((option) => AUTO_APPROVE_OPTION_PATTERN.test(option));
-    if (preferred) {
-      return preferred;
-    }
-
-    const fallback = options.find((option) => !AUTO_REJECT_OPTION_PATTERN.test(option));
-    return fallback ?? options[0] ?? "Continue";
-  }
-
-  private reviewAutonomousPlan(input: Record<string, unknown>, mode: ToolExecutionMode): ToolExecutionResult {
-    const summary = this.normalizeInteractiveText(input["summary"]);
-    const reasoning = this.normalizeInteractiveText(input["reasoning"]);
-    const steps = Array.isArray(input["steps"])
-      ? input["steps"]
-        .map((step) => this.normalizeInteractiveText(step))
-        .filter((step) => step.length > 0)
-      : [];
-    const issues: string[] = [];
-    const combinedText = [summary, reasoning, ...steps].filter((text) => text.length > 0);
-    const duplicatedStepCount = new Set(steps.map((step) => step.toLowerCase())).size;
-
-    if (summary.length < 12) {
-      issues.push("summary is too vague");
-    }
-    if (steps.length === 0) {
-      issues.push("steps are missing");
-    }
-    if (steps.some((step) => step.length < 8)) {
-      issues.push("one or more steps are too short to execute");
-    }
-    if (combinedText.some((text) => PLAN_PLACEHOLDER_PATTERN.test(text))) {
-      issues.push("plan contains placeholder language");
-    }
-    if (combinedText.some((text) => PLAN_WAIT_PATTERN.test(text))) {
-      issues.push("plan still waits for user approval");
-    }
-    if (steps.length > 0 && duplicatedStepCount !== steps.length) {
-      issues.push("steps repeat instead of progressing");
-    }
-    if (steps.length > 0 && !steps.some((step) => PLAN_EXECUTABLE_PATTERN.test(step))) {
-      issues.push("steps are not concrete enough");
-    }
-
-    if (issues.length > 0) {
-      return {
-        content:
-          `Autonomous plan review rejected (${mode} mode): ${issues.join("; ")}. ` +
-          "Revise the plan with concrete, executable, non-interactive steps and continue without waiting for user approval.",
-        isError: false,
-      };
-    }
-
-    return {
-      content:
-        `Autonomous plan review passed (${mode} mode). The ${steps.length}-step plan is concrete, ` +
-        "non-interactive, and executable. Proceed without waiting for user approval.",
-      isError: false,
-    };
-  }
-
-  private reviewAutonomousQuestion(input: Record<string, unknown>, mode: ToolExecutionMode): ToolExecutionResult {
-    const question = this.normalizeInteractiveText(input["question"]);
-    const context = this.normalizeInteractiveText(input["context"]);
-    const options = Array.isArray(input["options"])
-      ? input["options"]
-        .map((option) => this.normalizeInteractiveText(option))
-        .filter((option) => option.length > 0)
-      : [];
-    const recommended = this.normalizeInteractiveText(input["recommended"]);
-    const combinedText = [question, context, ...options].join(" ");
-    const looksLikePermissionGate =
-      PERMISSION_QUESTION_PATTERN.test(combinedText) ||
-      (options.some((option) => AUTO_APPROVE_OPTION_PATTERN.test(option)) &&
-        options.some((option) => AUTO_REJECT_OPTION_PATTERN.test(option)));
-
-    if (!question) {
-      return {
-        content:
-          `Autonomous question review rejected (${mode} mode): question is missing. ` +
-          "Do not wait for user input. Make the safest reasonable assumption from the task context and continue.",
-        isError: false,
-      };
-    }
-
-    if (options.length > 0) {
-      const choice = this.pickAutonomousChoice(options, recommended);
-      const rationale = looksLikePermissionGate
-        ? "this is a permission/confirmation gate, not a true blocker"
-        : "no interactive user is available in this execution mode";
-      return {
-        content:
-          `Autonomous question review (${mode} mode): ${rationale}. ` +
-          `Selected "${choice}" and approved continued execution.`,
-        isError: false,
-      };
-    }
-
-    return {
-      content:
-        `Autonomous question review (${mode} mode): no interactive user is available. ` +
-        "Make the safest reasonable assumption, state it briefly, and continue without waiting.",
-      isError: false,
-    };
-  }
-
-  private formatRequestedPlan(input: Record<string, unknown>): string | null {
-    const summary = this.normalizeInteractiveText(input["summary"]);
-    const reasoning = this.normalizeInteractiveText(input["reasoning"]);
-    const steps = Array.isArray(input["steps"])
-      ? input["steps"]
-        .map((step) => this.normalizeInteractiveText(step))
-        .filter((step) => step.length > 0)
-      : [];
-
-    if (!summary || steps.length === 0) {
-      return null;
-    }
-
-    const sections = [`Plan: ${summary}`, "", "Steps:"];
-    for (const [index, step] of steps.entries()) {
-      sections.push(`${index + 1}. ${step}`);
-    }
-    if (reasoning) {
-      sections.push("", `Reasoning: ${reasoning}`);
-    }
-    return sections.join("\n");
+    return normalizePolicyText(value);
   }
 
   private async resolveInteractiveToolCall(
@@ -5143,7 +5016,7 @@ export class Orchestrator {
     if (toolCall.name === "show_plan") {
       const explicitPlanReview = taskPrompt && userExplicitlyAskedForPlan(taskPrompt);
       if (explicitPlanReview) {
-        const planText = this.formatRequestedPlan(toolCall.input);
+        const planText = formatRequestedPlan(toolCall.input);
         if (!planText) {
           this.interactionPolicy.requirePlanReview(chatId, "user explicitly asked to review a plan first");
           return {
@@ -5197,7 +5070,7 @@ export class Orchestrator {
         };
       }
 
-      const review = this.reviewAutonomousPlan(toolCall.input, mode);
+      const review = reviewAutonomousPlan(toolCall.input, mode);
       return { toolCallId: toolCall.id, content: review.content, isError: review.isError };
     }
 
@@ -5206,7 +5079,7 @@ export class Orchestrator {
     }
 
     if (toolCall.name === "ask_user") {
-      const review = this.reviewAutonomousQuestion(toolCall.input, mode);
+      const review = reviewAutonomousQuestion(toolCall.input, mode);
       return { toolCallId: toolCall.id, content: review.content, isError: review.isError };
     }
 
@@ -5300,36 +5173,6 @@ export class Orchestrator {
       })
       .filter((line) => line.length > 0)
       .join("\n");
-  }
-
-  private parseShellReviewDecision(text: string): ShellCommandReviewDecision | null {
-    const trimmed = text.trim();
-    const candidates = [
-      trimmed,
-      trimmed.replace(/^```json\s*/i, "").replace(/```$/i, "").trim(),
-    ];
-    const braceStart = trimmed.indexOf("{");
-    const braceEnd = trimmed.lastIndexOf("}");
-    if (braceStart >= 0 && braceEnd > braceStart) {
-      candidates.push(trimmed.slice(braceStart, braceEnd + 1));
-    }
-
-    for (const candidate of candidates) {
-      if (!candidate) {
-        continue;
-      }
-
-      try {
-        const parsed = JSON.parse(candidate) as ShellCommandReviewDecision;
-        if (parsed && typeof parsed === "object") {
-          return parsed;
-        }
-      } catch {
-        // Try next candidate.
-      }
-    }
-
-    return null;
   }
 
   private recordAuxiliaryUsage(
@@ -5535,23 +5378,6 @@ export class Orchestrator {
     };
   }
 
-  private isSafeShellFallback(command: string): boolean {
-    const normalized = command.replace(/\s+/g, " ").trim();
-    if (!normalized || normalized.includes("|") || normalized.includes(";") || normalized.includes("||")) {
-      return false;
-    }
-    if (/(^|[^&])&([^&]|$)/.test(normalized)) {
-      return false;
-    }
-
-    const segments = normalized
-      .split(/\s*&&\s*/u)
-      .map((segment) => segment.trim())
-      .filter((segment) => segment.length > 0);
-
-    return segments.length > 0 && segments.every((segment) => SAFE_SHELL_SEGMENT_PATTERN.test(segment));
-  }
-
   private async reviewShellCommandWithProvider(
     chatId: string,
     command: string,
@@ -5599,7 +5425,7 @@ export class Orchestrator {
       });
 
       this.recordAuxiliaryUsage(provider.name, response.usage, options.onUsage ?? this.onUsage);
-      const decision = this.parseShellReviewDecision(response.text);
+      const decision = parseShellReviewDecision(response.text);
 
       if (decision?.decision === "approve" && decision.taskAligned !== false && decision.bounded !== false) {
         this.recordPhaseOutcome({
@@ -5652,7 +5478,7 @@ export class Orchestrator {
       // Fall back to local bounded-command heuristics below.
     }
 
-    if (this.isSafeShellFallback(command)) {
+    if (isSafeShellFallback(command)) {
       return { approved: true, reason: "shell review fallback approved a bounded development command" };
     }
 

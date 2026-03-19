@@ -10,6 +10,7 @@ import {
   generateEnvContent,
   getPostSetupWebLaunchCommand,
   getRemainingResponseProviderChoices,
+  resolveNodeUpgradeStrategy,
   getSuggestedNodeUpgradeCommand,
   launchMainWebAppAfterSetup,
   nodeSupportsWebPortalBuild,
@@ -191,7 +192,7 @@ describe("resolveNvmDir", () => {
 
     try {
       expect(resolveNvmDir({}, tempHome)).toBe(nvmDir);
-      expect(getSuggestedNodeUpgradeCommand({}, tempHome)).toBe(
+      expect(getSuggestedNodeUpgradeCommand({}, tempHome, "darwin")).toBe(
         "nvm install 22 && nvm use --delete-prefix 22 --silent",
       );
     } finally {
@@ -206,12 +207,23 @@ describe("resolveNvmDir", () => {
     writeFileSync(path.join(nvmDir, "nvm.sh"), "#!/bin/sh\n");
 
     try {
-      expect(getSuggestedNodeUpgradeCommand({}, tempHome)).toBe(
+      expect(getSuggestedNodeUpgradeCommand({}, tempHome, "darwin")).toBe(
         "nvm use --delete-prefix 22 --silent",
       );
     } finally {
       rmSync(tempHome, { recursive: true, force: true });
     }
+  });
+
+  it("prefers nvm-windows before winget on Windows", () => {
+    expect(resolveNodeUpgradeStrategy({}, "C:\\Users\\tester", "win32", (command) => command === "nvm")).toEqual({
+      kind: "windows-nvm",
+      suggestedCommand: "nvm install 22.12.0; nvm use 22.12.0",
+    });
+    expect(resolveNodeUpgradeStrategy({}, "C:\\Users\\tester", "win32", (command) => command === "winget")).toEqual({
+      kind: "winget",
+      suggestedCommand: "winget install OpenJS.NodeJS.LTS",
+    });
   });
 });
 
@@ -264,7 +276,7 @@ describe("getPostSetupWebLaunchCommand", () => {
     expect(getPostSetupWebLaunchCommand({
       STRADA_INSTALL_ROOT: "/Users/test/Strada.Brain",
       STRADA_LAUNCHER_PATH: "/Users/test/Strada.Brain/strada",
-    })).toEqual({
+    }, "/Users/test/Strada.Brain", "darwin")).toEqual({
       command: "/Users/test/Strada.Brain/strada",
       args: ["start", "--channel", "web"],
       cwd: "/Users/test/Strada.Brain",
@@ -272,12 +284,32 @@ describe("getPostSetupWebLaunchCommand", () => {
   })
 
   it("falls back to node execution when no launcher path exists", () => {
-    const command = getPostSetupWebLaunchCommand({}, "/Users/test/Strada.Brain")
+    const command = getPostSetupWebLaunchCommand({}, "/Users/test/Strada.Brain", "darwin")
     expect(command.command).toBe("node")
     expect(command.args.at(-3)).toBe("start")
     expect(command.args.at(-2)).toBe("--channel")
     expect(command.args.at(-1)).toBe("web")
     expect(command.cwd).toBe("/Users/test/Strada.Brain")
+  })
+
+  it("wraps PowerShell launchers correctly on Windows", () => {
+    expect(getPostSetupWebLaunchCommand({
+      STRADA_INSTALL_ROOT: "C:\\Repo\\Strada.Brain",
+      STRADA_LAUNCHER_PATH: "C:\\Repo\\Strada.Brain\\strada.ps1",
+    }, "C:\\Repo\\Strada.Brain", "win32")).toEqual({
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Repo\\Strada.Brain\\strada.ps1",
+        "start",
+        "--channel",
+        "web",
+      ],
+      cwd: "C:\\Repo\\Strada.Brain",
+    })
   })
 })
 
@@ -341,6 +373,22 @@ describe("launchMainWebAppAfterSetup", () => {
 describe("validateUnityPath", () => {
   it("accepts temp paths when HOME resolves through a symlinked tmp directory", () => {
     const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-home-"));
+    const projectDir = path.join(tempHome, "Projects", "MyGame");
+    mkdirSync(projectDir, { recursive: true });
+
+    try {
+      expect(validateUnityPath(projectDir, tempHome)).toEqual({ valid: true });
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts Windows-style project paths inside the user profile", () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-home-win-"));
     const projectDir = path.join(tempHome, "Projects", "MyGame");
     mkdirSync(projectDir, { recursive: true });
 

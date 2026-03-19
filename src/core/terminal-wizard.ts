@@ -18,7 +18,16 @@ import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
-import type { SetupWizard } from "./setup-wizard.js";
+import { buildSetupAccessUrl, type SetupWizard } from "./setup-wizard.js";
+import {
+  formatLauncherInvocation,
+  getBareCommand,
+  getPlatformInstallCommandGuidance,
+  getSourceDoctorCommand,
+  getSourceInstallCommand,
+  getSourceLauncherCommand,
+  getSourceSetupCommand,
+} from "../common/launcher-guidance.js";
 
 const MAX_RETRIES = 3;
 const RESPONSE_PROVIDER_CHOICES = [
@@ -64,7 +73,6 @@ const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../../web-portal/dist");
 const PACKAGED_WEB_SETUP_STATIC_DIR = path.resolve(MODULE_DIR, "../channels/web/static");
 const SETUP_HOST = "127.0.0.1";
-const SETUP_QUERY_PARAM = "strada-setup";
 
 export interface WizardAnswers {
   unityProjectPath: string;
@@ -120,7 +128,11 @@ export function validateUnityPath(inputPath: string, homeDir: string = os.homedi
     resolvedHome = homedir;
   }
 
-  if (resolved !== resolvedHome && !resolved.startsWith(resolvedHome + "/")) {
+  const relativeToHome = path.relative(resolvedHome, resolved);
+  const isInsideHome = relativeToHome === ""
+    || (!relativeToHome.startsWith("..") && !path.isAbsolute(relativeToHome));
+
+  if (!isInsideHome) {
     return { valid: false, error: `Path must be inside your home directory (${homedir}).` };
   }
 
@@ -333,14 +345,6 @@ function openBrowser(url: string): void {
   proc.unref();
 }
 
-function buildSetupAccessUrl(port: number): string {
-  const params = new URLSearchParams({
-    [SETUP_QUERY_PARAM]: "1",
-    t: Date.now().toString(),
-  });
-  return `http://${SETUP_HOST}:${port}/?${params.toString()}`;
-}
-
 async function waitForSetupUrlReady(
   url: string,
   maxAttempts = 20,
@@ -475,6 +479,22 @@ export function resolveNvmDir(
   return null;
 }
 
+function commandExists(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  spawnSyncFn: typeof spawnSync = spawnSync,
+): boolean {
+  const lookupCommand = platform === "win32" ? "where" : "which";
+  const result = spawnSyncFn(lookupCommand, [command], { stdio: "ignore" });
+  return result.status === 0;
+}
+
+export type NodeUpgradeStrategy =
+  | { kind: "posix-nvm"; suggestedCommand: string; nvmDir: string }
+  | { kind: "windows-nvm"; suggestedCommand: string }
+  | { kind: "winget"; suggestedCommand: string }
+  | { kind: "download" };
+
 function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -486,7 +506,20 @@ function buildShellCommand(parts: string[]): string {
 export function getSuggestedNodeUpgradeCommand(
   env: NodeJS.ProcessEnv = process.env,
   homeDir: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
+  commandExistsFn: (command: string, platform: NodeJS.Platform) => boolean = (commandName, commandPlatform) =>
+    commandExists(commandName, commandPlatform),
 ): string | null {
+  if (platform === "win32") {
+    if (commandExistsFn("nvm", platform)) {
+      return "nvm install 22.12.0; nvm use 22.12.0";
+    }
+    if (commandExistsFn("winget", platform)) {
+      return "winget install OpenJS.NodeJS.LTS";
+    }
+    return null;
+  }
+
   const nvmDir = resolveNvmDir(env, homeDir)
   if (!nvmDir) return null
 
@@ -499,6 +532,36 @@ export function getSuggestedNodeUpgradeCommand(
   } catch {
     return "nvm install 22 && nvm use --delete-prefix 22 --silent"
   }
+}
+
+function getNpmCommand(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "npm.cmd" : "npm";
+}
+
+export function resolveNodeUpgradeStrategy(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
+  commandExistsFn: (command: string, platform: NodeJS.Platform) => boolean = (commandName, commandPlatform) =>
+    commandExists(commandName, commandPlatform),
+): NodeUpgradeStrategy {
+  if (platform === "win32") {
+    const suggestedCommand = getSuggestedNodeUpgradeCommand(env, homeDir, platform, commandExistsFn);
+    if (suggestedCommand?.startsWith("nvm ")) {
+      return { kind: "windows-nvm", suggestedCommand };
+    }
+    if (suggestedCommand?.startsWith("winget ")) {
+      return { kind: "winget", suggestedCommand };
+    }
+    return { kind: "download" };
+  }
+
+  const nvmDir = resolveNvmDir(env, homeDir);
+  const suggestedCommand = getSuggestedNodeUpgradeCommand(env, homeDir, platform, commandExistsFn);
+  if (nvmDir && suggestedCommand) {
+    return { kind: "posix-nvm", suggestedCommand, nvmDir };
+  }
+  return { kind: "download" };
 }
 
 export function buildWebSetupUpgradeShellScript(
@@ -565,12 +628,14 @@ function continueWebSetupAfterNodeUpgrade(nvmDir: string): boolean {
 export function getPostSetupWebLaunchCommand(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = env["STRADA_INSTALL_ROOT"] ?? process.cwd(),
+  platform: NodeJS.Platform = process.platform,
 ): { command: string; args: string[]; cwd: string } {
   const launcherPath = env["STRADA_LAUNCHER_PATH"];
   if (launcherPath) {
+    const invocation = formatLauncherInvocation(launcherPath, ["start", "--channel", "web"], platform);
     return {
-      command: launcherPath,
-      args: ["start", "--channel", "web"],
+      command: invocation.command,
+      args: invocation.args,
       cwd,
     };
   }
@@ -689,12 +754,14 @@ export async function launchMainWebAppAfterSetup(
 async function promptForWebSetupUpgrade(
   rl: readline.Interface,
 ): Promise<"rerun" | "manual-upgrade"> {
+  const platform = process.platform;
+  const webSetupCommand = getSourceSetupCommand(platform, "web");
   console.log(
     `\n  Web setup needs Node.js 20.19+ or 22.12+ to build the full portal experience. Current Node: ${process.versions.node}.`,
   );
-  const nvmDir = resolveNvmDir();
-  const suggestedCommand = getSuggestedNodeUpgradeCommand();
-  if (nvmDir && suggestedCommand) {
+  const upgradeStrategy = resolveNodeUpgradeStrategy();
+  if (upgradeStrategy.kind === "posix-nvm") {
+    const suggestedCommand = upgradeStrategy.suggestedCommand;
     const alreadyInstalled = !suggestedCommand.includes("install 22");
     console.log(
       alreadyInstalled
@@ -712,18 +779,34 @@ async function promptForWebSetupUpgrade(
       console.log("  Installing the required Node.js version and relaunching Strada web setup...\n");
       return "rerun";
     }
+  } else if (upgradeStrategy.kind === "windows-nvm" || upgradeStrategy.kind === "winget") {
+    console.log(
+      upgradeStrategy.kind === "windows-nvm"
+        ? "  Strada detected nvm-windows and can guide the upgrade from a PowerShell window."
+        : "  Strada detected winget and can guide the Node.js LTS install from a PowerShell window.",
+    );
+    console.log(`  Run in PowerShell: ${upgradeStrategy.suggestedCommand}`);
+    console.log(`  Then rerun: ${webSetupCommand}`);
+    const answer = await rl.question("  Open a PowerShell window with that command now? [Y/n]: ");
+    const normalized = answer.trim().toLowerCase();
+    if (!normalized || normalized === "y" || normalized === "yes") {
+      const guidance = `${upgradeStrategy.suggestedCommand}; Write-Host ''; Write-Host 'After the install finishes, rerun ${webSetupCommand}'`;
+      spawn("cmd", ["/c", "start", '""', "powershell.exe", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", guidance], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
+    }
   } else {
     console.log("  Suggested upgrade path: install Node.js 22 LTS from nodejs.org.");
-  }
-
-  const answer = await rl.question("  Open the Node.js download page now? [Y/n]: ");
-  const normalized = answer.trim().toLowerCase();
-  if (!normalized || normalized === "y" || normalized === "yes") {
-    openBrowser("https://nodejs.org/en/download");
+    const answer = await rl.question("  Open the Node.js download page now? [Y/n]: ");
+    const normalized = answer.trim().toLowerCase();
+    if (!normalized || normalized === "y" || normalized === "yes") {
+      openBrowser("https://nodejs.org/en/download");
+    }
   }
 
   console.log("");
-  console.log("  After upgrading Node.js, run `strada setup --web` (or `./strada setup --web`) again.");
+  console.log(`  After upgrading Node.js, run \`${webSetupCommand}\` again.`);
   console.log("  Web remains the primary setup flow; Strada will not silently switch you to terminal setup.\n");
   return "manual-upgrade";
 }
@@ -739,7 +822,7 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
 
   if (!fs.existsSync(path.join(process.cwd(), "web-portal", "node_modules"))) {
     console.log("\n  Installing web setup dependencies...");
-    const installResult = spawnSync("npm", ["install", "--prefix", "web-portal"], {
+    const installResult = spawnSync(getNpmCommand(), ["install", "--prefix", "web-portal"], {
       stdio: "inherit",
       cwd: process.cwd(),
     });
@@ -749,7 +832,7 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
   }
 
   console.log("\n  Preparing web setup assets...");
-  const buildResult = spawnSync("npm", ["--prefix", "web-portal", "run", "build"], {
+  const buildResult = spawnSync(getNpmCommand(), ["--prefix", "web-portal", "run", "build"], {
     stdio: "inherit",
     cwd: process.cwd(),
   });
@@ -789,7 +872,7 @@ export async function runTerminalWizard(
       console.log("? Setup method:");
       console.log("  1) Web Browser (recommended)");
       console.log("  2) Terminal");
-      console.log("     Tip: next time you can jump straight in with `strada setup --web`.");
+      console.log(`     Tip: next time you can jump straight in with \`${getSourceSetupCommand(process.platform, "web")}\`.`);
       const method = await rl.question("  Choose [1/2] (default: 1): ");
       useWebWizard = method.trim() !== "2";
     }
@@ -801,13 +884,13 @@ export async function runTerminalWizard(
         if (upgradeAction === "rerun") {
           intentionalClose = true;
           rl.close();
-          const nvmDir = resolveNvmDir();
-          if (!nvmDir) {
+          const nodeUpgradeStrategy = resolveNodeUpgradeStrategy();
+          if (nodeUpgradeStrategy.kind !== "posix-nvm") {
             throw new Error("Strada could not locate nvm after approval. Please install Node.js 22 manually.");
           }
-          if (!continueWebSetupAfterNodeUpgrade(nvmDir)) {
+          if (!continueWebSetupAfterNodeUpgrade(nodeUpgradeStrategy.nvmDir)) {
           console.log("\n  Strada could not finish the automatic Node.js upgrade flow.");
-          console.log("  Please upgrade to Node.js 22 manually, then rerun `strada setup --web`.\n");
+          console.log(`  Please upgrade to Node.js 22 manually, then rerun \`${getSourceSetupCommand(process.platform, "web")}\`.\n`);
           }
           return undefined;
         }
@@ -826,7 +909,7 @@ export async function runTerminalWizard(
           "  Continue with terminal setup instead? [Y/n]: ",
         );
         if (termFallback.trim().toLowerCase() === "n") {
-          console.log("\n  Fix the build issue and rerun `strada setup --web`.\n");
+          console.log(`\n  Fix the build issue and rerun \`${getSourceSetupCommand(process.platform, "web")}\`.\n`);
           intentionalClose = true;
           rl.close();
           return undefined;
@@ -1118,9 +1201,13 @@ export async function runTerminalWizard(
 
     console.log("\n\u2705 .env created!");
     console.log("   Source checkout next steps:");
-    console.log("   1) Run `./strada doctor` from this repo root.");
-    console.log("   2) If you want the bare `strada` command everywhere, run `./strada install-command` once.");
-    console.log("   3) Then use either `strada doctor` / `strada start` or keep using `./strada ...`.\n");
+    console.log(`   1) Run \`${getSourceDoctorCommand(process.platform)}\` from this repo root.`);
+    console.log(`   2) If you want the bare \`strada\` command everywhere, run \`${getSourceInstallCommand(process.platform)}\` once.`);
+    console.log(`   3) Then use either \`${getBareCommand(["doctor"])}\` / \`${getBareCommand(["start"])}\` or keep using \`${getSourceLauncherCommand(process.platform)} ...\`.`);
+    for (const line of getPlatformInstallCommandGuidance(process.platform)) {
+      console.log(`      ${line}`);
+    }
+    console.log("");
     intentionalClose = true;
     rl.close();
     return undefined;

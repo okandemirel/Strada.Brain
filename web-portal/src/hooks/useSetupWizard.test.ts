@@ -99,4 +99,34 @@ describe('useSetupWizard helpers', () => {
 
     expect(result).toEqual({ state: 'booting', detail: 'Strada is starting.' })
   })
+
+  it('preserves provider warnings in setup bootstrap status responses', async () => {
+    const result = await readSetupBootstrapStatus(async (input) => {
+      if (String(input) === '/api/setup/status') {
+        return {
+          ok: true,
+          json: async () => ({
+            state: 'saved',
+            detail: 'Configuration accepted.',
+            providerWarnings: [{
+              providerId: 'kimi',
+              providerName: 'Kimi (Moonshot)',
+              detail: 'Kimi (Moonshot) health check failed. Verify the credential and network access.',
+            }],
+          }),
+        } as Response
+      }
+      throw new Error('unexpected fetch')
+    })
+
+    expect(result).toEqual({
+      state: 'saved',
+      detail: 'Configuration accepted.',
+      providerWarnings: [{
+        providerId: 'kimi',
+        providerName: 'Kimi (Moonshot)',
+        detail: 'Kimi (Moonshot) health check failed. Verify the credential and network access.',
+      }],
+    })
+  })
 })

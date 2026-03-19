@@ -37,6 +37,13 @@ interface LockContent {
 interface AutoUpdaterOptions {
   installRoot?: string;
   globalNpmRootResolver?: () => string | null;
+  commandRunner?: (
+    cmd: string,
+    args: string[],
+    timeoutMs: number,
+    cwd?: string,
+  ) => Promise<string>;
+  sourceLauncherRefresher?: () => Promise<void>;
 }
 
 export class AutoUpdater {
@@ -45,6 +52,13 @@ export class AutoUpdater {
   private readonly executor: BackgroundExecutorLike;
   private readonly installRoot: string;
   private readonly globalNpmRootResolver?: () => string | null;
+  private readonly commandRunner?: (
+    cmd: string,
+    args: string[],
+    timeoutMs: number,
+    cwd?: string,
+  ) => Promise<string>;
+  private readonly sourceLauncherRefresher?: () => Promise<void>;
   private installMethod: InstallMethod | null = null;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private pendingVersion: string | null = null;
@@ -62,6 +76,8 @@ export class AutoUpdater {
     this.executor = executor;
     this.installRoot = options.installRoot ?? AutoUpdater.resolveInstallRoot();
     this.globalNpmRootResolver = options.globalNpmRootResolver;
+    this.commandRunner = options.commandRunner;
+    this.sourceLauncherRefresher = options.sourceLauncherRefresher;
   }
 
   static resolveInstallRoot(moduleUrl: string = import.meta.url): string {
@@ -98,7 +114,8 @@ export class AutoUpdater {
     }
 
     try {
-      const result = spawnSync("npm", ["root", "-g"], {
+      const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+      const result = spawnSync(npmCommand, ["root", "-g"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       });
@@ -182,22 +199,57 @@ export class AutoUpdater {
     });
   }
 
+  private runCommand(
+    cmd: string,
+    args: string[],
+    timeoutMs: number,
+    cwd?: string,
+  ): Promise<string> {
+    if (this.commandRunner) {
+      return this.commandRunner(cmd, args, timeoutMs, cwd);
+    }
+    return this.spawnWithTimeout(cmd, args, timeoutMs, cwd);
+  }
+
+  private async refreshSourceLauncherBindings(): Promise<void> {
+    if (this.sourceLauncherRefresher) {
+      await this.sourceLauncherRefresher();
+      return;
+    }
+
+    if (!process.env["STRADA_LAUNCHER_PATH"]) {
+      return;
+    }
+
+    const sourceLauncherPath = path.join(this.installRoot, "scripts", "source-launcher.mjs");
+    if (!fs.existsSync(sourceLauncherPath)) {
+      return;
+    }
+
+    await this.runCommand(
+      process.execPath,
+      [sourceLauncherPath, "refresh-command-bindings"],
+      UPDATE_TIMEOUT,
+      this.installRoot,
+    );
+  }
+
   async checkForUpdate(): Promise<UpdateCheckResult> {
     const currentVersion = this.getCurrentVersion();
     const method = this.detectInstallMethod();
 
     try {
       if (method === "git") {
-        await this.spawnWithTimeout(
+        await this.runCommand(
           "git",
           ["fetch", "origin", "main"],
           VERSION_CHECK_TIMEOUT,
           this.installRoot,
         );
         // Ensure local ref is resolved (side-effect: validates git state)
-        await this.spawnWithTimeout("git", ["rev-parse", "HEAD"], VERSION_CHECK_TIMEOUT, this.installRoot);
+        await this.runCommand("git", ["rev-parse", "HEAD"], VERSION_CHECK_TIMEOUT, this.installRoot);
         const remoteRev = (
-          await this.spawnWithTimeout(
+          await this.runCommand(
             "git",
             ["rev-parse", "origin/main"],
             VERSION_CHECK_TIMEOUT,
@@ -206,7 +258,7 @@ export class AutoUpdater {
         ).trim();
         // Check if origin/main has commits we don't have (remote is ahead)
         const behindCount = (
-          await this.spawnWithTimeout(
+          await this.runCommand(
             "git",
             ["rev-list", "--count", `HEAD..origin/main`],
             VERSION_CHECK_TIMEOUT,
@@ -220,7 +272,7 @@ export class AutoUpdater {
         };
       } else {
         const distTag = this.config.channel === "latest" ? "latest" : "stable";
-        const output = await this.spawnWithTimeout(
+        const output = await this.runCommand(
           "npm",
           ["view", `strada-brain@${distTag}`, "version"],
           VERSION_CHECK_TIMEOUT,
@@ -248,7 +300,7 @@ export class AutoUpdater {
 
       if (method === "git") {
         const prePullSha = (
-          await this.spawnWithTimeout(
+          await this.runCommand(
             "git",
             ["rev-parse", "HEAD"],
             VERSION_CHECK_TIMEOUT,
@@ -256,33 +308,43 @@ export class AutoUpdater {
           )
         ).trim();
         try {
-          await this.spawnWithTimeout(
+          await this.runCommand(
             "git",
             ["pull", "origin", "main"],
             UPDATE_TIMEOUT,
             this.installRoot,
           );
-          await this.spawnWithTimeout("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
+          await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
         } catch (buildErr) {
           try {
-            await this.spawnWithTimeout(
+            await this.runCommand(
               "git",
               ["reset", "--hard", prePullSha],
               VERSION_CHECK_TIMEOUT,
               this.installRoot,
             );
             // Restore old dependencies after source rollback
-            await this.spawnWithTimeout("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
+            await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
           } catch {
             // Rollback failed — nothing we can do
           }
           throw buildErr;
         }
+
+        try {
+          await this.refreshSourceLauncherBindings();
+        } catch (refreshErr) {
+          if (this.notifyFn) {
+            this.notifyFn(
+              `Update succeeded, but launcher bindings were not refreshed. Run \`./strada install-command\`. Reason: ${(refreshErr as Error).message}`,
+            );
+          }
+        }
       } else {
         const args = method === "npm-global"
           ? ["install", "-g", `strada-brain@${this.config.channel}`]
           : ["install", `strada-brain@${this.config.channel}`];
-        await this.spawnWithTimeout("npm", args, UPDATE_TIMEOUT, method === "npm-local" ? this.installRoot : undefined);
+        await this.runCommand("npm", args, UPDATE_TIMEOUT, method === "npm-local" ? this.installRoot : undefined);
       }
 
       return true;

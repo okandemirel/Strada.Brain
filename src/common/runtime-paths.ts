@@ -14,6 +14,7 @@ export interface RuntimePathOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
+  platform?: NodeJS.Platform;
   installRoot?: string;
   sourceCheckout?: boolean;
 }
@@ -27,10 +28,14 @@ export function resolveStradaHome(
   env: NodeJS.ProcessEnv = process.env,
   homeDir: string = os.homedir(),
   cwd: string = process.cwd(),
+  platform: NodeJS.Platform = process.platform,
 ): string {
   const configured = env["STRADA_HOME"]?.trim();
   if (configured) {
     return path.isAbsolute(configured) ? configured : path.resolve(cwd, configured);
+  }
+  if (platform === "win32") {
+    return path.join(env["LOCALAPPDATA"] || path.join(homeDir, "AppData", "Local"), "Strada");
   }
   return path.join(homeDir, ".strada");
 }
@@ -42,11 +47,12 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
     ?? resolveInstallRoot(options.moduleUrl);
   const cwd = options.cwd ?? process.cwd();
   const homeDir = options.homeDir ?? os.homedir();
+  const platform = options.platform ?? process.platform;
   const sourceCheckout = options.sourceCheckout
     ?? (env["STRADA_SOURCE_CHECKOUT"] === "true"
       ? true
       : existsSync(path.join(installRoot, ".git")));
-  const configRoot = sourceCheckout ? installRoot : resolveStradaHome(env, homeDir, cwd);
+  const configRoot = sourceCheckout ? installRoot : resolveStradaHome(env, homeDir, cwd, platform);
 
   return {
     installRoot,

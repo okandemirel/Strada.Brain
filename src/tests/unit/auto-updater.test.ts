@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -13,6 +13,7 @@ describe("AutoUpdater", () => {
       } catch {}
     }
     tmpDirs.length = 0;
+    vi.restoreAllMocks();
   });
 
   function makeTmpDir(): string {
@@ -188,6 +189,75 @@ describe("AutoUpdater", () => {
         { installRoot: dir },
       );
       expect(() => updater.shutdown()).not.toThrow();
+    });
+  });
+
+  describe("performUpdate", () => {
+    it("refreshes installed launcher bindings after a successful git update", async () => {
+      const dir = makeTmpDir();
+      fs.mkdirSync(path.join(dir, ".git"));
+
+      const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse") {
+          return "abc123\n";
+        }
+        return "";
+      });
+      const sourceLauncherRefresher = vi.fn(async () => {});
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        {
+          installRoot: dir,
+          commandRunner,
+          sourceLauncherRefresher,
+        },
+      );
+
+      await expect(updater.performUpdate()).resolves.toBe(true);
+      expect(commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`)).toEqual([
+        "git rev-parse HEAD",
+        "git pull origin main",
+        "npm run build",
+      ]);
+      expect(sourceLauncherRefresher).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the update successful when launcher refresh fails", async () => {
+      const dir = makeTmpDir();
+      fs.mkdirSync(path.join(dir, ".git"));
+
+      const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse") {
+          return "abc123\n";
+        }
+        return "";
+      });
+      const sourceLauncherRefresher = vi.fn(async () => {
+        throw new Error("wrapper rewrite failed");
+      });
+      const notifyFn = vi.fn();
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        {
+          installRoot: dir,
+          commandRunner,
+          sourceLauncherRefresher,
+        },
+      );
+      updater.setNotifyFn(notifyFn);
+
+      await expect(updater.performUpdate()).resolves.toBe(true);
+      expect(notifyFn).toHaveBeenCalledWith(
+        expect.stringContaining("launcher bindings were not refreshed"),
+      );
     });
   });
 });

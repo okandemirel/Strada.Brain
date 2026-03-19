@@ -39,26 +39,36 @@
       <h2>Option 1 — Use terminal setup now</h2>
       <p>Configure Strada without building the portal:</p>
       <div class="cmd-block">
-        <span class="comment"># from the Strada.Brain directory</span><br>
-        ./strada setup --terminal
+        <span class="comment"># macOS / Linux</span><br>
+        ./strada setup --terminal<br>
+        <br>
+        <span class="comment"># Windows PowerShell</span><br>
+        .\strada.ps1 setup --terminal
       </div>
     </div>
 
     <div class="section">
       <h2>Option 2 — Upgrade Node.js, then rebuild</h2>
       <div class="cmd-block">
-        <span class="comment"># with nvm</span><br>
+        <span class="comment"># macOS / Linux with nvm</span><br>
         nvm install 22 &amp;&amp; nvm use 22<br>
         <br>
+        <span class="comment"># Windows PowerShell with nvm-windows</span><br>
+        nvm install 22.12.0 &amp;&amp; nvm use 22.12.0<br>
+        <br>
+        <span class="comment"># or Windows PowerShell with winget</span><br>
+        winget install OpenJS.NodeJS.LTS<br>
+        <br>
         <span class="comment"># then run web setup</span><br>
-        ./strada setup --web
+        ./strada setup --web<br>
+        .\strada.ps1 setup --web
       </div>
     </div>
 
     <hr class="divider" />
 
     <p class="footer">
-      Once configured, start Strada with <code>./strada start</code>.
+      Once configured, start Strada with <code>./strada start</code> on macOS/Linux or <code>.\strada.ps1 start</code> on Windows.
       The full portal becomes available after a successful build.
     </p>
   </div>

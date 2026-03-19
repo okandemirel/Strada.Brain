@@ -36,6 +36,9 @@ import {
 import type { ChainResilienceConfig } from "../learning/chains/chain-types.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
 import type { ProviderOfficialSnapshot } from "../agents/providers/provider-source-registry.js";
+import type { BootReport } from "../common/capability-contract.js";
+import { buildConfigCatalogEntries, summarizeConfigCatalog } from "../config/config-catalog.js";
+import { resolveAutonomousModeWithDefault } from "../memory/unified/user-profile-store.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -315,6 +318,7 @@ interface DashboardProviderManager {
 
 /** Structural interface for user profile store used by dashboard /api/user endpoints */
 interface DashboardUserProfileStore {
+  getProfile?(chatId: string): { preferences: Record<string, unknown> } | null;
   setAutonomousMode(chatId: string, enabled: boolean, expiresAt?: number): Promise<void>;
   isAutonomousMode(chatId: string): Promise<{ enabled: boolean; expiresAt?: number; remainingMs?: number }>;
 }
@@ -436,6 +440,7 @@ export class DashboardServer {
   // Provider router for agent activity / routing decisions
   private providerRouter?: DashboardProviderRouter;
   private startupNotices: string[] = [];
+  private bootReport?: BootReport;
 
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
@@ -524,6 +529,7 @@ export class DashboardServer {
     userProfileStore?: DashboardUserProfileStore;
     embeddingStatusProvider?: DashboardEmbeddingStatusProvider;
     stradaDeps?: StradaDepsStatus;
+    bootReport?: BootReport;
   }): void {
     this.toolRegistry = services.toolRegistry ?? this.toolRegistry;
     this.orchestratorSessions = services.orchestratorSessions ?? this.orchestratorSessions;
@@ -533,6 +539,7 @@ export class DashboardServer {
     this.userProfileStore = services.userProfileStore ?? this.userProfileStore;
     this.embeddingStatusProvider = services.embeddingStatusProvider ?? this.embeddingStatusProvider;
     this.stradaDeps = services.stradaDeps ?? this.stradaDeps;
+    this.bootReport = services.bootReport ?? this.bootReport;
   }
 
   /**
@@ -561,6 +568,7 @@ export class DashboardServer {
     daemonStorage?: DaemonStorage;
     historyDepth?: number;
     triggerFireRetentionDays?: number;
+    bootReport?: BootReport;
   }): void {
     this.daemonHeartbeatLoop = ctx.heartbeatLoop;
     this.daemonRegistry = ctx.registry;
@@ -597,6 +605,23 @@ export class DashboardServer {
     if (ctx.triggerFireRetentionDays !== undefined) {
       this.triggerFireRetentionDays = ctx.triggerFireRetentionDays;
     }
+    if (ctx.bootReport) {
+      this.bootReport = ctx.bootReport;
+    }
+  }
+
+  private getAutonomousDefaults(): { enabled: boolean; hours: number } {
+    const config = this.configSnapshot ? this.configSnapshot() : {};
+    const rawEnabled = config["autonomousDefaultEnabled"];
+    const rawHours = config["autonomousDefaultHours"];
+    const hours = typeof rawHours === "number" && Number.isFinite(rawHours)
+      ? Math.min(168, Math.max(1, Math.trunc(rawHours)))
+      : 24;
+
+    return {
+      enabled: rawEnabled === true,
+      hours,
+    };
   }
 
   async start(): Promise<void> {
@@ -803,11 +828,12 @@ export class DashboardServer {
             triggers: [],
             budget: { usedUsd: 0, limitUsd: 0, pct: 0 },
             approvalQueue: [],
-            identity: fallbackIdentity,
-            capabilityManifest: this.capabilityManifest ?? null,
-            triggerHistory: [],
-            startupNotices: this.startupNotices,
-          }));
+          identity: fallbackIdentity,
+          capabilityManifest: this.capabilityManifest ?? null,
+          bootReport: this.bootReport ?? null,
+          triggerHistory: [],
+          startupNotices: this.startupNotices,
+        }));
           return;
         }
 
@@ -862,6 +888,7 @@ export class DashboardServer {
           })),
           identity,
           capabilityManifest: this.capabilityManifest ?? null,
+          bootReport: this.bootReport ?? null,
           triggerHistory,
           startupNotices: this.startupNotices,
         }));
@@ -1024,8 +1051,19 @@ export class DashboardServer {
       if (url === "/api/config") {
         const config = this.configSnapshot ? this.configSnapshot() : {};
         const masked = DashboardServer.maskSensitiveConfig(config);
+        const entries = buildConfigCatalogEntries(masked);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ config: masked }));
+        res.end(JSON.stringify({
+          config: masked,
+          entries,
+          summary: summarizeConfigCatalog(entries),
+        }));
+        return;
+      }
+
+      if (url === "/api/system/boot") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ bootReport: this.bootReport ?? null }));
         return;
       }
 
@@ -1287,7 +1325,11 @@ export class DashboardServer {
           return;
         }
         const identityKey = resolveDashboardIdentityKey(chatId, userId, conversationId);
-        void this.userProfileStore.isAutonomousMode(identityKey).then((result) => {
+        void resolveAutonomousModeWithDefault(
+          this.userProfileStore,
+          identityKey,
+          this.getAutonomousDefaults(),
+        ).then((result) => {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(result));
         }).catch((err) => {

@@ -2,6 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveRuntimePaths } from "../common/runtime-paths.js";
+import {
+  getPackagedAppHomeDescription,
+  getSourceLauncherCommand,
+  getSourceSetupCommand,
+} from "../common/launcher-guidance.js";
 import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 import { loadConfigSafe, type Config } from "../config/config.js";
 import { resolveEmbeddingProvider, describeEmbeddingResolutionFailure } from "../rag/embeddings/embedding-resolver.js";
@@ -16,6 +21,7 @@ import {
   formatProviderPreflightFailures,
   preflightResponseProviders,
 } from "./response-provider-preflight.js";
+import { buildCapabilitySnapshot, summarizeCapabilityHealth } from "./boot-report.js";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -48,6 +54,7 @@ interface DoctorOptions {
   installRoot?: string;
   configRoot?: string;
   nodeVersion?: string;
+  platform?: NodeJS.Platform;
   configResult?: ConfigResult;
 }
 
@@ -83,7 +90,8 @@ function summarizeResponseWorker(config: Config): string {
 }
 
 export async function collectDoctorReport(options: DoctorOptions = {}): Promise<DoctorReport> {
-  const runtimePaths = resolveRuntimePaths({ moduleUrl: import.meta.url });
+  const platform = options.platform ?? process.platform;
+  const runtimePaths = resolveRuntimePaths({ moduleUrl: import.meta.url, platform });
   const installRoot = options.installRoot ?? runtimePaths.installRoot;
   const configRoot = options.configRoot ?? runtimePaths.configRoot;
   const configResult = options.configResult ?? (loadConfigSafe() as ConfigResult);
@@ -139,7 +147,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
     detail: buildReady
       ? "CLI and embedded web dashboard assets are built."
       : (installMethod === "git" && sourceRuntimeReady
-          ? "Built dist/ artifacts are missing, but this source checkout can still run through `strada` / `./strada`."
+          ? `Built dist/ artifacts are missing, but this source checkout can still run through \`${getSourceLauncherCommand(platform)}\` or the installed bare \`strada\` command.`
           : "Built CLI/web assets are missing from dist/."),
     fix: buildReady
       ? undefined
@@ -156,7 +164,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
       label: "Configuration",
       status: "fail",
       detail: `No .env file was found in ${configRoot}.`,
-      fix: "Run `strada setup --web`, `strada setup --terminal`, or `npm run setup:web`.",
+      fix: `Run \`${getSourceSetupCommand(platform, "web")}\`, \`${getSourceSetupCommand(platform, "terminal")}\`, or \`npm run setup:web\`.`,
     });
   } else if (configResult.kind === "error") {
     checks.push({
@@ -164,7 +172,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
       label: "Configuration",
       status: "fail",
       detail: `Config validation failed: ${configResult.error}`,
-      fix: "Re-run `strada setup --web` or `strada setup --terminal` and save a valid configuration.",
+      fix: `Re-run \`${getSourceSetupCommand(platform, "web")}\` or \`${getSourceSetupCommand(platform, "terminal")}\` and save a valid configuration.`,
     });
   } else {
     checks.push({
@@ -194,7 +202,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
       providerCheck.detail =
         `${providerCheck.detail} Failed preflight: ${formatProviderPreflightFailures(preflightResult.failures)}`;
       providerCheck.fix =
-        "Re-run `strada setup` and fix the failing response-worker credentials before starting Strada.";
+        `Re-run \`${getSourceSetupCommand(platform)}\` and fix the failing response-worker credentials before starting Strada.`;
     }
     checks.push(providerCheck);
 
@@ -222,7 +230,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
           : `${authInspection.detail} OpenAI conversation turns will fail until you sign in again or switch auth mode.`,
         fix: authInspection.ok
           ? undefined
-          : "Sign in again with Codex/ChatGPT on this machine, or re-run `strada setup` and switch OpenAI to API-key mode.",
+          : `Sign in again with Codex/ChatGPT on this machine, or re-run \`${getSourceSetupCommand(platform)}\` and switch OpenAI to API-key mode.`,
       });
     }
 
@@ -248,6 +256,32 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
           : "Add a usable embedding credential or switch `EMBEDDING_PROVIDER` to a supported local/remote provider.",
       });
     }
+
+    const capabilities = buildCapabilitySnapshot({
+      config: configResult.value,
+      installRoot,
+      channelType: "doctor",
+      daemonMode: false,
+      providerHealthy: undefined,
+      embeddingStatus: {
+        state: configResult.value.rag.enabled
+          ? (resolveEmbeddingProvider(configResult.value) ? "active" : "degraded")
+          : "disabled",
+        verified: false,
+        usingHashFallback: !resolveEmbeddingProvider(configResult.value),
+      },
+      deploymentWired: false,
+      alertingWired: false,
+      backupWired: false,
+    });
+    const capabilityHealth = summarizeCapabilityHealth(capabilities);
+    checks.push({
+      id: "capability-truth",
+      label: "Capability truth",
+      status: capabilityHealth.status,
+      detail: capabilityHealth.detail,
+      fix: capabilityHealth.fix,
+    });
   }
 
   return {
@@ -260,7 +294,8 @@ export async function runDoctorCommand(): Promise<number> {
   const report = await collectDoctorReport();
 
   console.log("\nStrada Doctor");
-  console.log("=============\n");
+  console.log("=============");
+  console.log(`Runtime app home default: ${getPackagedAppHomeDescription(process.platform)}\n`);
   for (const check of report.checks) {
     console.log(`[${formatStatus(check.status)}] ${check.label}`);
     console.log(`  ${check.detail}`);

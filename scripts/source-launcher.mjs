@@ -1,0 +1,848 @@
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
+const PACKAGE_JSON = path.join(ROOT_DIR, "package.json");
+const DIST_ENTRY = path.join(ROOT_DIR, "dist", "index.js");
+const SOURCE_ENTRY = path.join(ROOT_DIR, "src", "index.ts");
+const MANAGED_BLOCK_START = "# >>> Strada command >>>";
+const MANAGED_BLOCK_END = "# <<< Strada command <<<";
+const DEFAULT_RUNTIME_PURGE_TARGETS = [
+  { key: "MEMORY_DB_PATH", fallback: ".strada-memory", type: "directory" },
+  { key: "WHATSAPP_SESSION_PATH", fallback: ".whatsapp-session", type: "directory" },
+  { key: "LOG_FILE", fallback: "strada-brain.log", type: "file" },
+  { key: "DAEMON_HEARTBEAT_FILE", fallback: "./HEARTBEAT.md", type: "file" },
+  { key: "", fallback: "strada-brain-error.log", type: "file" },
+  { key: "", fallback: ".strada-update.lock", type: "file" },
+  { key: "", fallback: "data/tasks.db", type: "file" },
+];
+
+function isWindows(platform = process.platform) {
+  return platform === "win32";
+}
+
+function quotePosixSingle(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function quotePowerShellSingle(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function quoteCmdDouble(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function ensureRepositoryRoot() {
+  if (!existsSync(PACKAGE_JSON)) {
+    console.error(`Could not find package.json in ${ROOT_DIR}`);
+    console.error("Run this launcher from the Strada.Brain repository root.");
+    process.exit(1);
+  }
+}
+
+function printMissingNpm() {
+  console.error("Strada requires npm so it can prepare the local checkout.");
+}
+
+function resolveCommandBinary(command, platform = process.platform) {
+  return isWindows(platform) ? `${command}.cmd` : command;
+}
+
+function ensureSourceCheckout() {
+  ensureRepositoryRoot();
+  const npmCommand = resolveCommandBinary("npm");
+  try {
+    execFileSync(npmCommand, ["--version"], { stdio: "ignore" });
+  } catch {
+    printMissingNpm();
+    process.exit(1);
+  }
+
+  if (!existsSync(path.join(ROOT_DIR, "node_modules"))) {
+    console.log("Preparing Strada dependencies...");
+    const result = spawnSync(npmCommand, ["install"], {
+      cwd: ROOT_DIR,
+      stdio: "inherit",
+    });
+    if (result.status !== 0) {
+      process.exit(result.status ?? 1);
+    }
+  }
+}
+
+function ensurePrepared() {
+  ensureSourceCheckout();
+  if (!existsSync(DIST_ENTRY)) {
+    console.log("Preparing Strada build...");
+    const result = spawnSync(resolveCommandBinary("npm"), ["run", "bootstrap"], {
+      cwd: ROOT_DIR,
+      stdio: "inherit",
+    });
+    if (result.status !== 0) {
+      process.exit(result.status ?? 1);
+    }
+  }
+}
+
+function normalizeWindowsPathEntry(value) {
+  return String(value).replace(/[\\/]+$/, "").toLowerCase();
+}
+
+function normalizePathForComparison(value, platform = process.platform) {
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
+  const resolved = pathImpl.resolve(String(value));
+  const trimmed = resolved.replace(/[\\/]+$/, "");
+  return platform === "win32" ? trimmed.toLowerCase() : trimmed;
+}
+
+function pathsEqual(left, right, platform = process.platform) {
+  return normalizePathForComparison(left, platform) === normalizePathForComparison(right, platform);
+}
+
+function isWithinPath(targetPath, parentPath) {
+  const relative = path.relative(parentPath, targetPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+export function mergeWindowsUserPath(existingPath, installDir) {
+  const current = String(existingPath ?? "").trim();
+  const present = current
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .some((entry) => normalizeWindowsPathEntry(entry) === normalizeWindowsPathEntry(installDir));
+
+  if (present) {
+    return {
+      updated: false,
+      path: current,
+    };
+  }
+
+  return {
+    updated: true,
+    path: current ? `${installDir};${current}` : installDir,
+  };
+}
+
+export function removeWindowsUserPath(existingPath, installDir) {
+  const current = String(existingPath ?? "").trim();
+  if (!current) {
+    return {
+      updated: false,
+      path: "",
+    };
+  }
+
+  const remaining = current
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => normalizeWindowsPathEntry(entry) !== normalizeWindowsPathEntry(installDir));
+  const next = remaining.join(";");
+
+  return {
+    updated: next !== current,
+    path: next,
+  };
+}
+
+function hasWindowsPathEntry(existingPath, installDir) {
+  return !mergeWindowsUserPath(existingPath, installDir).updated;
+}
+
+function defaultWindowsPathSync(installDir) {
+  const readScript = "[Environment]::GetEnvironmentVariable('Path','User')";
+  const existing = execFileSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", readScript],
+    { encoding: "utf8" },
+  ).trim();
+  const merged = mergeWindowsUserPath(existing, installDir);
+  if (merged.updated) {
+    const escapedPath = quotePowerShellSingle(merged.path);
+    execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `[Environment]::SetEnvironmentVariable('Path', ${escapedPath}, 'User')`,
+      ],
+      { stdio: "ignore" },
+    );
+  }
+  return merged;
+}
+
+function defaultWindowsPathRemoveSync(installDir) {
+  const readScript = "[Environment]::GetEnvironmentVariable('Path','User')";
+  const existing = execFileSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", readScript],
+    { encoding: "utf8" },
+  ).trim();
+  const updated = removeWindowsUserPath(existing, installDir);
+  if (updated.updated) {
+    const escapedPath = quotePowerShellSingle(updated.path);
+    execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `[Environment]::SetEnvironmentVariable('Path', ${escapedPath}, 'User')`,
+      ],
+      { stdio: "ignore" },
+    );
+  }
+  return updated;
+}
+
+function defaultWindowsDeferredDelete(targetPaths, installDir) {
+  const existingTargets = targetPaths.filter((targetPath) => existsSync(targetPath));
+  if (existingTargets.length === 0) {
+    return false;
+  }
+
+  const deleteCommands = existingTargets
+    .map((targetPath) => `del /f /q ${quoteCmdDouble(targetPath)} >nul 2>nul`)
+    .join(" & ");
+  const cleanupScript = [
+    "ping 127.0.0.1 -n 3 >nul",
+    deleteCommands,
+    `if exist ${quoteCmdDouble(installDir)} rd ${quoteCmdDouble(installDir)} >nul 2>nul`,
+  ].join(" & ");
+
+  const cleanupProcess = spawn("cmd.exe", ["/d", "/s", "/c", cleanupScript], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  cleanupProcess.unref();
+  return true;
+}
+
+function getPosixInstallDir(env = process.env, homeDir = os.homedir()) {
+  return env.XDG_BIN_HOME || path.join(homeDir, ".local", "bin");
+}
+
+function getWindowsLocalAppData(env = process.env, homeDir = os.homedir()) {
+  return env.LOCALAPPDATA || path.join(homeDir, "AppData", "Local");
+}
+
+function getWindowsInstallDir(env = process.env, homeDir = os.homedir()) {
+  return path.join(getWindowsLocalAppData(env, homeDir), "Strada", "bin");
+}
+
+function getDefaultLauncherPath(wrapperKind) {
+  if (wrapperKind === "powershell") return path.join(ROOT_DIR, "strada.ps1");
+  if (wrapperKind === "cmd") return path.join(ROOT_DIR, "strada.cmd");
+  return path.join(ROOT_DIR, "strada");
+}
+
+function buildPosixWrapper({ wrapperPath }) {
+  const nodeBinExpr = "${STRADA_NODE_PATH:-node}";
+  return `#!/bin/sh
+NODE_BIN="${nodeBinExpr}"
+exec "$NODE_BIN" ${quotePosixSingle(path.join(ROOT_DIR, "scripts", "source-launcher.mjs"))} --wrapper-kind posix --wrapper-path ${quotePosixSingle(wrapperPath)} "$@"
+`;
+}
+
+function buildPowerShellWrapper() {
+  const sourceLauncherPath = quotePowerShellSingle(path.join(ROOT_DIR, "scripts", "source-launcher.mjs"));
+  return `$ErrorActionPreference = "Stop"
+$nodePath = if ($env:STRADA_NODE_PATH) { $env:STRADA_NODE_PATH } else { "node" }
+$launcherPath = $MyInvocation.MyCommand.Path
+& $nodePath ${sourceLauncherPath} '--wrapper-kind' 'powershell' '--wrapper-path' $launcherPath @args
+exit $LASTEXITCODE
+`;
+}
+
+function buildCmdWrapper() {
+  return `@echo off
+setlocal
+set "STRADA_SOURCE_LAUNCHER=${path.join(ROOT_DIR, "scripts", "source-launcher.mjs")}"
+if defined STRADA_NODE_PATH (
+  set "NODE_EXE=%STRADA_NODE_PATH%"
+) else (
+  set "NODE_EXE=node"
+)
+"%NODE_EXE%" "%STRADA_SOURCE_LAUNCHER%" --wrapper-kind cmd --wrapper-path "%~f0" %*
+exit /b %ERRORLEVEL%
+`;
+}
+
+function detectProfilePath(env = process.env, homeDir = os.homedir()) {
+  const shellName = path.basename(env.SHELL || "sh");
+  if (shellName === "fish") {
+    return {
+      shellName,
+      profilePath: path.join(env.XDG_CONFIG_HOME || path.join(homeDir, ".config"), "fish", "conf.d", "strada.fish"),
+    };
+  }
+  if (shellName === "bash") {
+    const bashProfile = path.join(homeDir, ".bash_profile");
+    return {
+      shellName,
+      profilePath: existsSync(bashProfile) ? bashProfile : path.join(homeDir, ".bashrc"),
+    };
+  }
+  if (shellName === "zsh") {
+    return {
+      shellName,
+      profilePath: path.join(env.ZDOTDIR || homeDir, ".zshrc"),
+    };
+  }
+  return {
+    shellName,
+    profilePath: path.join(homeDir, ".profile"),
+  };
+}
+
+function getManagedProfilePaths(env = process.env, homeDir = os.homedir()) {
+  return Array.from(new Set([
+    path.join(env.ZDOTDIR || homeDir, ".zshrc"),
+    path.join(homeDir, ".bash_profile"),
+    path.join(homeDir, ".bashrc"),
+    path.join(homeDir, ".profile"),
+    path.join(env.XDG_CONFIG_HOME || path.join(homeDir, ".config"), "fish", "conf.d", "strada.fish"),
+    detectProfilePath(env, homeDir).profilePath,
+  ]));
+}
+
+function appendManagedPathBlock(profilePath, installDir, shellName) {
+  mkdirSync(path.dirname(profilePath), { recursive: true });
+  const content = existsSync(profilePath) ? readFileSync(profilePath, "utf8") : "";
+  if (content.includes(MANAGED_BLOCK_START)) {
+    return false;
+  }
+
+  const block = shellName === "fish"
+    ? `${MANAGED_BLOCK_START}
+if not contains "${installDir}" $PATH
+    set -gx PATH "${installDir}" $PATH
+end
+${MANAGED_BLOCK_END}
+`
+    : `${MANAGED_BLOCK_START}
+case ":$PATH:" in
+  *:"${installDir}":*) ;;
+  *) export PATH="${installDir}:$PATH" ;;
+esac
+${MANAGED_BLOCK_END}
+`;
+
+  writeFileSync(profilePath, `${content}${content.endsWith("\n") || content.length === 0 ? "" : "\n"}${block}`);
+  return true;
+}
+
+function stripManagedPathBlock(content) {
+  const blockPattern = new RegExp(
+    `(?:\\r?\\n)?${escapeRegex(MANAGED_BLOCK_START)}[\\s\\S]*?${escapeRegex(MANAGED_BLOCK_END)}(?:\\r?\\n)?`,
+    "g",
+  );
+  return content.replace(blockPattern, (match, offset) => {
+    if (offset === 0) {
+      return "";
+    }
+    return "\n";
+  });
+}
+
+function removeManagedPathBlock(profilePath) {
+  if (!existsSync(profilePath)) {
+    return false;
+  }
+
+  const content = readFileSync(profilePath, "utf8");
+  if (!content.includes(MANAGED_BLOCK_START)) {
+    return false;
+  }
+
+  const updated = stripManagedPathBlock(content);
+  writeFileSync(profilePath, updated, "utf8");
+  return true;
+}
+
+function writeTextFile(filePath, content, mode) {
+  writeFileSync(filePath, content, { encoding: "utf8" });
+  if (mode !== undefined) {
+    chmodSync(filePath, mode);
+  }
+}
+
+function removeEntryIfExists(targetPath) {
+  if (!existsSync(targetPath)) {
+    return false;
+  }
+  rmSync(targetPath, { recursive: true, force: true });
+  return true;
+}
+
+function removeDirectoryIfEmpty(dirPath) {
+  if (!existsSync(dirPath)) {
+    return false;
+  }
+  if (readdirSync(dirPath).length > 0) {
+    return false;
+  }
+  rmSync(dirPath, { recursive: true, force: true });
+  return true;
+}
+
+function parseDotenvFile(filePath) {
+  if (!existsSync(filePath)) {
+    return {};
+  }
+
+  const content = readFileSync(filePath, "utf8");
+  const env = {};
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u);
+    if (!match) {
+      continue;
+    }
+
+    let value = match[2] ?? "";
+    if (
+      (value.startsWith('"') && value.endsWith('"'))
+      || (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    env[match[1]] = value;
+  }
+
+  return env;
+}
+
+function resolveManagedPath(rootDir, configuredValue, fallback) {
+  const raw = String(configuredValue || fallback).trim();
+  if (!raw) {
+    return null;
+  }
+  return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(rootDir, raw);
+}
+
+function purgeSourceRuntimeState(options = {}) {
+  const rootDir = options.rootDir || ROOT_DIR;
+  const envPath = path.join(rootDir, ".env");
+  const envConfig = parseDotenvFile(envPath);
+  const removed = [];
+  const skipped = [];
+
+  for (const target of DEFAULT_RUNTIME_PURGE_TARGETS) {
+    const resolvedPath = resolveManagedPath(rootDir, target.key ? envConfig[target.key] : undefined, target.fallback);
+    if (!resolvedPath) {
+      continue;
+    }
+
+    if (pathsEqual(resolvedPath, rootDir)) {
+      skipped.push(`${resolvedPath} (repo root is never removed)`);
+      continue;
+    }
+
+    if (!isWithinPath(resolvedPath, rootDir)) {
+      skipped.push(`${resolvedPath} (outside repo root)`);
+      continue;
+    }
+
+    if (removeEntryIfExists(resolvedPath)) {
+      removed.push(resolvedPath);
+    }
+  }
+
+  if (removeEntryIfExists(envPath)) {
+    removed.push(envPath);
+  }
+
+  const dataDir = path.join(rootDir, "data");
+  if (removeDirectoryIfEmpty(dataDir)) {
+    removed.push(dataDir);
+  }
+
+  return { removed, skipped };
+}
+
+export function installCommand(options = {}) {
+  const platform = options.platform || process.platform;
+  const env = options.env || process.env;
+  const homeDir = options.homeDir || os.homedir();
+  const launcherPath = options.launcherPath || getDefaultLauncherPath(options.wrapperKind);
+
+  if (isWindows(platform)) {
+    const installDir = options.installDir || getWindowsInstallDir(env, homeDir);
+    mkdirSync(installDir, { recursive: true });
+    const cmdPath = path.join(installDir, "strada.cmd");
+    const ps1Path = path.join(installDir, "strada.ps1");
+    writeTextFile(cmdPath, buildCmdWrapper());
+    writeTextFile(ps1Path, buildPowerShellWrapper());
+
+    let pathResult = { updated: false, path: env.PATH || env.Path || "" };
+    let pathSyncFailed = false;
+    try {
+      const syncWindowsPath = options.windowsPathSync || defaultWindowsPathSync;
+      pathResult = syncWindowsPath(installDir);
+    } catch {
+      pathSyncFailed = true;
+    }
+
+    console.log("Installed user-local Strada commands:");
+    console.log(`  ${cmdPath}`);
+    console.log(`  ${ps1Path}`);
+    if (pathSyncFailed) {
+      console.log("Could not update the Windows user PATH automatically.");
+      console.log("Add this directory to your user PATH manually:");
+      console.log(`  ${installDir}`);
+    } else if (pathResult.updated) {
+      console.log("Updated Windows user PATH:");
+      console.log(`  ${installDir}`);
+    } else {
+      console.log("Windows user PATH already contains the Strada install directory:");
+      console.log(`  ${installDir}`);
+    }
+
+    const currentPath = [env.PATH || "", env.Path || ""].filter(Boolean).join(";");
+    if (!hasWindowsPathEntry(currentPath, installDir)) {
+      console.log("");
+      console.log("Open a new PowerShell or Command Prompt window to pick up the new PATH automatically.");
+      console.log("If you want it in this session immediately, run:");
+      console.log(`  PowerShell: $env:PATH = "${installDir};$env:PATH"`);
+      console.log(`  CMD:        set PATH=${installDir};%PATH%`);
+    }
+
+    console.log("");
+    console.log("You can keep using this checkout immediately without changing directories:");
+    console.log(`  ${launcherPath} setup`);
+    console.log(`  ${launcherPath} doctor`);
+    return;
+  }
+
+  const installDir = options.installDir || getPosixInstallDir(env, homeDir);
+  mkdirSync(installDir, { recursive: true });
+  const wrapperPath = path.join(installDir, "strada");
+  const aliasPath = path.join(installDir, "strada-brain");
+  writeTextFile(wrapperPath, buildPosixWrapper({ wrapperPath }), 0o755);
+  writeTextFile(aliasPath, buildPosixWrapper({ wrapperPath: aliasPath }), 0o755);
+
+  const { shellName, profilePath } = detectProfilePath(env, homeDir);
+  const profileUpdated = appendManagedPathBlock(profilePath, installDir, shellName);
+
+  console.log("Installed user-local Strada commands:");
+  console.log(`  ${wrapperPath}`);
+  console.log(`  ${aliasPath}`);
+  if (profileUpdated) {
+    console.log("Updated shell profile:");
+    console.log(`  ${profilePath}`);
+  } else {
+    console.log("Shell profile already contains the Strada PATH entry:");
+    console.log(`  ${profilePath}`);
+  }
+
+  const pathEntries = String(env.PATH || "").split(":");
+  if (!pathEntries.includes(installDir)) {
+    console.log("");
+    console.log("Open a new terminal to pick up the new PATH automatically.");
+    console.log("If you want it in this shell immediately, run:");
+    if (shellName === "fish") {
+      console.log(`  source "${profilePath}"`);
+    } else {
+      console.log(`  . "${profilePath}"`);
+    }
+  }
+
+  console.log("");
+  console.log("You can keep using this checkout immediately without changing directories:");
+  console.log(`  ${launcherPath} setup`);
+  console.log(`  ${launcherPath} doctor`);
+}
+
+export function refreshInstalledCommandBindings(options = {}) {
+  const platform = options.platform || process.platform;
+  const env = options.env || process.env;
+  const homeDir = options.homeDir || os.homedir();
+  const launcherPath = options.launcherPath || env.STRADA_LAUNCHER_PATH;
+
+  if (!launcherPath) {
+    return false;
+  }
+
+  if (isWindows(platform)) {
+    const installDir = options.installDir || getWindowsInstallDir(env, homeDir);
+    const cmdPath = path.join(installDir, "strada.cmd");
+    const ps1Path = path.join(installDir, "strada.ps1");
+    const launchedFromInstalledWrapper = pathsEqual(launcherPath, cmdPath, platform)
+      || pathsEqual(launcherPath, ps1Path, platform);
+
+    if (!launchedFromInstalledWrapper) {
+      return false;
+    }
+
+    mkdirSync(installDir, { recursive: true });
+    writeTextFile(cmdPath, buildCmdWrapper());
+    writeTextFile(ps1Path, buildPowerShellWrapper());
+    return true;
+  }
+
+  const installDir = options.installDir || getPosixInstallDir(env, homeDir);
+  const wrapperPath = path.join(installDir, "strada");
+  const aliasPath = path.join(installDir, "strada-brain");
+  const launchedFromInstalledWrapper = pathsEqual(launcherPath, wrapperPath, platform)
+    || pathsEqual(launcherPath, aliasPath, platform);
+
+  if (!launchedFromInstalledWrapper) {
+    return false;
+  }
+
+  mkdirSync(installDir, { recursive: true });
+  writeTextFile(wrapperPath, buildPosixWrapper({ wrapperPath }), 0o755);
+  writeTextFile(aliasPath, buildPosixWrapper({ wrapperPath: aliasPath }), 0o755);
+  return true;
+}
+
+export function uninstallCommand(options = {}) {
+  const platform = options.platform || process.platform;
+  const env = options.env || process.env;
+  const homeDir = options.homeDir || os.homedir();
+  const purgeConfig = options.purgeConfig === true;
+  const rootDir = options.rootDir || ROOT_DIR;
+  const launcherPath = options.launcherPath
+    || env.STRADA_LAUNCHER_PATH
+    || getDefaultLauncherPath(options.wrapperKind);
+  const removed = [];
+  const skipped = [];
+
+  if (isWindows(platform)) {
+    const installDir = options.installDir || getWindowsInstallDir(env, homeDir);
+    const cmdPath = path.join(installDir, "strada.cmd");
+    const ps1Path = path.join(installDir, "strada.ps1");
+    const deferredTargets = [];
+    for (const targetPath of [cmdPath, ps1Path]) {
+      if (!existsSync(targetPath)) {
+        continue;
+      }
+      if (launcherPath && pathsEqual(launcherPath, targetPath, platform)) {
+        deferredTargets.push(targetPath);
+        continue;
+      }
+      if (removeEntryIfExists(targetPath)) {
+        removed.push(targetPath);
+      }
+    }
+    if (deferredTargets.length > 0) {
+      try {
+        const scheduleWindowsDeferredDelete =
+          options.windowsDeferredDelete || defaultWindowsDeferredDelete;
+        if (scheduleWindowsDeferredDelete(deferredTargets, installDir)) {
+          for (const targetPath of deferredTargets) {
+            removed.push(`${targetPath} (scheduled for deletion after process exit)`);
+          }
+        } else {
+          skipped.push(
+            `Could not schedule deletion of active Windows launcher(s) under ${installDir}`,
+          );
+        }
+      } catch {
+        skipped.push(`Could not schedule deletion of active Windows launcher(s) under ${installDir}`);
+      }
+    } else {
+      removeDirectoryIfEmpty(installDir);
+    }
+
+    let pathResult = { updated: false, path: env.PATH || env.Path || "" };
+    try {
+      const syncWindowsPath = options.windowsPathRemoveSync || defaultWindowsPathRemoveSync;
+      pathResult = syncWindowsPath(installDir);
+    } catch {
+      skipped.push(`Could not update Windows user PATH for ${installDir}`);
+    }
+    if (pathResult.updated) {
+      removed.push(`PATH:${installDir}`);
+    }
+  } else {
+    const installDir = options.installDir || getPosixInstallDir(env, homeDir);
+    const wrapperPath = path.join(installDir, "strada");
+    const aliasPath = path.join(installDir, "strada-brain");
+    if (removeEntryIfExists(wrapperPath)) {
+      removed.push(wrapperPath);
+    }
+    if (removeEntryIfExists(aliasPath)) {
+      removed.push(aliasPath);
+    }
+    removeDirectoryIfEmpty(installDir);
+
+    for (const profilePath of getManagedProfilePaths(env, homeDir)) {
+      if (removeManagedPathBlock(profilePath)) {
+        removed.push(profilePath);
+      }
+    }
+  }
+
+  if (purgeConfig) {
+    const purgeResult = purgeSourceRuntimeState({ rootDir });
+    removed.push(...purgeResult.removed);
+    skipped.push(...purgeResult.skipped);
+  }
+
+  console.log("Removed Strada user-local command bindings.");
+  if (removed.length > 0) {
+    console.log("Removed:");
+    for (const item of removed) {
+      console.log(`  ${item}`);
+    }
+  } else {
+    console.log("No installed user-local command bindings were found.");
+  }
+
+  if (skipped.length > 0) {
+    console.log("Skipped:");
+    for (const item of skipped) {
+      console.log(`  ${item}`);
+    }
+  }
+
+  if (purgeConfig) {
+    console.log("");
+    console.log("Strada runtime files under this repository were purged.");
+  }
+
+  console.log("The repository checkout itself was not deleted.");
+  return { removed, skipped };
+}
+
+export function shouldRunFromSource(args) {
+  if (!args.length) {
+    return true;
+  }
+
+  return args.some((arg) => [
+    "start",
+    "setup",
+    "doctor",
+    "--help",
+    "-h",
+    "--version",
+    "-V",
+    "--web",
+    "--terminal",
+  ].includes(arg));
+}
+
+function parseCliArgs(argv) {
+  let wrapperKind = null;
+  let wrapperPath = null;
+  const args = [...argv];
+  while (args.length > 0) {
+    const head = args[0];
+    if (head === "--wrapper-kind") {
+      args.shift();
+      wrapperKind = args.shift() || null;
+      continue;
+    }
+    if (head === "--wrapper-path") {
+      args.shift();
+      wrapperPath = args.shift() || null;
+      continue;
+    }
+    break;
+  }
+  return { wrapperKind, wrapperPath, userArgs: args };
+}
+
+function runNode(entryArgs, extraEnv = {}) {
+  const result = spawnSync(process.execPath, entryArgs, {
+    cwd: ROOT_DIR,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      STRADA_NODE_PATH: process.execPath,
+      ...extraEnv,
+    },
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  process.exit(result.status ?? 1);
+}
+
+export function main(argv = process.argv.slice(2)) {
+  const { wrapperKind, wrapperPath, userArgs } = parseCliArgs(argv);
+  const launcherKind = wrapperKind || (isWindows() ? "powershell" : "posix");
+  const resolvedLauncherPath = wrapperPath || getDefaultLauncherPath(launcherKind);
+
+  if (userArgs[0] === "install-command") {
+    installCommand({
+      wrapperKind: launcherKind,
+      launcherPath: resolvedLauncherPath,
+    });
+    return;
+  }
+
+  if (userArgs[0] === "refresh-command-bindings") {
+    refreshInstalledCommandBindings({
+      launcherPath: process.env.STRADA_LAUNCHER_PATH || resolvedLauncherPath,
+    });
+    return;
+  }
+
+  if (userArgs[0] === "uninstall-command" || userArgs[0] === "uninstall") {
+    const purgeConfig = userArgs.includes("--purge-config");
+    uninstallCommand({
+      wrapperKind: launcherKind,
+      launcherPath: process.env.STRADA_LAUNCHER_PATH || resolvedLauncherPath,
+      purgeConfig,
+    });
+    return;
+  }
+
+  if (shouldRunFromSource(userArgs)) {
+    ensureSourceCheckout();
+    runNode(
+      ["--import", "tsx", SOURCE_ENTRY, ...userArgs],
+      {
+        STRADA_INSTALL_ROOT: ROOT_DIR,
+        STRADA_SOURCE_CHECKOUT: "true",
+        STRADA_LAUNCHER_PATH: resolvedLauncherPath,
+      },
+    );
+    return;
+  }
+
+  ensurePrepared();
+  runNode(
+    [DIST_ENTRY, ...userArgs],
+    {
+      STRADA_INSTALL_ROOT: ROOT_DIR,
+      STRADA_LAUNCHER_PATH: resolvedLauncherPath,
+    },
+  );
+}
+
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  return import.meta.url === pathToFileURL(process.argv[1]).href;
+}
+
+if (isDirectExecution()) {
+  main();
+}

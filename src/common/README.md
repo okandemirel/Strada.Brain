@@ -2,6 +2,8 @@
 
 Shared constants and error types used throughout the application.
 
+Runtime/install helpers in this folder now also define the cross-platform launcher contract that setup, doctor, and bootstrap share. Source checkouts still keep config in the repository root on every OS, while packaged installs default to `~/.strada` on macOS/Linux and `%LOCALAPPDATA%\Strada` on Windows unless `STRADA_HOME` overrides that app home.
+
 ## Constants (`constants.ts`)
 
 Centralized numeric limits, thresholds, and default values grouped by domain.
@@ -52,10 +54,26 @@ Utility functions:
 
 Re-exports all constants and error types from `constants.ts` and `errors.ts`.
 
+## Launcher Guidance (`launcher-guidance.ts`)
+
+Platform-aware command helpers shared by setup, doctor, and startup handoff code.
+
+- `getSourceLauncherCommand()` — `./strada` on macOS/Linux, `.\strada.ps1` on Windows
+- `getSourceSetupCommand()` / `getSourceDoctorCommand()` / `getSourceInstallCommand()` / `getSourceUninstallCommand()` — platform-aware source-checkout command strings
+- `getWindowsInstallBinDir()` — resolves `%LOCALAPPDATA%\Strada\bin`
+- `getPackagedAppHomeDescription()` — human-readable packaged runtime-home default
+- `formatLauncherInvocation()` — converts a stored launcher path into a spawnable process command, including PowerShell/CMD wrapping on Windows
+
+## Cross-Platform Build Helper
+
+`scripts/build-package.mjs` replaces shell-specific `rm -rf` / `cp -r` style package build steps with a Node-driven build/copy flow so `npm run build` behaves the same way in POSIX shells and native Windows shells.
+
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `constants.ts` | All application-wide numeric limits, thresholds, defaults, and configuration constants |
 | `errors.ts` | Typed error hierarchy, error utilities, global error handlers, retry logic |
+| `launcher-guidance.ts` | Shared platform-aware launcher command strings and Windows wrapper invocation helpers |
+| `../../scripts/build-package.mjs` | Cross-platform package build helper for `npm run build` |
 | `index.ts` | Barrel re-export of constants and errors |

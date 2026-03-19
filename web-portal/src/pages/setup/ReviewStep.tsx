@@ -1,5 +1,6 @@
 import { PRESETS, EMBEDDING_CAPABLE, EMBEDDING_PROVIDERS, PROVIDER_MAP } from '../../types/setup-constants'
 import type { SaveStatus } from '../../types/setup'
+import { buildSetupRetryHref } from '../../../../src/common/setup-state.ts'
 
 interface ReviewStepProps {
   selectedPreset: string | null
@@ -17,6 +18,7 @@ interface ReviewStepProps {
   autonomyHours: number
   saveStatus: SaveStatus
   saveError: string | null
+  saveWarning: string | null
   bootstrapDetail: string | null
   saveCommitted: boolean
   canSave: boolean
@@ -46,6 +48,7 @@ export default function ReviewStep({
   autonomyHours,
   saveStatus,
   saveError,
+  saveWarning,
   bootstrapDetail,
   saveCommitted,
   canSave,
@@ -217,6 +220,12 @@ export default function ReviewStep({
         </div>
       )}
 
+      {saveStatus !== 'error' && saveWarning && (
+        <div className="save-message polling">
+          {saveWarning}
+        </div>
+      )}
+
       {saveStatus === 'booting' && (
         <div className="save-message polling">
           {bootstrapDetail ?? 'Strada is still starting the main web app.'}
@@ -236,7 +245,7 @@ export default function ReviewStep({
           {saveCommitted && (
             <>
               {' '}
-              <a href="/?strada-setup=1&retry=1">Re-open setup</a>
+              <a href={buildSetupRetryHref()}>Re-open setup</a>
             </>
           )}
         </div>

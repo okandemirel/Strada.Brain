@@ -250,6 +250,7 @@ export type EnvVarName =
   | "LLM_STREAM_STALL_TIMEOUT_MS"
 
   // Autonomous Mode
+  | "AUTONOMOUS_DEFAULT_ENABLED"
   | "AUTONOMOUS_DEFAULT_HOURS"
 
   // Model Intelligence Service
@@ -646,6 +647,7 @@ export interface Config {
   readonly deployment: DeploymentConfig;
 
   // Autonomous Mode
+  readonly autonomousDefaultEnabled: boolean;
   /** Default duration in hours for autonomous mode when no duration is specified */
   readonly autonomousDefaultHours: number;
 
@@ -1056,7 +1058,7 @@ export const configSchema = z
     stradaMemoryReRetrievalRagTopK: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("6"),
 
     // Multi-Agent (Phase 23)
-    multiAgentEnabled: boolFromString(true),
+    multiAgentEnabled: boolFromString(false),
     agentDefaultBudgetUsd: z.string().transform(parseFloat).pipe(z.number().min(0.01).max(100)).default("5.00"),
     agentMaxConcurrent: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
     agentIdleTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000)).default("3600000"),
@@ -1087,6 +1089,7 @@ export const configSchema = z
     deployPostScriptPath: z.string().optional(),
 
     // Autonomous Mode
+    autonomousDefaultEnabled: boolFromString(false),
     autonomousDefaultHours: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(168)).default("24"),
 
     // Tasks
@@ -1553,6 +1556,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       postScriptPath: rawConfig.deployPostScriptPath,
     },
 
+    autonomousDefaultEnabled: rawConfig.autonomousDefaultEnabled,
     autonomousDefaultHours: rawConfig.autonomousDefaultHours,
 
     routing: {
@@ -1982,6 +1986,7 @@ interface EnvVars {
   taskMessageBurstWindowMs: string | undefined;
   taskMessageBurstMaxMessages: string | undefined;
   // Autonomous Mode
+  autonomousDefaultEnabled: string | undefined;
   autonomousDefaultHours: string | undefined;
   // Provider Routing
   routingPreset: string | undefined;
@@ -2221,6 +2226,7 @@ function loadFromEnv(): EnvVars {
     taskMessageBurstWindowMs: process.env["TASK_MESSAGE_BURST_WINDOW_MS"],
     taskMessageBurstMaxMessages: process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"],
     // Autonomous Mode
+    autonomousDefaultEnabled: process.env["AUTONOMOUS_DEFAULT_ENABLED"],
     autonomousDefaultHours: process.env["AUTONOMOUS_DEFAULT_HOURS"],
     // Provider Routing
     routingPreset: process.env["ROUTING_PRESET"],

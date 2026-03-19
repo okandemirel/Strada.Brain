@@ -56,9 +56,19 @@ describe("setup doctor", () => {
   function makeBuiltInstallRoot(): string {
     const dir = makeInstallRoot();
     fs.mkdirSync(path.join(dir, "dist", "channels", "web", "static"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "pentest", "scripts"), { recursive: true });
     fs.writeFileSync(path.join(dir, "dist", "index.js"), "");
     fs.writeFileSync(path.join(dir, "dist", "channels", "web", "static", "index.html"), "");
     fs.writeFileSync(path.join(dir, ".env"), "UNITY_PROJECT_PATH=/tmp\n");
+    for (const scriptName of [
+      "run-all-tests.sh",
+      "test-sast.sh",
+      "test-path-traversal.sh",
+      "test-command-injection.sh",
+      "test-ssrf.sh",
+    ]) {
+      fs.writeFileSync(path.join(dir, "pentest", "scripts", scriptName), "#!/usr/bin/env bash\n");
+    }
     return dir;
   }
 
@@ -137,6 +147,7 @@ describe("setup doctor", () => {
       agent: {} as Config["agent"],
       delegation: {} as Config["delegation"],
       deployment: {} as Config["deployment"],
+      autonomousDefaultEnabled: false,
       autonomousDefaultHours: 4,
       routing: { preset: "balanced", phaseSwitching: true },
       consensus: { mode: "auto", threshold: 0.7, maxProviders: 2 },
@@ -193,6 +204,19 @@ describe("setup doctor", () => {
     expect(report.checks.find((check) => check.id === "config")?.detail).toContain("bad config");
   });
 
+  it("emits Windows-specific setup guidance when config is missing on Windows", async () => {
+    const installRoot = makeInstallRoot();
+    const report = await collectDoctorReport({
+      installRoot,
+      configRoot: installRoot,
+      platform: "win32",
+      configResult: { kind: "error", error: "missing .env" },
+    });
+
+    expect(report.checks.find((check) => check.id === "config")?.fix).toContain(".\\strada.ps1 setup --web");
+    expect(report.checks.find((check) => check.id === "config")?.fix).toContain(".\\strada.ps1 setup --terminal");
+  });
+
   it("passes when config and embeddings resolve cleanly", async () => {
     const installRoot = makeBuiltInstallRoot();
     const report = await collectDoctorReport({
@@ -203,6 +227,33 @@ describe("setup doctor", () => {
 
     expect(report.status).toBe("pass");
     expect(report.checks.find((check) => check.id === "embeddings")?.status).toBe("pass");
+    expect(report.checks.find((check) => check.id === "capability-truth")?.status).toBe("pass");
+  });
+
+  it("warns when deployment is enabled without runtime wiring", async () => {
+    const installRoot = makeBuiltInstallRoot();
+    const report = await collectDoctorReport({
+      installRoot,
+      configRoot: installRoot,
+      configResult: {
+        kind: "ok",
+        value: makeConfig({
+          deployment: {
+            enabled: true,
+            testCommand: "npm test",
+            targetBranch: "main",
+            requireCleanGit: true,
+            testTimeoutMs: 60000,
+            executionTimeoutMs: 600000,
+            cooldownMinutes: 30,
+            notificationUrgency: "medium",
+          },
+        }),
+      },
+    });
+
+    expect(report.status).toBe("warn");
+    expect(report.checks.find((check) => check.id === "capability-truth")?.status).toBe("warn");
   });
 
   it("fails when the only OpenAI subscription worker has an expired local auth session", async () => {
