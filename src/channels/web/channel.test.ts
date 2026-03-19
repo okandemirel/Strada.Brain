@@ -2,7 +2,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WebChannel } from "./channel.js";
+import { WebChannel, getCanonicalWebRedirectTarget } from "./channel.js";
 import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
 
 type WsHandler = (payload?: Buffer) => void;
@@ -418,5 +418,17 @@ describe("WebChannel HTTP surface", () => {
         channel: "web",
       }),
     );
+  });
+
+  it("strips stale setup handoff query params from the root URL", () => {
+    expect(getCanonicalWebRedirectTarget("/?strada-setup=1&t=12345")).toBe("/");
+  });
+
+  it("preserves unrelated query params and hashes when removing stale setup mode", () => {
+    expect(getCanonicalWebRedirectTarget("/dashboard?foo=bar&strada-setup=1&t=99#memory")).toBe("/dashboard?foo=bar#memory");
+  });
+
+  it("returns null when no stale setup query is present", () => {
+    expect(getCanonicalWebRedirectTarget("/dashboard?foo=bar")).toBeNull();
   });
 });

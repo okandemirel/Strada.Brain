@@ -13,15 +13,20 @@ import PersonalityPage from './pages/PersonalityPage'
 import MemoryPage from './pages/MemoryPage'
 import SettingsPage from './pages/SettingsPage'
 import SetupWizard from './pages/SetupWizard'
+import { FIRST_RUN_STORAGE_KEY } from './hooks/useWebSocket'
 import { detectSetupMode } from './utils/setup-mode'
 
 export default function App() {
   const rootDatasetSetupMode = typeof document !== 'undefined'
     ? document.getElementById('root')?.getAttribute('data-strada-setup') === '1'
     : false
+  const firstRunCommitted = typeof window !== 'undefined'
+    ? window.localStorage.getItem(FIRST_RUN_STORAGE_KEY) === '1'
+    : false
   const setupMode = typeof window !== 'undefined' && detectSetupMode(
     window.location.search,
     rootDatasetSetupMode || Boolean((window as Window & { __STRADA_SETUP__?: boolean }).__STRADA_SETUP__),
+    firstRunCommitted,
   )
 
   if (setupMode) {

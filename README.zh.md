@@ -91,7 +91,7 @@ cd Strada.Brain
 如果 `./strada setup --web` 检测到过旧的 Node 版本而无法构建完整 Web 门户，Strada 仍然会把 Web 作为第一优先路径：如果系统里有 `nvm`，Strada 会在你确认后安装兼容的 Node 版本并直接回到 Web setup；该引导升级会在临时的干净 HOME 中运行，因此不兼容的 npm `prefix` / `globalconfig` 设置不会阻塞 `nvm`。否则它会引导你完成下载/升级流程。如果你拒绝升级，Strada 会明确询问是否改用终端 setup 继续。
 如果 `nvm` 里已经装好了 Node 22，Strada 会直接复用它，而不是再次下载。Web setup 会在本地根 URL 打开，并在切换到主应用时继续使用同一个 URL。
 第一次浏览器打开时还会带上明确的 setup 标记，因此即使旧的门户缓存标签页还在，也会重新进入 setup 向导，而不是落到一个失效的 "Not Found" 页面。
-如果第一次 Web handoff 正好撞上重启时机，Strada 现在会自动重试那次启动。配置已经保存成功但浏览器仍然 timeout 时，不要重复保存；刷新一次，或者重新执行 `strada` 再打开 Web dashboard 即可。
+如果第一次 Web handoff 正好撞上重启时机，Strada 现在会自动重试那次启动。配置保存后，Strada 会在同一个 URL 上保持 handoff 页面直到主应用准备完成；不要再次运行 setup。
 
 向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。`./strada setup` 现在默认优先 **Web 浏览器**；只有在你明确想走更快的纯文本流程时，才选择 **终端**。
 终端 setup 在单个提示中接受以逗号分隔的 provider（例如 `kimi,deepseek`），用于 fallback / 多代理编排；也可以逐个交互式添加。"是否继续添加？"循环仅在输入单个 provider 时出现。embedding provider 选择保持独立。

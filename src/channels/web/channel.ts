@@ -77,12 +77,29 @@ const MIME_TYPES: Record<string, string> = {
 const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("static/", import.meta.url));
 const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../../web-portal/dist");
+const SETUP_QUERY_PARAM = "strada-setup";
+const SETUP_CACHE_BUST_PARAM = "t";
 
 function resolveStaticDir(): string {
   if (existsSync(SOURCE_BUILD_STATIC_DIR)) {
     return SOURCE_BUILD_STATIC_DIR;
   }
   return PACKAGED_STATIC_DIR;
+}
+
+export function getCanonicalWebRedirectTarget(url: string): string | null {
+  const parsed = new URL(url, "http://127.0.0.1");
+  const hadSetupQuery = parsed.searchParams.get(SETUP_QUERY_PARAM) === "1";
+
+  if (!hadSetupQuery) {
+    return null;
+  }
+
+  parsed.searchParams.delete(SETUP_QUERY_PARAM);
+  parsed.searchParams.delete(SETUP_CACHE_BUST_PARAM);
+
+  const nextSearch = parsed.searchParams.toString();
+  return `${parsed.pathname}${nextSearch ? `?${nextSearch}` : ""}${parsed.hash}`;
 }
 
 /** Rate limit: max messages per window. */
@@ -305,6 +322,17 @@ export class WebChannel
 
   private async handleHttp(req: HttpReq, res: ServerResponse): Promise<void> {
     const url = req.url ?? "/";
+    const canonicalRedirectTarget = getCanonicalWebRedirectTarget(url);
+
+    if (req.method === "GET" && canonicalRedirectTarget) {
+      res.writeHead(302, {
+        ...WebChannel.SECURITY_HEADERS,
+        Location: canonicalRedirectTarget,
+        ...WebChannel.NO_CACHE_HEADERS,
+      });
+      res.end();
+      return;
+    }
 
     // Health endpoint for Docker/K8s liveness probes
     if (url === "/health") {

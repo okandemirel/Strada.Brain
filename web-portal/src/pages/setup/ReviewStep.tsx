@@ -216,8 +216,7 @@ export default function ReviewStep({
 
       {saveStatus === 'polling' && (
         <div className="save-message polling">
-          Configuration saved. Waiting for server to restart... Source checkouts can keep using
-          `./strada ...` until `./strada install-command` is installed.
+          Configuration saved. Starting Strada on this same URL. Keep this page open while the main app comes up.
         </div>
       )}
 

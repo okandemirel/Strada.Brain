@@ -35,6 +35,29 @@ export function buildSetupAccessUrl(port: number, cacheBust: number = Date.now()
   return `http://${SETUP_HOST}:${port}/?${params.toString()}`;
 }
 
+export function renderSetupHandoffHtml(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content="1;url=/" />
+    <title>Starting Strada</title>
+  </head>
+  <body style="margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0d1117;color:#f0f6fc;display:flex;min-height:100vh;align-items:center;justify-content:center;">
+    <main style="max-width:560px;padding:32px 28px;border:1px solid rgba(240,246,252,0.12);border-radius:18px;background:rgba(22,27,34,0.96);box-shadow:0 24px 80px rgba(0,0,0,0.35);">
+      <h1 style="margin:0 0 12px;font-size:30px;line-height:1.2;">Configuration saved</h1>
+      <p style="margin:0 0 12px;font-size:16px;line-height:1.6;color:#c9d1d9;">
+        Strada is starting the main web app on this same address.
+      </p>
+      <p style="margin:0;font-size:14px;line-height:1.6;color:#8b949e;">
+        This page refreshes automatically until the main app is ready. Do not run setup again.
+      </p>
+    </main>
+  </body>
+</html>`;
+}
+
 export function injectSetupModeMarker(html: string): string {
   if (html.includes('data-strada-setup="1"')) {
     return html;
@@ -180,6 +203,7 @@ export class SetupWizard {
   private readonly port: number;
   private readonly csrfToken = randomUUID();
   private onComplete: (() => void) | null = null;
+  private handoffInProgress = false;
 
   constructor(opts?: { port?: number }) {
     this.port = opts?.port ?? 3000;
@@ -246,7 +270,20 @@ export class SetupWizard {
         return;
       }
 
+      if (url === "/health" && method === "GET") {
+        this.json(res, 503, { status: this.handoffInProgress ? "starting" : "setup" });
+        return;
+      }
+
       if (url === "/api/setup/csrf" && method === "GET") {
+        if (this.handoffInProgress) {
+          this.json(res, 409, {
+            success: false,
+            handoff: true,
+            error: "Configuration already saved. Strada is starting the main web app.",
+          });
+          return;
+        }
         res.writeHead(200, {
           ...SECURITY_HEADERS,
           "Content-Type": "application/json",
@@ -257,6 +294,14 @@ export class SetupWizard {
       }
 
       if (url === "/api/setup" && method === "POST") {
+        if (this.handoffInProgress) {
+          this.json(res, 409, {
+            success: false,
+            handoff: true,
+            error: "Configuration was already saved. Wait for Strada to finish starting.",
+          });
+          return;
+        }
         const token = req.headers["x-csrf-token"];
         if (token !== this.csrfToken) {
           this.json(res, 403, { success: false, error: "Invalid CSRF token" });
@@ -283,9 +328,19 @@ export class SetupWizard {
   private async serveStatic(url: string, res: ServerResponse): Promise<void> {
     const staticDir = resolveStaticDir();
     const rawSegment = url.split("?")[0]!;
+    const ext = extname(rawSegment);
+
+    if (this.handoffInProgress && !ext) {
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(renderSetupHandoffHtml());
+      return;
+    }
 
     // For known static file extensions, serve directly from STATIC_DIR
-    const ext = extname(rawSegment);
     if (ext && MIME_TYPES[ext]) {
       const candidate = resolve(join(staticDir, rawSegment));
       const safeRoot = resolve(staticDir);
@@ -627,6 +682,7 @@ export class SetupWizard {
       return;
     }
 
+    this.handoffInProgress = true;
     this.json(res, 200, { success: true });
 
     // Signal completion after a delay so the response and any follow-up polling can be handled

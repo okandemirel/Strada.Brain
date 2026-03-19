@@ -79,6 +79,13 @@ export async function probeSetupSurface(
         return { kind: 'available', token }
       }
     }
+
+    if (res.status === 409) {
+      const data = await res.json().catch(() => null)
+      if (data && typeof data === 'object' && data.handoff === true) {
+        return { kind: 'retry' }
+      }
+    }
   } catch {
     // setup server may still be booting or handing off
   }
@@ -397,6 +404,12 @@ export function useSetupWizard() {
         throw new Error(body.error ?? `Save failed (${res.status})`)
       }
 
+      localStorage.setItem(FIRST_RUN_STORAGE_KEY, '1')
+      localStorage.setItem(
+        POST_SETUP_BOOTSTRAP_STORAGE_KEY,
+        JSON.stringify(buildPostSetupBootstrap(autonomyEnabled, autonomyHours)),
+      )
+
       // Poll for readiness — the wizard server shuts down and the main app
       // boots on the same port, so expect connection errors during the gap.
       setSaveCommitted(true)
@@ -419,11 +432,6 @@ export function useSetupWizard() {
             if (!mountedRef.current) return
             setSaveStatus('success')
             setTimeout(() => {
-              localStorage.setItem(FIRST_RUN_STORAGE_KEY, '1')
-              localStorage.setItem(
-                POST_SETUP_BOOTSTRAP_STORAGE_KEY,
-                JSON.stringify(buildPostSetupBootstrap(autonomyEnabled, autonomyHours)),
-              )
               window.location.href = '/'
             }, 500)
           }
@@ -435,7 +443,7 @@ export function useSetupWizard() {
           if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
           if (!mountedRef.current) return
           setSaveStatus('error')
-          setSaveError('Configuration was saved, but Strada web app did not become ready in time. Refresh once or reopen Strada from the terminal.')
+          setSaveError('Configuration was saved, but Strada web app did not become ready in time. Keep this page open while Strada finishes starting, or reopen Strada from the terminal.')
         }
       }, 2000)
     } catch (err) {

@@ -69,4 +69,19 @@ describe('useSetupWizard helpers', () => {
 
     expect(result).toEqual({ kind: 'redirect' })
   })
+
+  it('keeps waiting when configuration was already saved and backend is handing off', async () => {
+    const result = await probeSetupSurface(async (input) => {
+      if (String(input) === '/api/setup/csrf') {
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({ handoff: true }),
+        } as Response
+      }
+      throw new Error('unexpected fetch')
+    })
+
+    expect(result).toEqual({ kind: 'retry' })
+  })
 })

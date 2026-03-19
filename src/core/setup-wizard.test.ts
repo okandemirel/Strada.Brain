@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
-import { SetupWizard, buildSetupAccessUrl, hasConfiguredEmbeddingCandidate, injectSetupModeMarker } from "./setup-wizard.js";
+import {
+  SetupWizard,
+  buildSetupAccessUrl,
+  hasConfiguredEmbeddingCandidate,
+  injectSetupModeMarker,
+  renderSetupHandoffHtml,
+} from "./setup-wizard.js";
 
 describe("SetupWizard path validation", () => {
   it("re-validates the project path during save using the resolved home-directory path", async () => {
@@ -64,5 +70,49 @@ describe("SetupWizard path validation", () => {
 
   it("builds a cache-busted setup access url that explicitly enables setup mode", () => {
     expect(buildSetupAccessUrl(3000, 12345)).toBe("http://127.0.0.1:3000/?strada-setup=1&t=12345");
+  });
+
+  it("renders a handoff page that refreshes to the root app without re-opening setup mode", () => {
+    const html = renderSetupHandoffHtml();
+    expect(html).toContain('http-equiv="refresh" content="1;url=/"');
+    expect(html).toContain("Do not run setup again.");
+    expect(html).not.toContain('data-strada-setup="1"');
+  });
+
+  it("rejects repeated setup API calls and serves a handoff page once configuration has been saved", async () => {
+    const wizard = new SetupWizard({ port: 0 });
+    (wizard as unknown as { handoffInProgress: boolean }).handoffInProgress = true;
+
+    const makeResponse = () => {
+      let statusCode = 0;
+      let body = "";
+      return {
+        response: {
+          writeHead: (status: number) => {
+            statusCode = status;
+            return undefined;
+          },
+          end: (chunk?: string | Buffer) => {
+            body = typeof chunk === "string" ? chunk : chunk?.toString("utf-8") ?? "";
+            return undefined;
+          },
+        },
+        read: () => ({ statusCode, body }),
+      };
+    };
+
+    const csrf = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({ url: "/api/setup/csrf", method: "GET" }, csrf.response);
+    expect(csrf.read().statusCode).toBe(409);
+    expect(JSON.parse(csrf.read().body)).toMatchObject({ handoff: true });
+
+    const page = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({ url: "/?strada-setup=1", method: "GET" }, page.response);
+    expect(page.read().statusCode).toBe(200);
+    expect(page.read().body).toContain("Configuration saved");
   });
 });
