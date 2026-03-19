@@ -36,17 +36,29 @@
 // Core exports
 export { LearningStorage, type LearningStats } from "./storage/learning-storage.js";
 export { LearningPipeline } from "./pipeline/learning-pipeline.js";
+export {
+  RuntimeArtifactManager,
+  createProjectScopeFingerprint,
+  projectScopeMatches,
+  type RuntimeArtifactEvaluationInput,
+  type RuntimeArtifactMatches,
+} from "./runtime-artifact-manager.js";
 export { ConfidenceScorer, calculateEloRating, wilsonScoreInterval, getVerdictScore } from "./scoring/confidence-scorer.js";
 export { PatternMatcher, extractKeywords, jaccardSimilarity } from "./matching/pattern-matcher.js";
 export { ErrorLearningHooks, type ErrorContext, type ResolutionContext } from "./hooks/error-learning-hooks.js";
 
 // Type exports
 export type {
+  ArtifactEvaluationVerdict,
   Instinct,
   InstinctType,
   InstinctStatus,
   InstinctStats,
   ContextCondition,
+  RuntimeArtifact,
+  RuntimeArtifactKind,
+  RuntimeArtifactMatch,
+  RuntimeArtifactState,
   Trajectory,
   TrajectoryPhaseReplay,
   TrajectoryReplayContext,

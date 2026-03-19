@@ -22,6 +22,35 @@ describe("CommandHandler /routing", () => {
       {
         listAvailable: () => [],
       } as never,
+      undefined,
+      undefined,
+      undefined,
+      {
+        getRecentArtifactsForIdentity: () => [
+          {
+            id: "artifact-1",
+            kind: "workflow",
+            state: "active",
+            name: "Compile Fix Loop",
+            description: "Reusable compile fix loop",
+            lastStateReason: "Promoted after clean verifier runs.",
+            projectWorldFingerprint: "unity:pooling",
+            stats: {
+              shadowSampleCount: 5,
+              activeUseCount: 4,
+              cleanCount: 4,
+              retryCount: 1,
+              failureCount: 0,
+              blockerCount: 0,
+              harmfulCount: 0,
+              recentEvaluations: [],
+              regressionFingerprints: {},
+            },
+            updatedAt: Date.now(),
+          },
+        ],
+      } as never,
+      "unity:pooling",
     );
 
     handler.setProviderRouter({
@@ -139,6 +168,10 @@ describe("CommandHandler /routing", () => {
     expect(sendMarkdown).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("verifier=`0.72`"),
+    );
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("*Runtime Self-Improvement*"),
     );
     expect(sendText).not.toHaveBeenCalled();
   });

@@ -582,6 +582,7 @@ Strada ahora tambien mantiene un execution journal y rollback memory internos po
 La memoria ahora tambien se separa por rol: user profile state guarda nombre/preferencias/autonomy, task execution memory guarda session summaries/open items/rollback state, y project/world memory ahora se inyecta explicitamente desde el project root activo y la AgentDB analysis cacheada. Task execution memory solo mantiene el `latest snapshot` de la identidad activa; la `persisted chronology` de un task run exacto no vive ahi. Esa misma capa project/world ahora tambien alimenta recovery memory y adaptive routing, mientras semantic retrieval sigue agregando memoria relevante en vivo por separado.
 El `execution replay` cross-session ahora usa esa misma ruta: Strada guarda project/world-aware recovery summaries dentro de learning trajectories e inyecta los success/failure branches previos mas relevantes como capa de contexto `Execution Replay` antes de repetir trabajo similar.
 La correlacion del replay ahora tambien se persiste con `taskRunId` scoped al chat, para que tareas concurrentes dentro del mismo chat no mezclen phase telemetry ni recovery history. La `persisted chronology` de un task run exacto vive en esas learning trajectories / replay contexts indexadas por `taskRunId`.
+Ese mismo camino de learning ahora tambien materializa runtime self-improvement artifacts: los patrones repetidos con alta confianza nacen primero como `skill`, `workflow` o `knowledge_patch` en estado `shadow`; solo las evaluaciones shadow limpias respaldadas por verifier los promocionan a guidance `active`. `/routing info` y el dashboard muestran telemetria identity-scoped para el proyecto actual: estado, muestras y reparto clean/retry/failure.
 Ese replay context ahora tambien persiste phase/provider telemetry, para que el adaptive routing pueda reutilizar workers exitosos en tareas similares en lugar de depender solo de la runtime history en memoria.
 
 **Importante:** `OPENAI_AUTH_MODE=chatgpt-subscription` solo cubre los turnos de conversacion de OpenAI dentro de Strada. No concede cuota de API ni de embeddings de OpenAI. Si eliges `EMBEDDING_PROVIDER=openai`, sigues necesitando `OPENAI_API_KEY`.
@@ -760,7 +761,7 @@ Comandos slash disponibles en todos los canales de chat:
 | `/agent` | Mostrar estado del Agent Core |
 | `/routing` | Mostrar estado de enrutamiento y preset |
 | `/routing preset <nombre>` | Cambiar preset de enrutamiento (budget/balanced/performance) |
-| `/routing info` | Mostrar decisiones de enrutamiento recientes, trazas de ejecucion reales, phase outcomes y adaptive phase scores para la identidad actual, incluyendo verifier clean rate, rollback pressure, retry count, token-cost telemetry, provider catalog freshness y official alignment / capability drift en planning, execution, clarification-review, review y synthesis |
+| `/routing info` | Mostrar decisiones de enrutamiento recientes, trazas de ejecucion reales, phase outcomes, adaptive phase scores y la telemetria identity-scoped de runtime self-improvement para el proyecto actual, incluyendo verifier clean rate, rollback pressure, retry count, token-cost telemetry, provider catalog freshness, official alignment / capability drift y artifact promotion telemetry |
 
 ---
 

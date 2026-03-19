@@ -11,7 +11,10 @@ const authoritativeDocs = [
   "src/channels/README.md",
   "src/dashboard/README.md",
   "src/agents/README.md",
+  "src/agent-core/README.md",
   "src/common/README.md",
+  "src/core/README.md",
+  "src/learning/README.md",
 ] as const;
 
 const localizedReadmes = [
@@ -92,9 +95,13 @@ describe("docs consistency", () => {
     expect(readRepoFile("README.md")).toContain("token cost");
     expect(readRepoFile("README.md")).toContain("provider catalog freshness");
     expect(readRepoFile("README.md")).toContain("official alignment");
+    expect(readRepoFile("README.md")).toContain("runtime self-improvement");
+    expect(readRepoFile("README.md")).toContain("knowledge_patch");
+    expect(readRepoFile("README.md")).toContain("shadow");
     expect(readRepoFile("CHANGELOG.md")).toContain("taskRunId");
     expect(readRepoFile("CHANGELOG.md")).toContain("latest snapshot");
     expect(readRepoFile("CHANGELOG.md")).toContain("Catalog-Aware Adaptive Routing");
+    expect(readRepoFile("CHANGELOG.md")).toContain("Runtime Self-Improvement Artifacts");
     expect(readRepoFile("src/agents/README.md")).toContain("Clarification Review");
     expect(readRepoFile("src/agents/README.md")).toContain("Verifier Pipeline");
     expect(readRepoFile("src/agents/README.md")).toContain("Execution Journal");
@@ -104,10 +111,17 @@ describe("docs consistency", () => {
     expect(readRepoFile("src/agents/README.md")).toContain("latest snapshot");
     expect(readRepoFile("src/agents/README.md")).toContain("provider catalog freshness");
     expect(readRepoFile("src/agents/README.md")).toContain("official alignment");
+    expect(readRepoFile("src/agents/README.md")).toContain("knowledge_patch");
+    expect(readRepoFile("src/learning/README.md")).toContain("RuntimeArtifactManager");
+    expect(readRepoFile("src/learning/README.md")).toContain("runtime_artifacts");
+    expect(readRepoFile("src/learning/README.md")).toContain("knowledge_patch");
+    expect(readRepoFile("src/learning/README.md")).toContain("shadow");
+    expect(readRepoFile("src/core/README.md")).toContain("RuntimeArtifactManager");
     expect(readRepoFile("src/memory/README.md")).toContain("execution replay");
     expect(readRepoFile("src/memory/README.md")).toContain("taskRunId");
     expect(readRepoFile("src/memory/README.md")).toContain("latest snapshot");
     expect(readRepoFile("src/memory/README.md")).toContain("persisted chronology");
+    expect(readRepoFile("src/memory/README.md")).toContain("Runtime self-improvement artifacts");
   });
 
   it("marks localized READMEs as translations that defer to the English canonical README", () => {
@@ -147,6 +161,8 @@ describe("docs consistency", () => {
       expect(content).toMatch(/token cost|token-cost/iu);
       expect(content).toContain("provider catalog freshness");
       expect(content).toContain("official alignment");
+      expect(content).toContain("knowledge_patch");
+      expect(content).toContain("shadow");
       expect(content).toContain("`approved`, `continued`, `replanned`, `blocked`");
       expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
     }

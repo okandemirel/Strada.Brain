@@ -11,10 +11,12 @@ The `Orchestrator` class implements a single-agent, multi-tool loop. There is on
 2. Memory retrieval: top 3 matches (TF-IDF, score >= 0.15)
 3. RAG retrieval: top 6 C# code chunks (HNSW vectors, score >= 0.2)
 4. Explicit project/world memory injection (project root + cached project analysis)
-5. LLM call with system prompt + all context + tool definitions
-6. Tool execution with autonomy layer analysis (error recovery, stall detection)
-7. Self-verification gate: forces `dotnet_build` before responding if `.cs` files were modified
-8. Loop repeats up to `MAX_TOOL_ITERATIONS = 50`
+5. Runtime self-improvement layer: inject active runtime artifact guidance; keep shadow artifacts internal for evaluation only
+6. Execution replay layer: inject prior success/failure branches for the same task/world when available
+7. LLM call with system prompt + all context + tool definitions
+8. Tool execution with autonomy layer analysis (error recovery, stall detection)
+9. Self-verification gate: forces `dotnet_build` before responding if `.cs` files were modified
+10. Loop repeats up to `MAX_TOOL_ITERATIONS = 50`
 
 **Session management:** LRU map capped at 100 sessions. Session trimming uses provider-aware thresholds (40-message baseline by default); trimmed slices are persisted to memory before leaving the active context window.
 
@@ -43,12 +45,14 @@ That replay context now also persists phase/provider telemetry for the task wind
 Terminal replay phases now also blend the strongest available verdict for each replayed trajectory into those persisted signals, preferring trusted judge types before recency, so later review quality can down-weight a branch that only looked successful in its original runtime window without punishing earlier non-terminal phases for a later bad final result.
 Those persisted signals now also include explicit phase-local verdict memory (`clean` / `retry` / `failure` plus a normalized score), so provider routing can learn from the quality of individual phases instead of inferring everything from coarse terminal outcomes.
 Replay correlation is now also persisted with chat-scoped `taskRunId` values, so concurrent tasks in the same conversation do not blend their phase telemetry or recovery branches.
+That learning path now also materializes runtime self-improvement artifacts. High-confidence repeated patterns become `skill`, `workflow`, or `knowledge_patch` artifacts in `shadow` state, then promote to `active` only after verifier-backed clean evaluations. Active artifacts are injected as internal guidance for matching planning / execution / review turns; shadow artifacts stay evaluation-only and cannot bypass the visibility boundary, verifier pipeline, or approval policy.
 
 `FallbackChainProvider` tries providers in order, swallows errors from non-last providers. Built via `buildProviderChain()` from `PROVIDER_CHAIN` env var.
 
 `PROVIDER_PRESETS` in `provider-registry.ts` maps names to `{ baseUrl, defaultModel }` for: openai, deepseek, qwen, kimi, minimax, groq, mistral, together, fireworks, gemini.
 
 `model-intelligence.ts` refreshes model metadata from live sources and mines official provider docs/changelogs from `provider-sources.json`, so routing, provider info, and the model selector can adapt without provider-specific hardcoded role tables.
+Runtime artifact telemetry is surfaced through `/routing info`, the dashboard, and the settings UI so Strada's self-improvement loop is observable instead of remaining hidden inside learning storage. Those user-facing surfaces are identity-scoped; they show the artifact activity relevant to the active identity and project rather than dumping the whole runtime artifact pool.
 
 ## Tools (`tools/`)
 

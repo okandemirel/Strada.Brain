@@ -33,7 +33,7 @@
 
 Strada.Brain is an AI agent you talk to through a chat channel. You describe what you want -- "create a new ECS system for player movement" or "find all components that use health" -- and the agent reads your C# project, writes the code, runs `dotnet build`, fixes errors automatically, and sends you the result.
 
-It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using hybrid weighted confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, and a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection.
+It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using hybrid weighted confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, a runtime self-improvement loop that materializes reusable `skill` / `workflow` / `knowledge_patch` artifacts in shadow mode before promoting them to active guidance, and a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection.
 
 New in this release: Strada.Brain now features an **Agent Core** -- an autonomous OODA reasoning engine that observes the environment (file changes, git state, build results), reasons about priorities using learned patterns, and takes action proactively. The **multi-provider routing** system dynamically selects the best AI provider for each task type (planning, code generation, debugging, review) with configurable presets (budget/balanced/performance). A **confidence-based consensus** system automatically consults a second provider when the agent's confidence is low, preventing errors on critical operations. All features gracefully degrade -- with a single provider, the system works identically to before with zero overhead.
 
@@ -270,14 +270,16 @@ Strada.Brain automatically checks for updates daily and applies them when idle. 
 3. **RAG retrieval** -- semantic search over your C# codebase (HNSW vectors, top 6 results)
 4. **Instinct retrieval** -- proactively queries learned patterns relevant to the task (semantic + keyword matching)
 5. **Identity context** -- injects persistent agent identity (UUID, boot count, uptime, crash recovery state)
-6. **PLAN phase** -- LLM creates a numbered plan, informed by learned insights and past failures
-7. **ACT phase** -- LLM executes tool calls following the plan
-8. **OBSERVE** -- results are recorded; error recovery analyzes failures; failure classifier categorizes errors
-9. **REFLECT** -- every 3 steps (or on error), LLM decides: **CONTINUE**, **REPLAN**, or **DONE**
-10. **Auto-replan** -- if 3+ consecutive same-type failures occur, forces a new approach avoiding failed strategies
-11. **Repeat** up to 50 iterations until complete
-12. **Learning** -- tool results flow through TypedEventBus to the learning pipeline for immediate pattern storage
-13. **Response sent** to the user through the channel (streaming if supported)
+6. **Runtime self-improvement layer** -- active runtime artifacts (`skill`, `workflow`, `knowledge_patch`) inject internal guidance; shadow artifacts stay evaluation-only
+7. **Execution replay layer** -- prior same-world success/failure branches are injected before planning retries
+8. **PLAN phase** -- LLM creates a numbered plan, informed by learned insights and past failures
+9. **ACT phase** -- LLM executes tool calls following the plan
+10. **OBSERVE** -- results are recorded; error recovery analyzes failures; failure classifier categorizes errors
+11. **REFLECT** -- every 3 steps (or on error), LLM decides: **CONTINUE**, **REPLAN**, or **DONE**
+12. **Auto-replan** -- if 3+ consecutive same-type failures occur, forces a new approach avoiding failed strategies
+13. **Repeat** up to 50 iterations until complete
+14. **Learning** -- tool results flow through TypedEventBus to the learning pipeline for immediate pattern storage
+15. **Response sent** to the user through the channel (streaming if supported)
 
 **Provider/model selection semantics:** Strada is always the agent talking to the user. Choosing a provider/model does not bypass Strada or send your message directly to that provider. Instead, it sets Strada's primary execution worker. Planning, review, synthesis, routing, and fallback stay inside Strada's current orchestration pool: the configured `PROVIDER_CHAIN`, plus the actively selected worker if you temporarily switch outside that chain.
 Strada also keeps ownership of the next step. If a provider returns an incomplete analysis, asks the user what to do next, or makes a broad completion claim without enough evidence, Strada reopens the loop, routes another inspection/review pass, and only returns once the result is verified or a real external blocker remains.
@@ -600,6 +602,7 @@ That replay context now also persists phase/provider telemetry, so adaptive rout
 Terminal replay weighting now also blends the strongest available trajectory verdicts into those persisted signals, preferring trusted judge types before recency, so a branch that looked successful at runtime but was later judged weak carries less routing influence than a cleanly verified one.
 Phase-local verdict memory now sits underneath that replay path as well. Runtime phase outcomes persist an explicit `clean` / `retry` / `failure` verdict with a normalized score, so routing and replay can learn from the quality of individual planning / execution / review phases instead of inferring everything from coarse terminal status alone.
 Replay correlation is now persisted with chat-scoped `taskRunId` values as well, so same-chat concurrent tasks no longer blend their phase telemetry or recovery history. The `persisted chronology` for an exact task run lives in those learning trajectories and replay contexts keyed by `taskRunId`.
+That same learning path now materializes runtime self-improvement artifacts. Repeated high-confidence patterns become `skill`, `workflow`, or `knowledge_patch` artifacts in `shadow` state first; only verifier-backed clean shadow runs can promote them to `active` guidance. `/routing info` exposes the current identity-scoped artifact telemetry for the active project with aggregated samples plus clean/retry/failure/blocker counts, while the dashboard/settings UI shows the split shadow-sample vs active-use counters and the last promotion / rejection / retirement reason.
 
 **Important:** `OPENAI_AUTH_MODE=chatgpt-subscription` only covers OpenAI conversation turns inside Strada. It does not grant OpenAI API billing or embeddings quota. If you choose `EMBEDDING_PROVIDER=openai`, you still need an `OPENAI_API_KEY`.
 
@@ -817,7 +820,7 @@ Slash commands available in all chat channels:
 | `/agent` | Show Agent Core status |
 | `/routing` | Show routing status and preset |
 | `/routing preset <name>` | Switch routing preset (budget/balanced/performance) |
-| `/routing info` | Show recent routing decisions, runtime execution traces, phase outcomes, and adaptive phase scores for the current identity, including verifier clean rate, rollback pressure, retry count, token-cost telemetry, terminal replay verdict weighting, provider catalog freshness, and official alignment / capability drift across planning, execution, clarification-review, review, and synthesis phases |
+| `/routing info` | Show recent routing decisions, runtime execution traces, phase outcomes, adaptive phase scores, and current identity-scoped runtime self-improvement telemetry for the active project, including verifier clean rate, rollback pressure, retry count, token-cost telemetry, terminal replay verdict weighting, provider catalog freshness, official alignment / capability drift, and artifact promotion telemetry across planning, execution, clarification-review, review, and synthesis phases |
 
 ---
 

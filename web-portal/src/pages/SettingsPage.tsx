@@ -97,6 +97,25 @@ interface PhaseScore {
   latestReason: string
 }
 
+interface RuntimeArtifact {
+  id: string
+  kind: 'skill' | 'workflow' | 'knowledge_patch'
+  state: 'shadow' | 'active' | 'retired' | 'rejected'
+  name: string
+  description: string
+  projectWorldFingerprint?: string
+  stats: {
+    shadowSampleCount: number
+    activeUseCount: number
+    cleanCount: number
+    retryCount: number
+    failureCount: number
+    blockerCount: number
+  }
+  lastStateReason?: string
+  updatedAt: number
+}
+
 interface EmbeddingStatus {
   state: 'disabled' | 'active' | 'degraded'
   ragEnabled: boolean
@@ -220,6 +239,7 @@ export default function SettingsPage() {
   const [executionTraces, setExecutionTraces] = useState<ExecutionTrace[]>([])
   const [phaseOutcomes, setPhaseOutcomes] = useState<PhaseOutcome[]>([])
   const [phaseScores, setPhaseScores] = useState<PhaseScore[]>([])
+  const [runtimeArtifacts, setRuntimeArtifacts] = useState<RuntimeArtifact[]>([])
   const [routingLoading, setRoutingLoading] = useState(true)
   const [routingSwitching, setRoutingSwitching] = useState(false)
 
@@ -272,13 +292,14 @@ export default function SettingsPage() {
 
   // --- Fetch routing preset ---
   const fetchRouting = useCallback(() => {
-    fetchJson<{ routing: RoutingDecision[]; execution?: ExecutionTrace[]; outcomes?: PhaseOutcome[]; phaseScores?: PhaseScore[]; preset?: string }>(`/api/agent-activity?${identityQuery}`)
+    fetchJson<{ routing: RoutingDecision[]; execution?: ExecutionTrace[]; outcomes?: PhaseOutcome[]; phaseScores?: PhaseScore[]; artifacts?: RuntimeArtifact[]; preset?: string }>(`/api/agent-activity?${identityQuery}`)
       .then((data) => {
         if (data?.preset) setRoutingPreset(data.preset)
         setRoutingDecisions(Array.isArray(data?.routing) ? data.routing.slice(0, 6) : [])
         setExecutionTraces(Array.isArray(data?.execution) ? data.execution.slice(-6).reverse() : [])
         setPhaseOutcomes(Array.isArray(data?.outcomes) ? data.outcomes.slice(-6).reverse() : [])
         setPhaseScores(Array.isArray(data?.phaseScores) ? data.phaseScores.slice(0, 6) : [])
+        setRuntimeArtifacts(Array.isArray(data?.artifacts) ? data.artifacts.slice(0, 6) : [])
         setRoutingLoading(false)
       })
       .catch(() => {
@@ -286,6 +307,7 @@ export default function SettingsPage() {
         setExecutionTraces([])
         setPhaseOutcomes([])
         setPhaseScores([])
+        setRuntimeArtifacts([])
         setRoutingLoading(false)
       })
   }, [identityQuery])
@@ -850,6 +872,50 @@ export default function SettingsPage() {
                       <div className="settings-hint" style={{ margin: 0 }}>
                         {score.latestReason}
                       </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {runtimeArtifacts.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
+                  <span className="admin-stat-label">Runtime Self-Improvement</span>
+                  <span className="admin-stat-value">{runtimeArtifacts.length}</span>
+                </div>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {runtimeArtifacts.map((artifact) => (
+                    <div
+                      key={artifact.id}
+                      className="settings-provider-card"
+                      style={{ textAlign: 'left', padding: '12px 14px', cursor: 'default' }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                          {artifact.kind}{' -> '}{artifact.name}
+                        </div>
+                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                          {artifact.state}
+                        </div>
+                      </div>
+                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
+                        <span className="settings-provider-id">samples {artifact.stats.shadowSampleCount}</span>
+                        <span className="settings-provider-model">active uses {artifact.stats.activeUseCount}</span>
+                        <span className="settings-provider-model">clean {artifact.stats.cleanCount}</span>
+                        <span className="settings-provider-model">retry {artifact.stats.retryCount}</span>
+                        <span className="settings-provider-model">failed {artifact.stats.failureCount}</span>
+                        <span className="settings-provider-model">blocker {artifact.stats.blockerCount}</span>
+                        <span className="settings-provider-model">{artifact.projectWorldFingerprint ? 'project-scoped' : 'general'}</span>
+                      </div>
+                      <div className="settings-hint" style={{ marginBottom: 4 }}>
+                        {artifact.description}
+                      </div>
+                      {artifact.lastStateReason ? (
+                        <div className="settings-hint" style={{ margin: 0 }}>
+                          {artifact.lastStateReason}
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </div>

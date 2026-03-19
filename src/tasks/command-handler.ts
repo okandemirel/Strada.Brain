@@ -11,6 +11,8 @@ import { TaskStatus, ACTIVE_STATUSES } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { ProviderManager } from "../agents/providers/provider-manager.js";
 import type { DMPolicy } from "../security/dm-policy.js";
+import { projectScopeMatches } from "../learning/runtime-artifact-manager.js";
+import type { RuntimeArtifactManager } from "../learning/runtime-artifact-manager.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "../agents/soul/index.js";
 import type { ExecutionTrace, PhaseOutcome, PhaseScore, RoutingDecision } from "../agent-core/routing/routing-types.js";
@@ -44,6 +46,8 @@ export class CommandHandler {
     private readonly dmPolicy?: DMPolicy,
     private readonly userProfileStore?: UserProfileStore,
     private readonly soulLoader?: SoulLoader,
+    private readonly runtimeArtifactManager?: Pick<RuntimeArtifactManager, "getRecentArtifactsForIdentity">,
+    private readonly projectScopeFingerprint?: string,
     private heartbeatLoopRef?: HeartbeatLoopRef,
   ) {}
 
@@ -818,7 +822,13 @@ export class CommandHandler {
       const executionTraces = this.providerRouter?.getRecentExecutionTraces?.(10, identityKey) ?? [];
       const phaseOutcomes = this.providerRouter?.getRecentPhaseOutcomes?.(10, identityKey) ?? [];
       const phaseScores = this.providerRouter?.getPhaseScoreboard?.(10, identityKey) ?? [];
-      if (decisions.length === 0 && executionTraces.length === 0 && phaseOutcomes.length === 0 && phaseScores.length === 0) {
+      const runtimeArtifacts = this.runtimeArtifactManager?.getRecentArtifactsForIdentity(identityKey, {
+        states: ["active", "shadow", "retired", "rejected"],
+        limit: 6,
+      }).filter((artifact) =>
+        projectScopeMatches(artifact.projectWorldFingerprint, this.projectScopeFingerprint),
+      ) ?? [];
+      if (decisions.length === 0 && executionTraces.length === 0 && phaseOutcomes.length === 0 && phaseScores.length === 0 && runtimeArtifacts.length === 0) {
         await this.channel.sendText(chatId, "No routing decisions recorded yet.");
         return;
       }
@@ -851,6 +861,14 @@ export class CommandHandler {
           `\`${entry.phase}/${entry.role}\` -> \`${entry.provider}\` score=\`${entry.score.toFixed(2)}\` samples=\`${entry.sampleSize}\` verifier=\`${entry.verifierCleanRate.toFixed(2)}\` rollback=\`${entry.rollbackRate.toFixed(2)}\` retries=\`${entry.avgRetryCount.toFixed(2)}\` cost=\`${Math.round(entry.avgTokenCost)}\` repeats=\`${entry.repeatedFailureCount}\` approved=\`${entry.approvedCount}\` continued=\`${entry.continuedCount}\` replanned=\`${entry.replannedCount}\` failed=\`${entry.failedCount}\``
         );
         sections.push(`*Adaptive Phase Scores*\n\n${lines.join("\n")}`);
+      }
+      if (runtimeArtifacts.length > 0) {
+        const lines = runtimeArtifacts.map((artifact) => {
+          const scope = artifact.projectWorldFingerprint ? "project-scoped" : "general";
+          const sampleCount = (artifact.stats.shadowSampleCount ?? 0) + (artifact.stats.activeUseCount ?? 0);
+          return `\`${artifact.kind}\` state=\`${artifact.state}\` samples=\`${sampleCount}\` clean=\`${artifact.stats.cleanCount}\` retry=\`${artifact.stats.retryCount}\` failed=\`${artifact.stats.failureCount}\` blocker=\`${artifact.stats.blockerCount}\` scope=\`${scope}\` (${artifact.lastStateReason ?? artifact.description})`;
+        });
+        sections.push(`*Runtime Self-Improvement*\n\n${lines.join("\n")}`);
       }
       await this.channel.sendMarkdown(chatId, sections.join("\n\n"));
       return;

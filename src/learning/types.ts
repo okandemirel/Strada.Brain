@@ -21,6 +21,7 @@ import type {
   ExecutionTraceSource,
   PhaseVerdict,
   PhaseOutcomeStatus,
+  TaskType,
   VerifierDecision,
 } from "../agent-core/routing/routing-types.js";
 
@@ -48,6 +49,9 @@ export type SolutionId = `sol_${string}`;
 
 /** Evolution proposal identifier */
 export type EvolutionProposalId = `evolution_${string}`;
+
+/** Runtime artifact identifier */
+export type RuntimeArtifactId = `artifact_${string}`;
 
 /** Context condition identifier */
 export type ContextConditionId = `ctx_${string}`;
@@ -700,7 +704,7 @@ export interface Observation {
 // =============================================================================
 
 /** Evolution target types */
-export type EvolutionTarget = "skill" | "command" | "agent" | "workflow";
+export type EvolutionTarget = "skill" | "command" | "agent" | "workflow" | "knowledge_patch";
 
 /** Evolution status */
 export type EvolutionStatus = "pending" | "approved" | "rejected" | "implemented" | "cancelled";
@@ -735,6 +739,72 @@ export interface EvolutionProposal {
   readonly estimatedImpact?: NormalizedScore;
   /** Affected trajectories */
   readonly affectedTrajectoryIds: TrajectoryId[];
+}
+
+// =============================================================================
+// RUNTIME SELF-IMPROVEMENT ARTIFACT TYPES
+// =============================================================================
+
+export type RuntimeArtifactKind = "skill" | "workflow" | "knowledge_patch";
+
+export type RuntimeArtifactState = "shadow" | "active" | "retired" | "rejected";
+
+export type ArtifactEvaluationVerdict = "clean" | "retry" | "failure";
+
+export interface RuntimeArtifactEvaluationRecord {
+  readonly verdict: ArtifactEvaluationVerdict;
+  readonly blocker: boolean;
+  readonly timestamp: TimestampMs;
+}
+
+export interface RuntimeArtifactStats {
+  readonly shadowSampleCount: number;
+  readonly activeUseCount: number;
+  readonly cleanCount: number;
+  readonly retryCount: number;
+  readonly failureCount: number;
+  readonly blockerCount: number;
+  readonly harmfulCount: number;
+  readonly lastVerdict?: ArtifactEvaluationVerdict;
+  readonly lastEvaluatedAt?: TimestampMs;
+  readonly lastFailureFingerprint?: string;
+  readonly recentEvaluations: RuntimeArtifactEvaluationRecord[];
+  readonly regressionFingerprints: Record<string, number>;
+}
+
+export interface RuntimeArtifact {
+  readonly id: RuntimeArtifactId;
+  readonly kind: RuntimeArtifactKind;
+  readonly state: RuntimeArtifactState;
+  readonly name: string;
+  readonly description: string;
+  readonly guidance: string;
+  readonly taskTypes: TaskType[];
+  readonly taskPatterns: string[];
+  readonly projectWorldFingerprint?: string;
+  readonly requiredToolNames: string[];
+  readonly requiredCapabilities: string[];
+  readonly sourceInstinctIds: InstinctId[];
+  readonly sourceTrajectoryIds: TrajectoryId[];
+  readonly stats: RuntimeArtifactStats;
+  readonly shadowActivatedAt?: TimestampMs;
+  readonly promotedAt?: TimestampMs;
+  readonly rejectedAt?: TimestampMs;
+  readonly retiredAt?: TimestampMs;
+  readonly lastStateReason?: string;
+  readonly createdAt: TimestampMs;
+  readonly updatedAt: TimestampMs;
+}
+
+export interface RuntimeArtifactMatch {
+  readonly artifact: RuntimeArtifact;
+  readonly matchScore: NormalizedScore;
+  readonly taskTypeMatched: boolean;
+  readonly projectWorldMatched: boolean;
+  readonly toolCoverage: NormalizedScore;
+  readonly keywordCoverage: NormalizedScore;
+  readonly requiredToolsSatisfied: boolean;
+  readonly usableForExecutionGuidance: boolean;
 }
 
 // =============================================================================
@@ -794,6 +864,13 @@ export function createTrajectoryId(): TrajectoryId {
  */
 export function createVerdictId(): VerdictId {
   return `verdict_${Date.now()}_${Math.random().toString(36).slice(2, 9)}` as VerdictId;
+}
+
+/**
+ * Create a new runtime artifact ID.
+ */
+export function createRuntimeArtifactId(): RuntimeArtifactId {
+  return `artifact_${Date.now()}_${Math.random().toString(36).slice(2, 9)}` as RuntimeArtifactId;
 }
 
 /**

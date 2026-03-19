@@ -14,9 +14,13 @@ import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type {
+  EvolutionProposal,
   Instinct,
   InstinctId,
   InstinctStatus,
+  RuntimeArtifact,
+  RuntimeArtifactId,
+  RuntimeArtifactStats,
   Trajectory,
   TrajectoryId,
   TrajectoryStep,
@@ -55,6 +59,8 @@ CREATE TABLE IF NOT EXISTS instincts (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   evolved_to TEXT,
+  source_trajectory_ids TEXT NOT NULL DEFAULT '[]', -- JSON array
+  tags TEXT NOT NULL DEFAULT '[]', -- JSON array
   bayesian_alpha REAL DEFAULT 1.0,
   bayesian_beta REAL DEFAULT 1.0,
   cooling_started_at INTEGER,
@@ -144,15 +150,41 @@ CREATE TABLE IF NOT EXISTS verdicts (
 CREATE TABLE IF NOT EXISTS evolution_proposals (
   id TEXT PRIMARY KEY,
   instinct_id TEXT NOT NULL,
-  target_type TEXT NOT NULL CHECK(target_type IN ('skill', 'command', 'agent')),
+  target_type TEXT NOT NULL CHECK(target_type IN ('skill', 'command', 'agent', 'workflow', 'knowledge_patch')),
   name TEXT NOT NULL,
   description TEXT NOT NULL,
   confidence REAL NOT NULL,
   implementation TEXT,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'implemented')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'implemented', 'cancelled')),
   proposed_at INTEGER NOT NULL,
   decided_at INTEGER,
+  affected_trajectory_ids TEXT NOT NULL DEFAULT '[]', -- JSON array
   FOREIGN KEY (instinct_id) REFERENCES instincts(id) ON DELETE CASCADE
+);
+
+-- Runtime self-improvement artifacts
+CREATE TABLE IF NOT EXISTS runtime_artifacts (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('skill', 'workflow', 'knowledge_patch')),
+  state TEXT NOT NULL CHECK(state IN ('shadow', 'active', 'retired', 'rejected')),
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  guidance TEXT NOT NULL,
+  task_types TEXT NOT NULL, -- JSON array
+  task_patterns TEXT NOT NULL, -- JSON array
+  project_world_fingerprint TEXT,
+  required_tool_names TEXT NOT NULL, -- JSON array
+  required_capabilities TEXT NOT NULL, -- JSON array
+  source_instinct_ids TEXT NOT NULL, -- JSON array
+  source_trajectory_ids TEXT NOT NULL, -- JSON array
+  stats TEXT NOT NULL, -- JSON object
+  shadow_activated_at INTEGER,
+  promoted_at INTEGER,
+  rejected_at INTEGER,
+  retired_at INTEGER,
+  last_state_reason TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 
 -- Optimized indexes for common queries
@@ -166,6 +198,8 @@ CREATE INDEX IF NOT EXISTS idx_observations_type_processed ON observations(type,
 CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_verdicts_trajectory ON verdicts(trajectory_id);
 CREATE INDEX IF NOT EXISTS idx_solutions_pattern ON solutions(error_pattern_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_artifacts_state_kind ON runtime_artifacts(state, kind, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runtime_artifacts_updated ON runtime_artifacts(updated_at DESC);
 
 -- Full-text search for message patterns (if available)
 CREATE VIRTUAL TABLE IF NOT EXISTS error_patterns_fts USING fts5(
@@ -285,6 +319,18 @@ export class LearningStorage {
       }
     }
 
+    const artifactProvenanceColumns = [
+      "ALTER TABLE instincts ADD COLUMN source_trajectory_ids TEXT NOT NULL DEFAULT '[]'",
+      "ALTER TABLE instincts ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'",
+    ];
+    for (const sql of artifactProvenanceColumns) {
+      try {
+        this.db.prepare(sql).run();
+      } catch {
+        // Column already exists — expected after first migration
+      }
+    }
+
     const trajectoryColumns = [
       "ALTER TABLE trajectories ADD COLUMN chat_id TEXT",
       "ALTER TABLE trajectories ADD COLUMN task_run_id TEXT",
@@ -318,6 +364,14 @@ export class LearningStorage {
 
     // Phase 9: Migrate CHECK constraint on type to include 'tool_chain'
     this.migrateTypeConstraint();
+
+    // Runtime self-improvement: align evolution target CHECK constraint with types.
+    try {
+      this.db.prepare("ALTER TABLE evolution_proposals ADD COLUMN affected_trajectory_ids TEXT NOT NULL DEFAULT '[]'").run();
+    } catch {
+      // Column already exists — expected after first migration
+    }
+    this.migrateEvolutionTargetConstraint();
 
     // Phase 6: Derive alpha/beta from existing stats for migrated instincts
     try {
@@ -403,6 +457,8 @@ export class LearningStorage {
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
           evolved_to TEXT,
+          source_trajectory_ids TEXT NOT NULL DEFAULT '[]',
+          tags TEXT NOT NULL DEFAULT '[]',
           bayesian_alpha REAL DEFAULT 1.0,
           bayesian_beta REAL DEFAULT 1.0,
           cooling_started_at INTEGER,
@@ -416,8 +472,9 @@ export class LearningStorage {
 
       // Copy data from old table
       this.db.exec(`
-        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
+        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, source_trajectory_ids, tags, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
         SELECT id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to,
+               COALESCE(source_trajectory_ids, '[]'), COALESCE(tags, '[]'),
                COALESCE(bayesian_alpha, 1.0), COALESCE(bayesian_beta, 1.0), cooling_started_at, COALESCE(cooling_failures, 0),
                origin_session_id, origin_boot_count, COALESCE(cross_session_hit_count, 0), migrated_at
         FROM instincts_old
@@ -485,6 +542,8 @@ export class LearningStorage {
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
           evolved_to TEXT,
+          source_trajectory_ids TEXT NOT NULL DEFAULT '[]',
+          tags TEXT NOT NULL DEFAULT '[]',
           bayesian_alpha REAL DEFAULT 1.0,
           bayesian_beta REAL DEFAULT 1.0,
           cooling_started_at INTEGER,
@@ -497,8 +556,9 @@ export class LearningStorage {
       `).run();
 
       this.db!.prepare(`
-        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
+        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, source_trajectory_ids, tags, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
         SELECT id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to,
+               COALESCE(source_trajectory_ids, '[]'), COALESCE(tags, '[]'),
                COALESCE(bayesian_alpha, 1.0), COALESCE(bayesian_beta, 1.0), cooling_started_at, COALESCE(cooling_failures, 0),
                origin_session_id, origin_boot_count, COALESCE(cross_session_hit_count, 0), migrated_at
         FROM instincts_old
@@ -511,6 +571,66 @@ export class LearningStorage {
       this.recreateTrajectoryInstinctsPreservingData();
 
       this.db!.prepare("DROP TABLE instincts_old").run();
+    });
+
+    try {
+      migrate();
+    } finally {
+      this.db.pragma("legacy_alter_table = OFF");
+      this.db.pragma("foreign_keys = ON");
+    }
+  }
+
+  /**
+   * Migrate the CHECK constraint on evolution_proposals.target_type so runtime
+   * artifact targets remain aligned with the TypeScript model.
+   */
+  private migrateEvolutionTargetConstraint(): void {
+    if (!this.db) return;
+
+    try {
+      const row = this.db.prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'evolution_proposals'",
+      ).get() as { sql?: string } | undefined;
+      const sql = row?.sql ?? "";
+      if (sql.includes("workflow") && sql.includes("knowledge_patch") && sql.includes("affected_trajectory_ids")) {
+        return;
+      }
+    } catch {
+      // Fall through to migration if sqlite_master inspection fails.
+    }
+
+    this.db.pragma("foreign_keys = OFF");
+    this.db.pragma("legacy_alter_table = ON");
+
+    const migrate = this.db.transaction(() => {
+      this.db!.prepare("ALTER TABLE evolution_proposals RENAME TO evolution_proposals_old").run();
+
+      this.db!.prepare(`
+        CREATE TABLE evolution_proposals (
+          id TEXT PRIMARY KEY,
+          instinct_id TEXT NOT NULL,
+          target_type TEXT NOT NULL CHECK(target_type IN ('skill', 'command', 'agent', 'workflow', 'knowledge_patch')),
+          name TEXT NOT NULL,
+          description TEXT NOT NULL,
+          confidence REAL NOT NULL,
+          implementation TEXT,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'implemented', 'cancelled')),
+          proposed_at INTEGER NOT NULL,
+          decided_at INTEGER,
+          affected_trajectory_ids TEXT NOT NULL DEFAULT '[]',
+          FOREIGN KEY (instinct_id) REFERENCES instincts(id) ON DELETE CASCADE
+        )
+      `).run();
+
+      this.db!.prepare(`
+        INSERT INTO evolution_proposals
+        (id, instinct_id, target_type, name, description, confidence, implementation, status, proposed_at, decided_at, affected_trajectory_ids)
+        SELECT id, instinct_id, target_type, name, description, confidence, implementation, status, proposed_at, decided_at, COALESCE(affected_trajectory_ids, '[]')
+        FROM evolution_proposals_old
+      `).run();
+
+      this.db!.prepare("DROP TABLE evolution_proposals_old").run();
     });
 
     try {
@@ -579,14 +699,14 @@ export class LearningStorage {
     const stmts = {
       insertInstinct: `
         INSERT INTO instincts
-        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, source_trajectory_ids, tags, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       updateInstinct: `
         UPDATE instincts SET
           name = ?, type = ?, status = ?, confidence = ?, trigger_pattern = ?,
           action = ?, context_conditions = ?, stats = ?, updated_at = ?, evolved_to = ?,
-          bayesian_alpha = ?, bayesian_beta = ?, cooling_started_at = ?, cooling_failures = ?,
+          source_trajectory_ids = ?, tags = ?, bayesian_alpha = ?, bayesian_beta = ?, cooling_started_at = ?, cooling_failures = ?,
           origin_session_id = ?, origin_boot_count = ?, cross_session_hit_count = ?, migrated_at = ?
         WHERE id = ?
       `,
@@ -749,6 +869,8 @@ export class LearningStorage {
       instinct.createdAt,
       instinct.updatedAt,
       instinct.evolvedTo ?? null,
+      JSON.stringify(instinct.sourceTrajectoryIds ?? []),
+      JSON.stringify(instinct.tags ?? []),
       instinct.bayesianAlpha ?? null,
       instinct.bayesianBeta ?? null,
       instinct.coolingStartedAt ?? null,
@@ -791,6 +913,8 @@ export class LearningStorage {
       JSON.stringify(instinct.stats),
       Date.now() as TimestampMs,
       instinct.evolvedTo ?? null,
+      JSON.stringify(instinct.sourceTrajectoryIds ?? []),
+      JSON.stringify(instinct.tags ?? []),
       instinct.bayesianAlpha ?? null,
       instinct.bayesianBeta ?? null,
       instinct.coolingStartedAt ?? null,
@@ -1317,6 +1441,180 @@ export class LearningStorage {
     );
   }
 
+  // ─── Evolution Proposal Operations ──────────────────────────────────────────
+
+  createEvolutionProposal(proposal: EvolutionProposal): void {
+    this.ensureConnection();
+    this.db!.prepare(`
+      INSERT OR REPLACE INTO evolution_proposals
+      (id, instinct_id, target_type, name, description, confidence, implementation, status, proposed_at, decided_at, affected_trajectory_ids)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      proposal.id,
+      proposal.instinctId,
+      proposal.targetType,
+      proposal.name,
+      proposal.description,
+      proposal.confidence,
+      proposal.implementation ?? null,
+      proposal.status,
+      proposal.proposedAt,
+      proposal.decidedAt ?? null,
+      JSON.stringify(proposal.affectedTrajectoryIds ?? []),
+    );
+  }
+
+  getEvolutionProposals(options: {
+    instinctId?: string;
+    status?: EvolutionProposal["status"];
+    limit?: number;
+  } = {}): EvolutionProposal[] {
+    this.ensureConnection();
+
+    let sql = "SELECT * FROM evolution_proposals WHERE 1=1";
+    const params: Array<string | number> = [];
+
+    if (options.instinctId) {
+      sql += " AND instinct_id = ?";
+      params.push(options.instinctId);
+    }
+    if (options.status) {
+      sql += " AND status = ?";
+      params.push(options.status);
+    }
+
+    sql += " ORDER BY proposed_at DESC";
+    if (options.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(options.limit);
+    }
+
+    const rows = this.db!.prepare(sql).all(...params) as EvolutionProposalRow[];
+    return rows.map((row) => this.rowToEvolutionProposal(row));
+  }
+
+  // ─── Runtime Artifact Operations ────────────────────────────────────────────
+
+  upsertRuntimeArtifact(artifact: RuntimeArtifact): void {
+    this.ensureConnection();
+    this.db!.prepare(`
+      INSERT INTO runtime_artifacts
+      (id, kind, state, name, description, guidance, task_types, task_patterns, project_world_fingerprint,
+       required_tool_names, required_capabilities, source_instinct_ids, source_trajectory_ids, stats,
+       shadow_activated_at, promoted_at, rejected_at, retired_at, last_state_reason, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        kind = excluded.kind,
+        state = excluded.state,
+        name = excluded.name,
+        description = excluded.description,
+        guidance = excluded.guidance,
+        task_types = excluded.task_types,
+        task_patterns = excluded.task_patterns,
+        project_world_fingerprint = excluded.project_world_fingerprint,
+        required_tool_names = excluded.required_tool_names,
+        required_capabilities = excluded.required_capabilities,
+        source_instinct_ids = excluded.source_instinct_ids,
+        source_trajectory_ids = excluded.source_trajectory_ids,
+        stats = excluded.stats,
+        shadow_activated_at = excluded.shadow_activated_at,
+        promoted_at = excluded.promoted_at,
+        rejected_at = excluded.rejected_at,
+        retired_at = excluded.retired_at,
+        last_state_reason = excluded.last_state_reason,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at
+    `).run(
+      artifact.id,
+      artifact.kind,
+      artifact.state,
+      artifact.name,
+      artifact.description,
+      artifact.guidance,
+      JSON.stringify(artifact.taskTypes),
+      JSON.stringify(artifact.taskPatterns),
+      artifact.projectWorldFingerprint ?? null,
+      JSON.stringify(artifact.requiredToolNames),
+      JSON.stringify(artifact.requiredCapabilities),
+      JSON.stringify(artifact.sourceInstinctIds),
+      JSON.stringify(artifact.sourceTrajectoryIds),
+      JSON.stringify(artifact.stats),
+      artifact.shadowActivatedAt ?? null,
+      artifact.promotedAt ?? null,
+      artifact.rejectedAt ?? null,
+      artifact.retiredAt ?? null,
+      artifact.lastStateReason ?? null,
+      artifact.createdAt,
+      artifact.updatedAt,
+    );
+  }
+
+  getRuntimeArtifact(id: string): RuntimeArtifact | null {
+    this.ensureConnection();
+    const row = this.db!.prepare("SELECT * FROM runtime_artifacts WHERE id = ?").get(id) as RuntimeArtifactRow | undefined;
+    return row ? this.rowToRuntimeArtifact(row) : null;
+  }
+
+  getRuntimeArtifactBySourceInstinct(
+    instinctId: string,
+    kind?: RuntimeArtifact["kind"],
+    states?: readonly RuntimeArtifact["state"][],
+  ): RuntimeArtifact | null {
+    this.ensureConnection();
+
+    const params: Array<string | number> = [];
+    let sql = `
+      SELECT * FROM runtime_artifacts
+      WHERE EXISTS (
+        SELECT 1 FROM json_each(source_instinct_ids)
+        WHERE json_each.value = ?
+      )
+    `;
+    params.push(instinctId);
+
+    if (kind) {
+      sql += " AND kind = ?";
+      params.push(kind);
+    }
+    if (states && states.length > 0) {
+      sql += ` AND state IN (${states.map(() => "?").join(",")})`;
+      params.push(...states);
+    }
+
+    sql += " ORDER BY updated_at DESC LIMIT 1";
+    const row = this.db!.prepare(sql).get(...params) as RuntimeArtifactRow | undefined;
+    return row ? this.rowToRuntimeArtifact(row) : null;
+  }
+
+  getRuntimeArtifacts(options: {
+    states?: readonly RuntimeArtifact["state"][];
+    kinds?: readonly RuntimeArtifact["kind"][];
+    limit?: number;
+  } = {}): RuntimeArtifact[] {
+    this.ensureConnection();
+
+    let sql = "SELECT * FROM runtime_artifacts WHERE 1=1";
+    const params: Array<string | number> = [];
+
+    if (options.states && options.states.length > 0) {
+      sql += ` AND state IN (${options.states.map(() => "?").join(",")})`;
+      params.push(...options.states);
+    }
+    if (options.kinds && options.kinds.length > 0) {
+      sql += ` AND kind IN (${options.kinds.map(() => "?").join(",")})`;
+      params.push(...options.kinds);
+    }
+
+    sql += " ORDER BY updated_at DESC";
+    if (options.limit !== undefined) {
+      sql += " LIMIT ?";
+      params.push(options.limit);
+    }
+
+    const rows = this.db!.prepare(sql).all(...params) as RuntimeArtifactRow[];
+    return rows.map((row) => this.rowToRuntimeArtifact(row));
+  }
+
   // ─── Lifecycle Log Operations ────────────────────────────────────────────────
 
   /** Write a lifecycle log entry */
@@ -1467,7 +1765,9 @@ export class LearningStorage {
         (SELECT COUNT(*) FROM trajectories) as trajectory_count,
         (SELECT COUNT(*) FROM error_patterns) as error_pattern_count,
         (SELECT COUNT(*) FROM observations) as observation_count,
-        (SELECT COUNT(*) FROM observations WHERE processed = 0) as unprocessed_observation_count
+        (SELECT COUNT(*) FROM observations WHERE processed = 0) as unprocessed_observation_count,
+        (SELECT COUNT(*) FROM runtime_artifacts) as runtime_artifact_count,
+        (SELECT COUNT(*) FROM runtime_artifacts WHERE state = 'active') as active_runtime_artifact_count
     `).get() as {
       instinct_count: number;
       active_instinct_count: number;
@@ -1475,6 +1775,8 @@ export class LearningStorage {
       error_pattern_count: number;
       observation_count: number;
       unprocessed_observation_count: number;
+      runtime_artifact_count: number;
+      active_runtime_artifact_count: number;
     };
     
     return {
@@ -1484,6 +1786,8 @@ export class LearningStorage {
       errorPatternCount: stats.error_pattern_count,
       observationCount: stats.observation_count,
       unprocessedObservationCount: stats.unprocessed_observation_count,
+      runtimeArtifactCount: stats.runtime_artifact_count,
+      activeRuntimeArtifactCount: stats.active_runtime_artifact_count,
     };
   }
 
@@ -1509,8 +1813,10 @@ export class LearningStorage {
       createdAt: row.created_at as TimestampMs,
       updatedAt: row.updated_at as TimestampMs,
       evolvedTo: row.evolved_to ? row.evolved_to as InstinctId : undefined,
-      sourceTrajectoryIds: [], // Default empty array for missing field
-      tags: [], // Default empty array for missing field
+      sourceTrajectoryIds: row.source_trajectory_ids
+        ? JSON.parse(row.source_trajectory_ids) as TrajectoryId[]
+        : [],
+      tags: row.tags ? JSON.parse(row.tags) as string[] : [],
       embedding: row.embedding ? JSON.parse(row.embedding) as number[] : undefined,
       bayesianAlpha: row.bayesian_alpha ?? undefined,
       bayesianBeta: row.bayesian_beta ?? undefined,
@@ -1569,6 +1875,50 @@ export class LearningStorage {
       processed: row.processed === 1,
     };
   }
+
+  private rowToEvolutionProposal(row: EvolutionProposalRow): EvolutionProposal {
+    return {
+      id: row.id as EvolutionProposal["id"],
+      instinctId: row.instinct_id as InstinctId,
+      targetType: row.target_type as EvolutionProposal["targetType"],
+      name: row.name,
+      description: row.description,
+      confidence: row.confidence,
+      implementation: row.implementation ?? undefined,
+      status: row.status as EvolutionProposal["status"],
+      proposedAt: row.proposed_at as TimestampMs,
+      decidedAt: row.decided_at ? row.decided_at as TimestampMs : undefined,
+      affectedTrajectoryIds: row.affected_trajectory_ids
+        ? JSON.parse(row.affected_trajectory_ids) as TrajectoryId[]
+        : [],
+    };
+  }
+
+  private rowToRuntimeArtifact(row: RuntimeArtifactRow): RuntimeArtifact {
+    return {
+      id: row.id as RuntimeArtifactId,
+      kind: row.kind as RuntimeArtifact["kind"],
+      state: row.state as RuntimeArtifact["state"],
+      name: row.name,
+      description: row.description,
+      guidance: row.guidance,
+      taskTypes: JSON.parse(row.task_types) as RuntimeArtifact["taskTypes"],
+      taskPatterns: JSON.parse(row.task_patterns) as string[],
+      projectWorldFingerprint: row.project_world_fingerprint ?? undefined,
+      requiredToolNames: JSON.parse(row.required_tool_names) as string[],
+      requiredCapabilities: JSON.parse(row.required_capabilities) as string[],
+      sourceInstinctIds: JSON.parse(row.source_instinct_ids) as InstinctId[],
+      sourceTrajectoryIds: JSON.parse(row.source_trajectory_ids) as TrajectoryId[],
+      stats: JSON.parse(row.stats) as RuntimeArtifactStats,
+      shadowActivatedAt: row.shadow_activated_at ? row.shadow_activated_at as TimestampMs : undefined,
+      promotedAt: row.promoted_at ? row.promoted_at as TimestampMs : undefined,
+      rejectedAt: row.rejected_at ? row.rejected_at as TimestampMs : undefined,
+      retiredAt: row.retired_at ? row.retired_at as TimestampMs : undefined,
+      lastStateReason: row.last_state_reason ?? undefined,
+      createdAt: row.created_at as TimestampMs,
+      updatedAt: row.updated_at as TimestampMs,
+    };
+  }
 }
 
 // ─── Row Types ──────────────────────────────────────────────────────────────────
@@ -1587,6 +1937,8 @@ interface InstinctRow {
   created_at: number;
   updated_at: number;
   evolved_to: string | null;
+  source_trajectory_ids: string | null;
+  tags: string | null;
   bayesian_alpha: number | null;
   bayesian_beta: number | null;
   cooling_started_at: number | null;
@@ -1637,6 +1989,44 @@ interface ObservationRow {
   processed: number;
 }
 
+interface EvolutionProposalRow {
+  id: string;
+  instinct_id: string;
+  target_type: string;
+  name: string;
+  description: string;
+  confidence: number;
+  implementation: string | null;
+  status: string;
+  proposed_at: number;
+  decided_at: number | null;
+  affected_trajectory_ids: string | null;
+}
+
+interface RuntimeArtifactRow {
+  id: string;
+  kind: string;
+  state: string;
+  name: string;
+  description: string;
+  guidance: string;
+  task_types: string;
+  task_patterns: string;
+  project_world_fingerprint: string | null;
+  required_tool_names: string;
+  required_capabilities: string;
+  source_instinct_ids: string;
+  source_trajectory_ids: string;
+  stats: string;
+  shadow_activated_at: number | null;
+  promoted_at: number | null;
+  rejected_at: number | null;
+  retired_at: number | null;
+  last_state_reason: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 // ─── Statistics Interface ───────────────────────────────────────────────────────
 
 export interface LearningStats {
@@ -1646,4 +2036,6 @@ export interface LearningStats {
   errorPatternCount: number;
   observationCount: number;
   unprocessedObservationCount: number;
+  runtimeArtifactCount: number;
+  activeRuntimeArtifactCount: number;
 }

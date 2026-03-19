@@ -324,7 +324,7 @@ describe("LearningPipeline", () => {
       expect(result.proposals).toBe(0);
     });
 
-    it("should consider high-confidence instincts for evolution", () => {
+    it("materializes a shadow runtime artifact and aligned evolution proposal for high-confidence instincts", () => {
       // Create a high-confidence tool_usage instinct with timestamp as number
       const instinct: Instinct = {
         id: `instinct_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -344,9 +344,46 @@ describe("LearningPipeline", () => {
       storage.createInstinct(instinct);
 
       const result = pipeline.runEvolution();
-      
-      // May or may not propose evolution depending on criteria
-      expect(result.proposals).toBeGreaterThanOrEqual(0);
+
+      expect(result.proposals).toBe(1);
+      expect(result.artifacts).toBe(1);
+      const artifacts = storage.getRuntimeArtifacts({ states: ["shadow"] });
+      expect(artifacts).toHaveLength(1);
+      expect(artifacts[0]).toMatchObject({
+        kind: "workflow",
+        state: "shadow",
+      });
+      const proposals = storage.getEvolutionProposals({ instinctId: instinct.id });
+      expect(proposals).toHaveLength(1);
+      expect(proposals[0]).toMatchObject({
+        targetType: "workflow",
+        status: "implemented",
+      });
+    });
+
+    it("does not create duplicate implemented proposals for the same live artifact", () => {
+      pipeline.setProjectPath("/projects/runtime-artifacts");
+      const instinct: Instinct = {
+        id: `instinct_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        name: "Stable Runtime Artifact",
+        type: "tool_usage",
+        status: "active",
+        confidence: 0.97,
+        triggerPattern: "repeat verified compile workflow",
+        action: "read error -> inspect files -> dotnet build",
+        contextConditions: [],
+        stats: { timesSuggested: 50, timesApplied: 48, timesFailed: 2, successRate: 0.96, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+      };
+      storage.createInstinct(instinct);
+
+      expect(pipeline.runEvolution()).toEqual({ proposals: 1, artifacts: 1 });
+      expect(pipeline.runEvolution()).toEqual({ proposals: 0, artifacts: 0 });
+      expect(storage.getEvolutionProposals({ instinctId: instinct.id })).toHaveLength(1);
+      expect(storage.getRuntimeArtifacts({ states: ["shadow"] })).toHaveLength(1);
     });
   });
 

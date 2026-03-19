@@ -49,6 +49,19 @@ describe("LearningStorage", () => {
       expect(retrieved?.type).toBe(instinct.type);
     });
 
+    it("should round-trip instinct provenance fields", () => {
+      const instinct = {
+        ...createTestInstinct(),
+        sourceTrajectoryIds: ["traj_alpha" as any, "traj_beta" as any],
+        tags: ["self-improving", "workflow"],
+      };
+      storage.createInstinct(instinct);
+
+      const retrieved = storage.getInstinct(instinct.id);
+      expect(retrieved?.sourceTrajectoryIds).toEqual(instinct.sourceTrajectoryIds);
+      expect(retrieved?.tags).toEqual(instinct.tags);
+    });
+
     it("should return null for non-existent instinct", () => {
       const retrieved = storage.getInstinct("non-existent-id");
       expect(retrieved).toBeNull();

@@ -14,7 +14,7 @@ import { buildSection, unavailableSection, checkToolRateLimit } from "./introspe
 export class LearningStatsTool implements ITool {
   readonly name = "learning_stats";
   readonly description =
-    "Get statistics about your learning pipeline: instinct counts, active patterns, " +
+    "Get statistics about your learning pipeline: instinct counts, active patterns, runtime self-improvement artifacts, " +
     "trajectory history, task completion rates, and confidence distribution. " +
     "Use this to report on your learning health.";
 
@@ -76,6 +76,7 @@ export class LearningStatsTool implements ITool {
       return buildSection("Instincts", [
         `**Total instincts:** ${stats.instinctCount}`,
         `**Active instincts:** ${stats.activeInstinctCount}`,
+        `**Runtime artifacts:** ${stats.runtimeArtifactCount} (${stats.activeRuntimeArtifactCount} active)`,
         `**Trajectories:** ${stats.trajectoryCount}`,
         `**Error patterns:** ${stats.errorPatternCount}`,
         `**Observations:** ${stats.observationCount} (${stats.unprocessedObservationCount} unprocessed)`,

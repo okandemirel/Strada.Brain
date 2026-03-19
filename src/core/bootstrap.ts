@@ -61,6 +61,8 @@ import {
   ErrorLearningHooks,
   PatternMatcher,
   ConfidenceScorer,
+  RuntimeArtifactManager,
+  createProjectScopeFingerprint,
 } from "../learning/index.js";
 import { TypedEventBus, type IEventBus, type LearningEventMap } from "./event-bus.js";
 import { LearningQueue } from "../learning/pipeline/learning-queue.js";
@@ -366,6 +368,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Wire cross-session scope context and InstinctRetriever (Phase 13)
   let instinctRetriever: InstinctRetriever | undefined;
   let trajectoryReplayRetriever: TrajectoryReplayRetriever | undefined;
+  const runtimeArtifactManager = learningResult.pipeline?.getRuntimeArtifactManager()
+    ?? (learningResult.storage ? new RuntimeArtifactManager(learningResult.storage) : undefined);
   if (learningResult.patternMatcher) {
     const scopeContext: ScopeContext = {
       projectPath: config.unityProjectPath,
@@ -473,11 +477,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     maxParallel: config.goalMaxParallel,
     maxRedecompositions: config.goal.maxRedecompositions,
   };
-
-  // Register services for deep readiness checks and agent metrics endpoint
-  if (dashboard) {
-    dashboard.registerServices({ memoryManager, channel, metricsStorage, learningStorage: learningResult.storage, goalStorage, chainResilienceConfig: config.toolChain.resilience });
-  }
 
   // Initialize soul personality system
   const soulOverrides: Record<string, string> = {};
@@ -614,6 +613,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     sessionSummarizer,
     userProfileStore,
     taskExecutionStore,
+    runtimeArtifactManager,
     toolMetadataByName: toolRegistry.getMetadataMap(),
     providerRouter,
     modelIntelligence,
@@ -724,7 +724,32 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     autoUpdater.scheduleChecks();
   }
 
-  const commandHandler = new CommandHandler(taskManager, channel, providerManager, dmPolicy, userProfileStore, soulLoader);
+  const projectScopeFingerprint = createProjectScopeFingerprint(config.unityProjectPath);
+
+  // Register services for deep readiness checks and agent metrics endpoint
+  if (dashboard) {
+    dashboard.registerServices({
+      memoryManager,
+      channel,
+      metricsStorage,
+      learningStorage: learningResult.storage,
+      runtimeArtifactManager,
+      projectScopeFingerprint,
+      goalStorage,
+      chainResilienceConfig: config.toolChain.resilience,
+    });
+  }
+
+  const commandHandler = new CommandHandler(
+    taskManager,
+    channel,
+    providerManager,
+    dmPolicy,
+    userProfileStore,
+    soulLoader,
+    runtimeArtifactManager,
+    projectScopeFingerprint,
+  );
   // Wire providerRouter to command handler for /routing command
   if (providerRouter) {
     commandHandler.setProviderRouter(providerRouter);

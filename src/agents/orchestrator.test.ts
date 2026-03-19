@@ -9,6 +9,7 @@ import { ShowPlanTool } from "./tools/show-plan.js";
 import { AskUserTool } from "./tools/ask-user.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import { LearningStorage } from "../learning/storage/learning-storage.js";
+import { RuntimeArtifactManager } from "../learning/runtime-artifact-manager.js";
 import type { Trajectory } from "../learning/types.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { TaskExecutionStore } from "../memory/unified/task-execution-store.js";
@@ -1201,6 +1202,182 @@ describe("Orchestrator", () => {
     expect(prompt).toContain("## Execution Replay");
     expect(prompt).toContain("Replay success (same project/world context)");
     expect(prompt).toContain("Replay warning (same project/world context)");
+  });
+
+  it("injects active runtime self-improvement artifacts but keeps shadow artifacts internal", async () => {
+    const artifactDir = mkdtempSync(join(tmpdir(), "orchestrator-artifacts-"));
+    const artifactStorage = new LearningStorage(join(artifactDir, "learning.db"));
+    artifactStorage.initialize();
+    artifactStorage.upsertRuntimeArtifact({
+      id: "artifact_active" as any,
+      kind: "workflow",
+      state: "active",
+      name: "Compile Fix Loop",
+      description: "Reusable compile-fix workflow.",
+      guidance: "Read the compiler output, inspect the failing files, and rerun dotnet build after each patch.",
+      taskTypes: ["debugging"],
+      taskPatterns: ["compile", "build", "pooling", "fix"],
+      projectWorldFingerprint: "unity:pooling",
+      requiredToolNames: ["file_read"],
+      requiredCapabilities: ["tool-calling"],
+      sourceInstinctIds: ["instinct_active" as any],
+      sourceTrajectoryIds: [],
+      stats: {
+        shadowSampleCount: 5,
+        activeUseCount: 5,
+        cleanCount: 5,
+        retryCount: 0,
+        failureCount: 0,
+        blockerCount: 0,
+        harmfulCount: 0,
+        recentEvaluations: [],
+        regressionFingerprints: {},
+      },
+      promotedAt: Date.now() as any,
+      createdAt: Date.now() as any,
+      updatedAt: Date.now() as any,
+    });
+    artifactStorage.upsertRuntimeArtifact({
+      id: "artifact_shadow" as any,
+      kind: "skill",
+      state: "shadow",
+      name: "Unverified tactic",
+      description: "Still under evaluation.",
+      guidance: "Try a speculative fix first.",
+      taskTypes: ["debugging"],
+      taskPatterns: ["compile", "build", "pooling", "fix"],
+      requiredToolNames: [],
+      requiredCapabilities: ["reasoning"],
+      sourceInstinctIds: ["instinct_shadow" as any],
+      sourceTrajectoryIds: [],
+      stats: {
+        shadowSampleCount: 2,
+        activeUseCount: 2,
+        cleanCount: 1,
+        retryCount: 1,
+        failureCount: 0,
+        blockerCount: 0,
+        harmfulCount: 0,
+        recentEvaluations: [],
+        regressionFingerprints: {},
+      },
+      createdAt: Date.now() as any,
+      updatedAt: Date.now() as any,
+    });
+
+    const runtimeArtifactManager = new RuntimeArtifactManager(artifactStorage);
+    const artifactOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      runtimeArtifactManager,
+      memoryManager: {
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "some", value: { summary: "Unity pooling world", fingerprint: "unity:pooling" } } }),
+      } as any,
+    });
+
+    try {
+      const promise = artifactOrch.handleMessage({
+        channelType: "cli",
+        chatId: "chat-runtime-artifacts",
+        userId: "user-1",
+        text: "Fix the pooling compile error and rerun the build",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      const prompt = String(mockProvider.chat.mock.calls.at(-1)?.[0] ?? "");
+      expect(prompt).toContain("## Runtime Self-Improvement");
+      expect(prompt).toContain("Read the compiler output, inspect the failing files");
+      expect(prompt).not.toContain("Try a speculative fix first.");
+    } finally {
+      artifactStorage.close();
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not inject runtime artifacts that depend on tools hidden from the worker surface", async () => {
+    const artifactDir = mkdtempSync(join(tmpdir(), "orchestrator-hidden-artifacts-"));
+    const artifactStorage = new LearningStorage(join(artifactDir, "learning.db"));
+    artifactStorage.initialize();
+    artifactStorage.upsertRuntimeArtifact({
+      id: "artifact_bridge" as any,
+      kind: "workflow",
+      state: "active",
+      name: "Bridge-only workflow",
+      description: "Requires a bridge-only tool.",
+      guidance: "Use the bridge tool first.",
+      taskTypes: ["debugging"],
+      taskPatterns: ["compile", "build", "pooling", "fix"],
+      projectWorldFingerprint: "unity:pooling",
+      requiredToolNames: ["bridge_tool"],
+      requiredCapabilities: ["tool-calling"],
+      sourceInstinctIds: ["instinct_bridge" as any],
+      sourceTrajectoryIds: [],
+      stats: {
+        shadowSampleCount: 5,
+        activeUseCount: 5,
+        cleanCount: 5,
+        retryCount: 0,
+        failureCount: 0,
+        blockerCount: 0,
+        harmfulCount: 0,
+        recentEvaluations: [],
+        regressionFingerprints: {},
+      },
+      promotedAt: Date.now() as any,
+      createdAt: Date.now() as any,
+      updatedAt: Date.now() as any,
+    });
+
+    const runtimeArtifactManager = new RuntimeArtifactManager(artifactStorage);
+    const hiddenTool = createMockTool("bridge_tool");
+    const artifactOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, hiddenTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      runtimeArtifactManager,
+      toolMetadataByName: {
+        bridge_tool: { readOnly: true, requiresBridge: true },
+      },
+      memoryManager: {
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "some", value: { summary: "Unity pooling world", fingerprint: "unity:pooling" } } }),
+      } as any,
+    });
+
+    try {
+      const promise = artifactOrch.handleMessage({
+        channelType: "cli",
+        chatId: "chat-hidden-artifacts",
+        userId: "user-1",
+        text: "Fix the pooling compile error and rerun the build",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      const prompt = String(mockProvider.chat.mock.calls.at(-1)?.[0] ?? "");
+      expect(prompt).not.toContain("## Runtime Self-Improvement");
+      expect(prompt).not.toContain("Use the bridge tool first.");
+    } finally {
+      artifactStorage.close();
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
   });
 
   it("builds trajectory replay context from exact task replay context and project/world memory", async () => {
@@ -2441,6 +2618,37 @@ DONE`,
   it("keeps interactive intake-style ask_user tool calls internal when Strada can still inspect locally", async () => {
     const listTool = createMockTool("list_directory");
     const askUserTool = createMockTool("ask_user");
+    const artifactDir = mkdtempSync(join(tmpdir(), "clarification-artifacts-"));
+    const artifactStorage = new LearningStorage(join(artifactDir, "learning.db"));
+    artifactStorage.initialize();
+    artifactStorage.upsertRuntimeArtifact({
+      id: "artifact_clarification" as any,
+      kind: "workflow",
+      state: "shadow",
+      name: "Unity asset inspection",
+      description: "Keep going with local asset inspection instead of handing the work back to the user.",
+      guidance: "Inspect the relevant Unity asset directly.",
+      taskTypes: ["analysis", "debugging"],
+      taskPatterns: ["analyze", "unity", "level", "assets", "inspect", "issue"],
+      requiredToolNames: [],
+      requiredCapabilities: ["tool-calling"],
+      sourceInstinctIds: ["instinct_clarification" as any],
+      sourceTrajectoryIds: [],
+      stats: {
+        shadowSampleCount: 0,
+        activeUseCount: 0,
+        cleanCount: 0,
+        retryCount: 0,
+        failureCount: 0,
+        blockerCount: 0,
+        harmfulCount: 0,
+        recentEvaluations: [],
+        regressionFingerprints: {},
+      },
+      createdAt: Date.now() as any,
+      updatedAt: Date.now() as any,
+    });
+    const runtimeArtifactManager = new RuntimeArtifactManager(artifactStorage);
     const clarificationOrch = new Orchestrator({
       providerManager: {
         getProvider: () => mockProvider,
@@ -2452,10 +2660,12 @@ DONE`,
       projectPath: "/tmp/test-project",
       readOnly: false,
       requireConfirmation: false,
+      runtimeArtifactManager,
     });
 
-    mockProvider.chat
-      .mockResolvedValueOnce({
+    try {
+      mockProvider.chat
+        .mockResolvedValueOnce({
         text: "Need more context before proceeding.",
         toolCalls: [{
           id: "tc-clarify-intake",
@@ -2470,7 +2680,7 @@ DONE`,
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
-      .mockResolvedValueOnce({
+        .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "internal_continue",
           reason: "Strada still has local project access and can inspect the Unity assets directly.",
@@ -2480,19 +2690,19 @@ DONE`,
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
-      .mockResolvedValueOnce({
+        .mockResolvedValueOnce({
         text: "Continuing with direct asset inspection.",
         toolCalls: [{ id: "tc-level-read", name: "file_read", input: { path: "Assets/Resources/Levels/Level_031.asset" } }],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
-      .mockResolvedValueOnce({
+        .mockResolvedValueOnce({
         text: "Level_031 is the problematic asset and the issue is now isolated.",
         toolCalls: [],
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
-      .mockResolvedValueOnce({
+        .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "approve",
           summary: "The issue is isolated cleanly.",
@@ -2512,35 +2722,39 @@ DONE`,
         usage: { inputTokens: 10, outputTokens: 20 },
       });
 
-    const promise = clarificationOrch.handleMessage({
-      channelType: "cli",
-      chatId: "chat-clarification-review",
-      userId: "user1",
-      text: "Analyze the Unity level assets and keep going until you know the real issue",
-      timestamp: new Date(),
-    });
-    await vi.advanceTimersByTimeAsync(100);
-    await promise;
+      const promise = clarificationOrch.handleMessage({
+        channelType: "cli",
+        chatId: "chat-clarification-review",
+        userId: "user1",
+        text: "Analyze the Unity level assets and keep going until you know the real issue",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
 
-    expect(askUserTool.execute).not.toHaveBeenCalled();
-    const continuationMessages = mockProvider.chat.mock.calls[2]?.[1] as Array<{ role: string; content: unknown }>;
-    expect(continuationMessages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "user",
-          content: expect.arrayContaining([
-            expect.objectContaining({
-              type: "tool_result",
-              content: expect.stringContaining("[CLARIFICATION REVIEW REQUIRED]"),
-            }),
-          ]),
-        }),
-      ]),
-    );
-    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
-      "chat-clarification-review",
-      expect.stringContaining("Level_031 is the problematic asset"),
-    );
+      expect(askUserTool.execute).not.toHaveBeenCalled();
+      const continuationMessages = mockProvider.chat.mock.calls[2]?.[1] as Array<{ role: string; content: unknown }>;
+      expect(continuationMessages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "tool_result",
+                content: expect.stringContaining("[CLARIFICATION REVIEW REQUIRED]"),
+              }),
+            ]),
+          }),
+        ]),
+      );
+      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+        "chat-clarification-review",
+        expect.stringContaining("Level_031 is the problematic asset"),
+      );
+    } finally {
+      artifactStorage.close();
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps plain-text internal execution plans off the user surface and continues internally", async () => {

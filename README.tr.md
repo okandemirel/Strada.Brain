@@ -543,6 +543,7 @@ Strada artik her gorev icin dahili bir execution journal ve rollback memory de t
 Hafiza artik role gore ayrilir: user profile state ad/tercih/autonomy bilgisini, task execution memory session summaries/open items/rollback state bilgisini tutar; project/world memory ise aktif proje root'u ve cached AgentDB analysis uzerinden explicit prompt katmani olarak enjekte edilir. Task execution memory yalnizca aktif identity icin `latest snapshot` tutar; exact bir task run'in `persisted chronology` kaydi burada degildir. Bu ayni project/world katmani artik recovery memory ve adaptive routing'i de besler; semantic retrieval ise canli ilgili hafizayi ayri ekler.
 Cross-session `execution replay` de artik ayni hatti kullanir: Strada project/world-aware recovery ozetlerini learning trajectory'lerine yazar ve benzer isi tekrar denerken en ilgili eski success/failure branch'lerini `Execution Replay` context layer'i olarak prompt'a geri koyar.
 Replay correlation artik chat-scope `taskRunId` ile de persist edilir; boylece ayni chat icindeki eszamanli task'lar phase telemetry ve recovery history tarafinda birbirine karismaz. Exact bir task run icin `persisted chronology` kaydi da bu `taskRunId` ile bagli learning trajectory / replay context tarafinda yasar.
+Ayni learning hatti artik runtime self-improvement artifacts da uretir: tekrar eden yuksek-confidence pattern'ler once `skill`, `workflow` veya `knowledge_patch` olarak `shadow` durumda materialize edilir; yalniz verifier-backed clean shadow run'lar bunlari `active` guidance'a tasir. `/routing info` ve dashboard aktif proje icin identity-scoped artifact telemetry gosterir: state, sample count ve clean/retry/failure dagilimi.
 Bu replay context artik phase/provider telemetry bilgisini de persist eder; boylece adaptive routing benzer gorevlerde yalnizca in-memory runtime history'e degil, basarili gecmis worker'lara da bakabilir.
 
 **Onemli:** `OPENAI_AUTH_MODE=chatgpt-subscription` sadece Strada icindeki OpenAI konusma turlari icin gecerli olur. OpenAI API veya embedding kotasi saglamaz. `EMBEDDING_PROVIDER=openai` secersen yine `OPENAI_API_KEY` gerekir.
@@ -721,7 +722,7 @@ Tum sohbet kanallarinda kullanilabilir slash komutlari:
 | `/agent` | Agent Core durumunu goster |
 | `/routing` | Yonlendirme durumunu ve on ayarini goster |
 | `/routing preset <ad>` | Yonlendirme on ayarini degistir (budget/balanced/performance) |
-| `/routing info` | Mevcut kimlik icin son yonlendirme kararlarini, runtime execution trace'lerini, phase outcome'larini ve adaptive phase scores ozetini goster; verifier clean rate, rollback pressure, retry count, token-cost telemetry, provider catalog freshness ve official alignment / capability drift ile planning, execution, clarification-review, review, synthesis asamalarini da icerir |
+| `/routing info` | Son yonlendirme kararlarini, runtime execution trace'lerini, phase outcome'larini, adaptive phase scores ozetini ve aktif proje icin identity-scoped runtime self-improvement telemetry listesini goster; verifier clean rate, rollback pressure, retry count, token-cost telemetry, provider catalog freshness, official alignment / capability drift ve artifact promotion telemetry sinyallerini de icerir |
 
 ---
 

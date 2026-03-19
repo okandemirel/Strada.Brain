@@ -100,7 +100,7 @@ import type { SoulLoader } from "./soul/index.js";
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/task-execution-store.js";
-import type { TrajectoryPhaseReplay, TrajectoryReplayContext } from "../learning/index.js";
+import type { RuntimeArtifactManager, TrajectoryPhaseReplay, TrajectoryReplayContext } from "../learning/index.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import { derivePhaseVerdict } from "../agent-core/routing/phase-verdict.js";
@@ -631,6 +631,7 @@ export class Orchestrator {
   private readonly sessionSummarizer?: SessionSummarizer;
   private readonly userProfileStore?: UserProfileStore;
   private readonly taskExecutionStore?: TaskExecutionStore;
+  private readonly runtimeArtifactManager?: RuntimeArtifactManager;
   /** Multi-provider routing: selects best provider per task/phase. */
   private readonly providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
   /** Live model intelligence for provider-aware prompting and trimming. */
@@ -642,6 +643,10 @@ export class Orchestrator {
   private readonly taskClassifier = new TaskClassifier();
   private readonly onUsage?: (usage: TaskUsageEvent) => void;
   private readonly taskContext = new AsyncLocalStorage<TaskExecutionContext>();
+  private readonly runtimeArtifactMatches = new Map<string, {
+    activeGuidanceIds: string[];
+    shadowIds: string[];
+  }>();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -676,6 +681,7 @@ export class Orchestrator {
     sessionSummarizer?: SessionSummarizer;
     userProfileStore?: UserProfileStore;
     taskExecutionStore?: TaskExecutionStore;
+    runtimeArtifactManager?: RuntimeArtifactManager;
     toolMetadataByName?: ReadonlyMap<string, WorkerToolMetadata> | Record<string, WorkerToolMetadata>;
     providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
     modelIntelligence?: ModelIntelligenceLookup;
@@ -716,6 +722,7 @@ export class Orchestrator {
     this.sessionSummarizer = opts.sessionSummarizer;
     this.userProfileStore = opts.userProfileStore;
     this.taskExecutionStore = opts.taskExecutionStore;
+    this.runtimeArtifactManager = opts.runtimeArtifactManager;
     if (opts.toolMetadataByName) {
       if (opts.toolMetadataByName instanceof Map) {
         for (const [name, metadata] of opts.toolMetadataByName.entries()) {
@@ -2107,6 +2114,13 @@ export class Orchestrator {
     const contentHashes: string[] = [];
     let projectWorldSummary: string | undefined;
     let projectWorldFingerprint: string | undefined;
+    const classifiedTask = this.taskClassifier.classify(userMessage);
+    const taskContext = this.getTaskExecutionContext();
+    const runtimeArtifactToolNames = this.buildWorkerToolDefinitions(
+      classifiedTask,
+      AgentPhase.EXECUTING,
+      "executor",
+    ).map((definition) => definition.name);
 
     // Layer 1: User Profile
     if (profile) {
@@ -2131,7 +2145,21 @@ export class Orchestrator {
       projectWorldFingerprint = projectWorldLayer.fingerprint;
     }
 
-    // Layer 4: Cross-session execution replay
+    // Layer 4: Runtime self-improvement artifacts
+    const runtimeArtifactLayer = this.buildRuntimeArtifactMemoryLayer(
+      userMessage,
+      classifiedTask,
+      projectWorldFingerprint,
+      runtimeArtifactToolNames,
+      taskContext?.chatId,
+      taskContext?.taskRunId,
+    );
+    if (runtimeArtifactLayer) {
+      layers.push(runtimeArtifactLayer.content);
+      contentHashes.push(...runtimeArtifactLayer.contentHashes);
+    }
+
+    // Layer 5: Cross-session execution replay
     const trajectoryReplayLayer = this.buildTrajectoryReplayMemoryLayer(
       userMessage,
       projectWorldFingerprint,
@@ -2141,7 +2169,7 @@ export class Orchestrator {
       contentHashes.push(...trajectoryReplayLayer.contentHashes);
     }
 
-    // Layer 5: Open Tasks/Goals
+    // Layer 6: Open Tasks/Goals
     const activeGoalTree = this.activeGoalTrees?.get(goalScope);
     if (activeGoalTree) {
       const pendingGoals: Array<{ task: string; status: string }> = [];
@@ -2159,7 +2187,7 @@ export class Orchestrator {
       }
     }
 
-    // Layer 6: Semantic Memory (real embedding search)
+    // Layer 7: Semantic Memory (real embedding search)
     if (this.memoryManager && userMessage) {
       try {
         const memoriesResult = await this.memoryManager.retrieve({
@@ -5368,6 +5396,13 @@ export class Orchestrator {
       availableToolNames: params.availableToolNames,
     });
     if (boundaryDecision.kind === "internal_continue" && boundaryDecision.gate) {
+      this.recordRuntimeArtifactEvaluation({
+        chatId: params.chatId,
+        taskRunId: this.getTaskExecutionContext()?.taskRunId,
+        decision: "continue",
+        summary: "The current draft still deflects execution back to the user.",
+        failureReason: params.draft,
+      });
       return {
         kind: "continue",
         gate: boundaryDecision.gate,
@@ -5382,6 +5417,13 @@ export class Orchestrator {
     }
 
     if (!plan.reviewRequired) {
+      this.recordRuntimeArtifactEvaluation({
+        chatId: params.chatId,
+        taskRunId: this.getTaskExecutionContext()?.taskRunId,
+        decision: plan.initialDecision,
+        summary: plan.summary,
+        failureReason: params.draft,
+      });
       return {
         kind: plan.initialDecision === "replan" ? "replan" : plan.initialDecision === "continue" ? "continue" : "approve",
         gate: plan.gate,
@@ -5444,6 +5486,13 @@ export class Orchestrator {
           failureReason: params.draft,
         }),
       });
+      this.recordRuntimeArtifactEvaluation({
+        chatId: params.chatId,
+        taskRunId: this.getTaskExecutionContext()?.taskRunId,
+        decision: result.decision,
+        summary: result.summary,
+        failureReason: params.draft,
+      });
       return {
         kind: result.decision === "replan" ? "replan" : result.decision === "continue" ? "continue" : "approve",
         gate: result.gate,
@@ -5472,6 +5521,13 @@ export class Orchestrator {
     }
 
     const fallbackResult = finalizeVerifierPipelineReview(plan, null, params.draft);
+    this.recordRuntimeArtifactEvaluation({
+      chatId: params.chatId,
+      taskRunId: this.getTaskExecutionContext()?.taskRunId,
+      decision: fallbackResult.decision,
+      summary: fallbackResult.summary,
+      failureReason: params.draft,
+    });
     return {
       kind: fallbackResult.decision === "replan" ? "replan" : fallbackResult.decision === "continue" ? "continue" : "approve",
       gate: fallbackResult.gate,
@@ -5802,14 +5858,27 @@ export class Orchestrator {
 
     this.tools.set(tool.name, tool);
     const intrinsicMetadata = getToolMetadata(tool);
+    const existingMetadata = this.toolMetadataByName.get(tool.name);
     const intrinsicRequiresBridge =
       intrinsicMetadata && "requiresBridge" in intrinsicMetadata
         ? Boolean((intrinsicMetadata as Record<string, unknown>).requiresBridge)
         : false;
-    this.toolMetadataByName.set(tool.name, metadata ?? {
-      readOnly: intrinsicMetadata?.isReadOnly ?? !WRITE_OPERATIONS.has(tool.name),
-      controlPlaneOnly: tool.name === "ask_user" || tool.name === "show_plan",
-      requiresBridge: intrinsicRequiresBridge,
+    const defaultControlPlaneOnly = tool.name === "ask_user" || tool.name === "show_plan";
+    this.toolMetadataByName.set(tool.name, {
+      readOnly: metadata?.readOnly
+        ?? existingMetadata?.readOnly
+        ?? intrinsicMetadata?.isReadOnly
+        ?? !WRITE_OPERATIONS.has(tool.name),
+      controlPlaneOnly: Boolean(
+        metadata?.controlPlaneOnly
+        ?? existingMetadata?.controlPlaneOnly
+        ?? defaultControlPlaneOnly,
+      ),
+      requiresBridge: Boolean(
+        metadata?.requiresBridge
+        ?? existingMetadata?.requiresBridge
+        ?? intrinsicRequiresBridge,
+      ),
     });
     const def = {
       name: tool.name,
@@ -6303,6 +6372,116 @@ export class Orchestrator {
       content: `## Task Execution Memory\nReference this context when continuing prior work or avoiding failed paths.\n${lines.join("\n")}`,
       contentHashes,
     };
+  }
+
+  private getRuntimeArtifactMatchKey(taskRunId?: string, chatId?: string): string | null {
+    const resolvedTaskRunId = taskRunId?.trim();
+    if (resolvedTaskRunId) {
+      return resolvedTaskRunId;
+    }
+    const resolvedChatId = chatId?.trim();
+    return resolvedChatId && resolvedChatId.length > 0 ? `chat:${resolvedChatId}` : null;
+  }
+
+  private buildRuntimeArtifactMemoryLayer(
+    userMessage: string,
+    task: TaskClassification,
+    projectWorldFingerprint: string | undefined,
+    availableToolNames: readonly string[],
+    chatId?: string,
+    taskRunId?: string,
+  ): { content: string; contentHashes: string[] } | null {
+    if (!this.runtimeArtifactManager || !userMessage.trim()) {
+      return null;
+    }
+
+    try {
+      const matches = this.runtimeArtifactManager.matchForTask({
+        taskDescription: userMessage,
+        taskType: task.type,
+        projectWorldFingerprint,
+        availableToolNames,
+        maxMatches: 6,
+      });
+      const activeGuidance = matches.active.filter((match) => match.usableForExecutionGuidance).slice(0, 3);
+      const key = this.getRuntimeArtifactMatchKey(taskRunId, chatId);
+      if (key) {
+        const matchedIds = {
+          activeGuidanceIds: activeGuidance.map((match) => match.artifact.id),
+          shadowIds: matches.shadow.map((match) => match.artifact.id),
+        };
+        if (matchedIds.activeGuidanceIds.length > 0 || matchedIds.shadowIds.length > 0) {
+          this.runtimeArtifactMatches.set(key, matchedIds);
+        } else {
+          this.runtimeArtifactMatches.delete(key);
+        }
+      }
+
+      if (activeGuidance.length === 0) {
+        return null;
+      }
+
+      const lines: string[] = [
+        "## Runtime Self-Improvement",
+        "These active runtime artifacts were learned from prior verified work. Treat them as internal guidance, not user-visible output.",
+      ];
+      const contentHashes: string[] = [];
+      for (const match of activeGuidance) {
+        const scope = match.projectWorldMatched ? "same-world" : "general";
+        lines.push(`- [${match.artifact.kind}] ${sanitizePromptInjection(match.artifact.guidance)} (score ${match.matchScore.toFixed(2)}, ${scope})`);
+        contentHashes.push(match.artifact.guidance);
+      }
+
+      return {
+        content: lines.join("\n"),
+        contentHashes,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private recordRuntimeArtifactEvaluation(params: {
+    chatId?: string;
+    taskRunId?: string;
+    decision: VerifierDecision;
+    summary: string;
+    failureReason?: string | null;
+  }): void {
+    if (!this.runtimeArtifactManager) {
+      return;
+    }
+
+    const key = this.getRuntimeArtifactMatchKey(params.taskRunId, params.chatId);
+    if (!key) {
+      return;
+    }
+
+    const matched = this.runtimeArtifactMatches.get(key);
+    if (!matched) {
+      return;
+    }
+
+    const artifactIds = [...new Set([...matched.activeGuidanceIds, ...matched.shadowIds])];
+    if (artifactIds.length === 0) {
+      return;
+    }
+
+    const fingerprint = params.decision === "approve"
+      ? ""
+      : normalizeFailureFingerprint(params.failureReason ?? params.summary);
+    this.runtimeArtifactManager.recordEvaluation({
+      artifactIds,
+      identityKey: this.getTaskExecutionContext()?.identityKey,
+      verdict: params.decision === "approve" ? "clean" : params.decision === "continue" ? "retry" : "failure",
+      blocker: params.decision === "replan",
+      reason: params.summary,
+      failureFingerprint: fingerprint || undefined,
+    });
+
+    if (params.decision === "approve") {
+      this.runtimeArtifactMatches.delete(key);
+    }
   }
 
   private buildTrajectoryReplayMemoryLayer(

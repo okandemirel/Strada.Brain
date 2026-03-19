@@ -581,6 +581,7 @@ Strada 现在还会为每个任务维护内部 execution journal 和 rollback me
 记忆现在也按角色拆分：user profile state 保存姓名/偏好/autonomy，task execution memory 保存 session summaries/open items/rollback state；project/world memory 现在会从当前 project root 和缓存的 AgentDB analysis 显式注入到 prompt layer 中。task execution memory 只保存当前 identity 的 `latest snapshot`，并不承担精确 task run 的 `persisted chronology`。这一层 project/world memory 现在也会参与 recovery memory 和 adaptive routing，而 semantic retrieval 仍会单独补充实时相关 memory。
 cross-session `execution replay` 现在也走同一条路径：Strada 会把 project/world-aware recovery summaries 记录进 learning trajectories，并在重试相似工作之前，把最相关的历史 success/failure branches 作为 `Execution Replay` context layer 重新注入 prompt。
 Replay correlation 现在也会连同 chat-scoped `taskRunId` 一起持久化，因此同一个 chat 里的并发 task 不会再混淆彼此的 phase telemetry 和 recovery history。精确 task run 的 `persisted chronology` 会保存在按 `taskRunId` 读取的 learning trajectories / replay contexts 中。
+同一条 learning path 现在也会 materialize runtime self-improvement artifacts。重复出现的 high-confidence pattern 会先以 `skill`、`workflow` 或 `knowledge_patch` 的 `shadow` state 落库，只有 verifier-backed 的 clean shadow evaluations 才能把它们提升为 `active` guidance。`/routing info` 和 dashboard 会以当前项目的 identity-scoped telemetry 形式显示 state、sample 数以及 clean/retry/failure 分布。
 这个 replay context 现在还会持久化 phase/provider telemetry，因此 adaptive routing 在相似任务上可以复用已经成功过的 worker，而不是只依赖内存里的 runtime history。
 
 **重要：** `OPENAI_AUTH_MODE=chatgpt-subscription` 只覆盖 Strada 内的 OpenAI 对话回合，不会提供 OpenAI API 或 embeddings 配额。如果你选择 `EMBEDDING_PROVIDER=openai`，仍然需要 `OPENAI_API_KEY`。
@@ -759,7 +760,7 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `/agent` | 显示 Agent Core 状态 |
 | `/routing` | 显示路由状态和预设 |
 | `/routing preset <name>` | 切换路由预设（budget/balanced/performance） |
-| `/routing info` | 显示当前身份最近的路由决策、runtime execution traces、phase outcomes 以及 adaptive phase scores，并附带 verifier clean rate、rollback pressure、retry count、token-cost telemetry、provider catalog freshness、official alignment / capability drift，覆盖 planning、execution、clarification-review、review、synthesis 阶段 |
+| `/routing info` | 显示最近的路由决策、runtime execution traces、phase outcomes、adaptive phase scores，以及当前项目的 identity-scoped runtime self-improvement telemetry，并附带 verifier clean rate、rollback pressure、retry count、token-cost telemetry、provider catalog freshness、official alignment / capability drift 和 artifact promotion telemetry |
 
 ---
 

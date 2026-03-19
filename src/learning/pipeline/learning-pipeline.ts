@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer, getVerdictScore } from "../scoring/confidence-scorer.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
+import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
 import type { ToolResultEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
@@ -27,12 +28,12 @@ import {
   type VerdictId,
   type VerdictDimensions,
   type EvolutionProposal,
-  type EvolutionProposalId,
   type LearningConfig,
   type ErrorDetails,
   type InstinctType,
   type ContextCondition,
   type ContextConditionId,
+  type RuntimeArtifact,
   type BayesianConfig,
   type InstinctLifecycleEvent,
   CONFIDENCE_THRESHOLDS,
@@ -68,6 +69,7 @@ export class LearningPipeline {
   private storage: LearningStorage;
   private confidenceScorer: ConfidenceScorer;
   private patternMatcher: PatternMatcher;
+  private readonly runtimeArtifacts: RuntimeArtifactManager;
   private config: LearningConfig;
   private bayesianConfig: BayesianConfig;
   private eventBus: IEventBus<LearningEventMap> | null = null;
@@ -92,6 +94,7 @@ export class LearningPipeline {
     this.bayesianConfig = bayesianConfig ?? DEFAULT_BAYESIAN_CONFIG;
     this.confidenceScorer = new ConfidenceScorer();
     this.patternMatcher = new PatternMatcher(storage);
+    this.runtimeArtifacts = new RuntimeArtifactManager(storage);
     this.eventBus = eventBus ?? null;
 
     if (embeddingProvider) {
@@ -522,61 +525,40 @@ export class LearningPipeline {
 
   // ─── Evolution ───────────────────────────────────────────────────────────────
 
-  runEvolution(): { proposals: number } {
-    if (!this.config.enabled) return { proposals: 0 };
+  runEvolution(): { proposals: number; artifacts: number } {
+    if (!this.config.enabled) return { proposals: 0, artifacts: 0 };
 
     let proposals = 0;
+    let artifacts = 0;
     const candidates = this.storage.getInstincts({
       status: "active",
       minConfidence: CONFIDENCE_THRESHOLDS.EVOLUTION,
     });
 
     for (const instinct of candidates) {
-      if (instinct.type === "tool_usage" && instinct.confidence > CONFIDENCE_THRESHOLDS.AUTO_EVOLVE) {
-        this.evolveToSkill(instinct);
-        proposals++;
+      if (instinct.confidence > CONFIDENCE_THRESHOLDS.AUTO_EVOLVE) {
+        const result = this.materializeRuntimeArtifact(instinct);
+        if (result.proposalCreated) {
+          proposals++;
+          artifacts++;
+        }
       }
     }
 
-    return { proposals };
+    return { proposals, artifacts };
   }
 
-  evolveToSkill(instinct: Instinct): EvolutionProposal {
-    const proposal: EvolutionProposal = {
-      id: `evolution_${randomUUID()}` as EvolutionProposalId,
-      instinctId: instinct.id,
-      targetType: "skill",
-      name: instinct.name,
-      description: `Evolved skill from instinct: ${instinct.name}`,
-      confidence: instinct.confidence,
-      implementation: this.generateSkillImplementation(instinct),
-      status: "pending",
-      proposedAt: Date.now() as TimestampMs,
-      affectedTrajectoryIds: [],
-    };
+  materializeRuntimeArtifact(instinct: Instinct): {
+    artifact: RuntimeArtifact;
+    proposal: EvolutionProposal | null;
+    proposalCreated: boolean;
+    created: boolean;
+  } {
+    return this.runtimeArtifacts.materializeShadowArtifact(instinct, this.projectPath);
+  }
 
-    // Access db through a public method or use storage methods
-    const storage = this.storage as unknown as { db: { prepare: (sql: string) => { run: (...args: unknown[]) => unknown } } | null };
-    storage.db?.prepare(`
-      INSERT INTO evolution_proposals 
-      (id, instinct_id, target_type, name, description, confidence, implementation, status, proposed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      proposal.id, proposal.instinctId, proposal.targetType, proposal.name,
-      proposal.description, proposal.confidence, proposal.implementation ?? null,
-      proposal.status, proposal.proposedAt
-    );
-
-    const evolvedInstinctId = createInstinctId();
-    const updatedInstinct: Instinct = {
-      ...instinct,
-      status: "evolved",
-      evolvedTo: evolvedInstinctId,
-      updatedAt: Date.now() as TimestampMs
-    };
-    this.storage.updateInstinct(updatedInstinct);
-
-    return proposal;
+  getRuntimeArtifactManager(): RuntimeArtifactManager {
+    return this.runtimeArtifacts;
   }
 
   // ─── Lifecycle Helpers ───────────────────────────────────────────────────────
@@ -805,19 +787,6 @@ export class LearningPipeline {
       dimensions,
       feedback: "Auto-generated verdict for clean successful trajectory",
     });
-  }
-
-  private generateSkillImplementation(instinct: Instinct): string {
-    return `
-// Auto-generated skill from instinct: ${instinct.name}
-// Confidence: ${instinct.confidence}
-
-export async function executeSkill(context: SkillContext): Promise<SkillResult> {
-  // Trigger pattern: ${instinct.triggerPattern.slice(0, 100)}...
-  const action = ${instinct.action};
-  return await context.execute(action);
-}
-`;
   }
 
   // ─── Public Getters ──────────────────────────────────────────────────────────

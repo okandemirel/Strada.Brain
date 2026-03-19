@@ -381,6 +381,28 @@ describe("DashboardServer", () => {
       latestTimestamp: 790,
       latestReason: "Verifier review requested a different approach.",
     }]);
+    const mockRuntimeArtifactManager = {
+      getRecentArtifactsForIdentity: vi.fn(() => [{
+        id: "artifact_1",
+        kind: "workflow",
+        state: "active",
+        name: "Compile Fix Loop",
+        description: "Reusable compile-fix workflow.",
+        projectWorldFingerprint: "unity:pooling",
+        stats: {
+          shadowSampleCount: 5,
+          activeUseCount: 4,
+          cleanCount: 4,
+          retryCount: 1,
+          failureCount: 0,
+          blockerCount: 0,
+          harmfulCount: 0,
+          recentEvaluations: [],
+          regressionFingerprints: {},
+        },
+        updatedAt: 791,
+      }]),
+    };
     server.setProviderRouter({
       getPreset: () => "balanced",
       setPreset: () => {},
@@ -389,6 +411,7 @@ describe("DashboardServer", () => {
       getRecentPhaseOutcomes,
       getPhaseScoreboard,
     });
+    server.registerServices({ runtimeArtifactManager: mockRuntimeArtifactManager as any, projectScopeFingerprint: "unity:pooling" });
 
     if (!await safeStart(server)) return;
 
@@ -402,6 +425,10 @@ describe("DashboardServer", () => {
     expect(getRecentExecutionTraces).toHaveBeenCalledWith(20, "user-1");
     expect(getRecentPhaseOutcomes).toHaveBeenCalledWith(20, "user-1");
     expect(getPhaseScoreboard).toHaveBeenCalledWith(12, "user-1");
+    expect(mockRuntimeArtifactManager.getRecentArtifactsForIdentity).toHaveBeenCalledWith("user-1", {
+      states: ["active", "shadow", "retired", "rejected"],
+      limit: 12,
+    });
     expect(data.preset).toBe("balanced");
     expect(data.execution).toEqual([
       expect.objectContaining({
@@ -432,6 +459,13 @@ describe("DashboardServer", () => {
         phase: "completion-review",
         score: 0.82,
         verifierCleanRate: 0.72,
+      }),
+    ]);
+    expect(data.artifacts).toEqual([
+      expect.objectContaining({
+        id: "artifact_1",
+        kind: "workflow",
+        state: "active",
       }),
     ]);
   });

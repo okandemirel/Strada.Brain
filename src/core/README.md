@@ -13,16 +13,18 @@ Initialization sequence (order matters):
 3. AI provider — single `ClaudeProvider` or a multi-provider chain built from `config.providerChain` (comma-separated names mapped to API keys)
 4. `FileMemoryManager` — optional, gated on `config.memory.enabled`
 5. `RAGPipeline` — optional, gated on `config.rag.enabled`; selects `OllamaEmbeddingProvider` or `OpenAIEmbeddingProvider`, wraps it in `CachedEmbeddingProvider`, configures HNSW params from env vars, triggers background `indexProject()`
-6. Learning system — `LearningStorage` + `LearningPipeline` + `ErrorRecoveryEngine` + `TaskPlanner`; falls back to bare `TaskPlanner`/`ErrorRecoveryEngine` on failure
+6. Learning system — `LearningStorage` + `LearningPipeline` + `RuntimeArtifactManager` + `ErrorRecoveryEngine` + `TaskPlanner`; falls back to bare `TaskPlanner`/`ErrorRecoveryEngine` on failure
 7. `ToolRegistry.initialize()` — receives `memoryManager` and `ragPipeline` as optional deps
 8. Channel adapter — `CLIChannel`, `TelegramChannel`, `DiscordChannel`, or `WhatsAppChannel` based on `channelType`
 9. `MetricsCollector` + optional `DashboardServer`
 10. `RateLimiter` — optional, configured from `DEFAULT_RATE_LIMITS` and config overrides
 11. `Orchestrator` — receives provider, tools, channel, memory, metrics, RAG, rate limiter, streaming flag
-12. Message handler wiring — `channel.onMessage` delegates to `orchestrator.handleMessage` with `TaskPlanner` start/end tracking
+12. Message handler wiring — `channel.onMessage` allocates `taskRunId`, wraps execution in task context, delegates to `orchestrator.handleMessage`, and feeds replay context back into `TaskPlanner`
 13. Session cleanup interval (`SESSION_CLEANUP_INTERVAL_MS`)
 
 Shutdown handler tears down in reverse: clears cleanup interval, stops learning pipeline, stops dashboard, shuts down RAG, shuts down memory, disconnects channel.
+
+The bootstrap path now also wires runtime self-improvement into the control plane. High-confidence instincts materialize shadow runtime artifacts in the learning subsystem, the orchestrator retrieves matching active artifacts as internal guidance, and `/api/agent-activity` plus `/routing info` surface identity-scoped artifact lifecycle telemetry without exposing raw internal drafts or the full artifact pool to users.
 
 ## DI Container (`di-container.ts`)
 

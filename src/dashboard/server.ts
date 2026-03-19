@@ -12,6 +12,8 @@ import { VALID_TASK_TYPES, VALID_COMPLETION_STATUSES } from "../metrics/metrics-
 import type { TaskType, CompletionStatus } from "../metrics/metrics-types.js";
 import { parseDurationToTimestamp } from "../metrics/parse-duration.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
+import type { RuntimeArtifactManager } from "../learning/runtime-artifact-manager.js";
+import { projectScopeMatches } from "../learning/runtime-artifact-manager.js";
 import type { GoalStorage } from "../goals/index.js";
 import type { GoalTree } from "../goals/types.js";
 import { calculateProgress } from "../goals/goal-progress.js";
@@ -379,6 +381,8 @@ export class DashboardServer {
   private channel?: IChannelAdapter;
   private metricsStorage?: MetricsStorage;
   private learningStorage?: LearningStorage;
+  private runtimeArtifactManager?: Pick<RuntimeArtifactManager, "getRecentArtifactsForIdentity">;
+  private projectScopeFingerprint?: string;
   private goalStorage?: GoalStorage;
 
   // Daemon context (set when daemon mode is active)
@@ -457,6 +461,8 @@ export class DashboardServer {
     channel?: IChannelAdapter;
     metricsStorage?: MetricsStorage;
     learningStorage?: LearningStorage;
+    runtimeArtifactManager?: Pick<RuntimeArtifactManager, "getRecentArtifactsForIdentity">;
+    projectScopeFingerprint?: string;
     goalStorage?: GoalStorage;
     chainResilienceConfig?: ChainResilienceConfig;
   }): void {
@@ -464,6 +470,8 @@ export class DashboardServer {
     this.channel = services.channel ?? this.channel;
     this.metricsStorage = services.metricsStorage ?? this.metricsStorage;
     this.learningStorage = services.learningStorage ?? this.learningStorage;
+    this.runtimeArtifactManager = services.runtimeArtifactManager ?? this.runtimeArtifactManager;
+    this.projectScopeFingerprint = services.projectScopeFingerprint ?? this.projectScopeFingerprint;
     this.goalStorage = services.goalStorage ?? this.goalStorage;
     this.chainResilienceConfig = services.chainResilienceConfig ?? this.chainResilienceConfig;
   }
@@ -1611,9 +1619,25 @@ export class DashboardServer {
         const executionTraces = this.providerRouter?.getRecentExecutionTraces?.(20, identityKey) ?? [];
         const phaseOutcomes = this.providerRouter?.getRecentPhaseOutcomes?.(20, identityKey) ?? [];
         const phaseScores = this.providerRouter?.getPhaseScoreboard?.(12, identityKey) ?? [];
+        const artifacts = (this.runtimeArtifactManager?.getRecentArtifactsForIdentity(identityKey, {
+          states: ["active", "shadow", "retired", "rejected"],
+          limit: 12,
+        }) ?? [])
+          .filter((artifact) => projectScopeMatches(artifact.projectWorldFingerprint, this.projectScopeFingerprint))
+          .map((artifact) => ({
+            id: artifact.id,
+            kind: artifact.kind,
+            state: artifact.state,
+            name: artifact.name,
+            description: artifact.description,
+            projectWorldFingerprint: artifact.projectWorldFingerprint,
+            stats: artifact.stats,
+            lastStateReason: artifact.lastStateReason,
+            updatedAt: artifact.updatedAt,
+          }));
         const preset = this.providerRouter?.getPreset() ?? "balanced";
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ routing: routingDecisions, execution: executionTraces, outcomes: phaseOutcomes, phaseScores, preset }));
+        res.end(JSON.stringify({ routing: routingDecisions, execution: executionTraces, outcomes: phaseOutcomes, phaseScores, artifacts, preset }));
         return;
       }
 
