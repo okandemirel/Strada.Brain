@@ -235,12 +235,13 @@ describe("buildDepsContext", () => {
     };
   }
 
-  it("treats Strada.MCP as a first-class authoritative source", () => {
+  it("treats Strada.MCP as an authoritative source with truthful runtime availability", () => {
     const result = buildDepsContext(makeDepsStatus());
 
     expect(result).toContain("Framework Source Authority");
     expect(result).toContain("Strada.MCP");
-    expect(result).toContain("first-class part of the Strada toolchain");
+    expect(result).toContain("first-class knowledge source inside the Strada toolchain");
+    expect(result).toContain("Only MCP action tools that are executable in the current Brain runtime belong to the live worker tool surface.");
     expect(result).toContain("/tools/Strada.MCP/src/tools");
   });
 

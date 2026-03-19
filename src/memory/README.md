@@ -6,6 +6,7 @@ Task execution memory is only a `latest snapshot` for the active identity. It is
 Project/world memory is surfaced to the orchestrator as its own prompt layer built from the active project root and cached project analysis. That same world-memory anchor now also feeds rollback/replan memory and adaptive provider scoring, while semantic retrieval continues to inject live relevant memories separately.
 Cross-session `execution replay` also consumes that anchor: learning trajectories now carry project/world-aware recovery summaries so the next similar task can reuse prior success/failure branches without inventing a second persistence layer.
 Those trajectories now also persist phase/provider telemetry plus chat-scoped `taskRunId` correlation, so replay and adaptive routing can separate concurrent tasks inside the same chat instead of mixing their runtime history. Exact task chronology lives in those replay trajectories and contexts keyed by `taskRunId`.
+Only the visible transcript is persisted into searchable conversation memory. Raw worker drafts, verifier gates, clarification prompts, and internal replanning nudges stay in task execution state / execution journals rather than leaking into `memory_search`.
 
 ## Active Backend: AgentDBMemory
 

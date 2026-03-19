@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Agente de Desarrollo con IA para Proyectos Unity / Strada.Core</strong><br/>
-  Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7. Ahora con orquestacion multi-agente, delegacion de tareas, consolidacion de memoria, un subsistema de despliegue con puertas de aprobacion, comparticion de medios con soporte de vision LLM, un sistema de personalidad configurable via SOUL.md, herramientas de aclaracion interactivas, enrutamiento inteligente multi-proveedor con conmutacion dinamica segun tarea, verificacion de consenso basada en confianza, un Agent Core autonomo con bucle de razonamiento OODA e integracion con Strada.MCP.
+  Un agente de programacion autonomo que se conecta a un dashboard web, Telegram, Discord, Slack, WhatsApp o tu terminal &mdash; lee tu codigo fuente, escribe codigo, ejecuta builds, aprende de sus errores y opera de forma autonoma con un bucle daemon 24/7. Ahora con orquestacion multi-agente, delegacion de tareas, consolidacion de memoria, un subsistema de despliegue con puertas de aprobacion, comparticion de medios con soporte de vision LLM, un sistema de personalidad configurable via SOUL.md, control-plane clarification review, enrutamiento inteligente multi-proveedor con conmutacion dinamica segun tarea, verificacion de consenso basada en confianza, un Agent Core autonomo con bucle de razonamiento OODA e integracion con Strada.MCP.
 </p>
 
 > Nota de traduccion: Para el comportamiento actual en runtime, los valores por defecto de variables de entorno y la semantica de seguridad, la fuente canonica es [README.md](README.md). Este archivo es una traduccion de ese documento.
@@ -481,7 +481,7 @@ Con 2+ proveedores configurados, Strada.Brain enruta automaticamente las tareas 
 
 ### Integracion con Strada.MCP
 
-Strada.Brain detecta [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (servidor MCP de Unity) e informa al agente sobre las capacidades MCP disponibles, incluyendo control de tiempo de ejecucion, operaciones de archivos, git, compilacion .NET, analisis de codigo y gestion de escenas/prefabs.
+Strada.Brain detecta [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (servidor MCP de Unity) e informa al agente sobre las capacidades MCP disponibles, incluyendo control de tiempo de ejecucion, operaciones de archivos, git, compilacion .NET, analisis de codigo y gestion de escenas/prefabs. Solo las herramientas MCP de accion ejecutables en el runtime actual de Brain entran en la superficie de herramientas del worker; las capacidades MCP limitadas por bridge/runtime siguen contando como authoritative docs/resources.
 
 ---
 
@@ -703,7 +703,7 @@ El agente tiene mas de 40 herramientas integradas organizadas por categoria:
 | `grep_search` | Busqueda de contenido con regex entre archivos (max. 20 coincidencias) |
 | `list_directory` | Listado de directorio con tamanos de archivo |
 | `code_search` | Busqueda semantica/vectorial via RAG -- consultas en lenguaje natural |
-| `memory_search` | Buscar en la memoria persistente de conversaciones |
+| `memory_search` | Buscar en la memoria persistente visible de conversaciones |
 
 ### Generacion de Codigo Strada
 | Herramienta | Descripcion |
@@ -734,8 +734,8 @@ El agente tiene mas de 40 herramientas integradas organizadas por categoria:
 ### Interaccion del Agente
 | Herramienta | Descripcion |
 |-------------|-------------|
-| `ask_user` | Hace al usuario una pregunta de aclaracion con opciones multiples y respuesta recomendada, pero solo despues de que `clarification-review` confirme que de verdad hace falta |
-| `show_plan` | Muestra el plan de ejecucion y espera aprobacion del usuario (Aprobar/Modificar/Rechazar) |
+| `ask_user` | No es una herramienta normal de accion del worker; solo se muestra al usuario cuando `clarification-review` confirma que de verdad hace falta |
+| `show_plan` | No es una herramienta normal de accion del worker; solo se muestra como turno de revision del plan cuando el usuario pidio ver el plan primero |
 | `switch_personality` | Cambia la personalidad del agente en tiempo de ejecucion (casual/formal/minimal/default) |
 
 ### Otros

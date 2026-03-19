@@ -8,6 +8,7 @@ import {
   hasOpenReviewFindingsForDraft,
   parseCompletionReviewDecision,
   shouldRunCompletionReview,
+  userExplicitlyAskedForPlan,
 } from "./completion-review.js";
 
 function createState(overrides: Partial<AgentState> = {}): AgentState {
@@ -216,7 +217,40 @@ DONE`;
       evidence,
     );
     expect(gate).toContain("[AUTONOMY REQUIRED]");
-    expect(gate).toContain("internal execution plan or intake checklist");
+    expect(gate).toContain("internal execution plan, tool checklist, or intake checklist");
+  });
+
+  it("builds an autonomy gate for internal tool-directed checklists even without a plan heading", () => {
+    const evidence = collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [
+          { toolName: "memory_search", success: true, summary: "Searched prior conversation memory", timestamp: Date.now() - 500 },
+          { toolName: "git_log", success: true, summary: "Reviewed recent commits", timestamp: Date.now() - 250 },
+        ],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      chatId: "chat-tool-checklist",
+      taskStartedAtMs: Date.now() - 1000,
+      logEntries: [],
+    });
+
+    const gate = buildAutonomyDeflectionGate(
+      `PLAN
+Bellek taramasi yap: memory_search ile son oturumu ara.
+Proje durumunu dogrula: git_log ve git_status ile son degisikliklere bak.
+Gerekirse grep_search ile ilgili modulu teyit et.
+Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
+      evidence,
+    );
+
+    expect(gate).toContain("[AUTONOMY REQUIRED]");
+    expect(gate).toContain("tool checklist");
   });
 
   it("allows an internal plan draft when the user explicitly asked for a plan", () => {
@@ -247,6 +281,11 @@ DONE`;
 
     expect(buildAutonomyDeflectionGate(draft, evidence, "Show me the plan before you touch the code.")).toBeNull();
     expect(shouldRunCompletionReview(evidence, draft, "Show me the plan before you touch the code.")).toBe(false);
+  });
+
+  it("does not treat generic execution-plan discussion as an explicit plan-review request", () => {
+    expect(userExplicitlyAskedForPlan("Why did this execution plan fail?")).toBe(false);
+    expect(userExplicitlyAskedForPlan("Can you explain the execution plan you used yesterday?")).toBe(false);
   });
 
   it("treats approve decisions with partial closure as still open", () => {

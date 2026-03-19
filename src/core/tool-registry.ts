@@ -47,6 +47,8 @@ export interface ToolMetadata {
   requiresConfirmation: boolean;
   readOnly: boolean;
   dependencies?: string[];
+  controlPlaneOnly?: boolean;
+  requiresBridge?: boolean;
 }
 
 // ============================================================================
@@ -209,6 +211,8 @@ export class ToolRegistry {
         requiresConfirmation: metadata.requiresConfirmation ?? false,
         readOnly: metadata.readOnly ?? true,
         dependencies: metadata.dependencies,
+        controlPlaneOnly: metadata.controlPlaneOnly ?? false,
+        requiresBridge: metadata.requiresBridge ?? false,
       };
       this.metadata.set(tool.name, fullMetadata);
 
@@ -313,6 +317,10 @@ export class ToolRegistry {
    */
   getMetadata(name: string): ToolMetadata | undefined {
     return this.metadata.get(name);
+  }
+
+  getMetadataMap(): ReadonlyMap<string, ToolMetadata> {
+    return new Map(this.metadata);
   }
 
   /**
@@ -612,12 +620,14 @@ export class ToolRegistry {
       category: ToolCategories.INTROSPECTION,
       dangerous: false,
       readOnly: true,
+      controlPlaneOnly: true,
     });
 
     this.register(new ShowPlanTool(), {
       category: ToolCategories.INTROSPECTION,
       dangerous: false,
       readOnly: true,
+      controlPlaneOnly: true,
     });
 
     this.register(new SwitchPersonalityTool(), {

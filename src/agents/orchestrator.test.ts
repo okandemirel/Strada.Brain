@@ -15,6 +15,7 @@ import { TaskExecutionStore } from "../memory/unified/task-execution-store.js";
 import { buildGoalTreeFromBlock } from "../goals/types.js";
 import { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import type { SessionId, TimestampMs, ToolName } from "../types/index.js";
+import { createInitialState } from "./agent-state.js";
 
 const mockLogRingBuffer: Array<{
   timestamp: string;
@@ -221,6 +222,259 @@ describe("Orchestrator", () => {
 
     expect(mockProvider.chat).toHaveBeenCalledTimes(1);
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat1", "Hello!");
+  });
+
+  it("keeps control-plane tools out of worker tool pools", async () => {
+    const toolSurfaceOrch = new Orchestrator({
+      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      tools: [new AskUserTool(), new ShowPlanTool(), readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    const promise = toolSurfaceOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-tool-surface",
+      userId: "user1",
+      text: "Hi there",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const toolNames = ((mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? [])
+      .map((tool) => tool.name);
+    expect(toolNames).toContain("file_read");
+    expect(toolNames).not.toContain("ask_user");
+    expect(toolNames).not.toContain("show_plan");
+  });
+
+  it("filters bridge-required MCP tools from worker tool pools", async () => {
+    const bridgeTool = createMockTool("unity_scene_info");
+    const bridgeOrch = new Orchestrator({
+      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      tools: [bridgeTool, readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+    (bridgeOrch as any).toolMetadataByName.set("unity_scene_info", {
+      readOnly: true,
+      controlPlaneOnly: false,
+      requiresBridge: true,
+    });
+
+    const promise = bridgeOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-bridge-filter",
+      userId: "user1",
+      text: "Hi there",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const toolNames = ((mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? [])
+      .map((tool) => tool.name);
+    expect(toolNames).toContain("file_read");
+    expect(toolNames).not.toContain("unity_scene_info");
+  });
+
+  it("refreshes dynamic tool metadata when a tool is removed and re-added", async () => {
+    const dynamicOrch = new Orchestrator({
+      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    dynamicOrch.addTool(createMockTool("dynamic_probe"), {
+      readOnly: true,
+      controlPlaneOnly: true,
+      requiresBridge: false,
+    });
+    dynamicOrch.removeTool("dynamic_probe");
+    dynamicOrch.addTool(createMockTool("dynamic_probe"), {
+      readOnly: true,
+      controlPlaneOnly: false,
+      requiresBridge: false,
+    });
+
+    const promise = dynamicOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-dynamic-tool",
+      userId: "user1",
+      text: "Inspect the workspace",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const toolNames = ((mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? [])
+      .map((tool) => tool.name);
+    expect(toolNames).toContain("dynamic_probe");
+  });
+
+  it("derives dynamic worker-tool metadata from enhanced tools added after construction", async () => {
+    const planningOrch = new Orchestrator({
+      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+    });
+
+    planningOrch.addTool({
+      ...createMockTool("delegate_specialist"),
+      metadata: {
+        name: "delegate_specialist",
+        description: "Delegates a subtask",
+        category: "delegation" as never,
+        riskLevel: "medium" as never,
+        isReadOnly: false,
+        requiresConfirmation: false,
+      },
+    } as any);
+
+    const promise = planningOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-dynamic-enhanced-tool",
+      userId: "user1",
+      text: "Analyze the bug and plan the fix",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const toolNames = ((mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? [])
+      .map((tool) => tool.name);
+    expect(toolNames).not.toContain("delegate_specialist");
+  });
+
+  it("persists only the visible transcript to conversation memory", async () => {
+    const storeConversation = vi.fn().mockResolvedValue({ kind: "ok", value: undefined });
+    const memoryOrch = new Orchestrator({
+      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      memoryManager: { storeConversation } as any,
+    });
+
+    const session = (memoryOrch as any).getOrCreateSession("chat-visible-only");
+    session.messages = [
+      { role: "user", content: "Analyze the freeze" },
+      { role: "assistant", content: "Geçmiş bağlamı çıkar\nmemory_search ile ara." },
+      { role: "user", content: "[VISIBILITY REVIEW REQUIRED] Continue internally." },
+      { role: "assistant", content: "Root cause verified." },
+    ];
+    session.visibleMessages = [
+      { role: "user", content: "Analyze the freeze" },
+      { role: "assistant", content: "Root cause verified." },
+    ];
+
+    await (memoryOrch as any).persistSessionToMemory(
+      "chat-visible-only",
+      (memoryOrch as any).getVisibleTranscript(session),
+      true,
+    );
+
+    const storedSummary = storeConversation.mock.calls[0]?.[1] as string | undefined;
+    expect(storedSummary).toContain("Analyze the freeze");
+    expect(storedSummary).toContain("Root cause verified.");
+    expect(storedSummary).not.toContain("Geçmiş bağlamı çıkar");
+    expect(storedSummary).not.toContain("[VISIBILITY REVIEW REQUIRED]");
+  });
+
+  it("does not leak raw sub-goal scaffolding when goal synthesis fails", async () => {
+    const failingSynthProvider = createMockProvider();
+    failingSynthProvider.chat = vi.fn().mockRejectedValue(new Error("synthesis unavailable"));
+    const goalOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => failingSynthProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    const goalTree = buildGoalTreeFromBlock({
+      isGoal: true,
+      estimatedMinutes: 5,
+      nodes: [{ id: "sub-1", task: "Inspect Level_031.asset", dependsOn: [] }],
+    }, "goal-session", "Investigate the freeze");
+
+    const visible = await goalOrch.synthesizeGoalExecutionResult({
+      prompt: "Investigate the freeze",
+      goalTree,
+      executionResult: {
+        tree: goalTree,
+        results: [{
+          nodeId: [...goalTree.nodes.keys()][1]!,
+          task: "Inspect Level_031.asset",
+          result: "## Sub-goal: Inspect Level_031.asset\n\nGeçmiş bağlamı çıkar\nmemory_search ile ara.",
+        }],
+        totalDurationMs: 1000,
+        failureCount: 0,
+        aborted: false,
+      },
+      chatId: "chat-goal-synthesis",
+    });
+
+    expect(visible).toContain("could not safely synthesize a user-facing summary");
+    expect(visible).not.toContain("## Sub-goal");
+    expect(visible).not.toContain("memory_search");
+  });
+
+  it("does not leak the raw worker draft when supervisor synthesis fails", async () => {
+    const synthProvider = createNamedProvider("synth");
+    synthProvider.chat = vi.fn().mockRejectedValue(new Error("synthesis unavailable"));
+    const synthOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      providerRouter: {} as any,
+    });
+
+    const visible = await (synthOrch as any).synthesizeUserFacingResponse({
+      chatId: "chat-synthesis-fallback",
+      identityKey: "user1",
+      prompt: "Investigate the freeze",
+      draft: "Geçmiş bağlamı çıkar\nmemory_search ile ara.",
+      agentState: createInitialState("Investigate the freeze"),
+      strategy: {
+        task: { type: "analysis", complexity: "moderate", criticality: "high" },
+        planner: { role: "planner", providerName: "mock", provider: mockProvider, reason: "test" },
+        executor: { role: "executor", providerName: "mock", provider: mockProvider, reason: "test" },
+        reviewer: { role: "reviewer", providerName: "mock", provider: mockProvider, reason: "test" },
+        synthesizer: { role: "synthesizer", providerName: "synth", provider: synthProvider, reason: "test" },
+        usesMultipleProviders: true,
+      },
+      systemPrompt: "Test system prompt",
+    });
+
+    expect(visible).toContain("could not safely synthesize");
+    expect(visible).not.toContain("memory_search");
+    expect(visible).not.toContain("Geçmiş bağlamı çıkar");
   });
 
   it("builds provider intelligence from the identity-scoped preference instead of the raw chat id", async () => {
@@ -1452,6 +1706,44 @@ describe("Orchestrator", () => {
     expect(String(mockProvider.chat.mock.calls[0]?.[0] ?? "")).toContain("Fix the failing test");
   });
 
+  it("records the triggering message once when showing a resume prompt and continuing normally", async () => {
+    const interruptedTree = buildGoalTreeFromBlock({
+      isGoal: true,
+      estimatedMinutes: 5,
+      nodes: [{ id: "fix", task: "Fix the failing test", dependsOn: [] }],
+    }, "stable-profile", "Fix the failing test");
+
+    const resumeOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      interruptedGoalTrees: [interruptedTree],
+    });
+
+    const promise = resumeOrch.handleMessage({
+      channelType: "web",
+      chatId: "ephemeral-chat",
+      conversationId: "stable-profile",
+      userId: "stable-profile",
+      text: "hello",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const session = (resumeOrch as any).getOrCreateSession("ephemeral-chat");
+    const visibleUserMessages = ((session.visibleMessages ?? []) as Array<{ role: string; content: unknown }>)
+      .filter((message) => message.role === "user" && message.content === "hello");
+    expect(visibleUserMessages).toHaveLength(1);
+  });
+
   it("does not mistake response-format instructions for the user's display name", async () => {
     const db = new Database(":memory:");
     const userProfileStore = new UserProfileStore(db);
@@ -2029,7 +2321,7 @@ DONE`,
       expect.arrayContaining([
         expect.objectContaining({
           role: "user",
-          content: expect.stringContaining("[COMPLETION REVIEW REQUIRED]"),
+          content: expect.stringContaining("[VISIBILITY REVIEW REQUIRED]"),
         }),
       ]),
     );
@@ -2331,6 +2623,101 @@ DONE`,
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
       "chat-plan-drift",
       expect.stringContaining("Level_031 is the problematic asset"),
+    );
+  });
+
+  it("keeps internal tool-directed operational checklists off the user surface and continues with the tools", async () => {
+    const memorySearchTool = createMockTool("memory_search");
+    const gitLogTool = createMockTool("git_log");
+    const toolDirectiveOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [memorySearchTool, gitLogTool, readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: `PLAN
+Bellek taramasi yap: memory_search ile son oturumu ara.
+Proje durumunu dogrula: git_log ile son commitlere bak.
+Gerekirse file_read ile ilgili dosyalari teyit et.
+Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Searching prior context first.",
+        toolCalls: [{ id: "tc-memory-search", name: "memory_search", input: { query: "100 level unity freeze arrows Tiki" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Checking recent repository history.",
+        toolCalls: [{ id: "tc-git-log", name: "git_log", input: { count: 5 } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "The previous session was about the 100-level analysis and the Unity freeze path is still the unresolved thread.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "The recovered context is concrete and user-facing.",
+          closureStatus: "verified",
+          openInvestigations: [],
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "not_applicable",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const promise = toolDirectiveOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-tool-directive-drift",
+      userId: "user1",
+      text: "Son konusmamizi ve senden istediklerimi hatirliyor musun?",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(memorySearchTool.execute).toHaveBeenCalledTimes(1);
+    expect(gitLogTool.execute).toHaveBeenCalledTimes(1);
+    expect(mockProvider.chat.mock.calls[1]?.[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("[AUTONOMY REQUIRED]"),
+        }),
+      ]),
+    );
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-tool-directive-drift",
+      expect.stringContaining("100-level analysis"),
+    );
+    expect(mockChannel.sendMarkdown).not.toHaveBeenCalledWith(
+      "chat-tool-directive-drift",
+      expect.stringContaining("Bellek taramasi yap"),
     );
   });
 
@@ -2739,6 +3126,45 @@ DONE`,
     expect(toolResultContents.some((content) => content.includes("Plan approval is still required"))).toBe(true);
   });
 
+  it("wraps raw background planning drafts in plan-review framing when the user explicitly asked for a plan first", async () => {
+    const backgroundOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat.mockResolvedValueOnce({
+      text: `Execution plan:
+
+1. Read the failing implementation.
+2. Apply the minimal verified fix.
+3. Run the relevant verification command.`,
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 20, outputTokens: 20 },
+    });
+
+    const result = await backgroundOrch.runBackgroundTask(
+      "Show me the plan before you touch the code.",
+      {
+        chatId: "bg-raw-plan-review",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+      },
+    );
+
+    expect(result).toContain("Plan review requested before execution.");
+    expect(result).toContain("Reply with your approval or requested changes before write-capable execution continues.");
+  });
+
   it("rejects weak plans in autonomous mode and asks the agent to revise them", async () => {
     const dmPolicy = new DMPolicy(mockChannel as any);
     dmPolicy.initFromProfile("auto-plan-reject", { autonomousMode: true });
@@ -2953,7 +3379,7 @@ DONE`,
       expect.arrayContaining([
         expect.objectContaining({
           role: "user",
-          content: expect.stringContaining("[COMPLETION REVIEW REQUIRED]"),
+          content: expect.stringContaining("[VISIBILITY REVIEW REQUIRED]"),
         }),
       ]),
     );

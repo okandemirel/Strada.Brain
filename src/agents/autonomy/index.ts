@@ -6,10 +6,13 @@ export { SelfVerification } from "./self-verification.js";
 export type { VerificationState } from "./self-verification.js";
 export {
   buildAutonomyDeflectionGate,
+  classifyAutonomyDrift,
   COMPLETION_REVIEW_SYSTEM_PROMPT,
   buildCompletionReviewGate,
   buildCompletionReviewRequest,
   collectCompletionReviewEvidence,
+  draftLooksLikeInternalPlanArtifact,
+  draftLooksLikeInternalToolingChecklist,
   hasOpenReviewFindings,
   parseCompletionReviewDecision,
   shouldRunCompletionReview,
@@ -52,4 +55,6 @@ export type {
 export { ExecutionJournal } from "./execution-journal.js";
 export { InteractionPolicyStateMachine } from "./interaction-policy.js";
 export type { InteractionGateKind, InteractionGateState, InteractionWriteBlock } from "./interaction-policy.js";
+export { decideInteractionBoundary } from "./visibility-boundary.js";
+export type { InteractionBoundaryDecision, InteractionBoundaryDecisionKind } from "./visibility-boundary.js";
 export { MUTATION_TOOLS, VERIFY_TOOLS, WRITE_OPERATIONS, COMPILABLE_EXT, extractFilePath } from "./constants.js";

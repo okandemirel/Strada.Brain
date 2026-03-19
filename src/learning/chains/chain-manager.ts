@@ -37,7 +37,14 @@ export class ChainManager {
     private readonly synthesizer: ChainSynthesizer,
     private readonly toolRegistry: ToolRegistry,
     private readonly learningStorage: LearningStorage,
-    private readonly orchestrator: { addTool(tool: ITool): void; removeTool(name: string): void },
+    private readonly orchestrator: {
+      addTool(tool: ITool, metadata?: {
+        readOnly?: boolean;
+        controlPlaneOnly?: boolean;
+        requiresBridge?: boolean;
+      }): void;
+      removeTool(name: string): void;
+    },
     private readonly eventBus: IEventEmitter<LearningEventMap>,
     private readonly config: ToolChainConfig,
     private readonly chainValidator?: ChainValidator,
@@ -132,7 +139,7 @@ export class ChainManager {
           v2Metadata.toolSequence.map((name) => this.toolRegistry.getMetadata(name)),
         );
         this.toolRegistry.registerOrUpdate(tool, toolMeta);
-        this.orchestrator.addTool(tool);
+        this.orchestrator.addTool(tool, toolMeta);
         this.activeChainNames.add(instinct.name);
         this.activeCandidateKeys.add(instinct.triggerPattern);
       } catch (error) {
@@ -192,7 +199,12 @@ export class ChainManager {
 
       const newTools = await this.synthesizer.synthesize(newCandidates);
       for (const tool of newTools) {
-        this.orchestrator.addTool(tool);
+        const toolMeta = this.toolRegistry.getMetadata(tool.name);
+        this.orchestrator.addTool(tool, toolMeta ? {
+          readOnly: toolMeta.readOnly,
+          controlPlaneOnly: toolMeta.controlPlaneOnly,
+          requiresBridge: toolMeta.requiresBridge,
+        } : undefined);
         this.activeChainNames.add(tool.name);
         this.activeCandidateKeys.add(tool.toolSequence.join(","));
       }

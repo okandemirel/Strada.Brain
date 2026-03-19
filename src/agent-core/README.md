@@ -42,6 +42,7 @@ Collects from registered observers, deduplicates within 60s window, maintains hi
 
 ### ProviderRouter
 Scores available providers against task classification using configurable preset weights plus learned control-plane signals. Preset workload weights (`cost`, `capability`, `speed`, `diversity`) are now combined with runtime phase telemetry, explicit phase-local verdict scores, verifier cleanliness, rollback pressure, retry cost, provider-catalog freshness, official alignment, and persisted execution replay signals. Terminal replay bias also blends the strongest available trajectory verdict, preferring trusted judge types before recency, so a later weak review can down-weight a branch that only looked successful in its original runtime window without punishing earlier non-terminal phases. Supports PAOR phase switching, so planning, execution, clarification-review, review, and synthesis can favor different workers without provider-specific hardcoding.
+These routing decisions are internal worker assignments only. The user still talks only to Strada; provider traces and phase outcomes are evidence of the control plane, not a direct chat identity switch.
 
 ### ConsensusManager
 When ConfidenceEstimator scores output below threshold, ConsensusManager verifies with a second provider. Strategies: "review" (ask if correct) or "re-execute" (same prompt to different provider). Graceful degradation: 1 provider = skip entirely.

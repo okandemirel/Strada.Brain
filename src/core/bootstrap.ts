@@ -614,6 +614,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     sessionSummarizer,
     userProfileStore,
     taskExecutionStore,
+    toolMetadataByName: toolRegistry.getMetadataMap(),
     providerRouter,
     modelIntelligence,
     consensusManager,

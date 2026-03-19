@@ -29,6 +29,10 @@ export interface CompletionReviewDecision {
   readonly logStatus?: string;
 }
 
+export interface AutonomyBoundaryContext {
+  readonly toolNames?: Iterable<string>;
+}
+
 export const COMPLETION_REVIEW_SYSTEM_PROMPT = `You are Strada Brain's completion reviewer.
 The executing provider is not allowed to self-certify completion.
 Review the evidence dynamically and decide whether Strada can consider the task complete.
@@ -78,9 +82,43 @@ const HEDGED_RUNTIME_RE = /\b(?:may|might|could|possibly|potential(?:ly)?|likely
 const FOLLOW_UP_CHECK_RE = /\b(?:inspect|check|profile|verify|confirm|investigat(?:e|ing))\b.*\b(?:profiler|call stack|cpu usage|runtime|frame|performance|freeze|entity scan|memory)\b/iu;
 const PLAN_HEADING_RE = /^(?:#{1,6}\s*)?(?:plan|execution plan|approach|next steps?)\b/iu;
 const INTAKE_HEADING_RE = /^(?:#{1,6}\s*)?(?:minimum inputs|requirements?|objective|scope|project health check)\b/iu;
+const SUBGOAL_HEADING_RE = /^(?:#{1,6}\s*)?sub-?goal\b/iu;
 const STRUCTURED_STEP_RE = /(?:^|\n)\s*(?:\d+\.\s+|[A-D]\)\s+|[-*]\s+)(?:run|read|inspect|search|trace|collect|get|locate|identify|check|verify|create|update|fix|branch|treat|add|remove|ask|confirm|clarify)\b/gimu;
 const INTERNAL_PLAN_RE = /\b(?:execution-ready plan|execution plan|plan to fix|next step is|first step|second step|minimum inputs to proceed)\b/iu;
-const EXPLICIT_PLAN_REQUEST_RE = /\b(?:show|give|share|outline|plan|explain|walk me through)\b.{0,30}\b(?:plan|approach|steps?|game plan)\b|\b(?:what(?:'s| is)?|how)\b.{0,25}\b(?:your|the)\b.{0,20}\b(?:plan|approach)\b|\b(?:create|make|write)\b.{0,20}\b(?:a )?(?:plan|checklist)\b/iu;
+const EXPLICIT_PLAN_REQUEST_RE =
+  /\b(?:show|share|outline|walk me through|review)\b.{0,24}\b(?:your|the)\b.{0,16}\b(?:plan|approach|steps?|checklist)\b.{0,40}\b(?:before|first|prior to)\b|\b(?:before|first)\b.{0,40}\b(?:touch|change|edit|write|implement|execute|proceed|run)\b.{0,20}\b(?:show|share|outline|review|walk me through)\b.{0,20}\b(?:your|the)?\s*(?:plan|approach|steps?|checklist)\b|\b(?:plan[ıi]|yaklaş[ıi]m[ıi]n[ıi]|yaklas[ıi]m[ıi]n[ıi]|ad[ıi]mlar[ıi]n[ıi])\b.{0,30}\b(?:önce|once)\b.{0,30}\b(?:göster|goster|paylaş|paylas|anlat)\b/iu;
+const INTERNAL_ROLE_RE = /\b(?:executor|worker|provider|orchestrator|planner|reviewer|synthesizer)\b/iu;
+const OPERATIONAL_SECTION_RE = /(?:^|\n)\s*[^\n:]{1,80}:\s*[^\n]+/gmu;
+const OPERATIONAL_VERB_RE = /\b(?:run|use|call|search|read|inspect|trace|collect|get|locate|identify|check|verify|create|update|fix|branch|treat|add|remove|ask|confirm|clarify|review|analy[sz]e|reproduce|arat|ara|oku|incele|kontrol et|doğrula|teyit et|çıkar|bak)\b/giu;
+const INTERNAL_TOOL_NAMES = [
+  "file_read",
+  "file_write",
+  "file_edit",
+  "file_delete",
+  "file_rename",
+  "glob_search",
+  "grep_search",
+  "list_directory",
+  "code_search",
+  "memory_search",
+  "rag_search",
+  "git_status",
+  "git_diff",
+  "git_log",
+  "git_commit",
+  "git_push",
+  "dotnet_build",
+  "dotnet_test",
+  "shell_exec",
+  "show_plan",
+  "ask_user",
+  "strada_analyze_project",
+  "strada_create_module",
+  "strada_create_component",
+  "strada_create_mediator",
+  "strada_create_system",
+] as const;
+const INTERNAL_TOOL_TOKEN_RE = new RegExp(`\\b(?:${INTERNAL_TOOL_NAMES.join("|")})\\b`, "giu");
 
 export function collectCompletionReviewEvidence(params: {
   state: AgentState;
@@ -137,8 +175,9 @@ export function buildAutonomyDeflectionGate(
   draft: string,
   evidence: CompletionReviewEvidence,
   prompt = "",
+  context: AutonomyBoundaryContext = {},
 ): string | null {
-  const driftKind = classifyAutonomyDrift(draft, prompt);
+  const driftKind = classifyAutonomyDrift(draft, prompt, context);
   if (driftKind === "none") {
     return null;
   }
@@ -151,11 +190,11 @@ export function buildAutonomyDeflectionGate(
 
   return [
     driftKind === "plan"
-      ? "[AUTONOMY REQUIRED] The current draft is an internal execution plan or intake checklist, not a user-facing result."
+      ? "[AUTONOMY REQUIRED] The current draft is an internal execution plan, tool checklist, or intake checklist, not a user-facing result."
       : "[AUTONOMY REQUIRED] The current draft hands the next step back to the user without surfacing a terminal blocker.",
     "Strada must continue autonomously here.",
     driftKind === "plan"
-      ? "Do not surface internal plans, requirement-gathering checklists, or execution TODOs as the final user-facing reply unless the user explicitly asked for a plan."
+      ? "Do not surface internal plans, tool-run checklists, requirement-gathering checklists, or execution TODOs as the final user-facing reply unless the user explicitly asked for a plan."
       : "Do not ask the user what to do next, request a screenshot, or ask them to choose between fix paths unless there is a real external blocker or a materially risky irreversible decision.",
     `Evidence so far:\n${evidenceSummary}`,
     "Inspect the relevant files/assets directly, use another provider/reviewer if needed, verify the concrete outcome, and only then return the result.",
@@ -321,11 +360,13 @@ function draftNeedsReview(
     && evidence.totalStepCount > 0;
 }
 
-function classifyAutonomyDrift(
+export function classifyAutonomyDrift(
   draft: string,
   prompt = "",
+  context: AutonomyBoundaryContext = {},
 ): "none" | "user_deflection" | "plan" {
   const normalized = draft.trim();
+  const firstLine = normalized.split("\n", 1)[0] ?? "";
   if (!normalized) {
     return "none";
   }
@@ -333,13 +374,16 @@ function classifyAutonomyDrift(
     return "user_deflection";
   }
 
-  const firstLine = normalized.split("\n", 1)[0] ?? "";
-  const looksLikePlanHeading = PLAN_HEADING_RE.test(firstLine) || INTAKE_HEADING_RE.test(firstLine);
   const structuredSteps = (normalized.match(STRUCTURED_STEP_RE) ?? []).length;
-  const looksLikeInternalPlan = INTERNAL_PLAN_RE.test(normalized) || looksLikePlanHeading;
+  const looksLikeInternalPlan = draftLooksLikeInternalPlanArtifact(normalized, context);
+  const subGoalScaffolding = SUBGOAL_HEADING_RE.test(firstLine);
   const userAskedForPlan = userExplicitlyAskedForPlan(prompt);
 
-  if (looksLikeInternalPlan && structuredSteps >= 2 && !userAskedForPlan) {
+  if (
+    looksLikeInternalPlan
+    && (structuredSteps >= 2 || subGoalScaffolding || draftLooksLikeInternalToolingChecklist(normalized, context))
+    && !userAskedForPlan
+  ) {
     return "plan";
   }
 
@@ -396,4 +440,71 @@ export function draftLeavesOpenInvestigations(draft: string | null | undefined):
 
 function draftClaimsCompletion(draft: string): boolean {
   return COMPLETION_CLAIM_RE.test(draft);
+}
+
+export function draftLooksLikeInternalPlanArtifact(
+  draft: string,
+  context: AutonomyBoundaryContext = {},
+): boolean {
+  const normalized = draft.trim();
+  if (!normalized) {
+    return false;
+  }
+  const firstLine = normalized.split("\n", 1)[0] ?? "";
+  return INTERNAL_PLAN_RE.test(normalized)
+    || PLAN_HEADING_RE.test(firstLine)
+    || INTAKE_HEADING_RE.test(firstLine)
+    || SUBGOAL_HEADING_RE.test(firstLine)
+    || draftLooksLikeInternalToolingChecklist(normalized, context);
+}
+
+export function draftLooksLikeInternalToolingChecklist(
+  draft: string,
+  context: AutonomyBoundaryContext = {},
+): boolean {
+  const toolMentions = collectInternalToolMentions(draft, context.toolNames);
+  const operationalSections = (draft.match(OPERATIONAL_SECTION_RE) ?? []).length;
+  const operationalVerbs = (draft.match(OPERATIONAL_VERB_RE) ?? []).length;
+  return toolMentions.size >= 2
+    && (
+      operationalSections >= 2
+      || operationalVerbs >= 3
+      || INTERNAL_ROLE_RE.test(draft)
+    );
+}
+
+function collectInternalToolMentions(
+  draft: string,
+  dynamicToolNames?: Iterable<string>,
+): Set<string> {
+  const mentions = new Set((draft.match(INTERNAL_TOOL_TOKEN_RE) ?? []).map((token) => token.toLowerCase()));
+  const dynamicPattern = buildDynamicToolTokenPattern(dynamicToolNames);
+  if (!dynamicPattern) {
+    return mentions;
+  }
+
+  const dynamicMatches = draft.match(dynamicPattern) ?? [];
+  for (const token of dynamicMatches) {
+    mentions.add(token.toLowerCase());
+  }
+  return mentions;
+}
+
+function buildDynamicToolTokenPattern(toolNames?: Iterable<string>): RegExp | null {
+  const escaped = [...new Set(
+    [...(toolNames ?? [])]
+      .map((name) => name.trim())
+      .filter((name) => name.length >= 3)
+      .map((name) => escapeRegExp(name)),
+  )];
+
+  if (escaped.length === 0) {
+    return null;
+  }
+
+  return new RegExp(`(?<![a-z0-9_])(?:${escaped.join("|")})(?![a-z0-9_])`, "giu");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -9,7 +9,7 @@ import type {
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { ProviderManager } from "./providers/provider-manager.js";
-import type { ITool, ToolContext, ToolExecutionResult } from "./tools/tool.interface.js";
+import { getToolMetadata, type ITool, type ToolContext, type ToolExecutionResult } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage, Attachment } from "../channels/channel.interface.js";
 import { supportsInteractivity, supportsRichMessaging } from "../channels/channel.interface.js";
 import { isVisionCompatible, toBase64ImageSource } from "../utils/media-processor.js";
@@ -53,11 +53,13 @@ import {
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
 import {
-  buildAutonomyDeflectionGate,
   buildClarificationContinuationGate,
   buildClarificationReviewRequest,
   CLARIFICATION_REVIEW_SYSTEM_PROMPT,
   COMPLETION_REVIEW_SYSTEM_PROMPT,
+  collectCompletionReviewEvidence,
+  decideInteractionBoundary,
+  draftLooksLikeInternalPlanArtifact,
   ErrorRecoveryEngine,
   ExecutionJournal,
   TaskPlanner,
@@ -74,6 +76,7 @@ import {
   shouldRunClarificationReview,
   InteractionPolicyStateMachine,
   userExplicitlyAskedForPlan,
+  type InteractionBoundaryDecision,
   type VerifierPipelineResult,
 } from "./autonomy/index.js";
 import { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
@@ -126,6 +129,7 @@ You are operating in AUTONOMOUS MODE. The user has explicitly granted you full a
 - Only use ask_user when you genuinely cannot determine user intent (missing critical info)
 - If you use ask_user anyway, prefer decision-ready options because the system may resolve the choice autonomously
 - Proceed confidently with your best judgment on all write operations
+- Do NOT return internal tool-run checklists or "first run X / then run Y" operational memos in plain text; use the tools directly when you can
 - Budget and safety limits are still enforced automatically\n`;
 const API_KEY_PATTERN =
   /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+|AKIA[0-9A-Z]{16}|-----BEGIN\s(?:RSA\s)?PRIVATE\sKEY-----|mongodb(?:\+srv)?:\/\/[^\s]+@)[a-zA-Z0-9_\-.]{10,}/gi;
@@ -164,10 +168,17 @@ Your job:
 
 interface Session {
   messages: ConversationMessage[];
+  visibleMessages?: ConversationMessage[];
   lastActivity: Date;
   conversationScope?: string;
   profileKey?: string;
   mixedParticipants?: boolean;
+}
+
+interface WorkerToolMetadata {
+  readonly readOnly?: boolean;
+  readonly controlPlaneOnly?: boolean;
+  readonly requiresBridge?: boolean;
 }
 
 interface TaskExecutionContext {
@@ -575,6 +586,7 @@ export class Orchestrator {
     description: string;
     input_schema: import("../types/index.js").JsonObject;
   }>;
+  private readonly toolMetadataByName = new Map<string, WorkerToolMetadata>();
   private readonly channel: IChannelAdapter;
   private readonly projectPath: string;
   private readonly readOnly: boolean;
@@ -664,6 +676,7 @@ export class Orchestrator {
     sessionSummarizer?: SessionSummarizer;
     userProfileStore?: UserProfileStore;
     taskExecutionStore?: TaskExecutionStore;
+    toolMetadataByName?: ReadonlyMap<string, WorkerToolMetadata> | Record<string, WorkerToolMetadata>;
     providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
     modelIntelligence?: ModelIntelligenceLookup;
     consensusManager?: import("../agent-core/routing/consensus-manager.js").ConsensusManager;
@@ -703,6 +716,17 @@ export class Orchestrator {
     this.sessionSummarizer = opts.sessionSummarizer;
     this.userProfileStore = opts.userProfileStore;
     this.taskExecutionStore = opts.taskExecutionStore;
+    if (opts.toolMetadataByName) {
+      if (opts.toolMetadataByName instanceof Map) {
+        for (const [name, metadata] of opts.toolMetadataByName.entries()) {
+          this.toolMetadataByName.set(name, metadata);
+        }
+      } else {
+        for (const [name, metadata] of Object.entries(opts.toolMetadataByName)) {
+          this.toolMetadataByName.set(name, metadata);
+        }
+      }
+    }
     this.providerRouter = opts.providerRouter;
     this.modelIntelligence = opts.modelIntelligence;
     this.consensusManager = opts.consensusManager;
@@ -1014,6 +1038,7 @@ export class Orchestrator {
       `- Synthesizer: ${strategy.synthesizer.providerName} (${strategy.synthesizer.reason})`,
       "",
       "Role contract:",
+      "- Do not emit internal tool-run checklists or instructions telling Strada which tools to invoke next. Use tools directly or return only phase-appropriate analysis.",
     ];
 
     switch (assignment.role) {
@@ -1324,6 +1349,7 @@ export class Orchestrator {
       "- Preserve only verified facts.",
       "- Mention blockers if any remain.",
       "- Remove internal workflow markers.",
+      "- Do not expose internal tool names, tool-run checklists, or orchestration instructions unless the user explicitly asked for a plan or audit trail.",
       "- Keep the answer directly usable for the user.",
       ...(exactLiteral
         ? [
@@ -1352,23 +1378,27 @@ export class Orchestrator {
         synthesisResponse.usage,
         params.usageHandler,
       );
+      const synthesizedText = this.stripInternalDecisionMarkers(synthesisResponse.text).trim();
+      const visibleText = synthesizedText
+        ? applyVisibleResponseContract(params.prompt, synthesizedText)
+        : this.buildSafeVisibleFallbackFromDraft(params.prompt, cleanedDraft, params.strategy.task, false);
       this.recordPhaseOutcome({
         chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: params.strategy.synthesizer,
         phase: "synthesis",
         source: "synthesis",
-        status: "approved",
+        status: synthesizedText ? "approved" : "failed",
         task: params.strategy.task,
-        reason: "Synthesis produced the final user-facing response.",
+        reason: synthesizedText
+          ? "Synthesis produced the final user-facing response."
+          : "Synthesis returned no safe visible text; falling back to the boundary-safe summary.",
         telemetry: this.buildPhaseOutcomeTelemetry({
           usage: synthesisResponse.usage,
+          failureReason: synthesizedText ? undefined : cleanedDraft,
         }),
       });
-      return applyVisibleResponseContract(
-        params.prompt,
-        this.stripInternalDecisionMarkers(synthesisResponse.text) || cleanedDraft,
-      );
+      return visibleText;
     } catch {
       this.recordPhaseOutcome({
         chatId: params.chatId,
@@ -1378,12 +1408,12 @@ export class Orchestrator {
         source: "synthesis",
         status: "failed",
         task: params.strategy.task,
-        reason: "Synthesis failed; falling back to the worker draft.",
+        reason: "Synthesis failed; falling back to the boundary-safe summary.",
         telemetry: this.buildPhaseOutcomeTelemetry({
           failureReason: cleanedDraft,
         }),
       });
-      return applyVisibleResponseContract(params.prompt, cleanedDraft);
+      return this.buildSafeVisibleFallbackFromDraft(params.prompt, cleanedDraft, params.strategy.task, false);
     }
   }
 
@@ -1468,9 +1498,10 @@ export class Orchestrator {
           usage: synthesisResponse.usage,
         }),
       });
-      return applyVisibleResponseContract(
+      return this.buildSafeVisibleFallbackFromDraft(
         params.prompt,
         this.stripInternalDecisionMarkers(synthesisResponse.text) || rawDraft,
+        strategy.task,
       );
     } catch {
       this.recordPhaseOutcome({
@@ -1486,7 +1517,11 @@ export class Orchestrator {
           failureReason: rawDraft,
         }),
       });
-      return applyVisibleResponseContract(params.prompt, rawDraft);
+      return this.buildSafeVisibleFallbackFromDraft(
+        params.prompt,
+        rawDraft,
+        strategy.task,
+      );
     }
   }
 
@@ -1494,8 +1529,8 @@ export class Orchestrator {
    * Dynamically add a tool to the orchestrator's available tools.
    * Used by chain synthesis to make composite tools available to the LLM.
    */
-  addTool(tool: ITool): void {
-    this.registerTool(tool);
+  addTool(tool: ITool, metadata?: WorkerToolMetadata): void {
+    this.registerTool(tool, metadata);
   }
 
   /**
@@ -1504,6 +1539,7 @@ export class Orchestrator {
    */
   removeTool(name: string): void {
     this.tools.delete(name);
+    this.toolMetadataByName.delete(name);
     const idx = this.toolDefinitions.findIndex(td => td.name === name);
     if (idx >= 0) {
       this.toolDefinitions.splice(idx, 1);
@@ -1516,6 +1552,296 @@ export class Orchestrator {
    */
   setTaskManager(tm: TaskManager): void {
     this.taskManager = tm;
+  }
+
+  private ensureVisibleMessages(session: Session): ConversationMessage[] {
+    if (!session.visibleMessages) {
+      session.visibleMessages = [];
+    }
+    return session.visibleMessages;
+  }
+
+  private getVisibleTranscript(session: Session): ConversationMessage[] {
+    return this.ensureVisibleMessages(session);
+  }
+
+  private appendVisibleUserMessage(session: Session, content: string | MessageContent[]): void {
+    const message: ConversationMessage = { role: "user", content };
+    session.messages.push(message);
+    this.ensureVisibleMessages(session).push(message);
+  }
+
+  private appendVisibleAssistantMessage(session: Session, content: string): void {
+    const message: ConversationMessage = { role: "assistant", content };
+    session.messages.push(message);
+    this.ensureVisibleMessages(session).push(message);
+  }
+
+  private async sendVisibleAssistantText(
+    chatId: string,
+    session: Session,
+    content: string,
+  ): Promise<void> {
+    this.appendVisibleAssistantMessage(session, content);
+    await this.channel.sendText(chatId, content);
+  }
+
+  private async sendVisibleAssistantMarkdown(
+    chatId: string,
+    session: Session,
+    content: string,
+  ): Promise<void> {
+    this.appendVisibleAssistantMessage(session, content);
+    await this.channel.sendMarkdown(chatId, content);
+  }
+
+  private buildWorkerToolDefinitions(
+    task: TaskClassification,
+    phase: AgentPhase,
+    role: SupervisorAssignment["role"],
+  ): Array<{
+    name: string;
+    description: string;
+    input_schema: import("../types/index.js").JsonObject;
+  }> {
+    const allowWriteTools =
+      role === "executor"
+      && task.type !== "analysis"
+      && task.type !== "simple-question"
+      && phase !== AgentPhase.PLANNING
+      && phase !== AgentPhase.REPLANNING
+      && phase !== AgentPhase.REFLECTING;
+
+    return this.toolDefinitions.filter((definition) => {
+      const metadata = this.toolMetadataByName.get(definition.name);
+      if (metadata?.controlPlaneOnly) {
+        return false;
+      }
+      if (metadata?.requiresBridge) {
+        return false;
+      }
+      if (!allowWriteTools && metadata?.readOnly === false) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  private hasLocalInspectionScope(prompt: string, task: TaskClassification): boolean {
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      return false;
+    }
+    if (extractExactResponseLiteral(trimmed)) {
+      return false;
+    }
+    if (task.type === "simple-question") {
+      return false;
+    }
+    if (LOCAL_INSPECTION_SCOPE_RE.test(trimmed)) {
+      return true;
+    }
+    return false;
+  }
+
+  private canInspectLocally(
+    prompt: string,
+    task: TaskClassification,
+    availableToolNames: readonly string[],
+  ): boolean {
+    const hasReadableTool = availableToolNames.some((name) => this.toolMetadataByName.get(name)?.readOnly !== false);
+    return hasReadableTool && this.hasLocalInspectionScope(prompt, task);
+  }
+
+  private collectInteractionBoundaryEvidence(
+    chatId: string,
+    state: AgentState,
+    selfVerification: SelfVerification,
+    taskStartedAtMs: number,
+  ) {
+    const logEntries = typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [];
+    return collectCompletionReviewEvidence({
+      state,
+      verificationState: selfVerification.getState(),
+      logEntries,
+      chatId,
+      taskStartedAtMs,
+    });
+  }
+
+  private decideUserVisibleBoundary(params: {
+    chatId: string;
+    prompt: string;
+    workerDraft: string;
+    visibleDraft?: string;
+    task: TaskClassification;
+    state: AgentState;
+    selfVerification: SelfVerification;
+    taskStartedAtMs: number;
+    availableToolNames: readonly string[];
+    terminalFailureReported?: boolean;
+  }): InteractionBoundaryDecision {
+    return decideInteractionBoundary({
+      prompt: params.prompt,
+      workerDraft: params.workerDraft,
+      visibleDraft: params.visibleDraft ?? "",
+      task: params.task,
+      evidence: this.collectInteractionBoundaryEvidence(
+        params.chatId,
+        params.state,
+        params.selfVerification,
+        params.taskStartedAtMs,
+      ),
+      canInspectLocally: this.canInspectLocally(
+        params.prompt,
+        params.task,
+        params.availableToolNames,
+      ),
+      terminalFailureReported: params.terminalFailureReported,
+      availableToolNames: params.availableToolNames,
+    });
+  }
+
+  private buildSafeVisibleFallbackFromDraft(
+    prompt: string,
+    draft: string,
+    task: TaskClassification,
+    allowDirectFinalAnswer = true,
+  ): string {
+    const cleanedDraft = this.stripInternalDecisionMarkers(draft).trim();
+    if (!cleanedDraft) {
+      return "";
+    }
+
+    const fallbackDecision = decideInteractionBoundary({
+      prompt,
+      workerDraft: cleanedDraft,
+      visibleDraft: "",
+      task,
+      canInspectLocally: false,
+      availableToolNames: [],
+      evidence: {
+        touchedFiles: [],
+        recentFailures: [],
+        recentLogIssues: [],
+        recentSteps: [],
+        totalStepCount: 0,
+        inspectionStepCount: 0,
+        verificationStepCount: 0,
+        mutationStepCount: 0,
+        verificationState: {
+          pendingFiles: new Set(),
+          touchedFiles: new Set(),
+          hasCompilableChanges: false,
+          lastBuildOk: null,
+          lastVerificationAt: null,
+        },
+      },
+    });
+
+    if (fallbackDecision.kind === "terminal_failure" && fallbackDecision.visibleText) {
+      return applyVisibleResponseContract(prompt, fallbackDecision.visibleText);
+    }
+
+    if (allowDirectFinalAnswer && fallbackDecision.kind === "final_answer" && fallbackDecision.visibleText) {
+      return applyVisibleResponseContract(prompt, fallbackDecision.visibleText);
+    }
+
+    return applyVisibleResponseContract(
+      prompt,
+      "Task execution completed, but Strada could not safely synthesize a user-facing summary from the internal worker output. Review the task trace or rerun the task for a clean final summary.",
+    );
+  }
+
+  private formatPlanReviewMessage(draft: string): string {
+    return [
+      "Plan review requested before execution.",
+      "",
+      draft.trim(),
+      "",
+      "Reply with your approval or requested changes before write-capable execution continues.",
+    ].join("\n");
+  }
+
+  private formatBoundaryVisibleText(decision: InteractionBoundaryDecision): string | undefined {
+    if (!decision.visibleText) {
+      return undefined;
+    }
+    return decision.kind === "plan_review"
+      ? this.formatPlanReviewMessage(decision.visibleText)
+      : decision.visibleText;
+  }
+
+  private async resolveVisibleDraftDecision(params: {
+    chatId: string;
+    identityKey: string;
+    prompt: string;
+    draft: string;
+    agentState: AgentState;
+    strategy: SupervisorExecutionStrategy;
+    systemPrompt: string;
+    selfVerification: SelfVerification;
+    taskStartedAtMs: number;
+    availableToolNames: readonly string[];
+    terminalFailureReported?: boolean;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }): Promise<InteractionBoundaryDecision> {
+    const cleanedDraft = this.stripInternalDecisionMarkers(params.draft).trim();
+    const explicitPlanReview = userExplicitlyAskedForPlan(params.prompt);
+
+    if (explicitPlanReview && draftLooksLikeInternalPlanArtifact(cleanedDraft, {
+      toolNames: params.availableToolNames,
+    })) {
+      this.interactionPolicy.requirePlanReview(
+        params.chatId,
+        "user explicitly asked to review a plan first",
+      );
+      return {
+        kind: "plan_review",
+        reason: "The user explicitly asked to review the plan before execution.",
+        visibleText: this.formatPlanReviewMessage(cleanedDraft),
+      };
+    }
+
+    const rawBoundary = this.decideUserVisibleBoundary({
+      chatId: params.chatId,
+      prompt: params.prompt,
+      workerDraft: cleanedDraft,
+      task: params.strategy.task,
+      state: params.agentState,
+      selfVerification: params.selfVerification,
+      taskStartedAtMs: params.taskStartedAtMs,
+      availableToolNames: params.availableToolNames,
+      terminalFailureReported: params.terminalFailureReported,
+    });
+    if (rawBoundary.kind !== "final_answer") {
+      return rawBoundary;
+    }
+
+    const visibleDraft = cleanedDraft
+      ? await this.synthesizeUserFacingResponse({
+          chatId: params.chatId,
+          identityKey: params.identityKey,
+          prompt: params.prompt,
+          draft: cleanedDraft,
+          agentState: params.agentState,
+          strategy: params.strategy,
+          systemPrompt: params.systemPrompt,
+          usageHandler: params.usageHandler,
+        })
+      : "";
+    return this.decideUserVisibleBoundary({
+      chatId: params.chatId,
+      prompt: params.prompt,
+      workerDraft: cleanedDraft,
+      visibleDraft,
+      task: params.strategy.task,
+      state: params.agentState,
+      selfVerification: params.selfVerification,
+      taskStartedAtMs: params.taskStartedAtMs,
+      availableToolNames: params.availableToolNames,
+      terminalFailureReported: params.terminalFailureReported,
+    });
   }
 
   /** Append soul personality section to a system prompt if available. */
@@ -2052,8 +2378,10 @@ export class Orchestrator {
     // Build user content with vision support if attachments present
     const supportsVision = fallbackProvider.capabilities.vision;
     const userContent = buildUserContent(prompt || DEFAULT_IMAGE_PROMPT, options.attachments, supportsVision);
+    const initialUserMessage: ConversationMessage = { role: "user", content: userContent };
     const session: Session = {
-      messages: [{ role: "user", content: userContent }],
+      messages: [initialUserMessage],
+      visibleMessages: [initialUserMessage],
       lastActivity: new Date(),
     };
 
@@ -2206,12 +2534,17 @@ export class Orchestrator {
           toolTurnAffinity,
         );
         const currentProvider = currentAssignment.provider;
+        const currentToolDefinitions = this.buildWorkerToolDefinitions(
+          executionStrategy.task,
+          bgAgentState.phase,
+          currentAssignment.role,
+        );
         activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
 
         const response = await currentProvider.chat(
           activePrompt,
           session.messages,
-          this.toolDefinitions,
+          currentToolDefinitions,
         );
         this.recordExecutionTrace({
           chatId,
@@ -2280,15 +2613,57 @@ export class Orchestrator {
               continue;
             }
             if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
-              session.messages.push({ role: "assistant", content: clarificationIntervention.message });
+              this.appendVisibleAssistantMessage(session, clarificationIntervention.message);
               this.recordMetricEnd(metricId, {
                 agentPhase: AgentPhase.COMPLETE,
                 iterations: bgAgentState.iteration,
                 toolCallCount: bgToolCallCount,
                 hitMaxIterations: false,
               });
-              await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
+              await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
               return clarificationIntervention.message;
+            }
+
+            const rawBoundary = this.decideUserVisibleBoundary({
+              chatId,
+              prompt,
+              workerDraft: response.text ?? "",
+              task: executionStrategy.task,
+              state: bgAgentState,
+              selfVerification,
+              taskStartedAtMs,
+              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+              terminalFailureReported: isTerminalFailureReport(response.text),
+            });
+            if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
+              bgAgentState = {
+                ...bgAgentState,
+                lastReflection: response.text ?? bgAgentState.lastReflection,
+                reflectionCount: bgAgentState.reflectionCount + 1,
+                consecutiveErrors: 0,
+              };
+              bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: rawBoundary.gate });
+              onProgress("Visibility boundary kept the task internal");
+              continue;
+            }
+            if (
+              (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure")
+              && rawBoundary.visibleText
+            ) {
+              const surfacedText = this.formatBoundaryVisibleText(rawBoundary)!;
+              this.appendVisibleAssistantMessage(session, surfacedText);
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: bgAgentState.iteration,
+                toolCallCount: bgToolCallCount,
+                hitMaxIterations: false,
+              });
+              await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
+              return surfacedText;
             }
 
             const verifierIntervention = await this.resolveVerifierIntervention({
@@ -2301,6 +2676,7 @@ export class Orchestrator {
               stradaConformance,
               strategy: executionStrategy,
               taskStartedAtMs,
+              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
               usageHandler: options.onUsage ?? this.onUsage,
             });
             executionJournal.recordVerifierResult(
@@ -2379,8 +2755,36 @@ export class Orchestrator {
               systemPrompt,
               usageHandler: options.onUsage ?? this.onUsage,
             });
-            if (finalText) {
-              session.messages.push({ role: "assistant", content: finalText });
+            const finalBoundary = this.decideUserVisibleBoundary({
+              chatId,
+              prompt,
+              workerDraft: response.text ?? "",
+              visibleDraft: finalText,
+              task: executionStrategy.task,
+              state: bgAgentState,
+              selfVerification,
+              taskStartedAtMs,
+              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+              terminalFailureReported: isTerminalFailureReport(response.text),
+            });
+            if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
+              bgAgentState = {
+                ...bgAgentState,
+                lastReflection: response.text ?? bgAgentState.lastReflection,
+                reflectionCount: bgAgentState.reflectionCount + 1,
+                consecutiveErrors: 0,
+              };
+              bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: finalBoundary.gate });
+              onProgress("Visibility boundary rejected the draft");
+              continue;
+            }
+            const surfacedFinalText = finalBoundary.visibleText ?? finalText;
+            if (surfacedFinalText) {
+              this.appendVisibleAssistantMessage(session, surfacedFinalText);
             }
             this.recordPhaseOutcome({
               chatId,
@@ -2402,8 +2806,8 @@ export class Orchestrator {
               toolCallCount: bgToolCallCount,
               hitMaxIterations: false,
             });
-            await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
-            return finalText || "Task completed without output.";
+            await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
+            return surfacedFinalText || "Task completed without output.";
           }
 
           if (decision === "REPLAN") {
@@ -2451,20 +2855,6 @@ export class Orchestrator {
           bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
 
           if (response.toolCalls.length === 0) {
-            if (shouldSurfaceTerminalFailureFromReflection(response)) {
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              this.recordMetricEnd(metricId, {
-                agentPhase: AgentPhase.COMPLETE,
-                iterations: bgAgentState.iteration,
-                toolCallCount: bgToolCallCount,
-                hitMaxIterations: false,
-              });
-              await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
-              return response.text || "Task completed without output.";
-            }
-
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
@@ -2473,6 +2863,42 @@ export class Orchestrator {
           }
         }
         // ────────────────────────────────────────────────────────────────
+
+        if (
+          (bgAgentState.phase === AgentPhase.PLANNING || bgAgentState.phase === AgentPhase.REPLANNING)
+          && response.toolCalls.length === 0
+          && userExplicitlyAskedForPlan(prompt)
+          && draftLooksLikeInternalPlanArtifact(response.text ?? "", {
+            toolNames: currentToolDefinitions.map((definition) => definition.name),
+          })
+        ) {
+          executionJournal.recordPlan(
+            response.text,
+            bgAgentState.phase,
+            currentAssignment.providerName,
+            currentAssignment.modelId,
+          );
+          bgAgentState = { ...bgAgentState, plan: response.text ?? null };
+          const planText = applyVisibleResponseContract(
+            prompt,
+            this.stripInternalDecisionMarkers(response.text) || response.text || "",
+          );
+          if (planText) {
+            this.interactionPolicy.requirePlanReview(
+              chatId,
+              "user explicitly asked to review a plan first",
+            );
+            this.appendVisibleAssistantMessage(session, this.formatPlanReviewMessage(planText));
+          }
+          this.recordMetricEnd(metricId, {
+            agentPhase: AgentPhase.COMPLETE,
+            iterations: bgAgentState.iteration,
+            toolCallCount: bgToolCallCount,
+            hitMaxIterations: false,
+          });
+          await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
+          return planText ? this.formatPlanReviewMessage(planText) : "Plan prepared for review.";
+        }
 
         // Final response — return text
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
@@ -2494,15 +2920,49 @@ export class Orchestrator {
             continue;
           }
           if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
-            session.messages.push({ role: "assistant", content: clarificationIntervention.message });
+            this.appendVisibleAssistantMessage(session, clarificationIntervention.message);
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
               iterations: bgAgentState.iteration,
               toolCallCount: bgToolCallCount,
               hitMaxIterations: false,
             });
-            await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
+            await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
             return clarificationIntervention.message;
+          }
+
+          const rawBoundary = this.decideUserVisibleBoundary({
+            chatId,
+            prompt,
+            workerDraft: response.text ?? "",
+            task: executionStrategy.task,
+            state: bgAgentState,
+            selfVerification,
+            taskStartedAtMs,
+            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+            terminalFailureReported: isTerminalFailureReport(response.text),
+          });
+          if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: rawBoundary.gate });
+            continue;
+          }
+          if (
+            (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure")
+            && rawBoundary.visibleText
+          ) {
+            const surfacedText = this.formatBoundaryVisibleText(rawBoundary)!;
+            this.appendVisibleAssistantMessage(session, surfacedText);
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: bgAgentState.iteration,
+              toolCallCount: bgToolCallCount,
+              hitMaxIterations: false,
+            });
+            await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
+            return surfacedText;
           }
 
           const verifierIntervention = await this.resolveVerifierIntervention({
@@ -2515,6 +2975,7 @@ export class Orchestrator {
             stradaConformance,
             strategy: executionStrategy,
             taskStartedAtMs,
+            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
             usageHandler: options.onUsage ?? this.onUsage,
           });
           if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
@@ -2573,8 +3034,28 @@ export class Orchestrator {
             systemPrompt,
             usageHandler: options.onUsage ?? this.onUsage,
           });
-          if (finalText) {
-            session.messages.push({ role: "assistant", content: finalText });
+          const finalBoundary = this.decideUserVisibleBoundary({
+            chatId,
+            prompt,
+            workerDraft: response.text ?? "",
+            visibleDraft: finalText,
+            task: executionStrategy.task,
+            state: bgAgentState,
+            selfVerification,
+            taskStartedAtMs,
+            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+            terminalFailureReported: isTerminalFailureReport(response.text),
+          });
+          if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: finalBoundary.gate });
+            continue;
+          }
+          const surfacedFinalText = finalBoundary.visibleText ?? finalText;
+          if (surfacedFinalText) {
+            this.appendVisibleAssistantMessage(session, surfacedFinalText);
           }
           this.recordPhaseOutcome({
             chatId,
@@ -2601,9 +3082,9 @@ export class Orchestrator {
           // ────────────────────────────────────────────────────────────
 
           // Persist background task conversation to memory
-          await this.persistSessionToMemory(chatId, session.messages, /* force */ true);
+          await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
 
-          return finalText || "Task completed without output.";
+          return surfacedFinalText || "Task completed without output.";
         }
 
         // ─── PAOR: Phase transitions ────────────────────────────────────
@@ -2870,34 +3351,38 @@ export class Orchestrator {
   private async handleDepsSetup(msg: IncomingMessage): Promise<void> {
     const { chatId } = msg;
     const text = msg.text?.toLowerCase() ?? "";
+    const session = this.getOrCreateSession(chatId);
+    this.appendVisibleUserMessage(session, msg.text ?? "");
 
     if (this.pendingDepsPrompt.get(chatId)) {
       // User is responding to our install prompt
       if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
-        await this.channel.sendText(chatId, "Strada.Core kuruluyor...");
+        await this.sendVisibleAssistantText(chatId, session, "Strada.Core kuruluyor...");
         const result = await installStradaDep(this.projectPath, "core", this.stradaConfig);
         if (result.kind === "ok") {
           this.stradaDeps = checkStradaDeps(this.projectPath, this.stradaConfig);
           this.rebuildBaseSystemPrompt();
           this.depsSetupComplete = true;
-          await this.channel.sendText(chatId, "Strada.Core kuruldu! Artık kullanabilirsiniz.");
+          await this.sendVisibleAssistantText(chatId, session, "Strada.Core kuruldu! Artık kullanabilirsiniz.");
 
           if (!this.stradaDeps.modulesInstalled) {
             this.pendingModulesPrompt.set(chatId, true);
-            await this.channel.sendText(
+            await this.sendVisibleAssistantText(
               chatId,
+              session,
               "Strada.Modules da kurulu değil. Kurmamı ister misiniz? (evet/hayır)",
             );
             return;
           }
         } else {
-          await this.channel.sendText(chatId, `Kurulum başarısız: ${result.error}`);
+          await this.sendVisibleAssistantText(chatId, session, `Kurulum başarısız: ${result.error}`);
           this.depsSetupComplete = true;
         }
       } else {
         this.depsSetupComplete = true;
-        await this.channel.sendText(
+        await this.sendVisibleAssistantText(
           chatId,
+          session,
           "Anlaşıldı. Strada.Core olmadan sınırlı destek sunabilirim.",
         );
       }
@@ -2906,8 +3391,9 @@ export class Orchestrator {
 
     // First message — send the install prompt
     this.pendingDepsPrompt.set(chatId, true);
-    await this.channel.sendText(
+    await this.sendVisibleAssistantText(
       chatId,
+      session,
       "⚠️ Strada.Core projenizde bulunamadı.\n\n" +
         `Proje: ${this.projectPath}\n` +
         "Arama yapılan konumlar: Packages/strada.core, Packages/com.strada.core, Packages/Strada.Core\n\n" +
@@ -2921,20 +3407,22 @@ export class Orchestrator {
   private async handleModulesPrompt(msg: IncomingMessage): Promise<void> {
     const { chatId } = msg;
     const text = msg.text?.toLowerCase() ?? "";
+    const session = this.getOrCreateSession(chatId);
+    this.appendVisibleUserMessage(session, msg.text ?? "");
     this.pendingModulesPrompt.delete(chatId);
 
     if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
-      await this.channel.sendText(chatId, "Strada.Modules kuruluyor...");
+      await this.sendVisibleAssistantText(chatId, session, "Strada.Modules kuruluyor...");
       const result = await installStradaDep(this.projectPath, "modules", this.stradaConfig);
       if (result.kind === "ok") {
         this.stradaDeps = checkStradaDeps(this.projectPath, this.stradaConfig);
         this.rebuildBaseSystemPrompt();
-        await this.channel.sendText(chatId, "Strada.Modules kuruldu!");
+        await this.sendVisibleAssistantText(chatId, session, "Strada.Modules kuruldu!");
       } else {
-        await this.channel.sendText(chatId, `Modules kurulumu başarısız: ${result.error}`);
+        await this.sendVisibleAssistantText(chatId, session, `Modules kurulumu başarısız: ${result.error}`);
       }
     } else {
-      await this.channel.sendText(chatId, "Anlaşıldı. Strada.Modules olmadan devam ediyoruz.");
+      await this.sendVisibleAssistantText(chatId, session, "Anlaşıldı. Strada.Modules olmadan devam ediyoruz.");
     }
   }
 
@@ -2951,22 +3439,26 @@ export class Orchestrator {
       channel: msg.channelType,
     });
 
+    const session = this.getOrCreateSession(chatId);
+
     // Goal tree resume detection (trigger on first message when interrupted trees exist)
     const pendingResumeTrees = this.takePendingResumeTrees(conversationScope, chatId);
     if (pendingResumeTrees.length > 0) {
       const resumePrompt = formatResumePrompt(pendingResumeTrees);
-      await this.channel.sendMarkdown(chatId, resumePrompt);
-
       const normalized = text.toLowerCase().trim();
       if (normalized === "resume" || normalized === "resume all") {
+        this.appendVisibleUserMessage(session, text);
+        await this.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
         for (const tree of pendingResumeTrees) {
           const prepared = prepareTreeForResume(tree);
           this.activeGoalTrees.set(tree.sessionId, prepared);
         }
-        await this.channel.sendMarkdown(chatId, "Resuming interrupted goal trees...");
+        await this.sendVisibleAssistantMarkdown(chatId, session, "Resuming interrupted goal trees...");
         return;
       } else if (normalized === "discard" || normalized === "discard all") {
-        await this.channel.sendMarkdown(chatId, "Interrupted goal trees discarded.");
+        this.appendVisibleUserMessage(session, text);
+        await this.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
+        await this.sendVisibleAssistantMarkdown(chatId, session, "Interrupted goal trees discarded.");
         return;
       }
     }
@@ -2979,7 +3471,8 @@ export class Orchestrator {
         const retryMsg = rateCheck.retryAfterMs
           ? ` Please try again in ${Math.ceil(rateCheck.retryAfterMs / 1000)} seconds.`
           : "";
-        await this.channel.sendText(chatId, `${rateCheck.reason}${retryMsg}`);
+        this.appendVisibleUserMessage(session, text);
+        await this.sendVisibleAssistantText(chatId, session, `${rateCheck.reason}${retryMsg}`);
         return;
       }
     }
@@ -2996,8 +3489,6 @@ export class Orchestrator {
       });
     }
 
-    // Get or create session
-    const session = this.getOrCreateSession(chatId);
     session.lastActivity = new Date();
     session.conversationScope = conversationScope;
     if (!session.mixedParticipants) {
@@ -3039,7 +3530,7 @@ export class Orchestrator {
     const provider = this.providerManager.getProvider(identityKey);
     const supportsVision = provider.capabilities.vision;
     const userContent = buildUserContent(text, msg.attachments, supportsVision);
-    session.messages.push({ role: "user", content: userContent });
+    this.appendVisibleUserMessage(session, userContent);
 
     // Trim old messages to manage context window (provider-aware threshold)
     // Persist trimmed messages to memory before discarding
@@ -3072,14 +3563,15 @@ export class Orchestrator {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
-      await this.channel.sendText(chatId, classifyErrorMessage(error));
+      await this.sendVisibleAssistantText(chatId, session, classifyErrorMessage(error));
     } finally {
       clearInterval(typingInterval);
       // Persist conversation summary (forced to ensure no messages are lost)
-      await this.persistSessionToMemory(chatId, session.messages.slice(-10), /* force */ true);
+      const visibleMessages = this.getVisibleTranscript(session);
+      await this.persistSessionToMemory(chatId, visibleMessages.slice(-10), /* force */ true);
       // Periodic summarization: every 10 messages, generate an LLM summary
-      if (this.sessionSummarizer && session.messages.length > 0 && session.messages.length % 10 === 0) {
-        void this.sessionSummarizer.summarizeAndUpdateProfile(session.profileKey ?? chatId, session.messages)
+      if (this.sessionSummarizer && visibleMessages.length > 0 && visibleMessages.length % 10 === 0) {
+        void this.sessionSummarizer.summarizeAndUpdateProfile(session.profileKey ?? chatId, visibleMessages)
           .catch(() => { /* periodic summarization failure is non-fatal */ });
       }
     }
@@ -3258,13 +3750,18 @@ export class Orchestrator {
         typeof this.channel.startStreamingMessage === "function";
 
       logger.debug("Calling LLM", { chatId, canStream, provider: currentAssignment.providerName, iteration });
+      const currentToolDefinitions = this.buildWorkerToolDefinitions(
+        executionStrategy.task,
+        agentState.phase,
+        currentAssignment.role,
+      );
       let response;
       if (canStream) {
         // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
         // but don't create visible messages. User sees only the final response via sendMarkdown.
-        response = await this.silentStream(chatId, activePrompt, session, currentProvider);
+        response = await this.silentStream(chatId, activePrompt, session, currentProvider, currentToolDefinitions);
       } else {
-        response = await currentProvider.chat(activePrompt, session.messages, this.toolDefinitions);
+        response = await currentProvider.chat(activePrompt, session.messages, currentToolDefinitions);
       }
       this.recordExecutionTrace({
         chatId,
@@ -3331,8 +3828,7 @@ export class Orchestrator {
             continue;
           }
           if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
-            session.messages.push({ role: "assistant", content: clarificationIntervention.message });
-            await this.channel.sendMarkdown(chatId, clarificationIntervention.message);
+            await this.sendVisibleAssistantMarkdown(chatId, session, clarificationIntervention.message);
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
               iterations: agentState.iteration,
@@ -3349,11 +3845,12 @@ export class Orchestrator {
             state: agentState,
             draft: response.text,
             selfVerification,
-            stradaConformance,
-            strategy: executionStrategy,
-            taskStartedAtMs,
-            usageHandler: this.onUsage,
-          });
+              stradaConformance,
+              strategy: executionStrategy,
+              taskStartedAtMs,
+              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+              usageHandler: this.onUsage,
+            });
           executionJournal.recordVerifierResult(
             verifierIntervention.result,
             executionStrategy.reviewer.providerName,
@@ -3418,7 +3915,7 @@ export class Orchestrator {
             continue;
           }
 
-          const finalText = await this.synthesizeUserFacingResponse({
+          const visibilityDecision = await this.resolveVisibleDraftDecision({
             chatId,
             identityKey,
             prompt: lastUserMessage,
@@ -3426,11 +3923,52 @@ export class Orchestrator {
             agentState,
             strategy: executionStrategy,
             systemPrompt,
+            selfVerification,
+            taskStartedAtMs,
+            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
             usageHandler: this.onUsage,
           });
+          if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: visibilityDecision.gate });
+            agentState = {
+              ...agentState,
+              lastReflection: response.text ?? agentState.lastReflection,
+              reflectionCount: agentState.reflectionCount + 1,
+              consecutiveErrors: 0,
+            };
+            agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+            continue;
+          }
+          if ((visibilityDecision.kind === "plan_review" || visibilityDecision.kind === "blocked" || visibilityDecision.kind === "ask_user") && visibilityDecision.visibleText) {
+            await this.sendVisibleAssistantMarkdown(chatId, session, visibilityDecision.visibleText);
+            this.recordPhaseOutcome({
+              chatId,
+              identityKey,
+              assignment: currentAssignment,
+              phase: "reflecting",
+              status: "blocked",
+              task: executionStrategy.task,
+              reason: visibilityDecision.reason,
+              telemetry: buildInteractivePhaseOutcomeTelemetry({
+                state: agentState,
+                usage: response.usage,
+                verifierDecision: "approve",
+              }),
+            });
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
+            });
+            return;
+          }
+          const finalText = visibilityDecision.visibleText?.trim() ?? "";
           if (finalText) {
-            session.messages.push({ role: "assistant", content: finalText });
-            await this.channel.sendMarkdown(chatId, finalText);
+            await this.sendVisibleAssistantMarkdown(chatId, session, finalText);
           }
           this.recordPhaseOutcome({
             chatId,
@@ -3439,7 +3977,7 @@ export class Orchestrator {
             phase: "reflecting",
             status: "approved",
             task: executionStrategy.task,
-            reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
+            reason: visibilityDecision.reason,
             telemetry: buildInteractivePhaseOutcomeTelemetry({
               state: agentState,
               usage: response.usage,
@@ -3492,7 +4030,7 @@ export class Orchestrator {
                 if (updatedTree) {
                   this.activeGoalTrees.set(conversationScope, updatedTree);
                   const treeViz = renderGoalTree(updatedTree);
-                  await this.channel.sendMarkdown(chatId, "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```");
+                  await this.sendVisibleAssistantMarkdown(chatId, session, "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```");
                 } else {
                   getLogger().info("Reactive decomposition skipped (depth limit reached)", { chatId, nodeId: executingNodeId });
                 }
@@ -3539,9 +4077,29 @@ export class Orchestrator {
 
         if (response.toolCalls.length === 0) {
           if (shouldSurfaceTerminalFailureFromReflection(response)) {
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-              await this.channel.sendMarkdown(chatId, response.text);
+            const visibilityDecision = await this.resolveVisibleDraftDecision({
+              chatId,
+              identityKey,
+              prompt: lastUserMessage,
+              draft: response.text ?? "",
+              agentState,
+              strategy: executionStrategy,
+              systemPrompt,
+              selfVerification,
+              taskStartedAtMs,
+              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+              terminalFailureReported: true,
+              usageHandler: this.onUsage,
+            });
+            if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: visibilityDecision.gate });
+              continue;
+            }
+            if (visibilityDecision.visibleText) {
+              await this.sendVisibleAssistantMarkdown(chatId, session, visibilityDecision.visibleText);
             }
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
@@ -3576,7 +4134,7 @@ export class Orchestrator {
           const nodeCount = goalTree.nodes.size - 1;
           const ackMsg = `Working on: ${lastUserMessage.slice(0, 80)}` +
             ` (${nodeCount} step${nodeCount !== 1 ? "s" : ""}, ~${goalBlock.estimatedMinutes} min). I'll update you as I go.`;
-          await this.channel.sendText(chatId, ackMsg);
+          await this.sendVisibleAssistantText(chatId, session, ackMsg);
 
           // Submit as background task with pre-decomposed tree
           this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, {
@@ -3598,6 +4156,56 @@ export class Orchestrator {
         }
       }
       // ────────────────────────────────────────────────────────────────────
+
+      if (
+        (agentState.phase === AgentPhase.PLANNING || agentState.phase === AgentPhase.REPLANNING)
+        && response.toolCalls.length === 0
+        && userExplicitlyAskedForPlan(lastUserMessage)
+        && draftLooksLikeInternalPlanArtifact(response.text ?? "", {
+          toolNames: currentToolDefinitions.map((definition) => definition.name),
+        })
+      ) {
+        executionJournal.recordPlan(
+          response.text,
+          agentState.phase,
+          currentAssignment.providerName,
+          currentAssignment.modelId,
+        );
+        agentState = { ...agentState, plan: response.text ?? null };
+
+        if (agentState.phase === AgentPhase.PLANNING && this.goalDecomposer && this.goalDecomposer.shouldDecompose(lastUserMessage)) {
+          try {
+            const goalTree = await this.goalDecomposer.decomposeProactive(conversationScope, lastUserMessage);
+            this.activeGoalTrees.set(conversationScope, goalTree);
+            this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
+            const treeViz = renderGoalTree(goalTree);
+            await this.sendVisibleAssistantMarkdown(chatId, session, "Goal decomposition:\n```\n" + treeViz + "\n```");
+            const treeSummary = summarizeTree(goalTree);
+            agentState = { ...agentState, plan: (agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]" };
+          } catch (decompError) {
+            getLogger().warn("Proactive goal decomposition failed", {
+              chatId,
+              error: decompError instanceof Error ? decompError.message : String(decompError),
+            });
+          }
+        }
+
+        this.interactionPolicy.requirePlanReview(chatId, "user explicitly asked to review a plan first");
+        const planText = this.formatPlanReviewMessage(
+          applyVisibleResponseContract(
+            lastUserMessage,
+            this.stripInternalDecisionMarkers(response.text) || response.text || "",
+          ),
+        );
+        await this.sendVisibleAssistantMarkdown(chatId, session, planText);
+        this.recordMetricEnd(metricId, {
+          agentPhase: AgentPhase.COMPLETE,
+          iterations: agentState.iteration,
+          toolCallCount: agentState.stepResults.length,
+          hitMaxIterations: false,
+        });
+        return;
+      }
 
       // If no tool calls, send the final text response
       // (streaming already sent it, so skip for streamed end_turn)
@@ -3623,11 +4231,7 @@ export class Orchestrator {
           continue;
         }
         if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
-          session.messages.push({
-            role: "assistant",
-            content: clarificationIntervention.message,
-          });
-          await this.channel.sendMarkdown(chatId, clarificationIntervention.message);
+          await this.sendVisibleAssistantMarkdown(chatId, session, clarificationIntervention.message);
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
             iterations: agentState.iteration,
@@ -3648,6 +4252,7 @@ export class Orchestrator {
           stradaConformance,
           strategy: executionStrategy,
           taskStartedAtMs,
+          availableToolNames: currentToolDefinitions.map((definition) => definition.name),
           usageHandler: this.onUsage,
         });
         if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
@@ -3774,7 +4379,7 @@ export class Orchestrator {
         // ────────────────────────────────────────────────────────────────
 
         if (response.text) {
-          const finalText = await this.synthesizeUserFacingResponse({
+          const visibilityDecision = await this.resolveVisibleDraftDecision({
             chatId,
             identityKey,
             prompt: lastUserMessage,
@@ -3782,29 +4387,58 @@ export class Orchestrator {
             agentState,
             strategy: executionStrategy,
             systemPrompt,
+            selfVerification,
+            taskStartedAtMs,
+            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
             usageHandler: this.onUsage,
           });
-          if (finalText) {
-            session.messages.push({
-              role: "assistant",
-              content: finalText,
-            });
-            await this.channel.sendMarkdown(chatId, finalText);
+          if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
+            session.messages.push({ role: "assistant", content: response.text });
+            session.messages.push({ role: "user", content: visibilityDecision.gate });
+            continue;
           }
-        this.recordPhaseOutcome({
-          chatId,
-          identityKey,
-          assignment: currentAssignment,
-          phase: this.toExecutionPhase(agentState.phase),
-          status: "approved",
-          task: executionStrategy.task,
-          reason: "Execution produced a final response after the verifier pipeline cleared the task.",
-          telemetry: buildInteractivePhaseOutcomeTelemetry({
-            state: agentState,
-            usage: response.usage,
-            verifierDecision: "approve",
-          }),
-        });
+          if ((visibilityDecision.kind === "plan_review" || visibilityDecision.kind === "blocked" || visibilityDecision.kind === "ask_user") && visibilityDecision.visibleText) {
+            await this.sendVisibleAssistantMarkdown(chatId, session, visibilityDecision.visibleText);
+            this.recordPhaseOutcome({
+              chatId,
+              identityKey,
+              assignment: currentAssignment,
+              phase: this.toExecutionPhase(agentState.phase),
+              status: "blocked",
+              task: executionStrategy.task,
+              reason: visibilityDecision.reason,
+              telemetry: buildInteractivePhaseOutcomeTelemetry({
+                state: agentState,
+                usage: response.usage,
+                verifierDecision: "approve",
+              }),
+            });
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
+            });
+            return;
+          }
+          const finalText = visibilityDecision.visibleText?.trim() ?? "";
+          if (finalText) {
+            await this.sendVisibleAssistantMarkdown(chatId, session, finalText);
+          }
+          this.recordPhaseOutcome({
+            chatId,
+            identityKey,
+            assignment: currentAssignment,
+            phase: this.toExecutionPhase(agentState.phase),
+            status: "approved",
+            task: executionStrategy.task,
+            reason: visibilityDecision.reason,
+            telemetry: buildInteractivePhaseOutcomeTelemetry({
+              state: agentState,
+              usage: response.usage,
+              verifierDecision: "approve",
+            }),
+          });
         } else {
           // LLM returned empty response — send fallback to user
           const lang = profile?.language ?? this.defaultLanguage;
@@ -3817,7 +4451,7 @@ export class Orchestrator {
             : lang === "fr" ? "Je n'ai pas pu générer de réponse. Pourriez-vous reformuler votre question ?"
             : "I wasn't able to generate a response. Could you rephrase your question?";
           logger.warn("LLM returned empty response", { chatId, canStream, provider: currentAssignment.providerName });
-          await this.channel.sendMarkdown(chatId, fallback);
+          await this.sendVisibleAssistantMarkdown(chatId, session, fallback);
         }
         // ─── Metrics: record end_turn ───────────────────────────────
         this.recordMetricEnd(metricId, {
@@ -3847,7 +4481,7 @@ export class Orchestrator {
             this.activeGoalTrees.set(conversationScope, goalTree);
             this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
             const treeViz = renderGoalTree(goalTree);
-            await this.channel.sendMarkdown(chatId, "Goal decomposition:\n```\n" + treeViz + "\n```");
+            await this.sendVisibleAssistantMarkdown(chatId, session, "Goal decomposition:\n```\n" + treeViz + "\n```");
             // Augment plan with decomposition summary
             const treeSummary = summarizeTree(goalTree);
             agentState = { ...agentState, plan: (agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]" };
@@ -4109,8 +4743,9 @@ export class Orchestrator {
     });
     // ────────────────────────────────────────────────────────────────
 
-    await this.channel.sendText(
+    await this.sendVisibleAssistantText(
       chatId,
+      session,
       "I've reached the maximum number of steps for this request. " +
         "Please send a follow-up message to continue.",
     );
@@ -4155,6 +4790,11 @@ export class Orchestrator {
     systemPrompt: string,
     session: Session,
     provider: IAIProvider,
+    toolDefinitions: Array<{
+      name: string;
+      description: string;
+      input_schema: import("../types/index.js").JsonObject;
+    }>,
   ): Promise<ProviderResponse> => {
     const timeoutGuard = createStreamingProgressTimeout(
       this.streamInitialTimeoutMs,
@@ -4164,7 +4804,7 @@ export class Orchestrator {
       const streamPromise = (provider as IStreamingProvider).chatStream(
         systemPrompt,
         session.messages,
-        this.toolDefinitions,
+        toolDefinitions,
         () => {
           timeoutGuard.markProgress();
         },
@@ -4180,7 +4820,7 @@ export class Orchestrator {
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
       try {
-        return await provider.chat(systemPrompt, session.messages, this.toolDefinitions);
+        return await provider.chat(systemPrompt, session.messages, toolDefinitions);
       } catch (fallbackErr) {
         getLogger().error("Silent stream fallback chat failed", {
           chatId,
@@ -4207,6 +4847,11 @@ export class Orchestrator {
     systemPrompt: string,
     session: Session,
     provider: IAIProvider,
+    toolDefinitions: Array<{
+      name: string;
+      description: string;
+      input_schema: import("../types/index.js").JsonObject;
+    }>,
   ): Promise<ProviderResponse> {
     const channel = this.channel;
     let streamId: string | undefined;
@@ -4255,7 +4900,7 @@ export class Orchestrator {
       const streamPromise = (provider as IStreamingProvider).chatStream(
         systemPrompt,
         session.messages,
-        this.toolDefinitions,
+        toolDefinitions,
         (chunk) => {
           timeoutGuard.markProgress();
           onChunk(chunk);
@@ -4687,6 +5332,7 @@ export class Orchestrator {
     stradaConformance: StradaConformanceGuard;
     strategy: SupervisorExecutionStrategy;
     taskStartedAtMs: number;
+    availableToolNames?: readonly string[];
     usageHandler?: (usage: TaskUsageEvent) => void;
   }): Promise<VerifierIntervention> {
     const verificationState = params.selfVerification.getState();
@@ -4707,18 +5353,27 @@ export class Orchestrator {
       chatId: params.chatId,
       taskStartedAtMs: params.taskStartedAtMs,
     });
-    const autonomyDeflectionGate = buildAutonomyDeflectionGate(
-      params.draft ?? "",
-      plan.evidence,
-      params.prompt,
-    );
-    if (autonomyDeflectionGate) {
+    const boundaryDecision = decideInteractionBoundary({
+      prompt: params.prompt,
+      workerDraft: params.draft ?? "",
+      visibleDraft: "",
+      task: params.strategy.task,
+      evidence: plan.evidence,
+      canInspectLocally: this.canInspectLocally(
+        params.prompt,
+        params.strategy.task,
+        params.availableToolNames ?? [],
+      ),
+      terminalFailureReported: isTerminalFailureReport(params.draft ?? ""),
+      availableToolNames: params.availableToolNames,
+    });
+    if (boundaryDecision.kind === "internal_continue" && boundaryDecision.gate) {
       return {
         kind: "continue",
-        gate: autonomyDeflectionGate,
+        gate: boundaryDecision.gate,
         result: {
           decision: "continue",
-          gate: autonomyDeflectionGate,
+          gate: boundaryDecision.gate,
           summary: "The current draft still deflects execution back to the user.",
           checks: plan.checks,
           evidence: plan.evidence,
@@ -5139,13 +5794,23 @@ export class Orchestrator {
     return WRITE_OPERATIONS.has(toolName);
   }
 
-  private registerTool(tool: ITool): void {
+  private registerTool(tool: ITool, metadata?: WorkerToolMetadata): void {
     const readOnlyCheck = checkReadOnlyBlock(tool.name, this.readOnly);
     if (!readOnlyCheck.allowed) {
       return;
     }
 
     this.tools.set(tool.name, tool);
+    const intrinsicMetadata = getToolMetadata(tool);
+    const intrinsicRequiresBridge =
+      intrinsicMetadata && "requiresBridge" in intrinsicMetadata
+        ? Boolean((intrinsicMetadata as Record<string, unknown>).requiresBridge)
+        : false;
+    this.toolMetadataByName.set(tool.name, metadata ?? {
+      readOnly: intrinsicMetadata?.isReadOnly ?? !WRITE_OPERATIONS.has(tool.name),
+      controlPlaneOnly: tool.name === "ask_user" || tool.name === "show_plan",
+      requiresBridge: intrinsicRequiresBridge,
+    });
     const def = {
       name: tool.name,
       description: tool.description,
@@ -5254,7 +5919,7 @@ export class Orchestrator {
       this.activeGoalTrees.delete(oldestSession?.conversationScope ?? oldestKey);
     }
 
-    session = { messages: [], lastActivity: new Date(), mixedParticipants: false };
+    session = { messages: [], visibleMessages: [], lastActivity: new Date(), mixedParticipants: false };
     this.sessions.set(chatId, session);
     return session;
   }
@@ -5268,6 +5933,19 @@ export class Orchestrator {
     if (session.messages.length <= maxMessages) return [];
 
     const overflow = session.messages.length - maxMessages;
+    const trimMessages = (count: number): ConversationMessage[] => {
+      const removed = session.messages.splice(0, count);
+      if (removed.length === 0) {
+        return removed;
+      }
+      if (!session.visibleMessages?.length) {
+        return [];
+      }
+      const removedSet = new Set(removed);
+      const removedVisible = session.visibleMessages.filter((message) => removedSet.has(message));
+      session.visibleMessages = session.visibleMessages.filter((message) => !removedSet.has(message));
+      return removedVisible;
+    };
 
     // Find a safe trim boundary that does NOT orphan tool_call/tool_result pairs.
     // A safe boundary is a user message with plain string content (not a tool_result array)
@@ -5295,7 +5973,7 @@ export class Orchestrator {
     }
 
     if (trimTo > 0) {
-      return session.messages.splice(0, trimTo);
+      return trimMessages(trimTo);
     }
 
     // Fallback: if no safe boundary found and session exceeds hard cap (2x max),
@@ -5311,11 +5989,11 @@ export class Orchestrator {
         const msg = session.messages[i]!;
         const prev = session.messages[i - 1]!;
         if (msg.role === "user" && prev.role === "user") {
-          return session.messages.splice(0, i);
+          return trimMessages(i);
         }
       }
       // Last resort: trim at overflow, accepting potential orphaning
-      return session.messages.splice(0, overflow);
+      return trimMessages(overflow);
     }
 
     return [];
@@ -5336,14 +6014,15 @@ export class Orchestrator {
         if (this.sessionLocks.has(chatId)) continue;
 
         // Session-end summarization (fire-and-forget)
-        if (this.sessionSummarizer && session.messages.length >= 2) {
-          void this.sessionSummarizer.summarizeAndUpdateProfile(session.profileKey ?? chatId, session.messages)
+        const visibleMessages = this.getVisibleTranscript(session);
+        if (this.sessionSummarizer && visibleMessages.length >= 2) {
+          void this.sessionSummarizer.summarizeAndUpdateProfile(session.profileKey ?? chatId, visibleMessages)
             .catch(() => {
               // Session summarization failure is non-fatal
             });
         }
         // Persist before cleanup (forced — session is being evicted)
-        void this.persistSessionToMemory(chatId, session.messages.slice(-10), /* force */ true);
+        void this.persistSessionToMemory(chatId, visibleMessages.slice(-10), /* force */ true);
         this.lastPersistTime.delete(chatId);
         this.sessions.delete(chatId);
         this.activeGoalTrees.delete(session.conversationScope ?? chatId);
@@ -5919,6 +6598,8 @@ type ReflectionDecision = "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTION
 
 const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\s*\*\*/;
 const VALID_DECISIONS = new Set<ReflectionDecision>(["CONTINUE", "REPLAN", "DONE", "DONE_WITH_SUGGESTIONS"]);
+const LOCAL_INSPECTION_SCOPE_RE =
+  /(?:[A-Za-z0-9_./\\-]+\.(?:cs|ts|tsx|js|jsx|json|ya?ml|md|asset|prefab|unity|scene)|\b(?:file|repo|repository|project|module|component|system|class|function|provider|orchestrator|memory|routing|build|compile|error|warning|bug|crash|freeze|runtime|editor|unity|stack trace|log|test|implement|create|write|add|fix|debug|refactor|review|analy[sz]e)\b)/iu;
 
 function parseReflectionDecision(text: string | null | undefined): ReflectionDecision {
   if (!text) return "CONTINUE";

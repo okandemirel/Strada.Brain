@@ -89,15 +89,38 @@ export const COMPOSITE_TOOL_METADATA = {
   dangerous: true,
   requiresConfirmation: false,
   readOnly: false,
+  controlPlaneOnly: false,
+  requiresBridge: false,
 } as const;
 
 /** Compute composite tool metadata inheriting the most restrictive flags from component tools */
 export function computeCompositeMetadata(
-  componentMeta: Array<{ dangerous?: boolean; requiresConfirmation?: boolean } | undefined>,
-): { category: "composite"; dangerous: boolean; requiresConfirmation: boolean; readOnly: false } {
+  componentMeta: Array<{
+    dangerous?: boolean;
+    requiresConfirmation?: boolean;
+    controlPlaneOnly?: boolean;
+    requiresBridge?: boolean;
+  } | undefined>,
+): {
+  category: "composite";
+  dangerous: boolean;
+  requiresConfirmation: boolean;
+  readOnly: false;
+  controlPlaneOnly: boolean;
+  requiresBridge: boolean;
+} {
   const dangerous = componentMeta.some((m) => m?.dangerous);
   const requiresConfirmation = componentMeta.some((m) => m?.requiresConfirmation);
-  return { category: "composite" as const, dangerous, requiresConfirmation, readOnly: false };
+  const controlPlaneOnly = componentMeta.some((m) => m?.controlPlaneOnly);
+  const requiresBridge = componentMeta.some((m) => m?.requiresBridge);
+  return {
+    category: "composite" as const,
+    dangerous,
+    requiresConfirmation,
+    readOnly: false,
+    controlPlaneOnly,
+    requiresBridge,
+  };
 }
 
 /**

@@ -44,6 +44,35 @@ describe("registerStradaMcpTools", () => {
       dangerous: false,
       readOnly: true,
       dependencies: ["strada-mcp"],
+      requiresBridge: false,
+    });
+  });
+
+  it("propagates bridge requirements into Brain tool metadata", () => {
+    const register = vi.fn();
+    const registry = {
+      has: vi.fn().mockReturnValue(false),
+      register,
+    };
+
+    registerStradaMcpTools(registry, [
+      {
+        name: "unity_live_scene",
+        description: "Reads live Unity scene data",
+        inputSchema: { type: "object", properties: {} },
+        metadata: {
+          category: "unity-scene",
+          requiresBridge: true,
+          dangerous: false,
+          readOnly: true,
+        },
+        execute: vi.fn(),
+      },
+    ]);
+
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(register.mock.calls[0]?.[1]).toMatchObject({
+      requiresBridge: true,
     });
   });
 

@@ -14,6 +14,14 @@ export const STRADA_SYSTEM_PROMPT = `You are Strada Brain, an expert AI assistan
 - When Strada.Core and/or Strada.MCP source trees are installed, read those sources and docs before stating exact APIs, tool names, behavior contracts, or setup steps.
 - Do not guess framework or tool behavior from memory when the installed source can answer it precisely.
 
+## Control-Plane Boundary
+
+- Strada is the only user-facing agent. Providers are internal workers for planning, execution, review, and synthesis.
+- Do not surface internal tool recipes, requirement-gathering checklists, raw worker plans, or memory/git/file-read instructions as the final user-facing answer.
+- If a tool can be used, prefer using it over describing how to use it.
+- ask_user and show_plan are control-plane decisions, not ordinary worker action tools.
+- Treat only the worker tool surface that is executable in the current Brain runtime as executable. Installed Strada.MCP docs/resources may be authoritative even when bridge/runtime constraints keep some MCP capabilities out of the live tool pool.
+
 ## Strada.Core Framework Knowledge
 
 Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-grade dependency injection with performance-critical ECS simulation, wrapped in a ScriptableObject-driven modular architecture.
@@ -490,9 +498,9 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
     lines.push(
       `\n### Strada.MCP`,
       `Strada.MCP is installed${status.mcpVersion ? ` (v${status.mcpVersion})` : ""}${status.mcpPath ? ` at ${status.mcpPath}` : ""}.`,
-      `Treat Strada.MCP as a first-class part of the Strada toolchain, not as an external afterthought.`,
+      `Treat Strada.MCP as a first-class knowledge source inside the Strada toolchain, not as an external afterthought.`,
       `Its installed source/docs are authoritative for MCP tool behavior, bridge contracts, prompts, and resources.`,
-      `When a matching Strada.MCP tool exists, assume it is part of your main tool surface and prefer the real installed implementation over memory.`,
+      `Only MCP action tools that are executable in the current Brain runtime belong to the live worker tool surface. Bridge/runtime-limited MCP capabilities may still be authoritative docs/resources without being executable in this turn.`,
       status.mcpPath
         ? `Primary paths to inspect when needed: ${joinPath(status.mcpPath, "README.md")}, ${joinPath(status.mcpPath, "src/tools")}, ${joinPath(status.mcpPath, "src/resources")}, ${joinPath(status.mcpPath, "src/prompts")}, ${joinPath(status.mcpPath, "src/bridge")}.`
         : "Inspect the installed Strada.MCP package root, especially README.md, src/tools, src/resources, src/prompts, and src/bridge.",

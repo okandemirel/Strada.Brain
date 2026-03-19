@@ -264,7 +264,7 @@ describe("ChainManager", () => {
 
       expect(detector.detect).toHaveBeenCalledTimes(1);
       expect(synthesizer.synthesize).toHaveBeenCalledWith([candidate]);
-      expect(orchestrator.addTool).toHaveBeenCalledWith(newTool);
+      expect(orchestrator.addTool).toHaveBeenCalledWith(newTool, undefined);
       expect(manager.activeCount).toBe(1);
     });
 
@@ -458,7 +458,7 @@ describe("ChainManager", () => {
       const manager = createManager(); // no validator
       await manager.runDetectionCycle();
 
-      expect(orchestrator.addTool).toHaveBeenCalledWith(newTool);
+      expect(orchestrator.addTool).toHaveBeenCalledWith(newTool, undefined);
       expect(manager.activeCount).toBe(1);
     });
 

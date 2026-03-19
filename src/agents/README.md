@@ -31,10 +31,11 @@ Default models are no longer documented here as static truth; runtime resolves t
 Provider selection is a Strada policy decision, not a direct chat target. Strada remains the control plane for every turn, then assigns planner/executor/reviewer/synthesizer work to providers. A user-selected provider/model sets the primary execution worker, while routing and synthesis may still involve other providers. Runtime execution traces expose which provider/model actually handled each phase and review pass.
 Strada is also expected to keep driving the task until it has enough evidence. If a worker returns an incomplete analysis, throws the next step back to the user, or makes a broad completion claim without enough support, Strada reopens the loop, routes another review/inspection pass, and only returns once the result is verified or a real external blocker remains.
 That same fail-closed rule now also applies to plain-text execution plans and intake checklists. A provider draft that surfaces internal next-step plans, requirement-gathering checklists, or action menus before the work is actually done is treated as internal orchestration material, not a user-facing response. If the user explicitly asked to review a plan first, Strada preserves that approval/revision step instead of auto-approving the plan internally.
-That boundary is now enforced by a small interaction-policy state machine inside the autonomy layer. Explicit plan-review requests, write blocking, and approval-style follow-up messages are handled as structured control-plane state rather than scattered ad-hoc checks.
+That boundary is now enforced by the interaction-policy state machine together with a fail-closed visibility boundary inside the autonomy layer. Explicit plan-review requests, write blocking, approval-style follow-up messages, and user-visible finalization are handled as structured control-plane state rather than scattered ad-hoc checks.
 Clarification is no longer a default user-facing intake step. Workers may still propose a question, but the orchestrator now routes those drafts through an internal `clarification-review` phase first. `ask_user` is treated as a last-resort interaction after Strada has exhausted local inspection, review, and verification paths.
 Completion is now governed by an explicit verifier pipeline. Build verification, targeted repro / failing-path checks, log review, Strada.Core / Strada.Modules conformance, and completion review are evaluated as a single control-plane decision before the orchestrator can finish. Runtime traces still show who executed each phase, and phase outcomes now show whether that phase was approved, continued, replanned, blocked, or failed.
 Completion review also keeps a structured closure verdict. A worker that reports "build fixed" but still leaves runtime hypotheses, remaining potential issues, or profiler/debug follow-ups is treated as `partial`/`unverified` rather than done, so both interactive and daemon execution keep the task internal until the real issue is verified or honestly blocked.
+Searchable conversation memory follows the same boundary: only the visible transcript is persisted. Raw worker drafts, verifier gates, clarification prompts, and replan nudges stay in control-plane state / execution journals instead of leaking back through `memory_search`.
 PAOR now also carries an internal execution journal and rollback memory. Replanning can reference the last stable checkpoint, avoid exhausted branches, reuse a project/world anchor, and feed adaptive phase scores back into routing without provider-specific hardcoded lore. Those phase scores now blend verifier clean rate, rollback pressure, retry count, repeated failure fingerprints, repeated world-context failures, phase-local token cost, provider catalog freshness, and official alignment / capability drift from the shared provider catalog.
 Cross-session execution replay now builds on the same path: Strada records project/world-aware recovery summaries into learning trajectories, then injects the most relevant prior success/failure branches as an `Execution Replay` context layer before planning retries.
 Task execution memory remains a `latest snapshot` for the active identity; exact task chronology lives in those persisted replay trajectories and contexts.
@@ -65,6 +66,8 @@ Replay correlation is now also persisted with chat-scoped `taskRunId` values, so
 - **HTTP:** `http_client` (not in default registry)
 
 **Security invariants:** All file tools call `validatePath()`. Shell commands pass through a blocklist. Git arguments are injection-safe. Tool outputs are scrubbed for credentials and capped at 8192 chars.
+
+`ask_user` and `show_plan` still exist in the codebase, but they are control-plane-only interaction turns. Worker tool pools do not receive them as ordinary action tools.
 
 ## Autonomy (`autonomy/`)
 
@@ -98,7 +101,7 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 
 ## Context (`context/strada-knowledge.ts`)
 
-`STRADA_SYSTEM_PROMPT` — core system prompt establishing agent identity and Strada-specific behavior. It is augmented at runtime with project context, task execution memory, an explicit project/world memory layer (active project root + cached analysis), RAG results, and authoritative local sources such as Strada.Core and Strada.MCP when available.
+`STRADA_SYSTEM_PROMPT` — core system prompt establishing agent identity and Strada-specific behavior. It is augmented at runtime with project context, task execution memory, an explicit project/world memory layer (active project root + cached analysis), RAG results, and authoritative local sources such as Strada.Core and Strada.MCP when available. Installed Strada.MCP docs/resources stay authoritative even when bridge/runtime constraints keep some MCP capabilities out of the live worker tool surface for the current Brain runtime.
 
 ## Key Files
 

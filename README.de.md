@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>KI-gesteuerter Entwicklungs-Agent fuer Unity / Strada.Core-Projekte</strong><br/>
-  Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt, Fehler automatisch behebt und aus seinen Fehlern lernt &mdash; und mit einer 24/7-Daemon-Schleife autonom arbeitet. Jetzt mit Multi-Agent-Orchestrierung, Aufgabendelegation, Ged&auml;chtniskonsolidierung, einem Deployment-Subsystem mit Genehmigungsgates, Medienfreigabe mit LLM-Vision-Unterstuetzung, einem konfigurierbaren Persoenlichkeitssystem ueber SOUL.md, interaktiven Klaerungstools, intelligentem Multi-Provider-Routing mit aufgabenbewusstem dynamischem Wechsel, konfidenzbasierter Konsensverifizierung, einem autonomen Agent Core mit OODA-Reasoning-Loop und Strada.MCP-Integration.
+  Ein autonomer Coding-Agent, der sich mit einem Web-Dashboard, Telegram, Discord, Slack, WhatsApp oder Ihrem Terminal verbindet &mdash; Ihre Codebasis liest, Code schreibt, Builds ausfuehrt, Fehler automatisch behebt und aus seinen Fehlern lernt &mdash; und mit einer 24/7-Daemon-Schleife autonom arbeitet. Jetzt mit Multi-Agent-Orchestrierung, Aufgabendelegation, Ged&auml;chtniskonsolidierung, einem Deployment-Subsystem mit Genehmigungsgates, Medienfreigabe mit LLM-Vision-Unterstuetzung, einem konfigurierbaren Persoenlichkeitssystem ueber SOUL.md, control-plane clarification review, intelligentem Multi-Provider-Routing mit aufgabenbewusstem dynamischem Wechsel, konfidenzbasierter Konsensverifizierung, einem autonomen Agent Core mit OODA-Reasoning-Loop und Strada.MCP-Integration.
 </p>
 
 > Uebersetzungshinweis: Fuer aktuelles Laufzeitverhalten, Umgebungsvariablen-Defaults und Sicherheitssemantik ist [README.md](README.md) die kanonische Quelle. Diese Datei ist eine Uebersetzung davon.
@@ -450,7 +450,7 @@ Bei 2+ konfigurierten Anbietern routet Strada.Brain Aufgaben automatisch zum opt
 
 ### Strada.MCP-Integration
 
-Strada.Brain erkennt [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (76-Tool Unity MCP-Server) und informiert den Agenten ueber verfuegbare MCP-Faehigkeiten einschliesslich Laufzeitsteuerung, Dateioperationen, Git, .NET-Build, Code-Analyse und Szenen-/Prefab-Verwaltung.
+Strada.Brain erkennt [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (Unity MCP-Server) und informiert den Agenten ueber verfuegbare MCP-Faehigkeiten einschliesslich Laufzeitsteuerung, Dateioperationen, Git, .NET-Build, Code-Analyse und Szenen-/Prefab-Verwaltung. Nur aktuell nutzbare MCP-Action-Tools gelangen in die Worker-Toolflaeche; Bridge-/Runtime-beschraenkte MCP-Faehigkeiten bleiben weiterhin authoritative docs/resources.
 
 ---
 
@@ -672,7 +672,7 @@ Der Agent verfuegt ueber mehr als 40 integrierte Tools, organisiert nach Kategor
 | `grep_search` | Regex-Inhaltssuche ueber Dateien (max. 20 Treffer) |
 | `list_directory` | Verzeichnislisting mit Dateigroessen |
 | `code_search` | Semantische/Vektorsuche via RAG -- natuerlichsprachliche Abfragen |
-| `memory_search` | Persistenten Konversationsspeicher durchsuchen |
+| `memory_search` | Persistenten sichtbaren Konversationsspeicher durchsuchen |
 
 ### Strada Code-Generierung
 | Tool | Beschreibung |
@@ -703,8 +703,8 @@ Der Agent verfuegt ueber mehr als 40 integrierte Tools, organisiert nach Kategor
 ### Agenten-Interaktion
 | Tool | Beschreibung |
 |------|-------------|
-| `ask_user` | Stellt dem Benutzer eine Klaerungsfrage mit Mehrfachauswahl und empfohlener Antwort, aber erst nachdem `clarification-review` sie als wirklich notwendig freigegeben hat |
-| `show_plan` | Zeigt den Ausfuehrungsplan und wartet auf Benutzerfreigabe (Genehmigen/Aendern/Ablehnen) |
+| `ask_user` | Kein normales Worker-Action-Tool; wird nur dann user-facing, wenn `clarification-review` es als wirklich notwendig freigibt |
+| `show_plan` | Kein normales Worker-Action-Tool; wird nur dann als Plan-Review-Turn gezeigt, wenn der Benutzer den Plan ausdruecklich zuerst sehen wollte |
 | `switch_personality` | Wechselt die Agenten-Persoenlichkeit zur Laufzeit (casual/formal/minimal/default) |
 
 ### Sonstiges

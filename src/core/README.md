@@ -1,6 +1,6 @@
 # src/core/
 
-Application bootstrap, dependency injection, and tool registration. These three files wire every subsystem together at startup.
+Application bootstrap, dependency injection, and tool registration. These files wire every subsystem together at startup, including the truthful worker tool surface that Strada exposes to internal providers.
 
 ## Bootstrap (`bootstrap.ts`)
 
@@ -47,14 +47,19 @@ Note: `bootstrap.ts` does not currently use `DIContainer` for resolution. The co
 Centralized registry for all tools available to the orchestrator.
 
 - `Map<string, ITool>` stores tool instances by name
-- `Map<string, ToolMetadata>` stores per-tool metadata (category, dangerous, requiresConfirmation, readOnly, dependencies)
+- `Map<string, ToolMetadata>` stores per-tool metadata (category, dangerous, requiresConfirmation, readOnly, dependencies, `controlPlaneOnly`, `requiresBridge`)
 - `Map<ToolCategory, Set<string>>` provides a category-to-tool-names index
 - `ToolCategories` const: `file`, `code`, `search`, `strata`, `shell`, `git`, `dotnet`, `memory`, `browser`
-- `initialize(config, options)` is idempotent (guarded by `initialized` flag); calls `registerBuiltinTools()` then loads plugin tools via `PluginLoader`
+- `initialize(config, options)` is idempotent (guarded by `initialized` flag); calls `registerBuiltinTools()`, loads any usable Strada.MCP action tools, then loads plugin tools via `PluginLoader`
 - `register(tool, metadata)` throws `ValidationError` on duplicate names
 - Query methods: `get()`, `getAllTools()`, `getToolsByCategory()`, `getDangerousTools()`, `getReadOnlyTools()`, `has()`, `getMetadata()`, `getToolNames()`
 - `createFiltered(allowedNames)` returns a new `ToolRegistry` containing only the specified tools
 - `execute(name, input, context)` is a convenience wrapper around `tool.execute()`
+
+Truthfulness rules:
+- `controlPlaneOnly` tools such as `ask_user` and `show_plan` exist for orchestrator policy decisions, not as ordinary worker action tools
+- `requiresBridge` tools stay out of worker tool pools unless the current Brain runtime actually exposes the required bridge
+- installed Strada.MCP prompts/resources/docs can still be authoritative knowledge even when some MCP action tools are filtered out of the live worker surface
 
 Built-in tools registered in `registerBuiltinTools()`:
 

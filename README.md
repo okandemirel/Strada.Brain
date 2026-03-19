@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>AI-Powered Development Agent for Unity / Strada.Core Projects</strong><br/>
-  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, and interactive clarification tools, intelligent multi-provider routing with task-aware dynamic switching, confidence-based consensus verification, an autonomous Agent Core with OODA reasoning loop, and Strada.MCP integration.
+  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, control-plane clarification review, intelligent multi-provider routing with task-aware dynamic switching, confidence-based consensus verification, an autonomous Agent Core with OODA reasoning loop, and Strada.MCP integration.
 </p>
 
 <p align="center">
@@ -489,7 +489,7 @@ With 2+ providers configured, Strada.Brain automatically routes tasks to the opt
 
 ### Strada.MCP Integration
 
-Strada.Brain detects an installed [Strada.MCP](https://github.com/okandemirel/Strada.MCP), verifies the package root, and loads its tools into the main toolchain as first-class Brain tools. Detection can be pinned with `STRADA_MCP_PATH`, while missing Strada.Core / Strada.Modules installs use the explicit `STRADA_CORE_REPO_URL` and `STRADA_MODULES_REPO_URL` config values instead of hidden env fallbacks. When available locally, Strada.Core and Strada.MCP are also treated as authoritative knowledge sources.
+Strada.Brain detects an installed [Strada.MCP](https://github.com/okandemirel/Strada.MCP), verifies the package root, and loads only MCP action tools that are executable in the current Brain runtime into the main toolchain. Detection can be pinned with `STRADA_MCP_PATH`, while missing Strada.Core / Strada.Modules installs use the explicit `STRADA_CORE_REPO_URL` and `STRADA_MODULES_REPO_URL` config values instead of hidden env fallbacks. Installed Strada.Core and Strada.MCP docs/sources remain authoritative knowledge even when bridge or runtime constraints keep some MCP prompts/resources/tools out of the live worker tool surface.
 
 ---
 
@@ -591,7 +591,8 @@ Clarification is also part of that control plane. Worker providers may propose a
 Completion now runs through an internal verifier pipeline as well. Build verification, targeted repro / failing-path checks, log review, Strada conformance, and completion review must clear before Strada can finish. `/routing info` and the dashboard now show both runtime execution traces and phase outcomes (`approved`, `continued`, `replanned`, `blocked`).
 That completion review now also tracks structured closure state. If a worker says the build is clean but still lists runtime hypotheses, "remaining potential issues", or profiler/debug checks that Strada can continue internally, the task stays open in both interactive and daemon paths until those investigations are either verified or surfaced as a real blocker.
 Strada now also keeps plain-text internal plans and intake checklists inside the orchestration loop. If a provider surfaces an execution plan, requirement-gathering checklist, or “what should I act on?” style draft before the work is actually done, Strada reopens the loop instead of sending that draft to the user. The only exception is when the user explicitly asked to review a plan first; in that case Strada preserves the plan-review step instead of auto-approving it internally.
-That interaction boundary is now handled by a small internal policy state machine instead of scattered one-off checks. Explicit plan-review requests, clarification gates, and write blocking all stay inside Strada's control plane until the relevant approval or verifier condition is satisfied.
+That interaction boundary is now handled by the interaction-policy state machine together with a fail-closed visibility boundary instead of scattered one-off checks. Explicit plan-review requests, clarification gates, write blocking, and user-visible finalization all stay inside Strada's control plane until the relevant approval or verifier condition is satisfied.
+Conversation persistence now follows that same boundary. Searchable conversation memory and session summaries ingest only the visible transcript; raw worker drafts, verifier gates, and internal replanning prompts stay in control-plane state and execution journals instead of leaking back through `memory_search`.
 Strada now also keeps an internal execution journal and rollback memory for each task. Replans can reuse the last stable checkpoint, remember exhausted branches, carry forward a project/world anchor, and feed adaptive phase scores back into provider routing without hardcoded provider lore. Those adaptive phase scores now factor in verifier clean rate, rollback pressure, retry count, repeated failure fingerprints, repeated world-context failures, phase-local token cost, provider catalog freshness, and official alignment / capability drift from the shared provider catalog.
 Memory is now split by role as well: user profile state keeps names/preferences/autonomy, task execution memory keeps session summaries/open items/rollback state, and project/world memory is injected explicitly from the active project root plus cached AgentDB analysis. Task execution memory is only the `latest snapshot` for the active identity, not the `persisted chronology` for an exact task run. That same project/world layer now also feeds recovery memory and adaptive routing, while semantic retrieval still adds live relevant memory separately.
 Cross-session `execution replay` now builds on that same path: Strada records project/world-aware recovery summaries into learning trajectories and injects the most relevant prior success/failure branches as an `Execution Replay` context layer before retrying similar work.
@@ -759,7 +760,7 @@ The agent has 40+ built-in tools organized by category:
 | `grep_search` | Regex content search across files (max 20 matches) |
 | `list_directory` | Directory listing with file sizes |
 | `code_search` | Semantic/vector search via RAG -- natural language queries |
-| `memory_search` | Search persistent conversation memory |
+| `memory_search` | Search persistent visible conversation memory |
 
 ### Strada Code Generation
 | Tool | Description |
@@ -790,8 +791,8 @@ The agent has 40+ built-in tools organized by category:
 ### Agent Interaction
 | Tool | Description |
 |------|-------------|
-| `ask_user` | Ask the user a clarifying question with multiple-choice options and a recommended answer, but only after `clarification-review` approves it as truly necessary |
-| `show_plan` | Show the execution plan and wait for user approval (Approve/Modify/Reject) |
+| `ask_user` | Control-plane clarification turn surfaced only after `clarification-review` approves it as truly necessary; workers do not receive it as a normal action tool |
+| `show_plan` | Control-plane plan-review turn surfaced only when the user explicitly asked to review a plan first |
 | `switch_personality` | Switch agent personality at runtime (casual/formal/minimal/default) |
 
 ### Other
@@ -1003,7 +1004,7 @@ src/
     autonomy/           # Error recovery, task planning, self-verification
     context/            # System prompt (Strada.Core knowledge base)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + more
-    tools/              # 30+ tool implementations (ask_user, show_plan, switch_personality, ...)
+    tools/              # 30+ tool implementations plus control-plane interaction turns (ask_user, show_plan, switch_personality, ...)
     soul/               # SOUL.md personality loader with hot-reload and per-channel overrides
     plugins/            # External plugin loader
   profiles/             # Personality profile files: casual.md, formal.md, minimal.md

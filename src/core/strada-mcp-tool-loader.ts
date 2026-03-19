@@ -243,6 +243,7 @@ export function registerStradaMcpTools(
       requiresConfirmation: tool.metadata.dangerous && !tool.metadata.readOnly,
       readOnly: tool.metadata.readOnly,
       dependencies: [STRADA_MCP_PACKAGE_NAME],
+      requiresBridge: tool.metadata.requiresBridge,
     });
     registered++;
   }

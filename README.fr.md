@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Agent de D&eacute;veloppement Propuls&eacute; par l'IA pour les Projets Unity / Strada.Core</strong><br/>
-  Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7. D&eacute;sormais avec orchestration multi-agent, d&eacute;l&eacute;gation de t&acirc;ches, consolidation de m&eacute;moire, un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation, partage de m&eacute;dias avec support de vision LLM, un syst&egrave;me de personnalit&eacute; configurable via SOUL.md, des outils de clarification interactifs, un routage intelligent multi-fournisseur avec commutation dynamique selon la t&acirc;che, une v&eacute;rification par consensus bas&eacute;e sur la confiance, un Agent Core autonome avec boucle de raisonnement OODA, et l'int&eacute;gration Strada.MCP.
+  Un agent de programmation autonome qui se connecte &agrave; un tableau de bord web, Telegram, Discord, Slack, WhatsApp, ou votre terminal &mdash; lit votre base de code, &eacute;crit du code, lance les builds, apprend de ses erreurs et fonctionne de mani&egrave;re autonome avec une boucle daemon 24/7. D&eacute;sormais avec orchestration multi-agent, d&eacute;l&eacute;gation de t&acirc;ches, consolidation de m&eacute;moire, un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation, partage de m&eacute;dias avec support de vision LLM, un syst&egrave;me de personnalit&eacute; configurable via SOUL.md, control-plane clarification review, un routage intelligent multi-fournisseur avec commutation dynamique selon la t&acirc;che, une v&eacute;rification par consensus bas&eacute;e sur la confiance, un Agent Core autonome avec boucle de raisonnement OODA, et l'int&eacute;gration Strada.MCP.
 </p>
 
 > Note de traduction : pour le comportement runtime actuel, les valeurs par d&eacute;faut des variables d'environnement et la s&eacute;mantique de s&eacute;curit&eacute;, la source canonique est [README.md](README.md). Ce fichier en est une traduction.
@@ -480,7 +480,7 @@ Avec 2 fournisseurs ou plus configur&eacute;s, Strada.Brain route automatiquemen
 
 ### Int&eacute;gration Strada.MCP
 
-Strada.Brain d&eacute;tecte [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (serveur MCP Unity) et informe l'agent des capacit&eacute;s MCP disponibles, y compris le contr&ocirc;le d'ex&eacute;cution, les op&eacute;rations de fichiers, git, le build .NET, l'analyse de code et la gestion des sc&egrave;nes/prefabs.
+Strada.Brain d&eacute;tecte [Strada.MCP](https://github.com/okandemirel/Strada.MCP) (serveur MCP Unity) et informe l'agent des capacit&eacute;s MCP disponibles, y compris le contr&ocirc;le d'ex&eacute;cution, les op&eacute;rations de fichiers, git, le build .NET, l'analyse de code et la gestion des sc&egrave;nes/prefabs. Seuls les outils MCP d'action ex&eacute;cutables dans le runtime Brain courant entrent dans la surface d'outils du worker; les capacit&eacute;s MCP limit&eacute;es par le bridge/runtime restent des authoritative docs/resources.
 
 ---
 
@@ -702,7 +702,7 @@ L'agent dispose de plus de 40 outils int&eacute;gr&eacute;s organis&eacute;s par
 | `grep_search` | Recherche de contenu par regex dans les fichiers (max 20 correspondances) |
 | `list_directory` | Listage de r&eacute;pertoire avec tailles de fichiers |
 | `code_search` | Recherche s&eacute;mantique/vectorielle via RAG -- requ&ecirc;tes en langage naturel |
-| `memory_search` | Recherche dans la m&eacute;moire persistante des conversations |
+| `memory_search` | Recherche dans la m&eacute;moire persistante visible des conversations |
 
 ### G&eacute;n&eacute;ration de Code Strada
 | Outil | Description |
@@ -733,8 +733,8 @@ L'agent dispose de plus de 40 outils int&eacute;gr&eacute;s organis&eacute;s par
 ### Interaction Agent
 | Outil | Description |
 |-------|-------------|
-| `ask_user` | Pose &agrave; l'utilisateur une question de clarification avec choix multiples et r&eacute;ponse recommand&eacute;e, mais seulement apr&egrave;s validation par `clarification-review` |
-| `show_plan` | Affiche le plan d'ex&eacute;cution et attend l'approbation de l'utilisateur (Approuver/Modifier/Rejeter) |
+| `ask_user` | N'est pas un outil d'action normal pour le worker; il ne devient visible que lorsque `clarification-review` confirme qu'il est vraiment n&eacute;cessaire |
+| `show_plan` | N'est pas un outil d'action normal pour le worker; il n'est montr&eacute; comme tour de revue du plan que si l'utilisateur a explicitement demand&eacute; &agrave; voir le plan d'abord |
 | `switch_personality` | Change la personnalit&eacute; de l'agent &agrave; l'ex&eacute;cution (casual/formal/minimal/default) |
 
 ### Autres

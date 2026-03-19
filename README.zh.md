@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>面向 Unity / Strada.Core 项目的 AI 驱动开发代理</strong><br/>
-  一个连接到 Web 仪表板、Telegram、Discord、Slack、WhatsApp 或终端的自主编码代理 &mdash; 读取您的代码库、编写代码、运行构建、从错误中学习，并通过 24/7 守护进程循环实现自主运行。现已支持多代理编排、任务委派、记忆整合、带审批门控的部署子系统、支持 LLM 视觉识别的媒体共享、通过 SOUL.md 实现的可配置个性系统，以及交互式澄清工具、支持任务感知动态切换的智能多提供商路由、基于置信度的共识验证、带 OODA 推理循环的自主 Agent Core，以及 Strada.MCP 集成。
+  一个连接到 Web 仪表板、Telegram、Discord、Slack、WhatsApp 或终端的自主编码代理 &mdash; 读取您的代码库、编写代码、运行构建、从错误中学习，并通过 24/7 守护进程循环实现自主运行。现已支持多代理编排、任务委派、记忆整合、带审批门控的部署子系统、支持 LLM 视觉识别的媒体共享、通过 SOUL.md 实现的可配置个性系统、control-plane clarification review、支持任务感知动态切换的智能多提供商路由、基于置信度的共识验证、带 OODA 推理循环的自主 Agent Core，以及 Strada.MCP 集成。
 </p>
 
 > 翻译说明：当前运行时行为、环境变量默认值和安全语义的正本是 [README.md](README.md)。本文件是其翻译版本。
@@ -480,7 +480,7 @@ Strada.Brain 每天自动检查更新，在空闲时应用更新。源码 checko
 
 ### Strada.MCP 集成
 
-Strada.Brain 检测 [Strada.MCP](https://github.com/okandemirel/Strada.MCP)（Unity MCP 服务器）并告知代理可用的 MCP 功能，包括运行时控制、文件操作、git、.NET 构建、代码分析和场景/预制件管理。
+Strada.Brain 检测 [Strada.MCP](https://github.com/okandemirel/Strada.MCP)（Unity MCP 服务器）并告知代理可用的 MCP 功能，包括运行时控制、文件操作、git、.NET 构建、代码分析和场景/预制件管理。只有在当前 Brain runtime 里真正可执行的 MCP action tools 会进入 worker tool surface；受 bridge/runtime 约束而暂时不可执行的 MCP 能力，仍然作为 authoritative docs/resources 保留。
 
 ---
 
@@ -702,7 +702,7 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `grep_search` | 跨文件的正则表达式内容搜索（最多 20 个匹配） |
 | `list_directory` | 带文件大小的目录列表 |
 | `code_search` | 通过 RAG 进行语义/向量搜索——自然语言查询 |
-| `memory_search` | 搜索持久对话记忆 |
+| `memory_search` | 搜索持久的可见对话记忆 |
 
 ### Strada 代码生成
 | 工具 | 说明 |
@@ -733,8 +733,8 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 ### 代理交互
 | 工具 | 说明 |
 |------|------|
-| `ask_user` | 向用户发送带有多项选择和推荐答案的澄清问题，但只有在 `clarification-review` 确认确有必要后才会使用 |
-| `show_plan` | 显示执行计划并等待用户审批（批准/修改/拒绝） |
+| `ask_user` | 不是普通的 worker action tool；只有在 `clarification-review` 确认确有必要后才会作为 user-facing 回合出现 |
+| `show_plan` | 不是普通的 worker action tool；只有当用户明确要求先看计划时，才会作为 plan-review 回合出现 |
 | `switch_personality` | 在运行时切换代理个性（casual/formal/minimal/default） |
 
 ### 其他

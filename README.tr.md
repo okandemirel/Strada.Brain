@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Unity / Strada.Core Projeleri icin Yapay Zeka Destekli Gelistirme Ajani</strong><br/>
-  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu, onay kapili dagitim alt sistemi, LLM goruntu destegiyle medya paylasimi, SOUL.md uzerinden yapilandirilabilir kisilik sistemi, etkilesimli aciklama araclari, gorev bilinclii dinamik gecis ile akilli coklu saglayici yonlendirme, guven tabanli konsensus dogrulamasi, OODA akil yurutme dongusune sahip otonom Agent Core ve Strada.MCP entegrasyonu ile.
+  Web paneline, Telegram, Discord, Slack, WhatsApp veya terminalinize baglanan otonom bir kodlama ajani &mdash; kod tabaninizi okur, kod yazar, derlemeleri calistirir, hatalarindan ogrenir ve 7/24 daemon dongusu ile otonom olarak calisir. Artik coklu ajan orkestrasyonu, gorev delegasyonu, bellek konsolidasyonu, onay kapili dagitim alt sistemi, LLM goruntu destegiyle medya paylasimi, SOUL.md uzerinden yapilandirilabilir kisilik sistemi, control-plane clarification review, gorev bilinclii dinamik gecis ile akilli coklu saglayici yonlendirme, guven tabanli konsensus dogrulamasi, OODA akil yurutme dongusune sahip otonom Agent Core ve Strada.MCP entegrasyonu ile.
 </p>
 
 > Ceviri notu: Guncel calisma zamani davranisi, ortam degiskeni varsayilanlari ve guvenlik semantigi icin kanonik kaynak [README.md](README.md) dosyasidir. Bu dosya onun cevirisidir.
@@ -442,7 +442,7 @@ Guvenlik: tickInFlight korumasi, hiz sinirlamasi, butce tabani (%10) ve DaemonSe
 
 ### Strada.MCP Entegrasyonu
 
-Strada.Brain, [Strada.MCP](https://github.com/okandemirel/Strada.MCP)'yi (Unity MCP sunucusu) tespit eder ve ajani mevcut MCP yetenekleri hakkinda bilgilendirir: calisma zamani kontrolu, dosya islemleri, git, .NET derleme, kod analizi ve sahne/prefab yonetimi.
+Strada.Brain, [Strada.MCP](https://github.com/okandemirel/Strada.MCP)'yi (Unity MCP sunucusu) tespit eder ve ajani mevcut MCP yetenekleri hakkinda bilgilendirir: calisma zamani kontrolu, dosya islemleri, git, .NET derleme, kod analizi ve sahne/prefab yonetimi. Yalnizca mevcut Brain runtime'inda gercekten calistirilabilen MCP action tool'lari worker tool surface'e girer; bridge/runtime kisitli MCP yetenekleri ise yine authoritative docs/resources olarak kalir.
 
 ---
 
@@ -664,7 +664,7 @@ Ajan, kategorilere gore duzenlenmis 40'dan fazla yerlesik araca sahiptir:
 | `grep_search` | Dosyalar arasi regex icerik aramasi (maksimum 20 eslesme) |
 | `list_directory` | Dosya boyutlari ile dizin listeleme |
 | `code_search` | RAG uzerinden anlamsal/vektor arama -- dogal dil sorgulari |
-| `memory_search` | Kalici konusma hafizasinda arama |
+| `memory_search` | Kalici gorunur konusma hafizasinda arama |
 
 ### Strada Kod Uretimi
 | Arac | Aciklama |
@@ -695,8 +695,8 @@ Ajan, kategorilere gore duzenlenmis 40'dan fazla yerlesik araca sahiptir:
 ### Ajan Etkilesimi
 | Arac | Aciklama |
 |------|----------|
-| `ask_user` | Kullaniciya coktan secmeli ve onerilen cevapli aciklayici soru sorar; ancak bu ancak `clarification-review` bunun gercekten gerekli oldugunu onaylarsa kullanilir |
-| `show_plan` | Yurutme planini gosterir ve kullanici onayini bekler (Onayla/Duzenle/Reddet) |
+| `ask_user` | Normal worker action tool degildir; yalnizca `clarification-review` bunu gerekli gorurse control-plane tarafindan kullaniciya surface edilir |
+| `show_plan` | Normal worker action tool degildir; yalnizca kullanici plani once gormeyi acikca isterse control-plane plan-review turn'u olarak surface edilir |
 | `switch_personality` | Ajan kisiligini calisma zamaninda degistirir (casual/formal/minimal/default) |
 
 ### Diger
