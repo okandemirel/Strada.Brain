@@ -35,6 +35,12 @@ interface StrategyFailureMemory {
   readonly lastSeenAt: number;
 }
 
+export interface ExecutionJournalSnapshot {
+  branchSummary?: string;
+  verifierSummary?: string;
+  learnedInsights: string[];
+}
+
 const MAX_ENTRIES = 120;
 const MAX_FAILURES = 6;
 
@@ -220,6 +226,23 @@ export class ExecutionJournal {
 
   getLearnedInsights(): string[] {
     return [...this.learnedInsights].slice(-8);
+  }
+
+  snapshot(): ExecutionJournalSnapshot {
+    const branch = this.branches.get(this.currentBranchId);
+    const branchSummary = branch
+      ? [
+          `Branch ${branch.id}`,
+          branch.parentId ? `parent ${branch.parentId}` : "",
+          this.lastStableCheckpoint ? `stable checkpoint: ${this.lastStableCheckpoint}` : "",
+        ].filter(Boolean).join(" | ")
+      : undefined;
+
+    return {
+      branchSummary,
+      verifierSummary: this.lastVerifierSummary ?? undefined,
+      learnedInsights: this.getLearnedInsights(),
+    };
   }
 
   buildPromptSection(phase: AgentPhase): string {

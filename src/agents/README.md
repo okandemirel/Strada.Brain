@@ -71,6 +71,7 @@ The autonomy layer now also includes:
 - **Completion Review** — Forces security/code/simplify review plus log/error verification before a worker can self-certify completion
 - **Verifier Pipeline** — Aggregates build verification, targeted repro, log review, conformance, and completion-review results into a single continue/replan/approve control-plane outcome
 - **Execution Journal** — Tracks task branches, failed approaches, verifier findings, and rollback memory so replans can reuse stable checkpoints instead of starting blind
+- **Task Execution Memory** — Persists session summaries, open items, verifier memory, and learned insights separately from user profile state so recovery context survives without polluting persona/preferences
 
 ## Plugins (`plugins/plugin-loader.ts`)
 

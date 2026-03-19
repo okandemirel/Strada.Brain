@@ -62,4 +62,33 @@ describe("ExecutionJournal", () => {
     expect(prompt).toContain("Avoid repeating exhausted strategies");
     expect(prompt).toContain("Required verifier actions");
   });
+
+  it("exports a compact snapshot for persistent execution memory", () => {
+    const journal = new ExecutionJournal("Investigate the broken Unity level import");
+    journal.recordVerifierResult({
+      decision: "continue",
+      summary: "Need to inspect the serialized asset and live runtime behavior together.",
+      gate: "[VERIFIER PIPELINE: CONTINUE REQUIRED]",
+      checks: [],
+      evidence: {
+        task: { type: "analysis", complexity: "complex", criticality: "high" },
+        hasTerminalFailureReport: false,
+        conformanceRequired: false,
+        recentFailures: [],
+        recentSteps: [],
+        recentLogIssues: [],
+        touchedFiles: [],
+        mutationStepCount: 0,
+        inspectionStepCount: 1,
+        verificationStepCount: 0,
+        totalStepCount: 1,
+        lastVerificationAt: null,
+      },
+    });
+
+    const snapshot = journal.snapshot();
+    expect(snapshot.verifierSummary).toContain("serialized asset");
+    expect(snapshot.learnedInsights.length).toBeGreaterThan(0);
+    expect(snapshot.branchSummary).toContain("Branch root");
+  });
 });

@@ -14,7 +14,7 @@ import type {
   ConversationMessage,
   MessageContent,
 } from "../../agents/providers/provider-core.interface.js";
-import type { UserProfileStore } from "./user-profile-store.js";
+import type { TaskExecutionStore } from "./task-execution-store.js";
 
 import { getLogger } from "../../utils/logger.js";
 
@@ -70,7 +70,7 @@ Respond ONLY with the JSON object. No additional text or explanation.`;
 export class SessionSummarizer {
   constructor(
     private readonly llmProvider: IAIProvider,
-    private readonly profileStore: UserProfileStore,
+    private readonly taskExecutionStore: TaskExecutionStore,
   ) {}
 
   /**
@@ -108,9 +108,9 @@ export class SessionSummarizer {
   }
 
   /**
-   * Summarize the conversation and persist the result to the user profile store.
+   * Summarize the conversation and persist the result to task execution memory.
    *
-   * Profile update failure is non-fatal; the summary is still returned.
+   * Persistence failure is non-fatal; the summary is still returned.
    */
   async summarizeAndUpdateProfile(
     chatId: string,
@@ -125,13 +125,14 @@ export class SessionSummarizer {
         if (summary.openItems.length > 0) {
           fullSummary += "\n\nOpen items: " + summary.openItems.join("; ");
         }
-        this.profileStore.updateContextSummary(
+        this.taskExecutionStore.updateSessionSummary(
           chatId,
           fullSummary,
+          summary.openItems,
           summary.topics,
         );
       } catch (err) {
-        getLoggerSafe().warn("Failed to update profile after summarization", { error: err });
+        getLoggerSafe().warn("Failed to update task execution memory after summarization", { error: err });
       }
     }
 

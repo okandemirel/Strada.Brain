@@ -294,7 +294,7 @@ The active memory backend is `AgentDBMemory` -- SQLite with HNSW vector indexing
 - Hybrid retrieval combines 70% semantic similarity (HNSW vectors) with 30% TF-IDF keyword matching
 - The `strada_analyze_project` tool caches project structure analysis for instant context injection
 - Memory persists across restarts in the `MEMORY_DB_PATH` directory (default: `.strada-memory/`)
-- The session summarizer updates the user profile every 10 active messages and again during session cleanup
+- The session summarizer updates task execution memory every 10 active messages and again during session cleanup
 - Automatic migration from the legacy FileMemoryManager runs on first startup
 
 **Fallback:** If AgentDB initialization fails, the system automatically falls back to `FileMemoryManager` (JSON + TF-IDF).
@@ -586,6 +586,7 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 Clarification is also part of that control plane. Worker providers may propose a user question, but Strada now runs an internal `clarification-review` phase before any provider draft can become an `ask_user` turn.
 Completion now runs through an internal verifier pipeline as well. Build verification, targeted repro / failing-path checks, log review, Strada conformance, and completion review must clear before Strada can finish. `/routing info` and the dashboard now show both runtime execution traces and phase outcomes (`approved`, `continued`, `replanned`, `blocked`).
 Strada now also keeps an internal execution journal and rollback memory for each task. Replans can reuse the last stable checkpoint, remember exhausted branches, and feed adaptive phase scores back into provider routing without hardcoded provider lore. Those adaptive phase scores now factor in verifier clean rate, rollback pressure, retry count, repeated failure fingerprints, and phase-local token cost.
+Memory is now split by role as well: user profile state keeps names/preferences/autonomy, task execution memory keeps session summaries/open items/rollback state, and project/world memory stays in AgentDB analysis plus semantic retrieval layers.
 
 **Important:** `OPENAI_AUTH_MODE=chatgpt-subscription` only covers OpenAI conversation turns inside Strada. It does not grant OpenAI API billing or embeddings quota. If you choose `EMBEDDING_PROVIDER=openai`, you still need an `OPENAI_API_KEY`.
 

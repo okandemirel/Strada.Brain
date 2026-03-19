@@ -40,6 +40,7 @@ import type {
 import { ok, err, some, none, createBrand } from "../../types/index.js";
 import { HnswWriteMutex } from "./hnsw-write-mutex.js";
 import { UserProfileStore } from "./user-profile-store.js";
+import { TaskExecutionStore } from "./task-execution-store.js";
 import { MS_PER_DAY } from "../../learning/types.js";
 import type { DecayStats, DecayTierStats, MemoryDecayConfig } from "../memory.interface.js";
 export type { MemoryDecayConfig } from "../memory.interface.js";
@@ -178,6 +179,7 @@ export class AgentDBMemory implements IUnifiedMemory {
   private sqliteStatements: Map<string, Database.Statement> = new Map();
   private decayConfig: MemoryDecayConfig | null = null;
   private userProfileStore: UserProfileStore | null = null;
+  private taskExecutionStore: TaskExecutionStore | null = null;
   private rebuildInProgress = false;
 
   constructor(config: Partial<UnifiedMemoryConfig> = {}) {
@@ -224,6 +226,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       // Initialize user profile store (shares SQLite DB)
       if (this.sqliteDb) {
         this.userProfileStore = new UserProfileStore(this.sqliteDb);
+        this.taskExecutionStore = new TaskExecutionStore(this.sqliteDb);
       }
 
       // Initialize HNSW vector store
@@ -290,6 +293,10 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   getUserProfileStore(): UserProfileStore | null {
     return this.userProfileStore;
+  }
+
+  getTaskExecutionStore(): TaskExecutionStore | null {
+    return this.taskExecutionStore;
   }
 
   // ---------------------------------------------------------------------------

@@ -91,6 +91,7 @@ import type { TaskManager } from "../tasks/task-manager.js";
 import type { SoulLoader } from "./soul/index.js";
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
+import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/task-execution-store.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import type {
@@ -598,6 +599,7 @@ export class Orchestrator {
   private readonly lastPersistTime = new Map<string, number>();
   private readonly sessionSummarizer?: SessionSummarizer;
   private readonly userProfileStore?: UserProfileStore;
+  private readonly taskExecutionStore?: TaskExecutionStore;
   /** Multi-provider routing: selects best provider per task/phase. */
   private readonly providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
   /** Live model intelligence for provider-aware prompting and trimming. */
@@ -640,6 +642,7 @@ export class Orchestrator {
     dmPolicy?: DMPolicy;
     sessionSummarizer?: SessionSummarizer;
     userProfileStore?: UserProfileStore;
+    taskExecutionStore?: TaskExecutionStore;
     providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
     modelIntelligence?: ModelIntelligenceLookup;
     consensusManager?: import("../agent-core/routing/consensus-manager.js").ConsensusManager;
@@ -677,6 +680,7 @@ export class Orchestrator {
     this.dmPolicy = opts.dmPolicy ?? new DMPolicy(opts.channel, opts.dmPolicyConfig);
     this.sessionSummarizer = opts.sessionSummarizer;
     this.userProfileStore = opts.userProfileStore;
+    this.taskExecutionStore = opts.taskExecutionStore;
     this.providerRouter = opts.providerRouter;
     this.modelIntelligence = opts.modelIntelligence;
     this.consensusManager = opts.consensusManager;
@@ -1667,6 +1671,7 @@ export class Orchestrator {
    */
   private async buildContextLayers(
     goalScope: string,
+    executionScope: string,
     userMessage: string,
     profile: import("../memory/unified/user-profile-store.js").UserProfile | null,
     preComputedEmbedding?: number[],
@@ -1680,10 +1685,12 @@ export class Orchestrator {
       if (parts.length > 0) layers.push(`## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${parts.join("\n")}`);
     }
 
-    // Layer 2: Last Session Summary (data only, not instructions)
-    if (profile?.contextSummary) {
-      layers.push(`## Previous Session\nReference this context naturally when relevant. Mention past work to show continuity.\n${sanitizePromptInjection(profile.contextSummary)}`);
-      contentHashes.push(profile.contextSummary);
+    // Layer 2: Task Execution Memory
+    const taskExecutionMemory = this.taskExecutionStore?.getMemory(executionScope) ?? null;
+    const taskExecutionLayer = this.buildTaskExecutionMemoryLayer(taskExecutionMemory, profile?.contextSummary);
+    if (taskExecutionLayer) {
+      layers.push(taskExecutionLayer.content);
+      contentHashes.push(...taskExecutionLayer.contentHashes);
     }
 
     // Layer 3: Open Tasks/Goals
@@ -1776,6 +1783,7 @@ export class Orchestrator {
     // 4. Context layers (user profile, session summary, open tasks, semantic memory)
     const { context: contextLayers, contentHashes } = await this.buildContextLayers(
       params.conversationScope,
+      params.identityKey,
       params.prompt,
       params.profile as import("../memory/unified/user-profile-store.js").UserProfile | null,
       params.preComputedEmbedding,
@@ -2667,6 +2675,7 @@ export class Orchestrator {
       bgAgentState = transitionPhase(bgAgentState, AgentPhase.FAILED);
       throw error;
     } finally {
+      this.persistExecutionMemory(identityKey, executionJournal);
       // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
       this.recordMetricEnd(metricId, {
         agentPhase: bgAgentState.phase,
@@ -3886,6 +3895,7 @@ export class Orchestrator {
       agentState = transitionPhase(agentState, AgentPhase.FAILED);
       throw error;
     } finally {
+      this.persistExecutionMemory(identityKey, executionJournal);
       // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
       this.recordMetricEnd(metricId, {
         agentPhase: agentState.phase,
@@ -5217,6 +5227,70 @@ export class Orchestrator {
         autonomousExpiresAt: updates.autonomousMode.expiresAt,
       }, userId);
     }
+  }
+
+  private persistExecutionMemory(scopeKey: string, executionJournal: ExecutionJournal): void {
+    if (!this.taskExecutionStore) {
+      return;
+    }
+    try {
+      this.taskExecutionStore.updateExecutionSnapshot(scopeKey, executionJournal.snapshot());
+    } catch (error) {
+      getLogger().warn("Execution memory persistence failed", {
+        scopeKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private buildTaskExecutionMemoryLayer(
+    taskExecutionMemory: TaskExecutionMemory | null,
+    legacyContextSummary?: string,
+  ): { content: string; contentHashes: string[] } | null {
+    if (
+      !taskExecutionMemory?.sessionSummary
+      && !taskExecutionMemory?.branchSummary
+      && !taskExecutionMemory?.verifierSummary
+      && !(taskExecutionMemory?.learnedInsights.length)
+      && !legacyContextSummary
+    ) {
+      return null;
+    }
+
+    const lines: string[] = [];
+    const contentHashes: string[] = [];
+
+    if (taskExecutionMemory?.sessionSummary) {
+      lines.push(`Recent session: ${sanitizePromptInjection(taskExecutionMemory.sessionSummary)}`);
+      contentHashes.push(taskExecutionMemory.sessionSummary);
+    } else if (legacyContextSummary) {
+      lines.push(`Recent session: ${sanitizePromptInjection(legacyContextSummary)}`);
+      contentHashes.push(legacyContextSummary);
+    }
+
+    if (taskExecutionMemory && taskExecutionMemory.openItems.length > 0) {
+      lines.push(`Open items: ${taskExecutionMemory.openItems.join("; ")}`);
+    }
+    if (taskExecutionMemory?.branchSummary) {
+      lines.push(`Branch recovery: ${sanitizePromptInjection(taskExecutionMemory.branchSummary)}`);
+      contentHashes.push(taskExecutionMemory.branchSummary);
+    }
+    if (taskExecutionMemory?.verifierSummary) {
+      lines.push(`Verifier memory: ${sanitizePromptInjection(taskExecutionMemory.verifierSummary)}`);
+      contentHashes.push(taskExecutionMemory.verifierSummary);
+    }
+    if (taskExecutionMemory && taskExecutionMemory.learnedInsights.length > 0) {
+      lines.push("Execution insights:");
+      for (const insight of taskExecutionMemory.learnedInsights.slice(0, 4)) {
+        lines.push(`- ${sanitizePromptInjection(insight)}`);
+        contentHashes.push(insight);
+      }
+    }
+
+    return {
+      content: `## Task Execution Memory\nReference this context when continuing prior work or avoiding failed paths.\n${lines.join("\n")}`,
+      contentHashes,
+    };
   }
 
   private emitToolResult(chatId: string, tc: { name: string; input: unknown }, tr: { content: string; isError?: boolean }): void {

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SessionSummarizer } from "./session-summarizer.js";
 import type { SessionSummary } from "./session-summarizer.js";
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
-import type { UserProfileStore } from "./user-profile-store.js";
+import type { TaskExecutionStore } from "./task-execution-store.js";
 
 // =============================================================================
 // MOCK SETUP
@@ -44,14 +44,12 @@ function createMockProvider(
   } as unknown as IAIProvider;
 }
 
-function createMockProfileStore(): UserProfileStore {
+function createMockExecutionStore(): TaskExecutionStore {
   return {
-    updateContextSummary: vi.fn(),
-    upsertProfile: vi.fn(),
-    getProfile: vi.fn().mockReturnValue(null),
-    setActivePersona: vi.fn(),
-    touchLastSeen: vi.fn(),
-  } as unknown as UserProfileStore;
+    updateSessionSummary: vi.fn(),
+    updateExecutionSnapshot: vi.fn(),
+    getMemory: vi.fn().mockReturnValue(null),
+  } as unknown as TaskExecutionStore;
 }
 
 // =============================================================================
@@ -60,13 +58,13 @@ function createMockProfileStore(): UserProfileStore {
 
 describe("SessionSummarizer", () => {
   let provider: IAIProvider;
-  let profileStore: UserProfileStore;
+  let executionStore: TaskExecutionStore;
   let summarizer: SessionSummarizer;
 
   beforeEach(() => {
     provider = createMockProvider();
-    profileStore = createMockProfileStore();
-    summarizer = new SessionSummarizer(provider, profileStore);
+    executionStore = createMockExecutionStore();
+    summarizer = new SessionSummarizer(provider, executionStore);
   });
 
   // ---------------------------------------------------------------------------
@@ -114,7 +112,7 @@ describe("SessionSummarizer", () => {
       (failingProvider.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error("API rate limit exceeded"),
       );
-      const failSummarizer = new SessionSummarizer(failingProvider, profileStore);
+      const failSummarizer = new SessionSummarizer(failingProvider, executionStore);
 
       const messages = [
         { role: "user" as const, content: "Hello" },
@@ -130,7 +128,7 @@ describe("SessionSummarizer", () => {
 
     it("handles malformed LLM JSON response (returns empty summary)", async () => {
       const malformedProvider = createMockProvider("This is not JSON at all {{{");
-      const malformedSummarizer = new SessionSummarizer(malformedProvider, profileStore);
+      const malformedSummarizer = new SessionSummarizer(malformedProvider, executionStore);
 
       const messages = [
         { role: "user" as const, content: "Hello" },
@@ -147,7 +145,7 @@ describe("SessionSummarizer", () => {
     it("strips markdown fencing from LLM response before parsing", async () => {
       const fencedJson = "```json\n" + JSON.stringify(VALID_SUMMARY) + "\n```";
       const fencedProvider = createMockProvider(fencedJson);
-      const fencedSummarizer = new SessionSummarizer(fencedProvider, profileStore);
+      const fencedSummarizer = new SessionSummarizer(fencedProvider, executionStore);
 
       const messages = [
         { role: "user" as const, content: "Hello" },
@@ -163,7 +161,7 @@ describe("SessionSummarizer", () => {
       const partialProvider = createMockProvider(
         JSON.stringify({ summary: "Partial response" }),
       );
-      const partialSummarizer = new SessionSummarizer(partialProvider, profileStore);
+      const partialSummarizer = new SessionSummarizer(partialProvider, executionStore);
 
       const messages = [
         { role: "user" as const, content: "Hello" },
@@ -211,10 +209,11 @@ describe("SessionSummarizer", () => {
       const result = await summarizer.summarizeAndUpdateProfile("chat-10", messages);
 
       expect(result.summary).toBe("User discussed combat system design");
-      expect(profileStore.updateContextSummary).toHaveBeenCalledTimes(1);
-      expect(profileStore.updateContextSummary).toHaveBeenCalledWith(
+      expect(executionStore.updateSessionSummary).toHaveBeenCalledTimes(1);
+      expect(executionStore.updateSessionSummary).toHaveBeenCalledWith(
         "chat-10",
         "User discussed combat system design\n\nOpen items: Implement DamageCalculator",
+        ["Implement DamageCalculator"],
         ["combat", "ECS"],
       );
     });
@@ -223,11 +222,11 @@ describe("SessionSummarizer", () => {
       const result = await summarizer.summarizeAndUpdateProfile("chat-11", []);
 
       expect(result.summary).toBe("");
-      expect(profileStore.updateContextSummary).not.toHaveBeenCalled();
+      expect(executionStore.updateSessionSummary).not.toHaveBeenCalled();
     });
 
     it("returns summary even when profile update fails", async () => {
-      (profileStore.updateContextSummary as ReturnType<typeof vi.fn>).mockImplementation(
+      (executionStore.updateSessionSummary as ReturnType<typeof vi.fn>).mockImplementation(
         () => {
           throw new Error("Database write failed");
         },

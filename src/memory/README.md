@@ -1,6 +1,7 @@
 # src/memory/
 
 Persistent conversation memory with text search and vector retrieval. The memory system stores past conversations, project analyses, and notes, making them available to the agent as context for future interactions.
+Runtime memory is now explicitly split by role: user profile memory, task execution memory, and project/world memory.
 
 ## Active Backend: AgentDBMemory
 
@@ -63,6 +64,7 @@ When no embedding provider is configured, `generateEmbedding()` uses a character
 |------|---------|
 | `memory.interface.ts` | `IMemoryManager`, entry types, retrieval options |
 | `unified/agentdb-memory.ts` | Active production backend (SQLite + HNSW) |
+| `unified/task-execution-store.ts` | Task execution memory: session summaries, open items, verifier memory, rollback context |
 | `unified/unified-memory.interface.ts` | `IUnifiedMemory`, tier enum, HNSW types |
 | `unified/consolidation-engine.ts` | Idle-driven memory consolidation (v3.0) |
 | `file-memory-manager.ts` | Legacy fallback backend (JSON + TF-IDF) |

@@ -6,6 +6,7 @@ import { ShowPlanTool } from "./tools/show-plan.js";
 import { AskUserTool } from "./tools/ask-user.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
+import { TaskExecutionStore } from "../memory/unified/task-execution-store.js";
 import { buildGoalTreeFromBlock } from "../goals/types.js";
 
 const mockLogRingBuffer: Array<{
@@ -648,6 +649,60 @@ describe("Orchestrator", () => {
     expect(firstPrompt).toContain("At most, ask one short natural follow-up");
     expect(firstPrompt).not.toContain("Ask about their preferred communication style");
     expect(firstPrompt).not.toContain("Ask how detailed they want explanations");
+  });
+
+  it("injects task execution memory separately from user profile memory", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const taskExecutionStore = new TaskExecutionStore(db);
+    userProfileStore.upsertProfile("user-1", {
+      displayName: "Alice",
+      contextSummary: "Legacy profile summary should not be the primary task memory.",
+    });
+    taskExecutionStore.updateSessionSummary(
+      "user-1",
+      "Investigated the Unity crash and isolated the failing import path.",
+      ["Replay the editor failure with live runtime checks"],
+      ["unity", "levels"],
+    );
+    taskExecutionStore.updateExecutionSnapshot("user-1", {
+      branchSummary: "Branch branch-2 | stable checkpoint: inspected Level_031 serialization",
+      verifierSummary: "Verifier still requires runtime confirmation before closing the task.",
+      learnedInsights: ["Avoid assuming serialized YAML proves Unity runtime correctness."],
+    });
+
+    const memoryOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+      taskExecutionStore,
+    });
+
+    const promise = memoryOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-task-memory",
+      userId: "user-1",
+      text: "Continue fixing the Unity level issue",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const prompt = String(mockProvider.chat.mock.calls.at(-1)?.[0] ?? "");
+    expect(prompt).toContain("## Task Execution Memory");
+    expect(prompt).toContain("Investigated the Unity crash and isolated the failing import path.");
+    expect(prompt).toContain("Verifier still requires runtime confirmation");
+    expect(prompt).toContain("Avoid assuming serialized YAML proves Unity runtime correctness.");
+    expect(prompt).not.toContain("Legacy profile summary should not be the primary task memory.");
+    db.close();
   });
 
   it("stores periodic session summaries under the stable profile identity", async () => {

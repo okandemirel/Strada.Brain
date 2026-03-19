@@ -492,14 +492,19 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Wire SessionSummarizer and UserProfileStore (requires AgentDBAdapter)
   let sessionSummarizer: import("../memory/unified/session-summarizer.js").SessionSummarizer | undefined;
   let userProfileStore: import("../memory/unified/user-profile-store.js").UserProfileStore | undefined;
+  let taskExecutionStore: import("../memory/unified/task-execution-store.js").TaskExecutionStore | undefined;
   if (memoryManager) {
     try {
       if (memoryManager instanceof AgentDBAdapter) {
         const profileStore = memoryManager.getUserProfileStore();
+        const executionStore = memoryManager.getTaskExecutionStore();
         if (profileStore) {
           userProfileStore = profileStore;
+        }
+        if (executionStore) {
+          taskExecutionStore = executionStore;
           const { SessionSummarizer: SummarizerClass } = await import("../memory/unified/session-summarizer.js");
-          sessionSummarizer = new SummarizerClass(providerManager.getProvider(""), profileStore);
+          sessionSummarizer = new SummarizerClass(providerManager.getProvider(""), executionStore);
           logger.info("SessionSummarizer wired for session-end summarization");
         }
       }
@@ -597,6 +602,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     dmPolicy,
     sessionSummarizer,
     userProfileStore,
+    taskExecutionStore,
     providerRouter,
     modelIntelligence,
     consensusManager,

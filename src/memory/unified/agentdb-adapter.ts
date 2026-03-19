@@ -34,6 +34,7 @@ import { ok, err, some, none, createBrand } from "../../types/index.js";
 import type { AgentDBMemory } from "./agentdb-memory.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import type { UserProfileStore } from "./user-profile-store.js";
+import type { TaskExecutionStore } from "./task-execution-store.js";
 
 type MutableMetadata = Record<string, JsonObject | string | number | boolean | null | undefined>;
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -140,6 +141,10 @@ export class AgentDBAdapter implements IMemoryManager {
   /** Get the user profile store (returns null if memory not initialized) */
   getUserProfileStore(): UserProfileStore | null {
     return this.agentdb.getUserProfileStore();
+  }
+
+  getTaskExecutionStore(): TaskExecutionStore | null {
+    return this.agentdb.getTaskExecutionStore();
   }
 
   // =========================================================================
