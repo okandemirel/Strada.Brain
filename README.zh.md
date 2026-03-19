@@ -574,7 +574,7 @@ npm run dev -- daemon --channel web
 澄清也是这个控制平面的一部分。worker 可以提出一个用户问题草案，但 Strada 现在会先运行内部 `clarification-review` 阶段，再决定这个草案能否真的变成 `ask_user` 回合。
 完成判定现在也要经过内部 verifier pipeline。build verification、targeted repro / failing-path 检查、log review、Strada conformance 和 completion review 都必须清理干净，Strada 才会结束。`/routing info` 和 dashboard 现在除了 runtime execution traces 之外，也会显示 phase outcomes (`approved`, `continued`, `replanned`, `blocked`)。
 Strada 现在还会为每个任务维护内部 execution journal 和 rollback memory。replan 可以复用最近的稳定 checkpoint、记住已经耗尽的 branch，并把 adaptive phase scores 回灌到 routing，而不依赖 hardcoded provider lore。这些 score 现在还会考虑 verifier clean rate、rollback pressure、retry count、repeated failure fingerprints 和 phase-local token cost。
-记忆现在也按角色拆分：user profile state 保存姓名/偏好/autonomy，task execution memory 保存 session summaries/open items/rollback state，project/world memory 继续留在 AgentDB analysis 与 semantic retrieval 层。
+记忆现在也按角色拆分：user profile state 保存姓名/偏好/autonomy，task execution memory 保存 session summaries/open items/rollback state；project/world memory 现在会从当前 project root 和缓存的 AgentDB analysis 显式注入到 prompt layer 中，而 semantic retrieval 仍会单独补充实时相关 memory。
 
 **重要：** `OPENAI_AUTH_MODE=chatgpt-subscription` 只覆盖 Strada 内的 OpenAI 对话回合，不会提供 OpenAI API 或 embeddings 配额。如果你选择 `EMBEDDING_PROVIDER=openai`，仍然需要 `OPENAI_API_KEY`。
 Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返回了不完整的分析、反过来询问用户下一步该做什么，或在证据不足时声称大范围任务已经完成，Strada 会重新打开循环，再做一轮检查/评审，只有在结果已经验证完毕或确实只剩真实外部阻塞时才向用户返回。

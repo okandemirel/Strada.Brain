@@ -10,7 +10,7 @@ The `Orchestrator` class implements a single-agent, multi-tool loop. There is on
 1. Messages are serialized per-chat via `sessionLocks` (concurrent messages for the same chat are queued)
 2. Memory retrieval: top 3 matches (TF-IDF, score >= 0.15)
 3. RAG retrieval: top 6 C# code chunks (HNSW vectors, score >= 0.2)
-4. Cached project analysis injection
+4. Explicit project/world memory injection (project root + cached project analysis)
 5. LLM call with system prompt + all context + tool definitions
 6. Tool execution with autonomy layer analysis (error recovery, stall detection)
 7. Self-verification gate: forces `dotnet_build` before responding if `.cs` files were modified
@@ -87,7 +87,7 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 
 ## Context (`context/strada-knowledge.ts`)
 
-`STRADA_SYSTEM_PROMPT` — core system prompt establishing agent identity and Strada-specific behavior. It is augmented at runtime with project context, memory, RAG results, cached analysis, and authoritative local sources such as Strada.Core and Strada.MCP when available.
+`STRADA_SYSTEM_PROMPT` — core system prompt establishing agent identity and Strada-specific behavior. It is augmented at runtime with project context, task execution memory, an explicit project/world memory layer (active project root + cached analysis), RAG results, and authoritative local sources such as Strada.Core and Strada.MCP when available.
 
 ## Key Files
 

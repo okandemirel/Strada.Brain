@@ -19,11 +19,11 @@ import type { MetricsCollector } from "../dashboard/metrics.js";
 import {
   STRADA_SYSTEM_PROMPT,
   buildProjectContext,
-  buildAnalysisSummary,
   buildDepsContext,
   buildCapabilityManifest,
   buildIdentitySection,
   buildCrashNotificationSection,
+  buildProjectWorldMemorySection,
 } from "./context/strada-knowledge.js";
 import type { IdentityState } from "../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
@@ -1693,7 +1693,14 @@ export class Orchestrator {
       contentHashes.push(...taskExecutionLayer.contentHashes);
     }
 
-    // Layer 3: Open Tasks/Goals
+    // Layer 3: Project / World Memory
+    const projectWorldLayer = await this.buildProjectWorldMemoryLayer();
+    if (projectWorldLayer) {
+      layers.push(projectWorldLayer.content);
+      contentHashes.push(...projectWorldLayer.contentHashes);
+    }
+
+    // Layer 4: Open Tasks/Goals
     const activeGoalTree = this.activeGoalTrees?.get(goalScope);
     if (activeGoalTree) {
       const pendingGoals: Array<{ task: string; status: string }> = [];
@@ -1711,7 +1718,7 @@ export class Orchestrator {
       }
     }
 
-    // Layer 4: Semantic Memory (real embedding search)
+    // Layer 5: Semantic Memory (real embedding search)
     if (this.memoryManager && userMessage) {
       try {
         const memoriesResult = await this.memoryManager.retrieve({
@@ -1816,21 +1823,6 @@ export class Orchestrator {
         }
       } catch {
         // RAG failure is non-fatal
-      }
-    }
-
-    // 7. Analysis cache injection
-    if (this.memoryManager) {
-      try {
-        const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
-        if (isOk(analysisResult)) {
-          const analysisOpt = analysisResult.value;
-          if (isSome(analysisOpt)) {
-            systemPrompt += buildAnalysisSummary(analysisOpt.value);
-          }
-        }
-      } catch {
-        // Analysis cache failure is non-fatal
       }
     }
 
@@ -5291,6 +5283,31 @@ export class Orchestrator {
       content: `## Task Execution Memory\nReference this context when continuing prior work or avoiding failed paths.\n${lines.join("\n")}`,
       contentHashes,
     };
+  }
+
+  private async buildProjectWorldMemoryLayer(): Promise<{ content: string; contentHashes: string[] } | null> {
+    if (!this.memoryManager) {
+      return buildProjectWorldMemorySection({
+        projectPath: this.projectPath,
+        analysis: null,
+      });
+    }
+
+    try {
+      const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
+      const analysis = isOk(analysisResult) && isSome(analysisResult.value)
+        ? analysisResult.value.value
+        : null;
+      return buildProjectWorldMemorySection({
+        projectPath: this.projectPath,
+        analysis,
+      });
+    } catch {
+      return buildProjectWorldMemorySection({
+        projectPath: this.projectPath,
+        analysis: null,
+      });
+    }
   }
 
   private emitToolResult(chatId: string, tc: { name: string; input: unknown }, tr: { content: string; isError?: boolean }): void {

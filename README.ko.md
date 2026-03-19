@@ -574,7 +574,7 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 명확화도 이 컨트롤 플레인의 일부입니다. worker 가 사용자 질문 초안을 제안하더라도, Strada 는 그 초안을 `ask_user` 턴으로 보내기 전에 내부 `clarification-review` 단계를 먼저 수행합니다.
 완료 판정도 이제 내부 verifier pipeline 을 거칩니다. build verification, targeted repro / failing-path 확인, log review, Strada conformance, completion review 가 모두 깨끗해야 Strada 가 종료됩니다. `/routing info` 와 dashboard 는 runtime execution traces 와 함께 phase outcomes (`approved`, `continued`, `replanned`, `blocked`) 도 보여줍니다.
 Strada 는 이제 각 작업마다 내부 execution journal 과 rollback memory 도 유지합니다. replan 은 마지막 안정 checkpoint 와 소진된 branch 를 다시 참고할 수 있고, hardcoded provider lore 없이 adaptive phase scores 를 routing 에 되돌려 줍니다. 이 score 는 verifier clean rate, rollback pressure, retry count, repeated failure fingerprints, phase-local token cost 도 함께 반영합니다.
-메모리도 이제 역할별로 분리됩니다. user profile state 는 이름/선호/autonomy 를, task execution memory 는 session summaries/open items/rollback state 를, project/world memory 는 AgentDB analysis 와 semantic retrieval 층을 담당합니다.
+메모리도 이제 역할별로 분리됩니다. user profile state 는 이름/선호/autonomy 를, task execution memory 는 session summaries/open items/rollback state 를 담당하고, project/world memory 는 활성 project root 와 cached AgentDB analysis 에서 explicit prompt layer 로 주입됩니다. semantic retrieval 은 live 관련 memory 를 계속 별도로 더합니다.
 
 **중요:** `OPENAI_AUTH_MODE=chatgpt-subscription`은 Strada 내부의 OpenAI 대화 턴에만 적용됩니다. OpenAI API나 임베딩 쿼터를 제공하지 않습니다. `EMBEDDING_PROVIDER=openai`를 사용하려면 여전히 `OPENAI_API_KEY`가 필요합니다.
 Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니다. 어떤 제공자가 불완전한 분석을 반환하거나, 다음에 무엇을 해야 하는지 사용자에게 묻거나, 충분한 근거 없이 넓은 완료 주장을 하면 Strada가 루프를 다시 열고 추가 점검/리뷰를 수행한 뒤, 결과가 검증되었거나 실제 외부 블로커만 남았을 때만 사용자에게 응답합니다.

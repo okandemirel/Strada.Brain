@@ -19,6 +19,10 @@ vi.mock("./agents/context/strada-knowledge.js", () => ({
   STRADA_SYSTEM_PROMPT: "Test system prompt",
   buildProjectContext: vi.fn().mockReturnValue("\nProject context"),
   buildAnalysisSummary: vi.fn().mockReturnValue(""),
+  buildProjectWorldMemorySection: vi.fn().mockImplementation((params: { projectPath: string; analysis?: { modules?: Array<{ name: string }> } | null }) => ({
+    content: `## Project/World Memory\nActive project root: ${params.projectPath}\n${params.analysis?.modules?.[0]?.name ?? "No cached analysis"}`,
+    contentHashes: [params.projectPath, params.analysis?.modules?.[0]?.name ?? "No cached analysis"],
+  })),
   buildDepsContext: vi.fn().mockReturnValue(""),
   buildCapabilityManifest: vi.fn().mockReturnValue(""),
 }));

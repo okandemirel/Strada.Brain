@@ -383,6 +383,34 @@ export function buildAnalysisSummary(analysis: StradaProjectAnalysis): string {
   return lines.join("\n") + "\n";
 }
 
+export function buildProjectWorldMemorySection(params: {
+  projectPath: string;
+  analysis?: StradaProjectAnalysis | null;
+}): { content: string; contentHashes: string[] } {
+  const lines: string[] = [
+    "## Project/World Memory",
+    `Active project root: ${params.projectPath}`,
+    "Treat this as durable project context. Use it to stay grounded in the real repo structure and cached world facts.",
+  ];
+  const contentHashes: string[] = [params.projectPath];
+
+  if (params.analysis) {
+    const analysisSummary = buildAnalysisSummary(params.analysis).trim();
+    lines.push("", analysisSummary);
+    contentHashes.push(analysisSummary);
+  } else {
+    lines.push(
+      "",
+      "No cached project analysis is currently available. If precise architecture facts are needed, inspect the repo or run project analysis before claiming them.",
+    );
+  }
+
+  return {
+    content: `${lines.join("\n")}\n`,
+    contentHashes,
+  };
+}
+
 /**
  * Build a context section describing which Strada packages are available.
  * Prevents the LLM from hallucinating APIs that aren't installed.

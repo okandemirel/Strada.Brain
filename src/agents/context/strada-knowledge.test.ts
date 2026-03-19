@@ -5,10 +5,12 @@ import {
   buildIdentitySection,
   buildCrashNotificationSection,
   buildProjectContext,
+  buildProjectWorldMemorySection,
 } from "./strada-knowledge.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { makeIdentityState, makeGoalTree } from "../../test-helpers.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
+import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 
 describe("buildCapabilityManifest", () => {
   it("returns a non-empty string", () => {
@@ -172,6 +174,46 @@ describe("buildProjectContext", () => {
     expect(result).toContain("verify by reading/searching the file");
     expect(result).toContain("does not exist");
     expect(result).toContain("multiple files could match");
+  });
+});
+
+describe("buildProjectWorldMemorySection", () => {
+  it("combines project root and cached analysis into a single world-memory section", () => {
+    const analysis: StradaProjectAnalysis = {
+      modules: [{
+        name: "Combat",
+        className: "CombatModuleConfig",
+        filePath: "Assets/Modules/Combat/CombatModuleConfig.cs",
+        namespace: "Game.Combat",
+        systems: [],
+        services: [],
+        dependencies: [],
+        lineNumber: 1,
+      }],
+      systems: [],
+      components: [],
+      services: [],
+      mediators: [],
+      controllers: [],
+      events: [],
+      dependencies: [],
+      asmdefs: [],
+      prefabs: [],
+      scenes: [],
+      csFileCount: 12,
+      analyzedAt: new Date("2026-03-19T00:00:00.000Z"),
+    };
+
+    const result = buildProjectWorldMemorySection({
+      projectPath: "/projects/MyGame",
+      analysis,
+    });
+
+    expect(result.content).toContain("## Project/World Memory");
+    expect(result.content).toContain("Active project root: /projects/MyGame");
+    expect(result.content).toContain("## Cached Project Analysis");
+    expect(result.content).toContain("Combat");
+    expect(result.contentHashes.length).toBeGreaterThanOrEqual(2);
   });
 });
 

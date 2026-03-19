@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Autonomous Agent Overhaul**: 3-layer autonomous bypass (system prompt injection, ask_user/show_plan tool auto-resolve, DaemonSecurityPolicy override with time-based expiry)
 - **Verifier Pipeline**: explicit build/log/targeted-repro/conformance/completion-review pipeline with verifier-driven continue vs replan outcomes
 - **Execution Journal + Adaptive Phase Scores**: PAOR now keeps branch/rollback memory per task and feeds runtime phase outcomes back into routing without hardcoded provider lore, including verifier clean rate, rollback pressure, retry count, repeated failure fingerprints, and phase-local token cost
-- **Memory Role Split**: User profile state is now separated from task execution memory, while session summaries, open items, verifier memory, and rollback context persist outside the persona/preferences layer
+- **Memory Role Split**: User profile state is now separated from task execution memory, while session summaries, open items, verifier memory, and rollback context persist outside the persona/preferences layer. Project/world memory is now also surfaced explicitly as its own prompt layer from the active project root plus cached project analysis
 - **PAOR Unification**: Removed TaskPlanner conflicting PLANNING_PROMPT, background tasks now use full PAOR (reflect/replan), extracted shared buildSystemPromptWithContext()
 - **Strada.MCP Detection**: Automatic detection of sibling Strada.MCP installation with system prompt awareness (76 tools)
 - **TierRouter Facade**: ProviderRouter wraps TierRouter as internal sub-component for delegation compatibility

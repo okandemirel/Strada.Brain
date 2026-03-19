@@ -30,6 +30,10 @@ vi.mock("./context/strada-knowledge.js", () => ({
   STRADA_SYSTEM_PROMPT: "Test system prompt.",
   buildProjectContext: () => "",
   buildAnalysisSummary: () => "",
+  buildProjectWorldMemorySection: (params: { projectPath: string; analysis?: { modules?: Array<{ name: string }> } | null }) => ({
+    content: `## Project/World Memory\nActive project root: ${params.projectPath}\n${params.analysis?.modules?.[0]?.name ?? "No cached analysis"}`,
+    contentHashes: [params.projectPath, params.analysis?.modules?.[0]?.name ?? "No cached analysis"],
+  }),
   buildDepsContext: () => "",
   buildCapabilityManifest: () => "\n## Agent Capability Manifest\nGoal Decomposition\nLearning Pipeline\nIntrospection\n",
 }));
@@ -703,6 +707,72 @@ describe("Orchestrator", () => {
     expect(prompt).toContain("Avoid assuming serialized YAML proves Unity runtime correctness.");
     expect(prompt).not.toContain("Legacy profile summary should not be the primary task memory.");
     db.close();
+  });
+
+  it("injects project/world memory separately from task execution memory", async () => {
+    const mockMemMgr = {
+      getCachedAnalysis: vi.fn().mockResolvedValue({
+        kind: "ok",
+        value: {
+          kind: "some",
+          value: {
+            modules: [{
+              name: "Combat",
+              className: "CombatModuleConfig",
+              filePath: "Assets/Modules/Combat/CombatModuleConfig.cs",
+              namespace: "Game.Combat",
+              systems: [],
+              services: [],
+              dependencies: [],
+              lineNumber: 1,
+            }],
+            systems: [],
+            components: [],
+            services: [],
+            mediators: [],
+            controllers: [],
+            events: [],
+            dependencies: [],
+            asmdefs: [],
+            prefabs: [],
+            scenes: [],
+            csFileCount: 12,
+            analyzedAt: new Date("2026-03-19T00:00:00.000Z"),
+          },
+        },
+      }),
+      retrieve: vi.fn().mockResolvedValue({ kind: "ok", value: [] }),
+    };
+
+    const memoryOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      memoryManager: mockMemMgr as any,
+    });
+
+    const promise = memoryOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-project-memory",
+      userId: "user-1",
+      text: "Continue fixing the Unity level issue",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const prompt = String(mockProvider.chat.mock.calls.at(-1)?.[0] ?? "");
+    expect(prompt).toContain("## Project/World Memory");
+    expect(prompt).toContain("Active project root: /tmp/test-project");
+    expect(prompt).toContain("Combat");
+    expect(prompt).not.toContain("## Cached Project Analysis");
   });
 
   it("stores periodic session summaries under the stable profile identity", async () => {
