@@ -27,6 +27,12 @@ const DEBUG_TASK = {
   criticality: "high",
 } as const;
 
+const IMPLEMENTATION_TASK = {
+  type: "implementation",
+  complexity: "moderate",
+  criticality: "medium",
+} as const;
+
 describe("verifier-pipeline", () => {
   it("continues when compilable changes still need clean verification", () => {
     const plan = planVerifierPipeline({
@@ -112,6 +118,138 @@ describe("verifier-pipeline", () => {
     expect(plan.evidence.hasTerminalFailureReport).toBe(true);
     expect(plan.reviewRequired).toBe(false);
     expect(plan.initialDecision).toBe("approve");
+  });
+
+  it("forces completion review for read-only investigation work even when static verifier checks are clean", () => {
+    const plan = planVerifierPipeline({
+      prompt: "Fix the runtime issue and keep going until the real issue is verified",
+      draft: `Build successful. Strada.Core compatible fixes are complete.
+
+Remaining potential issues:
+- ArrowInputSystem may still scan every arrow on input.
+- If the freeze continues, inspect Unity Profiler CPU Usage and Call Stack.
+DONE`,
+      state: createState({
+        stepResults: [
+          { toolName: "file_read", success: true, summary: "Read ArrowInputSystem.cs", timestamp: Date.now() - 300 },
+          { toolName: "file_read", success: true, summary: "Read GameRenderer.cs", timestamp: Date.now() - 200 },
+        ],
+      }),
+      task: IMPLEMENTATION_TASK,
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: Date.now() - 100,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-debug-review",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+    expect(plan.reviewRequired).toBe(true);
+    expect(plan.initialDecision).toBe("continue");
+  });
+
+  it("keeps the verifier pipeline open when completion review approves only a partial closure", () => {
+    const plan = planVerifierPipeline({
+      prompt: "Analyze why the Unity editor freezes and keep going until the real issue is verified",
+      draft: "Build succeeded.\nDONE",
+      state: createState({
+        stepResults: [
+          { toolName: "file_read", success: true, summary: "Read ArrowInputSystem.cs", timestamp: Date.now() - 300 },
+          { toolName: "dotnet_build", success: true, summary: "Build passed", timestamp: Date.now() - 100 },
+        ],
+      }),
+      task: DEBUG_TASK,
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["src/runtime/arrow-input-system.ts"]),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: Date.now() - 100,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-partial-closure",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+    const result = finalizeVerifierPipelineReview(plan, {
+      decision: "approve",
+      summary: "The build fix is clean, but the runtime freeze still has open hypotheses.",
+      closureStatus: "partial",
+      openInvestigations: [
+        "ArrowInputSystem input path still needs profiler-backed verification.",
+      ],
+      findings: [],
+      requiredActions: [
+        "Continue with runtime-path inspection before declaring the task complete.",
+      ],
+      reviews: {
+        security: "clean",
+        code: "clean",
+        simplify: "clean",
+      },
+      logStatus: "clean",
+    });
+
+    expect(result.decision).toBe("continue");
+    expect(result.gate).toContain("[COMPLETION REVIEW REQUIRED]");
+    expect(result.gate).toContain("Open investigations:");
+  });
+
+  it("keeps the verifier pipeline open when the reviewer omits closure fields on a hedged success draft", () => {
+    const draft = `Build successful. Strada.Core compatible fixes are complete.
+
+Remaining potential issues:
+- ArrowInputSystem may still scan every arrow on input.
+- If the freeze continues, inspect Unity Profiler CPU Usage and Call Stack.
+DONE`;
+
+    const plan = planVerifierPipeline({
+      prompt: "Fix the runtime issue and keep going until the real issue is verified",
+      draft,
+      state: createState({
+        stepResults: [
+          { toolName: "file_read", success: true, summary: "Read ArrowInputSystem.cs", timestamp: Date.now() - 300 },
+          { toolName: "file_read", success: true, summary: "Read GameRenderer.cs", timestamp: Date.now() - 200 },
+        ],
+      }),
+      task: IMPLEMENTATION_TASK,
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: Date.now() - 100,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-hedged-approve",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+    const result = finalizeVerifierPipelineReview(plan, {
+      decision: "approve",
+      summary: "The compile fix is clean.",
+      findings: [],
+      requiredActions: [],
+      reviews: {
+        security: "clean",
+        code: "clean",
+        simplify: "clean",
+      },
+      logStatus: "clean",
+    }, draft);
+
+    expect(result.decision).toBe("continue");
+    expect(result.gate).toContain("[COMPLETION REVIEW REQUIRED]");
   });
 
   it("turns a completion review replan decision into a verifier replan gate", () => {

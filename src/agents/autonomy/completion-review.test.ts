@@ -5,6 +5,7 @@ import {
   buildCompletionReviewGate,
   collectCompletionReviewEvidence,
   hasOpenReviewFindings,
+  hasOpenReviewFindingsForDraft,
   parseCompletionReviewDecision,
   shouldRunCompletionReview,
 } from "./completion-review.js";
@@ -74,7 +75,7 @@ describe("completion-review", () => {
 
   it("parses json review decisions and builds a gate prompt", () => {
     const decision = parseCompletionReviewDecision(`\`\`\`json
-{"decision":"continue","summary":"Logs still show runtime problems.","findings":["Unhandled error remained in console output."],"requiredActions":["Inspect the console output and rerun verification."],"reviews":{"security":"clean","code":"issues","simplify":"clean"},"logStatus":"issues"}
+{"decision":"continue","summary":"Logs still show runtime problems.","findings":["Unhandled error remained in console output."],"requiredActions":["Inspect the console output and rerun verification."],"closureStatus":"partial","openInvestigations":["The runtime failure path still needs confirmation after the latest patch."],"reviews":{"security":"clean","code":"issues","simplify":"clean"},"logStatus":"issues"}
 \`\`\``);
     expect(hasOpenReviewFindings(decision)).toBe(true);
 
@@ -106,6 +107,8 @@ describe("completion-review", () => {
     expect(gate).toContain("[COMPLETION REVIEW REQUIRED]");
     expect(gate).toContain("Unhandled error remained in console output.");
     expect(gate).toContain("Security review: clean");
+    expect(gate).toContain("Closure status: partial");
+    expect(gate).toContain("Open investigations:");
   });
 
   it("forces review when the draft makes a broad completion claim after tool activity", () => {
@@ -128,6 +131,36 @@ describe("completion-review", () => {
     });
 
     expect(shouldRunCompletionReview(evidence, "All 100 levels analyzed successfully.")).toBe(true);
+  });
+
+  it("forces review when a read-only investigation draft claims success but leaves open runtime hypotheses", () => {
+    const evidence = collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [
+          { toolName: "file_read", success: true, summary: "Read ArrowInputSystem.cs", timestamp: Date.now() - 500 },
+          { toolName: "file_read", success: true, summary: "Read GameRenderer.cs", timestamp: Date.now() - 250 },
+        ],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: Date.now() - 100,
+      },
+      chatId: "chat-open-investigation",
+      taskStartedAtMs: Date.now() - 1000,
+      logEntries: [],
+    });
+
+    const draft = `Build successful. Strada.Core compatible fixes are complete.
+
+Remaining potential issues:
+- ArrowInputSystem may still scan every arrow on input.
+- If the freeze continues, inspect Unity Profiler CPU Usage and Call Stack.
+DONE`;
+
+    expect(shouldRunCompletionReview(evidence, draft)).toBe(true);
   });
 
   it("builds an autonomy gate when the draft throws the next step back to the user", () => {
@@ -214,5 +247,36 @@ describe("completion-review", () => {
 
     expect(buildAutonomyDeflectionGate(draft, evidence, "Show me the plan before you touch the code.")).toBeNull();
     expect(shouldRunCompletionReview(evidence, draft, "Show me the plan before you touch the code.")).toBe(false);
+  });
+
+  it("treats approve decisions with partial closure as still open", () => {
+    expect(hasOpenReviewFindings({
+      decision: "approve",
+      summary: "The build fix landed, but the runtime freeze still has open hypotheses.",
+      closureStatus: "partial",
+      openInvestigations: ["ArrowInputSystem input path still needs profiler-backed verification."],
+      reviews: {
+        security: "clean",
+        code: "clean",
+        simplify: "clean",
+      },
+      logStatus: "clean",
+    })).toBe(true);
+  });
+
+  it("keeps bare approve decisions open when the draft still leaves runtime investigations unresolved", () => {
+    expect(hasOpenReviewFindingsForDraft({
+      decision: "approve",
+      summary: "The build fix landed cleanly.",
+      reviews: {
+        security: "clean",
+        code: "clean",
+        simplify: "clean",
+      },
+      logStatus: "clean",
+    }, `Build successful. Remaining potential issues:
+- ArrowInputSystem may still scan every arrow on input.
+- If the freeze continues, inspect Unity Profiler CPU Usage and Call Stack.
+DONE`)).toBe(true);
   });
 });

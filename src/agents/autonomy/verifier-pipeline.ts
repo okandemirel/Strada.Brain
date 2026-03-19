@@ -6,7 +6,7 @@ import {
   buildCompletionReviewGate,
   buildCompletionReviewRequest,
   collectCompletionReviewEvidence,
-  hasOpenReviewFindings,
+  hasOpenReviewFindingsForDraft,
   shouldRunCompletionReview,
 } from "./completion-review.js";
 import type { VerificationState } from "./self-verification.js";
@@ -163,11 +163,12 @@ export function buildVerifierPipelineReviewRequest(params: {
 export function finalizeVerifierPipelineReview(
   plan: VerifierPipelinePlan,
   decision: CompletionReviewDecision | null,
+  draft: string | null | undefined = "",
 ): VerifierPipelineResult {
-  const reviewCheck: VerifierCheck = buildCompletionReviewCheck(decision);
+  const reviewCheck: VerifierCheck = buildCompletionReviewCheck(decision, draft);
   const checks = [...plan.checks, reviewCheck];
 
-  if (!hasOpenReviewFindings(decision) || decision?.decision === "approve") {
+  if (!hasOpenReviewFindingsForDraft(decision, draft)) {
     return {
       decision: "approve",
       summary: decision?.summary?.trim() || "Verifier review approved completion.",
@@ -361,8 +362,11 @@ function buildLogVerifierCheck(evidence: VerifierPipelineEvidence): VerifierChec
   };
 }
 
-function buildCompletionReviewCheck(decision: CompletionReviewDecision | null): VerifierCheck {
-  if (!hasOpenReviewFindings(decision) || decision?.decision === "approve") {
+function buildCompletionReviewCheck(
+  decision: CompletionReviewDecision | null,
+  draft: string | null | undefined = "",
+): VerifierCheck {
+  if (!hasOpenReviewFindingsForDraft(decision, draft)) {
     return {
       name: "completion-review",
       status: "clean",

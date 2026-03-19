@@ -19,6 +19,8 @@ export interface CompletionReviewDecision {
   readonly summary?: string;
   readonly findings?: readonly string[];
   readonly requiredActions?: readonly string[];
+  readonly closureStatus?: "verified" | "partial" | "unverified";
+  readonly openInvestigations?: readonly string[];
   readonly reviews?: {
     readonly security?: string;
     readonly code?: string;
@@ -41,9 +43,10 @@ Approve only when:
 1. Remaining failures are either resolved or honestly surfaced as blockers.
 2. Recent console/log issues do not indicate unresolved errors.
 3. The implementation is coherent, safe enough for the task, and not obviously overcomplicated.
+4. The draft does not leave open runtime hypotheses, likely causes, or "remaining potential issues" that Strada should continue investigating internally.
 
 Return JSON only:
-{"decision":"approve"|"continue"|"replan"|"fail","summary":"short summary","findings":["..."],"requiredActions":["..."],"reviews":{"security":"clean|issues|not_applicable","code":"clean|issues|not_applicable","simplify":"clean|issues|not_applicable"},"logStatus":"clean|issues|not_applicable"}`;
+{"decision":"approve"|"continue"|"replan"|"fail","summary":"short summary","findings":["..."],"requiredActions":["..."],"closureStatus":"verified"|"partial"|"unverified","openInvestigations":["..."],"reviews":{"security":"clean|issues|not_applicable","code":"clean|issues|not_applicable","simplify":"clean|issues|not_applicable"},"logStatus":"clean|issues|not_applicable"}`;
 
 const INSPECTION_TOOL_NAMES = new Set([
   "file_read",
@@ -69,6 +72,10 @@ const MUTATION_TOOL_NAMES = new Set([
 const USER_DEFLECTION_RE = /\b(?:what should i do|what do you want me to do|do you want me to|would you like me to|should i\b|ne yapmalıyım|ne yapayım|ister misin|ekran görüntüsü|screenshot)\b/iu;
 const SCOPE_QUALIFIER_RE = /\b(?:all|every|entire|whole|full|tüm|hepsi|bütün)\b/iu;
 const SCOPE_COMPLETION_VERB_RE = /\b(?:verified|reviewed|analy[sz]ed|complete(?:d)?|tamamlandı|doğrulandı|analiz(?:i)? tamamlandı)\b/iu;
+const COMPLETION_CLAIM_RE = /\b(?:done|fixed|resolved|successful(?:ly)?|succeeded|complete(?:d)?|verified|root cause|tamamlandı|doğrulandı)\b/iu;
+const OPEN_INVESTIGATION_HEADING_RE = /^(?:#{1,6}\s*)?(?:remaining potential issues|potential issues|open investigations|possible causes|likely causes|next checks?)\b/imu;
+const HEDGED_RUNTIME_RE = /\b(?:may|might|could|possibly|potential(?:ly)?|likely)\b.*\b(?:runtime|freeze|profiler|call stack|cpu usage|frame|performance|entity scan|memory)\b|\bif\b.{0,40}\b(?:continues|still happens|persists)\b/iu;
+const FOLLOW_UP_CHECK_RE = /\b(?:inspect|check|profile|verify|confirm|investigat(?:e|ing))\b.*\b(?:profiler|call stack|cpu usage|runtime|frame|performance|freeze|entity scan|memory)\b/iu;
 const PLAN_HEADING_RE = /^(?:#{1,6}\s*)?(?:plan|execution plan|approach|next steps?)\b/iu;
 const INTAKE_HEADING_RE = /^(?:#{1,6}\s*)?(?:minimum inputs|requirements?|objective|scope|project health check)\b/iu;
 const STRUCTURED_STEP_RE = /(?:^|\n)\s*(?:\d+\.\s+|[A-D]\)\s+|[-*]\s+)(?:run|read|inspect|search|trace|collect|get|locate|identify|check|verify|create|update|fix|branch|treat|add|remove|ask|confirm|clarify)\b/gimu;
@@ -197,6 +204,7 @@ export function buildCompletionReviewRequest(params: {
     "",
     "Reject unsupported scope claims. If the draft claims broad completion (for example all/everything/full analysis/verified) but the evidence is too thin, force continue or replan.",
     "Reject drafts that ask the user what to do next, ask for screenshots, or defer obvious next investigations back to the user without a real blocker.",
+    "If the draft says the build or code fix succeeded but still lists likely causes, remaining potential issues, or profiler/runtime checks that Strada should continue investigating, mark closureStatus as partial or unverified and keep the task internal.",
     "",
     "Decide whether Strada should approve completion, continue execution, or replan.",
   ].join("\n");
@@ -238,6 +246,7 @@ export function buildCompletionReviewGate(
 ): string {
   const findings = decision?.findings?.filter(Boolean) ?? [];
   const requiredActions = decision?.requiredActions?.filter(Boolean) ?? [];
+  const openInvestigations = decision?.openInvestigations?.filter(Boolean) ?? [];
   const reviews = decision?.reviews;
   const logLines = evidence.recentLogIssues.slice(-5).map((entry) => `- [${entry.level}] ${entry.message}`);
   const summary = decision?.summary?.trim() || "Strada's completion review is not clean yet.";
@@ -246,16 +255,21 @@ export function buildCompletionReviewGate(
     reviews?.code ? `- Code review: ${reviews.code}` : null,
     reviews?.simplify ? `- Simplify review: ${reviews.simplify}` : null,
     decision?.logStatus ? `- Log review: ${decision.logStatus}` : null,
+    decision?.closureStatus ? `- Closure status: ${decision.closureStatus}` : null,
   ].filter((line): line is string => Boolean(line));
+  const nextAction = openInvestigations.length > 0
+    ? "Finish the open investigations, confirm or eliminate the remaining runtime hypotheses, and only then declare DONE."
+    : "Inspect the remaining console/log issues, perform the required security/code/simplify review work, run the relevant verification again if code changed, and continue. Do not declare DONE until this review comes back clean.";
 
   return [
     "[COMPLETION REVIEW REQUIRED] Strada's final review has not cleared this task yet.",
     summary,
     reviewLines.length > 0 ? `Review status:\n${reviewLines.join("\n")}` : "",
     findings.length > 0 ? `Findings:\n${findings.map((finding) => `- ${finding}`).join("\n")}` : "",
+    openInvestigations.length > 0 ? `Open investigations:\n${openInvestigations.map((item) => `- ${item}`).join("\n")}` : "",
     requiredActions.length > 0 ? `Required actions:\n${requiredActions.map((action) => `- ${action}`).join("\n")}` : "",
     logLines.length > 0 ? `Recent log issues:\n${logLines.join("\n")}` : "",
-    "Inspect the remaining console/log issues, perform the required security/code/simplify review work, run the relevant verification again if code changed, and continue. Do not declare DONE until this review comes back clean.",
+    nextAction,
   ]
     .filter((section) => section.length > 0)
     .join("\n\n");
@@ -294,6 +308,12 @@ function draftNeedsReview(
     return false;
   }
   if (classifyAutonomyDrift(normalized, prompt) !== "none") {
+    return true;
+  }
+  if (draftLeavesOpenInvestigations(normalized)) {
+    return evidence.totalStepCount > 0;
+  }
+  if (draftClaimsCompletion(normalized) && evidence.inspectionStepCount > 0) {
     return true;
   }
   return SCOPE_QUALIFIER_RE.test(normalized)
@@ -338,11 +358,42 @@ function isVerificationStep(toolName: string, summary: string): boolean {
 }
 
 export function hasOpenReviewFindings(decision: CompletionReviewDecision | null): boolean {
+  return hasOpenReviewFindingsForDraft(decision);
+}
+
+export function hasOpenReviewFindingsForDraft(
+  decision: CompletionReviewDecision | null,
+  draft: string | null | undefined = "",
+): boolean {
   if (!decision) {
+    return true;
+  }
+  const openInvestigations = decision.openInvestigations?.filter(Boolean) ?? [];
+  if (decision.closureStatus && decision.closureStatus !== "verified") {
+    return true;
+  }
+  if (openInvestigations.length > 0) {
+    return true;
+  }
+  if (decision.decision === "approve" && draftLeavesOpenInvestigations(draft)) {
     return true;
   }
   if (decision.decision === "approve") {
     return false;
   }
   return true;
+}
+
+export function draftLeavesOpenInvestigations(draft: string | null | undefined): boolean {
+  const normalized = draft?.trim() ?? "";
+  if (!normalized) {
+    return false;
+  }
+  return OPEN_INVESTIGATION_HEADING_RE.test(normalized)
+    || HEDGED_RUNTIME_RE.test(normalized)
+    || FOLLOW_UP_CHECK_RE.test(normalized);
+}
+
+function draftClaimsCompletion(draft: string): boolean {
+  return COMPLETION_CLAIM_RE.test(draft);
 }

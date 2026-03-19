@@ -282,6 +282,25 @@ describe("Orchestrator", () => {
       stopReason: "end_turn",
       usage: { inputTokens: 12, outputTokens: 18 },
     });
+    reviewerProvider.chat.mockResolvedValueOnce({
+      text: JSON.stringify({
+        decision: "approve",
+        summary: "Completion review approved the executor result.",
+        closureStatus: "verified",
+        openInvestigations: [],
+        findings: [],
+        requiredActions: [],
+        reviews: {
+          security: "clean",
+          code: "clean",
+          simplify: "clean",
+        },
+        logStatus: "clean",
+      }),
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 8, outputTokens: 12 },
+    });
     synthProvider.chat.mockResolvedValueOnce({
       text: "Supervisor final answer",
       toolCalls: [],
@@ -337,6 +356,7 @@ describe("Orchestrator", () => {
 
     expect(plannerProvider.chat).toHaveBeenCalledTimes(1);
     expect(executorProvider.chat).toHaveBeenCalledTimes(1);
+    expect(reviewerProvider.chat).toHaveBeenCalledTimes(1);
     expect(synthProvider.chat).toHaveBeenCalledTimes(1);
     expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: planner");
     expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Provider: planner");
@@ -526,8 +546,9 @@ describe("Orchestrator", () => {
     await promise;
 
     expect(plannerProvider.chat).toHaveBeenCalledTimes(1);
-    expect(executorProvider.chat).toHaveBeenCalledTimes(2);
-    expect(reviewerProvider.chat).not.toHaveBeenCalled();
+    expect(executorProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(executorProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: executor");
+    expect(executorProvider.chat.mock.calls[1]?.[0]).toContain("Current worker role: executor");
     expect(synthProvider.chat).toHaveBeenCalledTimes(1);
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-pinned", "Pinned tool-turn response");
   });
@@ -1882,7 +1903,7 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    expect(mockProvider.chat).toHaveBeenCalledTimes(4);
+    expect(mockProvider.chat).toHaveBeenCalledTimes(5);
     expect(mockProvider.chat.mock.calls[2]?.[1]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1898,6 +1919,127 @@ describe("Orchestrator", () => {
     expect(mockChannel.sendMarkdown).not.toHaveBeenCalledWith(
       "chat-autonomy-review",
       expect.stringContaining("What should I do next?"),
+    );
+  });
+
+  it("keeps partial-closure runtime hypotheses internal until the real issue is verified", async () => {
+    const runtimeOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Inspecting the runtime path first.",
+        toolCalls: [{ id: "tc-runtime-read-1", name: "file_read", input: { path: "Assets/Scripts/ArrowInputSystem.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: `Build successful. Strada.Core compatible fixes are complete.
+
+Remaining potential issues:
+- ArrowInputSystem may still scan every arrow on input.
+- GameRenderer could still iterate all ECS entities each frame.
+- If the freeze continues, inspect Unity Profiler CPU Usage and Call Stack.
+DONE`,
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "The compile fix is clean, but the runtime freeze still has open hypotheses.",
+          closureStatus: "partial",
+          openInvestigations: [
+            "ArrowInputSystem input path still needs profiler-backed verification.",
+            "GameRenderer frame cost still needs runtime confirmation.",
+          ],
+          findings: [],
+          requiredActions: [
+            "Continue investigating the runtime failing path before declaring completion.",
+          ],
+          reviews: {
+            security: "clean",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Continuing with runtime-path inspection.",
+        toolCalls: [{ id: "tc-runtime-read-2", name: "file_read", input: { path: "Assets/Scripts/GameRenderer.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Root cause verified: ArrowInputSystem performs an O(n) entity scan on every input turn and was causing the freeze.\nDONE",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "The real runtime issue is now verified cleanly.",
+          closureStatus: "verified",
+          openInvestigations: [],
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "clean",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const promise = runtimeOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-partial-runtime-closure",
+      userId: "user1",
+      text: "Analyze why the Unity editor freezes and keep going until the real issue is verified",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const flattenedMessages = mockProvider.chat.mock.calls.flatMap((call) => {
+      const messages = call[1] as Array<{ role: string; content: unknown }> | undefined;
+      return messages ?? [];
+    });
+    expect(flattenedMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("[COMPLETION REVIEW REQUIRED]"),
+        }),
+      ]),
+    );
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-partial-runtime-closure",
+      expect.stringContaining("Root cause verified"),
+    );
+    expect(mockChannel.sendMarkdown).not.toHaveBeenCalledWith(
+      "chat-partial-runtime-closure",
+      expect.stringContaining("Remaining potential issues"),
     );
   });
 
@@ -2060,8 +2202,18 @@ describe("Orchestrator", () => {
       })
       .mockResolvedValueOnce({
         text: JSON.stringify({
-          decision: "none",
-          reason: "This draft is a normal final response.",
+          decision: "approve",
+          summary: "The issue is isolated cleanly.",
+          closureStatus: "verified",
+          openInvestigations: [],
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "not_applicable",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
         }),
         toolCalls: [],
         stopReason: "end_turn",
@@ -2139,8 +2291,18 @@ describe("Orchestrator", () => {
       })
       .mockResolvedValueOnce({
         text: JSON.stringify({
-          decision: "none",
-          reason: "This draft is a normal final response.",
+          decision: "approve",
+          summary: "The issue is isolated cleanly.",
+          closureStatus: "verified",
+          openInvestigations: [],
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "not_applicable",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
         }),
         toolCalls: [],
         stopReason: "end_turn",
@@ -2683,6 +2845,120 @@ describe("Orchestrator", () => {
     expect(toolResultBlock?.content).toContain("Autonomous question review (background mode)");
     expect(toolResultBlock?.content).toContain("Selected \"Proceed\"");
     expect(toolResultBlock?.is_error).toBe(false);
+  });
+
+  it("keeps partial-closure runtime hypotheses internal during background execution", async () => {
+    const backgroundOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Inspecting the runtime path first.",
+        toolCalls: [{ id: "tc-bg-runtime-read-1", name: "file_read", input: { path: "Assets/Scripts/ArrowInputSystem.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: `Build successful. Strada.Core compatible fixes are complete.
+
+Remaining potential issues:
+- ArrowInputSystem may still scan every arrow on input.
+- If the freeze continues, inspect Unity Profiler CPU Usage and Call Stack.
+DONE`,
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "The compile fix is clean, but the runtime freeze still has open hypotheses.",
+          closureStatus: "partial",
+          openInvestigations: [
+            "ArrowInputSystem input path still needs profiler-backed verification.",
+          ],
+          findings: [],
+          requiredActions: [
+            "Continue investigating the runtime failing path before declaring completion.",
+          ],
+          reviews: {
+            security: "clean",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Continuing with runtime-path inspection.",
+        toolCalls: [{ id: "tc-bg-runtime-read-2", name: "file_read", input: { path: "Assets/Scripts/GameRenderer.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Root cause verified: ArrowInputSystem performs an O(n) entity scan on every input turn and was causing the freeze.\nDONE",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "The real runtime issue is now verified cleanly.",
+          closureStatus: "verified",
+          openInvestigations: [],
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "clean",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const onProgress = vi.fn();
+    const result = await backgroundOrch.runBackgroundTask(
+      "Analyze why the Unity editor freezes and keep going until the real issue is verified",
+      {
+        chatId: "bg-partial-runtime-closure",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress,
+      },
+    );
+
+    const flattenedMessages = mockProvider.chat.mock.calls.flatMap((call) => {
+      const messages = call[1] as Array<{ role: string; content: unknown }> | undefined;
+      return messages ?? [];
+    });
+    expect(flattenedMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("[COMPLETION REVIEW REQUIRED]"),
+        }),
+      ]),
+    );
+    expect(result).toContain("Root cause verified");
+    expect(result).not.toContain("Remaining potential issues");
   });
 
   it("auto-approves safe write operations during background execution without waiting", async () => {
@@ -4335,6 +4611,25 @@ describe("Orchestrator", () => {
         .mockResolvedValueOnce(createToolResponse("Step 2", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Step 3", "file_read"))
         .mockResolvedValueOnce(createToolResponse("All steps succeeded.\n**DONE**", undefined))
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            decision: "approve",
+            summary: "The read-only background analysis completed cleanly.",
+            closureStatus: "verified",
+            openInvestigations: [],
+            findings: [],
+            requiredActions: [],
+            reviews: {
+              security: "not_applicable",
+              code: "clean",
+              simplify: "clean",
+            },
+            logStatus: "clean",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 8 },
+        })
         .mockResolvedValueOnce(createToolResponse("Task complete", undefined));
       mockProvider.chat = chatSpy;
 
@@ -4600,7 +4895,26 @@ describe("Orchestrator", () => {
         .mockResolvedValueOnce(planResponse)
         .mockResolvedValueOnce(execResponse)
         .mockResolvedValueOnce(execResponse2)
-        .mockResolvedValueOnce(reflectDoneResponse);
+        .mockResolvedValueOnce(reflectDoneResponse)
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            decision: "approve",
+            summary: "The requested files were analyzed cleanly.",
+            closureStatus: "verified",
+            openInvestigations: [],
+            findings: [],
+            requiredActions: [],
+            reviews: {
+              security: "not_applicable",
+              code: "clean",
+              simplify: "clean",
+            },
+            logStatus: "clean",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 20, outputTokens: 10 },
+        });
 
       const promise = orch.handleMessage({
         channelType: "cli",
@@ -4612,8 +4926,8 @@ describe("Orchestrator", () => {
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      // All 4 provider calls should have been made (plan + 2 exec + reflect)
-      expect(mockProvider.chat).toHaveBeenCalledTimes(4);
+      // Plan + 2 execution turns + reflect + completion review
+      expect(mockProvider.chat).toHaveBeenCalledTimes(5);
       // Tool was executed 3 times
       expect(readTool.execute).toHaveBeenCalledTimes(3);
       // Final user-facing response strips internal DONE markers

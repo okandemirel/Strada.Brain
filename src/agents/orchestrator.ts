@@ -4771,6 +4771,7 @@ export class Orchestrator {
       const result = finalizeVerifierPipelineReview(
         plan,
         parseCompletionReviewDecision(reviewResponse.text),
+        params.draft,
       );
       this.recordPhaseOutcome({
         chatId: params.chatId,
@@ -4815,7 +4816,7 @@ export class Orchestrator {
       });
     }
 
-    const fallbackResult = finalizeVerifierPipelineReview(plan, null);
+    const fallbackResult = finalizeVerifierPipelineReview(plan, null, params.draft);
     return {
       kind: fallbackResult.decision === "replan" ? "replan" : fallbackResult.decision === "continue" ? "continue" : "approve",
       gate: fallbackResult.gate,
