@@ -576,15 +576,108 @@ export function getPostSetupWebLaunchCommand(
   };
 }
 
-function handoffToMainWebAppAfterSetup(): void {
-  const launch = getPostSetupWebLaunchCommand();
-  const child = spawn(launch.command, launch.args, {
-    cwd: launch.cwd,
-    env: process.env,
-    stdio: "ignore",
-    detached: true,
-  });
-  child.unref();
+async function waitForMainWebAppReady(
+  port: number,
+  maxAttempts = 20,
+  delayMs = 1_000,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  const healthUrl = `http://${SETUP_HOST}:${port}/health`;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await fetchImpl(healthUrl, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`health returned ${response.status}`);
+      }
+      const payload = await response.json().catch(() => ({}));
+      if (payload && typeof payload === "object" && payload.status === "ok") {
+        return true;
+      }
+    } catch {
+      // Expected while the setup server is releasing the port and the main app is booting.
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  return false;
+}
+
+export async function launchMainWebAppAfterSetup(
+  port: number,
+  options: {
+    spawnFn?: typeof spawn;
+    fetchImpl?: typeof fetch;
+    maxLaunchAttempts?: number;
+    perAttemptHealthChecks?: number;
+    perAttemptDelayMs?: number;
+  } = {},
+): Promise<{ ok: boolean; detail?: string }> {
+  const spawnFn = options.spawnFn ?? spawn;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const maxLaunchAttempts = options.maxLaunchAttempts ?? 3;
+  const perAttemptHealthChecks = options.perAttemptHealthChecks ?? 20;
+  const perAttemptDelayMs = options.perAttemptDelayMs ?? 1_000;
+  let lastDetail: string | undefined;
+
+  for (let attempt = 1; attempt <= maxLaunchAttempts; attempt += 1) {
+    const launch = getPostSetupWebLaunchCommand();
+    const child = spawnFn(launch.command, launch.args, {
+      cwd: launch.cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stderr = "";
+    let stdout = "";
+    let exited = false;
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
+    let launchError: string | undefined;
+
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+    child.once("error", (error) => {
+      launchError = error.message;
+    });
+    child.once("exit", (code, signal) => {
+      exited = true;
+      exitCode = code;
+      exitSignal = signal;
+    });
+
+    const ready = await waitForMainWebAppReady(
+      port,
+      perAttemptHealthChecks,
+      perAttemptDelayMs,
+      fetchImpl,
+    );
+    if (ready) {
+      child.unref?.();
+      return { ok: true };
+    }
+
+    if (!exited) {
+      child.kill("SIGTERM");
+    }
+
+    const output = `${stderr || stdout}`.trim();
+    lastDetail = launchError
+      ?? (exited
+        ? `web launch attempt ${attempt} exited${exitCode !== null ? ` with code ${exitCode}` : ""}${exitSignal ? ` (${exitSignal})` : ""}${output ? `: ${output.slice(0, 300)}` : ""}`
+        : `web launch attempt ${attempt} did not become healthy in time`);
+
+    if (attempt < maxLaunchAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+  }
+
+  return { ok: false, detail: lastDetail };
 }
 
 async function promptForWebSetupUpgrade(
@@ -756,7 +849,14 @@ export async function runTerminalWizard(
         await wizard.waitForCompletion();
         await wizard.shutdown();
         console.log(`\nConfiguration saved. Launching Strada web app at http://${SETUP_HOST}:${port}/ ...\n`);
-        handoffToMainWebAppAfterSetup();
+        const handoffResult = await launchMainWebAppAfterSetup(port);
+        if (!handoffResult.ok) {
+          console.log("  Strada saved the configuration, but the first web handoff did not complete.");
+          if (handoffResult.detail) {
+            console.log(`  Detail: ${handoffResult.detail}`);
+          }
+          console.log("  Refresh the browser once, or reopen Strada and choose the web dashboard.\n");
+        }
         return;
       }
     }

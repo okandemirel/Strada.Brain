@@ -12,6 +12,7 @@ import { join, extname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 
 const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
@@ -464,6 +465,21 @@ export class SetupWizard {
     if (config.OPENAI_AUTH_MODE && !KNOWN_OPENAI_AUTH_MODES.has(String(config.OPENAI_AUTH_MODE))) {
       this.json(res, 400, { success: false, error: "Invalid OPENAI_AUTH_MODE value" });
       return;
+    }
+
+    if (config.OPENAI_AUTH_MODE === "chatgpt-subscription") {
+      const authInspection = inspectOpenAiSubscriptionAuth({
+        authFile: typeof config.OPENAI_CHATGPT_AUTH_FILE === "string"
+          ? config.OPENAI_CHATGPT_AUTH_FILE
+          : undefined,
+      });
+      if (!authInspection.ok) {
+        this.json(res, 400, {
+          success: false,
+          error: `${authInspection.detail} Sign in again on this machine or switch OpenAI to API key mode.`,
+        });
+        return;
+      }
     }
 
     // Validate LANGUAGE_PREFERENCE if provided

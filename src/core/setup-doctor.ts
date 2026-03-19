@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveRuntimePaths } from "../common/runtime-paths.js";
+import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 import { loadConfigSafe, type Config } from "../config/config.js";
 import { resolveEmbeddingProvider, describeEmbeddingResolutionFailure } from "../rag/embeddings/embedding-resolver.js";
 import { AutoUpdater } from "./auto-updater.js";
@@ -104,24 +105,38 @@ export function collectDoctorReport(options: DoctorOptions = {}): DoctorReport {
     { hasRunningTasks: () => false },
     { installRoot },
   );
+  const installMethod = updater.detectInstallMethod();
   checks.push({
     id: "install-method",
     label: "Install method",
     status: "pass",
-    detail: `Detected ${updater.detectInstallMethod()} install rooted at ${installRoot}.`,
+    detail: `Detected ${installMethod} install rooted at ${installRoot}.`,
   });
 
   const distIndexPath = path.join(installRoot, "dist", "index.js");
   const webStaticPath = path.join(installRoot, "dist", "channels", "web", "static", "index.html");
   const buildReady = fs.existsSync(distIndexPath) && fs.existsSync(webStaticPath);
+  const sourceRuntimeReady =
+    fs.existsSync(path.join(installRoot, "package.json"))
+    && fs.existsSync(path.join(installRoot, "src", "index.ts"))
+    && fs.existsSync(path.join(installRoot, "node_modules"));
+  const buildStatus: DoctorStatus = buildReady
+    ? "pass"
+    : (installMethod === "git" && sourceRuntimeReady ? "warn" : "fail");
   checks.push({
     id: "build",
     label: "Build artifacts",
-    status: buildReady ? "pass" : "fail",
+    status: buildStatus,
     detail: buildReady
       ? "CLI and embedded web dashboard assets are built."
-      : "Built CLI/web assets are missing from dist/.",
-    fix: buildReady ? undefined : "Run `npm run bootstrap` from the source checkout.",
+      : (installMethod === "git" && sourceRuntimeReady
+          ? "Built dist/ artifacts are missing, but this source checkout can still run through `strada` / `./strada`."
+          : "Built CLI/web assets are missing from dist/."),
+    fix: buildReady
+      ? undefined
+      : (installMethod === "git" && sourceRuntimeReady
+          ? `Optional: run \`cd "${installRoot}" && npm run bootstrap\` if you want dist/ artifacts for this source checkout.`
+          : `Run \`cd "${installRoot}" && npm run bootstrap\` from the source checkout.`),
   });
 
   const envPath = path.join(configRoot, ".env");
@@ -150,12 +165,41 @@ export function collectDoctorReport(options: DoctorOptions = {}): DoctorReport {
       detail: `Loaded .env successfully. Language=${configResult.value.language}, web port=${configResult.value.web.port}.`,
     });
 
-    checks.push({
+    const providerCheck: DoctorCheck = {
       id: "providers",
       label: "Response workers",
       status: "pass",
       detail: summarizeResponseWorker(configResult.value),
-    });
+    };
+    checks.push(providerCheck);
+
+    const responseChain = configResult.value.providerChain
+      ?.split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      ?? [];
+    const openAiInResponsePool = responseChain.length === 0
+      ? configResult.value.openaiAuthMode === "chatgpt-subscription"
+      : responseChain.includes("openai");
+    if (openAiInResponsePool && configResult.value.openaiAuthMode === "chatgpt-subscription") {
+      const authInspection = inspectOpenAiSubscriptionAuth({
+        authFile: configResult.value.openaiChatgptAuthFile,
+        accessToken: configResult.value.openaiSubscriptionAccessToken,
+        accountId: configResult.value.openaiSubscriptionAccountId,
+      });
+      const openAiIsOnlyResponseWorker = responseChain.length <= 1;
+      checks.push({
+        id: "openai-subscription",
+        label: "OpenAI subscription session",
+        status: authInspection.ok ? "pass" : (openAiIsOnlyResponseWorker ? "fail" : "warn"),
+        detail: authInspection.ok
+          ? authInspection.detail
+          : `${authInspection.detail} OpenAI conversation turns will fail until you sign in again or switch auth mode.`,
+        fix: authInspection.ok
+          ? undefined
+          : "Sign in again with Codex/ChatGPT on this machine, or re-run `strada setup` and switch OpenAI to API-key mode.",
+      });
+    }
 
     if (!configResult.value.rag.enabled) {
       checks.push({

@@ -1,6 +1,8 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
   buildWebSetupUpgradeShellScript,
@@ -9,6 +11,7 @@ import {
   getPostSetupWebLaunchCommand,
   getRemainingResponseProviderChoices,
   getSuggestedNodeUpgradeCommand,
+  launchMainWebAppAfterSetup,
   nodeSupportsWebPortalBuild,
   validateUnityPath,
   resolveNvmDir,
@@ -275,6 +278,63 @@ describe("getPostSetupWebLaunchCommand", () => {
     expect(command.args.at(-2)).toBe("--channel")
     expect(command.args.at(-1)).toBe("web")
     expect(command.cwd).toBe("/Users/test/Strada.Brain")
+  })
+})
+
+describe("launchMainWebAppAfterSetup", () => {
+  it("retries when the first web launch exits before health becomes ready", async () => {
+    class FakeChild extends EventEmitter {
+      readonly stdout = new PassThrough()
+      readonly stderr = new PassThrough()
+      killed = false
+
+      kill(): boolean {
+        this.killed = true
+        this.emit("exit", 1, "SIGTERM")
+        return true
+      }
+
+      unref(): void {}
+    }
+
+    let spawnCount = 0
+    let secondAttemptHealthChecks = 0
+    const spawnFn = ((() => {
+      spawnCount += 1
+      const child = new FakeChild()
+      if (spawnCount === 1) {
+        queueMicrotask(() => {
+          child.stderr.write("listen EADDRINUSE 127.0.0.1:3000")
+          child.emit("exit", 1, null)
+        })
+      }
+      return child
+    }) as unknown) as typeof import("node:child_process").spawn
+
+    const fetchImpl = (async () => {
+      if (spawnCount < 2) {
+        throw new Error("server not ready")
+      }
+      secondAttemptHealthChecks += 1
+      if (secondAttemptHealthChecks < 2) {
+        throw new Error("still booting")
+      }
+      return {
+        ok: true,
+        json: async () => ({ status: "ok" }),
+      } as Response
+    }) as typeof fetch
+
+    const result = await launchMainWebAppAfterSetup(3000, {
+      spawnFn,
+      fetchImpl,
+      maxLaunchAttempts: 2,
+      perAttemptHealthChecks: 3,
+      perAttemptDelayMs: 0,
+    })
+
+    expect(result).toEqual({ ok: true })
+    expect(spawnCount).toBe(2)
   })
 })
 

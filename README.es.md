@@ -91,9 +91,11 @@ Cuando Strada se instale desde una version empaquetada de npm/tarball, guardara 
 Si `./strada setup --web` detecta una version de Node demasiado antigua para construir el portal completo, Strada mantiene la web como camino principal: si `nvm` esta disponible puede instalar una version compatible de Node con tu aprobacion y volver directamente al setup web; para ello ejecuta ese upgrade guiado dentro de un HOME temporal limpio para que las opciones incompatibles de npm `prefix` / `globalconfig` no bloqueen `nvm`. Si no, te guia al flujo de descarga/actualizacion. Si rechazas la actualizacion, Strada te pregunta explicitamente si deseas continuar con el setup de terminal.
 Si Node 22 ya esta instalado en `nvm`, Strada reutiliza ese runtime en lugar de descargarlo otra vez. El flujo de setup web se abre en la URL local raiz y conserva esa misma URL cuando entrega el control a la aplicacion principal.
 Ese primer arranque en el navegador tambien lleva una marca explicita de setup, para que incluso una pestana antigua en cache del portal vuelva al asistente en lugar de caer en una pagina muerta de "Not Found".
+Si el primer handoff web coincide con el reinicio, Strada ahora reintenta ese arranque automaticamente. Si la configuracion ya se guardo pero el navegador aun entra en timeout, refresca una vez o vuelve a abrir `strada` y elige el dashboard web en lugar de guardar otra vez.
 
 El asistente te pide la ruta de tu proyecto Unity, la clave de API del proveedor de IA, el canal por defecto e idioma. `./strada setup` ahora prioriza **Navegador Web** por defecto; elige **Terminal** solo si quieres de forma explicita el flujo de texto mas rapido.
 El setup de terminal acepta proveedores separados por comas en un solo prompt (p. ej. `kimi,deepseek`) para fallback u orquestacion multiagente, o puedes agregarlos uno a uno de forma interactiva. El bucle "¿Agregar otro?" solo aparece cuando se introduce un unico proveedor. La eleccion del proveedor de embeddings se mantiene separada.
+Cuando OpenAI usa `chatgpt-subscription`, el setup valida la sesion local de Codex/ChatGPT antes de guardar. Las sesiones caducadas se rechazan en setup y tambien se reportan en `strada doctor`.
 Cuando guardas el asistente web, Strada entrega el control a la aplicacion web principal en la misma URL para que un refresh durante la transicion no te deje en una pagina de setup muerta.
 En esa primera transicion Strada tambien reaplica el turno de onboarding y la eleccion inicial de autonomia en la primera sesion de chat, para que la conversacion inicial y la pantalla de Settings reflejen de inmediato lo elegido en el asistente.
 Si el primer mensaje real del chat es tecnico, Strada ahora empieza a resolverlo de inmediato y reduce el onboarding a como mucho una sola pregunta corta de seguimiento en lugar de abrir un formulario de intake.
@@ -110,6 +112,8 @@ Despues del setup, ejecuta una comprobacion de readiness antes de iniciar el age
 # O, despues de `./strada install-command`
 strada doctor
 ```
+
+En instalaciones git/source, `strada doctor` ya no trata un `dist/` ausente como error bloqueante si el launcher source ya funciona. Lo deja como warning y muestra el comando exacto del repo root solo cuando realmente quieres generar artefactos empaquetados con `npm run bootstrap`.
 
 Alternativamente, crea `.env` manualmente:
 

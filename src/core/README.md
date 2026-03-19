@@ -80,13 +80,14 @@ A minimal HTTP server that runs during first-time configuration when no valid `.
 **HTTP Endpoints:**
 
 - `GET /` — Serves the setup UI (`setup.html`)
-- `POST /api/setup` — Accepts JSON-encoded configuration, validates required fields (`ANTHROPIC_API_KEY`, `UNITY_PROJECT_PATH`), sanitizes all values, writes `.env` file, and exits the process (daemon restarts with new config)
+- `POST /api/setup` — Accepts JSON-encoded configuration, validates required fields (`UNITY_PROJECT_PATH`, provider credentials, OpenAI subscription session state when `chatgpt-subscription` is selected), sanitizes all values, writes `.env`, and then hands off to the main app
 - `GET /api/setup/validate-path` — Query parameter `path` (must be absolute, no `..` sequences); returns `{ valid: true }` if directory exists, or `{ valid: false, error: "..." }` otherwise
 
 **Security Measures:**
 
 - **Newline injection prevention:** All `.env` values are sanitized via `sanitizeEnvValue()` to strip carriage returns and newlines, blocking log injection and key overwriting attacks
 - **Directory traversal blocking:** Path validation rejects relative paths, `..` sequences, and URL-encoded traversals using `path.resolve()` normalization
+- **Subscription auth validation:** OpenAI `chatgpt-subscription` mode is rejected early when the local Codex/ChatGPT session file is missing, malformed, or already expired
 - **HTTP security headers:** Every response includes:
   - `X-Content-Type-Options: nosniff` — prevents MIME sniffing
   - `X-Frame-Options: DENY` — blocks framing in other sites

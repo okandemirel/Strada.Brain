@@ -91,9 +91,11 @@ Quand Strada est installe depuis une version npm/tarball empaquetee, sa configur
 Si `./strada setup --web` detecte une version de Node trop ancienne pour construire le portail complet, Strada garde le web comme chemin principal : si `nvm` est disponible, Strada peut installer une version compatible de Node avec votre accord puis revenir directement au setup web ; cette mise a niveau guidee s'execute dans un HOME temporaire propre afin que les options npm incompatibles `prefix` / `globalconfig` ne bloquent pas `nvm`. Sinon, il vous guide vers le telechargement/la mise a niveau. Si vous refusez la mise a niveau, Strada vous propose explicitement de continuer avec le setup terminal.
 Si Node 22 est deja installe dans `nvm`, Strada reutilise ce runtime au lieu de le telecharger une nouvelle fois. Le flux de setup web s'ouvre sur l'URL locale racine et conserve cette meme URL lors du passage vers l'application principale.
 Cette premiere ouverture navigateur porte aussi un marqueur explicite de setup, afin qu'un ancien onglet portail mis en cache retombe bien sur l'assistant plutot que sur une page morte "Not Found".
+Si le premier handoff web tombe pendant le redemarrage, Strada reessaie maintenant ce lancement automatiquement. Si la configuration a deja ete enregistree mais que le navigateur finit quand meme en timeout, faites un refresh une fois ou relancez `strada` et choisissez le dashboard web au lieu de re-sauvegarder.
 
 L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de fournisseur IA, votre canal par d&eacute;faut et votre langue. `./strada setup` privilegie maintenant **Navigateur Web** par d&eacute;faut ; choisissez **Terminal** seulement si vous voulez explicitement le flux texte le plus rapide.
 Le setup terminal accepte des fournisseurs separes par des virgules en une seule saisie (par ex. `kimi,deepseek`) pour le fallback ou l'orchestration multi-agent, ou vous pouvez les ajouter un par un de facon interactive. La boucle "Ajouter un autre ?" n'apparait que lorsqu'un seul fournisseur est saisi. Le choix du fournisseur d'embeddings reste separe.
+Quand OpenAI utilise `chatgpt-subscription`, le setup valide maintenant la session locale Codex/ChatGPT avant l'enregistrement. Les sessions expirees sont refusees pendant le setup et egalement signalees par `strada doctor`.
 Une fois l'assistant web enregistr&eacute;, Strada bascule vers l'application web principale sur la m&ecirc;me URL afin qu'un refresh pendant la transition ne vous laisse pas sur une page de setup morte.
 Lors de ce premier basculement, Strada rejoue aussi le tour d'onboarding et le choix initial d'autonomy dans la premi&egrave;re session de chat, afin que la conversation d'ouverture et l'&eacute;cran Settings refl&egrave;tent imm&eacute;diatement ce qui a &eacute;t&eacute; choisi dans l'assistant.
 Si le premier vrai message du chat est technique, Strada commence maintenant &agrave; traiter la t&acirc;che tout de suite et limite l'onboarding &agrave; au plus une courte question de suivi au lieu d'ouvrir un questionnaire d'intake complet.
@@ -110,6 +112,8 @@ Apr&egrave;s le setup, lancez un contr&ocirc;le de readiness avant de d&eacute;m
 # Ou apres `./strada install-command`
 strada doctor
 ```
+
+Sur une installation git/source, `strada doctor` ne traite plus un dossier `dist/` absent comme un blocage si le launcher source fonctionne deja. Cela devient un warning avec la commande exacte du repo root pour `npm run bootstrap` seulement quand vous voulez construire les artefacts packages.
 
 Alternativement, cr&eacute;ez `.env` manuellement :
 

@@ -91,8 +91,10 @@ Wenn Strada aus einer paketierten npm-/Tarball-Version installiert wird, liegt d
 Wenn `./strada setup --web` eine aeltere Node-Version erkennt, die das volle Portal-Bundle nicht bauen kann, bleibt Web der primaere Weg: Wenn `nvm` verfuegbar ist, kann Strada nach Ihrer Zustimmung eine kompatible Node-Version installieren und direkt zum Web-Setup zurueckkehren; dabei laeuft das gefuehrte Upgrade in einem temporaeren sauberen HOME, damit inkompatible npm-Einstellungen wie `prefix` / `globalconfig` `nvm` nicht blockieren. Andernfalls fuehrt es Sie durch den Upgrade/Download-Pfad. Falls Sie das Upgrade ablehnen, fragt Strada explizit, ob Sie stattdessen mit dem Terminal-Setup fortfahren moechten.
 Wenn Node 22 bereits in `nvm` installiert ist, verwendet Strada diese Laufzeit erneut, statt sie nochmals herunterzuladen. Der Web-Setup-Flow oeffnet auf der lokalen Root-URL und behaelt dieselbe URL auch beim Handoff an die Haupt-App.
 Der erste Browser-Start traegt zusaetzlich ein explizites Setup-Flag, damit selbst ein veralteter gecachter Portal-Tab wieder im Setup-Assistenten landet statt auf einer toten "Not Found"-Seite.
+Wenn der erste Web-Handoff mit dem Neustart kollidiert, versucht Strada diesen Start jetzt automatisch erneut. Wenn die Konfiguration schon gespeichert wurde, der Browser aber trotzdem in ein Timeout laeuft, refreshen Sie einmal oder oeffnen `strada` erneut und waehlen das Web-Dashboard statt noch einmal zu speichern.
 
 Der Assistent fragt nach Ihrem Unity-Projektpfad, AI-Anbieter-API-Schluessel, Standard-Kanal und Sprache. `./strada setup` bevorzugt jetzt standardmaessig den **Web-Browser**; waehlen Sie **Terminal** nur dann, wenn Sie den schnelleren Text-Flow bewusst moechten.
+Wenn OpenAI im Modus `chatgpt-subscription` verwendet wird, validiert das Setup vor dem Speichern die lokale Codex/ChatGPT-Sitzung. Abgelaufene Sessions werden bereits im Setup und in `strada doctor` gemeldet.
 Nach dem Speichern des Web-Assistenten uebergibt Strada auf derselben URL an die Haupt-App weiter und spielt dabei auch den Onboarding-Turn sowie die erste Autonomy-Auswahl in die erste Chat-Sitzung ein, damit Begruessung und Settings sofort den Wizard-Stand widerspiegeln.
 Wenn die erste echte Chat-Nachricht bereits eine technische Aufgabe ist, beginnt Strada jetzt sofort mit der Bearbeitung und reduziert das Onboarding auf hoechstens eine kurze Rueckfrage statt einen kompletten Intake-Dialog zu starten.
 Das Terminal-Setup akzeptiert kommagetrennte Provider in einer einzigen Eingabe (z. B. `kimi,deepseek`) fuer Fallback- oder Multi-Agent-Orchestrierung; alternativ koennen Sie Provider auch einzeln interaktiv eingeben. Die Schleife "Einen weiteren hinzufuegen?" erscheint nur, wenn ein einzelner Provider eingegeben wird. Die Embedding-Provider-Wahl bleibt getrennt.
@@ -110,6 +112,8 @@ Fuehren Sie danach einen Bereitschaftscheck aus, bevor Sie den Agenten starten:
 # Oder nach `./strada install-command`
 strada doctor
 ```
+
+Bei Git-/Source-Installationen behandelt `strada doctor` ein fehlendes `dist/` nicht mehr als Blocker, solange der Source-Launcher bereits nutzbar ist. Es bleibt eine Warnung mit dem exakten Repo-Root-Befehl fuer `npm run bootstrap`, falls Sie gepackte Artefakte bauen wollen.
 
 Alternativ erstellen Sie `.env` manuell:
 

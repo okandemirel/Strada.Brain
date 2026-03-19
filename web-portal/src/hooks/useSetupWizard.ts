@@ -118,6 +118,7 @@ export function useSetupWizard() {
   const [autonomyEnabled, setAutonomyEnabledState] = useState(false)
   const [autonomyHours, setAutonomyHoursState] = useState(4)
   const [daemonBudget, setDaemonBudgetState] = useState(1.0)
+  const [saveCommitted, setSaveCommitted] = useState(false)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -312,6 +313,7 @@ export function useSetupWizard() {
   const save = useCallback(async () => {
     setSaveStatus('saving')
     setSaveError(null)
+    setSaveCommitted(false)
 
     if (reviewBlockingReason) {
       setSaveStatus('error')
@@ -397,6 +399,7 @@ export function useSetupWizard() {
 
       // Poll for readiness — the wizard server shuts down and the main app
       // boots on the same port, so expect connection errors during the gap.
+      setSaveCommitted(true)
       setSaveStatus('polling')
       let attempts = 0
       const maxAttempts = 40 // 40 x 2s = 80s total timeout
@@ -408,7 +411,7 @@ export function useSetupWizard() {
         }
         attempts++
         try {
-          const healthRes = await fetch('/health')
+          const healthRes = await fetch('/health', { cache: 'no-store' })
           if (!healthRes.ok) return // non-200, keep polling
           const healthData = await healthRes.json()
           if (healthData.status === 'ok') {
@@ -432,7 +435,7 @@ export function useSetupWizard() {
           if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
           if (!mountedRef.current) return
           setSaveStatus('error')
-          setSaveError('Server did not become ready in time. Please refresh and try again.')
+          setSaveError('Configuration was saved, but Strada web app did not become ready in time. Refresh once or reopen Strada from the terminal.')
         }
       }, 2000)
     } catch (err) {
@@ -465,7 +468,7 @@ export function useSetupWizard() {
     saveStatus,
     saveError,
     reviewBlockingReason,
-    canSave: !reviewBlockingReason,
+    canSave: !reviewBlockingReason && !(saveCommitted && saveStatus === 'error'),
 
     // Methods
     nextStep,

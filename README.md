@@ -89,9 +89,11 @@ When Strada is installed from a packaged npm/tarball release, it keeps its runti
 If `./strada setup --web` detects an older Node runtime that cannot build the full portal bundle, Strada keeps web as the primary path: when `nvm` is available it can install a compatible Node.js version for you and continue directly into web setup after you approve it, running that guided upgrade inside a temporary clean HOME so incompatible `prefix` / `globalconfig` npm settings do not block `nvm`; otherwise it opens the upgrade/download path. If you decline the upgrade, Strada offers to continue with terminal setup instead.
 If Node 22 is already installed in `nvm`, Strada reuses that runtime instead of downloading it again. The setup browser flow opens on the root local URL and stays on that same URL when it hands off to the main app.
 That first-run browser open also carries an explicit setup flag, so a stale cached portal tab still resolves into the setup wizard instead of a dead "Not Found" page.
+If the first web handoff races the restart, Strada now retries that launch automatically before surfacing an error. If the config was already saved but the browser still times out, refresh once or reopen `strada` and choose the web dashboard again instead of re-saving setup.
 
 The wizard asks for your Unity project path, AI provider API key, default channel, and language. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
 Terminal setup accepts comma-separated providers in a single prompt (e.g. `kimi,deepseek`) for fallback / multi-agent orchestration, or you can add them one at a time interactively. The "Add another?" loop only appears when a single provider is entered. The embedding provider choice stays separate.
+When OpenAI uses `chatgpt-subscription`, setup validates the local Codex/ChatGPT session before saving. Expired subscription sessions are rejected during setup and reported by `strada doctor`.
 After you save the web wizard, Strada hands off to the main web app on the same URL so refreshes can survive the transition instead of dropping you onto a dead setup page.
 That first handoff also replays Strada's onboarding turn and your initial autonomy choice into the first chat session, so the opening conversation and Settings screen immediately reflect what you chose in the wizard.
 If the first real chat message is technical, Strada now starts solving immediately and keeps onboarding to at most one short follow-up instead of opening with a full intake questionnaire.
@@ -110,6 +112,8 @@ After setup, run a readiness check before you start the agent:
 # Or, after installing the user-local command
 strada doctor
 ```
+
+For git/source installs, `strada doctor` treats a missing `dist/` folder as a warning when the source launcher is already usable. It now shows the exact repo-root `npm run bootstrap` command only when you want packaged build artifacts.
 
 Alternatively, create `.env` manually:
 

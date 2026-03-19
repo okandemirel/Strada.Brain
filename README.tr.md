@@ -91,9 +91,11 @@ Strada paketlenmis bir npm/tarball surumunden kuruldugunda runtime config'i vars
 `./strada setup --web`, tam portal paketi icin yeterli olmayan daha eski bir Node surumu gorurse web yolunu birincil tutar: `nvm` varsa onayinizla uyumlu Node surumunu kurup sizi dogrudan web setup'a geri sokabilir; bu rehberli yukseltmeyi gecici temiz bir HOME icinde calistirarak uyumsuz `prefix` / `globalconfig` npm ayarlarinin `nvm`'i engellemesini onler. Yoksa Node yukleme/yukseltme akisina yonlendirir. Yukseltmeyi reddederseniz Strada, terminal setup ile devam etmek isteyip istemediginizi acikca sorar.
 Node 22 `nvm` icinde zaten kuruluysa Strada yeniden indirmek yerine o kurulumu tekrar kullanir. Web setup akisi root local URL uzerinden acilir ve ana uygulamaya devredilirken de ayni URL korunur.
 Ilk tarayici acilisi acik bir setup bayragi da tasir; boylece cache'te kalmis eski bir portal sekmesi bile olu bir "Not Found" sayfasina dusmek yerine setup sihirbazina gider.
+Ilk web handoff restart ile yarisirsa Strada artik bu acilisi otomatik olarak tekrar dener. Config kaydedildigi halde tarayici timeout verirse setup'i yeniden kaydetmek yerine bir kez refresh atin veya `strada` ile web dashboard'u tekrar acin.
 
 Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. `./strada setup` artik varsayilan olarak **Web Tarayicisi** yolunu tercih eder; daha hizli metin akisina bilincli olarak ihtiyaciniz varsa **Terminal** secin.
 Terminal setup, tek bir istemde virgule ayrilmis provider'lari kabul eder (ornegin `kimi,deepseek`) ya da bunlari tek tek etkilesimli olarak girebilirsiniz. "Baska eklensin mi?" dongusu yalnizca tek bir provider girildiginde gosterilir. Embedding provider secimi ayri kalir.
+OpenAI `chatgpt-subscription` modunda setup artik kaydetmeden once yerel Codex/ChatGPT oturumunu dogrular. Suresi dolmus subscription oturumlari setup ve `strada doctor` seviyesinde raporlanir.
 Web sihirbazinda kaydetme tamamlandiginda Strada ayni URL uzerinden ana web uygulamasina devreder; boylece refresh gecisi olu setup sayfasina dusmez.
 Bu ilk devir sirasinda Strada onboarding turunu ve ilk autonomy tercihini de ilk chat oturumuna uygular; boylece acilis konusmasi ve Settings ekrani sihirbazda sectiginiz durumla hemen uyusur.
 Ilk gercek chat mesaji teknik bir gorevse Strada artik ise hemen baslar ve uzun bir intake akisi acmak yerine onboarding'i en fazla tek kisa takip sorusuna indirir.
@@ -110,6 +112,8 @@ Kurulumdan sonra, ajani baslatmadan once hazirlik kontrolu calistirin:
 # Kullanici-local komutu kurduysaniz
 strada doctor
 ```
+
+Git/source kurulumlarda `strada doctor`, source launcher zaten calisiyorsa eksik `dist/` klasorunu artik bloklayici hata saymaz; warning verir ve sadece paketli build artifact istediginizde tam repo kokundeki `npm run bootstrap` komutunu gosterir.
 
 Alternatif olarak, `.env` dosyasini manuel olarak olusturun:
 

@@ -18,6 +18,14 @@ beforeEach(() => {
 });
 
 describe("OpenAIProvider", () => {
+  function createJwt(expSecondsFromNow: number): string {
+    const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({
+      exp: Math.floor(Date.now() / 1000) + expSecondsFromNow,
+    })).toString("base64url");
+    return `${header}.${payload}.sig`;
+  }
+
   it("parses a simple text response correctly", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -306,5 +314,16 @@ describe("OpenAIProvider", () => {
     });
 
     await expect(provider.healthCheck()).resolves.toBe(false);
+  });
+
+  it("fails subscription health check locally when the token is already expired", async () => {
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: createJwt(-300),
+      accountId: "account-id",
+    });
+
+    await expect(provider.healthCheck()).resolves.toBe(false);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });

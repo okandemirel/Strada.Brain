@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import type {
   IAIProvider,
   ConversationMessage,
@@ -13,10 +12,13 @@ import type { MessageContent, AssistantMessage } from "./provider-core.interface
 import { getLogger } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
 import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-retry.js";
+import {
+  inspectOpenAiSubscriptionAuth,
+  OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
+} from "../../common/openai-subscription-auth.js";
 
 const MAX_RETRIES = 3;
 export const MAX_SSE_BUFFER_BYTES = 1 * 1024 * 1024; // 1 MB
-export const OPENAI_CHATGPT_AUTH_DEFAULT_FILE = "~/.codex/auth.json";
 export const OPENAI_CHATGPT_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
 
 /** Maps OpenAI finish_reason values to internal stop reasons */
@@ -548,6 +550,14 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     const logger = getLogger();
     try {
       if (this.isChatGptSubscriptionMode()) {
+        const authInspection = inspectOpenAiSubscriptionAuth({
+          authFile: this.getChatGptSubscriptionAuth().authFile,
+          env: process.env,
+        });
+        if (!authInspection.ok) {
+          logger.warn(`${this.name} health check failed: ${authInspection.detail}`);
+          return false;
+        }
         const response = await fetch(`${this.baseUrl}/responses`, {
           method: "POST",
           headers: await this.buildHeaders(),
@@ -657,31 +667,32 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     const authConfig = this.getChatGptSubscriptionAuth();
 
     if (authConfig.accessToken && authConfig.accountId) {
-      return {
+      const inspection = inspectOpenAiSubscriptionAuth({
         accessToken: authConfig.accessToken,
         accountId: authConfig.accountId,
+        authFile: authConfig.authFile,
+        env: process.env,
+      });
+      if (!inspection.ok || !inspection.accessToken || !inspection.accountId) {
+        throw new Error(`${this.name} ${inspection.detail}`);
+      }
+      return {
+        accessToken: inspection.accessToken,
+        accountId: inspection.accountId,
       };
     }
 
-    const authFile = this.expandHomePath(authConfig.authFile ?? OPENAI_CHATGPT_AUTH_DEFAULT_FILE);
-    const parsed = JSON.parse(readFileSync(authFile, "utf8")) as {
-      tokens?: { access_token?: string; account_id?: string };
+    const inspection = inspectOpenAiSubscriptionAuth({
+      authFile: authConfig.authFile ?? OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
+      env: process.env,
+    });
+    if (!inspection.ok || !inspection.accessToken || !inspection.accountId) {
+      throw new Error(`${this.name} ${inspection.detail}`);
+    }
+    return {
+      accessToken: inspection.accessToken,
+      accountId: inspection.accountId,
     };
-    const accessToken = parsed.tokens?.access_token;
-    const accountId = parsed.tokens?.account_id;
-    if (!accessToken || !accountId) {
-      throw new Error(
-        `${this.name} ChatGPT/Codex subscription auth file does not contain access_token/account_id`,
-      );
-    }
-    return { accessToken, accountId };
-  }
-
-  private expandHomePath(pathValue: string): string {
-    if (pathValue.startsWith("~/")) {
-      return `${process.env["HOME"] ?? ""}/${pathValue.slice(2)}`;
-    }
-    return pathValue;
   }
 
   private buildChatGptResponsesRequest(

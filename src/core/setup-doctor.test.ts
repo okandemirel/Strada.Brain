@@ -24,6 +24,14 @@ describe("setup doctor", () => {
     return dir;
   }
 
+  function createJwt(expSecondsFromNow: number): string {
+    const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({
+      exp: Math.floor(Date.now() / 1000) + expSecondsFromNow,
+    })).toString("base64url");
+    return `${header}.${payload}.sig`;
+  }
+
   function makeBuiltInstallRoot(): string {
     const dir = makeInstallRoot();
     fs.mkdirSync(path.join(dir, "dist", "channels", "web", "static"), { recursive: true });
@@ -135,6 +143,23 @@ describe("setup doctor", () => {
     expect(report.checks.find((check) => check.id === "build")?.status).toBe("fail");
   });
 
+  it("warns instead of failing when dist is missing for a prepared git checkout", () => {
+    const installRoot = makeInstallRoot();
+    fs.writeFileSync(path.join(installRoot, "package.json"), "{}");
+    fs.mkdirSync(path.join(installRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(installRoot, "node_modules"), { recursive: true });
+    fs.writeFileSync(path.join(installRoot, "src", "index.ts"), "export {};");
+    fs.mkdirSync(path.join(installRoot, ".git"));
+
+    const report = collectDoctorReport({
+      installRoot,
+      configRoot: installRoot,
+      configResult: { kind: "error", error: "missing .env" },
+    });
+
+    expect(report.checks.find((check) => check.id === "build")?.status).toBe("warn");
+  });
+
   it("fails when config is invalid", () => {
     const installRoot = makeBuiltInstallRoot();
     const report = collectDoctorReport({
@@ -157,5 +182,31 @@ describe("setup doctor", () => {
 
     expect(report.status).toBe("pass");
     expect(report.checks.find((check) => check.id === "embeddings")?.status).toBe("pass");
+  });
+
+  it("fails when the only OpenAI subscription worker has an expired local auth session", () => {
+    const installRoot = makeBuiltInstallRoot();
+    const authDir = path.join(installRoot, ".codex");
+    fs.mkdirSync(authDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(authDir, "auth.json"),
+      JSON.stringify({ tokens: { access_token: createJwt(-300), account_id: "acct_test" } }),
+    );
+
+    const report = collectDoctorReport({
+      installRoot,
+      configRoot: installRoot,
+      configResult: {
+        kind: "ok",
+        value: makeConfig({
+          providerChain: "openai",
+          openaiAuthMode: "chatgpt-subscription",
+          openaiChatgptAuthFile: path.join(authDir, "auth.json"),
+        }),
+      },
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.checks.find((check) => check.id === "openai-subscription")?.status).toBe("fail");
   });
 });
