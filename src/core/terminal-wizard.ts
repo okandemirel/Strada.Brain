@@ -18,6 +18,7 @@ import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import type { SetupWizard } from "./setup-wizard.js";
 
 const MAX_RETRIES = 3;
 const RESPONSE_PROVIDER_CHOICES = [
@@ -82,6 +83,11 @@ export interface WizardAnswers {
 export interface ValidationResult {
   valid: boolean;
   error?: string;
+}
+
+export interface TerminalWizardResult {
+  readonly launchWebApp?: boolean;
+  readonly wizard?: SetupWizard;
 }
 
 /**
@@ -762,7 +768,7 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
  */
 export async function runTerminalWizard(
   options?: { mode?: "terminal" | "web" },
-): Promise<void> {
+): Promise<TerminalWizardResult | undefined> {
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
   let intentionalClose = false;
@@ -800,10 +806,10 @@ export async function runTerminalWizard(
             throw new Error("Strada could not locate nvm after approval. Please install Node.js 22 manually.");
           }
           if (!continueWebSetupAfterNodeUpgrade(nvmDir)) {
-            console.log("\n  Strada could not finish the automatic Node.js upgrade flow.");
-            console.log("  Please upgrade to Node.js 22 manually, then rerun `strada setup --web`.\n");
+          console.log("\n  Strada could not finish the automatic Node.js upgrade flow.");
+          console.log("  Please upgrade to Node.js 22 manually, then rerun `strada setup --web`.\n");
           }
-          return;
+          return undefined;
         }
         const termFallback = await rl.question(
           "  Web setup requires Node.js 20.19+. Continue with terminal setup instead? [Y/n]: ",
@@ -811,7 +817,7 @@ export async function runTerminalWizard(
         if (termFallback.trim().toLowerCase() === "n") {
           intentionalClose = true;
           rl.close();
-          return;
+          return undefined;
         }
         useWebWizard = false;
       } else if (!webAssets.ready) {
@@ -823,7 +829,7 @@ export async function runTerminalWizard(
           console.log("\n  Fix the build issue and rerun `strada setup --web`.\n");
           intentionalClose = true;
           rl.close();
-          return;
+          return undefined;
         }
         useWebWizard = false;
       } else {
@@ -847,17 +853,8 @@ export async function runTerminalWizard(
         console.log(`   (Open this URL in your browser if it didn't open automatically)\n`);
         openBrowser(url);
         await wizard.waitForCompletion();
-        await wizard.shutdown();
         console.log(`\nConfiguration saved. Launching Strada web app at http://${SETUP_HOST}:${port}/ ...\n`);
-        const handoffResult = await launchMainWebAppAfterSetup(port);
-        if (!handoffResult.ok) {
-          console.log("  Strada saved the configuration, but the first web handoff did not complete.");
-          if (handoffResult.detail) {
-            console.log(`  Detail: ${handoffResult.detail}`);
-          }
-          console.log("  Refresh the browser once, or reopen Strada and choose the web dashboard.\n");
-        }
-        return;
+        return { launchWebApp: true, wizard };
       }
     }
 
@@ -1099,7 +1096,7 @@ export async function runTerminalWizard(
         console.log("\nSetup cancelled. Existing .env preserved.");
         intentionalClose = true;
         rl.close();
-        return;
+        return undefined;
       }
     }
 
@@ -1126,6 +1123,7 @@ export async function runTerminalWizard(
     console.log("   3) Then use either `strada doctor` / `strada start` or keep using `./strada ...`.\n");
     intentionalClose = true;
     rl.close();
+    return undefined;
   } catch (err) {
     intentionalClose = true;
     rl.close();

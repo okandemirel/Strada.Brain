@@ -133,6 +133,7 @@ export interface BootstrapOptions {
   config: Config;
   container?: DIContainer;
   daemonMode?: boolean;
+  beforeChannelConnect?: (() => Promise<void> | void) | undefined;
 }
 
 export interface BootstrapResult {
@@ -152,7 +153,7 @@ export interface BootstrapResult {
  * Bootstrap the application with all services
  */
 export async function bootstrap(options: BootstrapOptions): Promise<BootstrapResult> {
-  const { channelType, config, container: customContainer } = options;
+  const { channelType, config, container: customContainer, beforeChannelConnect } = options;
   const container = customContainer!; // We ensure container exists below
 
   const logger = createLogger(config.logLevel, config.logFile);
@@ -1369,6 +1370,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const cleanupInterval = setupCleanup(orchestrator);
 
   // Start channel
+  if (beforeChannelConnect) {
+    await beforeChannelConnect();
+  }
   await channel.connect();
   logger.info("Strada Brain is running!");
   if (startupNotices.length > 0) {

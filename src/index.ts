@@ -159,9 +159,12 @@ program
       process.exit(1);
     }
     const { runTerminalWizard } = await import("./core/terminal-wizard.js");
-    await runTerminalWizard({
+    const result = await runTerminalWizard({
       mode: opts.web ? "web" : opts.terminal ? "terminal" : undefined,
     });
+    if (result?.launchWebApp && result.wizard) {
+      await startApp("web", false, result.wizard);
+    }
   });
 
 program
@@ -257,10 +260,14 @@ program.parse();
 // Application Startup
 // ============================================================================
 
-async function startApp(channelType: string, daemonMode = false): Promise<void> {
+async function startApp(
+  channelType: string,
+  daemonMode = false,
+  initialWizard: SetupWizard | null = null,
+): Promise<void> {
   const MAX_WIZARD_ATTEMPTS = 3;
   const wizardPort = Number.parseInt(process.env["SETUP_WIZARD_PORT"] ?? "3000", 10) || 3000;
-  let activeWizard: SetupWizard | null = null;
+  let activeWizard: SetupWizard | null = initialWizard;
 
   // Try loading config — if invalid and using web channel, launch setup wizard
   let configResult = loadConfigSafe();
@@ -324,12 +331,6 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
       );
     }
 
-    // Shut down wizard server to free the port for the main app
-    if (activeWizard) {
-      await activeWizard.shutdown();
-      activeWizard = null;
-    }
-
     // Create DI container
     const container = createContainer();
 
@@ -340,6 +341,12 @@ async function startApp(channelType: string, daemonMode = false): Promise<void> 
       config,
       container,
       daemonMode: effectiveDaemonMode,
+      beforeChannelConnect: activeWizard
+        ? async () => {
+          await activeWizard?.shutdown();
+          activeWizard = null;
+        }
+        : undefined,
     });
 
     // Store bootstrap result for daemon CLI context access
@@ -378,9 +385,12 @@ async function runRootLauncher(options: RootLaunchOptions): Promise<void> {
   if (configResult.kind === "err") {
     console.log("First-time setup is required before Strada can start.\n");
     const { runTerminalWizard } = await import("./core/terminal-wizard.js");
-    await runTerminalWizard({
+    const result = await runTerminalWizard({
       mode: options.web ? "web" : options.terminal ? "terminal" : undefined,
     });
+    if (result?.launchWebApp && result.wizard) {
+      await startApp("web", false, result.wizard);
+    }
     return;
   }
 
@@ -420,7 +430,10 @@ async function runLauncherAction(action: {
 
   if (action.kind === "setup") {
     const { runTerminalWizard } = await import("./core/terminal-wizard.js");
-    await runTerminalWizard();
+    const result = await runTerminalWizard();
+    if (result?.launchWebApp && result.wizard) {
+      await startApp("web", false, result.wizard);
+    }
     return;
   }
 
