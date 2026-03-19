@@ -563,21 +563,25 @@ describe("ProviderRouter", () => {
         getSignalsForTask: () => [
           {
             provider: "beta",
-            phase: "planning",
+            phase: "synthesis",
             sampleSize: 3,
             sameWorldMatches: 2,
             successCount: 3,
             failureCount: 0,
+            verdictSampleSize: 2,
+            verdictScore: 0.91,
             latestTimestamp: 20,
             score: 0.86,
           },
           {
             provider: "alpha",
-            phase: "planning",
+            phase: "synthesis",
             sampleSize: 2,
             sameWorldMatches: 2,
             successCount: 0,
             failureCount: 2,
+            verdictSampleSize: 1,
+            verdictScore: 0.22,
             latestTimestamp: 21,
             score: 0.18,
           },
@@ -588,7 +592,7 @@ describe("ProviderRouter", () => {
         trajectoryPhaseSignalRetriever: retriever,
       });
 
-      const decision = router.resolve(planningTask, "planning", {
+      const decision = router.resolve(planningTask, "synthesis", {
         identityKey: "user-3",
         taskDescription: "Fix the Unity editor crash during 100-level generation",
         projectWorldFingerprint: "root tiki arrows modules castle systems 9",
@@ -597,11 +601,14 @@ describe("ProviderRouter", () => {
       expect(decision.provider).toBe("beta");
       expect(decision.reason).toContain("replay score");
       expect(decision.reason).toContain("persisted trajectories");
+      expect(decision.reason).toContain("verdict");
       expect(decision.replaySignal).toEqual({
-        phase: "planning",
+        phase: "synthesis",
         score: 0.86,
         sampleSize: 3,
         sameWorldMatches: 2,
+        verdictSampleSize: 2,
+        verdictScore: 0.91,
         latestTimestamp: 20,
       });
     });

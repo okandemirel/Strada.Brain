@@ -47,6 +47,8 @@ export interface RoutingDecision {
     readonly score: number;
     readonly sampleSize: number;
     readonly sameWorldMatches: number;
+    readonly verdictSampleSize: number;
+    readonly verdictScore: number;
     readonly latestTimestamp: number;
   };
 }

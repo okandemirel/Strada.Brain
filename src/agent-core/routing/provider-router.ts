@@ -548,7 +548,7 @@ export class ProviderRouter {
       ? `; phase score ${phaseScore.score.toFixed(2)} from ${phaseScore.sampleSize} runtime outcomes (verifier ${phaseScore.verifierCleanRate.toFixed(2)}, rollback ${phaseScore.rollbackRate.toFixed(2)})`
       : "";
     const replayNote = replaySignal
-      ? `; replay score ${replaySignal.score.toFixed(2)} from ${replaySignal.sampleSize} persisted trajectories${replaySignal.sameWorldMatches > 0 ? ` (${replaySignal.sameWorldMatches} same-world)` : ""}`
+      ? `; replay score ${replaySignal.score.toFixed(2)} from ${replaySignal.sampleSize} persisted trajectories${replaySignal.sameWorldMatches > 0 ? ` (${replaySignal.sameWorldMatches} same-world)` : ""}${replaySignal.verdictSampleSize > 0 ? `, verdict ${replaySignal.verdictScore.toFixed(2)}` : ""}`
       : "";
     return `${qualifier} choice for ${task.type} (${task.complexity}); ${workload} fit ${snapshot.workloadScores[workload].toFixed(2)}${topFeatures ? ` via ${topFeatures}` : ""}${phaseNote}${replayNote}`;
   }
@@ -694,6 +694,8 @@ export class ProviderRouter {
       score: signal.score,
       sampleSize: signal.sampleSize,
       sameWorldMatches: signal.sameWorldMatches,
+      verdictSampleSize: signal.verdictSampleSize,
+      verdictScore: signal.verdictScore,
       latestTimestamp: signal.latestTimestamp,
     };
   }

@@ -1053,6 +1053,59 @@ export class LearningStorage {
     return row ? this.rowToTrajectory(row) : null;
   }
 
+  getLatestTrajectoryVerdictScores(trajectoryIds: readonly string[]): Map<string, {
+    score: number;
+    createdAt: number;
+  }> {
+    this.ensureConnection();
+    if (trajectoryIds.length === 0) {
+      return new Map();
+    }
+
+    const placeholders = trajectoryIds.map(() => "?").join(",");
+    const rows = this.db!.prepare(`
+      SELECT
+        trajectory_id,
+        judge_type,
+        score,
+        created_at,
+        rowid
+      FROM verdicts
+      WHERE trajectory_id IN (${placeholders})
+      ORDER BY
+        trajectory_id ASC,
+        CASE judge_type
+          WHEN 'human' THEN 3
+          WHEN 'hybrid' THEN 2
+          WHEN 'automated' THEN 1
+          WHEN 'self' THEN 0
+          ELSE 0
+        END DESC,
+        created_at DESC,
+        rowid DESC
+    `).all(...trajectoryIds) as Array<{
+      trajectory_id: string;
+      judge_type: string;
+      score: number;
+      created_at: number;
+      rowid: number;
+    }>;
+
+    const scores = new Map<string, {
+      score: number;
+      createdAt: number;
+    }>();
+    for (const row of rows) {
+      if (!scores.has(row.trajectory_id)) {
+        scores.set(row.trajectory_id, {
+          score: row.score,
+          createdAt: row.created_at,
+        });
+      }
+    }
+    return scores;
+  }
+
   getTrajectoryByTaskRun(taskRunId: string, chatId?: string): Trajectory | null {
     this.ensureConnection();
     const row = chatId

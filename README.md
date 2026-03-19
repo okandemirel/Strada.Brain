@@ -593,6 +593,7 @@ Strada now also keeps an internal execution journal and rollback memory for each
 Memory is now split by role as well: user profile state keeps names/preferences/autonomy, task execution memory keeps session summaries/open items/rollback state, and project/world memory is injected explicitly from the active project root plus cached AgentDB analysis. Task execution memory is only the `latest snapshot` for the active identity, not the `persisted chronology` for an exact task run. That same project/world layer now also feeds recovery memory and adaptive routing, while semantic retrieval still adds live relevant memory separately.
 Cross-session `execution replay` now builds on that same path: Strada records project/world-aware recovery summaries into learning trajectories and injects the most relevant prior success/failure branches as an `Execution Replay` context layer before retrying similar work.
 That replay context now also persists phase/provider telemetry, so adaptive routing can reuse successful workers for similar tasks instead of relying only on in-memory runtime history.
+Terminal replay weighting now also blends the strongest available trajectory verdicts into those persisted signals, preferring trusted judge types before recency, so a branch that looked successful at runtime but was later judged weak carries less routing influence than a cleanly verified one.
 Replay correlation is now persisted with chat-scoped `taskRunId` values as well, so same-chat concurrent tasks no longer blend their phase telemetry or recovery history. The `persisted chronology` for an exact task run lives in those learning trajectories and replay contexts keyed by `taskRunId`.
 
 **Important:** `OPENAI_AUTH_MODE=chatgpt-subscription` only covers OpenAI conversation turns inside Strada. It does not grant OpenAI API billing or embeddings quota. If you choose `EMBEDDING_PROVIDER=openai`, you still need an `OPENAI_API_KEY`.
@@ -811,7 +812,7 @@ Slash commands available in all chat channels:
 | `/agent` | Show Agent Core status |
 | `/routing` | Show routing status and preset |
 | `/routing preset <name>` | Switch routing preset (budget/balanced/performance) |
-| `/routing info` | Show recent routing decisions, runtime execution traces, phase outcomes, and adaptive phase scores for the current identity, including verifier clean rate, rollback pressure, retry count, token-cost telemetry, provider catalog freshness, and official alignment / capability drift across planning, execution, clarification-review, review, and synthesis phases |
+| `/routing info` | Show recent routing decisions, runtime execution traces, phase outcomes, and adaptive phase scores for the current identity, including verifier clean rate, rollback pressure, retry count, token-cost telemetry, terminal replay verdict weighting, provider catalog freshness, and official alignment / capability drift across planning, execution, clarification-review, review, and synthesis phases |
 
 ---
 

@@ -36,6 +36,7 @@ PAOR now also carries an internal execution journal and rollback memory. Replann
 Cross-session execution replay now builds on the same path: Strada records project/world-aware recovery summaries into learning trajectories, then injects the most relevant prior success/failure branches as an `Execution Replay` context layer before planning retries.
 Task execution memory remains a `latest snapshot` for the active identity; exact task chronology lives in those persisted replay trajectories and contexts.
 That replay context now also persists phase/provider telemetry for the task window, so adaptive routing can reuse successful workers for similar tasks instead of depending only on process-local phase outcomes.
+Terminal replay phases now also blend the strongest available verdict for each replayed trajectory into those persisted signals, preferring trusted judge types before recency, so later review quality can down-weight a branch that only looked successful in its original runtime window without punishing earlier non-terminal phases for a later bad final result.
 Replay correlation is now also persisted with chat-scoped `taskRunId` values, so concurrent tasks in the same conversation do not blend their phase telemetry or recovery branches.
 
 `FallbackChainProvider` tries providers in order, swallows errors from non-last providers. Built via `buildProviderChain()` from `PROVIDER_CHAIN` env var.
@@ -76,7 +77,7 @@ The autonomy layer now also includes:
 - **Verifier Pipeline** — Aggregates build verification, targeted repro, log review, conformance, and completion-review results into a single continue/replan/approve control-plane outcome
 - **Execution Journal** — Tracks task branches, failed approaches, verifier findings, project/world anchors, and rollback memory so replans can reuse stable checkpoints instead of starting blind
 - **Task Execution Memory** — Persists session summaries, open items, verifier memory, and learned insights separately from user profile state so recovery context survives without polluting persona/preferences
-- **Execution Replay** — Reuses prior recorded learning trajectories as cross-session hints, weighted by task similarity and same-world fingerprints
+- **Execution Replay** — Reuses prior recorded learning trajectories as cross-session hints, weighted by task similarity, same-world fingerprints, and terminal verdict quality when the replay phase is itself terminal or verification-oriented
 
 ## Plugins (`plugins/plugin-loader.ts`)
 

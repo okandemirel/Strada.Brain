@@ -123,8 +123,189 @@ describe("TrajectoryPhaseSignalRetriever", () => {
       provider: "beta",
       successCount: 1,
       failureCount: 0,
+      verdictSampleSize: 0,
     });
     expect(signals[0]!.score).toBeGreaterThan(0.6);
+  });
+
+  it("down-weights synthesis replay signals when the latest verdict for a trajectory is poor", () => {
+    const now = Date.now();
+
+    const alphaTrajectory = createTrajectory({
+      id: "traj_alpha_clean",
+      taskDescription: "Fix the Unity editor crash while generating 100 levels",
+      success: true,
+      projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+      phaseTelemetry: [
+        {
+          phase: "synthesis",
+          role: "planner",
+          provider: "alpha",
+          model: "alpha-model",
+          source: "supervisor-strategy",
+          status: "approved",
+          verifierDecision: "approve",
+          timestamp: now - 4_000,
+        },
+      ],
+      createdAt: now - 4_000,
+    });
+    const betaTrajectory = createTrajectory({
+      id: "traj_beta_clean",
+      taskDescription: "Fix the Unity editor crash while generating 100 levels",
+      success: true,
+      projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+      phaseTelemetry: [
+        {
+          phase: "synthesis",
+          role: "planner",
+          provider: "beta",
+          model: "beta-model",
+          source: "supervisor-strategy",
+          status: "approved",
+          verifierDecision: "approve",
+          timestamp: now - 2_000,
+        },
+      ],
+      createdAt: now - 2_000,
+    });
+
+    storage.createTrajectoryImmediate(alphaTrajectory);
+    storage.createTrajectoryImmediate(betaTrajectory);
+
+    storage.recordVerdict({
+      id: "verdict_alpha_low" as any,
+      trajectoryId: alphaTrajectory.id as any,
+      judgeType: "human",
+      judgeId: "reviewer",
+      score: 0.2 as any,
+      dimensions: {
+        efficiency: 0.3 as any,
+        correctness: 0.2 as any,
+        quality: 0.2 as any,
+        bestPractices: 0.2 as any,
+      },
+      createdAt: (now - 1_000) as any,
+    });
+    storage.recordVerdict({
+      id: "verdict_beta_high" as any,
+      trajectoryId: betaTrajectory.id as any,
+      judgeType: "human",
+      judgeId: "reviewer",
+      score: 0.95 as any,
+      dimensions: {
+        efficiency: 0.95 as any,
+        correctness: 0.95 as any,
+        quality: 0.95 as any,
+        bestPractices: 0.95 as any,
+      },
+      createdAt: now as any,
+    });
+
+    const retriever = new TrajectoryPhaseSignalRetriever(storage);
+    const signals = retriever.getSignalsForTask({
+      taskDescription: "Fix the Unity crash during 100-level generation",
+      phase: "synthesis",
+      projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+    });
+
+    const alpha = signals.find((signal) => signal.provider === "alpha");
+    const beta = signals.find((signal) => signal.provider === "beta");
+    expect(alpha).toBeDefined();
+    expect(beta).toBeDefined();
+    expect(alpha!.verdictScore).toBeLessThan(beta!.verdictScore);
+    expect(alpha!.score).toBeLessThan(beta!.score);
+  });
+
+  it("does not apply trajectory verdict weighting to planning replay signals", () => {
+    const now = Date.now();
+
+    const alphaTrajectory = createTrajectory({
+      id: "traj_alpha_planning",
+      taskDescription: "Fix the Unity editor crash while generating 100 levels",
+      success: true,
+      projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+      phaseTelemetry: [
+        {
+          phase: "planning",
+          role: "planner",
+          provider: "alpha",
+          model: "alpha-model",
+          source: "supervisor-strategy",
+          status: "approved",
+          verifierDecision: "approve",
+          timestamp: now - 2_000,
+        },
+      ],
+      createdAt: now - 2_000,
+    });
+    const betaTrajectory = createTrajectory({
+      id: "traj_beta_planning",
+      taskDescription: "Fix the Unity editor crash while generating 100 levels",
+      success: true,
+      projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+      phaseTelemetry: [
+        {
+          phase: "planning",
+          role: "planner",
+          provider: "beta",
+          model: "beta-model",
+          source: "supervisor-strategy",
+          status: "approved",
+          verifierDecision: "approve",
+          timestamp: now - 2_000,
+        },
+      ],
+      createdAt: now - 2_000,
+    });
+
+    storage.createTrajectoryImmediate(alphaTrajectory);
+    storage.createTrajectoryImmediate(betaTrajectory);
+
+    storage.recordVerdict({
+      id: "verdict_alpha_planning_low" as any,
+      trajectoryId: alphaTrajectory.id as any,
+      judgeType: "human",
+      judgeId: "reviewer",
+      score: 0.1 as any,
+      dimensions: {
+        efficiency: 0.1 as any,
+        correctness: 0.1 as any,
+        quality: 0.1 as any,
+        bestPractices: 0.1 as any,
+      },
+      createdAt: now as any,
+    });
+    storage.recordVerdict({
+      id: "verdict_beta_planning_high" as any,
+      trajectoryId: betaTrajectory.id as any,
+      judgeType: "human",
+      judgeId: "reviewer",
+      score: 0.95 as any,
+      dimensions: {
+        efficiency: 0.95 as any,
+        correctness: 0.95 as any,
+        quality: 0.95 as any,
+        bestPractices: 0.95 as any,
+      },
+      createdAt: now as any,
+    });
+
+    const retriever = new TrajectoryPhaseSignalRetriever(storage);
+    const signals = retriever.getSignalsForTask({
+      taskDescription: "Fix the Unity crash during 100-level generation",
+      phase: "planning",
+      projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+    });
+
+    const alpha = signals.find((signal) => signal.provider === "alpha");
+    const beta = signals.find((signal) => signal.provider === "beta");
+    expect(alpha).toBeDefined();
+    expect(beta).toBeDefined();
+    expect(alpha!.verdictSampleSize).toBe(0);
+    expect(beta!.verdictSampleSize).toBe(0);
+    expect(alpha!.verdictScore).toBe(0.5);
+    expect(beta!.verdictScore).toBe(0.5);
   });
 });
 

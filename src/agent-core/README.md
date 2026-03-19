@@ -41,7 +41,7 @@ Runs as part of HeartbeatLoop.tick(). Each tick: collect observations → score 
 Collects from registered observers, deduplicates within 60s window, maintains history (100 entries max). Priority-sorted output.
 
 ### ProviderRouter
-Scores available providers against task classification using configurable preset weights (cost, capability, speed, diversity). Supports PAOR phase switching — different providers for planning vs execution vs reflection.
+Scores available providers against task classification using configurable preset weights plus learned control-plane signals. Preset workload weights (`cost`, `capability`, `speed`, `diversity`) are now combined with runtime phase telemetry, verifier cleanliness, rollback pressure, retry cost, provider-catalog freshness, official alignment, and persisted execution replay signals. Terminal replay bias also blends the strongest available trajectory verdict, preferring trusted judge types before recency, so a later weak review can down-weight a branch that only looked successful in its original runtime window without punishing earlier non-terminal phases. Supports PAOR phase switching, so planning, execution, clarification-review, review, and synthesis can favor different workers without provider-specific hardcoding.
 
 ### ConsensusManager
 When ConfidenceEstimator scores output below threshold, ConsensusManager verifies with a second provider. Strategies: "review" (ask if correct) or "re-execute" (same prompt to different provider). Graceful degradation: 1 provider = skip entirely.

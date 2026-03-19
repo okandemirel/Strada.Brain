@@ -175,6 +175,86 @@ describe("LearningStorage", () => {
       expect(unscoped?.chatId).toBe("chat-other");
     });
 
+    it("prefers the strongest judge type before recency when picking a trajectory verdict score", () => {
+      const trajectory = createTestTrajectory();
+      storage.createTrajectoryImmediate(trajectory);
+
+      storage.recordVerdict({
+        id: "verdict_human" as any,
+        trajectoryId: trajectory.id as any,
+        judgeType: "human",
+        judgeId: "reviewer",
+        score: 0.35 as any,
+        dimensions: {
+          efficiency: 0.4 as any,
+          correctness: 0.3 as any,
+          quality: 0.35 as any,
+          bestPractices: 0.35 as any,
+        },
+        createdAt: 1000 as any,
+      });
+      storage.recordVerdict({
+        id: "verdict_auto_newer" as any,
+        trajectoryId: trajectory.id as any,
+        judgeType: "automated",
+        judgeId: "system",
+        score: 0.92 as any,
+        dimensions: {
+          efficiency: 0.9 as any,
+          correctness: 0.95 as any,
+          quality: 0.9 as any,
+          bestPractices: 0.93 as any,
+        },
+        createdAt: 2000 as any,
+      });
+
+      const scores = storage.getLatestTrajectoryVerdictScores([trajectory.id]);
+      expect(scores.get(trajectory.id)).toEqual({
+        score: 0.35,
+        createdAt: 1000,
+      });
+    });
+
+    it("breaks verdict ties deterministically when timestamps match", () => {
+      const trajectory = createTestTrajectory();
+      storage.createTrajectoryImmediate(trajectory);
+
+      storage.recordVerdict({
+        id: "verdict_first" as any,
+        trajectoryId: trajectory.id as any,
+        judgeType: "human",
+        judgeId: "reviewer-a",
+        score: 0.2 as any,
+        dimensions: {
+          efficiency: 0.2 as any,
+          correctness: 0.2 as any,
+          quality: 0.2 as any,
+          bestPractices: 0.2 as any,
+        },
+        createdAt: 3000 as any,
+      });
+      storage.recordVerdict({
+        id: "verdict_second" as any,
+        trajectoryId: trajectory.id as any,
+        judgeType: "human",
+        judgeId: "reviewer-b",
+        score: 0.8 as any,
+        dimensions: {
+          efficiency: 0.8 as any,
+          correctness: 0.8 as any,
+          quality: 0.8 as any,
+          bestPractices: 0.8 as any,
+        },
+        createdAt: 3000 as any,
+      });
+
+      const scores = storage.getLatestTrajectoryVerdictScores([trajectory.id]);
+      expect(scores.get(trajectory.id)).toEqual({
+        score: 0.8,
+        createdAt: 3000,
+      });
+    });
+
     it("should get unprocessed trajectories", () => {
       const unprocessed = createTestTrajectory();
       const processed = { ...createTestTrajectory(), id: randomUUID(), processed: true };

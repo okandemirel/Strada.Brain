@@ -13,6 +13,8 @@ export interface TrajectoryPhaseSignal {
   readonly sameWorldMatches: number;
   readonly successCount: number;
   readonly failureCount: number;
+  readonly verdictSampleSize: number;
+  readonly verdictScore: number;
   readonly latestTimestamp: number;
   readonly score: number;
 }
@@ -22,10 +24,12 @@ interface ReplayPhaseCandidate {
   readonly trajectory: Trajectory;
   readonly weight: number;
   readonly sameWorld: boolean;
+  readonly verdictScore?: number;
 }
 
 const NEUTRAL_SCORE = 0.5;
 const PRIOR_WEIGHT = 2;
+const VERDICT_BLEND_WEIGHT = 0.3;
 
 export class TrajectoryPhaseSignalRetriever {
   private readonly maxTrajectories: number;
@@ -48,8 +52,19 @@ export class TrajectoryPhaseSignalRetriever {
     }
 
     const trajectories = this.storage.getTrajectories({ limit: this.maxTrajectories });
+    const verdictScores = phaseUsesTrajectoryVerdict(params.phase)
+      ? this.storage.getLatestTrajectoryVerdictScores(
+        trajectories.map((trajectory) => trajectory.id),
+      )
+      : new Map<string, { score: number; createdAt: number }>();
     const candidates = trajectories
-      .flatMap((trajectory) => this.collectCandidates(trajectory, normalizedTask, params.phase, params.projectWorldFingerprint))
+      .flatMap((trajectory) => this.collectCandidates(
+        trajectory,
+        normalizedTask,
+        params.phase,
+        params.projectWorldFingerprint,
+        verdictScores.get(trajectory.id)?.score,
+      ))
       .sort((left, right) => right.weight - left.weight);
 
     if (candidates.length === 0) {
@@ -64,6 +79,9 @@ export class TrajectoryPhaseSignalRetriever {
       sameWorldMatches: number;
       successCount: number;
       failureCount: number;
+      verdictSampleSize: number;
+      verdictWeightedTotal: number;
+      verdictWeightTotal: number;
       latestTimestamp: number;
     }>();
 
@@ -81,6 +99,9 @@ export class TrajectoryPhaseSignalRetriever {
         sameWorldMatches: 0,
         successCount: 0,
         failureCount: 0,
+        verdictSampleSize: 0,
+        verdictWeightedTotal: 0,
+        verdictWeightTotal: 0,
         latestTimestamp: 0,
       };
       const contribution = scoreCandidate(candidate);
@@ -95,6 +116,11 @@ export class TrajectoryPhaseSignalRetriever {
       } else if (isFailedReplayPhase(candidate.phaseTelemetry)) {
         current.failureCount += 1;
       }
+      if (candidate.verdictScore !== undefined) {
+        current.verdictSampleSize += 1;
+        current.verdictWeightedTotal += clamp(candidate.verdictScore) * candidate.weight;
+        current.verdictWeightTotal += candidate.weight;
+      }
       current.latestTimestamp = Math.max(current.latestTimestamp, candidate.phaseTelemetry.timestamp, candidate.trajectory.createdAt);
       grouped.set(provider, current);
     }
@@ -107,6 +133,10 @@ export class TrajectoryPhaseSignalRetriever {
         sameWorldMatches: entry.sameWorldMatches,
         successCount: entry.successCount,
         failureCount: entry.failureCount,
+        verdictSampleSize: entry.verdictSampleSize,
+        verdictScore: entry.verdictWeightTotal > 0
+          ? clamp(entry.verdictWeightedTotal / entry.verdictWeightTotal)
+          : NEUTRAL_SCORE,
         latestTimestamp: entry.latestTimestamp,
         score: clamp(
           (
@@ -136,6 +166,7 @@ export class TrajectoryPhaseSignalRetriever {
     normalizedTask: string,
     phase: ExecutionPhase,
     projectWorldFingerprint?: string,
+    verdictScore?: number,
   ): ReplayPhaseCandidate[] {
     const replayContext = trajectory.outcome.replayContext;
     if (!replayContext?.phaseTelemetry?.length) {
@@ -165,14 +196,18 @@ export class TrajectoryPhaseSignalRetriever {
         trajectory,
         weight,
         sameWorld: match.sameWorld,
+        verdictScore,
       }));
   }
 }
 
 function scoreCandidate(candidate: ReplayPhaseCandidate): number {
   const statusScore = scoreReplayStatus(candidate.phaseTelemetry);
+  const verdictAdjustedScore = candidate.verdictScore === undefined
+    ? statusScore
+    : statusScore * (1 - VERDICT_BLEND_WEIGHT) + clamp(candidate.verdictScore) * VERDICT_BLEND_WEIGHT;
   const sameWorldBonus = candidate.sameWorld ? 0.05 : 0;
-  return clamp(statusScore + sameWorldBonus);
+  return clamp(verdictAdjustedScore + sameWorldBonus);
 }
 
 function scoreReplayStatus(phaseTelemetry: TrajectoryPhaseReplay): number {
@@ -204,4 +239,11 @@ function isFailedReplayPhase(phaseTelemetry: TrajectoryPhaseReplay): boolean {
   return phaseTelemetry.status === "replanned"
     || phaseTelemetry.status === "blocked"
     || phaseTelemetry.status === "failed";
+}
+
+function phaseUsesTrajectoryVerdict(phase: ExecutionPhase): boolean {
+  return phase === "synthesis"
+    || phase === "completion-review"
+    || phase === "consensus-review"
+    || phase === "shell-review";
 }
