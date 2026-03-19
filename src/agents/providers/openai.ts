@@ -550,8 +550,11 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     const logger = getLogger();
     try {
       if (this.isChatGptSubscriptionMode()) {
+        const authConfig = this.getChatGptSubscriptionAuth();
         const authInspection = inspectOpenAiSubscriptionAuth({
-          authFile: this.getChatGptSubscriptionAuth().authFile,
+          authFile: authConfig.authFile,
+          accessToken: authConfig.accessToken,
+          accountId: authConfig.accountId,
           env: process.env,
         });
         if (!authInspection.ok) {
