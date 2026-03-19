@@ -607,7 +607,7 @@ export class ToolRegistry {
       },
     );
 
-    // Interactive tools (ask_user, show_plan)
+    // Control-plane interaction tools (ask_user, show_plan)
     this.register(new AskUserTool(), {
       category: ToolCategories.INTROSPECTION,
       dangerous: false,

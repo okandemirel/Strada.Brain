@@ -110,7 +110,7 @@ export function buildReflectionPrompt(state: AgentState): string {
     "- **DONE** - the task is complete",
     "- **DONE_WITH_SUGGESTIONS** - task complete, but include proactive next-step recommendations for the user",
     "",
-    "Prefer DONE_WITH_SUGGESTIONS over DONE when you can identify useful follow-up actions.",
+    "Only use DONE_WITH_SUGGESTIONS after you have already completed and verified the user's requested work. Never use suggestions as a substitute for continuing the task.",
     "Only choose DONE or DONE_WITH_SUGGESTIONS when recent failures are resolved and the final state has a relevant clean verification signal.",
     "If a bug fix still has failing tool output, missing verification, or contradictory evidence, choose CONTINUE or REPLAN.",
     "Your final line MUST be one of: **CONTINUE**, **REPLAN**, **DONE**, or **DONE_WITH_SUGGESTIONS**",

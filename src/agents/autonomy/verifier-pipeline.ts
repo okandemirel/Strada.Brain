@@ -115,7 +115,7 @@ export function planVerifierPipeline(params: {
     };
   }
 
-  if (!shouldRunCompletionReview(evidence, params.draft)) {
+  if (!shouldRunCompletionReview(evidence, params.draft, params.prompt)) {
     return {
       evidence,
       checks,

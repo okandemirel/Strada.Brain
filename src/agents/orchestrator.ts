@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage, Attachment } from "../channels/channel.interface.js";
-import { supportsRichMessaging } from "../channels/channel.interface.js";
+import { supportsInteractivity, supportsRichMessaging } from "../channels/channel.interface.js";
 import { isVisionCompatible, toBase64ImageSource } from "../utils/media-processor.js";
 import type { MessageContent, AssistantMessage } from "./providers/provider-core.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
@@ -72,6 +72,7 @@ import {
   planVerifierPipeline,
   sanitizeClarificationReviewDecision,
   shouldRunClarificationReview,
+  userExplicitlyAskedForPlan,
   type VerifierPipelineResult,
 } from "./autonomy/index.js";
 import { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
@@ -118,7 +119,7 @@ const AUTONOMOUS_MODE_DIRECTIVE = `\n\n## AUTONOMOUS MODE ACTIVE
 You are operating in AUTONOMOUS MODE. The user has explicitly granted you full autonomy.
 - Execute ALL operations directly without asking for confirmation
 - Do NOT use ask_user tool for permission/confirmation questions
-- Do NOT use show_plan tool to wait for approval — execute immediately
+- Do NOT use show_plan tool to wait for approval unless the user explicitly asked to review a plan first
 - If you use show_plan internally, make it concrete and execution-ready; strong plans are self-reviewed and auto-approved
 - Only use ask_user when you genuinely cannot determine user intent (missing critical info)
 - If you use ask_user anyway, prefer decision-ready options because the system may resolve the choice autonomously
@@ -132,6 +133,7 @@ const PLAN_EXECUTABLE_PATTERN = /\b(analy(?:se|ze)|inspect|read|search|trace|rep
 const PERMISSION_QUESTION_PATTERN = /\b(approve|approval|permission|okay|ok(?:ay)? to|should i|may i|can i|do you want me to|confirm|proceed|continue|go ahead|allowed)\b/i;
 const AUTO_APPROVE_OPTION_PATTERN = /\b(approve|approved|continue|proceed|yes|ok|okay|go ahead|accept)\b/i;
 const AUTO_REJECT_OPTION_PATTERN = /\b(reject|deny|cancel|stop|no)\b/i;
+const PLAN_APPROVAL_MESSAGE_RE = /^(?:\s*)(?:approve|approved|go ahead|proceed|continue|yes|ok|okay|looks good|ship it|tamam|devam|uygun)(?:\b|[.!])/iu;
 const NATURAL_LANGUAGE_AUTONOMOUS_HOURS = 24;
 const SAFE_SHELL_SEGMENT_PATTERN =
   /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck)\b)|npx\s+(?:vitest|eslint|tsc)\b|git\s+(?:status|diff|log|show|branch|rev-parse)\b|(?:rg|ls|pwd|cat|head|tail|find|sed|wc|stat|grep|test)\b|(?:vitest|eslint|tsc)\b)/i;
@@ -273,6 +275,11 @@ interface NaturalLanguageDirectiveUpdates {
     enabled: boolean;
     expiresAt?: number;
   };
+}
+
+interface PendingPlanReview {
+  readonly requestedAt: number;
+  readonly reason: string;
 }
 
 function sanitizePreferenceText(raw: string, maxLength = 160): string {
@@ -594,6 +601,7 @@ export class Orchestrator {
   private depsSetupComplete: boolean = false;
   private readonly pendingDepsPrompt = new Map<string, boolean>();
   private readonly pendingModulesPrompt = new Map<string, boolean>();
+  private readonly pendingPlanReviews = new Map<string, PendingPlanReview>();
   private readonly instinctRetriever: InstinctRetriever | null;
   private readonly trajectoryReplayRetriever: TrajectoryReplayRetriever | null;
   private readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
@@ -2967,6 +2975,15 @@ export class Orchestrator {
     this.metrics?.recordMessage();
     this.metrics?.setActiveSessions(this.sessions.size);
     const identityKey = resolveIdentityKey(chatId, userId, conversationId);
+    const pendingPlanReview = this.getPendingPlanReview(chatId);
+    if (pendingPlanReview && this.isPlanApprovalMessage(text)) {
+      this.clearPendingPlanReview(chatId);
+      logger.info("Cleared pending plan review after explicit user approval", {
+        chatId,
+        userId,
+        reason: pendingPlanReview.reason,
+      });
+    }
 
     // Get or create session
     const session = this.getOrCreateSession(chatId);
@@ -4409,19 +4426,118 @@ export class Orchestrator {
     };
   }
 
-  private resolveInteractiveToolCall(
-    chatId: string,
-    toolCall: ToolCall,
-    mode: ToolExecutionMode,
-    userId?: string,
-  ): ToolResult | null {
-    if (!this.isSelfManagedInteractiveMode(chatId, mode, userId)) {
+  private formatRequestedPlan(input: Record<string, unknown>): string | null {
+    const summary = this.normalizeInteractiveText(input["summary"]);
+    const reasoning = this.normalizeInteractiveText(input["reasoning"]);
+    const steps = Array.isArray(input["steps"])
+      ? input["steps"]
+        .map((step) => this.normalizeInteractiveText(step))
+        .filter((step) => step.length > 0)
+      : [];
+
+    if (!summary || steps.length === 0) {
       return null;
     }
 
+    const sections = [`Plan: ${summary}`, "", "Steps:"];
+    for (const [index, step] of steps.entries()) {
+      sections.push(`${index + 1}. ${step}`);
+    }
+    if (reasoning) {
+      sections.push("", `Reasoning: ${reasoning}`);
+    }
+    return sections.join("\n");
+  }
+
+  private setPendingPlanReview(chatId: string, reason: string): void {
+    this.pendingPlanReviews.set(chatId, {
+      requestedAt: Date.now(),
+      reason,
+    });
+  }
+
+  private clearPendingPlanReview(chatId: string): void {
+    this.pendingPlanReviews.delete(chatId);
+  }
+
+  private getPendingPlanReview(chatId: string): PendingPlanReview | undefined {
+    return this.pendingPlanReviews.get(chatId);
+  }
+
+  private isPlanApprovalMessage(text: string): boolean {
+    return PLAN_APPROVAL_MESSAGE_RE.test(text.trim());
+  }
+
+  private async resolveInteractiveToolCall(
+    chatId: string,
+    toolCall: ToolCall,
+    mode: ToolExecutionMode,
+    taskPrompt: string | undefined,
+    userId?: string,
+  ): Promise<ToolResult | null> {
     if (toolCall.name === "show_plan") {
+      const explicitPlanReview = taskPrompt && userExplicitlyAskedForPlan(taskPrompt);
+      if (explicitPlanReview) {
+        const planText = this.formatRequestedPlan(toolCall.input);
+        if (!planText) {
+          this.setPendingPlanReview(chatId, "user explicitly asked to review a plan first");
+          return {
+            toolCallId: toolCall.id,
+            content:
+              "Plan request could not be satisfied because the proposed plan is incomplete. " +
+              "Provide a concrete summary and actionable steps before asking the user to review it. " +
+              "Do not execute write-capable actions until the plan is reviewed.",
+            isError: true,
+          };
+        }
+
+        this.setPendingPlanReview(chatId, "user explicitly asked to review a plan first");
+
+        if (mode === "interactive" && this.channel && supportsInteractivity(this.channel)) {
+          const response = await this.channel.requestConfirmation({
+            chatId,
+            userId,
+            question: planText,
+            options: ["Approve", "Modify", "Reject"],
+            details: "User explicitly asked to review the plan before execution.",
+          });
+
+          if (response === "timeout") {
+            return {
+              toolCallId: toolCall.id,
+              content: "User did not respond to the requested plan review. Wait for their decision before proceeding with write-capable actions.",
+              isError: true,
+            };
+          }
+
+          if (response === "Approve") {
+            this.clearPendingPlanReview(chatId);
+            return { toolCallId: toolCall.id, content: "Plan approved by user. Proceed with execution." };
+          }
+
+          return {
+            toolCallId: toolCall.id,
+            content: response === "Reject"
+              ? "Plan rejected by user. Revise the approach or ask one focused follow-up question only if a real decision blocker remains. Do not execute write-capable actions until the revised plan is approved."
+              : `User requested plan changes: "${response}". Revise the plan accordingly and show it again before proceeding. Do not execute write-capable actions until the revised plan is approved.`,
+            isError: response === "Reject",
+          };
+        }
+
+        return {
+          toolCallId: toolCall.id,
+          content:
+            "User explicitly asked to review the plan before execution. Present the plan in your next user-facing response and wait for approval or revision before any write-capable actions.",
+          isError: true,
+        };
+      }
+
       const review = this.reviewAutonomousPlan(toolCall.input, mode);
       return { toolCallId: toolCall.id, content: review.content, isError: review.isError };
+    }
+
+    if (!this.isSelfManagedInteractiveMode(chatId, mode, userId)) {
+      return null;
     }
 
     if (toolCall.name === "ask_user") {
@@ -4599,7 +4715,11 @@ export class Orchestrator {
       chatId: params.chatId,
       taskStartedAtMs: params.taskStartedAtMs,
     });
-    const autonomyDeflectionGate = buildAutonomyDeflectionGate(params.draft ?? "", plan.evidence);
+    const autonomyDeflectionGate = buildAutonomyDeflectionGate(
+      params.draft ?? "",
+      plan.evidence,
+      params.prompt,
+    );
     if (autonomyDeflectionGate) {
       return {
         kind: "continue",
@@ -4871,7 +4991,13 @@ export class Orchestrator {
 
     for (const tc of toolCalls) {
       let activeToolCall = tc;
-      const interactiveResolution = this.resolveInteractiveToolCall(chatId, activeToolCall, mode, options.userId);
+      const interactiveResolution = await this.resolveInteractiveToolCall(
+        chatId,
+        activeToolCall,
+        mode,
+        options.taskPrompt,
+        options.userId,
+      );
       if (interactiveResolution) {
         results.push(interactiveResolution);
         continue;
@@ -4921,6 +5047,18 @@ export class Orchestrator {
         results.push({
           toolCallId: activeToolCall.id,
           content: `Error: unknown tool '${activeToolCall.name}'`,
+          isError: true,
+        });
+        continue;
+      }
+
+      const pendingPlanReview = this.getPendingPlanReview(chatId);
+      if (pendingPlanReview && this.isWriteOperation(activeToolCall.name)) {
+        results.push({
+          toolCallId: activeToolCall.id,
+          content:
+            `Plan approval is still required before '${activeToolCall.name}' can run. ` +
+            `Reason: ${pendingPlanReview.reason}. Revise or reshow the plan, or wait for the user to approve it first.`,
           isError: true,
         });
         continue;

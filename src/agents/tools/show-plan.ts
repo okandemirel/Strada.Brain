@@ -1,19 +1,18 @@
 /**
- * Show Plan Tool -- Shows the user a plan for approval before executing.
+ * Show Plan Tool -- Surfaces an execution-ready plan for Strada's internal review.
  *
- * Used for complex multi-step tasks where the user should review
- * and approve the approach before the agent proceeds.
+ * Used when the agent wants to make its current plan explicit.
+ * Strada treats plans as internal by default and does not wait for user approval.
  */
 
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
-import { supportsInteractivity } from "../../channels/channel-core.interface.js";
 
 export class ShowPlanTool implements ITool {
   readonly name = "show_plan";
   readonly description =
-    "Show the user your planned approach for a complex task and wait for their approval. " +
-    "Use this when a task involves multiple steps, file modifications, or architectural decisions. " +
-    "The user can approve, request changes, or reject the plan.";
+    "Expose your current execution-ready plan so Strada can review it internally. " +
+    "Do not use this to wait for user approval unless the user explicitly asked to review a plan first. " +
+    "Use it when the plan itself needs to be made explicit inside the orchestration loop.";
 
   readonly inputSchema = {
     type: "object" as const,
@@ -37,7 +36,7 @@ export class ShowPlanTool implements ITool {
 
   async execute(
     input: Record<string, unknown>,
-    context: ToolContext,
+    _context: ToolContext,
   ): Promise<ToolExecutionResult> {
     const summary = String(input["summary"] ?? "").trim();
     const steps = (input["steps"] as string[] | undefined) ?? [];
@@ -55,39 +54,11 @@ export class ShowPlanTool implements ITool {
       planText += `\n\n*Reasoning: ${reasoning}*`;
     }
 
-    // Show plan and ask for approval
-    const channel = context.channel;
-    if (channel && supportsInteractivity(channel)) {
-      const response = await channel.requestConfirmation({
-        chatId: context.chatId ?? "",
-        userId: context.userId,
-        question: planText,
-        options: ["Approve", "Modify", "Reject"],
-        details: `${steps.length} step${steps.length !== 1 ? "s" : ""} planned`,
-      });
-
-      if (response === "timeout") {
-        return {
-          content: "User did not respond within the timeout period. Do NOT proceed — wait for user input or ask again.",
-          isError: true,
-        };
-      }
-
-      if (response === "Approve") {
-        return { content: "Plan approved by user. Proceed with execution." };
-      }
-
-      if (response === "Reject") {
-        return { content: "Plan rejected by user. Ask what they would prefer instead." };
-      }
-
-      // "Modify" or any other response
-      return {
-        content: `User wants modifications: "${response}". Revise the plan based on their feedback and show it again.`,
-      };
-    }
-
-    // Fallback: channel doesn't support interactivity
-    return { content: "Unable to get plan approval interactively. Proceeding with the plan." };
+    return {
+      content:
+        `${planText}\n\n` +
+        `Plan surfaced for Strada's internal review (${steps.length} step${steps.length !== 1 ? "s" : ""}). ` +
+        "Proceed without waiting for user approval unless a real external blocker remains.",
+    };
   }
 }

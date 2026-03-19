@@ -69,6 +69,11 @@ const MUTATION_TOOL_NAMES = new Set([
 const USER_DEFLECTION_RE = /\b(?:what should i do|what do you want me to do|do you want me to|would you like me to|should i\b|ne yapmalıyım|ne yapayım|ister misin|ekran görüntüsü|screenshot)\b/iu;
 const SCOPE_QUALIFIER_RE = /\b(?:all|every|entire|whole|full|tüm|hepsi|bütün)\b/iu;
 const SCOPE_COMPLETION_VERB_RE = /\b(?:verified|reviewed|analy[sz]ed|complete(?:d)?|tamamlandı|doğrulandı|analiz(?:i)? tamamlandı)\b/iu;
+const PLAN_HEADING_RE = /^(?:#{1,6}\s*)?(?:plan|execution plan|approach|next steps?)\b/iu;
+const INTAKE_HEADING_RE = /^(?:#{1,6}\s*)?(?:minimum inputs|requirements?|objective|scope|project health check)\b/iu;
+const STRUCTURED_STEP_RE = /(?:^|\n)\s*(?:\d+\.\s+|[A-D]\)\s+|[-*]\s+)(?:run|read|inspect|search|trace|collect|get|locate|identify|check|verify|create|update|fix|branch|treat|add|remove|ask|confirm|clarify)\b/gimu;
+const INTERNAL_PLAN_RE = /\b(?:execution-ready plan|execution plan|plan to fix|next step is|first step|second step|minimum inputs to proceed)\b/iu;
+const EXPLICIT_PLAN_REQUEST_RE = /\b(?:show|give|share|outline|plan|explain|walk me through)\b.{0,30}\b(?:plan|approach|steps?|game plan)\b|\b(?:what(?:'s| is)?|how)\b.{0,25}\b(?:your|the)\b.{0,20}\b(?:plan|approach)\b|\b(?:create|make|write)\b.{0,20}\b(?:a )?(?:plan|checklist)\b/iu;
 
 export function collectCompletionReviewEvidence(params: {
   state: AgentState;
@@ -111,20 +116,23 @@ export function collectCompletionReviewEvidence(params: {
 export function shouldRunCompletionReview(
   evidence: CompletionReviewEvidence,
   draft: string,
+  prompt = "",
 ): boolean {
   return (
     evidence.touchedFiles.length > 0 ||
     evidence.recentFailures.length > 0 ||
     evidence.recentLogIssues.length > 0 ||
-    draftNeedsReview(draft, evidence)
+    draftNeedsReview(draft, evidence, prompt)
   );
 }
 
 export function buildAutonomyDeflectionGate(
   draft: string,
   evidence: CompletionReviewEvidence,
+  prompt = "",
 ): string | null {
-  if (!USER_DEFLECTION_RE.test(draft)) {
+  const driftKind = classifyAutonomyDrift(draft, prompt);
+  if (driftKind === "none") {
     return null;
   }
 
@@ -135,9 +143,13 @@ export function buildAutonomyDeflectionGate(
   ].join("\n");
 
   return [
-    "[AUTONOMY REQUIRED] The current draft hands the next step back to the user without surfacing a terminal blocker.",
+    driftKind === "plan"
+      ? "[AUTONOMY REQUIRED] The current draft is an internal execution plan or intake checklist, not a user-facing result."
+      : "[AUTONOMY REQUIRED] The current draft hands the next step back to the user without surfacing a terminal blocker.",
     "Strada must continue autonomously here.",
-    "Do not ask the user what to do next, request a screenshot, or ask them to choose between fix paths unless there is a real external blocker or a materially risky irreversible decision.",
+    driftKind === "plan"
+      ? "Do not surface internal plans, requirement-gathering checklists, or execution TODOs as the final user-facing reply unless the user explicitly asked for a plan."
+      : "Do not ask the user what to do next, request a screenshot, or ask them to choose between fix paths unless there is a real external blocker or a materially risky irreversible decision.",
     `Evidence so far:\n${evidenceSummary}`,
     "Inspect the relevant files/assets directly, use another provider/reviewer if needed, verify the concrete outcome, and only then return the result.",
   ].join("\n\n");
@@ -272,17 +284,50 @@ function isRelevantLogIssue(entry: LogEntry, chatId: string, cutoffMs: number): 
   return entry.message.includes(chatId);
 }
 
-function draftNeedsReview(draft: string, evidence: CompletionReviewEvidence): boolean {
+function draftNeedsReview(
+  draft: string,
+  evidence: CompletionReviewEvidence,
+  prompt = "",
+): boolean {
   const normalized = draft.trim();
   if (!normalized) {
     return false;
   }
-  if (USER_DEFLECTION_RE.test(normalized)) {
+  if (classifyAutonomyDrift(normalized, prompt) !== "none") {
     return true;
   }
   return SCOPE_QUALIFIER_RE.test(normalized)
     && SCOPE_COMPLETION_VERB_RE.test(normalized)
     && evidence.totalStepCount > 0;
+}
+
+function classifyAutonomyDrift(
+  draft: string,
+  prompt = "",
+): "none" | "user_deflection" | "plan" {
+  const normalized = draft.trim();
+  if (!normalized) {
+    return "none";
+  }
+  if (USER_DEFLECTION_RE.test(normalized)) {
+    return "user_deflection";
+  }
+
+  const firstLine = normalized.split("\n", 1)[0] ?? "";
+  const looksLikePlanHeading = PLAN_HEADING_RE.test(firstLine) || INTAKE_HEADING_RE.test(firstLine);
+  const structuredSteps = (normalized.match(STRUCTURED_STEP_RE) ?? []).length;
+  const looksLikeInternalPlan = INTERNAL_PLAN_RE.test(normalized) || looksLikePlanHeading;
+  const userAskedForPlan = userExplicitlyAskedForPlan(prompt);
+
+  if (looksLikeInternalPlan && structuredSteps >= 2 && !userAskedForPlan) {
+    return "plan";
+  }
+
+  return "none";
+}
+
+export function userExplicitlyAskedForPlan(prompt: string): boolean {
+  return EXPLICIT_PLAN_REQUEST_RE.test(prompt.trim());
 }
 
 function isVerificationStep(toolName: string, summary: string): boolean {

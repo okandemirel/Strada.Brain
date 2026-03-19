@@ -153,4 +153,66 @@ describe("completion-review", () => {
     expect(gate).toContain("[AUTONOMY REQUIRED]");
     expect(gate).toContain("Strada must continue autonomously here.");
   });
+
+  it("builds an autonomy gate when the draft is only an internal execution plan", () => {
+    const evidence = collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [
+          { toolName: "list_directory", success: true, summary: "Listed Assets/Resources/Levels", timestamp: Date.now() },
+          { toolName: "file_read", success: true, summary: "Read Level_031.asset", timestamp: Date.now() },
+        ],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      chatId: "chat-plan-drift",
+      taskStartedAtMs: Date.now() - 1000,
+      logEntries: [],
+    });
+
+    const gate = buildAutonomyDeflectionGate(
+      `Plan to fix the pooling compile errors
+
+1. Run dotnet_build for the solution
+2. Read the failing pooling files
+3. Search the package for the missing types`,
+      evidence,
+    );
+    expect(gate).toContain("[AUTONOMY REQUIRED]");
+    expect(gate).toContain("internal execution plan or intake checklist");
+  });
+
+  it("allows an internal plan draft when the user explicitly asked for a plan", () => {
+    const evidence = collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [
+          { toolName: "list_directory", success: true, summary: "Listed Assets/Resources/Levels", timestamp: Date.now() },
+          { toolName: "file_read", success: true, summary: "Read Level_031.asset", timestamp: Date.now() },
+        ],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      chatId: "chat-explicit-plan",
+      taskStartedAtMs: Date.now() - 1000,
+      logEntries: [],
+    });
+
+    const draft = `Plan to fix the pooling compile errors
+
+1. Run dotnet_build for the solution
+2. Read the failing pooling files
+3. Search the package for the missing types`;
+
+    expect(buildAutonomyDeflectionGate(draft, evidence, "Show me the plan before you touch the code.")).toBeNull();
+    expect(shouldRunCompletionReview(evidence, draft, "Show me the plan before you touch the code.")).toBe(false);
+  });
 });

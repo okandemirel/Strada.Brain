@@ -11,9 +11,8 @@ import { supportsInteractivity } from "../../channels/channel-core.interface.js"
 export class AskUserTool implements ITool {
   readonly name = "ask_user";
   readonly description =
-    "Ask the user a clarifying question when the request is ambiguous or you need more information before proceeding. " +
-    "You can provide multiple-choice options with a recommended option, or ask an open-ended question. " +
-    "The user can choose an option OR provide their own answer.";
+    "Ask exactly one concise, decision-ready question only when a real external blocker remains and Strada cannot continue internally. " +
+    "Use decision-ready options when possible. Do not use this for broad intake, plan approval, or requirement-gathering checklists.";
 
   readonly inputSchema = {
     type: "object" as const,

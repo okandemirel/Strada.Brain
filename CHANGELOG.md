@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **First-Run Web Handoff Hardening**: `strada setup` now retries the post-save web launch automatically, keeps a dedicated handoff page alive on the same URL until the main app is ready, and rejects any second Save after config has already been committed
 - **Source-Install Doctor Semantics**: `strada doctor` now treats missing `dist/` as a warning, not a blocker, when a git/source checkout is already runnable through the source launcher, and it prints the exact repo-root bootstrap command
 - **OpenAI Subscription Session Validation**: setup, doctor, and OpenAI health checks now validate the local ChatGPT/Codex subscription session eagerly and surface expired-token failures before they degrade into later background 401s
+- **Internal Plan Deflection Gate**: Strada now keeps plain-text execution plans, action menus, and intake checklists inside the orchestration loop instead of surfacing them to the user before work is actually done, while still preserving an explicit plan-review / approval step when the user actually asked to see the plan first
 - **PAOR Unification**: Removed TaskPlanner conflicting PLANNING_PROMPT, background tasks now use full PAOR (reflect/replan), extracted shared buildSystemPromptWithContext()
 - **Strada.MCP Detection**: Automatic detection of sibling Strada.MCP installation with system prompt awareness (76 tools)
 - **TierRouter Facade**: ProviderRouter wraps TierRouter as internal sub-component for delegation compatibility

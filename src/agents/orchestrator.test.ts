@@ -120,6 +120,15 @@ function getToolResultBlock(callArgs: any[] | undefined): any {
   return toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
 }
 
+function getToolResultContents(callArgs: any[] | undefined): string[] {
+  const messages = (callArgs?.[1] as any[]) ?? [];
+  return messages
+    .filter((m: any) => m.role === "user" && Array.isArray(m.content))
+    .flatMap((m: any) => m.content)
+    .filter((block: any) => block?.type === "tool_result" && typeof block.content === "string")
+    .map((block: any) => block.content as string);
+}
+
 function createReplayTrajectory(params: {
   id: string;
   chatId: string;
@@ -2086,6 +2095,255 @@ describe("Orchestrator", () => {
     );
   });
 
+  it("keeps plain-text internal execution plans off the user surface and continues internally", async () => {
+    const listTool = createMockTool("list_directory");
+    const planningOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [listTool, readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: `Plan to fix the Unity editor crash
+
+1. Run the relevant inspection pass
+2. Read the suspicious asset
+3. Verify the real issue`,
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Continuing with direct asset inspection.",
+        toolCalls: [{ id: "tc-level-read-plan", name: "file_read", input: { path: "Assets/Resources/Levels/Level_031.asset" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Level_031 is the problematic asset and the issue is now isolated.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "none",
+          reason: "This draft is a normal final response.",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const promise = planningOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-plan-drift",
+      userId: "user1",
+      text: "Analyze the Unity level assets and keep going until you know the real issue",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const continuationMessages = mockProvider.chat.mock.calls[1]?.[1] as Array<{ role: string; content: unknown }>;
+    expect(continuationMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("[AUTONOMY REQUIRED]"),
+        }),
+      ]),
+    );
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-plan-drift",
+      expect.stringContaining("Level_031 is the problematic asset"),
+    );
+  });
+
+  it("keeps show_plan internal even in interactive mode", async () => {
+    const showPlanOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [new ShowPlanTool()],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-plan-interactive",
+          name: "show_plan",
+          input: {
+            summary: "Inspect the failing workflow and land the minimal verified fix",
+            steps: [
+              "Read the failing workflow output and inspect the related implementation files",
+              "Apply the minimal code change needed to remove the regression",
+              "Run the relevant verification command and confirm the fix holds",
+            ],
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Proceeding.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const promise = showPlanOrch.handleMessage({
+      channelType: "cli",
+      chatId: "interactive-plan",
+      userId: "user1",
+      text: "Handle the task",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
+    const toolResultBlock = getToolResultBlock(mockProvider.chat.mock.calls[1]);
+    expect(toolResultBlock?.content).toContain("Proceed without waiting for user approval");
+  });
+
+  it("waits for approval when the user explicitly asked to review a plan first", async () => {
+    const showPlanOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [new ShowPlanTool()],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockChannel.requestConfirmation.mockResolvedValueOnce("Approve");
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-plan-explicit-review",
+          name: "show_plan",
+          input: {
+            summary: "Inspect the failing workflow and land the minimal verified fix",
+            steps: [
+              "Read the failing workflow output and inspect the related implementation files",
+              "Apply the minimal code change needed to remove the regression",
+              "Run the relevant verification command and confirm the fix holds",
+            ],
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Proceeding after plan approval.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const promise = showPlanOrch.handleMessage({
+      channelType: "cli",
+      chatId: "interactive-plan-approval",
+      userId: "user1",
+      text: "Show me the plan before you touch the code.",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(mockChannel.requestConfirmation).toHaveBeenCalled();
+    const toolResultBlock = getToolResultBlock(mockProvider.chat.mock.calls[1]);
+    expect(toolResultBlock?.content).toContain("Plan approved by user");
+  });
+
+  it("blocks write-capable actions after a plan is rejected", async () => {
+    const guardedOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [new ShowPlanTool(), writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockChannel.requestConfirmation.mockResolvedValueOnce("Reject");
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-plan-reject-write-guard",
+          name: "show_plan",
+          input: {
+            summary: "Inspect the failing workflow and land the minimal verified fix",
+            steps: [
+              "Read the failing workflow output and inspect the related implementation files",
+              "Apply the minimal code change needed to remove the regression",
+              "Run the relevant verification command and confirm the fix holds",
+            ],
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-write-after-plan-reject",
+          name: "file_write",
+          input: { path: "src/fix.ts", content: "export const ok = true;" },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Plan revision required.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const promise = guardedOrch.handleMessage({
+      channelType: "cli",
+      chatId: "interactive-plan-reject",
+      userId: "user1",
+      text: "Show me the plan before you touch the code.",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(writeTool.execute).not.toHaveBeenCalled();
+    const toolResultContents = mockProvider.chat.mock.calls.flatMap((call) => getToolResultContents(call));
+    expect(toolResultContents.some((content) => content.includes("Plan approval is still required"))).toBe(true);
+  });
+
   it("cancels write operation when user denies confirmation", async () => {
     const toolResponse: ProviderResponse = {
       text: "",
@@ -2248,6 +2506,71 @@ describe("Orchestrator", () => {
     expect(toolResultBlock?.content).toContain("Autonomous plan review passed");
     expect(toolResultBlock?.content).toContain("Proceed without waiting for user approval");
     expect(toolResultBlock?.is_error).toBe(false);
+  });
+
+  it("fails closed for explicit plan-review requests in background mode", async () => {
+    const backgroundOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [new ShowPlanTool(), writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-bg-plan-review",
+          name: "show_plan",
+          input: {
+            summary: "Inspect the failing workflow and land the minimal verified fix",
+            steps: [
+              "Read the failing workflow output and inspect the related implementation files",
+              "Apply the minimal code change needed to remove the regression",
+              "Run the relevant verification command and confirm the fix holds",
+            ],
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "",
+        toolCalls: [{
+          id: "tc-bg-write-without-plan-approval",
+          name: "file_write",
+          input: { path: "src/fix.ts", content: "export const ok = true;" },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Waiting for user plan approval.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 20, outputTokens: 20 },
+      });
+
+    const abortController = new AbortController();
+    await backgroundOrch.runBackgroundTask("Show me the plan before you touch the code.", {
+      chatId: "bg-explicit-plan-review",
+      channelType: "cli",
+      signal: abortController.signal,
+      onProgress: vi.fn(),
+    });
+
+    expect(writeTool.execute).not.toHaveBeenCalled();
+    const planGate = getToolResultBlock(mockProvider.chat.mock.calls[1]);
+    expect(planGate?.content).toContain("Present the plan in your next user-facing response");
+    expect(planGate?.is_error).toBe(true);
+    const toolResultContents = mockProvider.chat.mock.calls.flatMap((call) => getToolResultContents(call));
+    expect(toolResultContents.some((content) => content.includes("Plan approval is still required"))).toBe(true);
   });
 
   it("rejects weak plans in autonomous mode and asks the agent to revise them", async () => {

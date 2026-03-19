@@ -13,6 +13,7 @@ export {
   hasOpenReviewFindings,
   parseCompletionReviewDecision,
   shouldRunCompletionReview,
+  userExplicitlyAskedForPlan,
 } from "./completion-review.js";
 export type { CompletionReviewDecision, CompletionReviewEvidence } from "./completion-review.js";
 export {
