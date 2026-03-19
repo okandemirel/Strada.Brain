@@ -17,7 +17,14 @@
 
 import { MUTATION_TOOLS, isVerificationToolName } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
-import type { LearningPipeline, TrajectoryStep, TrajectoryOutcome, TrajectoryStepResult, ErrorDetails } from "../../learning/index.js";
+import type {
+  LearningPipeline,
+  TrajectoryReplayContext,
+  TrajectoryStep,
+  TrajectoryOutcome,
+  TrajectoryStepResult,
+  ErrorDetails,
+} from "../../learning/index.js";
 import { createBrand, now, durationMs, type JsonObject, type JsonValue } from "../../types/index.js";
 
 /** Convert Record<string, unknown> to JsonObject, filtering non-JSON values */
@@ -73,6 +80,7 @@ export class TaskPlanner {
   private learningPipeline: LearningPipeline | null = null;
   private trajectorySteps: TrajectoryStep[] = [];
   private trajectoryStartTime: number = 0;
+  private trajectoryReplayContext: TrajectoryReplayContext | undefined;
 
   /** Reset for a new task. */
   reset(): void {
@@ -86,6 +94,7 @@ export class TaskPlanner {
     this.isTaskActive = false;
     this.trajectorySteps = [];
     this.trajectoryStartTime = 0;
+    this.trajectoryReplayContext = undefined;
   }
 
   /**
@@ -129,6 +138,7 @@ export class TaskPlanner {
       errorCount: params.errorCount,
       durationMs: durationMs(Date.now() - this.trajectoryStartTime),
       completionRate: completionRate as unknown as import("../../types/index.js").NormalizedScore,
+      replayContext: this.trajectoryReplayContext,
     };
 
     // Record trajectory for learning
@@ -156,6 +166,30 @@ export class TaskPlanner {
    */
   disableLearning(): void {
     this.learningPipeline = null;
+  }
+
+  /**
+   * Attach replay/recovery context to the trajectory that will be recorded
+   * when the current task ends.
+   */
+  attachReplayContext(context: TrajectoryReplayContext | null | undefined): void {
+    if (!context) {
+      this.trajectoryReplayContext = undefined;
+      return;
+    }
+
+    const learnedInsights = (context.learnedInsights ?? [])
+      .map((insight) => insight.trim())
+      .filter((insight) => insight.length > 0)
+      .slice(0, 4);
+
+    this.trajectoryReplayContext = {
+      projectWorldFingerprint: context.projectWorldFingerprint?.trim() || undefined,
+      projectWorldSummary: context.projectWorldSummary?.trim() || undefined,
+      branchSummary: context.branchSummary?.trim() || undefined,
+      verifierSummary: context.verifierSummary?.trim() || undefined,
+      learnedInsights,
+    };
   }
 
   /**

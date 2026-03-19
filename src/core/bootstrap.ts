@@ -67,6 +67,7 @@ import { LearningQueue } from "../learning/pipeline/learning-queue.js";
 import { ErrorRecoveryEngine } from "../agents/autonomy/error-recovery.js";
 import { TaskPlanner } from "../agents/autonomy/task-planner.js";
 import { InstinctRetriever } from "../agents/instinct-retriever.js";
+import { TrajectoryReplayRetriever } from "../agents/trajectory-replay-retriever.js";
 import { MetricsStorage } from "../metrics/metrics-storage.js";
 import { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import { GoalStorage, GoalDecomposer, detectInterruptedTrees } from "../goals/index.js";
@@ -363,6 +364,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Wire cross-session scope context and InstinctRetriever (Phase 13)
   let instinctRetriever: InstinctRetriever | undefined;
+  let trajectoryReplayRetriever: TrajectoryReplayRetriever | undefined;
   if (learningResult.patternMatcher) {
     const scopeContext: ScopeContext = {
       projectPath: config.unityProjectPath,
@@ -379,6 +381,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       storage: learningResult.storage,
       metricsRecorder,
     });
+  }
+  if (learningResult.storage) {
+    trajectoryReplayRetriever = new TrajectoryReplayRetriever(learningResult.storage);
   }
 
   // Wire project path and promotion threshold to learning pipeline (Phase 13)
@@ -590,6 +595,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     stradaDeps,
     stradaConfig: config.strada,
     instinctRetriever,
+    trajectoryReplayRetriever,
     eventEmitter: learningResult.eventBus,
     metricsRecorder,
     goalDecomposer,
@@ -1317,6 +1323,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       }
       await agentManager!.routeMessage(msg);
       if (learningResult.taskPlanner?.isActive()) {
+        learningResult.taskPlanner.attachReplayContext(await orchestrator.buildTrajectoryReplayContext({
+          chatId: msg.chatId,
+          userId: msg.userId,
+          conversationId: msg.conversationId,
+        }));
         learningResult.taskPlanner.endTask({ success: true, hadErrors: false, errorCount: 0 });
       }
     });
@@ -2433,7 +2444,7 @@ function initializeTaskStorage(config: Config, logger: winston.Logger): TaskStor
 function wireMessageHandler(
   channel: IChannelAdapter,
   messageRouter: MessageRouter,
-  _orchestrator: Orchestrator,
+  orchestrator: Orchestrator,
   taskPlanner: TaskPlanner,
   learningPipeline: LearningPipeline | undefined,
   identityManager?: IdentityStateManager,
@@ -2467,6 +2478,11 @@ function wireMessageHandler(
 
     // End task tracking
     if (taskPlanner?.isActive()) {
+      taskPlanner.attachReplayContext(await orchestrator.buildTrajectoryReplayContext({
+        chatId: msg.chatId,
+        userId: msg.userId,
+        conversationId: msg.conversationId,
+      }));
       taskPlanner.endTask({
         success: true,
         hadErrors: false,

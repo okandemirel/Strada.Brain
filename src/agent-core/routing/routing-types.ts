@@ -84,6 +84,7 @@ export interface PhaseOutcomeTelemetry {
   readonly retryCount?: number;
   readonly rollbackDepth?: number;
   readonly failureFingerprint?: string;
+  readonly projectWorldFingerprint?: string;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
 }
@@ -119,6 +120,7 @@ export interface PhaseScore {
   readonly avgRetryCount: number;
   readonly avgTokenCost: number;
   readonly repeatedFailureCount: number;
+  readonly repeatedWorldContextCount: number;
   readonly latestTimestamp: number;
   readonly latestReason: string;
   readonly identityKey?: string;

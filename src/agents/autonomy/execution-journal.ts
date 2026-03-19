@@ -53,6 +53,8 @@ export class ExecutionJournal {
   private lastStableCheckpoint: string | null = null;
   private lastVerifierSummary: string | null = null;
   private lastRequiredActions: readonly string[] = [];
+  private projectWorldSummary: string | null = null;
+  private projectWorldFingerprint: string | null = null;
   private readonly learnedInsights = new Set<string>();
 
   constructor(taskDescription: string) {
@@ -183,6 +185,19 @@ export class ExecutionJournal {
     }
   }
 
+  attachProjectWorldContext(params: {
+    summary: string;
+    fingerprint: string;
+  }): void {
+    const summary = summarizeText(params.summary, 220);
+    const fingerprint = summarizeText(params.fingerprint, 220);
+    if (!summary || !fingerprint) {
+      return;
+    }
+    this.projectWorldSummary = summary;
+    this.projectWorldFingerprint = fingerprint;
+  }
+
   beginReplan(params: {
     state: AgentState;
     reason: string;
@@ -190,11 +205,17 @@ export class ExecutionJournal {
     modelId?: string;
   }): void {
     const failedApproach = summarizeApproach(params.state);
-    const fingerprint = fingerprintApproach(failedApproach);
+    const fingerprint = fingerprintApproach([
+      this.projectWorldFingerprint ? `world=${this.projectWorldFingerprint}` : null,
+      failedApproach,
+    ].filter(Boolean).join(" | "));
     const existing = this.strategyFailures.get(fingerprint);
     const failures = Math.min(MAX_FAILURES, (existing?.failures ?? 0) + 1);
     this.strategyFailures.set(fingerprint, {
-      fingerprint: failedApproach,
+      fingerprint: [
+        this.projectWorldSummary ? `world=${this.projectWorldSummary}` : null,
+        failedApproach,
+      ].filter(Boolean).join(" | "),
       failures,
       lastReason: summarizeText(params.reason, 200) || "replan requested",
       lastSeenAt: Date.now(),
@@ -202,6 +223,9 @@ export class ExecutionJournal {
 
     this.learnedInsights.add(`Avoid repeating this failed path: ${failedApproach}`);
     this.learnedInsights.add(`Replan trigger: ${summarizeText(params.reason, 160) || "internal verifier requested a new approach"}`);
+    if (this.projectWorldSummary) {
+      this.learnedInsights.add(`Project/world anchor: ${this.projectWorldSummary}`);
+    }
 
     const branchId = `branch-${++this.branchCounter}`;
     this.branches.set(branchId, {
@@ -235,6 +259,7 @@ export class ExecutionJournal {
           `Branch ${branch.id}`,
           branch.parentId ? `parent ${branch.parentId}` : "",
           this.lastStableCheckpoint ? `stable checkpoint: ${this.lastStableCheckpoint}` : "",
+          this.projectWorldSummary ? `world anchor: ${this.projectWorldSummary}` : "",
         ].filter(Boolean).join(" | ")
       : undefined;
 
@@ -254,6 +279,9 @@ export class ExecutionJournal {
       if (branch.parentId) {
         lines.push(`Parent branch: ${branch.parentId}`);
       }
+    }
+    if (this.projectWorldSummary) {
+      lines.push(`Project/world anchor: ${this.projectWorldSummary}`);
     }
 
     if (phase === AgentPhase.REPLANNING) {

@@ -2,7 +2,8 @@
 
 Persistent conversation memory with text search and vector retrieval. The memory system stores past conversations, project analyses, and notes, making them available to the agent as context for future interactions.
 Runtime memory is now explicitly split by role: user profile memory, task execution memory, and project/world memory.
-Project/world memory is surfaced to the orchestrator as its own prompt layer built from the active project root and cached project analysis, while semantic retrieval continues to inject live relevant memories separately.
+Project/world memory is surfaced to the orchestrator as its own prompt layer built from the active project root and cached project analysis. That same world-memory anchor now also feeds rollback/replan memory and adaptive provider scoring, while semantic retrieval continues to inject live relevant memories separately.
+Cross-session `execution replay` also consumes that anchor: learning trajectories now carry project/world-aware recovery summaries so the next similar task can reuse prior success/failure branches without inventing a second persistence layer.
 
 ## Active Backend: AgentDBMemory
 

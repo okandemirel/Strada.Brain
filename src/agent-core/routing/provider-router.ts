@@ -67,6 +67,7 @@ const PHASE_SCORE_ROLLBACK_WEIGHT = 0.12;
 const PHASE_SCORE_RETRY_WEIGHT = 0.1;
 const PHASE_SCORE_COST_WEIGHT = 0.08;
 const PHASE_SCORE_REPEAT_FAILURE_WEIGHT = 0.08;
+const PHASE_SCORE_WORLD_CONTEXT_WEIGHT = 0.06;
 
 type AvailableProvider = {
   name: string;
@@ -553,6 +554,7 @@ export class ProviderRouter {
       totalRetryCount: number;
       totalTokenCost: number;
       failureFingerprints: Map<string, number>;
+      worldFingerprints: Map<string, number>;
       latestTimestamp: number;
       latestReason: string;
     }>();
@@ -578,6 +580,7 @@ export class ProviderRouter {
         totalRetryCount: 0,
         totalTokenCost: 0,
         failureFingerprints: new Map<string, number>(),
+        worldFingerprints: new Map<string, number>(),
         latestTimestamp: 0,
         latestReason: "",
       };
@@ -601,6 +604,12 @@ export class ProviderRouter {
           current.failureFingerprints.set(fingerprint, (current.failureFingerprints.get(fingerprint) ?? 0) + 1);
         }
       }
+      if (outcome.telemetry?.projectWorldFingerprint) {
+        const fingerprint = outcome.telemetry.projectWorldFingerprint.trim();
+        if (fingerprint) {
+          current.worldFingerprints.set(fingerprint, (current.worldFingerprints.get(fingerprint) ?? 0) + 1);
+        }
+      }
       if (outcome.timestamp >= current.latestTimestamp) {
         current.latestTimestamp = outcome.timestamp;
         current.latestReason = outcome.reason;
@@ -621,6 +630,7 @@ export class ProviderRouter {
       const avgRetryCount = entry.sampleSize > 0 ? entry.totalRetryCount / entry.sampleSize : 0;
       const avgTokenCost = entry.sampleSize > 0 ? entry.totalTokenCost / entry.sampleSize : 0;
       const repeatedFailureCount = [...entry.failureFingerprints.values()].filter((count) => count > 1).length;
+      const repeatedWorldContextCount = [...entry.worldFingerprints.values()].filter((count) => count > 1).length;
       const outcomeScore = (
         entry.weightedTotal + PHASE_SCORE_PRIOR_WEIGHT * PHASE_SCORE_NEUTRAL
       ) / (entry.sampleSize + PHASE_SCORE_PRIOR_WEIGHT);
@@ -642,6 +652,7 @@ export class ProviderRouter {
         avgRetryCount,
         avgTokenCost,
         repeatedFailureCount,
+        repeatedWorldContextCount,
         latestTimestamp: entry.latestTimestamp,
         latestReason: entry.latestReason,
         identityKey,
@@ -660,7 +671,8 @@ export class ProviderRouter {
           (1 - entry.rollbackRate) * PHASE_SCORE_ROLLBACK_WEIGHT +
           (1 - Math.min(entry.avgRetryCount / 4, 1)) * PHASE_SCORE_RETRY_WEIGHT +
           normalizePhaseCostEfficiency(scored, entry.phase, entry.avgTokenCost) * PHASE_SCORE_COST_WEIGHT -
-          Math.min(entry.repeatedFailureCount / 3, 1) * PHASE_SCORE_REPEAT_FAILURE_WEIGHT,
+          Math.min(entry.repeatedFailureCount / 3, 1) * PHASE_SCORE_REPEAT_FAILURE_WEIGHT -
+          Math.min(entry.repeatedWorldContextCount / 3, 1) * PHASE_SCORE_WORLD_CONTEXT_WEIGHT,
         ),
         approvedCount: entry.approvedCount,
         continuedCount: entry.continuedCount,
@@ -673,6 +685,7 @@ export class ProviderRouter {
         avgRetryCount: entry.avgRetryCount,
         avgTokenCost: entry.avgTokenCost,
         repeatedFailureCount: entry.repeatedFailureCount,
+        repeatedWorldContextCount: entry.repeatedWorldContextCount,
         latestTimestamp: entry.latestTimestamp,
         latestReason: entry.latestReason,
         identityKey,

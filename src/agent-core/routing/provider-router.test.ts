@@ -387,6 +387,7 @@ describe("ProviderRouter", () => {
         sampleSize: 2,
         verifierCleanRate: expect.any(Number),
         rollbackRate: expect.any(Number),
+        repeatedWorldContextCount: expect.any(Number),
       }));
       expect(scoreboard.find((entry) => entry.provider === "beta")!.score).toBeGreaterThan(
         scoreboard.find((entry) => entry.provider === "alpha")!.score,
@@ -418,6 +419,7 @@ describe("ProviderRouter", () => {
           inputTokens: 1200,
           outputTokens: 500,
           failureFingerprint: "same failure path",
+          projectWorldFingerprint: "root project a modules castle systems 9",
         },
       });
       router.recordPhaseOutcome({
@@ -437,6 +439,7 @@ describe("ProviderRouter", () => {
           inputTokens: 1500,
           outputTokens: 600,
           failureFingerprint: "same failure path",
+          projectWorldFingerprint: "root project a modules castle systems 9",
         },
       });
       router.recordPhaseOutcome({
@@ -455,6 +458,7 @@ describe("ProviderRouter", () => {
           rollbackDepth: 0,
           inputTokens: 400,
           outputTokens: 200,
+          projectWorldFingerprint: "root project a modules combat systems 4",
         },
       });
       router.recordPhaseOutcome({
@@ -473,6 +477,7 @@ describe("ProviderRouter", () => {
           rollbackDepth: 0,
           inputTokens: 350,
           outputTokens: 150,
+          projectWorldFingerprint: "root project a modules ui systems 3",
         },
       });
 
@@ -485,6 +490,7 @@ describe("ProviderRouter", () => {
       expect(beta!.score).toBeGreaterThan(alpha!.score);
       expect(alpha!.rollbackRate).toBeGreaterThan(beta!.rollbackRate);
       expect(alpha!.repeatedFailureCount).toBeGreaterThan(beta!.repeatedFailureCount);
+      expect(alpha!.repeatedWorldContextCount).toBeGreaterThanOrEqual(beta!.repeatedWorldContextCount);
       expect(alpha!.avgRetryCount).toBeGreaterThan(beta!.avgRetryCount);
     });
   });

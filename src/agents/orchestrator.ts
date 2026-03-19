@@ -35,6 +35,7 @@ import { getLogger, getLogRingBuffer } from "../utils/logger.js";
 import { AgentPhase, createInitialState, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
 import { buildPlanningPrompt, buildReflectionPrompt, buildReplanningPrompt, buildExecutionContext } from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
+import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import { MemoryRefresher } from "./memory-refresher.js";
 import {
   DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
@@ -92,6 +93,7 @@ import type { SoulLoader } from "./soul/index.js";
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/task-execution-store.js";
+import type { TrajectoryReplayContext } from "../learning/index.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import type {
@@ -581,6 +583,7 @@ export class Orchestrator {
   private readonly pendingDepsPrompt = new Map<string, boolean>();
   private readonly pendingModulesPrompt = new Map<string, boolean>();
   private readonly instinctRetriever: InstinctRetriever | null;
+  private readonly trajectoryReplayRetriever: TrajectoryReplayRetriever | null;
   private readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
   private readonly metricsRecorder: MetricsRecorder | null;
   /** Per-session matched instinct IDs for appliedInstinctIds attribution in tool:result events */
@@ -629,6 +632,7 @@ export class Orchestrator {
     stradaDeps?: StradaDepsStatus;
     stradaConfig?: Partial<StradaDependencyConfig>;
     instinctRetriever?: InstinctRetriever;
+    trajectoryReplayRetriever?: TrajectoryReplayRetriever;
     eventEmitter?: IEventEmitter<LearningEventMap>;
     metricsRecorder?: MetricsRecorder;
     goalDecomposer?: GoalDecomposer;
@@ -666,6 +670,7 @@ export class Orchestrator {
       opts.streamStallTimeoutMs ?? DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS;
     this.stradaConfig = opts.stradaConfig;
     this.instinctRetriever = opts.instinctRetriever ?? null;
+    this.trajectoryReplayRetriever = opts.trajectoryReplayRetriever ?? null;
     this.eventEmitter = opts.eventEmitter ?? null;
     this.metricsRecorder = opts.metricsRecorder ?? null;
     this.goalDecomposer = opts.goalDecomposer ?? null;
@@ -1136,6 +1141,7 @@ export class Orchestrator {
     usage?: ProviderResponse["usage"];
     verifierDecision?: VerifierDecision;
     failureReason?: string | null;
+    projectWorldFingerprint?: string;
   }): PhaseOutcomeTelemetry | undefined {
     const inputTokens = params.usage?.inputTokens ?? 0;
     const outputTokens = params.usage?.outputTokens ?? 0;
@@ -1162,6 +1168,7 @@ export class Orchestrator {
       retryCount,
       rollbackDepth,
       failureFingerprint: failureFingerprint || undefined,
+      projectWorldFingerprint: params.projectWorldFingerprint || undefined,
       inputTokens,
       outputTokens,
     };
@@ -1666,8 +1673,8 @@ export class Orchestrator {
   }
 
   /**
-   * Build 4-layer context injection for system prompt enrichment.
-   * Layers: User Profile, Last Session Summary, Open Tasks/Goals, Semantic Memory.
+   * Build context injection for system prompt enrichment.
+   * Layers: User Profile, Task Execution Memory, Project/World Memory, Open Tasks/Goals, Semantic Memory.
    */
   private async buildContextLayers(
     goalScope: string,
@@ -1675,9 +1682,16 @@ export class Orchestrator {
     userMessage: string,
     profile: import("../memory/unified/user-profile-store.js").UserProfile | null,
     preComputedEmbedding?: number[],
-  ): Promise<{ context: string; contentHashes: string[] }> {
+  ): Promise<{
+    context: string;
+    contentHashes: string[];
+    projectWorldSummary?: string;
+    projectWorldFingerprint?: string;
+  }> {
     const layers: string[] = [];
     const contentHashes: string[] = [];
+    let projectWorldSummary: string | undefined;
+    let projectWorldFingerprint: string | undefined;
 
     // Layer 1: User Profile
     if (profile) {
@@ -1698,9 +1712,21 @@ export class Orchestrator {
     if (projectWorldLayer) {
       layers.push(projectWorldLayer.content);
       contentHashes.push(...projectWorldLayer.contentHashes);
+      projectWorldSummary = projectWorldLayer.summary;
+      projectWorldFingerprint = projectWorldLayer.fingerprint;
     }
 
-    // Layer 4: Open Tasks/Goals
+    // Layer 4: Cross-session execution replay
+    const trajectoryReplayLayer = this.buildTrajectoryReplayMemoryLayer(
+      userMessage,
+      projectWorldFingerprint,
+    );
+    if (trajectoryReplayLayer) {
+      layers.push(trajectoryReplayLayer.content);
+      contentHashes.push(...trajectoryReplayLayer.contentHashes);
+    }
+
+    // Layer 5: Open Tasks/Goals
     const activeGoalTree = this.activeGoalTrees?.get(goalScope);
     if (activeGoalTree) {
       const pendingGoals: Array<{ task: string; status: string }> = [];
@@ -1718,7 +1744,7 @@ export class Orchestrator {
       }
     }
 
-    // Layer 5: Semantic Memory (real embedding search)
+    // Layer 6: Semantic Memory (real embedding search)
     if (this.memoryManager && userMessage) {
       try {
         const memoriesResult = await this.memoryManager.retrieve({
@@ -1749,7 +1775,7 @@ export class Orchestrator {
       ? `\n\n<!-- context-layers:start -->\n${layers.join("\n\n")}\n<!-- context-layers:end -->\n`
       : "";
 
-    return { context, contentHashes };
+    return { context, contentHashes, projectWorldSummary, projectWorldFingerprint };
   }
 
   /**
@@ -1767,7 +1793,12 @@ export class Orchestrator {
     allowFirstTimeOnboarding: boolean;
     profile: { displayName?: string; language: string; activePersona: string; preferences: unknown; contextSummary?: string } | null;
     preComputedEmbedding?: number[];
-  }): Promise<{ systemPrompt: string; initialContentHashes: string[] }> {
+  }): Promise<{
+    systemPrompt: string;
+    initialContentHashes: string[];
+    projectWorldSummary?: string;
+    projectWorldFingerprint?: string;
+  }> {
     const logger = getLogger();
 
     // 1. Language directive — FIRST, highest priority, before personality
@@ -1788,7 +1819,7 @@ export class Orchestrator {
     }
 
     // 4. Context layers (user profile, session summary, open tasks, semantic memory)
-    const { context: contextLayers, contentHashes } = await this.buildContextLayers(
+    const { context: contextLayers, contentHashes, projectWorldSummary, projectWorldFingerprint } = await this.buildContextLayers(
       params.conversationScope,
       params.identityKey,
       params.prompt,
@@ -1826,7 +1857,7 @@ export class Orchestrator {
       }
     }
 
-    return { systemPrompt, initialContentHashes };
+    return { systemPrompt, initialContentHashes, projectWorldSummary, projectWorldFingerprint };
   }
 
   /**
@@ -1954,7 +1985,12 @@ export class Orchestrator {
     }
 
     // Build system prompt with all context layers (DRY: shared with runAgentLoop)
-    const { systemPrompt: builtPrompt, initialContentHashes: bgInitialContentHashes } = await this.buildSystemPromptWithContext({
+    const {
+      systemPrompt: builtPrompt,
+      initialContentHashes: bgInitialContentHashes,
+      projectWorldSummary: bgProjectWorldSummary,
+      projectWorldFingerprint: bgProjectWorldFingerprint,
+    } = await this.buildSystemPromptWithContext({
       chatId,
       conversationScope,
       identityKey,
@@ -1994,8 +2030,23 @@ export class Orchestrator {
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
     const executionJournal = new ExecutionJournal(prompt);
+    if (bgProjectWorldSummary && bgProjectWorldFingerprint) {
+      executionJournal.attachProjectWorldContext({
+        summary: bgProjectWorldSummary,
+        fingerprint: bgProjectWorldFingerprint,
+      });
+    }
     const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
     const taskStartedAtMs = Date.now();
+    const buildBgPhaseOutcomeTelemetry = (params: {
+      state?: AgentState;
+      usage?: ProviderResponse["usage"];
+      verifierDecision?: VerifierDecision;
+      failureReason?: string | null;
+    }) => this.buildPhaseOutcomeTelemetry({
+      ...params,
+      projectWorldFingerprint: bgProjectWorldFingerprint,
+    });
     stradaConformance.trackPrompt(prompt);
     let toolTurnAffinity: SupervisorAssignment | null = null;
 
@@ -2144,7 +2195,7 @@ export class Orchestrator {
                 status: "continued",
                 task: executionStrategy.task,
                 reason: verifierIntervention.result.summary,
-                telemetry: this.buildPhaseOutcomeTelemetry({
+                telemetry: buildBgPhaseOutcomeTelemetry({
                   state: bgAgentState,
                   usage: response.usage,
                   verifierDecision: "continue",
@@ -2179,7 +2230,7 @@ export class Orchestrator {
                 status: "replanned",
                 task: executionStrategy.task,
                 reason: verifierIntervention.result.summary,
-                telemetry: this.buildPhaseOutcomeTelemetry({
+                telemetry: buildBgPhaseOutcomeTelemetry({
                   state: bgAgentState,
                   usage: response.usage,
                   verifierDecision: "replan",
@@ -2214,7 +2265,7 @@ export class Orchestrator {
               status: "approved",
               task: executionStrategy.task,
               reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
-              telemetry: this.buildPhaseOutcomeTelemetry({
+              telemetry: buildBgPhaseOutcomeTelemetry({
                 state: bgAgentState,
                 usage: response.usage,
                 verifierDecision: "approve",
@@ -2254,7 +2305,7 @@ export class Orchestrator {
               status: "replanned",
               task: executionStrategy.task,
               reason: response.text ?? "reflection requested a new plan",
-              telemetry: this.buildPhaseOutcomeTelemetry({
+              telemetry: buildBgPhaseOutcomeTelemetry({
                 state: bgAgentState,
                 usage: response.usage,
                 failureReason: response.text,
@@ -2348,7 +2399,7 @@ export class Orchestrator {
               status: "continued",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
-              telemetry: this.buildPhaseOutcomeTelemetry({
+              telemetry: buildBgPhaseOutcomeTelemetry({
                 state: bgAgentState,
                 usage: response.usage,
                 verifierDecision: "continue",
@@ -2369,7 +2420,7 @@ export class Orchestrator {
               status: "replanned",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
-              telemetry: this.buildPhaseOutcomeTelemetry({
+              telemetry: buildBgPhaseOutcomeTelemetry({
                 state: bgAgentState,
                 usage: response.usage,
                 verifierDecision: "replan",
@@ -2403,7 +2454,7 @@ export class Orchestrator {
             status: "approved",
             task: executionStrategy.task,
             reason: "Execution produced a final response after the verifier pipeline cleared the task.",
-            telemetry: this.buildPhaseOutcomeTelemetry({
+            telemetry: buildBgPhaseOutcomeTelemetry({
               state: bgAgentState,
               usage: response.usage,
               verifierDecision: "approve",
@@ -2943,7 +2994,12 @@ export class Orchestrator {
 
     // Build system prompt with all context layers (DRY: shared with runBackgroundTask)
     logger.debug("Building system prompt", { chatId });
-    const { systemPrompt: builtSystemPrompt, initialContentHashes } = await this.buildSystemPromptWithContext({
+    const {
+      systemPrompt: builtSystemPrompt,
+      initialContentHashes,
+      projectWorldSummary,
+      projectWorldFingerprint,
+    } = await this.buildSystemPromptWithContext({
       chatId,
       conversationScope,
       identityKey,
@@ -2963,8 +3019,23 @@ export class Orchestrator {
     const taskPlanner = new TaskPlanner();
     const selfVerification = new SelfVerification();
     const executionJournal = new ExecutionJournal(lastUserMessage);
+    if (projectWorldSummary && projectWorldFingerprint) {
+      executionJournal.attachProjectWorldContext({
+        summary: projectWorldSummary,
+        fingerprint: projectWorldFingerprint,
+      });
+    }
     const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
     const taskStartedAtMs = Date.now();
+    const buildInteractivePhaseOutcomeTelemetry = (params: {
+      state?: AgentState;
+      usage?: ProviderResponse["usage"];
+      verifierDecision?: VerifierDecision;
+      failureReason?: string | null;
+    }) => this.buildPhaseOutcomeTelemetry({
+      ...params,
+      projectWorldFingerprint,
+    });
     // ────────────────────────────────────────────────────────────────────
 
     // ─── PAOR State Machine ──────────────────────────────────────────────
@@ -3149,7 +3220,7 @@ export class Orchestrator {
               status: "continued",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
-              telemetry: this.buildPhaseOutcomeTelemetry({
+              telemetry: buildInteractivePhaseOutcomeTelemetry({
                 state: agentState,
                 usage: response.usage,
                 verifierDecision: "continue",
@@ -3183,7 +3254,7 @@ export class Orchestrator {
               status: "replanned",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
-              telemetry: this.buildPhaseOutcomeTelemetry({
+              telemetry: buildInteractivePhaseOutcomeTelemetry({
                 state: agentState,
                 usage: response.usage,
                 verifierDecision: "replan",
@@ -3218,7 +3289,7 @@ export class Orchestrator {
             status: "approved",
             task: executionStrategy.task,
             reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
-            telemetry: this.buildPhaseOutcomeTelemetry({
+            telemetry: buildInteractivePhaseOutcomeTelemetry({
               state: agentState,
               usage: response.usage,
               verifierDecision: "approve",
@@ -3296,7 +3367,7 @@ export class Orchestrator {
             status: "replanned",
             task: executionStrategy.task,
             reason: response.text ?? "reflection requested a new plan",
-            telemetry: this.buildPhaseOutcomeTelemetry({
+            telemetry: buildInteractivePhaseOutcomeTelemetry({
               state: agentState,
               usage: response.usage,
               failureReason: response.text,
@@ -3435,7 +3506,7 @@ export class Orchestrator {
             status: "continued",
             task: executionStrategy.task,
             reason: verifierIntervention.result.summary,
-            telemetry: this.buildPhaseOutcomeTelemetry({
+            telemetry: buildInteractivePhaseOutcomeTelemetry({
               state: agentState,
               usage: response.usage,
               verifierDecision: "continue",
@@ -3460,7 +3531,7 @@ export class Orchestrator {
             status: "replanned",
             task: executionStrategy.task,
             reason: verifierIntervention.result.summary,
-            telemetry: this.buildPhaseOutcomeTelemetry({
+            telemetry: buildInteractivePhaseOutcomeTelemetry({
               state: agentState,
               usage: response.usage,
               verifierDecision: "replan",
@@ -3570,7 +3641,7 @@ export class Orchestrator {
           status: "approved",
           task: executionStrategy.task,
           reason: "Execution produced a final response after the verifier pipeline cleared the task.",
-          telemetry: this.buildPhaseOutcomeTelemetry({
+          telemetry: buildInteractivePhaseOutcomeTelemetry({
             state: agentState,
             usage: response.usage,
             verifierDecision: "approve",
@@ -5285,7 +5356,40 @@ export class Orchestrator {
     };
   }
 
-  private async buildProjectWorldMemoryLayer(): Promise<{ content: string; contentHashes: string[] } | null> {
+  private buildTrajectoryReplayMemoryLayer(
+    userMessage: string,
+    projectWorldFingerprint?: string,
+  ): { content: string; contentHashes: string[] } | null {
+    if (!this.trajectoryReplayRetriever || !userMessage.trim()) {
+      return null;
+    }
+
+    try {
+      const replay = this.trajectoryReplayRetriever.getInsightsForTask({
+        taskDescription: userMessage,
+        projectWorldFingerprint,
+        maxInsights: 2,
+      });
+
+      if (replay.insights.length === 0) {
+        return null;
+      }
+
+      return {
+        content: `## Execution Replay\nReference these prior similar trajectories before repeating a failed branch.\n${replay.insights.map((insight) => `- ${sanitizePromptInjection(insight)}`).join("\n")}`,
+        contentHashes: [...replay.insights],
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async buildProjectWorldMemoryLayer(): Promise<{
+    content: string;
+    contentHashes: string[];
+    summary: string;
+    fingerprint: string;
+  } | null> {
     if (!this.memoryManager) {
       return buildProjectWorldMemorySection({
         projectPath: this.projectPath,
@@ -5322,6 +5426,38 @@ export class Orchestrator {
       appliedInstinctIds: this.currentSessionInstinctIds.get(chatId) ?? [],
       timestamp: Date.now(),
     });
+  }
+
+  async buildTrajectoryReplayContext(params: {
+    chatId: string;
+    userId?: string;
+    conversationId?: string;
+  }): Promise<TrajectoryReplayContext | null> {
+    const identityKey = resolveIdentityKey(
+      params.chatId,
+      params.userId,
+      params.conversationId,
+    );
+    const taskExecutionMemory = this.taskExecutionStore?.getMemory(identityKey) ?? null;
+    const projectWorldLayer = await this.buildProjectWorldMemoryLayer();
+
+    const learnedInsights = (taskExecutionMemory?.learnedInsights ?? []).slice(0, 4);
+    if (
+      !projectWorldLayer
+      && !taskExecutionMemory?.branchSummary
+      && !taskExecutionMemory?.verifierSummary
+      && learnedInsights.length === 0
+    ) {
+      return null;
+    }
+
+    return {
+      projectWorldFingerprint: projectWorldLayer?.fingerprint,
+      projectWorldSummary: projectWorldLayer?.summary,
+      branchSummary: taskExecutionMemory?.branchSummary,
+      verifierSummary: taskExecutionMemory?.verifierSummary,
+      learnedInsights,
+    };
   }
 
   /** Emit a goal lifecycle event on the event bus */

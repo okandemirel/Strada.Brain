@@ -213,6 +213,9 @@ describe("buildProjectWorldMemorySection", () => {
     expect(result.content).toContain("Active project root: /projects/MyGame");
     expect(result.content).toContain("## Cached Project Analysis");
     expect(result.content).toContain("Combat");
+    expect(result.summary).toContain("root=/projects/MyGame");
+    expect(result.summary).toContain("modules=Combat");
+    expect(result.fingerprint).toContain("root projects mygame");
     expect(result.contentHashes.length).toBeGreaterThanOrEqual(2);
   });
 });

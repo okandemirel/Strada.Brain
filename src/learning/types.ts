@@ -326,6 +326,20 @@ export interface TrajectoryStep {
   readonly context?: JsonObject;
 }
 
+/** Cross-session replay context captured alongside a trajectory outcome */
+export interface TrajectoryReplayContext {
+  /** Normalized project/world fingerprint for same-world replay matching */
+  readonly projectWorldFingerprint?: string;
+  /** Human-readable project/world summary */
+  readonly projectWorldSummary?: string;
+  /** Stable branch/recovery summary captured by the execution journal */
+  readonly branchSummary?: string;
+  /** Latest verifier memory at task completion */
+  readonly verifierSummary?: string;
+  /** Most relevant learned execution insights from the task */
+  readonly learnedInsights?: readonly string[];
+}
+
 /** Outcome of a trajectory */
 export interface TrajectoryOutcome {
   /** Whether the task was completed successfully */
@@ -342,6 +356,8 @@ export interface TrajectoryOutcome {
   readonly durationMs: DurationMs;
   /** Completion percentage (0-1) */
   readonly completionRate: NormalizedScore;
+  /** Optional replay context for later cross-session recovery */
+  readonly replayContext?: TrajectoryReplayContext;
 }
 
 /** A trajectory is a recorded execution path */

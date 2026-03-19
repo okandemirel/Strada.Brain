@@ -5,6 +5,10 @@ import { ExecutionJournal } from "./execution-journal.js";
 describe("ExecutionJournal", () => {
   it("builds replanning context from failed approaches and verifier memory", () => {
     const journal = new ExecutionJournal("Fix the Unity level regression");
+    journal.attachProjectWorldContext({
+      summary: "root=/projects/MyGame | modules=Castle | systems=9 | services=2 | components=14",
+      fingerprint: "root projects mygame modules castle systems 9 services 2 components 14",
+    });
     let state = createInitialState("Fix the Unity level regression");
     state = {
       ...state,
@@ -58,6 +62,7 @@ describe("ExecutionJournal", () => {
     const prompt = journal.buildPromptSection(AgentPhase.REPLANNING);
     expect(prompt).toContain("Execution Journal");
     expect(prompt).toContain("Current branch: branch-1");
+    expect(prompt).toContain("Project/world anchor: root=/projects/MyGame");
     expect(prompt).toContain("Latest verifier result");
     expect(prompt).toContain("Avoid repeating exhausted strategies");
     expect(prompt).toContain("Required verifier actions");
@@ -65,6 +70,10 @@ describe("ExecutionJournal", () => {
 
   it("exports a compact snapshot for persistent execution memory", () => {
     const journal = new ExecutionJournal("Investigate the broken Unity level import");
+    journal.attachProjectWorldContext({
+      summary: "root=/projects/MyGame | modules=Castle | systems=9 | services=2 | components=14",
+      fingerprint: "root projects mygame modules castle systems 9 services 2 components 14",
+    });
     journal.recordVerifierResult({
       decision: "continue",
       summary: "Need to inspect the serialized asset and live runtime behavior together.",
@@ -90,5 +99,6 @@ describe("ExecutionJournal", () => {
     expect(snapshot.verifierSummary).toContain("serialized asset");
     expect(snapshot.learnedInsights.length).toBeGreaterThan(0);
     expect(snapshot.branchSummary).toContain("Branch root");
+    expect(snapshot.branchSummary).toContain("world anchor: root=/projects/MyGame");
   });
 });

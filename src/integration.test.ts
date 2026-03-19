@@ -22,6 +22,8 @@ vi.mock("./agents/context/strada-knowledge.js", () => ({
   buildProjectWorldMemorySection: vi.fn().mockImplementation((params: { projectPath: string; analysis?: { modules?: Array<{ name: string }> } | null }) => ({
     content: `## Project/World Memory\nActive project root: ${params.projectPath}\n${params.analysis?.modules?.[0]?.name ?? "No cached analysis"}`,
     contentHashes: [params.projectPath, params.analysis?.modules?.[0]?.name ?? "No cached analysis"],
+    summary: `root=${params.projectPath} | modules=${params.analysis?.modules?.[0]?.name ?? "none"}`,
+    fingerprint: `root ${params.projectPath.replace(/[^a-z0-9]+/gi, " ").trim().toLowerCase()} modules ${(params.analysis?.modules?.[0]?.name ?? "none").toLowerCase()}`,
   })),
   buildDepsContext: vi.fn().mockReturnValue(""),
   buildCapabilityManifest: vi.fn().mockReturnValue(""),

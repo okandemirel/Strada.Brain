@@ -383,16 +383,25 @@ export function buildAnalysisSummary(analysis: StradaProjectAnalysis): string {
   return lines.join("\n") + "\n";
 }
 
+export interface ProjectWorldMemorySection {
+  content: string;
+  contentHashes: string[];
+  summary: string;
+  fingerprint: string;
+}
+
 export function buildProjectWorldMemorySection(params: {
   projectPath: string;
   analysis?: StradaProjectAnalysis | null;
-}): { content: string; contentHashes: string[] } {
+}): ProjectWorldMemorySection {
   const lines: string[] = [
     "## Project/World Memory",
     `Active project root: ${params.projectPath}`,
     "Treat this as durable project context. Use it to stay grounded in the real repo structure and cached world facts.",
   ];
   const contentHashes: string[] = [params.projectPath];
+  const summary = buildProjectWorldRecoverySummary(params.projectPath, params.analysis);
+  const fingerprint = normalizeProjectWorldFingerprint(summary);
 
   if (params.analysis) {
     const analysisSummary = buildAnalysisSummary(params.analysis).trim();
@@ -408,7 +417,42 @@ export function buildProjectWorldMemorySection(params: {
   return {
     content: `${lines.join("\n")}\n`,
     contentHashes,
+    summary,
+    fingerprint,
   };
+}
+
+function buildProjectWorldRecoverySummary(
+  projectPath: string,
+  analysis?: StradaProjectAnalysis | null,
+): string {
+  const parts = [`root=${projectPath}`];
+  if (analysis) {
+    const moduleNames = analysis.modules
+      .slice(0, 4)
+      .map((module) => module.name)
+      .filter(Boolean);
+    if (moduleNames.length > 0) {
+      parts.push(`modules=${moduleNames.join(",")}`);
+    }
+    parts.push(`systems=${analysis.systems.length}`);
+    parts.push(`services=${analysis.services.length}`);
+    parts.push(`components=${analysis.components.length}`);
+    if (analysis.scenes.length > 0) {
+      parts.push(`scenes=${analysis.scenes.slice(0, 3).join(",")}`);
+    }
+  } else {
+    parts.push("analysis=unavailable");
+  }
+  return parts.join(" | ");
+}
+
+function normalizeProjectWorldFingerprint(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .slice(0, 220);
 }
 
 /**

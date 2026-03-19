@@ -72,6 +72,43 @@ describe("TaskPlanner", () => {
       storage.close();
       rmSync(tempDir, { recursive: true, force: true });
     });
+
+    it("records replay context alongside the trajectory outcome", () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
+      const dbPath = join(tempDir, "test.db");
+      const storage = new LearningStorage(dbPath);
+      storage.initialize();
+      const pipeline = new LearningPipeline(storage);
+
+      planner.startTask({
+        sessionId: "test-session",
+        taskDescription: "Test task",
+        learningPipeline: pipeline,
+      });
+      planner.attachReplayContext({
+        projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+        projectWorldSummary: "root=/Users/okan/Tiki/arrows | modules=Castle",
+        branchSummary: "stable checkpoint: inspected Level_031",
+        verifierSummary: "runtime replay still required",
+        learnedInsights: ["Avoid trusting serialized YAML alone."],
+      });
+
+      planner.endTask({
+        success: true,
+        hadErrors: false,
+        errorCount: 0,
+      });
+
+      const trajectory = storage.getTrajectories({ limit: 1 })[0];
+      expect(trajectory?.outcome.replayContext?.projectWorldFingerprint).toContain("castle systems 9");
+      expect(trajectory?.outcome.replayContext?.branchSummary).toContain("Level_031");
+      expect(trajectory?.outcome.replayContext?.learnedInsights).toEqual([
+        "Avoid trusting serialized YAML alone.",
+      ]);
+
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    });
   });
 
   describe("Tool Call Tracking", () => {

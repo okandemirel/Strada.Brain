@@ -33,6 +33,8 @@ vi.mock("./context/strada-knowledge.js", () => ({
   buildProjectWorldMemorySection: (params: { projectPath: string; analysis?: { modules?: Array<{ name: string }> } | null }) => ({
     content: `## Project/World Memory\nActive project root: ${params.projectPath}\n${params.analysis?.modules?.[0]?.name ?? "No cached analysis"}`,
     contentHashes: [params.projectPath, params.analysis?.modules?.[0]?.name ?? "No cached analysis"],
+    summary: `root=${params.projectPath} | modules=${params.analysis?.modules?.[0]?.name ?? "none"}`,
+    fingerprint: `root ${params.projectPath.replace(/[^a-z0-9]+/gi, " ").trim().toLowerCase()} modules ${(params.analysis?.modules?.[0]?.name ?? "none").toLowerCase()}`,
   }),
   buildDepsContext: () => "",
   buildCapabilityManifest: () => "\n## Agent Capability Manifest\nGoal Decomposition\nLearning Pipeline\nIntrospection\n",
@@ -817,6 +819,116 @@ describe("Orchestrator", () => {
       "stable-web-user",
       expect.any(Array),
     );
+    db.close();
+  });
+
+  it("injects execution replay memory from prior trajectories", async () => {
+    const replayRetriever = {
+      getInsightsForTask: vi.fn().mockReturnValue({
+        insights: [
+          "Replay success (same project/world context): inspected Level_031 import path. 6 steps, clean verifier outcome.",
+          "Replay warning (same project/world context): avoid repeating YAML-only inspection. Last verifier memory: live repro still crashes.",
+        ],
+        matchedTrajectoryIds: ["traj_1", "traj_2"],
+      }),
+    };
+
+    const replayOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      trajectoryReplayRetriever: replayRetriever as any,
+    });
+
+    const promise = replayOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-replay-memory",
+      userId: "user-1",
+      text: "Fix the Unity editor crash during level generation",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const prompt = String(mockProvider.chat.mock.calls.at(-1)?.[0] ?? "");
+    expect(prompt).toContain("## Execution Replay");
+    expect(prompt).toContain("Replay success (same project/world context)");
+    expect(prompt).toContain("Replay warning (same project/world context)");
+  });
+
+  it("builds trajectory replay context from task execution memory and project/world memory", async () => {
+    const db = new Database(":memory:");
+    const taskExecutionStore = new TaskExecutionStore(db);
+    taskExecutionStore.updateExecutionSnapshot("user-replay", {
+      branchSummary: "stable checkpoint: inspected Level_031 asset import path",
+      verifierSummary: "runtime replay still required before final completion",
+      learnedInsights: ["Avoid trusting serialized YAML alone."],
+    });
+
+    const mockMemMgr = {
+      getCachedAnalysis: vi.fn().mockResolvedValue({
+        kind: "ok",
+        value: {
+          kind: "some",
+          value: {
+            modules: [{
+              name: "Castle",
+              className: "CastleModuleConfig",
+              filePath: "Assets/Modules/Castle/CastleModuleConfig.cs",
+              namespace: "Game.Castle",
+              systems: [],
+              services: [],
+              dependencies: [],
+              lineNumber: 1,
+            }],
+            systems: [],
+            components: [],
+            services: [],
+            mediators: [],
+            controllers: [],
+            events: [],
+            dependencies: [],
+            asmdefs: [],
+            prefabs: [],
+            scenes: [],
+            csFileCount: 12,
+            analyzedAt: new Date("2026-03-19T00:00:00.000Z"),
+          },
+        },
+      }),
+    };
+
+    const replayOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      memoryManager: mockMemMgr as any,
+      taskExecutionStore,
+    });
+
+    const replayContext = await replayOrch.buildTrajectoryReplayContext({
+      chatId: "chat-replay",
+      userId: "user-replay",
+    });
+
+    expect(replayContext?.projectWorldFingerprint).toContain("castle");
+    expect(replayContext?.branchSummary).toContain("Level_031");
+    expect(replayContext?.verifierSummary).toContain("runtime replay");
+    expect(replayContext?.learnedInsights).toEqual(["Avoid trusting serialized YAML alone."]);
     db.close();
   });
 
