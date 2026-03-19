@@ -36,7 +36,7 @@ interface MiniMaxResponse {
  * MiniMax provider.
  *
  * Handles MiniMax-specific API features:
- * - reasoning_details extraction (thinking/reasoning content from M2.5)
+ * - reasoning_details extraction (thinking/reasoning content from current M2.x models)
  * - Temperature must be in (0.0, 1.0] range
  * - Unsupported params: presence_penalty, frequency_penalty, logit_bias, n>1
  *
@@ -57,7 +57,7 @@ export class MiniMaxProvider extends OpenAIProvider {
 
   constructor(
     apiKey: string,
-    model = "MiniMax-M2.5",
+    model = "MiniMax-M2.7",
     baseUrl = "https://api.minimax.io/v1",
   ) {
     super(apiKey, model, baseUrl, "MiniMax");

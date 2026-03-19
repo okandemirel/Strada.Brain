@@ -572,7 +572,7 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 | `GROQ_API_KEY` | Groq | `llama-3.3-70b-versatile` |
 | `QWEN_API_KEY` | Alibaba Qwen | `qwen-plus` |
 | `KIMI_API_KEY` | Moonshot Kimi | `moonshot-v1-8k` |
-| `MINIMAX_API_KEY` | MiniMax | `abab6.5s-chat` |
+| `MINIMAX_API_KEY` | MiniMax | `MiniMax-M2.7` |
 | `MISTRAL_API_KEY` | Mistral AI | `mistral-large-latest` |
 | `TOGETHER_API_KEY` | Together AI | `meta-llama/Llama-3-70b-chat-hf` |
 | `FIREWORKS_API_KEY` | Fireworks AI | `accounts/fireworks/models/llama-v3p1-70b-instruct` |

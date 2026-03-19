@@ -67,7 +67,7 @@ export const PROVIDER_PRESETS: Record<
   },
   minimax: {
     baseUrl: "https://api.minimax.io/v1",
-    defaultModel: "MiniMax-M2.5",
+    defaultModel: "MiniMax-M2.7",
     label: "MiniMax",
   },
   groq: {

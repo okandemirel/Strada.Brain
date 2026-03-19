@@ -269,7 +269,10 @@ export class ProviderManager {
             // Fallback to default model
           }
           const catalogModels = this.modelCatalog?.getProviderModels(p.name).map((model) => model.id) ?? [];
-          models = [...new Set([...models, ...catalogModels, p.defaultModel])];
+          const officialModels = this.getProviderOfficialSnapshot(p.name)?.signals
+            .filter((signal) => signal.kind === "model")
+            .map((signal) => signal.value) ?? [];
+          models = [...new Set([...models, ...catalogModels, ...officialModels, p.defaultModel])];
           return { ...p, models };
         }),
       ),

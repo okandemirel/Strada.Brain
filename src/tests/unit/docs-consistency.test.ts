@@ -85,6 +85,7 @@ describe("docs consistency", () => {
     expect(readRepoFile("README.md")).toContain("execution replay");
     expect(readRepoFile("README.md")).toContain("phase/provider telemetry");
     expect(readRepoFile("README.md")).toContain("taskRunId");
+    expect(readRepoFile("README.md")).toContain("MiniMax-M2.7");
     expect(readRepoFile("README.md")).toContain("latest snapshot");
     expect(readRepoFile("README.md")).toContain("persisted chronology");
     expect(readRepoFile("README.md")).toContain("rollback pressure");
@@ -133,6 +134,7 @@ describe("docs consistency", () => {
       expect(content).toMatch(/execution journal/iu);
       expect(content).toMatch(/execution replay/iu);
       expect(content).toContain("taskRunId");
+      expect(content).toContain("MiniMax-M2.7");
       expect(content).toContain("latest snapshot");
       expect(content).toContain("persisted chronology");
       expect(content).toMatch(/adaptive phase scores/iu);

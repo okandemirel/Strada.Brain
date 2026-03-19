@@ -35,52 +35,42 @@ export interface ProviderOfficialSnapshot {
 }
 
 const SIGNAL_LINE_KEYWORDS = [
-  /\b(agent|swarm|multi-agent)\b/iu,
-  /\btool(?:\s|-)?(calling|use)\b/iu,
-  /\bfunction(?:\s|-)?calling\b/iu,
-  /\bjson(?:\s|-)?schema\b/iu,
-  /\bjson(?:\s|-)?mode\b/iu,
-  /\bstructured outputs?\b/iu,
-  /\bmcp\b/iu,
-  /\bmodel context protocol\b/iu,
-  /\bplan\b/iu,
-  /\bloop\b/iu,
+  /\b(agent|swarm|multi-agent)\b|智能体/iu,
+  /\btool(?:\s|-)?(calling|use)\b|\bfunction(?:\s|-)?calling\b|工具调用/iu,
+  /\bjson(?:\s|-)?schema\b|\bjson(?:\s|-)?mode\b|\bstructured outputs?\b|结构化输出/iu,
+  /\bmcp\b|\bmodel context protocol\b/iu,
+  /\bplan\b|规划/iu,
+  /\bloop\b|循环/iu,
   /\bhooks?\b/iu,
-  /\breason(?:ing)?\b/iu,
-  /\bthink(?:ing)?\b/iu,
-  /\bsearch\b/iu,
-  /\bgrounding\b/iu,
-  /\bvision\b/iu,
-  /\bmultimodal\b/iu,
-  /\baudio\b/iu,
-  /\bvideo\b/iu,
-  /\bcoding?\b/iu,
-  /\bcode execution\b/iu,
-  /\bstream(?:ing)?\b/iu,
-  /\bcache|caching\b/iu,
-  /\bbrowser use\b/iu,
-  /\bcomputer use\b/iu,
+  /\breason(?:ing)?\b|\bthink(?:ing)?\b|推理|思考/iu,
+  /\bsearch\b|\bgrounding\b|搜索/iu,
+  /\bvision\b|\bmultimodal\b|视觉|多模态/iu,
+  /\baudio\b|\bvideo\b|音频|视频/iu,
+  /\bcoding?\b|\bcode execution\b|编码|代码执行/iu,
+  /\bstream(?:ing)?\b|流式输出|流式/iu,
+  /\bcache|caching\b|缓存/iu,
+  /\bbrowser use\b|\bcomputer use\b/iu,
 ];
 
 const FEATURE_TAG_PATTERNS: Array<{ readonly tag: string; readonly pattern: RegExp }> = [
-  { tag: "agents", pattern: /\b(agent|swarm|multi-agent)\b/iu },
-  { tag: "tool-calling", pattern: /\btool(?:\s|-)?(calling|use)\b|\bfunction(?:\s|-)?calling\b/iu },
-  { tag: "structured-output", pattern: /\bjson(?:\s|-)?(schema|mode)\b|\bstructured outputs?\b/iu },
+  { tag: "agents", pattern: /\b(agent|swarm|multi-agent)\b|智能体/iu },
+  { tag: "tool-calling", pattern: /\btool(?:\s|-)?(calling|use)\b|\bfunction(?:\s|-)?calling\b|工具调用/iu },
+  { tag: "structured-output", pattern: /\bjson(?:\s|-)?(schema|mode)\b|\bstructured outputs?\b|结构化输出/iu },
   { tag: "mcp", pattern: /\bmcp\b|\bmodel context protocol\b/iu },
-  { tag: "planning", pattern: /\bplan\b/iu },
-  { tag: "loop", pattern: /\bloop\b/iu },
+  { tag: "planning", pattern: /\bplan\b|规划/iu },
+  { tag: "loop", pattern: /\bloop\b|循环/iu },
   { tag: "hooks", pattern: /\bhooks?\b/iu },
-  { tag: "reasoning", pattern: /\breason(?:ing)?\b|\bthink(?:ing)?\b/iu },
-  { tag: "search", pattern: /\bsearch\b|\bgrounding\b/iu },
-  { tag: "multimodal", pattern: /\bvision\b|\bmultimodal\b|\baudio\b|\bvideo\b/iu },
-  { tag: "coding", pattern: /\bcoding?\b|\bcode execution\b/iu },
-  { tag: "streaming", pattern: /\bstream(?:ing)?\b/iu },
-  { tag: "caching", pattern: /\bcache|caching\b/iu },
+  { tag: "reasoning", pattern: /\breason(?:ing)?\b|\bthink(?:ing)?\b|推理|思考/iu },
+  { tag: "search", pattern: /\bsearch\b|\bgrounding\b|搜索/iu },
+  { tag: "multimodal", pattern: /\bvision\b|\bmultimodal\b|\baudio\b|\bvideo\b|视觉|多模态|音频|视频/iu },
+  { tag: "coding", pattern: /\bcoding?\b|\bcode execution\b|编码|代码执行/iu },
+  { tag: "streaming", pattern: /\bstream(?:ing)?\b|流式输出|流式/iu },
+  { tag: "caching", pattern: /\bcache|caching\b|缓存/iu },
   { tag: "computer-use", pattern: /\bbrowser use\b|\bcomputer use\b/iu },
 ];
 
 const COMMAND_RE = /(^|\s)(\/[a-z][a-z0-9-]{1,32})(?=\s|$)/gimu;
-const MODEL_RE = /\b(?:gpt|gemini|claude|kimi|qwen|deepseek|mistral|llama|o1|o3|o4|opus|sonnet|haiku)[a-z0-9./-]{1,64}\b/giu;
+const MODEL_RE = /\b(?:gpt|gemini|claude|kimi|qwen|deepseek|mistral|llama|minimax|o1|o3|o4|opus|sonnet|haiku)[a-z0-9./-]{1,64}\b/giu;
 
 function inferProviderFromModelId(modelId: string): string {
   const id = modelId.toLowerCase();

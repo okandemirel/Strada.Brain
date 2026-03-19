@@ -41,6 +41,10 @@ describe("PROVIDER_PRESETS", () => {
       expect(preset.label, `${name} missing label`).toBeTruthy();
     }
   });
+
+  it("tracks the current MiniMax default worker model", () => {
+    expect(PROVIDER_PRESETS["minimax"]?.defaultModel).toBe("MiniMax-M2.7");
+  });
 });
 
 describe("createProvider", () => {

@@ -38,6 +38,11 @@ vi.mock("./provider-registry.js", () => ({
       defaultModel: "kimi-for-coding",
       label: "Kimi (Moonshot)",
     },
+    minimax: {
+      baseUrl: "https://example.test/minimax",
+      defaultModel: "MiniMax-M2.7",
+      label: "MiniMax",
+    },
   },
   buildProviderChain: buildProviderChainMock,
   createProvider: vi.fn(({ name }: { name: string }) => makeProvider(name)),
@@ -240,5 +245,53 @@ describe("ProviderManager", () => {
     const capabilities = manager.getProviderCapabilities("kimi", "kimi-for-coding");
 
     expect(capabilities?.specialFeatures).toEqual(expect.arrayContaining(["agents", "planning"]));
+  });
+
+  it("surfaces official model signals in the provider model list when the shared catalog lags", async () => {
+    const defaultProvider = makeProvider("chain(minimax)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { minimax: { apiKey: "minimax-key" } },
+      { minimax: "MiniMax-M2.7" },
+      "/tmp/provider-manager-test",
+      ["minimax"],
+    );
+
+    manager.setModelCatalog({
+      getProviderModels: () => [],
+      getProviderOfficialSnapshot: () => ({
+        provider: "minimax",
+        lastUpdated: Date.now(),
+        sourceUrls: ["https://platform.minimaxi.com/docs/api-reference/api-overview"],
+        signals: [
+          {
+            kind: "model",
+            title: "Model MiniMax-M2.7",
+            value: "MiniMax-M2.7",
+            url: "https://platform.minimaxi.com/docs/api-reference/api-overview",
+            sourceLabel: "MiniMax API overview",
+            tags: ["model"],
+          },
+          {
+            kind: "model",
+            title: "Model MiniMax-M2.7-highspeed",
+            value: "MiniMax-M2.7-highspeed",
+            url: "https://platform.minimaxi.com/docs/api-reference/api-overview",
+            sourceLabel: "MiniMax API overview",
+            tags: ["model"],
+          },
+        ],
+        featureTags: [],
+      }),
+      refresh: vi.fn(),
+    });
+
+    const providers = await manager.listAvailableWithModels();
+    const minimax = providers.find((entry) => entry.name === "minimax");
+
+    expect(minimax?.models).toEqual(expect.arrayContaining([
+      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
+    ]));
   });
 });

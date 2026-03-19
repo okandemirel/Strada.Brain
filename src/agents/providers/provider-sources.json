@@ -44,6 +44,18 @@
         "kind": "html"
       }
     ],
+    "minimax": [
+      {
+        "url": "https://platform.minimaxi.com/docs/api-reference/api-overview",
+        "label": "MiniMax API overview",
+        "kind": "html"
+      },
+      {
+        "url": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+        "label": "MiniMax pay-as-you-go pricing",
+        "kind": "html"
+      }
+    ],
     "groq": [
       {
         "url": "https://console.groq.com/docs/models",
