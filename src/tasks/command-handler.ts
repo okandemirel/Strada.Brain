@@ -824,9 +824,12 @@ export class CommandHandler {
       }
       const sections: string[] = [];
       if (decisions.length > 0) {
-        const lines = decisions.map((decision) =>
-          `\`${decision.task.type}\` -> \`${decision.provider}\` (${decision.reason})`,
-        );
+        const lines = decisions.map((decision) => {
+          const catalogSignal = decision.catalogSignal
+            ? ` freshness=\`${decision.catalogSignal.freshnessScore.toFixed(2)}\` alignment=\`${decision.catalogSignal.alignmentScore.toFixed(2)}\`${decision.catalogSignal.stale ? " stale=`yes`" : ""}`
+            : "";
+          return `\`${decision.task.type}\` -> \`${decision.provider}\`${catalogSignal} (${decision.reason})`;
+        });
         sections.push(`*Recent Routing Decisions*\n\n${lines.join("\n")}`);
       }
       if (executionTraces.length > 0) {

@@ -36,6 +36,12 @@ export interface RoutingDecision {
   readonly task: TaskClassification;
   readonly timestamp: number;
   readonly identityKey?: string;
+  readonly catalogSignal?: {
+    readonly freshnessScore: number;
+    readonly alignmentScore: number;
+    readonly stale: boolean;
+    readonly updatedAt?: number;
+  };
   readonly replaySignal?: {
     readonly phase: ExecutionPhase;
     readonly score: number;

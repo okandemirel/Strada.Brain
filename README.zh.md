@@ -573,7 +573,7 @@ npm run dev -- daemon --channel web
 **提供商链：** 将 `PROVIDER_CHAIN` 设置为以逗号分隔的提供商名称列表。Strada 仍然是控制平面，并将这条链作为默认编排池，用于主执行 worker、supervisor 路由以及故障回退。示例：`PROVIDER_CHAIN=kimi,deepseek,claude` 首先使用 Kimi，Kimi 失败则使用 DeepSeek，然后是 Claude。
 澄清也是这个控制平面的一部分。worker 可以提出一个用户问题草案，但 Strada 现在会先运行内部 `clarification-review` 阶段，再决定这个草案能否真的变成 `ask_user` 回合。
 完成判定现在也要经过内部 verifier pipeline。build verification、targeted repro / failing-path 检查、log review、Strada conformance 和 completion review 都必须清理干净，Strada 才会结束。`/routing info` 和 dashboard 现在除了 runtime execution traces 之外，也会显示 phase outcomes (`approved`, `continued`, `replanned`, `blocked`)。
-Strada 现在还会为每个任务维护内部 execution journal 和 rollback memory。replan 可以复用最近的稳定 checkpoint、记住已经耗尽的 branch、携带 project/world anchor，并把 adaptive phase scores 回灌到 routing，而不依赖 hardcoded provider lore。这些 score 现在还会考虑 verifier clean rate、rollback pressure、retry count、repeated failure fingerprints、repeated world-context failures 和 phase-local token cost。
+Strada 现在还会为每个任务维护内部 execution journal 和 rollback memory。replan 可以复用最近的稳定 checkpoint、记住已经耗尽的 branch、携带 project/world anchor，并把 adaptive phase scores 回灌到 routing，而不依赖 hardcoded provider lore。这些 score 现在还会考虑 verifier clean rate、rollback pressure、retry count、repeated failure fingerprints、repeated world-context failures、phase-local token cost、provider catalog freshness，以及共享目录给出的 official alignment / capability drift。
 记忆现在也按角色拆分：user profile state 保存姓名/偏好/autonomy，task execution memory 保存 session summaries/open items/rollback state；project/world memory 现在会从当前 project root 和缓存的 AgentDB analysis 显式注入到 prompt layer 中。task execution memory 只保存当前 identity 的 `latest snapshot`，并不承担精确 task run 的 `persisted chronology`。这一层 project/world memory 现在也会参与 recovery memory 和 adaptive routing，而 semantic retrieval 仍会单独补充实时相关 memory。
 cross-session `execution replay` 现在也走同一条路径：Strada 会把 project/world-aware recovery summaries 记录进 learning trajectories，并在重试相似工作之前，把最相关的历史 success/failure branches 作为 `Execution Replay` context layer 重新注入 prompt。
 Replay correlation 现在也会连同 chat-scoped `taskRunId` 一起持久化，因此同一个 chat 里的并发 task 不会再混淆彼此的 phase telemetry 和 recovery history。精确 task run 的 `persisted chronology` 会保存在按 `taskRunId` 读取的 learning trajectories / replay contexts 中。
@@ -755,7 +755,7 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `/agent` | 显示 Agent Core 状态 |
 | `/routing` | 显示路由状态和预设 |
 | `/routing preset <name>` | 切换路由预设（budget/balanced/performance） |
-| `/routing info` | 显示当前身份最近的路由决策、runtime execution traces、phase outcomes 以及 adaptive phase scores，并附带 verifier clean rate、rollback pressure、retry count、token-cost telemetry，覆盖 planning、execution、clarification-review、review、synthesis 阶段 |
+| `/routing info` | 显示当前身份最近的路由决策、runtime execution traces、phase outcomes 以及 adaptive phase scores，并附带 verifier clean rate、rollback pressure、retry count、token-cost telemetry、provider catalog freshness、official alignment / capability drift，覆盖 planning、execution、clarification-review、review、synthesis 阶段 |
 
 ---
 

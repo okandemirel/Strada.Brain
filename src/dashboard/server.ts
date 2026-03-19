@@ -174,7 +174,18 @@ function isDashboardIdentityPartTooLong(value: string | null): boolean {
 
 /** Structural interface for ProviderRouter methods used by dashboard /api/agent-activity endpoint */
 interface DashboardProviderRouter {
-  getRecentDecisions(n: number, identityKey?: string): Array<{ provider: string; reason: string; task: { type: string; complexity: string; criticality: string }; timestamp: number }>;
+  getRecentDecisions(n: number, identityKey?: string): Array<{
+    provider: string;
+    reason: string;
+    task: { type: string; complexity: string; criticality: string };
+    timestamp: number;
+    catalogSignal?: {
+      freshnessScore: number;
+      alignmentScore: number;
+      stale: boolean;
+      updatedAt?: number;
+    };
+  }>;
   getRecentExecutionTraces?(n: number, identityKey?: string): Array<{
     provider: string;
     model?: string;

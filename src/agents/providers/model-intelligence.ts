@@ -21,6 +21,7 @@ import {
   type ProviderOfficialSnapshot,
   type ProviderOfficialSource,
 } from "./provider-source-registry.js";
+import type { ProviderCatalogHealth } from "./provider-manager.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -767,6 +768,19 @@ export class ModelIntelligenceService {
 
   getProviderOfficialSnapshot(provider: string): ProviderOfficialSnapshot | undefined {
     return this.providerSnapshots.get(provider.toLowerCase());
+  }
+
+  getCatalogHealth(provider?: string): ProviderCatalogHealth | undefined {
+    const normalizedProvider = provider?.trim().toLowerCase();
+    const snapshot = normalizedProvider ? this.providerSnapshots.get(normalizedProvider) : undefined;
+    const snapshotAgeMs = snapshot ? Math.max(0, Date.now() - snapshot.lastUpdated) : undefined;
+    return {
+      refreshIntervalMs: this.refreshIntervalMs,
+      stale: snapshotAgeMs !== undefined
+        ? snapshotAgeMs > this.refreshIntervalMs
+        : this.isStale(),
+      snapshotAgeMs,
+    };
   }
 
   /** Returns true if the last refresh was more than the configured interval ago. */

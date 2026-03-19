@@ -37,6 +37,12 @@ interface RoutingDecision {
     criticality: string
   }
   timestamp: number
+  catalogSignal?: {
+    freshnessScore: number
+    alignmentScore: number
+    stale: boolean
+    updatedAt?: number
+  }
 }
 
 interface ExecutionTrace {
@@ -703,6 +709,19 @@ export default function SettingsPage() {
                         <span className="settings-provider-id">{decision.task.complexity}</span>
                         <span className="settings-provider-model">{decision.task.criticality}</span>
                       </div>
+                      {decision.catalogSignal && (
+                        <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
+                          <span className="settings-provider-id">
+                            freshness {decision.catalogSignal.freshnessScore.toFixed(2)}
+                          </span>
+                          <span className="settings-provider-model">
+                            alignment {decision.catalogSignal.alignmentScore.toFixed(2)}
+                          </span>
+                          {decision.catalogSignal.stale && (
+                            <span className="settings-provider-model">stale catalog</span>
+                          )}
+                        </div>
+                      )}
                       <div className="settings-hint" style={{ margin: 0 }}>
                         {decision.reason}
                       </div>

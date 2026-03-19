@@ -40,13 +40,13 @@ export interface ProviderManagerRef {
     label: string;
     defaultModel: string;
     capabilities?: ProviderCapabilities | null;
-  }>;
+  } & CatalogTelemetry>;
   describeAvailable?(): Array<{
     name: string;
     label: string;
     defaultModel: string;
     capabilities: ProviderCapabilities | null;
-  }>;
+  } & CatalogTelemetry>;
   getProviderCapabilities?(name: string, model?: string): ProviderCapabilities | undefined;
   isAvailable(name: string): boolean;
 }
@@ -73,13 +73,22 @@ const PHASE_SCORE_COST_WEIGHT = 0.08;
 const PHASE_SCORE_REPEAT_FAILURE_WEIGHT = 0.08;
 const PHASE_SCORE_WORLD_CONTEXT_WEIGHT = 0.06;
 const TRAJECTORY_SIGNAL_BIAS_WEIGHT = 0.12;
+const CATALOG_FRESHNESS_WEIGHT = 0.08;
+const OFFICIAL_ALIGNMENT_WEIGHT = 0.1;
+
+type CatalogTelemetry = {
+  catalogUpdatedAt?: number;
+  catalogFreshnessScore?: number;
+  catalogStale?: boolean;
+  officialAlignmentScore?: number;
+};
 
 type AvailableProvider = {
   name: string;
   label: string;
   defaultModel: string;
   capabilities?: ProviderCapabilities | null;
-};
+} & CatalogTelemetry;
 
 const TASK_TYPE_TO_WORKLOAD: Record<TaskType, ProviderWorkload> = {
   planning: "planning",
@@ -202,6 +211,7 @@ export class ProviderRouter {
     }
 
     let bestProvider = available[0]!.name;
+    let bestEntry = available[0]!;
     let bestScore = -Infinity;
     let bestReason = "";
 
@@ -218,6 +228,7 @@ export class ProviderRouter {
       if (score > bestScore) {
         bestScore = score;
         bestProvider = entry.name;
+        bestEntry = entry;
         bestReason = this.buildReason(
           entry,
           task,
@@ -235,6 +246,7 @@ export class ProviderRouter {
       task,
       timestamp: Date.now(),
       identityKey: options.identityKey,
+      catalogSignal: this.toRoutingCatalogSignal(bestEntry),
       replaySignal: this.toRoutingReplaySignal(bestProvider, phase, trajectorySignals),
     };
 
@@ -336,6 +348,8 @@ export class ProviderRouter {
       phase,
       trajectorySignals,
     );
+    const catalogFreshnessBias = this.catalogFreshnessBias(entry, task, phase);
+    const officialAlignmentBias = this.officialAlignmentBias(entry, task, phase);
 
     return (
       weights.costWeight * cost +
@@ -343,7 +357,9 @@ export class ProviderRouter {
       weights.speedWeight * speed +
       weights.diversityWeight * diversity +
       adaptiveBias +
-      replayBias
+      replayBias +
+      catalogFreshnessBias +
+      officialAlignmentBias
     );
   }
 
@@ -556,6 +572,59 @@ export class ProviderRouter {
     return (score.score - PHASE_SCORE_NEUTRAL) * PHASE_SCORE_BIAS_WEIGHT;
   }
 
+  private getCatalogSensitivity(task: TaskClassification, phase: string | undefined): number {
+    const normalizedPhase = normalizeExecutionPhase(phase);
+    const phaseBoost = normalizedPhase && (
+      normalizedPhase === "planning"
+      || normalizedPhase === "clarification-review"
+      || normalizedPhase === "completion-review"
+      || normalizedPhase === "consensus-review"
+      || normalizedPhase === "synthesis"
+    )
+      ? 1
+      : 0;
+
+    switch (task.type) {
+      case "planning":
+      case "analysis":
+      case "code-review":
+      case "debugging":
+      case "destructive-operation":
+        return Math.max(0.9, phaseBoost);
+      case "code-generation":
+      case "refactoring":
+        return Math.max(0.75, phaseBoost);
+      case "simple-question":
+        return Math.max(0.4, phaseBoost);
+      default:
+        return Math.max(0.6, phaseBoost);
+    }
+  }
+
+  private catalogFreshnessBias(
+    entry: AvailableProvider,
+    task: TaskClassification,
+    phase: string | undefined,
+  ): number {
+    if (entry.catalogFreshnessScore === undefined) {
+      return 0;
+    }
+    const sensitivity = this.getCatalogSensitivity(task, phase);
+    return (entry.catalogFreshnessScore - PHASE_SCORE_NEUTRAL) * CATALOG_FRESHNESS_WEIGHT * sensitivity;
+  }
+
+  private officialAlignmentBias(
+    entry: AvailableProvider,
+    task: TaskClassification,
+    phase: string | undefined,
+  ): number {
+    if (entry.officialAlignmentScore === undefined) {
+      return 0;
+    }
+    const sensitivity = this.getCatalogSensitivity(task, phase);
+    return (entry.officialAlignmentScore - PHASE_SCORE_NEUTRAL) * OFFICIAL_ALIGNMENT_WEIGHT * sensitivity;
+  }
+
   private getProviderPhaseScore(
     providerName: string,
     phase: string | undefined,
@@ -626,6 +695,18 @@ export class ProviderRouter {
       sampleSize: signal.sampleSize,
       sameWorldMatches: signal.sameWorldMatches,
       latestTimestamp: signal.latestTimestamp,
+    };
+  }
+
+  private toRoutingCatalogSignal(entry: AvailableProvider): RoutingDecision["catalogSignal"] | undefined {
+    if (entry.catalogFreshnessScore === undefined && entry.officialAlignmentScore === undefined) {
+      return undefined;
+    }
+    return {
+      freshnessScore: entry.catalogFreshnessScore ?? PHASE_SCORE_NEUTRAL,
+      alignmentScore: entry.officialAlignmentScore ?? PHASE_SCORE_NEUTRAL,
+      stale: entry.catalogStale ?? false,
+      updatedAt: entry.catalogUpdatedAt,
     };
   }
 

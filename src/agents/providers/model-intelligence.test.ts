@@ -498,6 +498,48 @@ describe("ModelIntelligenceService", () => {
     expect(snapshot?.signals.some((signal) => signal.value === "/loop")).toBe(true);
   });
 
+  it("reports provider catalog health with snapshot age and staleness", async () => {
+    tempRegistryPath = join(process.cwd(), ".tmp-provider-sources-health.test.json");
+    writeFileSync(tempRegistryPath, JSON.stringify({
+      version: 1,
+      providers: {
+        gemini: [
+          {
+            url: "https://official.example/gemini-health",
+            label: "Gemini health docs",
+            kind: "html",
+          },
+        ],
+      },
+    }));
+
+    service.shutdown();
+    service = new ModelIntelligenceService({
+      providerSourcesPath: tempRegistryPath,
+      refreshHours: 1,
+    });
+
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("official.example/gemini-health")) {
+        return {
+          ok: true,
+          text: async () => "<p>/plan</p><p>Grounding and tool calling support.</p>",
+          headers: { get: () => null },
+        };
+      }
+      throw new Error("offline");
+    });
+
+    await service.refresh();
+
+    const health = service.getCatalogHealth("gemini");
+    expect(health).toBeDefined();
+    expect(health?.refreshIntervalMs).toBe(60 * 60 * 1000);
+    expect(health?.snapshotAgeMs).toBeGreaterThanOrEqual(0);
+    expect(health?.stale).toBe(false);
+  });
+
   it("clears stale official snapshots when a later successful refresh yields no relevant signals", async () => {
     tempRegistryPath = join(process.cwd(), ".tmp-provider-sources-clear.test.json");
     const tempDbPath = join(process.cwd(), ".tmp-model-intelligence-clear.test.db");

@@ -90,8 +90,11 @@ describe("docs consistency", () => {
     expect(readRepoFile("README.md")).toContain("persisted chronology");
     expect(readRepoFile("README.md")).toContain("rollback pressure");
     expect(readRepoFile("README.md")).toContain("token cost");
+    expect(readRepoFile("README.md")).toContain("provider catalog freshness");
+    expect(readRepoFile("README.md")).toContain("official alignment");
     expect(readRepoFile("CHANGELOG.md")).toContain("taskRunId");
     expect(readRepoFile("CHANGELOG.md")).toContain("latest snapshot");
+    expect(readRepoFile("CHANGELOG.md")).toContain("Catalog-Aware Adaptive Routing");
     expect(readRepoFile("src/agents/README.md")).toContain("Clarification Review");
     expect(readRepoFile("src/agents/README.md")).toContain("Verifier Pipeline");
     expect(readRepoFile("src/agents/README.md")).toContain("Execution Journal");
@@ -99,6 +102,8 @@ describe("docs consistency", () => {
     expect(readRepoFile("src/agents/README.md")).toContain("phase/provider telemetry");
     expect(readRepoFile("src/agents/README.md")).toContain("taskRunId");
     expect(readRepoFile("src/agents/README.md")).toContain("latest snapshot");
+    expect(readRepoFile("src/agents/README.md")).toContain("provider catalog freshness");
+    expect(readRepoFile("src/agents/README.md")).toContain("official alignment");
     expect(readRepoFile("src/memory/README.md")).toContain("execution replay");
     expect(readRepoFile("src/memory/README.md")).toContain("taskRunId");
     expect(readRepoFile("src/memory/README.md")).toContain("latest snapshot");
@@ -140,6 +145,8 @@ describe("docs consistency", () => {
       expect(content).toMatch(/adaptive phase scores/iu);
       expect(content).toMatch(/rollback pressure/iu);
       expect(content).toMatch(/token cost|token-cost/iu);
+      expect(content).toContain("provider catalog freshness");
+      expect(content).toContain("official alignment");
       expect(content).toContain("`approved`, `continued`, `replanned`, `blocked`");
       expect(content).not.toMatch(/# .*npm install -g strada-brain/u);
     }

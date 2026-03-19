@@ -43,17 +43,120 @@ export interface ProviderExecutionCandidate {
   readonly officialSignals?: ProviderOfficialSnapshot["signals"];
   readonly officialSourceUrls?: string[];
   readonly catalogUpdatedAt?: number;
+  readonly catalogFreshnessScore?: number;
+  readonly catalogAgeMs?: number;
+  readonly catalogStale?: boolean;
+  readonly officialAlignmentScore?: number;
+  readonly capabilityDriftReasons?: string[];
+}
+
+export interface ProviderCatalogHealth {
+  readonly refreshIntervalMs: number;
+  readonly stale: boolean;
+  readonly snapshotAgeMs?: number;
 }
 
 interface ProviderModelCatalogLookup {
   getProviderModels(provider: string): Array<{ id: string }>;
   getProviderOfficialSnapshot?(provider: string): ProviderOfficialSnapshot | undefined;
+  getCatalogHealth?(provider: string): ProviderCatalogHealth | undefined;
   refresh?(): Promise<RefreshResult>;
 }
 
 const MAX_CACHED_PROVIDERS = 50;
 const EXECUTION_POLICY_NOTE =
   "Strada remains the control plane. This selection sets the primary execution worker; planning, review, and synthesis may still route to other providers.";
+
+const CAPABILITY_ALIGNMENT_NEUTRAL = 0.5;
+const CAPABILITY_ALIGNMENT_MISMATCH = 0.25;
+
+function normalizeProviderFeatureTag(tag: string): string {
+  return tag.trim().toLowerCase().replace(/[_\s]+/g, "-");
+}
+
+function normalizeModelId(modelId: string): string {
+  return modelId.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function scoreCatalogFreshness(ageMs: number, refreshIntervalMs: number): number {
+  const interval = Math.max(refreshIntervalMs, 60_000);
+  const decay = Math.min(ageMs / (interval * 4), 1);
+  return Math.max(0.25, 1 - decay * 0.75);
+}
+
+function computeOfficialAlignment(
+  model: string,
+  baseCapabilities: ProviderCapabilities | undefined,
+  officialSnapshot: ProviderOfficialSnapshot | undefined,
+): { score: number; reasons: string[] } {
+  if (!officialSnapshot) {
+    return { score: CAPABILITY_ALIGNMENT_NEUTRAL, reasons: [] };
+  }
+
+  const officialTags = new Set(officialSnapshot.featureTags.map(normalizeProviderFeatureTag));
+  const officialModels = officialSnapshot.signals
+    .filter((signal) => signal.kind === "model")
+    .map((signal) => signal.value)
+    .filter(Boolean);
+  const reasons: string[] = [];
+  const checks: number[] = [];
+
+  if (officialModels.length > 0) {
+    const normalizedModel = normalizeModelId(model);
+    const modelMatch = officialModels.some((officialModel) => normalizeModelId(officialModel) === normalizedModel);
+    checks.push(modelMatch ? 1 : 0.35);
+    if (!modelMatch) {
+      reasons.push("default-model-missing-from-official-catalog");
+    }
+  }
+
+  const capabilityChecks: Array<{
+    readonly tag: string;
+    readonly enabled: boolean | undefined;
+    readonly reason: string;
+  }> = [
+    {
+      tag: "tool-calling",
+      enabled: baseCapabilities?.toolCalling,
+      reason: "tool-calling-not-reflected-locally",
+    },
+    {
+      tag: "reasoning",
+      enabled: baseCapabilities?.thinkingSupported,
+      reason: "reasoning-not-reflected-locally",
+    },
+    {
+      tag: "multimodal",
+      enabled: baseCapabilities?.vision,
+      reason: "multimodal-not-reflected-locally",
+    },
+    {
+      tag: "streaming",
+      enabled: baseCapabilities?.streaming,
+      reason: "streaming-not-reflected-locally",
+    },
+  ];
+
+  for (const check of capabilityChecks) {
+    if (!officialTags.has(check.tag)) {
+      continue;
+    }
+    const aligned = Boolean(check.enabled);
+    checks.push(aligned ? 1 : CAPABILITY_ALIGNMENT_MISMATCH);
+    if (!aligned) {
+      reasons.push(check.reason);
+    }
+  }
+
+  if (checks.length === 0) {
+    return { score: CAPABILITY_ALIGNMENT_NEUTRAL, reasons };
+  }
+
+  return {
+    score: checks.reduce((sum, value) => sum + value, 0) / checks.length,
+    reasons,
+  };
+}
 
 export class ProviderManager {
   private readonly preferences: ProviderPreferenceStore;
@@ -299,6 +402,10 @@ export class ProviderManager {
     return this.modelCatalog?.getProviderOfficialSnapshot?.(name.trim().toLowerCase());
   }
 
+  private getProviderCatalogHealth(name: string): ProviderCatalogHealth | undefined {
+    return this.modelCatalog?.getCatalogHealth?.(name.trim().toLowerCase());
+  }
+
   private mergeCapabilities(
     name: string,
     model?: string,
@@ -327,6 +434,37 @@ export class ProviderManager {
     };
   }
 
+  private buildCatalogTelemetry(
+    name: string,
+    model: string,
+  ): Pick<
+    ProviderExecutionCandidate,
+    "catalogUpdatedAt" | "catalogFreshnessScore" | "catalogAgeMs" | "catalogStale" | "officialAlignmentScore" | "capabilityDriftReasons"
+  > {
+    const officialSnapshot = this.getProviderOfficialSnapshot(name);
+    const health = this.getProviderCatalogHealth(name);
+    const baseCapabilities = this.buildPrimaryProvider(name, model)?.capabilities;
+    const snapshotAgeMs = health?.snapshotAgeMs
+      ?? (officialSnapshot ? Math.max(0, Date.now() - officialSnapshot.lastUpdated) : undefined);
+    const refreshIntervalMs = health?.refreshIntervalMs ?? 24 * 60 * 60 * 1000;
+    const { score: officialAlignmentScore, reasons: capabilityDriftReasons } = computeOfficialAlignment(
+      model,
+      baseCapabilities,
+      officialSnapshot,
+    );
+
+    return {
+      catalogUpdatedAt: officialSnapshot?.lastUpdated,
+      catalogFreshnessScore: snapshotAgeMs !== undefined
+        ? scoreCatalogFreshness(snapshotAgeMs, refreshIntervalMs)
+        : (health?.stale === true ? 0.35 : CAPABILITY_ALIGNMENT_NEUTRAL),
+      catalogAgeMs: snapshotAgeMs,
+      catalogStale: health?.stale ?? false,
+      officialAlignmentScore,
+      capabilityDriftReasons,
+    };
+  }
+
   getProviderCapabilities(name: string, model?: string): ProviderCapabilities | undefined {
     return this.mergeCapabilities(name, model);
   }
@@ -349,9 +487,15 @@ export class ProviderManager {
     officialSignals?: ProviderOfficialSnapshot["signals"];
     officialSourceUrls?: string[];
     catalogUpdatedAt?: number;
+    catalogFreshnessScore?: number;
+    catalogAgeMs?: number;
+    catalogStale?: boolean;
+    officialAlignmentScore?: number;
+    capabilityDriftReasons?: string[];
   } {
     const capabilities = this.getProviderCapabilities(name, defaultModel);
     const officialSnapshot = this.getProviderOfficialSnapshot(name);
+    const catalogTelemetry = this.buildCatalogTelemetry(name, defaultModel);
     return {
       name,
       label,
@@ -361,7 +505,7 @@ export class ProviderManager {
       specialFeatures: capabilities?.specialFeatures,
       officialSignals: officialSnapshot?.signals,
       officialSourceUrls: officialSnapshot?.sourceUrls,
-      catalogUpdatedAt: officialSnapshot?.lastUpdated,
+      ...catalogTelemetry,
     };
   }
 

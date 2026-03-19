@@ -10,7 +10,18 @@ import type { TrajectoryPhaseSignalRetriever } from "./trajectory-phase-signal-r
 /* ------------------------------------------------------------------ */
 
 function createMockManager(
-  providers: Array<{ name: string; label: string; defaultModel: string; capabilities?: ProviderCapabilities }>,
+  providers: Array<{
+    name: string;
+    label: string;
+    defaultModel: string;
+    capabilities?: ProviderCapabilities;
+    catalogUpdatedAt?: number;
+    catalogFreshnessScore?: number;
+    catalogAgeMs?: number;
+    catalogStale?: boolean;
+    officialAlignmentScore?: number;
+    capabilityDriftReasons?: string[];
+  }>,
   executionPools: Record<string, string[]> = {},
 ): ProviderManagerRef {
   return {
@@ -231,6 +242,36 @@ describe("ProviderRouter", () => {
       // Budget mode favors cheap providers (ollama or groq)
       expect(["ollama", "groq"]).toContain(decision.provider);
       expect(decision.reason).toContain("cost-effective");
+    });
+
+    it("prefers fresher and more aligned catalog telemetry when providers are otherwise close", () => {
+      const manager = createMockManager([
+        {
+          ...PARITY_PROVIDERS[0]!,
+          catalogUpdatedAt: Date.now() - 30 * 60 * 1000,
+          catalogFreshnessScore: 0.98,
+          officialAlignmentScore: 0.95,
+          catalogStale: false,
+        },
+        {
+          ...PARITY_PROVIDERS[1]!,
+          catalogUpdatedAt: Date.now() - 9 * 24 * 60 * 60 * 1000,
+          catalogFreshnessScore: 0.28,
+          officialAlignmentScore: 0.35,
+          catalogStale: true,
+          capabilityDriftReasons: ["default-model-missing-from-official-catalog"],
+        },
+      ]);
+      const router = new ProviderRouter(manager, "balanced");
+
+      const decision = router.resolve(planningTask, "planning");
+
+      expect(decision.provider).toBe("alpha");
+      expect(decision.catalogSignal).toEqual(expect.objectContaining({
+        freshnessScore: 0.98,
+        alignmentScore: 0.95,
+        stale: false,
+      }));
     });
   });
 

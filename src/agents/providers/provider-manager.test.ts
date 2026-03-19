@@ -294,4 +294,50 @@ describe("ProviderManager", () => {
       "MiniMax-M2.7-highspeed",
     ]));
   });
+
+  it("surfaces catalog freshness and capability drift telemetry for execution candidates", () => {
+    const defaultProvider = makeProvider("chain(kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { kimi: { apiKey: "kimi-key" } },
+      { kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["kimi"],
+    );
+
+    manager.setModelCatalog({
+      getProviderModels: () => [],
+      getProviderOfficialSnapshot: () => ({
+        provider: "kimi",
+        lastUpdated: Date.now() - 2 * 60 * 60 * 1000,
+        sourceUrls: ["https://official.example/kimi"],
+        signals: [
+          {
+            kind: "model",
+            title: "Model kimi-vnext",
+            value: "kimi-vnext",
+            url: "https://official.example/kimi",
+            sourceLabel: "Kimi official docs",
+            tags: ["model"],
+          },
+        ],
+        featureTags: ["reasoning", "tool-calling"],
+      }),
+      getCatalogHealth: () => ({
+        refreshIntervalMs: 60 * 60 * 1000,
+        stale: true,
+        snapshotAgeMs: 2 * 60 * 60 * 1000,
+      }),
+    });
+
+    const candidate = manager.listExecutionCandidates()[0];
+
+    expect(candidate?.catalogFreshnessScore).toBeLessThan(1);
+    expect(candidate?.catalogStale).toBe(true);
+    expect(candidate?.officialAlignmentScore).toBeLessThan(1);
+    expect(candidate?.capabilityDriftReasons).toEqual(expect.arrayContaining([
+      "default-model-missing-from-official-catalog",
+      "reasoning-not-reflected-locally",
+    ]));
+  });
 });
