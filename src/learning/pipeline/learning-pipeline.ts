@@ -262,6 +262,8 @@ export class LearningPipeline {
 
   recordTrajectory(params: {
     sessionId: string;
+    chatId?: string;
+    taskRunId?: string;
     taskDescription: string;
     steps: TrajectoryStep[];
     outcome: TrajectoryOutcome;
@@ -270,6 +272,8 @@ export class LearningPipeline {
     const trajectory: Trajectory = {
       id: `traj_${randomUUID()}` as TrajectoryId,
       sessionId: createBrand(params.sessionId, "SessionId" as const),
+      chatId: params.chatId ? createBrand(params.chatId, "ChatId" as const) : undefined,
+      taskRunId: params.taskRunId,
       taskDescription: params.taskDescription,
       steps: params.steps,
       outcome: params.outcome,

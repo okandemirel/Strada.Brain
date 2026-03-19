@@ -400,6 +400,8 @@ export interface Trajectory {
   readonly sessionId: SessionId;
   /** Chat ID if applicable */
   readonly chatId?: ChatId;
+  /** Correlation ID for the specific task run that produced this trajectory */
+  readonly taskRunId?: string;
   /** Description of the task */
   readonly taskDescription: string;
   /** Sequence of steps */

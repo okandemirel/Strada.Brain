@@ -576,6 +576,7 @@ npm run dev -- daemon --channel web
 Strada 现在还会为每个任务维护内部 execution journal 和 rollback memory。replan 可以复用最近的稳定 checkpoint、记住已经耗尽的 branch、携带 project/world anchor，并把 adaptive phase scores 回灌到 routing，而不依赖 hardcoded provider lore。这些 score 现在还会考虑 verifier clean rate、rollback pressure、retry count、repeated failure fingerprints、repeated world-context failures 和 phase-local token cost。
 记忆现在也按角色拆分：user profile state 保存姓名/偏好/autonomy，task execution memory 保存 session summaries/open items/rollback state；project/world memory 现在会从当前 project root 和缓存的 AgentDB analysis 显式注入到 prompt layer 中。这一层 project/world memory 现在也会参与 recovery memory 和 adaptive routing，而 semantic retrieval 仍会单独补充实时相关 memory。
 cross-session `execution replay` 现在也走同一条路径：Strada 会把 project/world-aware recovery summaries 记录进 learning trajectories，并在重试相似工作之前，把最相关的历史 success/failure branches 作为 `Execution Replay` context layer 重新注入 prompt。
+Replay correlation 现在也会连同 chat-scoped `taskRunId` 一起持久化，因此同一个 chat 里的并发 task 不会再混淆彼此的 phase telemetry 和 recovery history。
 这个 replay context 现在还会持久化 phase/provider telemetry，因此 adaptive routing 在相似任务上可以复用已经成功过的 worker，而不是只依赖内存里的 runtime history。
 
 **重要：** `OPENAI_AUTH_MODE=chatgpt-subscription` 只覆盖 Strada 内的 OpenAI 对话回合，不会提供 OpenAI API 或 embeddings 配额。如果你选择 `EMBEDDING_PROVIDER=openai`，仍然需要 `OPENAI_API_KEY`。

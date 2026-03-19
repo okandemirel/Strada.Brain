@@ -935,6 +935,24 @@ describe("Orchestrator", () => {
             timestamp: 250,
             identityKey: "user-replay",
             chatId: "chat-replay",
+            taskRunId: "taskrun-current",
+          },
+          {
+            provider: "gemini",
+            model: "gemini-2.5-pro",
+            role: "planner",
+            phase: "planning",
+            source: "supervisor-strategy",
+            reason: "same chat but different task should not leak",
+            task: {
+              type: "planning",
+              complexity: "complex",
+              criticality: "high",
+            },
+            timestamp: 255,
+            identityKey: "user-replay",
+            chatId: "chat-replay",
+            taskRunId: "taskrun-other",
           },
           {
             provider: "gemini",
@@ -951,6 +969,7 @@ describe("Orchestrator", () => {
             timestamp: 260,
             identityKey: "user-replay",
             chatId: "chat-other",
+            taskRunId: "taskrun-foreign-chat",
           },
         ]),
         getRecentPhaseOutcomes: vi.fn(() => [
@@ -970,10 +989,34 @@ describe("Orchestrator", () => {
             timestamp: 300,
             identityKey: "user-replay",
             chatId: "chat-replay",
+            taskRunId: "taskrun-current",
             telemetry: {
               verifierDecision: "approve",
               retryCount: 0,
               rollbackDepth: 0,
+            },
+          },
+          {
+            provider: "gemini",
+            model: "gemini-2.5-pro",
+            role: "planner",
+            phase: "planning",
+            source: "supervisor-strategy",
+            status: "replanned",
+            reason: "same chat but different task should not leak",
+            task: {
+              type: "planning",
+              complexity: "complex",
+              criticality: "high",
+            },
+            timestamp: 310,
+            identityKey: "user-replay",
+            chatId: "chat-replay",
+            taskRunId: "taskrun-other",
+            telemetry: {
+              verifierDecision: "replan",
+              retryCount: 2,
+              rollbackDepth: 1,
             },
           },
           {
@@ -992,6 +1035,7 @@ describe("Orchestrator", () => {
             timestamp: 320,
             identityKey: "user-replay",
             chatId: "chat-other",
+            taskRunId: "taskrun-foreign-chat",
             telemetry: {
               verifierDecision: "approve",
               retryCount: 0,
@@ -1006,6 +1050,7 @@ describe("Orchestrator", () => {
       chatId: "chat-replay",
       userId: "user-replay",
       sinceTimestamp: 200,
+      taskRunId: "taskrun-current",
     });
 
     expect(replayContext?.projectWorldFingerprint).toContain("castle");

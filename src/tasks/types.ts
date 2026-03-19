@@ -112,6 +112,7 @@ export interface BackgroundTaskOptions {
   onProgress: (message: string) => void;
   chatId: string;
   channelType: string;
+  taskRunId?: string;
   conversationId?: string;
   userId?: string;
   /** Attachments from the original message for vision/file support */

@@ -1318,23 +1318,47 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         identityManager.incrementMessages();
         identityManager.incrementTasks();
       }
+      let taskRunId: string | undefined;
       if (learningResult.taskPlanner) {
         learningResult.taskPlanner.startTask({
           sessionId: msg.chatId ?? generateSessionId(),
+          chatId: msg.chatId,
           taskDescription: msg.text.slice(0, 200),
           learningPipeline: learningResult.pipeline,
         });
+        taskRunId = learningResult.taskPlanner.getTaskRunId() ?? undefined;
       }
-      await agentManager!.routeMessage(msg);
-      if (learningResult.taskPlanner?.isActive()) {
-        learningResult.taskPlanner.attachReplayContext(await orchestrator.buildTrajectoryReplayContext({
-          chatId: msg.chatId,
-          userId: msg.userId,
-          conversationId: msg.conversationId,
-          sinceTimestamp: learningResult.taskPlanner.getTaskStartedAt() ?? undefined,
-        }));
-        learningResult.taskPlanner.endTask({ success: true, hadErrors: false, errorCount: 0 });
-      }
+
+      let routeError: unknown;
+      await orchestrator.withTaskExecutionContext({
+        chatId: msg.chatId,
+        conversationId: msg.conversationId,
+        userId: msg.userId,
+        taskRunId,
+      }, async () => {
+        try {
+          await agentManager!.routeMessage(msg);
+        } catch (error) {
+          routeError = error;
+          throw error;
+        } finally {
+          if (learningResult.taskPlanner?.isActive()) {
+            learningResult.taskPlanner.attachReplayContext(await orchestrator.buildTrajectoryReplayContext({
+              chatId: msg.chatId,
+              userId: msg.userId,
+              conversationId: msg.conversationId,
+              sinceTimestamp: learningResult.taskPlanner.getTaskStartedAt() ?? undefined,
+              taskRunId,
+            }));
+            learningResult.taskPlanner.endTask({
+              success: routeError === undefined,
+              finalOutput: routeError instanceof Error ? routeError.message : undefined,
+              hadErrors: routeError !== undefined,
+              errorCount: routeError === undefined ? 0 : 1,
+            });
+          }
+        }
+      });
     });
   } else {
     // v2.0 single-agent mode: unchanged path (AGENT-07)
@@ -2470,31 +2494,49 @@ function wireMessageHandler(
     }
 
     // Start task tracking for learning system
+    let taskRunId: string | undefined;
     if (taskPlanner) {
       taskPlanner.startTask({
         sessionId: msg.chatId ?? generateSessionId(),
+        chatId: msg.chatId,
         taskDescription: msg.text.slice(0, 200),
         learningPipeline,
       });
+      taskRunId = taskPlanner.getTaskRunId() ?? undefined;
     }
 
-    // Route through the message router (handles commands and task submission)
-    await messageRouter.route(msg);
-
-    // End task tracking
-    if (taskPlanner?.isActive()) {
-      taskPlanner.attachReplayContext(await orchestrator.buildTrajectoryReplayContext({
-        chatId: msg.chatId,
-        userId: msg.userId,
-        conversationId: msg.conversationId,
-        sinceTimestamp: taskPlanner.getTaskStartedAt() ?? undefined,
-      }));
-      taskPlanner.endTask({
-        success: true,
-        hadErrors: false,
-        errorCount: 0,
-      });
-    }
+    let routeError: unknown;
+    await orchestrator.withTaskExecutionContext({
+      chatId: msg.chatId,
+      conversationId: msg.conversationId,
+      userId: msg.userId,
+      taskRunId,
+    }, async () => {
+      try {
+        // Route through the message router (handles commands and task submission)
+        await messageRouter.route(msg);
+      } catch (error) {
+        routeError = error;
+        throw error;
+      } finally {
+        // End task tracking
+        if (taskPlanner?.isActive()) {
+          taskPlanner.attachReplayContext(await orchestrator.buildTrajectoryReplayContext({
+            chatId: msg.chatId,
+            userId: msg.userId,
+            conversationId: msg.conversationId,
+            sinceTimestamp: taskPlanner.getTaskStartedAt() ?? undefined,
+            taskRunId,
+          }));
+          taskPlanner.endTask({
+            success: routeError === undefined,
+            finalOutput: routeError instanceof Error ? routeError.message : undefined,
+            hadErrors: routeError !== undefined,
+            errorCount: routeError === undefined ? 0 : 1,
+          });
+        }
+      }
+    });
   });
 }
 

@@ -165,6 +165,21 @@ describe("LearningPipeline", () => {
       expect(stats.trajectoryCount).toBe(1);
     });
 
+    it("preserves chatId and taskRunId when recording a trajectory", () => {
+      const trajectory = {
+        ...createTestTrajectory(),
+        chatId: "chat-replay" as any,
+        taskRunId: "taskrun_replay_31",
+      };
+
+      pipeline.recordTrajectory(trajectory);
+
+      storage.flush();
+      const stored = storage.getTrajectories({ limit: 1 })[0];
+      expect(stored?.chatId).toBe("chat-replay");
+      expect(stored?.taskRunId).toBe("taskrun_replay_31");
+    });
+
     it("should auto-generate verdict for successful trajectories", () => {
       const trajectory = createTestTrajectory();
       trajectory.outcome.hadErrors = false; // Clean success

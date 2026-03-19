@@ -17,6 +17,7 @@
 
 import { MUTATION_TOOLS, isVerificationToolName } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
+import { randomUUID } from "node:crypto";
 import type {
   LearningPipeline,
   TrajectoryReplayContext,
@@ -75,7 +76,9 @@ export class TaskPlanner {
   private iterationsUsed = 0;
   private errorHistory: string[] = [];
   private sessionId = "";
+  private chatId: string | undefined;
   private taskDescription = "";
+  private taskRunId = "";
   private isTaskActive = false;
 
   private learningPipeline: LearningPipeline | null = null;
@@ -91,7 +94,9 @@ export class TaskPlanner {
     this.iterationsUsed = 0;
     this.errorHistory = [];
     this.sessionId = "";
+    this.chatId = undefined;
     this.taskDescription = "";
+    this.taskRunId = "";
     this.isTaskActive = false;
     this.trajectorySteps = [];
     this.trajectoryStartTime = 0;
@@ -103,12 +108,15 @@ export class TaskPlanner {
    */
   startTask(params: {
     sessionId: string;
+    chatId?: string;
     taskDescription: string;
     learningPipeline?: LearningPipeline;
   }): void {
     this.reset();
     this.sessionId = params.sessionId;
+    this.chatId = params.chatId;
     this.taskDescription = params.taskDescription;
+    this.taskRunId = `taskrun_${randomUUID()}`;
     this.isTaskActive = true;
     this.trajectoryStartTime = Date.now();
     
@@ -146,6 +154,8 @@ export class TaskPlanner {
     if (this.learningPipeline) {
       this.learningPipeline.recordTrajectory({
         sessionId: this.sessionId,
+        chatId: this.chatId,
+        taskRunId: this.taskRunId || undefined,
         taskDescription: this.taskDescription,
         steps: this.trajectorySteps,
         outcome,
@@ -175,6 +185,10 @@ export class TaskPlanner {
    */
   getTaskStartedAt(): number | null {
     return this.trajectoryStartTime || null;
+  }
+
+  getTaskRunId(): string | null {
+    return this.taskRunId || null;
   }
 
   /**

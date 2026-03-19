@@ -139,6 +139,19 @@ describe("LearningStorage", () => {
       expect(retrieved?.steps).toHaveLength(1);
     });
 
+    it("should persist chatId and taskRunId for trajectories", () => {
+      const trajectory = {
+        ...createTestTrajectory(),
+        chatId: "chat-031" as any,
+        taskRunId: "taskrun_level_031",
+      };
+      storage.createTrajectoryImmediate(trajectory);
+
+      const retrieved = storage.getTrajectory(trajectory.id);
+      expect(retrieved?.chatId).toBe("chat-031");
+      expect(retrieved?.taskRunId).toBe("taskrun_level_031");
+    });
+
     it("should get unprocessed trajectories", () => {
       const unprocessed = createTestTrajectory();
       const processed = { ...createTestTrajectory(), id: randomUUID(), processed: true };

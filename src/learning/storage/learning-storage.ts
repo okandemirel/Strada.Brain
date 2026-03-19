@@ -33,7 +33,7 @@ import type {
   ErrorCategory,
 } from "../types.js";
 import { MS_PER_DAY } from "../types.js";
-import type { SessionId, TimestampMs, JsonObject } from "../../types/index.js";
+import type { ChatId, SessionId, TimestampMs, JsonObject } from "../../types/index.js";
 import { createBrand } from "../../types/index.js";
 import type { IEventBus } from "../../core/event-bus.js";
 
@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS instincts (
 CREATE TABLE IF NOT EXISTS trajectories (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
+  chat_id TEXT,
+  task_run_id TEXT,
   task_description TEXT NOT NULL,
   steps TEXT NOT NULL, -- JSON array of TrajectoryStep
   outcome TEXT NOT NULL, -- JSON object
@@ -276,6 +278,18 @@ export class LearningStorage {
       "ALTER TABLE instincts ADD COLUMN migrated_at INTEGER",
     ];
     for (const sql of provenanceColumns) {
+      try {
+        this.db.prepare(sql).run();
+      } catch {
+        // Column already exists — expected after first migration
+      }
+    }
+
+    const trajectoryColumns = [
+      "ALTER TABLE trajectories ADD COLUMN chat_id TEXT",
+      "ALTER TABLE trajectories ADD COLUMN task_run_id TEXT",
+    ];
+    for (const sql of trajectoryColumns) {
       try {
         this.db.prepare(sql).run();
       } catch {
@@ -574,8 +588,8 @@ export class LearningStorage {
       listInstincts: `SELECT * FROM instincts WHERE status = ? ORDER BY confidence DESC`,
       insertTrajectory: `
         INSERT INTO trajectories 
-        (id, session_id, task_description, steps, outcome, applied_instinct_ids, created_at, processed)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (id, session_id, chat_id, task_run_id, task_description, steps, outcome, applied_instinct_ids, created_at, processed)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       insertJunction: `INSERT OR IGNORE INTO trajectory_instincts (trajectory_id, instinct_id) VALUES (?, ?)`,
       getUnprocessedTrajectories: `SELECT * FROM trajectories WHERE processed = 0 ORDER BY created_at ASC LIMIT ?`,
@@ -688,6 +702,8 @@ export class LearningStorage {
         insert.run(
           item.id,
           item.sessionId,
+          item.chatId ?? null,
+          item.taskRunId ?? null,
           item.taskDescription,
           JSON.stringify(item.steps),
           JSON.stringify(item.outcome),
@@ -1009,6 +1025,8 @@ export class LearningStorage {
     insert.run(
       trajectory.id,
       trajectory.sessionId,
+      trajectory.chatId ?? null,
+      trajectory.taskRunId ?? null,
       trajectory.taskDescription,
       JSON.stringify(trajectory.steps),
       JSON.stringify(trajectory.outcome),
@@ -1438,6 +1456,8 @@ export class LearningStorage {
     return {
       id: row.id as TrajectoryId,
       sessionId: row.session_id as SessionId,
+      chatId: row.chat_id ? row.chat_id as ChatId : undefined,
+      taskRunId: row.task_run_id ?? undefined,
       taskDescription: row.task_description,
       steps: JSON.parse(row.steps) as TrajectoryStep[],
       outcome: JSON.parse(row.outcome) as TrajectoryOutcome,
@@ -1509,6 +1529,8 @@ interface InstinctRow {
 interface TrajectoryRow {
   id: string;
   session_id: string;
+  chat_id: string | null;
+  task_run_id: string | null;
   task_description: string;
   steps: string;
   outcome: string;

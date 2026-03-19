@@ -6,6 +6,8 @@ import type {
   ProviderResponse,
   IStreamingProvider,
 } from "./providers/provider.interface.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tools/tool.interface.js";
 import type { IChannelAdapter, IncomingMessage, Attachment } from "../channels/channel.interface.js";
@@ -163,6 +165,14 @@ interface Session {
   conversationScope?: string;
   profileKey?: string;
   mixedParticipants?: boolean;
+}
+
+interface TaskExecutionContext {
+  readonly chatId: string;
+  readonly conversationId?: string;
+  readonly userId?: string;
+  readonly identityKey?: string;
+  readonly taskRunId?: string;
 }
 
 type ToolExecutionMode = "interactive" | "background";
@@ -615,6 +625,7 @@ export class Orchestrator {
   private readonly confidenceEstimator?: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
   private readonly taskClassifier = new TaskClassifier();
   private readonly onUsage?: (usage: TaskUsageEvent) => void;
+  private readonly taskContext = new AsyncLocalStorage<TaskExecutionContext>();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -707,6 +718,31 @@ export class Orchestrator {
     this.depsSetupComplete = !opts.stradaDeps || opts.stradaDeps.coreInstalled;
     this.systemPrompt = "";
     this.rebuildBaseSystemPrompt();
+  }
+
+  async withTaskExecutionContext<T>(
+    context: TaskExecutionContext,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    return await this.taskContext.run(context, run);
+  }
+
+  private getTaskExecutionContext(): TaskExecutionContext | undefined {
+    return this.taskContext.getStore();
+  }
+
+  private resolveTaskRunId(chatId?: string, explicitTaskRunId?: string): string | undefined {
+    if (explicitTaskRunId) {
+      return explicitTaskRunId;
+    }
+    const scoped = this.getTaskExecutionContext();
+    if (!scoped?.taskRunId) {
+      return undefined;
+    }
+    if (!chatId || scoped.chatId === chatId) {
+      return scoped.taskRunId;
+    }
+    return undefined;
   }
 
   private rebuildBaseSystemPrompt(): void {
@@ -1113,6 +1149,7 @@ export class Orchestrator {
     source?: ExecutionTraceSource;
     task: TaskClassification;
     reason?: string;
+    taskRunId?: string;
   }): void {
     this.providerRouter?.recordExecutionTrace?.({
       provider: params.assignment.providerName,
@@ -1125,6 +1162,7 @@ export class Orchestrator {
       timestamp: Date.now(),
       identityKey: params.identityKey,
       chatId: params.chatId,
+      taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
     });
   }
 
@@ -1138,6 +1176,7 @@ export class Orchestrator {
     source?: ExecutionTraceSource;
     reason?: string;
     telemetry?: PhaseOutcomeTelemetry;
+    taskRunId?: string;
   }): void {
     this.providerRouter?.recordPhaseOutcome?.({
       provider: params.assignment.providerName,
@@ -1151,6 +1190,7 @@ export class Orchestrator {
       timestamp: Date.now(),
       identityKey: params.identityKey,
       chatId: params.chatId,
+      taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
       telemetry: params.telemetry,
     });
   }
@@ -1909,22 +1949,36 @@ export class Orchestrator {
    */
   async handleMessage(msg: IncomingMessage): Promise<void> {
     const { chatId } = msg;
+    const identityKey = resolveIdentityKey(chatId, msg.userId, msg.conversationId);
+    const existingTaskContext = this.getTaskExecutionContext();
+    const taskRunId = existingTaskContext?.taskRunId ?? `taskrun_${randomUUID()}`;
+    const taskContext: TaskExecutionContext = {
+      chatId,
+      conversationId: msg.conversationId,
+      userId: msg.userId,
+      identityKey,
+      taskRunId,
+    };
 
     // Intercept messages if Strada.Core is missing and setup not complete
     if (!this.depsSetupComplete && this.stradaDeps && !this.stradaDeps.coreInstalled) {
-      await this.handleDepsSetup(msg);
+      await this.withTaskExecutionContext(taskContext, async () => {
+        await this.handleDepsSetup(msg);
+      });
       return;
     }
 
     // Handle pending modules prompt after core installation
     if (this.pendingModulesPrompt.get(chatId)) {
-      await this.handleModulesPrompt(msg);
+      await this.withTaskExecutionContext(taskContext, async () => {
+        await this.handleModulesPrompt(msg);
+      });
       return;
     }
 
     // Per-session concurrency lock: queue messages for the same chat
     const prev = this.sessionLocks.get(chatId) ?? Promise.resolve();
-    const current = prev.then(() => this.processMessage(msg));
+    const current = prev.then(() => this.withTaskExecutionContext(taskContext, async () => this.processMessage(msg)));
     const tracked = current.catch((err) => {
       getLogger().error("Session lock error", {
         chatId,
@@ -1947,12 +2001,23 @@ export class Orchestrator {
    * Used by the task system for async execution.
    */
   async runBackgroundTask(prompt: string, options: BackgroundTaskOptions): Promise<string> {
-    const logger = getLogger();
     const { signal, onProgress, chatId } = options;
     const conversationScope = resolveConversationScope(chatId, options.conversationId);
     const identityKey = resolveIdentityKey(chatId, options.userId, options.conversationId);
-    const fallbackProvider = this.providerManager.getProvider(identityKey);
-    let executionStrategy = this.buildSupervisorExecutionStrategy(prompt, identityKey, fallbackProvider);
+    const taskRunId = options.taskRunId?.trim()
+      || this.getTaskExecutionContext()?.taskRunId
+      || `taskrun_${randomUUID()}`;
+
+    return await this.withTaskExecutionContext({
+      chatId,
+      conversationId: options.conversationId,
+      userId: options.userId,
+      identityKey,
+      taskRunId,
+    }, async () => {
+      const logger = getLogger();
+      const fallbackProvider = this.providerManager.getProvider(identityKey);
+      let executionStrategy = this.buildSupervisorExecutionStrategy(prompt, identityKey, fallbackProvider);
 
     // ─── Metrics: start recording ────────────────────────────────────
     const taskType = options.parentMetricId ? "subtask" as const : "background" as const;
@@ -2775,6 +2840,7 @@ export class Orchestrator {
       });
       // ────────────────────────────────────────────────────────────────
     }
+    });
   }
 
   /**
@@ -5491,17 +5557,21 @@ export class Orchestrator {
     chatId: string,
     identityKey: string,
     sinceTimestamp?: number,
+    taskRunId?: string,
   ): TrajectoryPhaseReplay[] {
     if (!this.providerRouter) {
       return [];
     }
 
+    const correlatedTaskRunId = this.resolveTaskRunId(chatId, taskRunId);
     const traces = (this.providerRouter.getRecentExecutionTraces?.(100, identityKey) ?? [])
       .filter((trace) => trace.chatId === chatId)
-      .filter((trace) => sinceTimestamp === undefined || trace.timestamp >= sinceTimestamp);
+      .filter((trace) => correlatedTaskRunId ? trace.taskRunId === correlatedTaskRunId : true)
+      .filter((trace) => correlatedTaskRunId || sinceTimestamp === undefined || trace.timestamp >= sinceTimestamp);
     const outcomes = (this.providerRouter.getRecentPhaseOutcomes?.(100, identityKey) ?? [])
       .filter((outcome) => outcome.chatId === chatId)
-      .filter((outcome) => sinceTimestamp === undefined || outcome.timestamp >= sinceTimestamp);
+      .filter((outcome) => correlatedTaskRunId ? outcome.taskRunId === correlatedTaskRunId : true)
+      .filter((outcome) => correlatedTaskRunId || sinceTimestamp === undefined || outcome.timestamp >= sinceTimestamp);
     if (traces.length === 0 && outcomes.length === 0) {
       return [];
     }
@@ -5576,6 +5646,7 @@ export class Orchestrator {
     userId?: string;
     conversationId?: string;
     sinceTimestamp?: number;
+    taskRunId?: string;
   }): Promise<TrajectoryReplayContext | null> {
     const identityKey = resolveIdentityKey(
       params.chatId,
@@ -5588,6 +5659,7 @@ export class Orchestrator {
       params.chatId,
       identityKey,
       params.sinceTimestamp,
+      params.taskRunId,
     );
 
     const learnedInsights = (taskExecutionMemory?.learnedInsights ?? []).slice(0, 4);

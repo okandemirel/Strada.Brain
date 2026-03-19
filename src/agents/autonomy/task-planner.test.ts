@@ -73,6 +73,37 @@ describe("TaskPlanner", () => {
       rmSync(tempDir, { recursive: true, force: true });
     });
 
+    it("persists chatId and taskRunId with the recorded trajectory", () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
+      const dbPath = join(tempDir, "test.db");
+      const storage = new LearningStorage(dbPath);
+      storage.initialize();
+      const pipeline = new LearningPipeline(storage);
+
+      planner.startTask({
+        sessionId: "test-session",
+        chatId: "chat-31",
+        taskDescription: "Inspect Level_031",
+        learningPipeline: pipeline,
+      });
+
+      const taskRunId = planner.getTaskRunId();
+      expect(taskRunId).toMatch(/^taskrun_/);
+
+      planner.endTask({
+        success: true,
+        hadErrors: false,
+        errorCount: 0,
+      });
+
+      const trajectory = storage.getTrajectories({ limit: 1 })[0];
+      expect(trajectory?.chatId).toBe("chat-31");
+      expect(trajectory?.taskRunId).toBe(taskRunId);
+
+      storage.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
     it("records replay context alongside the trajectory outcome", () => {
       const tempDir = mkdtempSync(join(tmpdir(), "planner-test-"));
       const dbPath = join(tempDir, "test.db");

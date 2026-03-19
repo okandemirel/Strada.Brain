@@ -237,7 +237,9 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     }, { timeout: 5000 });
 
     expect(runBackgroundTask.mock.calls[0]?.[1]?.chatId).toBe("shared");
+    expect(runBackgroundTask.mock.calls[0]?.[1]?.taskRunId).toBe("task_same_1");
     expect(runBackgroundTask.mock.calls[1]?.[1]?.chatId).toBe("other");
+    expect(runBackgroundTask.mock.calls[1]?.[1]?.taskRunId).toBe("task_other");
 
     releaseFirstTask?.();
 
@@ -246,6 +248,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     }, { timeout: 5000 });
 
     expect(runBackgroundTask.mock.calls[2]?.[1]?.chatId).toBe("shared");
+    expect(runBackgroundTask.mock.calls[2]?.[1]?.taskRunId).toBe("task_same_2");
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
   });
 

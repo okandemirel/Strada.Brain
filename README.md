@@ -589,6 +589,7 @@ Strada now also keeps an internal execution journal and rollback memory for each
 Memory is now split by role as well: user profile state keeps names/preferences/autonomy, task execution memory keeps session summaries/open items/rollback state, and project/world memory is injected explicitly from the active project root plus cached AgentDB analysis. That same project/world layer now also feeds recovery memory and adaptive routing, while semantic retrieval still adds live relevant memory separately.
 Cross-session `execution replay` now builds on that same path: Strada records project/world-aware recovery summaries into learning trajectories and injects the most relevant prior success/failure branches as an `Execution Replay` context layer before retrying similar work.
 That replay context now also persists phase/provider telemetry, so adaptive routing can reuse successful workers for similar tasks instead of relying only on in-memory runtime history.
+Replay correlation is now persisted with chat-scoped `taskRunId` values as well, so same-chat concurrent tasks no longer blend their phase telemetry or recovery history.
 
 **Important:** `OPENAI_AUTH_MODE=chatgpt-subscription` only covers OpenAI conversation turns inside Strada. It does not grant OpenAI API billing or embeddings quota. If you choose `EMBEDDING_PROVIDER=openai`, you still need an `OPENAI_API_KEY`.
 

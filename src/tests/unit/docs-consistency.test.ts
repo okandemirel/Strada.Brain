@@ -84,14 +84,18 @@ describe("docs consistency", () => {
     expect(readRepoFile("README.md")).toContain("adaptive phase scores");
     expect(readRepoFile("README.md")).toContain("execution replay");
     expect(readRepoFile("README.md")).toContain("phase/provider telemetry");
+    expect(readRepoFile("README.md")).toContain("taskRunId");
     expect(readRepoFile("README.md")).toContain("rollback pressure");
     expect(readRepoFile("README.md")).toContain("token cost");
+    expect(readRepoFile("CHANGELOG.md")).toContain("taskRunId");
     expect(readRepoFile("src/agents/README.md")).toContain("Clarification Review");
     expect(readRepoFile("src/agents/README.md")).toContain("Verifier Pipeline");
     expect(readRepoFile("src/agents/README.md")).toContain("Execution Journal");
     expect(readRepoFile("src/agents/README.md")).toContain("Execution Replay");
     expect(readRepoFile("src/agents/README.md")).toContain("phase/provider telemetry");
+    expect(readRepoFile("src/agents/README.md")).toContain("taskRunId");
     expect(readRepoFile("src/memory/README.md")).toContain("execution replay");
+    expect(readRepoFile("src/memory/README.md")).toContain("taskRunId");
   });
 
   it("marks localized READMEs as translations that defer to the English canonical README", () => {
@@ -122,6 +126,7 @@ describe("docs consistency", () => {
       expect(content).toMatch(/phase outcomes|phase outcome|phase-outcomes|Phase-Outcomes/iu);
       expect(content).toMatch(/execution journal/iu);
       expect(content).toMatch(/execution replay/iu);
+      expect(content).toContain("taskRunId");
       expect(content).toMatch(/adaptive phase scores/iu);
       expect(content).toMatch(/rollback pressure/iu);
       expect(content).toMatch(/token cost|token-cost/iu);

@@ -35,6 +35,7 @@ Completion is now governed by an explicit verifier pipeline. Build verification,
 PAOR now also carries an internal execution journal and rollback memory. Replanning can reference the last stable checkpoint, avoid exhausted branches, reuse a project/world anchor, and feed adaptive phase scores back into routing without provider-specific hardcoded lore. Those phase scores now blend verifier clean rate, rollback pressure, retry count, repeated failure fingerprints, repeated world-context failures, and phase-local token cost.
 Cross-session execution replay now builds on the same path: Strada records project/world-aware recovery summaries into learning trajectories, then injects the most relevant prior success/failure branches as an `Execution Replay` context layer before planning retries.
 That replay context now also persists phase/provider telemetry for the task window, so adaptive routing can reuse successful workers for similar tasks instead of depending only on process-local phase outcomes.
+Replay correlation is now also persisted with chat-scoped `taskRunId` values, so concurrent tasks in the same conversation do not blend their phase telemetry or recovery branches.
 
 `FallbackChainProvider` tries providers in order, swallows errors from non-last providers. Built via `buildProviderChain()` from `PROVIDER_CHAIN` env var.
 

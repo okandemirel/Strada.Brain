@@ -76,6 +76,7 @@ export interface ExecutionTrace {
   readonly timestamp: number;
   readonly identityKey?: string;
   readonly chatId?: string;
+  readonly taskRunId?: string;
 }
 
 export type PhaseOutcomeStatus =
@@ -109,6 +110,7 @@ export interface PhaseOutcome {
   readonly timestamp: number;
   readonly identityKey?: string;
   readonly chatId?: string;
+  readonly taskRunId?: string;
   readonly telemetry?: PhaseOutcomeTelemetry;
 }
 
