@@ -17,6 +17,8 @@ interface ReviewStepProps {
   autonomyHours: number
   saveStatus: SaveStatus
   saveError: string | null
+  bootstrapDetail: string | null
+  saveCommitted: boolean
   canSave: boolean
   saveBlockingReason: string | null
   onBack: () => void
@@ -44,6 +46,8 @@ export default function ReviewStep({
   autonomyHours,
   saveStatus,
   saveError,
+  bootstrapDetail,
+  saveCommitted,
   canSave,
   saveBlockingReason,
   onBack,
@@ -71,7 +75,7 @@ export default function ReviewStep({
       : undefined
   const hasEmbeddingProvider = Boolean(effectiveEmbeddingProviderId)
 
-  const isSaving = saveStatus === 'saving' || saveStatus === 'polling'
+  const isSaving = saveStatus === 'saving' || saveStatus === 'saved' || saveStatus === 'booting'
   const isSaveDisabled = isSaving || !canSave
 
   return (
@@ -207,22 +211,34 @@ export default function ReviewStep({
         </div>
       </div>
 
-      {saveStatus === 'success' && (
-        <div className="save-message success">
-          Configuration saved. Redirecting... If this is a source checkout, run `./strada
-          install-command` once before expecting the bare `strada` command to exist globally.
+      {saveStatus === 'saved' && (
+        <div className="save-message polling">
+          {bootstrapDetail ?? 'Configuration accepted. Starting Strada on this same URL.'}
         </div>
       )}
 
-      {saveStatus === 'polling' && (
+      {saveStatus === 'booting' && (
         <div className="save-message polling">
-          Configuration saved. Starting Strada on this same URL. Keep this page open while the main app comes up.
+          {bootstrapDetail ?? 'Strada is still starting the main web app.'}
+        </div>
+      )}
+
+      {saveStatus === 'success' && (
+        <div className="save-message success">
+          {bootstrapDetail ?? 'Configuration saved. Redirecting...'} If this is a source checkout,
+          run `./strada install-command` once before expecting the bare `strada` command to exist globally.
         </div>
       )}
 
       {saveStatus === 'error' && saveError && (
         <div className="save-message error">
           {saveError}
+          {saveCommitted && (
+            <>
+              {' '}
+              <a href="/?strada-setup=1&retry=1">Re-open setup</a>
+            </>
+          )}
         </div>
       )}
 

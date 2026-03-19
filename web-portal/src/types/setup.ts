@@ -44,7 +44,22 @@ export interface BrowseResult {
   error?: string
 }
 
-export type SaveStatus = 'idle' | 'saving' | 'success' | 'error' | 'polling'
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'booting' | 'success' | 'error'
+
+export type SetupBootstrapState = 'collecting' | 'saved' | 'booting' | 'ready' | 'failed'
+
+export interface ProviderPreflightFailure {
+  providerId: string
+  providerName: string
+  detail: string
+}
+
+export interface SetupStatusResponse {
+  state: SetupBootstrapState
+  detail?: string
+  readyUrl?: string
+  providerFailures?: ProviderPreflightFailure[]
+}
 
 export interface WizardState {
   step: number

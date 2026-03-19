@@ -5,7 +5,6 @@ import {
   buildSetupAccessUrl,
   hasConfiguredEmbeddingCandidate,
   injectSetupModeMarker,
-  renderSetupHandoffHtml,
 } from "./setup-wizard.js";
 
 describe("SetupWizard path validation", () => {
@@ -72,16 +71,9 @@ describe("SetupWizard path validation", () => {
     expect(buildSetupAccessUrl(3000, 12345)).toBe("http://127.0.0.1:3000/?strada-setup=1&t=12345");
   });
 
-  it("renders a handoff page that refreshes to the root app without re-opening setup mode", () => {
-    const html = renderSetupHandoffHtml();
-    expect(html).toContain('http-equiv="refresh" content="1;url=/"');
-    expect(html).toContain("Do not run setup again.");
-    expect(html).not.toContain('data-strada-setup="1"');
-  });
-
   it("rejects repeated setup API calls and serves a handoff page once configuration has been saved", async () => {
     const wizard = new SetupWizard({ port: 0 });
-    (wizard as unknown as { handoffInProgress: boolean }).handoffInProgress = true;
+    wizard.markBootstrapStarting();
 
     const makeResponse = () => {
       let statusCode = 0;
@@ -114,5 +106,45 @@ describe("SetupWizard path validation", () => {
     }).handleRequest({ url: "/?strada-setup=1", method: "GET" }, page.response);
     expect(page.read().statusCode).toBe(200);
     expect(page.read().body).toContain("Configuration saved");
+    expect(page.read().body).toContain('http-equiv="refresh" content="1;url=/"');
+  });
+
+  it("exposes explicit setup bootstrap status and allows retry after failure", async () => {
+    const wizard = new SetupWizard({ port: 0 });
+    wizard.markBootstrapFailed("OpenAI preflight failed.");
+
+    const makeResponse = () => {
+      let statusCode = 0;
+      let body = "";
+      return {
+        response: {
+          writeHead: (status: number) => {
+            statusCode = status;
+            return undefined;
+          },
+          end: (chunk?: string | Buffer) => {
+            body = typeof chunk === "string" ? chunk : chunk?.toString("utf-8") ?? "";
+            return undefined;
+          },
+        },
+        read: () => ({ statusCode, body }),
+      };
+    };
+
+    const status = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({ url: "/api/setup/status", method: "GET" }, status.response);
+    expect(JSON.parse(status.read().body)).toEqual({
+      state: "failed",
+      detail: "OpenAI preflight failed.",
+    });
+
+    const retryPage = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({ url: "/?strada-setup=1&retry=1", method: "GET" }, retryPage.response);
+    expect(retryPage.read().statusCode).toBe(200);
+    expect(retryPage.read().body).toContain('data-strada-setup="1"');
   });
 });

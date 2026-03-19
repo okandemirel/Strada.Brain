@@ -12,7 +12,12 @@ import { join, extname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
+import {
+  formatProviderPreflightFailures,
+  preflightResponseProviders,
+  type ResponseProviderPreflightFailure,
+} from "./response-provider-preflight.js";
+import type { ProviderCredentialMap } from "../agents/providers/provider-registry.js";
 
 const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
@@ -35,24 +40,56 @@ export function buildSetupAccessUrl(port: number, cacheBust: number = Date.now()
   return `http://${SETUP_HOST}:${port}/?${params.toString()}`;
 }
 
-export function renderSetupHandoffHtml(): string {
+
+export type SetupBootstrapState = "collecting" | "saved" | "booting" | "ready" | "failed";
+
+export interface SetupStatusResponse {
+  state: SetupBootstrapState;
+  detail?: string;
+  readyUrl?: string;
+  providerFailures?: ResponseProviderPreflightFailure[];
+}
+
+function renderSetupStatusHtml(status: SetupStatusResponse): string {
+  const heading = status.state === "failed"
+    ? "Strada could not finish starting"
+    : "Configuration saved";
+  const primary = status.detail ?? (
+    status.state === "saved"
+      ? "Strada accepted your configuration and is preparing startup."
+      : status.state === "booting"
+        ? "Strada is starting the main web app on this same address."
+        : status.state === "ready"
+          ? "Strada is ready. Redirecting now."
+          : "Waiting for setup to begin."
+  );
+  const secondary = status.state === "failed"
+    ? "Use the link below to reopen setup and fix the failing configuration."
+    : "This page refreshes automatically until the main app is ready. Do not run setup again.";
+  const refreshTag = status.state === "failed"
+    ? ""
+    : '    <meta http-equiv="refresh" content="1;url=/" />\n';
+  const action = status.state === "failed"
+    ? '<p style="margin:16px 0 0;font-size:14px;"><a href="/?strada-setup=1&retry=1" style="color:#58a6ff;">Re-open setup</a></p>'
+    : "";
+
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="refresh" content="1;url=/" />
-    <title>Starting Strada</title>
+${refreshTag}    <title>Starting Strada</title>
   </head>
   <body style="margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0d1117;color:#f0f6fc;display:flex;min-height:100vh;align-items:center;justify-content:center;">
-    <main style="max-width:560px;padding:32px 28px;border:1px solid rgba(240,246,252,0.12);border-radius:18px;background:rgba(22,27,34,0.96);box-shadow:0 24px 80px rgba(0,0,0,0.35);">
-      <h1 style="margin:0 0 12px;font-size:30px;line-height:1.2;">Configuration saved</h1>
+    <main style="max-width:620px;padding:32px 28px;border:1px solid rgba(240,246,252,0.12);border-radius:18px;background:rgba(22,27,34,0.96);box-shadow:0 24px 80px rgba(0,0,0,0.35);">
+      <h1 style="margin:0 0 12px;font-size:30px;line-height:1.2;">${heading}</h1>
       <p style="margin:0 0 12px;font-size:16px;line-height:1.6;color:#c9d1d9;">
-        Strada is starting the main web app on this same address.
+        ${primary}
       </p>
       <p style="margin:0;font-size:14px;line-height:1.6;color:#8b949e;">
-        This page refreshes automatically until the main app is ready. Do not run setup again.
+        ${secondary}
       </p>
+      ${action}
     </main>
   </body>
 </html>`;
@@ -108,6 +145,20 @@ const PROVIDER_ENV_KEYS = [
   "GROQ_API_KEY", "MISTRAL_API_KEY", "TOGETHER_API_KEY",
   "FIREWORKS_API_KEY", "GEMINI_API_KEY",
 ] as const;
+
+const PROVIDER_ID_TO_ENV_KEY: Record<string, typeof PROVIDER_ENV_KEYS[number] | undefined> = {
+  claude: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+  qwen: "QWEN_API_KEY",
+  kimi: "KIMI_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  groq: "GROQ_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  together: "TOGETHER_API_KEY",
+  fireworks: "FIREWORKS_API_KEY",
+  minimax: "MINIMAX_API_KEY",
+};
 
 const CHANNEL_ENV_KEYS = [
   "TELEGRAM_BOT_TOKEN", "ALLOWED_TELEGRAM_USER_IDS",
@@ -203,10 +254,30 @@ export class SetupWizard {
   private readonly port: number;
   private readonly csrfToken = randomUUID();
   private onComplete: (() => void) | null = null;
-  private handoffInProgress = false;
+  private status: SetupStatusResponse = { state: "collecting" };
 
   constructor(opts?: { port?: number }) {
     this.port = opts?.port ?? 3000;
+  }
+
+  markBootstrapStarting(detail = "Strada is starting the main web app."): void {
+    this.status = { state: "booting", detail };
+  }
+
+  markBootstrapReady(readyUrl = "/", detail = "Strada is ready. Redirecting now."): void {
+    this.status = { state: "ready", detail, readyUrl };
+  }
+
+  markBootstrapFailed(detail: string): void {
+    this.status = { state: "failed", detail };
+  }
+
+  private resetToCollecting(): void {
+    this.status = { state: "collecting" };
+  }
+
+  private get handoffInProgress(): boolean {
+    return this.status.state !== "collecting";
   }
 
   /** Starts the wizard and resolves when the user completes setup. */
@@ -237,8 +308,8 @@ export class SetupWizard {
       this.onComplete = resolve;
     });
 
-    // Don't stop the wizard server yet — let the caller (index.ts) stop it
-    // after the main app is ready, so the frontend can keep polling /health.
+    // Keep the wizard server alive until startup either succeeds or fails so the
+    // browser can keep reading explicit setup status from the same URL.
   }
 
   /** Stops the wizard server. Called by the app after bootstrap completes. */
@@ -249,8 +320,14 @@ export class SetupWizard {
   private stop(): Promise<void> {
     return new Promise((resolve) => {
       if (!this.server) return resolve();
-      this.server.closeAllConnections();
-      this.server.close(() => resolve());
+      const activeServer = this.server;
+      activeServer.closeAllConnections();
+      activeServer.close(() => {
+        if (this.server === activeServer) {
+          this.server = null;
+        }
+        resolve();
+      });
     });
   }
 
@@ -271,7 +348,15 @@ export class SetupWizard {
       }
 
       if (url === "/health" && method === "GET") {
-        this.json(res, 503, { status: this.handoffInProgress ? "starting" : "setup" });
+        this.json(res, 503, {
+          status: this.handoffInProgress ? "starting" : "setup",
+          setupState: this.status.state,
+        });
+        return;
+      }
+
+      if (url === "/api/setup/status" && method === "GET") {
+        this.json(res, 200, this.status);
         return;
       }
 
@@ -327,8 +412,13 @@ export class SetupWizard {
 
   private async serveStatic(url: string, res: ServerResponse): Promise<void> {
     const staticDir = resolveStaticDir();
-    const rawSegment = url.split("?")[0]!;
+    const parsed = new URL(url, "http://127.0.0.1");
+    const rawSegment = parsed.pathname;
     const ext = extname(rawSegment);
+
+    if (this.status.state === "failed" && parsed.searchParams.get("retry") === "1") {
+      this.resetToCollecting();
+    }
 
     if (this.handoffInProgress && !ext) {
       res.writeHead(200, {
@@ -336,7 +426,7 @@ export class SetupWizard {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
       });
-      res.end(renderSetupHandoffHtml());
+      res.end(renderSetupStatusHtml(this.status));
       return;
     }
 
@@ -522,21 +612,6 @@ export class SetupWizard {
       return;
     }
 
-    if (config.OPENAI_AUTH_MODE === "chatgpt-subscription") {
-      const authInspection = inspectOpenAiSubscriptionAuth({
-        authFile: typeof config.OPENAI_CHATGPT_AUTH_FILE === "string"
-          ? config.OPENAI_CHATGPT_AUTH_FILE
-          : undefined,
-      });
-      if (!authInspection.ok) {
-        this.json(res, 400, {
-          success: false,
-          error: `${authInspection.detail} Sign in again on this machine or switch OpenAI to API key mode.`,
-        });
-        return;
-      }
-    }
-
     // Validate LANGUAGE_PREFERENCE if provided
     if (config.LANGUAGE_PREFERENCE && !KNOWN_LANGUAGES.has(String(config.LANGUAGE_PREFERENCE))) {
       this.json(res, 400, { success: false, error: "Invalid LANGUAGE_PREFERENCE value" });
@@ -573,6 +648,18 @@ export class SetupWizard {
         .map((s) => s.trim());
       if (names.some((n) => !KNOWN_PROVIDERS.has(n))) {
         this.json(res, 400, { success: false, error: "Invalid provider name in PROVIDER_CHAIN" });
+        return;
+      }
+      const preflight = await preflightResponseProviders(
+        names,
+        this.collectProviderCredentials(config),
+      );
+      if (preflight.failures.length > 0) {
+        this.json(res, 400, {
+          success: false,
+          error: `Selected response providers failed validation. ${formatProviderPreflightFailures(preflight.failures)}`,
+          providerFailures: preflight.failures,
+        });
         return;
       }
       lines.push(`PROVIDER_CHAIN=${sanitizeEnvValue(config.PROVIDER_CHAIN)}`);
@@ -682,7 +769,10 @@ export class SetupWizard {
       return;
     }
 
-    this.handoffInProgress = true;
+    this.status = {
+      state: "saved",
+      detail: "Configuration accepted. Starting Strada on this same URL.",
+    };
     this.json(res, 200, { success: true });
 
     // Signal completion after a delay so the response and any follow-up polling can be handled
@@ -715,5 +805,26 @@ export class SetupWizard {
   private json(res: ServerResponse, status: number, data: unknown): void {
     res.writeHead(status, { ...SECURITY_HEADERS, "Content-Type": "application/json" });
     res.end(JSON.stringify(data));
+  }
+
+  private collectProviderCredentials(config: Record<string, string>): ProviderCredentialMap {
+    const credentials: ProviderCredentialMap = {};
+
+    for (const providerId of KNOWN_PROVIDERS) {
+      const envKey = PROVIDER_ID_TO_ENV_KEY[providerId];
+      credentials[providerId] = {
+        apiKey: envKey ? config[envKey] : undefined,
+      };
+    }
+
+    credentials["openai"] = {
+      apiKey: config.OPENAI_API_KEY,
+      openaiAuthMode: config.OPENAI_AUTH_MODE === "chatgpt-subscription"
+        ? "chatgpt-subscription"
+        : "api-key",
+      openaiChatgptAuthFile: config.OPENAI_CHATGPT_AUTH_FILE,
+    };
+
+    return credentials;
   }
 }

@@ -334,6 +334,10 @@ async function startApp(
     // Create DI container
     const container = createContainer();
 
+    if (activeWizard) {
+      activeWizard.markBootstrapStarting("Strada is starting the main web app.");
+    }
+
     // Bootstrap the application
     const effectiveDaemonMode = shouldEnableDaemonMode(channelType, daemonMode);
     const app = await bootstrap({
@@ -344,10 +348,14 @@ async function startApp(
       beforeChannelConnect: activeWizard
         ? async () => {
           await activeWizard?.shutdown();
-          activeWizard = null;
         }
         : undefined,
     });
+
+    if (activeWizard) {
+      activeWizard.markBootstrapReady("/");
+      activeWizard = null;
+    }
 
     // Store bootstrap result for daemon CLI context access
     appResult = app;
@@ -364,6 +372,19 @@ async function startApp(
       // Process will stay alive until shutdown
     });
   } catch (error) {
+    if (activeWizard) {
+      const detail = error instanceof AppError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : "Unexpected startup error";
+      try {
+        await activeWizard.listen();
+      } catch {
+        // Best-effort re-open so the failure state can still be surfaced.
+      }
+      activeWizard.markBootstrapFailed(detail);
+    }
     if (error instanceof AppError) {
       logger.error("Failed to start application", {
         code: error.code,
@@ -375,6 +396,9 @@ async function startApp(
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       });
+    }
+    if (activeWizard) {
+      return;
     }
     process.exit(1);
   }

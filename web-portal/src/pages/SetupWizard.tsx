@@ -120,6 +120,8 @@ export default function SetupWizard() {
             autonomyHours={wiz.autonomyHours}
             saveStatus={wiz.saveStatus}
             saveError={wiz.saveError}
+            bootstrapDetail={wiz.bootstrapDetail}
+            saveCommitted={wiz.saveCommitted}
             canSave={wiz.canSave}
             saveBlockingReason={wiz.reviewBlockingReason}
             onBack={wiz.prevStep}

@@ -748,7 +748,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         if (msg.content) {
           items.push({
             role: "assistant",
-            content: [{ type: "input_text", text: msg.content }],
+            content: [{ type: "output_text", text: msg.content }],
           });
         }
         if (msg.tool_calls) {
@@ -915,17 +915,27 @@ interface ChatGptInputTextPart {
   text: string;
 }
 
+interface ChatGptAssistantTextPart {
+  type: "output_text";
+  text: string;
+}
+
 interface ChatGptInputImagePart {
   type: "input_image";
   image_url: string;
 }
 
 type ChatGptInputContentPart = ChatGptInputTextPart | ChatGptInputImagePart;
+type ChatGptAssistantContentPart = ChatGptAssistantTextPart;
 
 type ChatGptInputItem =
   | {
-      role: "user" | "assistant";
+      role: "user";
       content: ChatGptInputContentPart[];
+    }
+  | {
+      role: "assistant";
+      content: ChatGptAssistantContentPart[];
     }
   | {
       type: "function_call";

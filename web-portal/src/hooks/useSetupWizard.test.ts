@@ -5,6 +5,7 @@ import {
   hasUsableEmbeddingCredential,
   hasUsableResponseCredential,
   probeSetupSurface,
+  readSetupBootstrapStatus,
 } from './useSetupWizard'
 
 describe('useSetupWizard helpers', () => {
@@ -83,5 +84,19 @@ describe('useSetupWizard helpers', () => {
     })
 
     expect(result).toEqual({ kind: 'retry' })
+  })
+
+  it('reads explicit setup bootstrap status during handoff', async () => {
+    const result = await readSetupBootstrapStatus(async (input) => {
+      if (String(input) === '/api/setup/status') {
+        return {
+          ok: true,
+          json: async () => ({ state: 'booting', detail: 'Strada is starting.' }),
+        } as Response
+      }
+      throw new Error('unexpected fetch')
+    })
+
+    expect(result).toEqual({ state: 'booting', detail: 'Strada is starting.' })
   })
 })

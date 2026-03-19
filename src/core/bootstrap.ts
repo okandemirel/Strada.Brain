@@ -15,7 +15,6 @@ import { AuthManager } from "../security/auth.js";
 import { configureAuthManager } from "../security/auth-hardened.js";
 import { ClaudeProvider } from "../agents/providers/claude.js";
 import { buildProviderChain } from "../agents/providers/provider-registry.js";
-import type { ProviderCredentialMap } from "../agents/providers/provider-registry.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { SoulLoader } from "../agents/soul/index.js";
@@ -37,6 +36,16 @@ import { RateLimiter } from "../security/rate-limiter.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import type { DIContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
+import {
+  collectProviderCredentials,
+  hasConfiguredOpenAISubscription,
+  hasUsableProviderConfig,
+  normalizeProviderNames,
+} from "./provider-config.js";
+import {
+  formatProviderPreflightFailures,
+  preflightResponseProviders,
+} from "./response-provider-preflight.js";
 import { AppError } from "../common/errors.js";
 import { checkStradaDeps } from "../config/strada-deps.js";
 import {
@@ -1580,85 +1589,6 @@ interface ProviderInitResult {
   notices: string[];
 }
 
-function normalizeProviderNames(providerChain?: string): string[] {
-  if (!providerChain) return [];
-  const seen = new Set<string>();
-  const names: string[] = [];
-
-  for (const rawName of providerChain.split(",")) {
-    const normalized = rawName.trim().toLowerCase();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    names.push(normalized);
-  }
-
-  return names;
-}
-
-function hasUsableProviderConfig(name: string, apiKeys: Record<string, string | undefined>): boolean {
-  if (name === "ollama") return true;
-  if (name === "claude" || name === "anthropic") {
-    return !!(apiKeys["claude"] || apiKeys["anthropic"]);
-  }
-  return !!apiKeys[name];
-}
-
-function collectProviderCredentials(config: Config): ProviderCredentialMap {
-  return {
-    claude: { apiKey: config.anthropicApiKey },
-    anthropic: { apiKey: config.anthropicApiKey },
-    openai: {
-      apiKey: config.openaiApiKey,
-      openaiAuthMode: config.openaiAuthMode,
-      openaiChatgptAuthFile: config.openaiChatgptAuthFile,
-      openaiSubscriptionAccessToken: config.openaiSubscriptionAccessToken,
-      openaiSubscriptionAccountId: config.openaiSubscriptionAccountId,
-    },
-    deepseek: { apiKey: config.deepseekApiKey },
-    qwen: { apiKey: config.qwenApiKey },
-    kimi: { apiKey: config.kimiApiKey },
-    minimax: { apiKey: config.minimaxApiKey },
-    groq: { apiKey: config.groqApiKey },
-    mistral: { apiKey: config.mistralApiKey },
-    together: { apiKey: config.togetherApiKey },
-    fireworks: { apiKey: config.fireworksApiKey },
-    gemini: { apiKey: config.geminiApiKey },
-  };
-}
-
-function hasConfiguredOpenAISubscription(config: Config): boolean {
-  return config.openaiAuthMode === "chatgpt-subscription"
-    || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
-    || Boolean(config.openaiChatgptAuthFile);
-}
-
-function detectConfiguredProviderNames(apiKeys: Record<string, string | undefined>): string[] {
-  const names: string[] = [];
-
-  if (apiKeys["claude"] || apiKeys["anthropic"]) {
-    names.push("claude");
-  }
-
-  for (const name of [
-    "openai",
-    "deepseek",
-    "qwen",
-    "kimi",
-    "minimax",
-    "groq",
-    "mistral",
-    "together",
-    "fireworks",
-    "gemini",
-  ]) {
-    if (apiKeys[name]) {
-      names.push(name);
-    }
-  }
-
-  return names;
-}
-
 export async function initializeAIProvider(
   config: Config,
   logger: winston.Logger,
@@ -1673,53 +1603,37 @@ export async function initializeAIProvider(
   // 1) Explicit provider chain
   if (config.providerChain) {
     const requestedNames = normalizeProviderNames(config.providerChain);
-    const usableNames = requestedNames.filter((name) =>
+    const configuredNames = requestedNames.filter((name) =>
       name === "openai" && hasConfiguredOpenAISubscription(config)
         ? true
         : hasUsableProviderConfig(name, apiKeys),
     );
-    const unavailableNames = requestedNames.filter((name) => !usableNames.includes(name));
+    const unavailableNames = requestedNames.filter((name) => !configuredNames.includes(name));
 
     if (unavailableNames.length > 0) {
-      const notice = `Unavailable AI providers were skipped: ${unavailableNames.join(", ")}.`;
-      notices.push(notice);
-      logger.warn("Configured AI providers are unavailable, skipping", {
-        unavailableProviders: unavailableNames,
-      });
+      throw new AppError(
+        `Configured AI providers are missing usable credentials: ${unavailableNames.join(", ")}.`,
+        "NO_AI_PROVIDER",
+      );
     }
 
-    if (usableNames.length > 0) {
-      defaultProviderOrder = usableNames;
-      defaultProvider = buildProviderChain(usableNames, providerCredentials, {
-        models: config.providerModels,
-      });
-      logger.info("AI provider chain initialized", { chain: usableNames });
-    } else {
-      const detectedNames = detectConfiguredProviderNames(apiKeys);
-      if (hasConfiguredOpenAISubscription(config) && !detectedNames.includes("openai")) {
-        detectedNames.unshift("openai");
-      }
-      if (detectedNames.length === 0) {
-        throw new AppError(
-          "No AI provider configured. Please set at least one provider API key.",
-          "NO_AI_PROVIDER",
-        );
-      }
-
-      const notice =
-        `Configured provider chain had no usable providers. Falling back to: ${detectedNames.join(", ")}.`;
-      notices.push(notice);
-      logger.warn("Configured provider chain had no usable providers, falling back", {
-        requestedChain: requestedNames,
-        fallbackChain: detectedNames,
-      });
-
-      defaultProviderOrder = detectedNames;
-      defaultProvider = buildProviderChain(detectedNames, providerCredentials, {
-        models: config.providerModels,
-      });
-      logger.info("AI provider auto-detected from available keys", { chain: detectedNames });
+    const preflightResult = await preflightResponseProviders(
+      configuredNames,
+      providerCredentials,
+      config.providerModels,
+    );
+    if (preflightResult.failures.length > 0) {
+      throw new AppError(
+        `Configured AI providers failed preflight. ${formatProviderPreflightFailures(preflightResult.failures)}`,
+        "NO_HEALTHY_AI_PROVIDER",
+      );
     }
+
+    defaultProviderOrder = preflightResult.passedProviderIds;
+    defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
+      models: config.providerModels,
+    });
+    logger.info("AI provider chain initialized", { chain: preflightResult.passedProviderIds });
   }
   // 2) Anthropic key present — use ClaudeProvider directly
   else if (config.anthropicApiKey) {
@@ -1743,11 +1657,33 @@ export async function initializeAIProvider(
       );
     }
 
-    defaultProviderOrder = detectedNames;
-    defaultProvider = buildProviderChain(detectedNames, providerCredentials, {
+    const preflightResult = await preflightResponseProviders(
+      detectedNames,
+      providerCredentials,
+      config.providerModels,
+    );
+    if (preflightResult.failures.length > 0) {
+      const notice =
+        `Configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
+      notices.push(notice);
+      logger.warn("Configured AI providers failed preflight", {
+        failedProviders: preflightResult.failures,
+      });
+    }
+    if (preflightResult.passedProviderIds.length === 0) {
+      throw new AppError(
+        `No AI provider passed preflight. ${formatProviderPreflightFailures(preflightResult.failures)}`,
+        "NO_HEALTHY_AI_PROVIDER",
+      );
+    }
+
+    defaultProviderOrder = preflightResult.passedProviderIds;
+    defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
       models: config.providerModels,
     });
-    logger.info("AI provider auto-detected from available keys", { chain: detectedNames });
+    logger.info("AI provider auto-detected from available keys", {
+      chain: preflightResult.passedProviderIds,
+    });
   }
 
   // Run health check (non-blocking — warn only)

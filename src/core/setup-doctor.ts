@@ -7,6 +7,15 @@ import { loadConfigSafe, type Config } from "../config/config.js";
 import { resolveEmbeddingProvider, describeEmbeddingResolutionFailure } from "../rag/embeddings/embedding-resolver.js";
 import { AutoUpdater } from "./auto-updater.js";
 import { ChannelActivityRegistry } from "./channel-activity-registry.js";
+import {
+  collectProviderCredentials,
+  detectConfiguredResponseProviders,
+  normalizeProviderNames,
+} from "./provider-config.js";
+import {
+  formatProviderPreflightFailures,
+  preflightResponseProviders,
+} from "./response-provider-preflight.js";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -73,7 +82,7 @@ function summarizeResponseWorker(config: Config): string {
     : `Strada control plane ready. ${openaiMode}`;
 }
 
-export function collectDoctorReport(options: DoctorOptions = {}): DoctorReport {
+export async function collectDoctorReport(options: DoctorOptions = {}): Promise<DoctorReport> {
   const runtimePaths = resolveRuntimePaths({ moduleUrl: import.meta.url });
   const installRoot = options.installRoot ?? runtimePaths.installRoot;
   const configRoot = options.configRoot ?? runtimePaths.configRoot;
@@ -171,6 +180,22 @@ export function collectDoctorReport(options: DoctorOptions = {}): DoctorReport {
       status: "pass",
       detail: summarizeResponseWorker(configResult.value),
     };
+    const configuredProviders = normalizeProviderNames(configResult.value.providerChain);
+    const requestedResponseProviders = configuredProviders.length > 0
+      ? configuredProviders
+      : detectConfiguredResponseProviders(configResult.value);
+    const preflightResult = await preflightResponseProviders(
+      requestedResponseProviders,
+      collectProviderCredentials(configResult.value),
+      configResult.value.providerModels,
+    );
+    if (preflightResult.failures.length > 0) {
+      providerCheck.status = "fail";
+      providerCheck.detail =
+        `${providerCheck.detail} Failed preflight: ${formatProviderPreflightFailures(preflightResult.failures)}`;
+      providerCheck.fix =
+        "Re-run `strada setup` and fix the failing response-worker credentials before starting Strada.";
+    }
     checks.push(providerCheck);
 
     const responseChain = configResult.value.providerChain
@@ -232,7 +257,7 @@ export function collectDoctorReport(options: DoctorOptions = {}): DoctorReport {
 }
 
 export async function runDoctorCommand(): Promise<number> {
-  const report = collectDoctorReport();
+  const report = await collectDoctorReport();
 
   console.log("\nStrada Doctor");
   console.log("=============\n");

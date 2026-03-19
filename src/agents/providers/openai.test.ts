@@ -256,10 +256,79 @@ describe("OpenAIProvider", () => {
         }),
       }),
     );
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
+    expect(body.input).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: "ping" }],
+      },
+    ]);
     expect(result.text).toBe("pong");
     expect(result.toolCalls).toEqual([]);
     expect(result.stopReason).toBe("end_turn");
     expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 1, totalTokens: 4 });
+  });
+
+  it("uses output_text for assistant replay on the subscription responses endpoint", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          [
+            'event: response.completed',
+            'data: {"response":{"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4},"output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      body: stream,
+      text: async () => "",
+      headers: new Headers(),
+    });
+
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: "access-token",
+      accountId: "account-id",
+    });
+
+    await provider.chat(
+      "system",
+      [
+        { role: "user", content: "start" },
+        { role: "assistant", content: "previous answer" },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "call_1",
+            content: { ok: true },
+          }],
+        },
+      ],
+      [],
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
+    expect(body.input).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: "start" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "previous answer" }],
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: '{"ok":true}',
+      },
+    ]);
   });
 
   it("performs a real subscription health probe against the responses endpoint", async () => {

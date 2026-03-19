@@ -87,14 +87,16 @@ A minimal HTTP server that runs during first-time configuration when no valid `.
 **HTTP Endpoints:**
 
 - `GET /` — Serves the setup UI (`setup.html`)
-- `POST /api/setup` — Accepts JSON-encoded configuration, validates required fields (`UNITY_PROJECT_PATH`, provider credentials, OpenAI subscription session state when `chatgpt-subscription` is selected), sanitizes all values, writes `.env`, and then hands off to the main app
+- `POST /api/setup` — Accepts JSON-encoded configuration, validates required fields (`UNITY_PROJECT_PATH`, provider credentials, OpenAI subscription session state when `chatgpt-subscription` is selected), runs real preflight for every selected response worker, sanitizes all values, writes `.env`, and then hands off to the main app
+- `GET /api/setup/status` — Returns explicit bootstrap handoff state (`collecting`, `saved`, `booting`, `ready`, `failed`) so the frontend can show startup progress or failure without guessing from `/health`
 - `GET /api/setup/validate-path` — Query parameter `path` (must be absolute, no `..` sequences); returns `{ valid: true }` if directory exists, or `{ valid: false, error: "..." }` otherwise
 
 **Security Measures:**
 
 - **Newline injection prevention:** All `.env` values are sanitized via `sanitizeEnvValue()` to strip carriage returns and newlines, blocking log injection and key overwriting attacks
 - **Directory traversal blocking:** Path validation rejects relative paths, `..` sequences, and URL-encoded traversals using `path.resolve()` normalization
-- **Subscription auth validation:** OpenAI `chatgpt-subscription` mode is rejected early when the local Codex/ChatGPT session file is missing, malformed, or already expired
+- **Subscription auth validation:** OpenAI `chatgpt-subscription` mode is rejected early when the local Codex/ChatGPT session file is missing, malformed, already expired, or fails the real Responses preflight probe
+- **Fail-closed provider setup:** Every selected response worker must pass setup preflight. Invalid provider chains are rejected instead of being silently skipped during startup
 - **HTTP security headers:** Every response includes:
   - `X-Content-Type-Options: nosniff` — prevents MIME sniffing
   - `X-Frame-Options: DENY` — blocks framing in other sites

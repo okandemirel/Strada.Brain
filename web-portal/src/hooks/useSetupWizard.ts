@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { SaveStatus } from '../types/setup'
+import type { ProviderPreflightFailure, SaveStatus, SetupStatusResponse } from '../types/setup'
 import { PRESETS, PROVIDER_MAP, CHANNELS, EMBEDDING_CAPABLE } from '../types/setup-constants'
 import { buildPostSetupBootstrap, FIRST_RUN_STORAGE_KEY, POST_SETUP_BOOTSTRAP_STORAGE_KEY } from './useWebSocket'
 
 const SETUP_AVAILABILITY_MAX_ATTEMPTS = 25
 const SETUP_AVAILABILITY_RETRY_MS = 1000
+const SETUP_BOOTSTRAP_POLL_MS = 1000
+const SETUP_BOOTSTRAP_MAX_ATTEMPTS = 80
 
 export function hasUsableResponseCredential(
   providerId: string,
@@ -67,6 +69,31 @@ export type SetupSurfaceProbe =
   | { kind: 'redirect' }
   | { kind: 'retry' }
 
+function formatProviderFailures(failures: ProviderPreflightFailure[] | undefined): string | null {
+  if (!failures || failures.length === 0) return null
+  return failures.map((failure) => `${failure.providerName}: ${failure.detail}`).join(' ')
+}
+
+export async function readSetupBootstrapStatus(
+  fetchImpl: typeof fetch = fetch,
+): Promise<SetupStatusResponse | null> {
+  try {
+    const res = await fetchImpl('/api/setup/status', { cache: 'no-store' })
+    if (!res.ok) {
+      return null
+    }
+
+    const data = await res.json().catch(() => null)
+    if (!data || typeof data !== 'object' || typeof data.state !== 'string') {
+      return null
+    }
+
+    return data as SetupStatusResponse
+  } catch {
+    return null
+  }
+}
+
 export async function probeSetupSurface(
   fetchImpl: typeof fetch = fetch,
 ): Promise<SetupSurfaceProbe> {
@@ -128,6 +155,7 @@ export function useSetupWizard() {
   const [saveCommitted, setSaveCommitted] = useState(false)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [bootstrapDetail, setBootstrapDetail] = useState<string | null>(null)
 
   const csrfTokenRef = useRef<string>('')
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -193,7 +221,7 @@ export function useSetupWizard() {
     switch (step) {
       case 2: {
         if (checkedProviders.size === 0) return false
-        return Array.from(checkedProviders).some((id) =>
+        return Array.from(checkedProviders).every((id) =>
           hasUsableResponseCredential(id, providerKeys, providerAuthModes),
         )
       }
@@ -321,6 +349,7 @@ export function useSetupWizard() {
     setSaveStatus('saving')
     setSaveError(null)
     setSaveCommitted(false)
+    setBootstrapDetail(null)
 
     if (reviewBlockingReason) {
       setSaveStatus('error')
@@ -399,23 +428,29 @@ export function useSetupWizard() {
         body: JSON.stringify(config),
       })
 
+      const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.error ?? `Save failed (${res.status})`)
+        if (res.status === 409 && body && typeof body === 'object' && body.handoff === true) {
+          setSaveCommitted(true)
+          setSaveStatus('booting')
+          setBootstrapDetail(typeof body.error === 'string' ? body.error : 'Configuration already saved. Strada is still starting.')
+        } else {
+          const providerFailureMessage = formatProviderFailures(body.providerFailures)
+          throw new Error(providerFailureMessage ?? body.error ?? `Save failed (${res.status})`)
+        }
+      } else {
+        localStorage.setItem(FIRST_RUN_STORAGE_KEY, '1')
+        localStorage.setItem(
+          POST_SETUP_BOOTSTRAP_STORAGE_KEY,
+          JSON.stringify(buildPostSetupBootstrap(autonomyEnabled, autonomyHours)),
+        )
+
+        setSaveCommitted(true)
+        setSaveStatus('saved')
+        setBootstrapDetail('Configuration accepted. Starting Strada on this same URL.')
       }
 
-      localStorage.setItem(FIRST_RUN_STORAGE_KEY, '1')
-      localStorage.setItem(
-        POST_SETUP_BOOTSTRAP_STORAGE_KEY,
-        JSON.stringify(buildPostSetupBootstrap(autonomyEnabled, autonomyHours)),
-      )
-
-      // Poll for readiness — the wizard server shuts down and the main app
-      // boots on the same port, so expect connection errors during the gap.
-      setSaveCommitted(true)
-      setSaveStatus('polling')
       let attempts = 0
-      const maxAttempts = 40 // 40 x 2s = 80s total timeout
 
       pollTimerRef.current = setInterval(async () => {
         if (!mountedRef.current) {
@@ -423,29 +458,64 @@ export function useSetupWizard() {
           return
         }
         attempts++
+
         try {
+          const setupStatus = await readSetupBootstrapStatus(fetch)
+          if (setupStatus) {
+            if (setupStatus.state === 'saved') {
+              setSaveStatus('saved')
+              setBootstrapDetail(setupStatus.detail ?? 'Configuration accepted. Waiting for Strada to begin booting.')
+              return
+            }
+
+            if (setupStatus.state === 'booting') {
+              setSaveStatus('booting')
+              setBootstrapDetail(setupStatus.detail ?? 'Strada is starting the main web app.')
+              return
+            }
+
+            if (setupStatus.state === 'failed') {
+              if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
+              setSaveStatus('error')
+              setBootstrapDetail(setupStatus.detail ?? null)
+              setSaveError(setupStatus.detail ?? 'Strada could not finish starting. Re-open setup and fix the configuration.')
+              return
+            }
+
+            if (setupStatus.state === 'ready') {
+              if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
+              setSaveStatus('success')
+              setBootstrapDetail(setupStatus.detail ?? 'Strada is ready. Redirecting now.')
+              setTimeout(() => {
+                window.location.href = setupStatus.readyUrl || '/'
+              }, 250)
+              return
+            }
+          }
+
           const healthRes = await fetch('/health', { cache: 'no-store' })
-          if (!healthRes.ok) return // non-200, keep polling
-          const healthData = await healthRes.json()
+          if (!healthRes.ok) return
+          const healthData = await healthRes.json().catch(() => null)
           if (healthData.status === 'ok') {
             if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
             if (!mountedRef.current) return
             setSaveStatus('success')
+            setBootstrapDetail('Strada is ready. Redirecting now.')
             setTimeout(() => {
               window.location.href = '/'
-            }, 500)
+            }, 250)
           }
         } catch {
-          // Connection refused during server restart — expected, keep polling
+          // Same-port handoff can briefly reject requests while the app replaces the wizard.
         }
 
-        if (attempts >= maxAttempts) {
+        if (attempts >= SETUP_BOOTSTRAP_MAX_ATTEMPTS) {
           if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
           if (!mountedRef.current) return
           setSaveStatus('error')
-          setSaveError('Configuration was saved, but Strada web app did not become ready in time. Keep this page open while Strada finishes starting, or reopen Strada from the terminal.')
+          setSaveError('Configuration was saved, but Strada did not expose a ready or failed bootstrap state in time. Re-open setup and inspect the startup error.')
         }
-      }, 2000)
+      }, SETUP_BOOTSTRAP_POLL_MS)
     } catch (err) {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
@@ -475,6 +545,8 @@ export function useSetupWizard() {
     daemonBudget,
     saveStatus,
     saveError,
+    bootstrapDetail,
+    saveCommitted,
     reviewBlockingReason,
     canSave: !reviewBlockingReason && !(saveCommitted && saveStatus === 'error'),
 

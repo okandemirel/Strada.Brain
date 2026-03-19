@@ -1,12 +1,33 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config/config.js";
 import { collectDoctorReport } from "./setup-doctor.js";
 
+const { preflightResponseProvidersMock } = vi.hoisted(() => ({
+  preflightResponseProvidersMock: vi.fn().mockResolvedValue({
+    passedProviderIds: ["gemini", "kimi"],
+    failures: [],
+  }),
+}));
+
+vi.mock("./response-provider-preflight.js", () => ({
+  formatProviderPreflightFailures: (failures: Array<{ providerName: string; detail: string }>) =>
+    failures.map((failure) => `${failure.providerName}: ${failure.detail}`).join(" "),
+  preflightResponseProviders: preflightResponseProvidersMock,
+}));
+
 describe("setup doctor", () => {
   const tmpDirs: string[] = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    preflightResponseProvidersMock.mockResolvedValue({
+      passedProviderIds: ["gemini", "kimi"],
+      failures: [],
+    });
+  });
 
   afterEach(() => {
     for (const dir of tmpDirs) {
@@ -131,9 +152,9 @@ describe("setup doctor", () => {
     } as Config;
   }
 
-  it("fails when built artifacts are missing", () => {
+  it("fails when built artifacts are missing", async () => {
     const installRoot = makeInstallRoot();
-    const report = collectDoctorReport({
+    const report = await collectDoctorReport({
       installRoot,
       configRoot: installRoot,
       configResult: { kind: "error", error: "missing .env" },
@@ -143,7 +164,7 @@ describe("setup doctor", () => {
     expect(report.checks.find((check) => check.id === "build")?.status).toBe("fail");
   });
 
-  it("warns instead of failing when dist is missing for a prepared git checkout", () => {
+  it("warns instead of failing when dist is missing for a prepared git checkout", async () => {
     const installRoot = makeInstallRoot();
     fs.writeFileSync(path.join(installRoot, "package.json"), "{}");
     fs.mkdirSync(path.join(installRoot, "src"), { recursive: true });
@@ -151,7 +172,7 @@ describe("setup doctor", () => {
     fs.writeFileSync(path.join(installRoot, "src", "index.ts"), "export {};");
     fs.mkdirSync(path.join(installRoot, ".git"));
 
-    const report = collectDoctorReport({
+    const report = await collectDoctorReport({
       installRoot,
       configRoot: installRoot,
       configResult: { kind: "error", error: "missing .env" },
@@ -160,9 +181,9 @@ describe("setup doctor", () => {
     expect(report.checks.find((check) => check.id === "build")?.status).toBe("warn");
   });
 
-  it("fails when config is invalid", () => {
+  it("fails when config is invalid", async () => {
     const installRoot = makeBuiltInstallRoot();
-    const report = collectDoctorReport({
+    const report = await collectDoctorReport({
       installRoot,
       configRoot: installRoot,
       configResult: { kind: "error", error: "bad config" },
@@ -172,9 +193,9 @@ describe("setup doctor", () => {
     expect(report.checks.find((check) => check.id === "config")?.detail).toContain("bad config");
   });
 
-  it("passes when config and embeddings resolve cleanly", () => {
+  it("passes when config and embeddings resolve cleanly", async () => {
     const installRoot = makeBuiltInstallRoot();
-    const report = collectDoctorReport({
+    const report = await collectDoctorReport({
       installRoot,
       configRoot: installRoot,
       configResult: { kind: "ok", value: makeConfig() },
@@ -184,7 +205,7 @@ describe("setup doctor", () => {
     expect(report.checks.find((check) => check.id === "embeddings")?.status).toBe("pass");
   });
 
-  it("fails when the only OpenAI subscription worker has an expired local auth session", () => {
+  it("fails when the only OpenAI subscription worker has an expired local auth session", async () => {
     const installRoot = makeBuiltInstallRoot();
     const authDir = path.join(installRoot, ".codex");
     fs.mkdirSync(authDir, { recursive: true });
@@ -193,7 +214,16 @@ describe("setup doctor", () => {
       JSON.stringify({ tokens: { access_token: createJwt(-300), account_id: "acct_test" } }),
     );
 
-    const report = collectDoctorReport({
+    preflightResponseProvidersMock.mockResolvedValue({
+      passedProviderIds: [],
+      failures: [{
+        providerId: "openai",
+        providerName: "OpenAI",
+        detail: "OpenAI ChatGPT/Codex subscription health probe failed. Sign in again or switch OpenAI to API-key mode.",
+      }],
+    });
+
+    const report = await collectDoctorReport({
       installRoot,
       configRoot: installRoot,
       configResult: {

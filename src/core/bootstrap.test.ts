@@ -15,12 +15,17 @@ const {
   resolveEmbeddingProviderMock,
   cachedEmbeddingInitializeMock,
   cachedEmbeddingEmbedMock,
+  preflightResponseProvidersMock,
 } = vi.hoisted(() => ({
   resolveEmbeddingProviderMock: vi.fn(),
   cachedEmbeddingInitializeMock: vi.fn().mockResolvedValue(undefined),
   cachedEmbeddingEmbedMock: vi.fn().mockResolvedValue({
     embeddings: [[0.1, 0.2, 0.3]],
     dimensions: 3,
+  }),
+  preflightResponseProvidersMock: vi.fn().mockResolvedValue({
+    passedProviderIds: ["gemini"],
+    failures: [],
   }),
 }));
 
@@ -108,6 +113,12 @@ vi.mock("../rag/embeddings/embedding-cache.js", () => {
   }));
   return { CachedEmbeddingProvider: MockCachedEmbeddingProvider };
 });
+
+vi.mock("./response-provider-preflight.js", () => ({
+  formatProviderPreflightFailures: (failures: Array<{ providerName: string; detail: string }>) =>
+    failures.map((failure) => `${failure.providerName}: ${failure.detail}`).join(" "),
+  preflightResponseProviders: preflightResponseProvidersMock,
+}));
 
 // Import the function under test
 import {
@@ -513,47 +524,42 @@ describe("initializeAIProvider", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    preflightResponseProvidersMock.mockResolvedValue({
+      passedProviderIds: ["gemini"],
+      failures: [],
+    });
     logger = createMockLogger();
   });
 
-  it("skips unavailable providers in the configured chain and continues", async () => {
+  it("rejects configured providers that do not have usable credentials", async () => {
     const config = createTestConfig({
       providerChain: "kimi,gemini",
       geminiApiKey: "gem-key",
     });
 
-    const result = await initializeAIProvider(config, logger);
-
-    expect(buildProviderChain).toHaveBeenCalledWith(
-      ["gemini"],
-      expect.objectContaining({
-        gemini: expect.objectContaining({ apiKey: "gem-key" }),
-        kimi: expect.objectContaining({ apiKey: undefined }),
-      }),
-      expect.any(Object),
-    );
-    expect(result.notices).toContain("Unavailable AI providers were skipped: kimi.");
-    expect(result.manager).toBeDefined();
+    await expect(initializeAIProvider(config, logger)).rejects.toMatchObject({
+      code: "NO_AI_PROVIDER",
+    });
   });
 
-  it("falls back to detected providers when the configured chain has no usable providers", async () => {
+  it("rejects configured providers that fail preflight instead of silently falling back", async () => {
     const config = createTestConfig({
       providerChain: "kimi",
+      kimiApiKey: "kimi-key",
       geminiApiKey: "gem-key",
     });
+    preflightResponseProvidersMock.mockResolvedValue({
+      passedProviderIds: [],
+      failures: [{
+        providerId: "kimi",
+        providerName: "Kimi",
+        detail: "Kimi health check failed. Verify the credential and network access.",
+      }],
+    });
 
-    const result = await initializeAIProvider(config, logger);
-
-    expect(buildProviderChain).toHaveBeenCalledWith(
-      ["gemini"],
-      expect.objectContaining({
-        gemini: expect.objectContaining({ apiKey: "gem-key" }),
-      }),
-      expect.any(Object),
-    );
-    expect(result.notices).toContain(
-      "Configured provider chain had no usable providers. Falling back to: gemini.",
-    );
-    expect(ProviderManager).toHaveBeenCalledTimes(1);
+    await expect(initializeAIProvider(config, logger)).rejects.toMatchObject({
+      code: "NO_HEALTHY_AI_PROVIDER",
+    });
+    expect(buildProviderChain).not.toHaveBeenCalled();
   });
 });
