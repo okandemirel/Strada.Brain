@@ -3,6 +3,7 @@ import { ProviderRouter } from "./provider-router.js";
 import type { ProviderManagerRef } from "./provider-router.js";
 import type { TaskClassification } from "./routing-types.js";
 import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
+import type { TrajectoryPhaseSignalRetriever } from "./trajectory-phase-signal-retriever.js";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -182,6 +183,27 @@ describe("ProviderRouter", () => {
       const router = new ProviderRouter(manager, "balanced");
 
       const decision = router.resolve(planningTask);
+
+      expect(decision.provider).toBe("ollama");
+      expect(decision.reason).toBe("only available provider");
+    });
+
+    it("keeps zero-overhead fast path without scanning replay storage", () => {
+      const manager = createMockManager(SINGLE_PROVIDER);
+      const retriever: TrajectoryPhaseSignalRetriever = {
+        getSignalsForTask: () => {
+          throw new Error("replay scan should not run for a single provider");
+        },
+        getSignalForProvider: () => null,
+      };
+      const router = new ProviderRouter(manager, "balanced", {
+        trajectoryPhaseSignalRetriever: retriever,
+      });
+
+      const decision = router.resolve(planningTask, "planning", {
+        taskDescription: "Fix the Unity editor crash during 100-level generation",
+        projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+      });
 
       expect(decision.provider).toBe("ollama");
       expect(decision.reason).toBe("only available provider");
@@ -492,6 +514,55 @@ describe("ProviderRouter", () => {
       expect(alpha!.repeatedFailureCount).toBeGreaterThan(beta!.repeatedFailureCount);
       expect(alpha!.repeatedWorldContextCount).toBeGreaterThanOrEqual(beta!.repeatedWorldContextCount);
       expect(alpha!.avgRetryCount).toBeGreaterThan(beta!.avgRetryCount);
+    });
+
+    it("uses persisted trajectory replay signals for task-specific phase bias", () => {
+      const manager = createMockManager(PARITY_PROVIDERS);
+      const retriever: TrajectoryPhaseSignalRetriever = {
+        getSignalsForTask: () => [
+          {
+            provider: "beta",
+            phase: "planning",
+            sampleSize: 3,
+            sameWorldMatches: 2,
+            successCount: 3,
+            failureCount: 0,
+            latestTimestamp: 20,
+            score: 0.86,
+          },
+          {
+            provider: "alpha",
+            phase: "planning",
+            sampleSize: 2,
+            sameWorldMatches: 2,
+            successCount: 0,
+            failureCount: 2,
+            latestTimestamp: 21,
+            score: 0.18,
+          },
+        ],
+        getSignalForProvider: () => null,
+      };
+      const router = new ProviderRouter(manager, "balanced", {
+        trajectoryPhaseSignalRetriever: retriever,
+      });
+
+      const decision = router.resolve(planningTask, "planning", {
+        identityKey: "user-3",
+        taskDescription: "Fix the Unity editor crash during 100-level generation",
+        projectWorldFingerprint: "root tiki arrows modules castle systems 9",
+      });
+
+      expect(decision.provider).toBe("beta");
+      expect(decision.reason).toContain("replay score");
+      expect(decision.reason).toContain("persisted trajectories");
+      expect(decision.replaySignal).toEqual({
+        phase: "planning",
+        score: 0.86,
+        sampleSize: 3,
+        sameWorldMatches: 2,
+        latestTimestamp: 20,
+      });
     });
   });
 

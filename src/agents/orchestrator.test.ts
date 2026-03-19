@@ -918,17 +918,108 @@ describe("Orchestrator", () => {
       requireConfirmation: true,
       memoryManager: mockMemMgr as any,
       taskExecutionStore,
+      providerRouter: {
+        getRecentExecutionTraces: vi.fn(() => [
+          {
+            provider: "kimi",
+            model: "kimi-k2",
+            role: "planner",
+            phase: "planning",
+            source: "supervisor-strategy",
+            reason: "planned the task cleanly",
+            task: {
+              type: "planning",
+              complexity: "complex",
+              criticality: "high",
+            },
+            timestamp: 250,
+            identityKey: "user-replay",
+            chatId: "chat-replay",
+          },
+          {
+            provider: "gemini",
+            model: "gemini-2.5-pro",
+            role: "planner",
+            phase: "planning",
+            source: "supervisor-strategy",
+            reason: "different chat should not leak",
+            task: {
+              type: "planning",
+              complexity: "complex",
+              criticality: "high",
+            },
+            timestamp: 260,
+            identityKey: "user-replay",
+            chatId: "chat-other",
+          },
+        ]),
+        getRecentPhaseOutcomes: vi.fn(() => [
+          {
+            provider: "kimi",
+            model: "kimi-k2",
+            role: "planner",
+            phase: "planning",
+            source: "supervisor-strategy",
+            status: "approved",
+            reason: "planning completed cleanly",
+            task: {
+              type: "planning",
+              complexity: "complex",
+              criticality: "high",
+            },
+            timestamp: 300,
+            identityKey: "user-replay",
+            chatId: "chat-replay",
+            telemetry: {
+              verifierDecision: "approve",
+              retryCount: 0,
+              rollbackDepth: 0,
+            },
+          },
+          {
+            provider: "gemini",
+            model: "gemini-2.5-pro",
+            role: "planner",
+            phase: "planning",
+            source: "supervisor-strategy",
+            status: "approved",
+            reason: "different chat should not leak",
+            task: {
+              type: "planning",
+              complexity: "complex",
+              criticality: "high",
+            },
+            timestamp: 320,
+            identityKey: "user-replay",
+            chatId: "chat-other",
+            telemetry: {
+              verifierDecision: "approve",
+              retryCount: 0,
+              rollbackDepth: 0,
+            },
+          },
+        ]),
+      } as any,
     });
 
     const replayContext = await replayOrch.buildTrajectoryReplayContext({
       chatId: "chat-replay",
       userId: "user-replay",
+      sinceTimestamp: 200,
     });
 
     expect(replayContext?.projectWorldFingerprint).toContain("castle");
     expect(replayContext?.branchSummary).toContain("Level_031");
     expect(replayContext?.verifierSummary).toContain("runtime replay");
     expect(replayContext?.learnedInsights).toEqual(["Avoid trusting serialized YAML alone."]);
+    expect(replayContext?.phaseTelemetry).toEqual([
+      expect.objectContaining({
+        phase: "planning",
+        provider: "kimi",
+        status: "approved",
+        verifierDecision: "approve",
+      }),
+    ]);
     db.close();
   });
 

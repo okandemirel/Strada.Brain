@@ -1,5 +1,9 @@
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { Trajectory } from "../learning/types.js";
+import {
+  buildTrajectoryReplayMatch,
+  normalizeTrajectoryReplayText,
+} from "../learning/trajectory-replay-match.js";
 
 export interface TrajectoryReplayInsightResult {
   readonly insights: string[];
@@ -27,7 +31,7 @@ export class TrajectoryReplayRetriever {
     projectWorldFingerprint?: string;
     maxInsights?: number;
   }): TrajectoryReplayInsightResult {
-    const normalizedTask = normalizeText(params.taskDescription);
+    const normalizedTask = normalizeTrajectoryReplayText(params.taskDescription);
     if (!normalizedTask) {
       return { insights: [], matchedTrajectoryIds: [] };
     }
@@ -77,35 +81,29 @@ export class TrajectoryReplayRetriever {
     normalizedTask: string,
     currentWorldFingerprint?: string,
   ): ReplayCandidate | null {
-    const normalizedTrajectoryTask = normalizeText(trajectory.taskDescription);
-    const taskSimilarity = tokenSimilarity(normalizedTask, normalizedTrajectoryTask);
-    const trajectoryWorld = trajectory.outcome.replayContext?.projectWorldFingerprint?.trim();
-    const sameWorld = Boolean(
-      currentWorldFingerprint
-      && trajectoryWorld
-      && currentWorldFingerprint.trim() === trajectoryWorld,
+    const match = buildTrajectoryReplayMatch(
+      trajectory,
+      normalizedTask,
+      currentWorldFingerprint,
+      { recencyWindowDays: 30 },
     );
-
-    if (taskSimilarity < 0.18 && !sameWorld) {
+    if (!match) {
       return null;
     }
 
-    const ageDays = Math.max(0, (Date.now() - trajectory.createdAt) / 86_400_000);
-    const recencyScore = Math.max(0, 1 - ageDays / 30);
     const outcomeScore = trajectory.outcome.success
       ? trajectory.outcome.hadErrors
         ? 0.2
         : 0.35
       : -0.1;
-    const verifierBoost = trajectory.outcome.replayContext?.verifierSummary ? 0.05 : 0;
     const score =
-      taskSimilarity * 0.55
-      + (sameWorld ? 0.25 : 0)
-      + recencyScore * 0.1
+      match.taskSimilarity * 0.55
+      + (match.sameWorld ? 0.25 : 0)
+      + match.recencyScore * 0.1
       + outcomeScore
-      + verifierBoost;
+      + match.verifierBoost;
 
-    return { trajectory, score, sameWorld };
+    return { trajectory, score, sameWorld: match.sameWorld };
   }
 }
 
@@ -138,26 +136,6 @@ function formatFailureInsight(candidate: ReplayCandidate): string {
     ? summarizeText(replayContext.verifierSummary, 120)
     : `${trajectory.outcome.errorCount} errors before failure`;
   return `Replay warning (${scopeLabel}): avoid repeating ${branch}. Last verifier memory: ${verifier}.`;
-}
-
-function normalizeText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function tokenSimilarity(left: string, right: string): number {
-  if (!left || !right) {
-    return 0;
-  }
-
-  const leftTokens = new Set(left.split(" "));
-  const rightTokens = new Set(right.split(" "));
-  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
-  const denominator = Math.max(leftTokens.size, rightTokens.size, 1);
-  return intersection / denominator;
 }
 
 function summarizeText(value: string, maxLength: number): string {

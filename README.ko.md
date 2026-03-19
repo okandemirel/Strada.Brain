@@ -576,6 +576,7 @@ OpenAI 호환 공급자라면 어떤 것이든 작동합니다. 아래 공급자
 Strada 는 이제 각 작업마다 내부 execution journal 과 rollback memory 도 유지합니다. replan 은 마지막 안정 checkpoint 와 소진된 branch 에 더해 project/world anchor 도 다시 참고할 수 있고, hardcoded provider lore 없이 adaptive phase scores 를 routing 에 되돌려 줍니다. 이 score 는 verifier clean rate, rollback pressure, retry count, repeated failure fingerprints, repeated world-context failures, phase-local token cost 도 함께 반영합니다.
 메모리도 이제 역할별로 분리됩니다. user profile state 는 이름/선호/autonomy 를, task execution memory 는 session summaries/open items/rollback state 를 담당하고, project/world memory 는 활성 project root 와 cached AgentDB analysis 에서 explicit prompt layer 로 주입됩니다. 이 project/world layer 는 recovery memory 와 adaptive routing 도 함께 지원하고, semantic retrieval 은 live 관련 memory 를 계속 별도로 더합니다.
 cross-session `execution replay` 역시 이제 같은 경로를 사용합니다. Strada 는 project/world-aware recovery summaries 를 learning trajectories 에 기록하고, 비슷한 작업을 다시 시도하기 전에 가장 관련 있는 과거 success/failure branches 를 `Execution Replay` context layer 로 prompt 에 다시 주입합니다.
+이 replay context 는 이제 phase/provider telemetry 도 함께 persist 하므로, adaptive routing 이 similar task 에서 성공했던 worker 를 in-memory runtime history 만이 아니라 persisted trajectory 기준으로도 재사용할 수 있습니다.
 
 **중요:** `OPENAI_AUTH_MODE=chatgpt-subscription`은 Strada 내부의 OpenAI 대화 턴에만 적용됩니다. OpenAI API나 임베딩 쿼터를 제공하지 않습니다. `EMBEDDING_PROVIDER=openai`를 사용하려면 여전히 `OPENAI_API_KEY`가 필요합니다.
 Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니다. 어떤 제공자가 불완전한 분석을 반환하거나, 다음에 무엇을 해야 하는지 사용자에게 묻거나, 충분한 근거 없이 넓은 완료 주장을 하면 Strada가 루프를 다시 열고 추가 점검/리뷰를 수행한 뒤, 결과가 검증되었거나 실제 외부 블로커만 남았을 때만 사용자에게 응답합니다.

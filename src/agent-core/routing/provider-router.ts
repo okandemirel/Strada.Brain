@@ -24,6 +24,10 @@ import {
   type ModelIntelligenceLookup,
   type ProviderWorkload,
 } from "../../agents/providers/provider-knowledge.js";
+import {
+  type TrajectoryPhaseSignal,
+  type TrajectoryPhaseSignalRetriever,
+} from "./trajectory-phase-signal-retriever.js";
 
 /* ------------------------------------------------------------------ */
 /*  Provider Manager structural interface (avoids hard coupling)      */
@@ -68,6 +72,7 @@ const PHASE_SCORE_RETRY_WEIGHT = 0.1;
 const PHASE_SCORE_COST_WEIGHT = 0.08;
 const PHASE_SCORE_REPEAT_FAILURE_WEIGHT = 0.08;
 const PHASE_SCORE_WORLD_CONTEXT_WEIGHT = 0.06;
+const TRAJECTORY_SIGNAL_BIAS_WEIGHT = 0.12;
 
 type AvailableProvider = {
   name: string;
@@ -99,6 +104,7 @@ export class ProviderRouter {
   private readonly phaseOutcomes: PhaseOutcome[] = [];
   private lastExecutingProvider: string | undefined;
   private readonly modelIntelligence?: ModelIntelligenceLookup;
+  private readonly trajectoryPhaseSignalRetriever?: TrajectoryPhaseSignalRetriever;
 
   /** Optional TierRouter for delegation escalation compatibility */
   private tierRouter?: TierRouterRef;
@@ -108,11 +114,13 @@ export class ProviderRouter {
     preset: RoutingPreset = "balanced",
     options: {
       modelIntelligence?: ModelIntelligenceLookup;
+      trajectoryPhaseSignalRetriever?: TrajectoryPhaseSignalRetriever;
     } = {},
   ) {
     this.weights = ROUTING_PRESETS[preset];
     this.presetName = preset;
     this.modelIntelligence = options.modelIntelligence;
+    this.trajectoryPhaseSignalRetriever = options.trajectoryPhaseSignalRetriever;
   }
 
   /**
@@ -158,6 +166,8 @@ export class ProviderRouter {
     options: {
       identityKey?: string;
       allowedProviderNames?: readonly string[];
+      taskDescription?: string;
+      projectWorldFingerprint?: string;
     } = {},
   ): RoutingDecision {
     const available = this.getAvailableProviders(options);
@@ -176,6 +186,12 @@ export class ProviderRouter {
       return decision;
     }
 
+    const trajectorySignals = this.getTrajectorySignalsForTask(
+      phase,
+      options.taskDescription,
+      options.projectWorldFingerprint,
+    );
+
     // Phase-aware weight adjustment
     let weights = this.weights;
     if (phase === "reflecting") {
@@ -190,11 +206,26 @@ export class ProviderRouter {
     let bestReason = "";
 
     for (const entry of available) {
-      const score = this.scoreProvider(entry, task, weights, available, phase, options.identityKey);
+      const score = this.scoreProvider(
+        entry,
+        task,
+        weights,
+        available,
+        phase,
+        options.identityKey,
+        trajectorySignals,
+      );
       if (score > bestScore) {
         bestScore = score;
         bestProvider = entry.name;
-        bestReason = this.buildReason(entry, task, weights, phase, options.identityKey);
+        bestReason = this.buildReason(
+          entry,
+          task,
+          weights,
+          phase,
+          options.identityKey,
+          trajectorySignals,
+        );
       }
     }
 
@@ -204,6 +235,7 @@ export class ProviderRouter {
       task,
       timestamp: Date.now(),
       identityKey: options.identityKey,
+      replaySignal: this.toRoutingReplaySignal(bestProvider, phase, trajectorySignals),
     };
 
     this.recordDecision(decision);
@@ -292,19 +324,26 @@ export class ProviderRouter {
     available: readonly AvailableProvider[],
     phase?: string,
     identityKey?: string,
+    trajectorySignals?: ReadonlyMap<string, TrajectoryPhaseSignal>,
   ): number {
     const cost = this.costScore(entry, available);
     const capability = this.capabilityScore(entry, task);
     const speed = this.speedScore(entry);
     const diversity = this.diversityScore(entry.name);
     const adaptiveBias = this.phaseReliabilityBias(entry.name, phase, identityKey);
+    const replayBias = this.trajectoryPhaseBias(
+      entry.name,
+      phase,
+      trajectorySignals,
+    );
 
     return (
       weights.costWeight * cost +
       weights.capabilityWeight * capability +
       weights.speedWeight * speed +
       weights.diversityWeight * diversity +
-      adaptiveBias
+      adaptiveBias +
+      replayBias
     );
   }
 
@@ -468,6 +507,7 @@ export class ProviderRouter {
     weights: RoutingWeights,
     phase?: string,
     identityKey?: string,
+    trajectorySignals?: ReadonlyMap<string, TrajectoryPhaseSignal>,
   ): string {
     const snapshot = this.getSnapshot(entry);
     const parts: string[] = [];
@@ -483,10 +523,18 @@ export class ProviderRouter {
     const workload = this.getWorkload(task.type);
     const topFeatures = snapshot.featureTags.slice(0, 2).join(", ");
     const phaseScore = this.getProviderPhaseScore(entry.name, phase, identityKey);
+    const replaySignal = this.getProviderTrajectorySignal(
+      entry.name,
+      phase,
+      trajectorySignals,
+    );
     const phaseNote = phaseScore
       ? `; phase score ${phaseScore.score.toFixed(2)} from ${phaseScore.sampleSize} runtime outcomes (verifier ${phaseScore.verifierCleanRate.toFixed(2)}, rollback ${phaseScore.rollbackRate.toFixed(2)})`
       : "";
-    return `${qualifier} choice for ${task.type} (${task.complexity}); ${workload} fit ${snapshot.workloadScores[workload].toFixed(2)}${topFeatures ? ` via ${topFeatures}` : ""}${phaseNote}`;
+    const replayNote = replaySignal
+      ? `; replay score ${replaySignal.score.toFixed(2)} from ${replaySignal.sampleSize} persisted trajectories${replaySignal.sameWorldMatches > 0 ? ` (${replaySignal.sameWorldMatches} same-world)` : ""}`
+      : "";
+    return `${qualifier} choice for ${task.type} (${task.complexity}); ${workload} fit ${snapshot.workloadScores[workload].toFixed(2)}${topFeatures ? ` via ${topFeatures}` : ""}${phaseNote}${replayNote}`;
   }
 
   private recordDecision(decision: RoutingDecision): void {
@@ -528,6 +576,78 @@ export class ProviderRouter {
     return this.computePhaseScores(undefined).find(
       (entry) => entry.provider === providerName && entry.phase === normalizedPhase,
     ) ?? scoped ?? null;
+  }
+
+  private trajectoryPhaseBias(
+    providerName: string,
+    phase: string | undefined,
+    trajectorySignals?: ReadonlyMap<string, TrajectoryPhaseSignal>,
+  ): number {
+    const signal = this.getProviderTrajectorySignal(
+      providerName,
+      phase,
+      trajectorySignals,
+    );
+    if (!signal) {
+      return 0;
+    }
+    return (signal.score - PHASE_SCORE_NEUTRAL) * TRAJECTORY_SIGNAL_BIAS_WEIGHT;
+  }
+
+  private getProviderTrajectorySignal(
+    providerName: string,
+    phase: string | undefined,
+    trajectorySignals?: ReadonlyMap<string, TrajectoryPhaseSignal>,
+  ): TrajectoryPhaseSignal | null {
+    const normalizedPhase = normalizeExecutionPhase(phase);
+    if (!normalizedPhase || !trajectorySignals) {
+      return null;
+    }
+
+    return trajectorySignals.get(`${normalizedPhase}:${providerName.trim().toLowerCase()}`) ?? null;
+  }
+
+  private toRoutingReplaySignal(
+    providerName: string,
+    phase: string | undefined,
+    trajectorySignals?: ReadonlyMap<string, TrajectoryPhaseSignal>,
+  ): RoutingDecision["replaySignal"] | undefined {
+    const normalizedPhase = normalizeExecutionPhase(phase);
+    if (!normalizedPhase) {
+      return undefined;
+    }
+    const signal = this.getProviderTrajectorySignal(providerName, normalizedPhase, trajectorySignals);
+    if (!signal) {
+      return undefined;
+    }
+    return {
+      phase: normalizedPhase,
+      score: signal.score,
+      sampleSize: signal.sampleSize,
+      sameWorldMatches: signal.sameWorldMatches,
+      latestTimestamp: signal.latestTimestamp,
+    };
+  }
+
+  private getTrajectorySignalsForTask(
+    phase: string | undefined,
+    taskDescription?: string,
+    projectWorldFingerprint?: string,
+  ): ReadonlyMap<string, TrajectoryPhaseSignal> | undefined {
+    const normalizedPhase = normalizeExecutionPhase(phase);
+    const normalizedTask = taskDescription?.trim();
+    if (!this.trajectoryPhaseSignalRetriever || !normalizedPhase || !normalizedTask) {
+      return undefined;
+    }
+
+    const signals = this.trajectoryPhaseSignalRetriever.getSignalsForTask({
+      taskDescription: normalizedTask,
+      phase: normalizedPhase,
+      projectWorldFingerprint,
+    });
+    return new Map(
+      signals.map((signal) => [`${signal.phase}:${signal.provider.trim().toLowerCase()}`, signal]),
+    );
   }
 
   private computePhaseScores(identityKey?: string): PhaseScore[] {

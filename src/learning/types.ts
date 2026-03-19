@@ -15,6 +15,13 @@ import type {
   DurationMs,
   JsonObject,
 } from "../types/index.js";
+import type {
+  ExecutionPhase,
+  ExecutionRole,
+  ExecutionTraceSource,
+  PhaseOutcomeStatus,
+  VerifierDecision,
+} from "../agent-core/routing/routing-types.js";
 
 // =============================================================================
 // BRANDED TYPES
@@ -327,6 +334,29 @@ export interface TrajectoryStep {
 }
 
 /** Cross-session replay context captured alongside a trajectory outcome */
+export interface TrajectoryPhaseReplay {
+  /** Phase observed during the original task */
+  readonly phase: ExecutionPhase;
+  /** Worker role that handled the phase */
+  readonly role: ExecutionRole;
+  /** Provider actually used for that phase */
+  readonly provider: string;
+  /** Optional model ID when known */
+  readonly model?: string;
+  /** How the phase was surfaced in runtime traces */
+  readonly source: ExecutionTraceSource;
+  /** Latest known phase outcome for that provider/phase pair in the task */
+  readonly status?: PhaseOutcomeStatus;
+  /** Latest verifier decision attached to the phase, when available */
+  readonly verifierDecision?: VerifierDecision;
+  /** Retry pressure seen at the point this phase outcome was recorded */
+  readonly retryCount?: number;
+  /** Rollback pressure seen at the point this phase outcome was recorded */
+  readonly rollbackDepth?: number;
+  /** Timestamp of the latest observed event for this phase replay snapshot */
+  readonly timestamp: number;
+}
+
 export interface TrajectoryReplayContext {
   /** Normalized project/world fingerprint for same-world replay matching */
   readonly projectWorldFingerprint?: string;
@@ -338,6 +368,8 @@ export interface TrajectoryReplayContext {
   readonly verifierSummary?: string;
   /** Most relevant learned execution insights from the task */
   readonly learnedInsights?: readonly string[];
+  /** Phase/provider telemetry captured from the original task */
+  readonly phaseTelemetry?: readonly TrajectoryPhaseReplay[];
 }
 
 /** Outcome of a trajectory */

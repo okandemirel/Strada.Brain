@@ -551,8 +551,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let providerRouter: import("../agent-core/routing/provider-router.js").ProviderRouter | undefined;
   try {
     const { ProviderRouter } = await import("../agent-core/routing/provider-router.js");
+    const { TrajectoryPhaseSignalRetriever } = await import("../agent-core/routing/trajectory-phase-signal-retriever.js");
     providerRouter = new ProviderRouter(providerManager, config.routing.preset, {
       modelIntelligence,
+      trajectoryPhaseSignalRetriever: learningResult.storage
+        ? new TrajectoryPhaseSignalRetriever(learningResult.storage)
+        : undefined,
     });
     logger.info("ProviderRouter initialized", { preset: config.routing.preset });
   } catch {
@@ -1327,6 +1331,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           chatId: msg.chatId,
           userId: msg.userId,
           conversationId: msg.conversationId,
+          sinceTimestamp: learningResult.taskPlanner.getTaskStartedAt() ?? undefined,
         }));
         learningResult.taskPlanner.endTask({ success: true, hadErrors: false, errorCount: 0 });
       }
@@ -2482,6 +2487,7 @@ function wireMessageHandler(
         chatId: msg.chatId,
         userId: msg.userId,
         conversationId: msg.conversationId,
+        sinceTimestamp: taskPlanner.getTaskStartedAt() ?? undefined,
       }));
       taskPlanner.endTask({
         success: true,

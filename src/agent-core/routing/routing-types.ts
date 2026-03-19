@@ -36,6 +36,13 @@ export interface RoutingDecision {
   readonly task: TaskClassification;
   readonly timestamp: number;
   readonly identityKey?: string;
+  readonly replaySignal?: {
+    readonly phase: ExecutionPhase;
+    readonly score: number;
+    readonly sampleSize: number;
+    readonly sameWorldMatches: number;
+    readonly latestTimestamp: number;
+  };
 }
 
 export type ExecutionRole = "planner" | "executor" | "reviewer" | "synthesizer";
@@ -68,6 +75,7 @@ export interface ExecutionTrace {
   readonly task: TaskClassification;
   readonly timestamp: number;
   readonly identityKey?: string;
+  readonly chatId?: string;
 }
 
 export type PhaseOutcomeStatus =
@@ -100,6 +108,7 @@ export interface PhaseOutcome {
   readonly task: TaskClassification;
   readonly timestamp: number;
   readonly identityKey?: string;
+  readonly chatId?: string;
   readonly telemetry?: PhaseOutcomeTelemetry;
 }
 

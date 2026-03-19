@@ -20,6 +20,7 @@ import { expandExecutedToolCalls } from "./executed-tools.js";
 import type {
   LearningPipeline,
   TrajectoryReplayContext,
+  TrajectoryPhaseReplay,
   TrajectoryStep,
   TrajectoryOutcome,
   TrajectoryStepResult,
@@ -169,6 +170,14 @@ export class TaskPlanner {
   }
 
   /**
+   * Start timestamp for the currently active trajectory window.
+   * Used to collect task-scoped replay telemetry after orchestration finishes.
+   */
+  getTaskStartedAt(): number | null {
+    return this.trajectoryStartTime || null;
+  }
+
+  /**
    * Attach replay/recovery context to the trajectory that will be recorded
    * when the current task ends.
    */
@@ -182,6 +191,27 @@ export class TaskPlanner {
       .map((insight) => insight.trim())
       .filter((insight) => insight.length > 0)
       .slice(0, 4);
+    const phaseTelemetry = (context.phaseTelemetry ?? [])
+      .map((phase): TrajectoryPhaseReplay | null => {
+        const provider = phase.provider.trim();
+        if (!provider) {
+          return null;
+        }
+        return {
+          phase: phase.phase,
+          role: phase.role,
+          provider,
+          model: phase.model?.trim() || undefined,
+          source: phase.source,
+          status: phase.status,
+          verifierDecision: phase.verifierDecision,
+          retryCount: typeof phase.retryCount === "number" ? Math.max(0, phase.retryCount) : undefined,
+          rollbackDepth: typeof phase.rollbackDepth === "number" ? Math.max(0, phase.rollbackDepth) : undefined,
+          timestamp: phase.timestamp,
+        };
+      })
+      .filter((phase): phase is TrajectoryPhaseReplay => phase !== null)
+      .slice(0, 12);
 
     this.trajectoryReplayContext = {
       projectWorldFingerprint: context.projectWorldFingerprint?.trim() || undefined,
@@ -189,6 +219,7 @@ export class TaskPlanner {
       branchSummary: context.branchSummary?.trim() || undefined,
       verifierSummary: context.verifierSummary?.trim() || undefined,
       learnedInsights,
+      phaseTelemetry,
     };
   }
 

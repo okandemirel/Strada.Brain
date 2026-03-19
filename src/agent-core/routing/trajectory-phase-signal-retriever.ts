@@ -1,0 +1,207 @@
+import type { LearningStorage } from "../../learning/storage/learning-storage.js";
+import type { Trajectory, TrajectoryPhaseReplay } from "../../learning/types.js";
+import {
+  buildTrajectoryReplayMatch,
+  normalizeTrajectoryReplayText,
+} from "../../learning/trajectory-replay-match.js";
+import type { ExecutionPhase } from "./routing-types.js";
+
+export interface TrajectoryPhaseSignal {
+  readonly provider: string;
+  readonly phase: ExecutionPhase;
+  readonly sampleSize: number;
+  readonly sameWorldMatches: number;
+  readonly successCount: number;
+  readonly failureCount: number;
+  readonly latestTimestamp: number;
+  readonly score: number;
+}
+
+interface ReplayPhaseCandidate {
+  readonly phaseTelemetry: TrajectoryPhaseReplay;
+  readonly trajectory: Trajectory;
+  readonly weight: number;
+  readonly sameWorld: boolean;
+}
+
+const NEUTRAL_SCORE = 0.5;
+const PRIOR_WEIGHT = 2;
+
+export class TrajectoryPhaseSignalRetriever {
+  private readonly maxTrajectories: number;
+
+  constructor(
+    private readonly storage: LearningStorage,
+    options?: { maxTrajectories?: number },
+  ) {
+    this.maxTrajectories = options?.maxTrajectories ?? 160;
+  }
+
+  getSignalsForTask(params: {
+    taskDescription: string;
+    phase: ExecutionPhase;
+    projectWorldFingerprint?: string;
+  }): TrajectoryPhaseSignal[] {
+    const normalizedTask = normalizeTrajectoryReplayText(params.taskDescription);
+    if (!normalizedTask) {
+      return [];
+    }
+
+    const trajectories = this.storage.getTrajectories({ limit: this.maxTrajectories });
+    const candidates = trajectories
+      .flatMap((trajectory) => this.collectCandidates(trajectory, normalizedTask, params.phase, params.projectWorldFingerprint))
+      .sort((left, right) => right.weight - left.weight);
+
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const grouped = new Map<string, {
+      provider: string;
+      sampleSize: number;
+      weightedTotal: number;
+      weightTotal: number;
+      sameWorldMatches: number;
+      successCount: number;
+      failureCount: number;
+      latestTimestamp: number;
+    }>();
+
+    for (const candidate of candidates) {
+      const provider = candidate.phaseTelemetry.provider.trim().toLowerCase();
+      if (!provider) {
+        continue;
+      }
+
+      const current = grouped.get(provider) ?? {
+        provider,
+        sampleSize: 0,
+        weightedTotal: 0,
+        weightTotal: 0,
+        sameWorldMatches: 0,
+        successCount: 0,
+        failureCount: 0,
+        latestTimestamp: 0,
+      };
+      const contribution = scoreCandidate(candidate);
+      current.sampleSize += 1;
+      current.weightedTotal += contribution * candidate.weight;
+      current.weightTotal += candidate.weight;
+      if (candidate.sameWorld) {
+        current.sameWorldMatches += 1;
+      }
+      if (isSuccessfulReplayPhase(candidate.phaseTelemetry)) {
+        current.successCount += 1;
+      } else if (isFailedReplayPhase(candidate.phaseTelemetry)) {
+        current.failureCount += 1;
+      }
+      current.latestTimestamp = Math.max(current.latestTimestamp, candidate.phaseTelemetry.timestamp, candidate.trajectory.createdAt);
+      grouped.set(provider, current);
+    }
+
+    return [...grouped.values()]
+      .map((entry): TrajectoryPhaseSignal => ({
+        provider: entry.provider,
+        phase: params.phase,
+        sampleSize: entry.sampleSize,
+        sameWorldMatches: entry.sameWorldMatches,
+        successCount: entry.successCount,
+        failureCount: entry.failureCount,
+        latestTimestamp: entry.latestTimestamp,
+        score: clamp(
+          (
+            (entry.weightTotal > 0 ? entry.weightedTotal / entry.weightTotal : NEUTRAL_SCORE) +
+            PRIOR_WEIGHT * NEUTRAL_SCORE
+          ) / (PRIOR_WEIGHT + 1),
+        ),
+      }))
+      .sort((left, right) => right.score - left.score || right.sameWorldMatches - left.sameWorldMatches || right.latestTimestamp - left.latestTimestamp);
+  }
+
+  getSignalForProvider(params: {
+    provider: string;
+    taskDescription: string;
+    phase: ExecutionPhase;
+    projectWorldFingerprint?: string;
+  }): TrajectoryPhaseSignal | null {
+    const normalizedProvider = params.provider.trim().toLowerCase();
+    if (!normalizedProvider) {
+      return null;
+    }
+    return this.getSignalsForTask(params).find((entry) => entry.provider === normalizedProvider) ?? null;
+  }
+
+  private collectCandidates(
+    trajectory: Trajectory,
+    normalizedTask: string,
+    phase: ExecutionPhase,
+    projectWorldFingerprint?: string,
+  ): ReplayPhaseCandidate[] {
+    const replayContext = trajectory.outcome.replayContext;
+    if (!replayContext?.phaseTelemetry?.length) {
+      return [];
+    }
+
+    const match = buildTrajectoryReplayMatch(
+      trajectory,
+      normalizedTask,
+      projectWorldFingerprint,
+      { recencyWindowDays: 45 },
+    );
+    if (!match) {
+      return [];
+    }
+
+    const weight =
+      match.taskSimilarity * 0.55 +
+      (match.sameWorld ? 0.25 : 0) +
+      match.recencyScore * 0.15 +
+      match.verifierBoost;
+
+    return replayContext.phaseTelemetry
+      .filter((entry) => entry.phase === phase)
+      .map((phaseTelemetry) => ({
+        phaseTelemetry,
+        trajectory,
+        weight,
+        sameWorld: match.sameWorld,
+      }));
+  }
+}
+
+function scoreCandidate(candidate: ReplayPhaseCandidate): number {
+  const statusScore = scoreReplayStatus(candidate.phaseTelemetry);
+  const sameWorldBonus = candidate.sameWorld ? 0.05 : 0;
+  return clamp(statusScore + sameWorldBonus);
+}
+
+function scoreReplayStatus(phaseTelemetry: TrajectoryPhaseReplay): number {
+  switch (phaseTelemetry.status) {
+    case "approved":
+      return phaseTelemetry.verifierDecision === "approve" ? 1 : 0.9;
+    case "continued":
+      return phaseTelemetry.verifierDecision === "continue" ? 0.7 : 0.62;
+    case "replanned":
+      return phaseTelemetry.verifierDecision === "replan" ? 0.2 : 0.25;
+    case "blocked":
+      return 0.12;
+    case "failed":
+      return 0;
+    default:
+      return 0.55;
+  }
+}
+
+function clamp(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function isSuccessfulReplayPhase(phaseTelemetry: TrajectoryPhaseReplay): boolean {
+  return phaseTelemetry.status === "approved" || phaseTelemetry.status === "continued";
+}
+
+function isFailedReplayPhase(phaseTelemetry: TrajectoryPhaseReplay): boolean {
+  return phaseTelemetry.status === "replanned"
+    || phaseTelemetry.status === "blocked"
+    || phaseTelemetry.status === "failed";
+}

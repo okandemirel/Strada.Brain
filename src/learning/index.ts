@@ -48,6 +48,7 @@ export type {
   InstinctStats,
   ContextCondition,
   Trajectory,
+  TrajectoryPhaseReplay,
   TrajectoryReplayContext,
   TrajectoryStep,
   TrajectoryStepResult,

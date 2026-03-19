@@ -83,12 +83,14 @@ describe("docs consistency", () => {
     expect(readRepoFile("README.md")).toContain("execution journal");
     expect(readRepoFile("README.md")).toContain("adaptive phase scores");
     expect(readRepoFile("README.md")).toContain("execution replay");
+    expect(readRepoFile("README.md")).toContain("phase/provider telemetry");
     expect(readRepoFile("README.md")).toContain("rollback pressure");
     expect(readRepoFile("README.md")).toContain("token cost");
     expect(readRepoFile("src/agents/README.md")).toContain("Clarification Review");
     expect(readRepoFile("src/agents/README.md")).toContain("Verifier Pipeline");
     expect(readRepoFile("src/agents/README.md")).toContain("Execution Journal");
     expect(readRepoFile("src/agents/README.md")).toContain("Execution Replay");
+    expect(readRepoFile("src/agents/README.md")).toContain("phase/provider telemetry");
     expect(readRepoFile("src/memory/README.md")).toContain("execution replay");
   });
 

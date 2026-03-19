@@ -93,13 +93,15 @@ import type { SoulLoader } from "./soul/index.js";
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/task-execution-store.js";
-import type { TrajectoryReplayContext } from "../learning/index.js";
+import type { TrajectoryPhaseReplay, TrajectoryReplayContext } from "../learning/index.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import type {
   TaskClassification,
+  ExecutionTrace,
   ExecutionPhase,
   ExecutionTraceSource,
+  PhaseOutcome,
   PhaseOutcomeStatus,
   PhaseOutcomeTelemetry,
   VerifierDecision,
@@ -773,6 +775,8 @@ export class Orchestrator {
     identityKey: string,
     fallbackName: string,
     fallbackProvider: IAIProvider,
+    taskDescription?: string,
+    projectWorldFingerprint?: string,
   ): SupervisorAssignment {
     if (!this.providerRouter) {
       return this.buildStaticSupervisorAssignment(
@@ -785,7 +789,11 @@ export class Orchestrator {
     }
 
     try {
-      const routed = this.providerRouter.resolve(task, phase, { identityKey });
+      const routed = this.providerRouter.resolve(task, phase, {
+        identityKey,
+        taskDescription,
+        projectWorldFingerprint,
+      });
       const resolved = this.getProviderByNameOrFallback(routed.provider, fallbackProvider);
       return this.buildStaticSupervisorAssignment(
         role,
@@ -811,6 +819,7 @@ export class Orchestrator {
     prompt: string,
     identityKey: string,
     fallbackProvider: IAIProvider,
+    projectWorldFingerprint?: string,
   ): SupervisorExecutionStrategy {
     const task = this.taskClassifier.classify(prompt);
     const activeInfo = this.providerManager.getActiveInfo?.(identityKey);
@@ -825,6 +834,8 @@ export class Orchestrator {
       identityKey,
       selectedProviderName,
       selectedProvider,
+      prompt,
+      projectWorldFingerprint,
     );
 
     const executor = this.buildStaticSupervisorAssignment(
@@ -844,6 +855,8 @@ export class Orchestrator {
       identityKey,
       planner.providerName,
       planner.provider,
+      prompt,
+      projectWorldFingerprint,
     );
     if (reviewer.providerName === executor.providerName && planner.providerName !== executor.providerName) {
       reviewer = this.buildStaticSupervisorAssignment(
@@ -862,6 +875,8 @@ export class Orchestrator {
       identityKey,
       reviewer.providerName,
       reviewer.provider,
+      prompt,
+      projectWorldFingerprint,
     );
     if (synthesizer.providerName === executor.providerName) {
       if (reviewer.providerName !== executor.providerName) {
@@ -1091,6 +1106,7 @@ export class Orchestrator {
   }
 
   private recordExecutionTrace(params: {
+    chatId?: string;
     identityKey: string;
     assignment: SupervisorAssignment;
     phase: ExecutionPhase;
@@ -1108,10 +1124,12 @@ export class Orchestrator {
       task: params.task,
       timestamp: Date.now(),
       identityKey: params.identityKey,
+      chatId: params.chatId,
     });
   }
 
   private recordPhaseOutcome(params: {
+    chatId?: string;
     identityKey: string;
     assignment: SupervisorAssignment;
     phase: ExecutionPhase;
@@ -1132,6 +1150,7 @@ export class Orchestrator {
       task: params.task,
       timestamp: Date.now(),
       identityKey: params.identityKey,
+      chatId: params.chatId,
       telemetry: params.telemetry,
     });
   }
@@ -1208,6 +1227,7 @@ export class Orchestrator {
   }
 
   private async synthesizeUserFacingResponse(params: {
+    chatId: string;
     identityKey: string;
     prompt: string;
     draft: string;
@@ -1260,6 +1280,7 @@ export class Orchestrator {
         [],
       );
       this.recordExecutionTrace({
+        chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: params.strategy.synthesizer,
         phase: "synthesis",
@@ -1272,6 +1293,7 @@ export class Orchestrator {
         params.usageHandler,
       );
       this.recordPhaseOutcome({
+        chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: params.strategy.synthesizer,
         phase: "synthesis",
@@ -1289,6 +1311,7 @@ export class Orchestrator {
       );
     } catch {
       this.recordPhaseOutcome({
+        chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: params.strategy.synthesizer,
         phase: "synthesis",
@@ -1360,6 +1383,7 @@ export class Orchestrator {
         [],
       );
       this.recordExecutionTrace({
+        chatId: params.chatId,
         identityKey,
         assignment: strategy.synthesizer,
         phase: "synthesis",
@@ -1372,6 +1396,7 @@ export class Orchestrator {
         params.onUsage,
       );
       this.recordPhaseOutcome({
+        chatId: params.chatId,
         identityKey,
         assignment: strategy.synthesizer,
         phase: "synthesis",
@@ -1389,6 +1414,7 @@ export class Orchestrator {
       );
     } catch {
       this.recordPhaseOutcome({
+        chatId: params.chatId,
         identityKey,
         assignment: strategy.synthesizer,
         phase: "synthesis",
@@ -1510,6 +1536,7 @@ export class Orchestrator {
         [],
       );
       this.recordExecutionTrace({
+        chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: reviewer,
         phase: "clarification-review",
@@ -1523,6 +1550,7 @@ export class Orchestrator {
       );
       const decision = sanitizeClarificationReviewDecision(parseClarificationReviewDecision(reviewResponse.text));
       this.recordPhaseOutcome({
+        chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: reviewer,
         phase: "clarification-review",
@@ -1548,6 +1576,7 @@ export class Orchestrator {
         error: error instanceof Error ? error.message : String(error),
       });
       this.recordPhaseOutcome({
+        chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: reviewer,
         phase: "clarification-review",
@@ -1923,7 +1952,7 @@ export class Orchestrator {
     const conversationScope = resolveConversationScope(chatId, options.conversationId);
     const identityKey = resolveIdentityKey(chatId, options.userId, options.conversationId);
     const fallbackProvider = this.providerManager.getProvider(identityKey);
-    const executionStrategy = this.buildSupervisorExecutionStrategy(prompt, identityKey, fallbackProvider);
+    let executionStrategy = this.buildSupervisorExecutionStrategy(prompt, identityKey, fallbackProvider);
 
     // ─── Metrics: start recording ────────────────────────────────────
     const taskType = options.parentMetricId ? "subtask" as const : "background" as const;
@@ -2001,6 +2030,12 @@ export class Orchestrator {
       preComputedEmbedding: bgEmbedding,
     });
     let systemPrompt = builtPrompt;
+    executionStrategy = this.buildSupervisorExecutionStrategy(
+      prompt,
+      identityKey,
+      fallbackProvider,
+      bgProjectWorldFingerprint,
+    );
 
     // ─── PAOR State Machine ──────────────────────────────────────────────
     let bgAgentState = createInitialState(prompt);
@@ -2094,6 +2129,7 @@ export class Orchestrator {
           this.toolDefinitions,
         );
         this.recordExecutionTrace({
+          chatId,
           identityKey,
           assignment: currentAssignment,
           phase: this.toExecutionPhase(bgAgentState.phase),
@@ -2189,6 +2225,7 @@ export class Orchestrator {
             );
             if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
               this.recordPhaseOutcome({
+                chatId,
                 identityKey,
                 assignment: currentAssignment,
                 phase: "reflecting",
@@ -2224,6 +2261,7 @@ export class Orchestrator {
                 modelId: executionStrategy.reviewer.modelId,
               });
               this.recordPhaseOutcome({
+                chatId,
                 identityKey,
                 assignment: currentAssignment,
                 phase: "reflecting",
@@ -2247,6 +2285,7 @@ export class Orchestrator {
             }
 
             const finalText = await this.synthesizeUserFacingResponse({
+              chatId,
               identityKey,
               prompt,
               draft: response.text ?? "",
@@ -2259,6 +2298,7 @@ export class Orchestrator {
               session.messages.push({ role: "assistant", content: finalText });
             }
             this.recordPhaseOutcome({
+              chatId,
               identityKey,
               assignment: currentAssignment,
               phase: "reflecting",
@@ -2299,6 +2339,7 @@ export class Orchestrator {
               session.messages.push({ role: "assistant", content: response.text });
             }
             this.recordPhaseOutcome({
+              chatId,
               identityKey,
               assignment: currentAssignment,
               phase: "reflecting",
@@ -2393,6 +2434,7 @@ export class Orchestrator {
           });
           if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
             this.recordPhaseOutcome({
+              chatId,
               identityKey,
               assignment: currentAssignment,
               phase: this.toExecutionPhase(bgAgentState.phase),
@@ -2414,6 +2456,7 @@ export class Orchestrator {
           }
           if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
             this.recordPhaseOutcome({
+              chatId,
               identityKey,
               assignment: currentAssignment,
               phase: this.toExecutionPhase(bgAgentState.phase),
@@ -2436,6 +2479,7 @@ export class Orchestrator {
           }
 
           const finalText = await this.synthesizeUserFacingResponse({
+            chatId,
             identityKey,
             prompt,
             draft: response.text ?? "",
@@ -2448,6 +2492,7 @@ export class Orchestrator {
             session.messages.push({ role: "assistant", content: finalText });
           }
           this.recordPhaseOutcome({
+            chatId,
             identityKey,
             assignment: currentAssignment,
             phase: this.toExecutionPhase(bgAgentState.phase),
@@ -2588,6 +2633,7 @@ export class Orchestrator {
                     prompt,
                   });
                   this.recordExecutionTrace({
+                    chatId,
                     identityKey,
                     assignment: bgReviewAssignment,
                     phase: "consensus-review",
@@ -2596,6 +2642,7 @@ export class Orchestrator {
                     reason: bgReviewAssignment.reason,
                   });
                   this.recordPhaseOutcome({
+                    chatId,
                     identityKey,
                     assignment: bgReviewAssignment,
                     phase: "consensus-review",
@@ -3041,7 +3088,12 @@ export class Orchestrator {
     // ─── PAOR State Machine ──────────────────────────────────────────────
     stradaConformance.trackPrompt(lastUserMessage);
     let agentState = createInitialState(lastUserMessage);
-    const executionStrategy = this.buildSupervisorExecutionStrategy(lastUserMessage, identityKey, fallbackProvider);
+    const executionStrategy = this.buildSupervisorExecutionStrategy(
+      lastUserMessage,
+      identityKey,
+      fallbackProvider,
+      projectWorldFingerprint,
+    );
     let toolTurnAffinity: SupervisorAssignment | null = null;
 
     let matchedInstinctIds: string[] = [];
@@ -3121,6 +3173,7 @@ export class Orchestrator {
         response = await currentProvider.chat(activePrompt, session.messages, this.toolDefinitions);
       }
       this.recordExecutionTrace({
+        chatId,
         identityKey,
         assignment: currentAssignment,
         phase: this.toExecutionPhase(agentState.phase),
@@ -3214,6 +3267,7 @@ export class Orchestrator {
           );
           if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
             this.recordPhaseOutcome({
+              chatId,
               identityKey,
               assignment: currentAssignment,
               phase: "reflecting",
@@ -3248,6 +3302,7 @@ export class Orchestrator {
               modelId: executionStrategy.reviewer.modelId,
             });
             this.recordPhaseOutcome({
+              chatId,
               identityKey,
               assignment: currentAssignment,
               phase: "reflecting",
@@ -3270,6 +3325,7 @@ export class Orchestrator {
           }
 
           const finalText = await this.synthesizeUserFacingResponse({
+            chatId,
             identityKey,
             prompt: lastUserMessage,
             draft: response.text ?? "",
@@ -3283,6 +3339,7 @@ export class Orchestrator {
             await this.channel.sendMarkdown(chatId, finalText);
           }
           this.recordPhaseOutcome({
+            chatId,
             identityKey,
             assignment: currentAssignment,
             phase: "reflecting",
@@ -3361,6 +3418,7 @@ export class Orchestrator {
             session.messages.push({ role: "assistant", content: response.text });
           }
           this.recordPhaseOutcome({
+            chatId,
             identityKey,
             assignment: currentAssignment,
             phase: "reflecting",
@@ -3500,6 +3558,7 @@ export class Orchestrator {
         });
         if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
           this.recordPhaseOutcome({
+            chatId,
             identityKey,
             assignment: currentAssignment,
             phase: this.toExecutionPhase(agentState.phase),
@@ -3525,6 +3584,7 @@ export class Orchestrator {
         }
         if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
           this.recordPhaseOutcome({
+            chatId,
             identityKey,
             assignment: currentAssignment,
             phase: this.toExecutionPhase(agentState.phase),
@@ -3581,17 +3641,19 @@ export class Orchestrator {
                       reviewProvider: textReviewAssignment.provider,
                       prompt: lastUserMessage,
                     });
-                    this.recordExecutionTrace({
-                      identityKey,
-                      assignment: textReviewAssignment,
+                  this.recordExecutionTrace({
+                    chatId,
+                    identityKey,
+                    assignment: textReviewAssignment,
                       phase: "consensus-review",
                       source: "consensus-review",
                       task: textTaskClass,
                       reason: textReviewAssignment.reason,
                     });
-                    this.recordPhaseOutcome({
-                      identityKey,
-                      assignment: textReviewAssignment,
+                  this.recordPhaseOutcome({
+                    chatId,
+                    identityKey,
+                    assignment: textReviewAssignment,
                       phase: "consensus-review",
                       source: "consensus-review",
                       status: textConsensus.agreed ? "approved" : "continued",
@@ -3619,6 +3681,7 @@ export class Orchestrator {
 
         if (response.text) {
           const finalText = await this.synthesizeUserFacingResponse({
+            chatId,
             identityKey,
             prompt: lastUserMessage,
             draft: response.text,
@@ -3635,6 +3698,7 @@ export class Orchestrator {
             await this.channel.sendMarkdown(chatId, finalText);
           }
         this.recordPhaseOutcome({
+          chatId,
           identityKey,
           assignment: currentAssignment,
           phase: this.toExecutionPhase(agentState.phase),
@@ -3816,6 +3880,7 @@ export class Orchestrator {
                   prompt: lastUserMessage,
                 });
                 this.recordExecutionTrace({
+                  chatId,
                   identityKey,
                   assignment: reviewAssignment,
                   phase: "consensus-review",
@@ -3824,6 +3889,7 @@ export class Orchestrator {
                   reason: reviewAssignment.reason,
                 });
                 this.recordPhaseOutcome({
+                  chatId,
                   identityKey,
                   assignment: reviewAssignment,
                   phase: "consensus-review",
@@ -4512,6 +4578,7 @@ export class Orchestrator {
         [],
       );
       this.recordExecutionTrace({
+        chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: reviewer,
         phase: "completion-review",
@@ -4528,6 +4595,7 @@ export class Orchestrator {
         parseCompletionReviewDecision(reviewResponse.text),
       );
       this.recordPhaseOutcome({
+        chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: reviewer,
         phase: "completion-review",
@@ -4554,6 +4622,7 @@ export class Orchestrator {
         error: error instanceof Error ? error.message : String(error),
       });
       this.recordPhaseOutcome({
+        chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: reviewer,
         phase: "completion-review",
@@ -4631,6 +4700,7 @@ export class Orchestrator {
         [],
       );
       this.recordExecutionTrace({
+        chatId,
         identityKey,
         assignment: reviewAssignment,
         phase: "shell-review",
@@ -4643,6 +4713,7 @@ export class Orchestrator {
 
       if (decision?.decision === "approve" && decision.taskAligned !== false && decision.bounded !== false) {
         this.recordPhaseOutcome({
+          chatId,
           identityKey,
           assignment: reviewAssignment,
           phase: "shell-review",
@@ -4659,6 +4730,7 @@ export class Orchestrator {
 
       if (decision?.decision === "reject" || decision?.taskAligned === false || decision?.bounded === false) {
         this.recordPhaseOutcome({
+          chatId,
           identityKey,
           assignment: reviewAssignment,
           phase: "shell-review",
@@ -4675,6 +4747,7 @@ export class Orchestrator {
       }
     } catch {
       this.recordPhaseOutcome({
+        chatId,
         identityKey,
         assignment: reviewAssignment,
         phase: "shell-review",
@@ -5414,6 +5487,76 @@ export class Orchestrator {
     }
   }
 
+  private buildTrajectoryPhaseReplayTelemetry(
+    chatId: string,
+    identityKey: string,
+    sinceTimestamp?: number,
+  ): TrajectoryPhaseReplay[] {
+    if (!this.providerRouter) {
+      return [];
+    }
+
+    const traces = (this.providerRouter.getRecentExecutionTraces?.(100, identityKey) ?? [])
+      .filter((trace) => trace.chatId === chatId)
+      .filter((trace) => sinceTimestamp === undefined || trace.timestamp >= sinceTimestamp);
+    const outcomes = (this.providerRouter.getRecentPhaseOutcomes?.(100, identityKey) ?? [])
+      .filter((outcome) => outcome.chatId === chatId)
+      .filter((outcome) => sinceTimestamp === undefined || outcome.timestamp >= sinceTimestamp);
+    if (traces.length === 0 && outcomes.length === 0) {
+      return [];
+    }
+
+    const keyed = new Map<string, TrajectoryPhaseReplay>();
+    const makeKey = (event: ExecutionTrace | PhaseOutcome) =>
+      [event.phase, event.role, event.provider, event.model ?? "", event.source].join(":");
+
+    for (const trace of traces) {
+      const key = makeKey(trace);
+      const existing = keyed.get(key);
+      if (existing && existing.timestamp > trace.timestamp) {
+        continue;
+      }
+      keyed.set(key, this.toTrajectoryPhaseReplay(trace));
+    }
+
+    for (const outcome of outcomes) {
+      const key = makeKey(outcome);
+      const existing = keyed.get(key);
+      if (!existing || outcome.timestamp >= existing.timestamp) {
+        keyed.set(key, this.toTrajectoryPhaseReplay(outcome));
+        continue;
+      }
+      keyed.set(key, {
+        ...existing,
+        status: outcome.status,
+        verifierDecision: outcome.telemetry?.verifierDecision,
+        retryCount: outcome.telemetry?.retryCount,
+        rollbackDepth: outcome.telemetry?.rollbackDepth,
+      });
+    }
+
+    return [...keyed.values()]
+      .sort((left, right) => left.timestamp - right.timestamp)
+      .slice(-12);
+  }
+
+  private toTrajectoryPhaseReplay(
+    event: ExecutionTrace | PhaseOutcome,
+  ): TrajectoryPhaseReplay {
+    return {
+      phase: event.phase,
+      role: event.role,
+      provider: event.provider,
+      model: event.model,
+      source: event.source,
+      status: "status" in event ? event.status : undefined,
+      verifierDecision: "telemetry" in event ? event.telemetry?.verifierDecision : undefined,
+      retryCount: "telemetry" in event ? event.telemetry?.retryCount : undefined,
+      rollbackDepth: "telemetry" in event ? event.telemetry?.rollbackDepth : undefined,
+      timestamp: event.timestamp,
+    };
+  }
+
   private emitToolResult(chatId: string, tc: { name: string; input: unknown }, tr: { content: string; isError?: boolean }): void {
     if (!this.eventEmitter) return;
     this.eventEmitter.emit("tool:result", {
@@ -5432,6 +5575,7 @@ export class Orchestrator {
     chatId: string;
     userId?: string;
     conversationId?: string;
+    sinceTimestamp?: number;
   }): Promise<TrajectoryReplayContext | null> {
     const identityKey = resolveIdentityKey(
       params.chatId,
@@ -5440,6 +5584,11 @@ export class Orchestrator {
     );
     const taskExecutionMemory = this.taskExecutionStore?.getMemory(identityKey) ?? null;
     const projectWorldLayer = await this.buildProjectWorldMemoryLayer();
+    const phaseTelemetry = this.buildTrajectoryPhaseReplayTelemetry(
+      params.chatId,
+      identityKey,
+      params.sinceTimestamp,
+    );
 
     const learnedInsights = (taskExecutionMemory?.learnedInsights ?? []).slice(0, 4);
     if (
@@ -5447,6 +5596,7 @@ export class Orchestrator {
       && !taskExecutionMemory?.branchSummary
       && !taskExecutionMemory?.verifierSummary
       && learnedInsights.length === 0
+      && phaseTelemetry.length === 0
     ) {
       return null;
     }
@@ -5457,6 +5607,7 @@ export class Orchestrator {
       branchSummary: taskExecutionMemory?.branchSummary,
       verifierSummary: taskExecutionMemory?.verifierSummary,
       learnedInsights,
+      phaseTelemetry,
     };
   }
 

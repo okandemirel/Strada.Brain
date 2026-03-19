@@ -91,6 +91,16 @@ describe("TaskPlanner", () => {
         branchSummary: "stable checkpoint: inspected Level_031",
         verifierSummary: "runtime replay still required",
         learnedInsights: ["Avoid trusting serialized YAML alone."],
+        phaseTelemetry: [{
+          phase: "planning",
+          role: "planner",
+          provider: "kimi",
+          model: "kimi-k2",
+          source: "supervisor-strategy",
+          status: "approved",
+          verifierDecision: "approve",
+          timestamp: Date.now(),
+        }],
       });
 
       planner.endTask({
@@ -104,6 +114,13 @@ describe("TaskPlanner", () => {
       expect(trajectory?.outcome.replayContext?.branchSummary).toContain("Level_031");
       expect(trajectory?.outcome.replayContext?.learnedInsights).toEqual([
         "Avoid trusting serialized YAML alone.",
+      ]);
+      expect(trajectory?.outcome.replayContext?.phaseTelemetry).toEqual([
+        expect.objectContaining({
+          phase: "planning",
+          provider: "kimi",
+          status: "approved",
+        }),
       ]);
 
       storage.close();
