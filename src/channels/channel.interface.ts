@@ -6,6 +6,7 @@
  */
 
 import type { IChannelCore, IChannelReceiver, IChannelSender } from "./channel-core.interface.js";
+import type { PostSetupBootstrapContext } from "../common/setup-contract.js";
 
 /**
  * Common interface for all messaging channel adapters.
@@ -17,6 +18,7 @@ import type { IChannelCore, IChannelReceiver, IChannelSender } from "./channel-c
  * - supportsInteractivity(channel) - for confirmation dialogs
  */
 export interface IChannelAdapter extends IChannelCore, IChannelReceiver, IChannelSender {
+  setPostSetupBootstrapHandler?(handler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null): void;
   // Core features are required
   // Optional features use type guards
 }

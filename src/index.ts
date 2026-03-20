@@ -395,6 +395,8 @@ async function startApp(
       });
     }
 
+    const postSetupBootstrap = activeWizard?.getPendingPostSetupBootstrap();
+
     // Bootstrap the application
     const effectiveDaemonMode = shouldEnableDaemonMode(channelType, daemonMode);
     const app = await bootstrap({
@@ -402,6 +404,7 @@ async function startApp(
       config,
       container,
       daemonMode: effectiveDaemonMode,
+      postSetupBootstrap,
       beforeChannelConnect: activeWizard
         ? async () => {
           await activeWizard?.shutdown();

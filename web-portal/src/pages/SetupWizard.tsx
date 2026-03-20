@@ -54,8 +54,10 @@ export default function SetupWizard() {
             toggleProvider={wiz.toggleProvider}
             providerKeys={wiz.providerKeys}
             providerAuthModes={wiz.providerAuthModes}
+            providerModels={wiz.providerModels}
             setProviderKey={wiz.setProviderKey}
             setProviderAuthMode={wiz.setProviderAuthMode}
+            setProviderModel={wiz.setProviderModel}
             onNext={wiz.nextStep}
             onBack={wiz.prevStep}
           />
@@ -109,6 +111,7 @@ export default function SetupWizard() {
             checkedProviders={wiz.checkedProviders}
             providerKeys={wiz.providerKeys}
             providerAuthModes={wiz.providerAuthModes}
+            providerModels={wiz.providerModels}
             projectPath={wiz.projectPath}
             channel={wiz.channel}
             language={wiz.language}

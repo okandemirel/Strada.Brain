@@ -34,6 +34,8 @@ import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
+import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
+import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/setup-contract.js";
 import { AgentPhase, createInitialState, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
 import { buildPlanningPrompt, buildReflectionPrompt, buildReplanningPrompt, buildExecutionContext } from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
@@ -192,6 +194,7 @@ interface Session {
   conversationScope?: string;
   profileKey?: string;
   mixedParticipants?: boolean;
+  postSetupBootstrapDelivered?: boolean;
 }
 
 interface WorkerToolMetadata {
@@ -297,18 +300,6 @@ function createStreamingProgressTimeout(initialTimeoutMs: number, stallTimeoutMs
     },
   };
 }
-
-const FIRST_TIME_USER_PROMPT = `\n\n## First-Time User
-This is a new user you haven't met before.
-
-Onboarding rules:
-1. If the user asked for concrete technical help, start solving it immediately.
-2. Do not turn onboarding into a checklist, intake form, or option menu.
-3. At most, ask one short natural follow-up about what to call them after you have already made concrete progress or given the first actionable answer.
-4. Do not ask about communication style or explanation detail in the same first technical reply unless the user explicitly asks about preferences.
-5. Start with the language from the Language Rule above, but if the user writes in a different language, match their language.
-
-Remember the user's name after they tell you. Keep onboarding minimal and non-blocking.\n`;
 
 /** Default prompt when user sends an image with no text. */
 const DEFAULT_IMAGE_PROMPT = "What is in this image?";
@@ -1954,7 +1945,6 @@ export class Orchestrator {
     channelType?: string;
     prompt: string;
     personaContent?: string;
-    allowFirstTimeOnboarding: boolean;
     profile: { displayName?: string; language: string; activePersona: string; preferences: unknown; contextSummary?: string } | null;
     preComputedEmbedding?: number[];
   }): Promise<{
@@ -1993,12 +1983,7 @@ export class Orchestrator {
     systemPrompt += contextLayers;
     const initialContentHashes: string[] = [...contentHashes];
 
-    // 5. First-time user prompt (only for direct user tasks without a known profile)
-    if (params.allowFirstTimeOnboarding && (!params.profile || !params.profile.displayName)) {
-      systemPrompt += FIRST_TIME_USER_PROMPT;
-    }
-
-    // 6. RAG injection
+    // 5. RAG injection
     if (this.ragPipeline && params.prompt) {
       try {
         const ragResults = await this.ragPipeline.search(params.prompt, {
@@ -2036,6 +2021,40 @@ export class Orchestrator {
       });
     }
     return result;
+  }
+
+  async deliverPostSetupBootstrap(
+    context: PostSetupBootstrapContext,
+    bootstrap: PostSetupBootstrap,
+  ): Promise<void> {
+    const session = this.getOrCreateSession(context.chatId);
+    if (session.postSetupBootstrapDelivered) {
+      return;
+    }
+
+    session.postSetupBootstrapDelivered = true;
+    session.lastActivity = new Date();
+    session.profileKey ??= context.profileId;
+    session.conversationScope ??= context.profileId;
+    session.mixedParticipants = false;
+
+    await this.sendVisibleAssistantText(
+      context.chatId,
+      session,
+      buildPostSetupWelcomeMessage(bootstrap.language),
+    );
+
+    if (bootstrap.autonomy?.enabled) {
+      const expiresAt = typeof bootstrap.autonomy.hours === "number"
+        ? Date.now() + (bootstrap.autonomy.hours * 3600_000)
+        : undefined;
+
+      await this.userProfileStore?.setAutonomousMode(context.profileId, true, expiresAt);
+      this.dmPolicy?.initFromProfile(context.chatId, {
+        autonomousMode: true,
+        ...(expiresAt ? { autonomousExpiresAt: expiresAt } : {}),
+      }, context.profileId);
+    }
   }
 
   /**
@@ -2196,7 +2215,6 @@ export class Orchestrator {
       identityKey,
       channelType: options.channelType,
       prompt,
-      allowFirstTimeOnboarding: false,
       profile,
       preComputedEmbedding: bgEmbedding,
     });
@@ -3407,7 +3425,6 @@ export class Orchestrator {
       channelType,
       prompt: queryText,
       personaContent,
-      allowFirstTimeOnboarding: true,
       profile,
       preComputedEmbedding,
     });

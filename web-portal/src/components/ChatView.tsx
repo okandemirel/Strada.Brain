@@ -5,7 +5,7 @@ import ChatInput from './ChatInput'
 import ConfirmDialog from './ConfirmDialog'
 import TypingIndicator from './TypingIndicator'
 import EmptyState from './EmptyState'
-import ModelSelector from './ModelSelector'
+import PrimaryWorkerSelector from './PrimaryWorkerSelector'
 
 export default function ChatView() {
   const { messages, status, confirmation, isTyping, sendMessage, sendConfirmation } = useWS()
@@ -39,7 +39,7 @@ export default function ChatView() {
   return (
     <div className="chat-area">
       <div className="chat-toolbar">
-        <ModelSelector />
+        <PrimaryWorkerSelector />
       </div>
       <div className="messages" ref={messagesContainerRef}>
         {messages.length === 0 && !isTyping ? (

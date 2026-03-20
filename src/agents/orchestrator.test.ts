@@ -992,10 +992,74 @@ describe("Orchestrator", () => {
     await promise;
 
     const firstPrompt = String(mockProvider.chat.mock.calls[0]?.[0] ?? "");
-    expect(firstPrompt).toContain("start solving it immediately");
-    expect(firstPrompt).toContain("At most, ask one short natural follow-up");
+    expect(firstPrompt).not.toContain("## First-Time User");
     expect(firstPrompt).not.toContain("Ask about their preferred communication style");
     expect(firstPrompt).not.toContain("Ask how detailed they want explanations");
+  });
+
+  it("sends a visible post-setup welcome and still learns profile preferences from the next technical reply", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const dmPolicy = new DMPolicy(mockChannel as any);
+    const bootstrapOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+      dmPolicy,
+    });
+
+    await bootstrapOrch.deliverPostSetupBootstrap(
+      { chatId: "chat-post-setup", profileId: "stable-web-user" },
+      {
+        language: "tr",
+        autonomy: { enabled: true, hours: 24 },
+      },
+    );
+
+    const bootstrapSession = (bootstrapOrch as any).getOrCreateSession("chat-post-setup");
+    expect(mockChannel.sendText).toHaveBeenCalledWith(
+      "chat-post-setup",
+      expect.stringContaining("Merhaba"),
+    );
+    expect(
+      ((bootstrapSession.visibleMessages ?? []) as Array<{ role: string }>).filter((message) => message.role === "assistant"),
+    ).toHaveLength(1);
+    expect(
+      ((bootstrapSession.visibleMessages ?? []) as Array<{ role: string }>).filter((message) => message.role === "user"),
+    ).toHaveLength(0);
+
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Crash pathini inceliyorum.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+
+    const promise = bootstrapOrch.handleMessage({
+      channelType: "web",
+      chatId: "chat-post-setup",
+      conversationId: "stable-web-user",
+      userId: "stable-web-user",
+      text: "Bana Okan de ve kısa cevap ver. Unity import crash'ini analiz et.",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const profile = userProfileStore.getProfile("stable-web-user");
+    expect(profile?.displayName).toBe("Okan");
+    expect(profile?.preferences.verbosity).toBe("brief");
+    expect(dmPolicy.isAutonomousActive("chat-post-setup", "stable-web-user")).toBe(true);
+    expect(mockProvider.chat).toHaveBeenCalled();
+    db.close();
   });
 
   it("injects task execution memory separately from user profile memory", async () => {

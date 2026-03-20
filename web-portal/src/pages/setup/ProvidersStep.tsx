@@ -1,4 +1,9 @@
-import { PRESETS, PROVIDERS } from '../../types/setup-constants'
+import {
+  PRESETS,
+  PROVIDERS,
+  getDefaultProviderModel,
+  getProviderModelOptions,
+} from '../../types/setup-constants'
 
 interface ProvidersStepProps {
   selectedPreset: string | null
@@ -7,8 +12,10 @@ interface ProvidersStepProps {
   toggleProvider: (id: string) => void
   providerKeys: Record<string, string>
   providerAuthModes: Record<string, string>
+  providerModels: Record<string, string>
   setProviderKey: (id: string, key: string) => void
   setProviderAuthMode: (id: string, mode: string) => void
+  setProviderModel: (id: string, model: string) => void
   onNext: () => void
   onBack: () => void
 }
@@ -77,14 +84,14 @@ export default function ProvidersStep({
   toggleProvider,
   providerKeys,
   providerAuthModes,
+  providerModels,
   setProviderKey,
   setProviderAuthMode,
+  setProviderModel,
   onNext,
   onBack,
 }: ProvidersStepProps) {
-  const providerSettingsProviders = PROVIDERS.filter(
-    (p) => checkedProviders.has(p.id) && (p.envKey !== null || (p.authModes?.length ?? 0) > 0),
-  )
+  const providerSettingsProviders = PROVIDERS.filter((p) => checkedProviders.has(p.id))
 
   return (
     <div className="step">
@@ -105,69 +112,113 @@ export default function ProvidersStep({
         <div className="provider-keys">
           <h3 className="section-label">Provider Access</h3>
           {providerSettingsProviders.map((provider) => {
+            const modelOptions = getProviderModelOptions(provider.id)
             const selectedAuthMode = providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id ?? 'api-key'
-            const requiresSecret = provider.id !== 'openai' || selectedAuthMode !== 'chatgpt-subscription'
+            const usingOpenAISubscription = provider.id === 'openai' && selectedAuthMode === 'chatgpt-subscription'
+            const showsCredentialField = provider.envKey !== null && !usingOpenAISubscription
+            const selectedModel = providerModels[provider.id] ?? getDefaultProviderModel(provider.id) ?? ''
+
             return (
-            <div key={provider.id} className="provider-key-field">
-              {provider.authModes && provider.authModes.length > 1 && (
-                <div className="provider-auth-modes" style={{ marginBottom: '0.7rem' }}>
-                  {provider.authModes.map((mode) => (
-                    <label key={mode.id} className="provider-option" style={{ display: 'block', marginBottom: '0.45rem' }}>
-                      <input
-                        type="radio"
-                        name={`auth-mode-${provider.id}`}
-                        checked={(providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id) === mode.id}
-                        onChange={() => setProviderAuthMode(provider.id, mode.id)}
-                      />
-                      <div className="provider-card">
-                        <span className="provider-name">{mode.label}</span>
-                        <span className="provider-desc" style={{ fontSize: '0.9rem', opacity: 0.8 }}>{mode.description}</span>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              )}
-              {requiresSecret && (
-                <>
-                  <label htmlFor={`key-${provider.id}`}>
-                    {provider.authModes?.find((mode) => mode.id === selectedAuthMode)?.secretLabel ?? provider.name}
-                    {provider.helpUrl && (
-                      <a
-                        href={provider.helpUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="key-help-link"
+              <div key={provider.id} className="provider-key-field">
+                {provider.authModes && provider.authModes.length > 1 && (
+                  <div className="provider-auth-modes" style={{ marginBottom: '0.7rem' }}>
+                    {provider.authModes.map((mode) => (
+                      <label
+                        key={mode.id}
+                        className="provider-option"
+                        style={{ display: 'block', marginBottom: '0.45rem' }}
                       >
-                        Get key
-                      </a>
-                    )}
-                  </label>
-                  <input
-                    id={`key-${provider.id}`}
-                    type="password"
-                    placeholder={
-                      provider.authModes?.find((mode) => mode.id === selectedAuthMode)?.secretPlaceholder
-                      ?? provider.placeholder
-                      ?? ''
-                    }
-                    value={providerKeys[provider.id] ?? ''}
-                    onChange={(e) => setProviderKey(provider.id, e.target.value)}
-                    autoComplete="off"
-                  />
-                </>
-              )}
-              {!requiresSecret && (
-                <>
-                  <p className="step-subtitle" style={{ marginTop: '0.25rem' }}>
-                    Strada will use the local Codex/ChatGPT subscription session available on this machine for OpenAI conversation turns.
-                  </p>
-                  <p className="step-subtitle warning" style={{ marginTop: '0.35rem' }}>
-                    This does not grant OpenAI API or embedding quota. If you later choose OpenAI for embeddings, you still need an OpenAI API key.
-                  </p>
-                </>
-              )}
-            </div>
-          )})}
+                        <input
+                          type="radio"
+                          name={`auth-mode-${provider.id}`}
+                          checked={(providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id) === mode.id}
+                          onChange={() => setProviderAuthMode(provider.id, mode.id)}
+                        />
+                        <div className="provider-card">
+                          <span className="provider-name">{mode.label}</span>
+                          <span className="provider-desc" style={{ fontSize: '0.9rem', opacity: 0.8 }}>
+                            {mode.description}
+                          </span>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                <div className="provider-model-field" style={{ marginTop: '0.8rem' }}>
+                  <label htmlFor={`model-${provider.id}`}>Model</label>
+                  {modelOptions.length > 0 ? (
+                    <select
+                      id={`model-${provider.id}`}
+                      value={selectedModel}
+                      onChange={(e) => setProviderModel(provider.id, e.target.value)}
+                    >
+                      {modelOptions.map((option) => (
+                        <option key={option.model} value={option.model}>
+                          {option.label} · {option.model}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id={`model-${provider.id}`}
+                      type="text"
+                      value={selectedModel}
+                      placeholder={getDefaultProviderModel(provider.id) ?? 'Enter model id'}
+                      onChange={(e) => setProviderModel(provider.id, e.target.value)}
+                      autoComplete="off"
+                    />
+                  )}
+                  {selectedModel && (
+                    <p className="step-subtitle" style={{ marginTop: '0.35rem' }}>
+                      {selectedModel}
+                    </p>
+                  )}
+                </div>
+
+                {showsCredentialField && (
+                  <>
+                    <label htmlFor={`key-${provider.id}`}>
+                      {provider.authModes?.find((mode) => mode.id === selectedAuthMode)?.secretLabel ?? provider.name}
+                      {provider.helpUrl && (
+                        <a
+                          href={provider.helpUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="key-help-link"
+                        >
+                          Get key
+                        </a>
+                      )}
+                    </label>
+                    <input
+                      id={`key-${provider.id}`}
+                      type="password"
+                      placeholder={
+                        provider.authModes?.find((mode) => mode.id === selectedAuthMode)?.secretPlaceholder
+                        ?? provider.placeholder
+                        ?? ''
+                      }
+                      value={providerKeys[provider.id] ?? ''}
+                      onChange={(e) => setProviderKey(provider.id, e.target.value)}
+                      autoComplete="off"
+                    />
+                  </>
+                )}
+
+                {usingOpenAISubscription && (
+                  <>
+                    <p className="step-subtitle" style={{ marginTop: '0.25rem' }}>
+                      Strada will use the local Codex/ChatGPT subscription session available on this machine for OpenAI conversation turns.
+                    </p>
+                    <p className="step-subtitle warning" style={{ marginTop: '0.35rem' }}>
+                      This does not grant OpenAI API or embedding quota. If you later choose OpenAI for embeddings, you still need an OpenAI API key.
+                    </p>
+                  </>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 

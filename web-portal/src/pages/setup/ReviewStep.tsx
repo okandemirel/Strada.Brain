@@ -7,6 +7,7 @@ interface ReviewStepProps {
   checkedProviders: Set<string>
   providerKeys: Record<string, string>
   providerAuthModes: Record<string, string>
+  providerModels: Record<string, string>
   projectPath: string
   channel: string
   language: string
@@ -38,6 +39,7 @@ export default function ReviewStep({
   checkedProviders,
   providerKeys,
   providerAuthModes,
+  providerModels,
   projectPath,
   channel,
   language,
@@ -60,7 +62,11 @@ export default function ReviewStep({
 }: ReviewStepProps) {
   const preset = PRESETS.find((p) => p.id === selectedPreset)
   const providerChain = Array.from(checkedProviders)
-    .map((id) => PROVIDER_MAP[id]?.name ?? id)
+    .map((id) => {
+      const providerName = PROVIDER_MAP[id]?.name ?? id
+      const model = providerModels[id]?.trim()
+      return model ? `${providerName} / ${model}` : providerName
+    })
     .join(', ')
 
   const autoDetectedEmbeddingProviderId = Array.from(checkedProviders).find((id) =>
@@ -140,6 +146,18 @@ export default function ReviewStep({
           <span className="review-value">{providerChain || 'None selected'}</span>
         </div>
 
+        {Array.from(checkedProviders).map((id) => {
+          const provider = PROVIDER_MAP[id]
+          if (!provider) return null
+          const model = providerModels[id]?.trim()
+          return (
+            <div key={`${id}-model`} className="review-item">
+              <span className="review-label">{provider.name} Model</span>
+              <span className="review-value mono">{model || 'Default'}</span>
+            </div>
+          )
+        })}
+
         {checkedProviders.has('openai') && (
           <div className="review-item">
             <span className="review-label">OpenAI Auth</span>
@@ -188,17 +206,17 @@ export default function ReviewStep({
           </div>
         )}
 
-      {ragEnabled && !hasEmbeddingProvider && (
-        <div className="save-message error" style={{ marginTop: 0 }}>
-          RAG needs a real embedding-capable provider. Add Gemini, OpenAI API key, Mistral, Together, Fireworks, Qwen, or Ollama before saving.
-        </div>
-      )}
+        {ragEnabled && !hasEmbeddingProvider && (
+          <div className="save-message error" style={{ marginTop: 0 }}>
+            RAG needs a real embedding-capable provider. Add Gemini, OpenAI API key, Mistral, Together, Fireworks, Qwen, or Ollama before saving.
+          </div>
+        )}
 
-      {!canSave && saveBlockingReason && (
-        <div className="save-message error" style={{ marginTop: ragEnabled && !hasEmbeddingProvider ? '0.75rem' : 0 }}>
-          {saveBlockingReason}
-        </div>
-      )}
+        {!canSave && saveBlockingReason && (
+          <div className="save-message error" style={{ marginTop: ragEnabled && !hasEmbeddingProvider ? '0.75rem' : 0 }}>
+            {saveBlockingReason}
+          </div>
+        )}
 
         <div className="review-item">
           <span className="review-label">Language</span>

@@ -3,6 +3,7 @@ import { useWS } from '../hooks/useWS'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import { fetchJson, settledValue } from '../utils/api'
 import { resolveSettingsIdentity, shouldRefetchIdentityScopedSettings } from './settings-identity'
+import PrimaryWorkerSelector from '../components/PrimaryWorkerSelector'
 import type { BootReport } from '../../../src/common/capability-contract.ts'
 
 // ---------------------------------------------------------------------------
@@ -214,7 +215,7 @@ function formatDecisionTime(timestamp: number): string {
 // ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
-  const { switchProvider, toggleAutonomous, sessionId, profileId } = useWS()
+  const { toggleAutonomous, sessionId, profileId } = useWS()
   const settingsIdentity = resolveSettingsIdentity(sessionId, profileId)
   const identityQuery = settingsIdentity?.query ?? null
   const identityQueryRef = useRef<string | null>(identityQuery)
@@ -226,11 +227,9 @@ export default function SettingsPage() {
   const [autoDuration, setAutoDuration] = useState(24)
 
   // --- Model Selection ---
-  const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [activeProvider, setActiveProvider] = useState<ActiveProvider | null>(null)
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus | null>(null)
   const [modelLoading, setModelLoading] = useState(true)
-  const [switching, setSwitching] = useState(false)
 
   // --- Daemon Mode ---
   const [daemonStatus, setDaemonStatus] = useState<DaemonStatus | null>(null)
@@ -273,15 +272,12 @@ export default function SettingsPage() {
   const fetchProviders = useCallback(() => {
     if (!identityQuery) return Promise.resolve()
     Promise.allSettled([
-      fetchJson<{ providers: ProviderInfo[] }>('/api/providers/available'),
       fetchJson<{ active: ActiveProvider | null; executionPool?: ProviderInfo[] | null }>(`/api/providers/active?${identityQuery}`),
       fetchJson<{ status: EmbeddingStatus }>('/api/rag/status'),
     ]).then((results) => {
-      const [availResult, activeResult, embeddingResult] = results
-      const availData = settledValue(availResult)
+      const [activeResult, embeddingResult] = results
       const activeData = settledValue(activeResult)
       const embeddingData = settledValue(embeddingResult)
-      if (availData?.providers) setProviders(availData.providers)
       if (activeData?.active) {
         setActiveProvider({
           ...activeData.active,
@@ -290,9 +286,6 @@ export default function SettingsPage() {
       }
       if (embeddingData?.status) setEmbeddingStatus(embeddingData.status)
       setModelLoading(false)
-      if (!availData && !activeData && !embeddingData) {
-        setProviders([])
-      }
     }).catch(() => {
       setModelLoading(false)
     })
@@ -447,34 +440,6 @@ export default function SettingsPage() {
       setDaemonToggling(false)
     }
   }, [daemonToggling, daemonStatus, fetchDaemon])
-
-  const handleProviderSwitch = useCallback((providerName: string) => {
-    if (switching) return
-    setSwitching(true)
-
-    const sent = switchProvider(providerName)
-    if (!sent) {
-      setSwitching(false)
-      return
-    }
-
-    // Optimistically update active display
-    const matched = providers.find((p) => p.name === providerName)
-    if (matched) {
-      setActiveProvider({
-        providerName: matched.name,
-        model: matched.defaultModel,
-        isDefault: false,
-        selectionMode: 'strada-primary-worker',
-        executionPolicyNote: activeProvider?.executionPolicyNote,
-      })
-    }
-
-    setTimeout(() => {
-      fetchProviders()
-      setSwitching(false)
-    }, 1500)
-  }, [activeProvider?.executionPolicyNote, switching, switchProvider, providers, fetchProviders])
 
   const handleVoiceInputToggle = useCallback(() => {
     setVoice((prev) => {
@@ -1126,32 +1091,7 @@ export default function SettingsPage() {
               main worker Strada prefers for implementation-heavy turns.
             </div>
 
-            {providers.length > 0 ? (
-              <div className="settings-provider-grid">
-                {providers.map((p) => {
-                  const isActive = activeProvider?.providerName === p.name
-                  return (
-                    <button
-                      key={p.name}
-                      className={`settings-provider-card ${isActive ? 'active' : ''}`}
-                      onClick={() => !isActive && handleProviderSwitch(p.name)}
-                      disabled={isActive || switching}
-                    >
-                      <div className="settings-provider-name">{p.label}</div>
-                      <div className="settings-provider-meta">
-                        <span className="settings-provider-id">{p.name}</span>
-                        <span className="settings-provider-model">{p.defaultModel}</span>
-                      </div>
-                      {isActive && <span className="settings-provider-active-tag">Primary</span>}
-                    </button>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="page-empty" style={{ height: 100 }}>
-                <p>No providers available. Check your API key configuration.</p>
-              </div>
-            )}
+            <PrimaryWorkerSelector />
           </>
         )}
       </div>

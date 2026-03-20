@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   advanceSetupPollSession,
+  buildProviderModelDefaults,
   getSetupReviewBlockingReason,
   hasAutoEmbeddingCandidate,
   hasUsableEmbeddingCredential,
@@ -19,6 +20,17 @@ describe('useSetupWizard helpers', () => {
   it('accepts OpenAI subscription for response providers only', () => {
     expect(hasUsableResponseCredential('openai', {}, { openai: 'chatgpt-subscription' })).toBe(true)
     expect(hasUsableEmbeddingCredential('openai', {})).toBe(false)
+  })
+
+  it('prefers preset model defaults and otherwise falls back to curated provider defaults', () => {
+    expect(buildProviderModelDefaults(['claude'], 'performance')).toEqual({
+      claude: 'claude-sonnet-4-6-20250514',
+    })
+
+    expect(buildProviderModelDefaults(['deepseek', 'gemini'], null)).toEqual({
+      deepseek: 'deepseek-chat',
+      gemini: 'gemini-3-flash-preview',
+    })
   })
 
   it('requires a real embedding-capable provider for auto embedding mode', () => {

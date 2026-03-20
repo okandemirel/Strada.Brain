@@ -118,6 +118,7 @@ import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 // Auto-update imports
 import { ChannelActivityRegistry } from "./channel-activity-registry.js";
 import { AutoUpdater } from "./auto-updater.js";
+import type { PostSetupBootstrap } from "../common/setup-contract.js";
 
 // Task system imports
 import {
@@ -136,6 +137,7 @@ export interface BootstrapOptions {
   container?: DIContainer;
   daemonMode?: boolean;
   beforeChannelConnect?: (() => Promise<void> | void) | undefined;
+  postSetupBootstrap?: PostSetupBootstrap | null;
 }
 
 export interface BootstrapResult {
@@ -700,6 +702,22 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   } else {
     // v2.0 single-agent mode: unchanged path (AGENT-07)
     wireMessageHandler(channel, messageRouter, orchestrator, learningResult.taskPlanner, learningResult.pipeline, identityManager, heartbeatLoop, activityRegistry, channelType);
+  }
+
+  const postSetupBootstrap = options.postSetupBootstrap;
+  if (postSetupBootstrap && channel.setPostSetupBootstrapHandler) {
+    channel.setPostSetupBootstrapHandler(async (context) => {
+      await orchestrator.deliverPostSetupBootstrap(context, postSetupBootstrap);
+
+      if (postSetupBootstrap.autonomy?.enabled) {
+        const expiresAt = typeof postSetupBootstrap.autonomy.hours === "number"
+          ? Date.now() + (postSetupBootstrap.autonomy.hours * 3600_000)
+          : undefined;
+        heartbeatLoop?.getSecurityPolicy().setAutonomousOverride(true, expiresAt);
+      }
+    });
+  } else {
+    channel.setPostSetupBootstrapHandler?.(null);
   }
 
   // Setup cleanup

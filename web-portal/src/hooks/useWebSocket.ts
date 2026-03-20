@@ -15,90 +15,6 @@ const PROFILE_ID_STORAGE_KEY = 'strada-profileId'
 const PROFILE_TOKEN_STORAGE_KEY = 'strada-profileToken'
 const LEGACY_PROFILE_CHAT_ID_STORAGE_KEY = 'strada-profileChatId'
 const RECONNECT_TOKEN_STORAGE_KEY = 'strada-reconnectToken'
-export const POST_SETUP_BOOTSTRAP_STORAGE_KEY = 'strada-postSetupBootstrap'
-export const FIRST_RUN_STORAGE_KEY = 'strada-firstRun'
-
-export interface PostSetupBootstrap {
-  onboarding?: boolean
-  autonomy?: {
-    enabled: true
-    hours?: number
-  }
-}
-
-interface BootstrapSocket {
-  readyState: number
-  send: (data: string) => void
-}
-
-export function buildPostSetupBootstrap(
-  autonomyEnabled: boolean,
-  autonomyHours: number,
-): PostSetupBootstrap {
-  return {
-    onboarding: true,
-    ...(autonomyEnabled ? { autonomy: { enabled: true, hours: autonomyHours } } : {}),
-  }
-}
-
-export function parsePostSetupBootstrap(raw: string | null): PostSetupBootstrap | null {
-  if (!raw) return null
-
-  try {
-    const parsed = JSON.parse(raw) as PostSetupBootstrap
-    const onboarding = parsed.onboarding === true
-    const hours = parsed.autonomy?.hours
-    const autonomyEnabled = parsed.autonomy?.enabled === true
-    const autonomyHours = typeof hours === 'number' && Number.isFinite(hours) && hours >= 1 && hours <= 168
-      ? Math.trunc(hours)
-      : undefined
-
-    if (!onboarding && !autonomyEnabled) {
-      return null
-    }
-
-    return {
-      ...(onboarding ? { onboarding: true } : {}),
-      ...(autonomyEnabled ? { autonomy: { enabled: true, ...(autonomyHours ? { hours: autonomyHours } : {}) } } : {}),
-    }
-  } catch {
-    return null
-  }
-}
-
-export function schedulePostSetupBootstrap(
-  socket: BootstrapSocket,
-  storage: Pick<Storage, 'getItem' | 'removeItem'>,
-  schedule: (callback: () => void, delayMs: number) => unknown = setTimeout,
-): boolean {
-  const postSetupBootstrap = parsePostSetupBootstrap(
-    storage.getItem(POST_SETUP_BOOTSTRAP_STORAGE_KEY),
-  )
-  if (!postSetupBootstrap) {
-    return false
-  }
-
-  schedule(() => {
-    if (socket.readyState !== 1) return
-
-    if (postSetupBootstrap.autonomy?.enabled) {
-      socket.send(JSON.stringify({
-        type: 'autonomous_toggle',
-        enabled: true,
-        ...(postSetupBootstrap.autonomy.hours ? { hours: postSetupBootstrap.autonomy.hours } : {}),
-      }))
-    }
-
-    if (postSetupBootstrap.onboarding) {
-      socket.send(JSON.stringify({ type: 'message', text: '__onboarding__' }))
-    }
-
-    storage.removeItem(POST_SETUP_BOOTSTRAP_STORAGE_KEY)
-    storage.removeItem(FIRST_RUN_STORAGE_KEY)
-  }, 300)
-
-  return true
-}
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
@@ -303,8 +219,6 @@ export function useWebSocket(): UseWebSocketReturn {
 
           pendingReconnectChatIdRef.current = null
           acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken)
-          // First-run: send sentinel to trigger deterministic onboarding (no user bubble)
-          schedulePostSetupBootstrap(ws, localStorage)
           break
         }
 

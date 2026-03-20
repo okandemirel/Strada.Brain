@@ -12,17 +12,21 @@ import { join, extname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { PROVIDER_PRESETS } from "../agents/providers/provider-registry.js";
 import {
   preflightResponseProviders,
   type ResponseProviderPreflightFailure,
 } from "./response-provider-preflight.js";
+import { getPreset, PROVIDER_MODEL_OPTIONS } from "../config/presets.js";
 import type { ProviderCredentialMap } from "../agents/providers/provider-registry.js";
 import {
   SETUP_QUERY_PARAM,
+  type PostSetupBootstrap,
   type SetupStatusResponse,
 } from "../common/setup-contract.js";
 import {
   buildSetupRetryHref,
+  buildPostSetupBootstrap,
   createSetupStatus,
   getSetupStatusDetail,
   transitionSetupStatus,
@@ -140,6 +144,27 @@ const KNOWN_EMBEDDING_PROVIDERS = new Set([
   "fireworks", "qwen", "gemini", "ollama",
 ]);
 
+const KNOWN_PROVIDER_MODEL_ORDER = [
+  "claude",
+  "openai",
+  "deepseek",
+  "qwen",
+  "kimi",
+  "minimax",
+  "groq",
+  "mistral",
+  "together",
+  "fireworks",
+  "gemini",
+  "ollama",
+] as const;
+
+const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
+  claude: "claude-sonnet-4-6-20250514",
+  ollama: "llama3.3",
+};
+const MODEL_NAME_RE = /^[A-Za-z0-9._:/-]+$/;
+
 const KNOWN_OPENAI_AUTH_MODES = new Set(["api-key", "chatgpt-subscription"]);
 
 const PROVIDER_ENV_KEYS = [
@@ -212,6 +237,65 @@ function sanitizeEnvValue(value: unknown): string {
   return `"${stripped.replace(/"/g, '\\"')}"`;
 }
 
+function buildProviderModelDefaults(config: Record<string, string>): Array<[string, string]> {
+  const resolved = new Map<string, string>();
+  const presetName = config.SYSTEM_PRESET;
+  const preset = presetName ? getPreset(presetName) : undefined;
+  if (preset?.providerModels) {
+    for (const [provider, model] of Object.entries(preset.providerModels)) {
+      resolved.set(provider, model);
+    }
+  }
+
+  for (const provider of KNOWN_PROVIDER_MODEL_ORDER) {
+    const explicit = config[`${provider.toUpperCase()}_MODEL`];
+    if (explicit && explicit.trim()) {
+      resolved.set(provider, explicit.trim());
+    }
+  }
+
+  const providerChain = typeof config.PROVIDER_CHAIN === "string"
+    ? config.PROVIDER_CHAIN.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  for (const provider of providerChain) {
+    if (resolved.has(provider)) {
+      continue;
+    }
+    const registryDefault = PROVIDER_PRESETS[provider]?.defaultModel;
+    const fallback = registryDefault ?? DEFAULT_PROVIDER_MODELS[provider];
+    if (fallback) {
+      resolved.set(provider, fallback);
+    }
+  }
+
+  return KNOWN_PROVIDER_MODEL_ORDER.flatMap((provider) => {
+    const model = resolved.get(provider);
+    return model ? [[provider, model]] : [];
+  });
+}
+
+function isKnownProviderModel(provider: string, model: string): boolean {
+  const knownModels = PROVIDER_MODEL_OPTIONS[provider];
+  return Array.isArray(knownModels) && knownModels.some((option) => option.model === model);
+}
+
+function validateProviderModelSelection(config: Record<string, string>, provider: string): string | null {
+  const modelKey = `${provider.toUpperCase()}_MODEL`;
+  const model = config[modelKey]?.trim();
+  if (!model) {
+    return null;
+  }
+  if (!MODEL_NAME_RE.test(model)) {
+    return `Invalid ${modelKey} value`;
+  }
+  const hasCuratedCatalog = (PROVIDER_MODEL_OPTIONS[provider]?.length ?? 0) > 0;
+  if (hasCuratedCatalog && !isKnownProviderModel(provider, model)) {
+    return `Unsupported ${modelKey} selection`;
+  }
+  return null;
+}
+
 export function hasConfiguredEmbeddingCandidate(config: Record<string, unknown>): boolean {
   const explicitProvider = typeof config.EMBEDDING_PROVIDER === "string" ? config.EMBEDDING_PROVIDER : "auto";
 
@@ -274,6 +358,10 @@ export function buildSetupEnvLines(
 
   if (config.PROVIDER_CHAIN) {
     lines.push(`PROVIDER_CHAIN=${sanitizeEnvValue(config.PROVIDER_CHAIN)}`);
+  }
+
+  for (const [provider, model] of buildProviderModelDefaults(config)) {
+    lines.push(`${provider.toUpperCase()}_MODEL=${sanitizeEnvValue(model)}`);
   }
 
   for (const key of CHANNEL_ENV_KEYS) {
@@ -412,6 +500,10 @@ export class SetupWizard {
       readyUrl: this.readyUrl,
       detail,
     });
+  }
+
+  getPendingPostSetupBootstrap(): PostSetupBootstrap | undefined {
+    return this.status.postSetupBootstrap;
   }
 
   private resetToCollecting(): void {
@@ -732,6 +824,14 @@ export class SetupWizard {
       return;
     }
 
+    if (config.PROVIDER_CHAIN) {
+      config.PROVIDER_CHAIN = String(config.PROVIDER_CHAIN)
+        .split(",")
+        .map((provider) => provider.trim().toLowerCase())
+        .filter(Boolean)
+        .join(",");
+    }
+
     // Validate required fields
     if (!config.UNITY_PROJECT_PATH) {
       this.json(res, 400, { success: false, error: "UNITY_PROJECT_PATH is required" });
@@ -775,11 +875,21 @@ export class SetupWizard {
     if (config.PROVIDER_CHAIN) {
       const names = String(config.PROVIDER_CHAIN)
         .split(",")
-        .map((s) => s.trim());
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
       if (names.some((n) => !KNOWN_PROVIDERS.has(n))) {
         this.json(res, 400, { success: false, error: "Invalid provider name in PROVIDER_CHAIN" });
         return;
       }
+
+      for (const provider of KNOWN_PROVIDER_MODEL_ORDER) {
+        const modelError = validateProviderModelSelection(config, provider);
+        if (modelError) {
+          this.json(res, 400, { success: false, error: modelError });
+          return;
+        }
+      }
+
       const preflight = await preflightResponseProviders(
         names,
         this.collectProviderCredentials(config),
@@ -819,8 +929,14 @@ export class SetupWizard {
       detail: "Configuration accepted. Starting Strada on this same URL.",
       readyUrl: this.readyUrl,
       providerWarnings,
+      postSetupBootstrap: buildPostSetupBootstrap(config),
     });
-    this.json(res, 200, { success: true, readyUrl: this.readyUrl, providerWarnings });
+    this.json(res, 200, {
+      success: true,
+      readyUrl: this.readyUrl,
+      providerWarnings,
+      postSetupBootstrap: this.status.postSetupBootstrap,
+    });
     logSetupLifecycle("config_saved", {
       envPath,
       port: this.port,

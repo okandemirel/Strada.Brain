@@ -1,4 +1,7 @@
-import type { SetupProviderFailure as ProviderPreflightFailure } from '../../../src/common/setup-contract.ts'
+import type {
+  PostSetupBootstrap,
+  SetupProviderFailure as ProviderPreflightFailure,
+} from '../../../src/common/setup-contract.ts'
 import type { SetupBootstrapViewStatus } from '../../../src/common/setup-state.ts'
 
 export type {
@@ -62,6 +65,7 @@ export interface SetupSaveResponse {
   readyUrl?: string
   providerFailures?: ProviderPreflightFailure[]
   providerWarnings?: ProviderPreflightFailure[]
+  postSetupBootstrap?: PostSetupBootstrap
 }
 
 export interface WizardState {
@@ -70,6 +74,7 @@ export interface WizardState {
   checkedProviders: Set<string>
   providerKeys: Record<string, string>
   providerAuthModes: Record<string, string>
+  providerModels: Record<string, string>
   projectPath: string
   pathValid: boolean | null
   pathError: string | null

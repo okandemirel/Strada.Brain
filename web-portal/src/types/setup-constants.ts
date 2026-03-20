@@ -1,4 +1,9 @@
 import type { ProviderDef, PresetDef, ChannelDef } from './setup'
+import {
+  PROVIDER_MODEL_OPTIONS as BACKEND_PROVIDER_MODEL_OPTIONS,
+  SYSTEM_PRESETS,
+  type ProviderModelOption as BackendProviderModelOption,
+} from '../../../src/config/presets.ts'
 
 export const PRESETS: PresetDef[] = [
   { id: 'free', name: 'Free', cost: '$0/mo', desc: 'Ollama local only', providers: ['ollama'] },
@@ -45,6 +50,27 @@ export const PROVIDERS: ProviderDef[] = [
 ]
 
 export const PROVIDER_MAP = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]))
+
+export const PROVIDER_MODEL_OPTIONS = BACKEND_PROVIDER_MODEL_OPTIONS
+const FALLBACK_PROVIDER_MODELS: Record<string, string> = {
+  ollama: 'llama3.3',
+}
+
+export type ProviderModelOption = BackendProviderModelOption
+
+export function getProviderModelOptions(providerId: string): ProviderModelOption[] {
+  return PROVIDER_MODEL_OPTIONS[providerId] ?? []
+}
+
+export function getDefaultProviderModel(providerId: string): string | null {
+  return getProviderModelOptions(providerId)[0]?.model ?? FALLBACK_PROVIDER_MODELS[providerId] ?? null
+}
+
+export function getPresetProviderModel(presetId: string | null, providerId: string): string | null {
+  if (!presetId) return null
+  const preset = SYSTEM_PRESETS[presetId as keyof typeof SYSTEM_PRESETS]
+  return preset?.providerModels?.[providerId] ?? null
+}
 
 export const CHANNELS: ChannelDef[] = [
   { id: 'web', name: 'Web', icon: 'globe', fields: [] },

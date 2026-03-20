@@ -10,6 +10,7 @@ describe('ReviewStep', () => {
         checkedProviders={new Set(['kimi'])}
         providerKeys={{ kimi: 'sk-kimi-test' }}
         providerAuthModes={{ openai: 'api-key' }}
+        providerModels={{ kimi: 'kimi-for-coding' }}
         projectPath="/Users/test/project"
         channel="web"
         language="en"
@@ -34,6 +35,8 @@ describe('ReviewStep', () => {
 
     expect(html).toContain('Configuration accepted. Starting Strada on this same URL.')
     expect(html).toContain('Kimi (Moonshot): Kimi (Moonshot) health check failed. Verify the credential and network access.')
+    expect(html).toContain('Kimi Model')
+    expect(html).toContain('kimi-for-coding')
     expect(html).not.toContain('Re-open setup')
   })
 })

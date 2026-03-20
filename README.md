@@ -107,13 +107,14 @@ If Node 22 is already installed in `nvm`, Strada reuses that runtime instead of 
 That first-run browser open also carries an explicit setup flag, so a stale cached portal tab still resolves into the setup wizard instead of a dead "Not Found" page.
 If the first web handoff races the restart, Strada now retries that launch automatically before surfacing an error. Once the config is saved, Strada keeps the handoff page alive on the same URL until the main app is ready, so do not re-run setup.
 
-The wizard asks for your Unity project path, AI provider API key, default channel, and language. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
+The wizard asks for your Unity project path, AI provider access, default channel, language, and per-provider default model selections. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
 Terminal setup accepts comma-separated providers in a single prompt (e.g. `kimi,deepseek`) for fallback / multi-agent orchestration, or you can add them one at a time interactively. The "Add another?" loop only appears when a single provider is entered. The embedding provider choice stays separate.
 Every selected response worker must pass preflight before setup can finish. Setup, `strada doctor`, and startup now use the same contract, so invalid provider chains are rejected instead of being silently skipped.
 When OpenAI uses `chatgpt-subscription`, setup validates the local Codex/ChatGPT session with a real Responses probe before saving. Expired subscription sessions are rejected during setup and reported by `strada doctor`.
 After you save the web wizard, Strada exposes explicit handoff states on the same URL (`saved`, `booting`, `ready`, `failed`) so refreshes can survive the transition and bootstrap failures stay visible until you retry setup.
-That first handoff also replays Strada's onboarding turn and your initial autonomy choice into the first chat session, so the opening conversation and Settings screen immediately reflect what you chose in the wizard.
-If the first real chat message is technical, Strada now starts solving immediately and keeps onboarding to at most one short follow-up instead of opening with a full intake questionnaire.
+That handoff is now server-owned: once the first resolved web identity/session exists, Strada sends one assistant-authored welcome in the configured language and applies any setup-time autonomy bootstrap exactly once.
+Setup writes global provider-model defaults into `.env`, while chat and Settings keep using identity-scoped provider/model overrides on top of those defaults.
+If the first real chat message is technical, Strada still starts solving immediately and only learns whatever name/style/detail preferences it can infer from that same reply.
 If RAG is enabled without a usable embedding provider, the wizard now lets you continue to the review step but keeps Save blocked until you choose a valid embedding provider or disable RAG.
 
 After the first successful setup, running `./strada` with no subcommand becomes your smart launcher:

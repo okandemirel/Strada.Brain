@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin } from "../../security/origin-validation.js";
 import { validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
-import { SETUP_QUERY_PARAM } from "../../common/setup-contract.js";
+import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
 import type {
   IChannelAdapter,
@@ -120,6 +120,8 @@ export class WebChannel
   private pendingConfirmations = new Map<string, PendingConfirmation>();
   /** Recently disconnected chatIds eligible for reconnect (5 min TTL) */
   private recentlyDisconnected = new Map<string, RecentlyDisconnectedSession>();
+  private postSetupBootstrapHandler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null = null;
+  private postSetupBootstrapConsumed = false;
   private readonly staticDir = resolveStaticDir();
   private readonly identityStore: WebIdentityStore;
 
@@ -136,6 +138,11 @@ export class WebChannel
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
+  }
+
+  setPostSetupBootstrapHandler(handler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null): void {
+    this.postSetupBootstrapHandler = handler;
+    this.postSetupBootstrapConsumed = false;
   }
 
   async connect(): Promise<void> {
@@ -532,6 +539,8 @@ export class WebChannel
       profileToken: identity.profileToken,
     });
 
+    void this.consumePostSetupBootstrap({ chatId, profileId: identity.profileId, profileToken: identity.profileToken });
+
     return { chatId, reconnectToken };
   }
 
@@ -706,6 +715,20 @@ export class WebChannel
       ws.send(JSON.stringify(data));
     } catch {
       // Connection may have closed
+    }
+  }
+
+  private async consumePostSetupBootstrap(context: PostSetupBootstrapContext): Promise<void> {
+    if (this.postSetupBootstrapConsumed || !this.postSetupBootstrapHandler) {
+      return;
+    }
+
+    this.postSetupBootstrapConsumed = true;
+
+    try {
+      await this.postSetupBootstrapHandler(context);
+    } catch {
+      // Bootstrap is best-effort; the first resolved session should not be retried.
     }
   }
 

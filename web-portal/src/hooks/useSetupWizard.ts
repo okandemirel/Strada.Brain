@@ -1,7 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { ProviderPreflightFailure, SaveStatus, SetupSaveResponse, SetupStatusResponse } from '../types/setup'
-import { PRESETS, PROVIDER_MAP, CHANNELS, EMBEDDING_CAPABLE } from '../types/setup-constants'
-import { buildPostSetupBootstrap, FIRST_RUN_STORAGE_KEY, POST_SETUP_BOOTSTRAP_STORAGE_KEY } from './useWebSocket'
+import {
+  PRESETS,
+  PROVIDER_MAP,
+  CHANNELS,
+  EMBEDDING_CAPABLE,
+  getDefaultProviderModel,
+  getPresetProviderModel,
+} from '../types/setup-constants'
 import { isSetupStatusResponse } from '../../../src/common/setup-contract.ts'
 import { deriveSetupBootstrapView, transitionSetupStatus } from '../../../src/common/setup-state.ts'
 
@@ -87,6 +93,20 @@ export function getSetupReviewBlockingReason(
 
   const providerName = PROVIDER_MAP[embeddingProvider]?.name ?? embeddingProvider
   return `${providerName} embeddings need a usable API key before setup can be saved.`
+}
+
+export function buildProviderModelDefaults(
+  providerIds: Iterable<string>,
+  presetId: string | null,
+): Record<string, string> {
+  const defaults: Record<string, string> = {}
+  for (const providerId of providerIds) {
+    defaults[providerId] =
+      getPresetProviderModel(presetId, providerId)
+      ?? getDefaultProviderModel(providerId)
+      ?? ''
+  }
+  return defaults
 }
 
 export type SetupSurfaceProbe =
@@ -245,6 +265,9 @@ export function useSetupWizard() {
   const [checkedProviders, setCheckedProviders] = useState<Set<string>>(new Set(['claude']))
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({})
   const [providerAuthModes, setProviderAuthModes] = useState<Record<string, string>>({ openai: 'api-key' })
+  const [providerModels, setProviderModels] = useState<Record<string, string>>(() =>
+    buildProviderModelDefaults(['claude'], null),
+  )
   const [projectPath, setProjectPathState] = useState('')
   const [pathValid, setPathValid] = useState<boolean | null>(null)
   const [pathError, setPathError] = useState<string | null>(null)
@@ -388,21 +411,32 @@ export function useSetupWizard() {
     const preset = PRESETS.find((p) => p.id === id)
     if (preset) {
       setCheckedProviders(new Set(preset.providers))
+      setProviderModels(buildProviderModelDefaults(preset.providers, id))
     }
   }, [])
 
   const toggleProvider = useCallback((id: string) => {
     setCheckedProviders((prev) => {
       const next = new Set(prev)
+      const adding = !next.has(id)
       if (next.has(id)) {
         next.delete(id)
       } else {
         next.add(id)
       }
+      if (adding) {
+        setProviderModels((models) => {
+          if (models[id]) return models
+          return {
+            ...models,
+            [id]: getPresetProviderModel(selectedPreset, id) ?? getDefaultProviderModel(id) ?? '',
+          }
+        })
+      }
       return next
     })
     setSelectedPreset(null)
-  }, [])
+  }, [selectedPreset])
 
   const setProviderKey = useCallback((id: string, key: string) => {
     setProviderKeys((prev) => ({ ...prev, [id]: key }))
@@ -473,6 +507,10 @@ export function useSetupWizard() {
 
   const setDaemonBudget = useCallback((budget: number) => {
     setDaemonBudgetState(budget)
+  }, [])
+
+  const setProviderModel = useCallback((id: string, model: string) => {
+    setProviderModels((prev) => ({ ...prev, [id]: model }))
   }, [])
 
   const applySetupBootstrapStatus = useCallback((status: SetupStatusResponse) => {
@@ -546,6 +584,13 @@ export function useSetupWizard() {
     const chain = Array.from(checkedProviders)
     config.PROVIDER_CHAIN = chain.join(',')
 
+    for (const id of chain) {
+      const model = providerModels[id]?.trim()
+      if (model) {
+        config[`${id.toUpperCase()}_MODEL`] = model
+      }
+    }
+
     // Add provider API keys
     for (const id of chain) {
       const provider = PROVIDER_MAP[id]
@@ -610,12 +655,6 @@ export function useSetupWizard() {
         }
       } else {
         const providerWarningMessage = formatProviderIssues(body.providerWarnings)
-        localStorage.setItem(FIRST_RUN_STORAGE_KEY, '1')
-        localStorage.setItem(
-          POST_SETUP_BOOTSTRAP_STORAGE_KEY,
-          JSON.stringify(buildPostSetupBootstrap(autonomyEnabled, autonomyHours)),
-        )
-
         setSaveCommitted(true)
         setSaveWarning(providerWarningMessage)
         applySetupBootstrapStatus(transitionSetupStatus(
@@ -718,7 +757,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, providerModels, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive])
 
   return {
     // State
@@ -729,6 +768,7 @@ export function useSetupWizard() {
     checkedProviders,
     providerKeys,
     providerAuthModes,
+    providerModels,
     projectPath,
     pathValid,
     pathError,
@@ -758,6 +798,7 @@ export function useSetupWizard() {
     toggleProvider,
     setProviderKey,
     setProviderAuthMode,
+    setProviderModel,
     setProjectPath,
     validatePath,
     setChannel,

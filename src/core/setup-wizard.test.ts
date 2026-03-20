@@ -186,6 +186,38 @@ describe("SetupWizard path validation", () => {
     expect(disabledLines.some((line) => line.includes("AUTONOMOUS_DEFAULT_"))).toBe(false);
   });
 
+  it("writes provider model defaults from presets and explicit overrides", () => {
+    const lines = buildSetupEnvLines({
+      PROVIDER_CHAIN: "claude,gemini",
+      SYSTEM_PRESET: "balanced",
+      ANTHROPIC_API_KEY: "sk-ant",
+      GEMINI_API_KEY: "sk-gem",
+      OPENAI_MODEL: "gpt-5.4",
+    }, homedir(), 3000);
+
+    expect(lines).toContain('CLAUDE_MODEL="claude-sonnet-4-6-20250514"');
+    expect(lines).toContain('DEEPSEEK_MODEL="deepseek-chat"');
+    expect(lines).toContain('GEMINI_MODEL="gemini-3-flash-preview"');
+    expect(lines).toContain('OPENAI_MODEL="gpt-5.4"');
+  });
+
+  it("rejects unsupported curated model selections during setup save", async () => {
+    const wizard = new SetupWizard({ port: 0 });
+    const response = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "openai",
+      OPENAI_API_KEY: "sk-openai",
+      OPENAI_MODEL: "definitely-not-a-real-openai-model",
+      RAG_ENABLED: "false",
+    });
+
+    expect(response.read().statusCode).toBe(400);
+    expect(JSON.parse(response.read().body)).toEqual({
+      success: false,
+      error: "Unsupported OPENAI_MODEL selection",
+    });
+  });
+
   it("rejects repeated setup API calls and serves a handoff page once configuration has been saved", async () => {
     const wizard = new SetupWizard({ port: 0 });
     wizard.markBootstrapStarting();
@@ -227,7 +259,7 @@ describe("SetupWizard path validation", () => {
     expect(retryPage.read().body).toContain('data-strada-setup="1"');
   });
 
-  it("saves configuration with provider warnings instead of rejecting the setup", async () => {
+  it("saves configuration with provider warnings and exposes post-setup bootstrap data", async () => {
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
     tmpDirs.push(tempCwd);
     process.chdir(tempCwd);
@@ -244,7 +276,15 @@ describe("SetupWizard path validation", () => {
     });
 
     const wizard = new SetupWizard({ port: 0 });
-    const saveResponse = await saveWizard(wizard);
+    const saveResponse = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      LANGUAGE_PREFERENCE: "tr",
+      RAG_ENABLED: "false",
+      AUTONOMOUS_DEFAULT_ENABLED: "true",
+      AUTONOMOUS_DEFAULT_HOURS: "48",
+    });
 
     expect(saveResponse.read().statusCode).toBe(200);
     expect(JSON.parse(saveResponse.read().body)).toEqual({
@@ -255,11 +295,28 @@ describe("SetupWizard path validation", () => {
         providerName: "Kimi (Moonshot)",
         detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
       }],
+      postSetupBootstrap: {
+        language: "tr",
+        autonomy: {
+          enabled: true,
+          hours: 48,
+        },
+      },
+    });
+
+    expect(wizard.getPendingPostSetupBootstrap()).toEqual({
+      language: "tr",
+      autonomy: {
+        enabled: true,
+        hours: 48,
+      },
     });
 
     const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
     expect(envContent).toContain('PROVIDER_CHAIN="kimi"');
     expect(envContent).toContain('KIMI_API_KEY="sk-kimi"');
+    expect(envContent).toContain("AUTONOMOUS_DEFAULT_ENABLED=true");
+    expect(envContent).toContain("AUTONOMOUS_DEFAULT_HOURS=48");
   });
 
   it("resolves setup completion even when waiting starts after save", async () => {
@@ -331,6 +388,9 @@ describe("SetupWizard path validation", () => {
         providerName: "Kimi (Moonshot)",
         detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
       }],
+      postSetupBootstrap: {
+        language: "en",
+      },
     });
   });
 });

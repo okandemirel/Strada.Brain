@@ -186,6 +186,68 @@ describe("WebChannel reconnect security", () => {
   });
 });
 
+describe("WebChannel post-setup bootstrap", () => {
+  it("waits for the resolved session before emitting the post-setup welcome", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+
+    channel.setPostSetupBootstrapHandler?.(async ({ chatId }) => {
+      await channel.sendText(chatId, "Hi, I'm Strada. What should I call you?");
+    });
+
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    expect(
+      socket.getSentMessages().filter((message) => message.type === "text"),
+    ).toHaveLength(0);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "session_init",
+      })),
+    );
+
+    const welcomeMessages = socket.getSentMessages()
+      .filter((message) => message.type === "text" && message.text === "Hi, I'm Strada. What should I call you?");
+
+    expect(welcomeMessages).toHaveLength(1);
+  });
+
+  it("emits exactly one Strada welcome across duplicate session_init handshakes", async () => {
+    const channel = new WebChannel();
+    const firstSocket = createMockSocket();
+    const secondSocket = createMockSocket();
+
+    channel.setPostSetupBootstrapHandler?.(async ({ chatId }) => {
+      await channel.sendText(chatId, "Hi, I'm Strada. What should I call you?");
+    });
+
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(firstSocket);
+    firstSocket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "session_init",
+      })),
+    );
+
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(secondSocket);
+    secondSocket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "session_init",
+      })),
+    );
+
+    const welcomeMessages = [
+      ...firstSocket.getSentMessages(),
+      ...secondSocket.getSentMessages(),
+    ].filter((message) => message.type === "text" && message.text === "Hi, I'm Strada. What should I call you?");
+
+    expect(welcomeMessages).toHaveLength(1);
+  });
+});
+
 describe("WebChannel dashboard proxy", () => {
   it("injects the configured dashboard bearer token for proxied requests", async () => {
     const channel = new WebChannel(3000, 3100, { dashboardAuthToken: "proxy-secret" });
