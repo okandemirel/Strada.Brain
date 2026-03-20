@@ -59,6 +59,7 @@ export interface SetupSaveResponse {
   success?: boolean
   error?: string
   handoff?: boolean
+  readyUrl?: string
   providerFailures?: ProviderPreflightFailure[]
   providerWarnings?: ProviderPreflightFailure[]
 }

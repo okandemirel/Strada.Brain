@@ -23,6 +23,7 @@ describe('ReviewStep', () => {
         saveError={null}
         saveWarning="Kimi (Moonshot): Kimi (Moonshot) health check failed. Verify the credential and network access."
         bootstrapDetail="Configuration accepted. Starting Strada on this same URL."
+        readyUrl="http://127.0.0.1:3000/"
         saveCommitted
         canSave
         saveBlockingReason={null}

@@ -159,8 +159,10 @@ export function useSetupWizard() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveWarning, setSaveWarning] = useState<string | null>(null)
   const [bootstrapDetail, setBootstrapDetail] = useState<string | null>(null)
+  const [readyUrl, setReadyUrl] = useState<string | null>(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
 
   const csrfTokenRef = useRef<string>('')
+  const readyUrlRef = useRef<string | null>(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const availabilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
@@ -171,6 +173,14 @@ export function useSetupWizard() {
     providerKeys,
     providerAuthModes,
   )
+
+  const rememberReadyUrl = useCallback((nextReadyUrl?: string | null) => {
+    if (typeof nextReadyUrl !== 'string') return
+    const normalized = nextReadyUrl.trim()
+    if (!normalized) return
+    readyUrlRef.current = normalized
+    setReadyUrl(normalized)
+  }, [])
 
   // Fetch CSRF token on mount
   useEffect(() => {
@@ -349,6 +359,7 @@ export function useSetupWizard() {
   }, [])
 
   const applySetupBootstrapStatus = useCallback((status: SetupStatusResponse) => {
+    rememberReadyUrl(status.readyUrl)
     const bootstrapView = deriveSetupBootstrapView(status)
     if (!bootstrapView) {
       return false
@@ -365,13 +376,14 @@ export function useSetupWizard() {
     setSaveError(null)
 
     if (bootstrapView.saveStatus === 'success') {
+      const nextLocation = bootstrapView.readyUrl || readyUrlRef.current || (typeof window !== 'undefined' ? `${window.location.origin}/` : '/')
       setTimeout(() => {
-        window.location.href = bootstrapView.readyUrl || '/'
+        window.location.replace(nextLocation)
       }, 250)
     }
 
     return true
-  }, [])
+  }, [rememberReadyUrl])
 
   const save = useCallback(async () => {
     setSaveStatus('saving')
@@ -379,6 +391,7 @@ export function useSetupWizard() {
     setSaveWarning(null)
     setSaveCommitted(false)
     setBootstrapDetail(null)
+    rememberReadyUrl(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
 
     if (reviewBlockingReason) {
       setSaveStatus('error')
@@ -459,6 +472,7 @@ export function useSetupWizard() {
       })
 
       const body = await res.json().catch(() => ({})) as SetupSaveResponse
+      rememberReadyUrl(body.readyUrl)
       if (!res.ok) {
         if (res.status === 409 && body && typeof body === 'object' && body.handoff === true) {
           setSaveCommitted(true)
@@ -466,6 +480,7 @@ export function useSetupWizard() {
             { state: 'saved' },
             {
               type: 'bootstrap_starting',
+              readyUrl: body.readyUrl ?? readyUrlRef.current ?? undefined,
               detail: typeof body.error === 'string'
                 ? body.error
                 : 'Configuration already saved. Strada is still starting.',
@@ -489,6 +504,7 @@ export function useSetupWizard() {
           { state: 'collecting' },
           {
             type: 'config_saved',
+            readyUrl: body.readyUrl ?? readyUrlRef.current ?? undefined,
             detail: 'Configuration accepted. Starting Strada on this same URL.',
             providerWarnings: body.providerWarnings,
           },
@@ -507,6 +523,7 @@ export function useSetupWizard() {
         try {
           const setupStatus = await readSetupBootstrapStatus(fetch)
           if (setupStatus) {
+            rememberReadyUrl(setupStatus.readyUrl)
             const providerWarningMessage = formatProviderIssues(setupStatus.providerWarnings)
             if (providerWarningMessage) {
               setSaveWarning(providerWarningMessage)
@@ -528,7 +545,7 @@ export function useSetupWizard() {
             if (!mountedRef.current) return
             applySetupBootstrapStatus(transitionSetupStatus(
               { state: 'booting' },
-              { type: 'bootstrap_ready', readyUrl: '/' },
+              { type: 'bootstrap_ready', readyUrl: readyUrlRef.current ?? `${window.location.origin}/` },
             ))
           }
         } catch {
@@ -538,11 +555,14 @@ export function useSetupWizard() {
         if (attempts >= SETUP_BOOTSTRAP_MAX_ATTEMPTS) {
           if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
           if (!mountedRef.current) return
+          const fallbackReadyUrl = readyUrlRef.current
           applySetupBootstrapStatus(transitionSetupStatus(
             { state: 'booting' },
             {
               type: 'bootstrap_failed',
-              detail: 'Configuration was saved, but Strada did not expose a ready or failed bootstrap state in time. Re-open setup and inspect the startup error.',
+              detail: fallbackReadyUrl
+                ? `Configuration was saved, but Strada did not expose a ready or failed bootstrap state in time. Open ${fallbackReadyUrl} directly, or re-open setup and inspect the startup error.`
+                : 'Configuration was saved, but Strada did not expose a ready or failed bootstrap state in time. Re-open setup and inspect the startup error.',
             },
           ))
         }
@@ -551,7 +571,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason, applySetupBootstrapStatus])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl])
 
   return {
     // State
@@ -578,6 +598,7 @@ export function useSetupWizard() {
     saveError,
     saveWarning,
     bootstrapDetail,
+    readyUrl,
     saveCommitted,
     reviewBlockingReason,
     canSave: !reviewBlockingReason && !(saveCommitted && saveStatus === 'error'),

@@ -39,12 +39,17 @@ function resolveStaticDir(): string {
   }
   return PACKAGED_STATIC_DIR;
 }
+
+export function buildSetupReadyUrl(port: number): string {
+  return `http://${SETUP_HOST}:${port}/`;
+}
+
 export function buildSetupAccessUrl(port: number, cacheBust: number = Date.now()): string {
   const params = new URLSearchParams({
     [SETUP_QUERY_PARAM]: "1",
     t: String(cacheBust),
   });
-  return `http://${SETUP_HOST}:${port}/?${params.toString()}`;
+  return `${buildSetupReadyUrl(port)}?${params.toString()}`;
 }
 
 function renderSetupStatusHtml(status: SetupStatusResponse): string {
@@ -55,9 +60,10 @@ function renderSetupStatusHtml(status: SetupStatusResponse): string {
   const secondary = status.state === "failed"
     ? "Use the link below to reopen setup and fix the failing configuration."
     : "This page refreshes automatically until the main app is ready. Do not run setup again.";
+  const refreshTarget = status.readyUrl ?? "/";
   const refreshTag = status.state === "failed"
     ? ""
-    : '    <meta http-equiv="refresh" content="1;url=/" />\n';
+    : `    <meta http-equiv="refresh" content="1;url=${refreshTarget}" />\n`;
   const action = status.state === "failed"
     ? `<p style="margin:16px 0 0;font-size:14px;"><a href="${buildSetupRetryHref()}" style="color:#58a6ff;">Re-open setup</a></p>`
     : "";
@@ -341,22 +347,25 @@ export function buildSetupEnvLines(
 export class SetupWizard {
   private server: Server | null = null;
   private readonly port: number;
+  private readonly readyUrl: string;
   private readonly csrfToken = randomUUID();
   private onComplete: (() => void) | null = null;
   private status: SetupStatusResponse = createSetupStatus();
 
   constructor(opts?: { port?: number }) {
     this.port = opts?.port ?? 3000;
+    this.readyUrl = buildSetupReadyUrl(this.port);
   }
 
   markBootstrapStarting(detail?: string): void {
     this.status = transitionSetupStatus(this.status, {
       type: "bootstrap_starting",
       detail,
+      readyUrl: this.readyUrl,
     });
   }
 
-  markBootstrapReady(readyUrl = "/", detail?: string): void {
+  markBootstrapReady(readyUrl = this.readyUrl, detail?: string): void {
     this.status = transitionSetupStatus(this.status, {
       type: "bootstrap_ready",
       readyUrl,
@@ -464,6 +473,7 @@ export class SetupWizard {
           this.json(res, 409, {
             success: false,
             handoff: true,
+            readyUrl: this.readyUrl,
             error: "Configuration already saved. Strada is starting the main web app.",
           });
           return;
@@ -482,6 +492,7 @@ export class SetupWizard {
           this.json(res, 409, {
             success: false,
             handoff: true,
+            readyUrl: this.readyUrl,
             error: "Configuration was already saved. Wait for Strada to finish starting.",
           });
           return;
@@ -770,9 +781,10 @@ export class SetupWizard {
     this.status = transitionSetupStatus(this.status, {
       type: "config_saved",
       detail: "Configuration accepted. Starting Strada on this same URL.",
+      readyUrl: this.readyUrl,
       providerWarnings,
     });
-    this.json(res, 200, { success: true, providerWarnings });
+    this.json(res, 200, { success: true, readyUrl: this.readyUrl, providerWarnings });
 
     // Signal completion after a delay so the response and any follow-up polling can be handled
     setTimeout(() => {

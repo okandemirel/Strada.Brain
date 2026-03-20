@@ -18,11 +18,13 @@ export type SetupStatusTransition =
   | {
     type: "config_saved";
     detail?: string;
+    readyUrl?: string;
     providerWarnings?: SetupProviderFailure[];
   }
   | {
     type: "bootstrap_starting";
     detail?: string;
+    readyUrl?: string;
   }
   | {
     type: "bootstrap_ready";
@@ -70,12 +72,14 @@ export function transitionSetupStatus(
       return {
         state: "saved",
         detail: transition.detail ?? SETUP_STATE_DEFAULT_DETAILS.saved,
+        readyUrl: transition.readyUrl ?? current.readyUrl,
         providerWarnings: transition.providerWarnings ?? current.providerWarnings,
       };
     case "bootstrap_starting":
       return {
         state: "booting",
         detail: transition.detail ?? SETUP_STATE_DEFAULT_DETAILS.booting,
+        readyUrl: transition.readyUrl ?? current.readyUrl,
         providerWarnings: current.providerWarnings,
       };
     case "bootstrap_ready":
@@ -89,6 +93,7 @@ export function transitionSetupStatus(
       return {
         state: "failed",
         detail: transition.detail,
+        readyUrl: current.readyUrl,
         providerWarnings: current.providerWarnings,
       };
   }
@@ -102,6 +107,7 @@ export function deriveSetupBootstrapView(status: SetupStatusResponse): SetupBoot
       return {
         saveStatus: "saved",
         detail: getSetupStatusDetail(status),
+        readyUrl: status.readyUrl,
         shouldPoll: true,
         canRetry: false,
       };
@@ -109,6 +115,7 @@ export function deriveSetupBootstrapView(status: SetupStatusResponse): SetupBoot
       return {
         saveStatus: "booting",
         detail: getSetupStatusDetail(status),
+        readyUrl: status.readyUrl,
         shouldPoll: true,
         canRetry: false,
       };
@@ -124,6 +131,7 @@ export function deriveSetupBootstrapView(status: SetupStatusResponse): SetupBoot
       return {
         saveStatus: "error",
         detail: getSetupStatusDetail(status),
+        readyUrl: status.readyUrl,
         shouldPoll: false,
         canRetry: true,
       };
