@@ -2014,6 +2014,60 @@ describe("Orchestrator", () => {
     db.close();
   });
 
+  it("hydrates configured autonomous defaults for new web and telegram-like identities", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const dmPolicy = new DMPolicy(mockChannel as any);
+    const profileOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+      dmPolicy,
+      autonomousDefaultEnabled: true,
+      autonomousDefaultHours: 6,
+    });
+
+    mockProvider.chat.mockResolvedValue({
+      text: "Autonomy defaults restored.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 10 },
+    });
+
+    await profileOrch.handleMessage({
+      channelType: "web",
+      chatId: "web-chat-1",
+      userId: "web-profile-1",
+      conversationId: "web-profile-1",
+      text: "hello from web",
+      timestamp: new Date(),
+    });
+
+    const webAutonomousState = await userProfileStore.isAutonomousMode("web-profile-1");
+    expect(webAutonomousState.enabled).toBe(true);
+    expect(dmPolicy.isAutonomousActive("web-chat-1", "web-profile-1")).toBe(true);
+
+    await profileOrch.handleMessage({
+      channelType: "telegram",
+      chatId: "telegram-chat-1",
+      text: "hello from telegram",
+      timestamp: new Date(),
+    });
+
+    const telegramAutonomousState = await userProfileStore.isAutonomousMode("telegram-chat-1");
+    expect(telegramAutonomousState.enabled).toBe(true);
+    expect(dmPolicy.isAutonomousActive("telegram-chat-1")).toBe(true);
+    db.close();
+  });
+
   it("executes tool calls and loops back to provider", async () => {
     const toolResponse: ProviderResponse = {
       text: "Let me read that file...",

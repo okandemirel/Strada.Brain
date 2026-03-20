@@ -14,6 +14,7 @@ import type { DMPolicy } from "../security/dm-policy.js";
 import { projectScopeMatches } from "../learning/runtime-artifact-manager.js";
 import type { RuntimeArtifactManager } from "../learning/runtime-artifact-manager.js";
 import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
+import { resolveAutonomousModeWithDefault } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "../agents/soul/index.js";
 import type { ExecutionTrace, PhaseOutcome, PhaseScore, RoutingDecision } from "../agent-core/routing/routing-types.js";
 
@@ -36,8 +37,15 @@ interface HeartbeatLoopRef {
   getSecurityPolicy?(): { setAutonomousOverride(enabled: boolean, expiresAt?: number): void } | undefined;
 }
 
+interface CommandHandlerOptions {
+  autonomousDefaultEnabled?: boolean;
+  autonomousDefaultHours?: number;
+}
+
 export class CommandHandler {
   private providerRouter?: ProviderRouterRef;
+  private readonly autonomousDefaultEnabled: boolean;
+  private readonly autonomousDefaultHours: number;
 
   constructor(
     private readonly taskManager: TaskManager,
@@ -49,7 +57,11 @@ export class CommandHandler {
     private readonly runtimeArtifactManager?: Pick<RuntimeArtifactManager, "getRecentArtifactsForIdentity">,
     private readonly projectScopeFingerprint?: string,
     private heartbeatLoopRef?: HeartbeatLoopRef,
-  ) {}
+    options: CommandHandlerOptions = {},
+  ) {
+    this.autonomousDefaultEnabled = options.autonomousDefaultEnabled ?? false;
+    this.autonomousDefaultHours = options.autonomousDefaultHours ?? 24;
+  }
 
   /** Set HeartbeatLoop reference for daemon control (set after construction due to init order) */
   setHeartbeatLoop(loop: HeartbeatLoopRef): void {
@@ -238,7 +250,7 @@ export class CommandHandler {
       "",
       "*Autonomous Mode*",
       "",
-      "`/autonomous on [hours]` - Enable autonomous mode (default: 24h, max: 168h)",
+      `\`/autonomous on [hours]\` - Enable autonomous mode (default: ${this.autonomousDefaultHours}h, max: 168h)`,
       "`/autonomous off` - Disable autonomous mode",
       "`/autonomous` - Show autonomous mode status",
       "",
@@ -482,11 +494,24 @@ export class CommandHandler {
 
     // status / no args → show current state
     if (!subcommand || subcommand === "status") {
-      const result = await this.userProfileStore.isAutonomousMode(identityKey);
+      const result = await resolveAutonomousModeWithDefault(
+        this.userProfileStore,
+        identityKey,
+        {
+          enabled: this.autonomousDefaultEnabled,
+          hours: this.autonomousDefaultHours,
+        },
+      );
       if (!result.enabled) {
+        this.dmPolicy.initFromProfile(chatId, { autonomousMode: false }, identityKey);
         await this.channel.sendText(chatId, "Autonomous mode is currently disabled.");
         return;
       }
+
+      this.dmPolicy.initFromProfile(chatId, {
+        autonomousMode: true,
+        autonomousExpiresAt: result.expiresAt,
+      }, identityKey);
 
       if (result.remainingMs !== undefined && result.remainingMs > 0) {
         const hours = Math.round(result.remainingMs / 3600_000 * 10) / 10;
@@ -501,11 +526,10 @@ export class CommandHandler {
 
     // on [hours]
     if (subcommand === "on") {
-      const DEFAULT_HOURS = 24;
       const MIN_HOURS = 1;
       const MAX_HOURS = 168;
 
-      let hours = DEFAULT_HOURS;
+      let hours = this.autonomousDefaultHours;
       const hoursArg = args[1];
       if (hoursArg) {
         const parsed = Number(hoursArg);

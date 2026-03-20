@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import Database from "better-sqlite3";
 import { CommandHandler } from "./command-handler.js";
+import { DMPolicy } from "../security/dm-policy.js";
+import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 
 describe("CommandHandler /routing", () => {
   const sendMarkdown = vi.fn().mockResolvedValue(undefined);
@@ -201,5 +204,86 @@ describe("CommandHandler /routing", () => {
 
     expect(sendText).toHaveBeenCalledWith("chat-1", "No routing decisions recorded yet.");
     expect(sendMarkdown).not.toHaveBeenCalled();
+  });
+});
+
+describe("CommandHandler /autonomous", () => {
+  it("uses the configured default hours when none are provided", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const channel = {
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockResolvedValue(undefined),
+    };
+    const handler = new CommandHandler(
+      {} as never,
+      channel as never,
+      undefined,
+      new DMPolicy(channel as never),
+      userProfileStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        autonomousDefaultEnabled: true,
+        autonomousDefaultHours: 36,
+      },
+    );
+
+    const before = Date.now();
+    await handler.handle("chat-1", "autonomous", ["on"], "user-42");
+    const result = await userProfileStore.isAutonomousMode("user-42");
+
+    expect(result.enabled).toBe(true);
+    expect(result.expiresAt).toBeGreaterThanOrEqual(before + 35 * 3600_000);
+    expect(result.expiresAt).toBeLessThanOrEqual(before + 36 * 3600_000 + 5_000);
+    expect(channel.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Autonomous mode enabled for 36 hours. I'll execute tasks without asking for approval.",
+    );
+    db.close();
+  });
+
+  it("hydrates autonomous status from the configured defaults without overriding explicit off", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const channel = {
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendText: vi.fn().mockResolvedValue(undefined),
+    };
+    const dmPolicy = new DMPolicy(channel as never);
+    const handler = new CommandHandler(
+      {} as never,
+      channel as never,
+      undefined,
+      dmPolicy,
+      userProfileStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        autonomousDefaultEnabled: true,
+        autonomousDefaultHours: 12,
+      },
+    );
+
+    await handler.handle("chat-1", "autonomous", [], "user-42");
+    expect(dmPolicy.isAutonomousActive("chat-1", "user-42")).toBe(true);
+    expect(channel.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Autonomous mode is enabled."),
+    );
+
+    await userProfileStore.setAutonomousMode("user-42", false);
+    channel.sendText.mockClear();
+
+    await handler.handle("chat-1", "autonomous", [], "user-42");
+    expect(channel.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Autonomous mode is currently disabled.",
+    );
+    db.close();
   });
 });
