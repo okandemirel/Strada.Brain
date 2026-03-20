@@ -106,7 +106,6 @@ import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/
 import type { RuntimeArtifactManager, TrajectoryPhaseReplay, TrajectoryReplayContext } from "../learning/index.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
-import { derivePhaseVerdict } from "../agent-core/routing/phase-verdict.js";
 import type {
   TaskClassification,
   ExecutionTrace,
@@ -126,11 +125,41 @@ import {
   reviewAutonomousPlan,
   reviewAutonomousQuestion,
 } from "./orchestrator-interaction-policy.js";
+import {
+  LANGUAGE_DISPLAY_NAMES,
+  applyVisibleResponseContract,
+  buildExactResponseDirective,
+  buildProfileParts,
+  extractExactResponseLiteral,
+  extractNaturalLanguageDirectiveUpdates,
+  redactSensitiveText,
+  resolveConversationScope,
+  resolveIdentityKey,
+  sanitizePromptInjection,
+} from "./orchestrator-text-utils.js";
+import {
+  extractApproachSummary,
+  mergeLearnedInsights,
+  normalizeFailureFingerprint,
+  parseReflectionDecision,
+  replaceSection,
+  sanitizeEventInput,
+  sanitizeToolResult,
+  shouldSurfaceTerminalFailureFromReflection,
+} from "./orchestrator-runtime-utils.js";
+import {
+  buildExecutionTraceRecord,
+  buildPhaseOutcomeRecord,
+  buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
+  resolveExecutionTraceSource as resolveExecutionTraceSourceModel,
+  toExecutionPhase as toExecutionPhaseModel,
+  toPhaseOutcomeStatus as toPhaseOutcomeStatusModel,
+  transitionToVerifierReplan as transitionToVerifierReplanModel,
+} from "./orchestrator-phase-telemetry.js";
 
 const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
-const MAX_TOOL_RESULT_LENGTH = 8192;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
 const AUTONOMOUS_MODE_DIRECTIVE = `\n\n## AUTONOMOUS MODE ACTIVE
 You are operating in AUTONOMOUS MODE. The user has explicitly granted you full autonomy.
@@ -143,9 +172,6 @@ You are operating in AUTONOMOUS MODE. The user has explicitly granted you full a
 - Proceed confidently with your best judgment on all write operations
 - Do NOT return internal tool-run checklists or "first run X / then run Y" operational memos in plain text; use the tools directly when you can
 - Budget and safety limits are still enforced automatically\n`;
-const API_KEY_PATTERN =
-  /(?:sk-|key-|token-|api[_-]?key[=: ]+|ghp_|gho_|ghu_|ghs_|ghr_|xox[bpas]-|Bearer\s+|AKIA[0-9A-Z]{16}|-----BEGIN\s(?:RSA\s)?PRIVATE\sKEY-----|mongodb(?:\+srv)?:\/\/[^\s]+@)[a-zA-Z0-9_\-.]{10,}/gi;
-const NATURAL_LANGUAGE_AUTONOMOUS_HOURS = 24;
 const INTERNAL_DECISION_LINE_RE = /^\s*\*{0,2}(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\*{0,2}\s*$/gim;
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
 The orchestrator remains the primary intelligence and the user-facing agent.
@@ -234,182 +260,6 @@ interface SupervisorExecutionStrategy {
   usesMultipleProviders: boolean;
 }
 
-/** Maps ISO codes to display names for system prompt injection. */
-const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
-  en: "English", tr: "Turkish", ja: "Japanese", ko: "Korean",
-  zh: "Chinese", de: "German", es: "Spanish", fr: "French",
-};
-
-/** Strip markdown control characters from user-supplied display names. */
-function sanitizeDisplayName(raw: string): string {
-  return raw.replace(/[*[\]()#`>!\\<&\r\n]/g, "").trim();
-}
-
-const NAME_INTRO_RE = /(?:ben\s+|i(?:'|’)m\s+|my name is\s+|ad[ıi]m\s+)([\p{L}]+)/iu;
-const EXPLICIT_USER_NAME_RE = /(?:benim\s+ad[ıi]m|ad[ıi]m|my\s+name\s+is|i(?:'|’)m|call\s+me)\s+(?:şu|su|as)?\s*["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})/iu;
-const USER_ADDRESS_NAME_RE = /(?:bana|beni)\s+["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})["”]?\s+(?:de|diye\s+(?:çağır|cagir|hitap\s+et)|call\s+me)/iu;
-const ASSISTANT_NAME_RE = /(?:bundan\s+sonra\s+)?(?:senin\s+)?(?:ad[ıi]n|ismin|your\s+name\s+(?:should\s+be|is)|call\s+yourself)\s*(?:şu|su|as)?\s*(?:olsun|olacak|be|is|:|-)?\s*["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})/iu;
-const RESPONSE_FORMAT_CUSTOM_RE =
-  /(?:(?:şu|su|this|following)\s+format(?:ta)?(?:\s+(?:cevap\s+ver|reply|respond))?|(?:cevap|yanıt|reply|respond)(?:ların|ler?n)?\s*(?:şöyle|like\s+this|in\s+this\s+format))(?:\s+ol(?:sun|malı|acak))?\s*[:\-]?\s*(.+)$/iu;
-const AUTONOMY_ENABLE_RE =
-  /(?:\b(?:autonom|otonom|autonomous)\b.*\b(?:çalış|calis|aç|ac|aktif|etkin|enable|turn\s+on|work|ilerle)\b|\b(?:onay|approval)\b.*\b(?:sormadan|istemeden|without\s+asking|without\s+approval)\b|\b(?:tam\s+yetki|full\s+autonomy|full\s+authority)\b)/iu;
-const AUTONOMY_DISABLE_RE =
-  /(?:\b(?:autonom|otonom|autonomous)\b.*\b(?:kapat|kapa|disable|turn\s+off|devre\s+dışı|devre\s+disi|çalışma|calisma)\b|\b(?:onay|approval)\b.*\b(?:sor|iste|ask\s+first|require)\b)/iu;
-const ULTRATHINK_ENABLE_RE =
-  /(?:\bultrathink\b|\bultra\s+think\b|\bdeep(?:er)?\s+think(?:ing)?\b|\bderin\s+düş(?:ün|un)\b|\bçok\s+derin\s+düş(?:ün|un)\b)/iu;
-const ULTRATHINK_DISABLE_RE =
-  /(?:\bultrathink\b|\bultra\s+think\b).*\b(?:kapat|kapa|disable|turn\s+off|off|devre\s+dışı|devre\s+disi)\b/iu;
-const EXACT_RESPONSE_LITERAL_PATTERNS = [
-  /\b(?:say|write|reply|respond|answer|output)\s+exactly\s*[:\-]\s*["“]?([^"\n]+?)["”]?\s*$/iu,
-  /\b(?:reply|respond|answer|output|write)\s+(?:with\s+)?only\s*[:\-]\s*["“]?([^"\n]+?)["”]?\s*$/iu,
-  /\b(?:yalnızca|yalnizca|sadece)\s*[:\-]\s*["“]?([^"\n]+?)["”]?\s*(?:yaz|söyle|soyle|cevap\s+ver|yanıtla)?\s*$/iu,
-] as const;
-
-interface NaturalLanguageDirectiveUpdates {
-  language?: string;
-  displayName?: string;
-  preferences?: Record<string, unknown>;
-  autonomousMode?: {
-    enabled: boolean;
-    expiresAt?: number;
-  };
-}
-
-function sanitizePreferenceText(raw: string, maxLength = 160): string {
-  return raw
-    .replace(API_KEY_PATTERN, "[REDACTED]")
-    .replace(/[*[\]()#`>!\\<&]/g, " ")
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLength);
-}
-
-function trimDirectiveTail(raw: string): string {
-  const firstLine = raw.split(/[\r\n]/u, 1)[0] ?? "";
-  const firstSentence = firstLine.split(/[.!?]/u, 1)[0] ?? firstLine;
-  const firstClause = firstSentence.split(/\s+(?:ve|and|ama|but|lütfen|please|çünkü|because)\b/iu, 1)[0] ?? firstSentence;
-  return firstClause
-    .replace(/["“”'`]+/g, "")
-    .replace(/[.,!?;:]+$/g, "")
-    .replace(/\b(?:olsun|olacak|be|is)$/iu, "")
-    .trim();
-}
-
-function extractExactResponseLiteral(prompt: string): string | undefined {
-  for (const pattern of EXACT_RESPONSE_LITERAL_PATTERNS) {
-    const captured = prompt.match(pattern)?.[1];
-    if (!captured) {
-      continue;
-    }
-    const literal = sanitizePreferenceText(captured, 120)
-      .replace(/^["“”'`]+|["“”'`]+$/g, "")
-      .trim();
-    if (literal.length > 0) {
-      return literal;
-    }
-  }
-  return undefined;
-}
-
-function buildExactResponseDirective(prompt: string): string {
-  const literal = extractExactResponseLiteral(prompt);
-  if (!literal) {
-    return "";
-  }
-  return [
-    "",
-    "## STRICT RESPONSE CONTRACT",
-    `The user requested an exact output literal: "${literal}"`,
-    "- The visible final answer must be exactly that literal.",
-    "- Do not add extra words, quotes, markdown, prefixes, suffixes, or explanations.",
-    "",
-  ].join("\n");
-}
-
-function applyVisibleResponseContract(prompt: string, responseText: string): string {
-  const literal = extractExactResponseLiteral(prompt);
-  return literal ?? responseText;
-}
-
-function getStringPreference(preferences: Record<string, unknown>, key: string, maxLength = 160): string | undefined {
-  const value = preferences[key];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const sanitized = sanitizePreferenceText(value, maxLength);
-  return sanitized.length > 0 ? sanitized : undefined;
-}
-
-function getBooleanPreference(preferences: Record<string, unknown>, key: string): boolean | undefined {
-  const value = preferences[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function resolveConversationScope(chatId: string, conversationId?: string): string {
-  const normalizedConversationId = conversationId?.trim();
-  return normalizedConversationId ? normalizedConversationId : chatId;
-}
-
-function resolveIdentityKey(chatId: string, userId?: string, conversationId?: string): string {
-  const normalizedUserId = userId?.trim();
-  if (normalizedUserId) {
-    return normalizedUserId;
-  }
-  return resolveConversationScope(chatId, conversationId);
-}
-
-function detectVerbosityPreference(text: string): string | undefined {
-  const responseIntent = /\b(cevap|yanıt|yaz|reply|respond|answer|açıkla|acikla|anlat|explain)\b/iu.test(text);
-  if (/\b(kısa|kisa|brief|concise|short)\b/iu.test(text) && /\b(cevap|yanıt|yaz|reply|respond|answer|açıkla|acikla)\b/iu.test(text)) {
-    return "brief";
-  }
-  if (responseIntent && /\b(detaylı|detayli|ayrıntılı|ayrintili|thorough|detailed|long-form|deep-dive)\b/iu.test(text)) {
-    return "detailed";
-  }
-  if (responseIntent && /\b(orta|normal|balanced|moderate)\b/iu.test(text)) {
-    return "moderate";
-  }
-  return undefined;
-}
-
-function detectCommunicationStylePreference(text: string): string | undefined {
-  const styleIntent = /\b(cevap|yanıt|reply|respond|answer|üslup|uslup|ton|tone|style)\b/iu.test(text);
-  if (!styleIntent) return undefined;
-  if (/\b(resmi|formal)\b/iu.test(text)) return "formal";
-  if (/\b(samimi|gündelik|gundelik|casual|friendly)\b/iu.test(text)) return "casual";
-  if (/\b(minimal|yalın|yalin|plain|minimalist)\b/iu.test(text)) return "minimal";
-  return undefined;
-}
-
-function detectResponseFormatPreference(text: string): { format?: string; instruction?: string } {
-  const customMatch = text.match(RESPONSE_FORMAT_CUSTOM_RE);
-  const instruction = customMatch?.[1]
-    ? sanitizePreferenceText(customMatch[1].split(/[.!?]/u, 1)[0] ?? customMatch[1], 220)
-    : undefined;
-  const formatIntent = /\b(cevap|yanıt|reply|respond|answer|format)\b/iu.test(text) || Boolean(instruction);
-
-  if (formatIntent && /\bjson\b/iu.test(text)) {
-    return { format: "json", instruction };
-  }
-  if (formatIntent && /\b(madde\s+madde|bullet\s+points?|bullets?)\b/iu.test(text)) {
-    return { format: "bullet points", instruction };
-  }
-  if (formatIntent && /\b(tablo|table)\b/iu.test(text)) {
-    return { format: "table", instruction };
-  }
-  if (formatIntent && /\b(tek\s+paragraf|single\s+paragraph)\b/iu.test(text)) {
-    return { format: "single paragraph", instruction };
-  }
-
-  if (instruction) {
-    return { instruction };
-  }
-
-  return {};
-}
-
 function createStreamingProgressTimeout(initialTimeoutMs: number, stallTimeoutMs: number): {
   markProgress: () => void;
   timeoutPromise: Promise<never>;
@@ -448,29 +298,6 @@ function createStreamingProgressTimeout(initialTimeoutMs: number, stallTimeoutMs
   };
 }
 
-/** Build a list of profile attribute lines for system prompt injection. */
-function buildProfileParts(profile: { displayName?: string; language: string; activePersona: string; preferences: unknown }): string[] {
-  const parts: string[] = [];
-  const preferences = profile.preferences as Record<string, unknown>;
-  if (profile.displayName) parts.push(`Name: ${profile.displayName}`);
-  parts.push(`Language: ${profile.language}`);
-  if (profile.activePersona !== "default") parts.push(`Communication Style: ${profile.activePersona}`);
-  const assistantName = getStringPreference(preferences, "assistantName", 80);
-  if (assistantName) parts.push(`Assistant Identity: When referring to yourself, use the name "${assistantName}".`);
-  const communicationStyle = getStringPreference(preferences, "communicationStyle", 60);
-  if (communicationStyle) parts.push(`Reply Style: ${communicationStyle}`);
-  const verbosity = getStringPreference(preferences, "verbosity", 40);
-  if (verbosity) parts.push(`Detail Level: ${verbosity}`);
-  const responseFormat = getStringPreference(preferences, "responseFormat", 80);
-  if (responseFormat) parts.push(`Response Format Preference: ${responseFormat}`);
-  const responseFormatInstruction = getStringPreference(preferences, "responseFormatInstruction", 220);
-  if (responseFormatInstruction) parts.push(`Response Format Instruction: ${responseFormatInstruction}`);
-  if (getBooleanPreference(preferences, "ultrathinkMode") === true) {
-    parts.push("Reasoning Mode: Use extra-careful, multi-step internal reasoning before answering.");
-  }
-  return parts;
-}
-
 const FIRST_TIME_USER_PROMPT = `\n\n## First-Time User
 This is a new user you haven't met before.
 
@@ -482,14 +309,6 @@ Onboarding rules:
 5. Start with the language from the Language Rule above, but if the user writes in a different language, match their language.
 
 Remember the user's name after they tell you. Keep onboarding minimal and non-blocking.\n`;
-
-/** Strip prompt injection patterns from stored text before injecting into system prompts. */
-function sanitizePromptInjection(text: string): string {
-  return text
-    .replace(API_KEY_PATTERN, "[REDACTED]")
-    .replace(/^(#{1,3}\s*(SYSTEM|IMPORTANT|INSTRUCTION|OVERRIDE|IGNORE))[:\s]/gim, "[filtered] ")
-    .replace(/\r/g, "");
-}
 
 /** Default prompt when user sends an image with no text. */
 const DEFAULT_IMAGE_PROMPT = "What is in this image?";
@@ -1107,66 +926,24 @@ export class Orchestrator {
   }
 
   private toExecutionPhase(phase: AgentPhase): ExecutionPhase {
-    switch (phase) {
-      case AgentPhase.PLANNING:
-        return "planning";
-      case AgentPhase.REFLECTING:
-        return "reflecting";
-      case AgentPhase.REPLANNING:
-        return "replanning";
-      case AgentPhase.EXECUTING:
-      case AgentPhase.COMPLETE:
-      case AgentPhase.FAILED:
-      default:
-        return "executing";
-    }
+    return toExecutionPhaseModel(phase);
   }
 
   private toPhaseOutcomeStatus(
     decision: "approve" | "continue" | "replan",
   ): PhaseOutcomeStatus {
-    switch (decision) {
-      case "approve":
-        return "approved";
-      case "replan":
-        return "replanned";
-      case "continue":
-      default:
-        return "continued";
-    }
+    return toPhaseOutcomeStatusModel(decision);
   }
 
   private transitionToVerifierReplan(state: AgentState, reflectionText?: string | null): AgentState {
-    const enrichedState: AgentState = {
-      ...state,
-      failedApproaches: [...state.failedApproaches, extractApproachSummary(state)],
-      lastReflection: reflectionText ?? state.lastReflection,
-      reflectionCount: state.reflectionCount + 1,
-      consecutiveErrors: 0,
-    };
-
-    if (enrichedState.phase === AgentPhase.REFLECTING) {
-      return transitionPhase(enrichedState, AgentPhase.REPLANNING);
-    }
-
-    if (enrichedState.phase === AgentPhase.EXECUTING) {
-      return transitionPhase(
-        transitionPhase(enrichedState, AgentPhase.REFLECTING),
-        AgentPhase.REPLANNING,
-      );
-    }
-
-    return {
-      ...enrichedState,
-      phase: AgentPhase.REPLANNING,
-    };
+    return transitionToVerifierReplanModel(state, reflectionText);
   }
 
   private resolveExecutionTraceSource(
     assignment: SupervisorAssignment,
     fallback: ExecutionTraceSource = "supervisor-strategy",
   ): ExecutionTraceSource {
-    return assignment.traceSource ?? fallback;
+    return resolveExecutionTraceSourceModel(assignment, fallback);
   }
 
   private recordExecutionTrace(params: {
@@ -1179,19 +956,17 @@ export class Orchestrator {
     reason?: string;
     taskRunId?: string;
   }): void {
-    this.providerRouter?.recordExecutionTrace?.({
-      provider: params.assignment.providerName,
-      model: params.assignment.modelId,
-      role: params.assignment.role,
-      phase: params.phase,
-      source: params.source ?? this.resolveExecutionTraceSource(params.assignment),
-      reason: params.reason ?? params.assignment.reason,
-      task: params.task,
-      timestamp: Date.now(),
+    this.providerRouter?.recordExecutionTrace?.(buildExecutionTraceRecord({
       identityKey: params.identityKey,
+      assignment: params.assignment,
+      phase: params.phase,
+      source: params.source,
+      task: params.task,
+      reason: params.reason,
+      timestampMs: Date.now(),
       chatId: params.chatId,
       taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
-    });
+    }));
   }
 
   private recordPhaseOutcome(params: {
@@ -1206,22 +981,19 @@ export class Orchestrator {
     telemetry?: PhaseOutcomeTelemetry;
     taskRunId?: string;
   }): void {
-    const telemetry = this.buildPhaseOutcomeVerdictTelemetry(params.status, params.telemetry);
-    this.providerRouter?.recordPhaseOutcome?.({
-      provider: params.assignment.providerName,
-      model: params.assignment.modelId,
-      role: params.assignment.role,
-      phase: params.phase,
-      source: params.source ?? this.resolveExecutionTraceSource(params.assignment),
-      status: params.status,
-      reason: params.reason ?? params.assignment.reason,
-      task: params.task,
-      timestamp: Date.now(),
+    this.providerRouter?.recordPhaseOutcome?.(buildPhaseOutcomeRecord({
       identityKey: params.identityKey,
+      assignment: params.assignment,
+      phase: params.phase,
+      status: params.status,
+      task: params.task,
+      timestampMs: Date.now(),
+      source: params.source,
+      reason: params.reason,
+      telemetry: params.telemetry,
       chatId: params.chatId,
       taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
-      telemetry,
-    });
+    }));
   }
 
   private buildPhaseOutcomeTelemetry(params: {
@@ -1231,50 +1003,7 @@ export class Orchestrator {
     failureReason?: string | null;
     projectWorldFingerprint?: string;
   }): PhaseOutcomeTelemetry | undefined {
-    const inputTokens = params.usage?.inputTokens ?? 0;
-    const outputTokens = params.usage?.outputTokens ?? 0;
-    const retryCount = Math.max(0, params.state?.reflectionCount ?? 0);
-    const rollbackDepth = Math.max(0, params.state?.failedApproaches.length ?? 0);
-    const failureFingerprint = normalizeFailureFingerprint(
-      params.failureReason
-        ?? (params.state ? extractApproachSummary(params.state) : ""),
-    );
-
-    if (
-      !params.verifierDecision &&
-      inputTokens === 0 &&
-      outputTokens === 0 &&
-      retryCount === 0 &&
-      rollbackDepth === 0 &&
-      !failureFingerprint
-    ) {
-      return undefined;
-    }
-
-    return {
-      verifierDecision: params.verifierDecision,
-      retryCount,
-      rollbackDepth,
-      failureFingerprint: failureFingerprint || undefined,
-      projectWorldFingerprint: params.projectWorldFingerprint || undefined,
-      inputTokens,
-      outputTokens,
-    };
-  }
-
-  private buildPhaseOutcomeVerdictTelemetry(
-    status: PhaseOutcomeStatus,
-    telemetry?: PhaseOutcomeTelemetry,
-  ): PhaseOutcomeTelemetry | undefined {
-    const verdict = derivePhaseVerdict(status, telemetry?.verifierDecision);
-    if (!telemetry && !verdict) {
-      return undefined;
-    }
-    return {
-      ...telemetry,
-      phaseVerdict: verdict?.label ?? telemetry?.phaseVerdict,
-      phaseVerdictScore: verdict?.score ?? telemetry?.phaseVerdictScore,
-    };
+    return buildPhaseOutcomeTelemetryModel(params);
   }
 
   private resolveConsensusReviewAssignment(
@@ -5965,7 +5694,7 @@ export class Orchestrator {
 
       if (summary) {
         // Sanitize before persisting — strip any leaked API keys/secrets
-        const sanitized = summary.replace(API_KEY_PATTERN, "[REDACTED]");
+        const sanitized = redactSensitiveText(summary);
         // Extract first user message and last assistant message for structured storage
         const userMsg = messages.find((m) => m.role === "user");
         let assistantMsg: ConversationMessage | undefined;
@@ -5997,116 +5726,16 @@ export class Orchestrator {
     }
   }
 
-  /** Simple heuristic language detection from text content. */
-  private detectLanguageFromText(text: string): string | null {
-    const lower = text.toLowerCase();
-    // Turkish indicators
-    if (/[çğıöşüÇĞİÖŞÜ]/.test(text) || /\b(merhaba|selam|nasıl|proje|yardım|bir|ile|için)\b/.test(lower)) return "tr";
-    // Japanese
-    if (/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(text)) return "ja";
-    // Korean
-    if (/[\uAC00-\uD7AF]/.test(text)) return "ko";
-    // Chinese (no Japanese/Korean)
-    if (/[\u4E00-\u9FFF]/.test(text) && !/[\u3040-\u309F\uAC00-\uD7AF]/.test(text)) return "zh";
-    // German
-    if (/[äöüßÄÖÜ]/.test(text) || /\b(hallo|projekt|hilfe)\b/.test(lower)) return "de";
-    // Spanish
-    if (/[ñ¡¿]/.test(text) || /\b(hola|proyecto|ayuda)\b/.test(lower)) return "es";
-    // French
-    if (/[àâæçéèêëïîôœùûüÿ]/.test(text) || /\b(bonjour|projet|aide)\b/.test(lower)) return "fr";
-    return null; // Default: don't override, keep "en"
-  }
-
-  private extractNaturalLanguageDirectiveUpdates(
-    latestProfile: { displayName?: string; preferences: Record<string, unknown> } | null,
-    prompt: string,
-  ): NaturalLanguageDirectiveUpdates {
-    const updates: NaturalLanguageDirectiveUpdates = {};
-    const trimmed = prompt.trim();
-
-    const langFromMsg = this.detectLanguageFromText(prompt);
-    if (langFromMsg) {
-      updates.language = langFromMsg;
-    }
-
-    const isSingleWord = trimmed.split(/\s+/).length <= 2 && /^[\p{L}]{2,20}$/u.test(trimmed);
-    const nameMatch = trimmed.match(EXPLICIT_USER_NAME_RE)
-      ?? trimmed.match(USER_ADDRESS_NAME_RE)
-      ?? trimmed.match(NAME_INTRO_RE)
-      ?? (isSingleWord ? [, trimmed] : null);
-    const displayName = nameMatch?.[1] ? sanitizeDisplayName(trimDirectiveTail(nameMatch[1])) : "";
-    if (displayName && (!latestProfile?.displayName || trimmed.match(EXPLICIT_USER_NAME_RE))) {
-      updates.displayName = displayName;
-    }
-
-    const preferenceUpdates: Record<string, unknown> = {};
-
-    const assistantNameMatch = trimmed.match(ASSISTANT_NAME_RE);
-    const assistantName = assistantNameMatch?.[1]
-      ? sanitizeDisplayName(trimDirectiveTail(assistantNameMatch[1])).slice(0, 40)
-      : "";
-    if (assistantName) {
-      preferenceUpdates.assistantName = assistantName;
-    }
-
-    const verbosity = detectVerbosityPreference(trimmed);
-    if (verbosity) {
-      preferenceUpdates.verbosity = verbosity;
-    }
-
-    const communicationStyle = detectCommunicationStylePreference(trimmed);
-    if (communicationStyle) {
-      preferenceUpdates.communicationStyle = communicationStyle;
-    }
-
-    const responseFormat = detectResponseFormatPreference(trimmed);
-    if (responseFormat.format) {
-      preferenceUpdates.responseFormat = responseFormat.format;
-    }
-    if (responseFormat.instruction) {
-      preferenceUpdates.responseFormatInstruction = responseFormat.instruction;
-    }
-
-    if (ULTRATHINK_DISABLE_RE.test(trimmed)) {
-      preferenceUpdates.ultrathinkMode = false;
-    } else if (ULTRATHINK_ENABLE_RE.test(trimmed)) {
-      preferenceUpdates.ultrathinkMode = true;
-    }
-
-    const fromNowOnMatch = trimmed.match(/(?:bundan\s+sonra|from\s+now\s+on|her\s+zaman|always)\s+(.+)$/iu);
-    const directiveTail = fromNowOnMatch?.[1]
-      ? sanitizePreferenceText(fromNowOnMatch[1].split(/[.!?]/u, 1)[0] ?? fromNowOnMatch[1], 220)
-      : undefined;
-    if (!responseFormat.instruction && directiveTail && /\b(cevap|yanıt|reply|respond|format|style|üslup|uslup|ton|tone|json|bullet|madde|tablo|table)\b/iu.test(directiveTail)) {
-      preferenceUpdates.responseFormatInstruction = directiveTail;
-    }
-
-    if (AUTONOMY_DISABLE_RE.test(trimmed)) {
-      updates.autonomousMode = { enabled: false };
-    } else if (AUTONOMY_ENABLE_RE.test(trimmed)) {
-      updates.autonomousMode = {
-        enabled: true,
-        expiresAt: Date.now() + NATURAL_LANGUAGE_AUTONOMOUS_HOURS * 3600_000,
-      };
-    }
-
-    if (Object.keys(preferenceUpdates).length > 0) {
-      updates.preferences = {
-        ...(latestProfile?.preferences ?? {}),
-        ...preferenceUpdates,
-      };
-    }
-
-    return updates;
-  }
-
   private async maybeUpdateUserProfileFromPrompt(chatId: string, profileKey: string, prompt: string, userId?: string): Promise<void> {
     if (!this.userProfileStore || !prompt.trim()) {
       return;
     }
 
     const latestProfile = this.userProfileStore.getProfile(profileKey);
-    const updates = this.extractNaturalLanguageDirectiveUpdates(latestProfile, prompt);
+    const updates = extractNaturalLanguageDirectiveUpdates({
+      latestProfile,
+      prompt,
+    });
     const profileUpdates: Record<string, unknown> = {};
 
     if (updates.language) {
@@ -6578,113 +6207,5 @@ export class Orchestrator {
   }
 }
 
-/**
- * Replace a section delimited by XML markers in a prompt string.
- * Markers: `<!-- {tag}:start -->` and `<!-- {tag}:end -->`.
- * If markers are not found, appends the section.
- */
-function replaceSection(prompt: string, tag: string, newContent: string): string {
-  const startMarker = `<!-- ${tag}:start -->`;
-  const endMarker = `<!-- ${tag}:end -->`;
-  // Sanitize newContent: strip any embedded markers to prevent injection
-  // of fake section boundaries from adversarial memory/RAG content.
-  const sanitized = newContent
-    .replace(/<!--\s*[\w:-]+:start\s*-->/g, "")
-    .replace(/<!--\s*[\w:-]+:end\s*-->/g, "");
-  const startIdx = prompt.indexOf(startMarker);
-  const endIdx = prompt.indexOf(endMarker);
-  if (startIdx === -1 || endIdx === -1) {
-    return prompt + `\n\n${startMarker}\n${sanitized}\n${endMarker}\n`;
-  }
-  return prompt.substring(0, startIdx) + startMarker + "\n" + sanitized + "\n" + endMarker + prompt.substring(endIdx + endMarker.length);
-}
-
-type ReflectionDecision = "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTIONS";
-
-const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\s*\*\*/;
-const VALID_DECISIONS = new Set<ReflectionDecision>(["CONTINUE", "REPLAN", "DONE", "DONE_WITH_SUGGESTIONS"]);
 const LOCAL_INSPECTION_SCOPE_RE =
   /(?:[A-Za-z0-9_./\\-]+\.(?:cs|ts|tsx|js|jsx|json|ya?ml|md|asset|prefab|unity|scene)|\b(?:file|repo|repository|project|module|component|system|class|function|provider|orchestrator|memory|routing|build|compile|error|warning|bug|crash|freeze|runtime|editor|unity|stack trace|log|test|implement|create|write|add|fix|debug|refactor|review|analy[sz]e)\b)/iu;
-
-function parseReflectionDecision(text: string | null | undefined): ReflectionDecision {
-  if (!text) return "CONTINUE";
-  const match = text.match(REFLECTION_DECISION_RE);
-  if (match) return match[1] as ReflectionDecision;
-  // Fallback: check last line for bare keyword
-  const lastLine = (text.trim().split("\n").pop() ?? "").toUpperCase() as ReflectionDecision;
-  if (VALID_DECISIONS.has(lastLine)) return lastLine;
-  return "CONTINUE";
-}
-
-function shouldSurfaceTerminalFailureFromReflection(response: ProviderResponse): boolean {
-  return (
-    response.stopReason === "end_turn" &&
-    response.toolCalls.length === 0 &&
-    isTerminalFailureReport(response.text)
-  );
-}
-
-function extractApproachSummary(state: AgentState): string {
-  const recentSteps = state.stepResults.slice(-5);
-  const tools = recentSteps.map(s => s.toolName + "(" + (s.success ? "OK" : "FAIL") + ")").join(" → ");
-  return (state.plan?.slice(0, 100) ?? "Unknown plan") + ": " + tools;
-}
-
-function mergeLearnedInsights(
-  base: readonly string[] | null | undefined,
-  extra: readonly string[] | null | undefined,
-): string[] {
-  const merged = new Set<string>();
-  for (const value of base ?? []) {
-    const normalized = value.trim();
-    if (normalized) {
-      merged.add(normalized);
-    }
-  }
-  for (const value of extra ?? []) {
-    const normalized = value.trim();
-    if (normalized) {
-      merged.add(normalized);
-    }
-  }
-  return [...merged].slice(-12);
-}
-
-function normalizeFailureFingerprint(text: string | null | undefined): string {
-  if (!text) {
-    return "";
-  }
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .slice(0, 180);
-}
-
-/** Sanitize tool input for learning events: cap size, strip API keys */
-function sanitizeEventInput(input: Record<string, unknown>): Record<string, unknown> {
-  const serialized = JSON.stringify(input);
-  if (serialized.length > 2048) {
-    return { _truncated: true, _keys: Object.keys(input) };
-  }
-  const scrubbed = serialized.replace(API_KEY_PATTERN, "[REDACTED]");
-  return JSON.parse(scrubbed) as Record<string, unknown>;
-}
-
-/**
- * Sanitize tool results before feeding back to LLM.
- * Caps length and strips potential API key patterns.
- */
-function sanitizeToolResult(content: string): string {
-  let result = content;
-
-  // Strip API key patterns
-  result = result.replace(API_KEY_PATTERN, "[REDACTED]");
-
-  // Cap length
-  if (result.length > MAX_TOOL_RESULT_LENGTH) {
-    result = result.substring(0, MAX_TOOL_RESULT_LENGTH) + "\n... (truncated)";
-  }
-
-  return result;
-}

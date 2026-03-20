@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
@@ -17,7 +17,6 @@ import { ClaudeProvider } from "../agents/providers/claude.js";
 import { buildProviderChain } from "../agents/providers/provider-registry.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
 import { Orchestrator } from "../agents/orchestrator.js";
-import { SoulLoader } from "../agents/soul/index.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { DashboardServer } from "../dashboard/server.js";
 import { FileMemoryManager } from "../memory/file-memory-manager.js";
@@ -33,7 +32,6 @@ import {
   describeEmbeddingResolutionFailure,
 } from "../rag/embeddings/embedding-resolver.js";
 import { RateLimiter } from "../security/rate-limiter.js";
-import { DMPolicy } from "../security/dm-policy.js";
 import type { DIContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
 import {
@@ -55,9 +53,21 @@ import {
 } from "../common/constants.js";
 import {
   finalizeChannelStartupStage,
+  initializeGoalContextStage,
+  initializeDaemonHeartbeatStage,
+  initializeDeploymentStage,
   initializeKnowledgeStage,
+  initializeMemoryConsolidationStage,
+  initializeMultiAgentDelegationStage,
   initializeOpsMonitoringStage,
   initializeProviderRuntimeStage,
+  initializeRuntimeIntelligenceStage,
+  initializeRuntimeStateStage,
+  initializeSessionRuntimeStage,
+  initializeTaskRuntimeStage,
+  initializeToolChainStage,
+  initializeToolRegistryStage,
+  registerDashboardPostBootStage,
   type EmbeddingResolutionResult,
   type LearningResult,
   type ProviderInitResult,
@@ -80,52 +90,28 @@ import {
   ErrorLearningHooks,
   PatternMatcher,
   ConfidenceScorer,
-  RuntimeArtifactManager,
-  createProjectScopeFingerprint,
 } from "../learning/index.js";
 import { TypedEventBus, type IEventBus, type LearningEventMap } from "./event-bus.js";
 import { LearningQueue } from "../learning/pipeline/learning-queue.js";
 import { ErrorRecoveryEngine } from "../agents/autonomy/error-recovery.js";
 import { TaskPlanner } from "../agents/autonomy/task-planner.js";
-import { InstinctRetriever } from "../agents/instinct-retriever.js";
-import { TrajectoryReplayRetriever } from "../agents/trajectory-replay-retriever.js";
 import { MetricsStorage } from "../metrics/metrics-storage.js";
-import { GoalStorage, GoalDecomposer, detectInterruptedTrees } from "../goals/index.js";
-import type { GoalExecutorConfig } from "../goals/index.js";
-import type { GoalTree } from "../goals/types.js";
-import { ChainDetector, ChainSynthesizer, ChainManager, ChainValidator } from "../learning/chains/index.js";
-import type { ToolChainConfig } from "../learning/chains/index.js";
-import { IdentityStateManager } from "../identity/identity-state.js";
+import type { GoalStorage } from "../goals/index.js";
+import { ChainManager } from "../learning/chains/index.js";
+import type { IdentityStateManager } from "../identity/identity-state.js";
 import { buildCapabilityManifest } from "../agents/context/strada-knowledge.js";
-import { buildCrashRecoveryContext } from "../identity/crash-recovery.js";
-import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
 import { MigrationRunner } from "../learning/storage/migrations/index.js";
 import { migration001CrossSessionProvenance } from "../learning/storage/migrations/001-cross-session-provenance.js";
-import type { ScopeContext } from "../learning/matching/pattern-matcher.js";
+import { SoulLoader } from "../agents/soul/index.js";
 
 // Multi-agent type-only imports (Plan 23-03: AGENT-01, AGENT-06, AGENT-07)
 import type { AgentManager as AgentManagerType } from "../agents/multi/agent-manager.js";
 import type { AgentBudgetTracker as AgentBudgetTrackerType } from "../agents/multi/agent-budget-tracker.js";
-import { createAgentId } from "../agents/multi/agent-types.js";
-
 // Delegation type-only imports (Plan 24-03: AGENT-03, AGENT-04, AGENT-05)
 import type { DelegationManager as DelegationManagerType } from "../agents/multi/delegation/delegation-manager.js";
 
 // Daemon imports
 import { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
-import { TriggerRegistry } from "../daemon/trigger-registry.js";
-import { DaemonStorage } from "../daemon/daemon-storage.js";
-import { BudgetTracker } from "../daemon/budget/budget-tracker.js";
-import { DaemonSecurityPolicy } from "../daemon/security/daemon-security-policy.js";
-import { ApprovalQueue } from "../daemon/security/approval-queue.js";
-import { CronTrigger } from "../daemon/triggers/cron-trigger.js";
-import { FileWatchTrigger } from "../daemon/triggers/file-watch-trigger.js";
-import { ChecklistTrigger } from "../daemon/triggers/checklist-trigger.js";
-import { WebhookTrigger } from "../daemon/triggers/webhook-trigger.js";
-import { TriggerDeduplicator } from "../daemon/dedup/trigger-deduplicator.js";
-import { parseHeartbeatFile } from "../daemon/heartbeat-parser.js";
-import type { DaemonEventMap } from "../daemon/daemon-events.js";
-import type { ITrigger } from "../daemon/daemon-types.js";
 import { NotificationRouter } from "../daemon/reporting/notification-router.js";
 import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 
@@ -136,11 +122,7 @@ import { AutoUpdater } from "./auto-updater.js";
 // Task system imports
 import {
   TaskStorage,
-  TaskManager,
-  BackgroundExecutor,
   MessageRouter,
-  CommandHandler,
-  ProgressReporter,
 } from "../tasks/index.js";
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
@@ -290,67 +272,19 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     initializeDashboard,
     initializeRateLimiter,
   });
-
-  // Initialize identity persistence (IDENT-01)
-  let identityManager: IdentityStateManager | undefined;
-  let uptimeInterval: ReturnType<typeof setInterval> | undefined;
-  try {
-    const identityDbPath = join(config.memory.dbPath, "identity.db");
-    identityManager = new IdentityStateManager(identityDbPath, config.agentName);
-    identityManager.initialize();
-    identityManager.recordBoot();
-    identityManager.setProjectContext(config.unityProjectPath);
-
-    // Periodic uptime flush using actual elapsed time (bounds SIGKILL loss to ~60s)
-    let lastFlushTime = Date.now();
-    uptimeInterval = setInterval(() => {
-      const now = Date.now();
-      identityManager!.updateUptime(now - lastFlushTime);
-      identityManager!.flush();
-      lastFlushTime = now;
-    }, 60000);
-
-    logger.info("Identity initialized", {
-      bootNumber: identityManager.getState().bootCount,
-      wasCrash: identityManager.wasCrash(),
-    });
-  } catch (error) {
-    logger.warn("Identity initialization failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  // Wire cross-session scope context and InstinctRetriever (Phase 13)
-  let instinctRetriever: InstinctRetriever | undefined;
-  let trajectoryReplayRetriever: TrajectoryReplayRetriever | undefined;
-  const runtimeArtifactManager = learningResult.pipeline?.getRuntimeArtifactManager()
-    ?? (learningResult.storage ? new RuntimeArtifactManager(learningResult.storage) : undefined);
-  if (learningResult.patternMatcher) {
-    const scopeContext: ScopeContext = {
-      projectPath: config.unityProjectPath,
-      scopeFilter: config.crossSession.scopeFilter,
-      maxAgeDays: config.crossSession.maxAgeDays,
-      recencyBoost: config.crossSession.recencyBoost,
-      scopeBoost: config.crossSession.scopeBoost,
-      currentBootCount: identityManager?.getState().bootCount,
-      currentSessionId: `boot-${identityManager?.getState().bootCount ?? 0}`,
-    };
-
-    instinctRetriever = new InstinctRetriever(learningResult.patternMatcher, {
-      scopeContext,
-      storage: learningResult.storage,
-      metricsRecorder,
-    });
-  }
-  if (learningResult.storage) {
-    trajectoryReplayRetriever = new TrajectoryReplayRetriever(learningResult.storage);
-  }
-
-  // Wire project path and promotion threshold to learning pipeline (Phase 13)
-  if (learningResult.pipeline) {
-    learningResult.pipeline.setProjectPath(config.unityProjectPath);
-    learningResult.pipeline.setPromotionThreshold(config.crossSession.promotionThreshold);
-  }
+  const {
+    identityManager,
+    uptimeInterval,
+    runtimeArtifactManager,
+    instinctRetriever,
+    trajectoryReplayRetriever,
+  } = initializeRuntimeStateStage({
+    config,
+    logger,
+    learningResult,
+    metricsStorage,
+    metricsRecorder,
+  });
 
   // Initialize tool registry now that all deps are available
   // getDaemonStatus closure captures heartbeatLoop (declared below) via late binding
@@ -361,179 +295,59 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let agentManager: AgentManagerType | undefined;
   let agentBudgetTrackerOuter: AgentBudgetTrackerType | undefined;
   let delegationManager: DelegationManagerType | undefined;
-  await toolRegistry.initialize(config, {
+  await initializeToolRegistryStage({
+    toolRegistry,
+    config,
     memoryManager,
     ragPipeline,
-    metricsCollector: metrics,
+    metrics,
     learningStorage: learningResult.storage,
     metricsStorage,
     getIdentityState: identityManager
       ? () => identityManager!.getState()
       : undefined,
+  }, {
     getDaemonStatus: () => heartbeatLoop?.getDaemonStatus(),
   });
 
-  // Initialize goal decomposition system (GOAL-01, GOAL-02)
-  let goalStorage: GoalStorage | undefined;
-  let goalDecomposer: GoalDecomposer | undefined;
-  try {
-    const goalsDbPath = join(config.memory.dbPath, "goals.db");
-    goalStorage = new GoalStorage(goalsDbPath);
-    goalStorage.initialize();
-    goalStorage.pruneOldTrees(); // Clean up completed/failed trees older than 7 days
-    goalDecomposer = new GoalDecomposer(
-      providerManager.getProvider(""),
-      config.goalMaxDepth,
-    );
-    logger.info("GoalDecomposer initialized", { dbPath: goalsDbPath, maxDepth: config.goalMaxDepth });
-  } catch (error) {
-    logger.warn("GoalDecomposer initialization failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  // Detect interrupted goal trees for resume prompt
-  let interruptedGoalTrees: GoalTree[] = [];
-  if (goalStorage) {
-    try {
-      interruptedGoalTrees = detectInterruptedTrees(goalStorage);
-      if (interruptedGoalTrees.length > 0) {
-        logger.info("Detected interrupted goal trees", { count: interruptedGoalTrees.length });
-      }
-    } catch (error) {
-      logger.debug("Interrupted tree detection failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  // Build crash recovery context if unclean shutdown detected (IDENT-02)
-  let crashContext: CrashRecoveryContext | null = null;
-  if (identityManager) {
-    crashContext = buildCrashRecoveryContext(
-      identityManager.wasCrash(),
-      identityManager.getState(),
-      interruptedGoalTrees,
-    );
-    if (crashContext) {
-      logger.warn("Unclean shutdown detected", {
-        downtimeMs: crashContext.downtimeMs,
-        interruptedTrees: crashContext.interruptedTrees.length,
-        bootCount: crashContext.bootCount,
-      });
-    }
-  }
-
-  // Create GoalExecutorConfig from config values
-  const goalExecutorConfig: GoalExecutorConfig = {
-    maxRetries: config.goalMaxRetries,
-    maxFailures: config.goalMaxFailures,
-    parallelExecution: config.goalParallelExecution,
-    maxParallel: config.goalMaxParallel,
-    maxRedecompositions: config.goal.maxRedecompositions,
-  };
-
-  // Initialize soul personality system
-  const soulOverrides: Record<string, string> = {};
-  for (const channel of ["telegram", "discord", "slack", "whatsapp", "web"] as const) {
-    const envValue = process.env[`SOUL_FILE_${channel.toUpperCase()}`];
-    if (envValue) soulOverrides[channel] = envValue;
-  }
-
-  // SoulLoader looks for soul.md + profiles/ in the base path.
-  // Use Strada.Brain root (process.cwd()), not the Unity project path.
-  const soulBasePath = process.cwd();
-  const soulLoader = new SoulLoader(soulBasePath, {
-    soulFile: process.env.SOUL_FILE ?? "soul.md",
-    channelOverrides: Object.keys(soulOverrides).length > 0 ? soulOverrides : undefined,
+  const {
+    goalStorage,
+    goalDecomposer,
+    interruptedGoalTrees,
+    crashContext,
+    goalExecutorConfig,
+  } = initializeGoalContextStage({
+    config,
+    logger,
+    provider: providerManager.getProvider(""),
+    identityManager,
   });
-  await soulLoader.initialize();
 
-  // Wire SessionSummarizer and UserProfileStore (requires AgentDBAdapter)
-  let sessionSummarizer: import("../memory/unified/session-summarizer.js").SessionSummarizer | undefined;
-  let userProfileStore: import("../memory/unified/user-profile-store.js").UserProfileStore | undefined;
-  let taskExecutionStore: import("../memory/unified/task-execution-store.js").TaskExecutionStore | undefined;
-  if (memoryManager) {
-    try {
-      if (memoryManager instanceof AgentDBAdapter) {
-        const profileStore = memoryManager.getUserProfileStore();
-        const executionStore = memoryManager.getTaskExecutionStore();
-        if (profileStore) {
-          userProfileStore = profileStore;
-        }
-        if (executionStore) {
-          taskExecutionStore = executionStore;
-          const { SessionSummarizer: SummarizerClass } = await import("../memory/unified/session-summarizer.js");
-          sessionSummarizer = new SummarizerClass(providerManager.getProvider(""), executionStore);
-          logger.info("SessionSummarizer wired for session-end summarization");
-        }
-      }
-    } catch {
-      // SessionSummarizer wiring failure is non-fatal
-      logger.debug("SessionSummarizer wiring skipped");
-    }
-  }
+  const {
+    soulLoader,
+    sessionSummarizer,
+    userProfileStore,
+    taskExecutionStore,
+    dmPolicy,
+  } = await initializeSessionRuntimeStage({
+    config,
+    logger,
+    memoryManager,
+    providerManager,
+    channel,
+  });
 
-  // Create a shared DMPolicy instance so both Orchestrator and CommandHandler
-  // use the same approval/confirmation state per session.
-  const dmPolicy = new DMPolicy(channel);
-
-  // Live model intelligence (provider catalogs, capability refresh, model metadata)
-  let modelIntelligence: import("../agents/providers/model-intelligence.js").ModelIntelligenceService | undefined;
-  if (config.modelIntelligence.enabled) {
-    try {
-      const { ModelIntelligenceService } = await import("../agents/providers/model-intelligence.js");
-      modelIntelligence = new ModelIntelligenceService({
-        refreshHours: config.modelIntelligence.refreshHours,
-        providerSourcesPath: config.modelIntelligence.providerSourcesPath,
-      });
-      await modelIntelligence.initialize(config.modelIntelligence.dbPath, {
-        refreshOnInitialize: false,
-      });
-      providerManager.setModelCatalog?.(modelIntelligence);
-      logger.info("ModelIntelligenceService initialized", {
-        dbPath: config.modelIntelligence.dbPath,
-        refreshHours: config.modelIntelligence.refreshHours,
-      });
-    } catch (error) {
-      logger.warn("ModelIntelligenceService initialization failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  // Multi-provider routing (if 2+ providers available)
-  let providerRouter: import("../agent-core/routing/provider-router.js").ProviderRouter | undefined;
-  try {
-    const { ProviderRouter } = await import("../agent-core/routing/provider-router.js");
-    const { TrajectoryPhaseSignalRetriever } = await import("../agent-core/routing/trajectory-phase-signal-retriever.js");
-    providerRouter = new ProviderRouter(providerManager, config.routing.preset, {
-      modelIntelligence,
-      trajectoryPhaseSignalRetriever: learningResult.storage
-        ? new TrajectoryPhaseSignalRetriever(learningResult.storage)
-        : undefined,
-    });
-    logger.info("ProviderRouter initialized", { preset: config.routing.preset });
-  } catch {
-    // Non-fatal — routing disabled
-  }
-
-  // Initialize ConsensusManager + ConfidenceEstimator (before Orchestrator so we can wire them)
-  let consensusManager: import("../agent-core/routing/consensus-manager.js").ConsensusManager | undefined;
-  let confidenceEstimator: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator | undefined;
-  try {
-    const { ConsensusManager } = await import("../agent-core/routing/consensus-manager.js");
-    consensusManager = new ConsensusManager({
-      mode: config.consensus.mode,
-      threshold: config.consensus.threshold,
-      maxProviders: config.consensus.maxProviders,
-    });
-    const { ConfidenceEstimator } = await import("../agent-core/routing/confidence-estimator.js");
-    confidenceEstimator = new ConfidenceEstimator();
-    logger.info("ConsensusManager initialized", { mode: config.consensus.mode });
-  } catch {
-    // Non-fatal — consensus disabled
-  }
+  const {
+    modelIntelligence,
+    providerRouter,
+    consensusManager,
+    confidenceEstimator,
+  } = await initializeRuntimeIntelligenceStage({
+    config,
+    logger,
+    providerManager,
+    learningStorage: learningResult.storage,
+  });
 
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
@@ -578,110 +392,47 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     confidenceEstimator,
   });
 
-  // Initialize tool chain synthesis (TOOL-01 through TOOL-05)
-  let chainManager: ChainManager | undefined;
-  if (config.toolChain.enabled && learningResult.storage) {
-    try {
-      const chainConfig: ToolChainConfig = config.toolChain;
-      const chainDetector = new ChainDetector(learningResult.storage, chainConfig);
-      const chainSynthesizer = new ChainSynthesizer(
-        learningResult.storage,
-        toolRegistry,
-        learningResult.eventBus as IEventBus<LearningEventMap>,
-        chainConfig,
-      );
-      // Use the same provider as orchestrator for LLM chain synthesis
-      chainSynthesizer.setProvider(providerManager.getProvider(""));
-
-      // Create chain validator for post-synthesis and runtime feedback (INTEL-05, INTEL-06)
-      const chainValidator = new ChainValidator({
-        storage: learningResult.storage,
-        confidenceScorer: new ConfidenceScorer(),
-        eventBus: learningResult.eventBus as IEventBus<LearningEventMap>,
-        updateInstinctStatus: (instinct) => {
-          learningResult.pipeline?.updateInstinctStatus(instinct);
-        },
-        onChainDeprecated: (chainName) => {
-          chainManager?.handleChainDeprecated(chainName);
-        },
-        maxAgeDays: chainConfig.maxAgeDays,
-      });
-
-      chainManager = new ChainManager(
-        chainDetector,
-        chainSynthesizer,
-        toolRegistry,
-        learningResult.storage,
-        orchestrator,
-        learningResult.eventBus as IEventBus<LearningEventMap>,
-        chainConfig,
-        chainValidator,
-      );
-
-      // Start chain manager (loads existing chains, starts detection timer)
-      await chainManager.start();
-
-      // Chain validation feedback loop (INTEL-05, INTEL-06)
-      if (learningResult.learningQueue) {
-        (learningResult.eventBus as IEventBus<LearningEventMap>).on("chain:executed", (event) => {
-          learningResult.learningQueue!.enqueue(async () => {
-            chainValidator.handleChainExecuted(event);
-          });
-        });
-      }
-
-      logger.info("Tool chain synthesis initialized");
-    } catch (error) {
-      logger.warn("Tool chain synthesis initialization failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  // Create daemon event bus early so it can be passed to BackgroundExecutor constructor
-  const daemonEventBus = options.daemonMode
-    ? new TypedEventBus<DaemonEventMap>()
-    : undefined;
-
-  // Initialize task system
-  const taskStorage = initializeTaskStorage(config, logger);
-  const backgroundExecutor = new BackgroundExecutor({
+  const { chainManager } = await initializeToolChainStage({
+    config,
+    logger,
+    learningStorage: learningResult.storage,
+    learningEventBus: learningResult.eventBus as IEventBus<LearningEventMap> | undefined,
+    learningQueue: learningResult.learningQueue,
+    learningPipeline: learningResult.pipeline,
+    toolRegistry,
+    providerManager,
     orchestrator,
-    concurrencyLimit: config.tasks.concurrencyLimit,
-    decomposer: goalDecomposer,
+  });
+
+  const {
+    daemonEventBus,
+    taskStorage,
+    backgroundExecutor,
+    taskManager,
+    autoUpdater,
+    projectScopeFingerprint,
+    commandHandler,
+    messageRouter,
+  } = await initializeTaskRuntimeStage({
+    daemonMode: Boolean(options.daemonMode),
+    config,
+    logger,
+    orchestrator,
+    providerManager,
+    channel,
+    dmPolicy,
+    userProfileStore,
+    soulLoader,
+    runtimeArtifactManager,
+    activityRegistry,
+    goalDecomposer,
     goalStorage,
     goalExecutorConfig,
-    aiProvider: providerManager.getProvider(""),
-    channel,
-    daemonEventBus,
-    goalConfig: config.goal,
-    learningEventBus: learningResult?.eventBus,
+    learningEventBus: learningResult.eventBus,
+    identityManager,
+    providerRouter,
+    startupNotices,
   });
-  const taskManager = new TaskManager(taskStorage, backgroundExecutor);
-  backgroundExecutor.setTaskManager(taskManager);
-  orchestrator.setTaskManager(taskManager);
-  taskManager.recoverOnStartup();
-  if (identityManager) {
-    taskManager.on("task:created", () => {
-      identityManager.incrementTasks();
-    });
-  }
-
-  // Initialize auto-updater (if enabled)
-  let autoUpdater: AutoUpdater | undefined;
-  if (config.autoUpdate.enabled) {
-    autoUpdater = new AutoUpdater(config, activityRegistry, backgroundExecutor);
-    autoUpdater.setNotifyFn((msg: string) => {
-      const chats = activityRegistry.getActiveChatIds();
-      for (const { chatId } of chats) {
-        channel.sendMarkdown(chatId, msg).catch(() => {});
-      }
-    });
-    await autoUpdater.init();
-    autoUpdater.scheduleChecks();
-  }
-
-  const projectScopeFingerprint = createProjectScopeFingerprint(config.unityProjectPath);
 
   // Register services for deep readiness checks and agent metrics endpoint
   if (dashboard) {
@@ -696,33 +447,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       chainResilienceConfig: config.toolChain.resilience,
     });
   }
-
-  const commandHandler = new CommandHandler(
-    taskManager,
-    channel,
-    providerManager,
-    dmPolicy,
-    userProfileStore,
-    soulLoader,
-    runtimeArtifactManager,
-    projectScopeFingerprint,
-    undefined,
-    {
-      autonomousDefaultEnabled: config.autonomousDefaultEnabled,
-      autonomousDefaultHours: config.autonomousDefaultHours,
-    },
-  );
-  // Wire providerRouter to command handler for /routing command
-  if (providerRouter) {
-    commandHandler.setProviderRouter(providerRouter);
-  }
   // HeartbeatLoop wired to CommandHandler below after daemon init (late binding)
-  const messageRouter = new MessageRouter(taskManager, commandHandler, channel, startupNotices, {
-    burstWindowMs: config.tasks.messageBurstWindowMs,
-    maxBurstMessages: config.tasks.messageBurstMaxMessages,
-  });
-  // ProgressReporter subscribes to taskManager events in constructor
-  new ProgressReporter(channel, taskManager);
 
   // Initialize daemon heartbeat loop (if daemon mode enabled)
   if (options.daemonMode) {
@@ -737,203 +462,92 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
       // daemonEventBus is guaranteed defined when daemonMode is true
       const daemonBus = daemonEventBus!;
-
-      // Initialize daemon storage
-      const daemonDbPath = join(config.memory.dbPath, "daemon.db");
-      const daemonStorage = new DaemonStorage(daemonDbPath);
-      daemonStorage.initialize();
-
-      // Create subsystems
-      const triggerRegistry = new TriggerRegistry();
-      const budgetTrackerInstance = new BudgetTracker(daemonStorage, daemonConfig.budget);
-      backgroundExecutor.setDaemonBudgetTracker(budgetTrackerInstance);
-      const approvalQueueInstance = new ApprovalQueue(
+      const {
         daemonStorage,
-        daemonConfig.security.approvalTimeoutMin,
-        daemonBus,
-      );
-      const securityPolicyInstance = new DaemonSecurityPolicy(
-        (name) => toolRegistry.getMetadata(name),
-        approvalQueueInstance,
-        new Set(daemonConfig.security.autoApproveTools),
-      );
-
-    // Parse HEARTBEAT.md and register triggers (path validated against project root)
-    const heartbeatPath = resolve(process.cwd(), daemonConfig.heartbeat.heartbeatFile);
-    if (!heartbeatPath.startsWith(process.cwd() + "/") && heartbeatPath !== process.cwd()) {
-      throw new AppError("HEARTBEAT file path is outside project root", "DAEMON_CONFIG_ERROR", 400);
-    }
-    // Type-routed trigger creation from HEARTBEAT.md definitions
-    const webhookTriggers = new Map<string, WebhookTrigger>();
-    const typeCounts = new Map<string, number>();
-    try {
-      const content = readFileSync(heartbeatPath, "utf-8");
-      const triggerDefs = parseHeartbeatFile(content, {
-        morningHour: daemonConfig.triggers.checklistMorningHour,
-        afternoonHour: daemonConfig.triggers.checklistAfternoonHour,
-        eveningHour: daemonConfig.triggers.checklistEveningHour,
-      });
-      for (const def of triggerDefs) {
-        if (def.enabled === false) continue;
-        let trigger: ITrigger;
-        switch (def.type) {
-          case "cron":
-            trigger = new CronTrigger(
-              { name: def.name, description: def.action, type: "cron", cooldownSeconds: def.cooldown },
-              def.cron,
-              daemonConfig.timezone || undefined,
-            );
-            break;
-          case "file-watch": {
-            const resolvedWatchPath = resolve(process.cwd(), def.path);
-            if (!resolvedWatchPath.startsWith(process.cwd() + "/") && resolvedWatchPath !== process.cwd()) {
-              logger.warn("File-watch path outside project root, skipping", {
-                trigger: def.name, path: def.path,
-              });
-              continue;
-            }
-            trigger = new FileWatchTrigger({
-              ...def,
-              path: resolvedWatchPath,
-              debounce: def.debounce ?? daemonConfig.triggers.defaultDebounceMs,
-            });
-            break;
-          }
-          case "checklist":
-            trigger = new ChecklistTrigger(def, daemonConfig.timezone || undefined);
-            break;
-          case "webhook": {
-            const wt = new WebhookTrigger(def.name, def.action);
-            webhookTriggers.set(def.name, wt);
-            trigger = wt;
-            break;
-          }
-          default:
-            logger.warn(`Unknown trigger type '${(def as { type: string }).type}', skipping`);
-            continue;
-        }
-        triggerRegistry.register(trigger);
-        typeCounts.set(def.type, (typeCounts.get(def.type) ?? 0) + 1);
-      }
-
-      // Log startup summary with trigger counts by type
-      logger.info("Daemon triggers loaded", {
-        total: triggerRegistry.count(),
-        byType: Object.fromEntries(typeCounts),
-        file: heartbeatPath,
-      });
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        logger.warn("HEARTBEAT.md not found", { path: heartbeatPath });
-      } else {
-        throw err;
-      }
-    }
-
-    // Create TriggerDeduplicator (TRIG-05)
-    const deduplicator = new TriggerDeduplicator(daemonConfig.triggers.dedupWindowMs);
-
-    // Create HeartbeatLoop
-    heartbeatLoop = new HeartbeatLoop(
-      triggerRegistry,
-      taskManager,
-      budgetTrackerInstance,
-      securityPolicyInstance,
-      approvalQueueInstance,
-      daemonStorage,
-      identityManager,
-      daemonBus,
-      daemonConfig,
-      logger,
-      deduplicator,
-    );
-
-    // Auto-restart after crash recovery
-    if (crashContext?.wasCrash) {
-      const wasDaemonRunning = daemonStorage.getDaemonState("daemon_was_running");
-      if (wasDaemonRunning === "true") {
-        logger.info("Daemon auto-restarting after crash recovery");
-      }
-    }
-
-    // Start heartbeat (HeartbeatLoop.start() logs startup details)
-    heartbeatLoop.start();
-
-    // Wire heartbeat loop to command handler for /daemon commands and autonomous propagation
-    commandHandler.setHeartbeatLoop({
-      start: () => heartbeatLoop!.start(),
-      stop: () => heartbeatLoop!.stop(),
-      isRunning: () => heartbeatLoop!.isRunning(),
-      getDaemonStatus: () => heartbeatLoop!.getDaemonStatus(),
-      getSecurityPolicy: () => securityPolicyInstance,
-    });
-
-    // Agent Core: autonomous OODA reasoning loop (Phase 4)
-    try {
-      const { AgentCore } = await import("../agent-core/agent-core.js");
-      const { ObservationEngine } = await import("../agent-core/observation-engine.js");
-      const { PriorityScorer } = await import("../agent-core/priority-scorer.js");
-      const { TriggerObserver, UserActivityObserver, GitStateObserver } = await import("../agent-core/observers/index.js");
-
-      const observationEngine = new ObservationEngine();
-
-      // Register observers that wrap existing infrastructure
-      observationEngine.register(new TriggerObserver(triggerRegistry));
-      observationEngine.register(new UserActivityObserver(daemonConfig.heartbeat.intervalMs * 5));
-      observationEngine.register(new GitStateObserver(config.unityProjectPath));
-      // BuildStateObserver needs a SelfVerification reference — skip for now (wired per-task)
-
-      observationEngine.start();
-
-      const priorityScorer = new PriorityScorer(instinctRetriever);
-      const agentCoreInstance = new AgentCore(
-        observationEngine,
-        priorityScorer,
-        providerManager.getProvider(""),
+        triggerRegistry,
+        budgetTracker: budgetTrackerInstance,
+        approvalQueue: approvalQueueInstance,
+        heartbeatLoop: activeHeartbeatLoop,
+        webhookTriggers,
+      } = initializeDaemonHeartbeatStage({
+        config,
+        logger,
+        toolRegistry,
+        backgroundExecutor,
         taskManager,
-        channel,
-        budgetTrackerInstance,
-        instinctRetriever,
-        undefined, // config — use defaults
-        providerRouter,
-        providerRouter ? providerManager : undefined,
-      );
-
-      heartbeatLoop.setAgentCore(agentCoreInstance);
-      logger.info("Agent Core initialized", { observers: observationEngine.getObserverCount() });
-    } catch (error) {
-      logger.warn("Agent Core initialization failed (non-fatal)", {
-        error: error instanceof Error ? error.message : String(error),
+        commandHandler,
+        daemonEventBus: daemonBus,
+        identityManager,
+        crashContext,
       });
-    }
+      heartbeatLoop = activeHeartbeatLoop;
 
-    // Create NotificationRouter (RPT-03, RPT-04)
-    notificationRouterInstance = new NotificationRouter({
-      config: config.notification,
-      quietHoursConfig: config.quietHours,
-      eventBus: daemonBus,
-      storage: daemonStorage,
-      channelSender: channel,
-      chatId: undefined, // Will be set on first message
-    });
-    notificationRouterInstance.start();
+      // Agent Core: autonomous OODA reasoning loop (Phase 4)
+      try {
+        const { AgentCore } = await import("../agent-core/agent-core.js");
+        const { ObservationEngine } = await import("../agent-core/observation-engine.js");
+        const { PriorityScorer } = await import("../agent-core/priority-scorer.js");
+        const { TriggerObserver, UserActivityObserver, GitStateObserver } = await import("../agent-core/observers/index.js");
 
-    // Create DigestReporter (RPT-01)
-    digestReporterInstance = new DigestReporter({
-      config: config.digest,
-      daemonConfig: { timezone: daemonConfig.timezone },
-      storage: daemonStorage,
-      channelSender: channel,
-      chatId: undefined, // Will be set on first message
-      channelType,
-      eventBus: daemonBus,
-      metricsStorage,
-      learningStorage: learningResult.storage,
-      budgetTracker: budgetTrackerInstance,
-      dashboardPort: config.dashboard.port,
-      logger,
-    });
-    digestReporterInstance.start();
+        const observationEngine = new ObservationEngine();
+
+        // Register observers that wrap existing infrastructure
+        observationEngine.register(new TriggerObserver(triggerRegistry));
+        observationEngine.register(new UserActivityObserver(daemonConfig.heartbeat.intervalMs * 5));
+        observationEngine.register(new GitStateObserver(config.unityProjectPath));
+        // BuildStateObserver needs a SelfVerification reference — skip for now (wired per-task)
+
+        observationEngine.start();
+
+        const priorityScorer = new PriorityScorer(instinctRetriever);
+        const agentCoreInstance = new AgentCore(
+          observationEngine,
+          priorityScorer,
+          providerManager.getProvider(""),
+          taskManager,
+          channel,
+          budgetTrackerInstance,
+          instinctRetriever,
+          undefined, // config — use defaults
+          providerRouter,
+          providerRouter ? providerManager : undefined,
+        );
+
+        heartbeatLoop.setAgentCore(agentCoreInstance);
+        logger.info("Agent Core initialized", { observers: observationEngine.getObserverCount() });
+      } catch (error) {
+        logger.warn("Agent Core initialization failed (non-fatal)", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      // Create NotificationRouter (RPT-03, RPT-04)
+      notificationRouterInstance = new NotificationRouter({
+        config: config.notification,
+        quietHoursConfig: config.quietHours,
+        eventBus: daemonBus,
+        storage: daemonStorage,
+        channelSender: channel,
+        chatId: undefined, // Will be set on first message
+      });
+      notificationRouterInstance.start();
+
+      // Create DigestReporter (RPT-01)
+      digestReporterInstance = new DigestReporter({
+        config: config.digest,
+        daemonConfig: { timezone: daemonConfig.timezone },
+        storage: daemonStorage,
+        channelSender: channel,
+        chatId: undefined, // Will be set on first message
+        channelType,
+        eventBus: daemonBus,
+        metricsStorage,
+        learningStorage: learningResult.storage,
+        budgetTracker: budgetTrackerInstance,
+        dashboardPort: config.dashboard.port,
+        logger,
+      });
+      digestReporterInstance.start();
 
     // Build daemon context for CLI commands (Plan 05 + Plan 18-02 reporting + Plan 21-03 decay stats + Plan 22-04 chain resilience)
     daemonContext = {
@@ -950,326 +564,60 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       chainResilienceConfig: config.toolChain.resilience,
     };
 
-    // Initialize multi-agent system (Phase 23: AGENT-01, AGENT-02, AGENT-06)
-    if (config.agent.enabled) {
-      const { AgentManager } = await import("../agents/multi/agent-manager.js");
-      const { AgentRegistry } = await import("../agents/multi/agent-registry.js");
-      const { AgentBudgetTracker } = await import("../agents/multi/agent-budget-tracker.js");
+    const multiAgentStage = await initializeMultiAgentDelegationStage({
+      config,
+      logger,
+      daemonMode: Boolean(options.daemonMode),
+      daemonStorage,
+      daemonContext: daemonContext!,
+      taskManager,
+      orchestrator,
+      learningEventBus: learningResult.eventBus,
+      providerManager,
+      toolRegistry,
+      channel,
+      metrics,
+      ragPipeline,
+      rateLimiter,
+      instinctRetriever,
+      metricsRecorder,
+      goalDecomposer,
+      identityManager,
+      cachedEmbeddingProvider,
+      soulLoader,
+      dmPolicy,
+      userProfileStore,
+      providerRouter,
+      dashboard,
+      stradaDeps,
+    });
+    agentManager = multiAgentStage.agentManager;
+    agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
+    delegationManager = multiAgentStage.delegationManager;
 
-      // Agent registry uses daemon.db for persistence
-      const agentRegistry = new AgentRegistry(daemonStorage.getDatabase());
-      agentRegistry.initialize();
+    await initializeMemoryConsolidationStage({
+      config,
+      logger,
+      memoryManager,
+      cachedEmbeddingProvider,
+      providerManager,
+      learningEventBus: learningResult.eventBus,
+      heartbeatLoop,
+      daemonContext: daemonContext!,
+    });
 
-      const agentBudgetTrackerInstance = new AgentBudgetTracker(daemonStorage);
-      agentBudgetTrackerInstance.initialize();
-      agentBudgetTrackerOuter = agentBudgetTrackerInstance;
-
-      agentManager = new AgentManager({
-        config: config.agent,
-        registry: agentRegistry,
-        budgetTracker: agentBudgetTrackerInstance,
-        eventBus: learningResult.eventBus as IEventBus<LearningEventMap>,
-        providerManager,
-        toolRegistry,
-        channel,
-        projectPath: config.unityProjectPath,
-        readOnly: config.security.readOnlyMode,
-        requireConfirmation: config.security.requireEditConfirmation,
-        metrics,
-        ragPipeline,
-        rateLimiter,
-        streamingEnabled: config.streamingEnabled,
-        defaultLanguage: config.language,
-        streamInitialTimeoutMs: config.llmStreamInitialTimeoutMs,
-        streamStallTimeoutMs: config.llmStreamStallTimeoutMs,
-        stradaDeps,
-        stradaConfig: config.strada,
-        instinctRetriever,
-        metricsRecorder,
-        goalDecomposer,
-        getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
-        reRetrievalConfig: config.reRetrieval,
-        embeddingProvider: cachedEmbeddingProvider,
-        memoryConfig: { dimensions: config.memory.unified.dimensions, dbBasePath: config.memory.dbPath },
-        soulLoader,
-        dmPolicy,
-        userProfileStore,
-        messageBurstWindowMs: config.tasks.messageBurstWindowMs,
-        maxBurstMessages: config.tasks.messageBurstMaxMessages,
-      });
-
-      // Add agentManager to daemon context for CLI commands
-      daemonContext!.agentManager = agentManager;
-      daemonContext!.agentBudgetTracker = agentBudgetTrackerInstance;
-
-      if (options.daemonMode) {
-        agentManager.setBackgroundTaskSubmitter((msg, agent) => {
-          taskManager.submit(msg.chatId, msg.channelType, msg.text, {
-            attachments: msg.attachments,
-            conversationId: msg.conversationId,
-            orchestrator: agentManager!.getLiveOrchestrator(agent.id),
-            userId: msg.userId,
-          });
-        });
-      }
-
-      logger.info("Multi-agent system initialized", {
-        maxConcurrent: config.agent.maxConcurrent,
-        defaultBudget: config.agent.defaultBudgetUsd,
-        idleTimeoutMs: config.agent.idleTimeoutMs,
-      });
-
-      // Task Delegation (Phase 24: AGENT-03, AGENT-04, AGENT-05) -- nested inside multi-agent guard
-      if (config.delegation.enabled) {
-        const { TierRouter } = await import("../agents/multi/delegation/tier-router.js");
-        const { DelegationLog } = await import("../agents/multi/delegation/delegation-log.js");
-        const { DelegationManager } = await import("../agents/multi/delegation/delegation-manager.js");
-        const { createDelegationTools, DEFAULT_DELEGATION_TYPES } = await import("../agents/multi/delegation/index.js");
-
-        const delegationLog = new DelegationLog(daemonStorage.getDatabase());
-
-        const tierRouter = new TierRouter(
-          config.delegation.tiers,
-          daemonStorage.getDatabase(),
-        );
-
-        // Use configured delegation types or defaults (spread to convert readonly to mutable)
-        const delegationTypes = config.delegation.types.length > 0
-          ? [...config.delegation.types]
-          : [...DEFAULT_DELEGATION_TYPES];
-
-        delegationManager = new DelegationManager({
-          config: {
-            enabled: true,
-            maxDepth: config.delegation.maxDepth,
-            maxConcurrentPerParent: config.delegation.maxConcurrentPerParent,
-            tiers: config.delegation.tiers,
-            types: delegationTypes,
-            verbosity: config.delegation.verbosity,
-          },
-          tierRouter,
-          delegationLog,
-          eventBus: learningResult.eventBus as IEventBus<LearningEventMap>,
-          budgetTracker: agentBudgetTrackerInstance,
-          channel,
-          projectPath: config.unityProjectPath,
-          readOnly: config.security.readOnlyMode,
-          defaultLanguage: config.language,
-          streamInitialTimeoutMs: config.llmStreamInitialTimeoutMs,
-          streamStallTimeoutMs: config.llmStreamStallTimeoutMs,
-          stradaDeps,
-          stradaConfig: config.strada,
-          parentTools: toolRegistry.getAllTools(),
-          apiKeys: collectApiKeys(config),
-          providerCredentials: collectProviderCredentials(config),
-          preferencesDbPath: config.memory.dbPath,
-          verifiedLocalProviders: providerManager.isAvailable("ollama") ? ["ollama"] : [],
-        });
-
-        // Inject delegation tool factory into AgentManager
-        agentManager.setDelegationFactory((parentAgentId, depth) =>
-          createDelegationTools(delegationTypes, delegationManager!, parentAgentId, depth, config.delegation.maxDepth),
-        );
-
-        const rootDelegationAgentId = createAgentId();
-        const rootDelegationTools = createDelegationTools(
-          delegationTypes,
-          delegationManager,
-          rootDelegationAgentId,
-          0,
-          config.delegation.maxDepth,
-        );
-        for (const tool of rootDelegationTools) {
-          orchestrator.addTool(tool);
-        }
-
-        // Wire TierRouter into ProviderRouter as facade sub-component
-        if (providerRouter) {
-          providerRouter.setTierRouter(tierRouter);
-        }
-
-        // Store in DaemonContext for CLI/dashboard access
-        daemonContext!.delegationManager = delegationManager;
-        daemonContext!.delegationLog = delegationLog;
-        daemonContext!.tierRouter = tierRouter;
-
-        // Register delegation services on dashboard (Plan 24-03)
-        if (dashboard) {
-          dashboard.registerDelegationServices(delegationLog, delegationManager);
-        }
-
-        logger.info("Task delegation enabled", {
-          types: delegationTypes.length,
-          maxDepth: config.delegation.maxDepth,
-        });
-      }
-    }
-
-    // Memory Consolidation (Phase 25: MEM-12, MEM-13)
-    if (config.memory.consolidation.enabled && memoryManager) {
-      try {
-        const { MemoryConsolidationEngine } = await import("../memory/unified/consolidation-engine.js");
-        const { AgentDBAdapter: AdapterCheck } = await import("../memory/unified/agentdb-adapter.js");
-
-        // Access AgentDBMemory internals through adapter
-        if (memoryManager instanceof AdapterCheck) {
-          const agentdbInstance = memoryManager.getAgentDBMemory();
-          const internals = agentdbInstance.getConsolidationInternals();
-
-          if (internals.sqliteDb && internals.hnswStore) {
-            // Build generateEmbedding function from the same embedding provider AgentDBMemory uses
-            const generateEmbeddingFn = async (text: string): Promise<number[]> => {
-              if (cachedEmbeddingProvider) {
-                const batch = await cachedEmbeddingProvider.embed([text]);
-                return batch.embeddings[0] as number[];
-              }
-              // Fallback: use hash-based embedding (same as AgentDBMemory without embedding provider)
-              const { createHash: hashFn } = await import("node:crypto");
-              const hash = hashFn("sha256").update(text).digest();
-              const dims = config.memory.unified.dimensions;
-              const vec = new Array<number>(dims);
-              for (let i = 0; i < dims; i++) {
-                vec[i] = (hash[i % hash.length]! / 128) - 1;
-              }
-              return vec;
-            };
-
-            // Build summarizeWithLLM function using ProviderManager
-            const summarizeFn = async (texts: string[]): Promise<{ summary: string; cost: number; model: string }> => {
-              const provider = providerManager.getProvider("");
-              const prompt = `Summarize the following related memory entries into a single concise entry that preserves key information:\n\n${texts.map((t, i) => `[${i + 1}] ${t}`).join("\n\n")}`;
-              const response = await provider.chat(
-                "You are a memory consolidation engine. Produce a concise summary preserving key facts.",
-                [{ role: "user", content: prompt }],
-                [],
-              );
-              return {
-                summary: response.text,
-                cost: 0, // Cost tracked at provider level
-                model: provider.name,
-              };
-            };
-
-            const consolidationEngine = new MemoryConsolidationEngine({
-              sqliteDb: internals.sqliteDb,
-              entries: internals.entries,
-              hnswStore: internals.hnswStore,
-              config: { ...config.memory.consolidation, minAgeMs: 3600000 },
-              generateEmbedding: generateEmbeddingFn,
-              summarizeWithLLM: summarizeFn,
-              eventEmitter: learningResult.eventBus ?? { emit: () => {} },
-              logger,
-              exemptDomains: config.memory.decay.exemptDomains,
-            });
-
-            // Wire into heartbeat for idle-driven consolidation
-            heartbeatLoop.setConsolidationEngine(consolidationEngine, {
-              idleMinutes: config.memory.consolidation.idleMinutes,
-            });
-
-            // Add to daemon context for CLI access
-            daemonContext!.consolidationEngine = consolidationEngine;
-
-            logger.info("Memory consolidation engine initialized", {
-              idleMinutes: config.memory.consolidation.idleMinutes,
-              threshold: config.memory.consolidation.threshold,
-            });
-          } else {
-            logger.warn("Memory consolidation skipped: SQLite DB or HNSW store not available");
-          }
-        } else {
-          logger.debug("Memory consolidation skipped: memory manager is not AgentDBAdapter");
-        }
-      } catch (error) {
-        logger.warn("Memory consolidation initialization failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    // Deployment (Phase 25: DEPLOY-01, DEPLOY-02, DEPLOY-03)
-    if (config.deployment.enabled) {
-      try {
-        const { DeployTrigger } = await import("../daemon/triggers/deploy-trigger.js");
-        const { registerDeployApprovalBridge } = await import("../daemon/triggers/deploy-approval-bridge.js");
-        const { ReadinessChecker } = await import("../daemon/deployment/readiness-checker.js");
-        const { DeploymentExecutor } = await import("../daemon/deployment/deployment-executor.js");
-        const { CircuitBreaker: DeployCircuitBreaker } = await import("../daemon/resilience/circuit-breaker.js");
-
-        const readinessCheckerInstance = new ReadinessChecker(
-          config.deployment,
-          config.unityProjectPath,
-          logger,
-        );
-
-        const deploymentExecutorInstance = new DeploymentExecutor(
-          config.deployment,
-          config.unityProjectPath,
-          logger,
-          daemonStorage.getDatabase(),
-        );
-
-        const deployCircuitBreaker = new DeployCircuitBreaker(
-          daemonConfig.backoff.failureThreshold,
-          daemonConfig.backoff.baseCooldownMs,
-          daemonConfig.backoff.maxCooldownMs,
-        );
-
-        const deployTriggerInstance = new DeployTrigger(
-          readinessCheckerInstance,
-          approvalQueueInstance,
-          deployCircuitBreaker,
-          deploymentExecutorInstance,
-          config.deployment,
-          logger,
-        );
-
-        // Register deploy trigger in trigger registry
-        triggerRegistry.register(deployTriggerInstance);
-
-        // Wire into heartbeat for readiness checks
-        const activeHeartbeatLoop = heartbeatLoop;
-        activeHeartbeatLoop.setDeployTrigger(deployTriggerInstance);
-        registerDeployApprovalBridge(
-          daemonEventBus!,
-          approvalQueueInstance,
-          deployTriggerInstance,
-          logger,
-        );
-        taskManager.on("task:completed", (taskId) => {
-          activeHeartbeatLoop.onTaskSettled(taskId);
-        });
-        taskManager.on("task:failed", (taskId) => {
-          activeHeartbeatLoop.onTaskSettled(taskId);
-        });
-
-        // Store in DaemonContext for CLI/dashboard access
-        daemonContext!.deploymentExecutor = deploymentExecutorInstance;
-        daemonContext!.readinessChecker = readinessCheckerInstance;
-        daemonContext!.deployTrigger = deployTriggerInstance;
-
-        // Validate script path at startup (warning only)
-        if (config.deployment.scriptPath) {
-          try {
-            readinessCheckerInstance.validateScriptPath(config.deployment.scriptPath);
-          } catch {
-            logger.warn("Deployment script path validation failed at startup (will be re-validated at execution time)", {
-              scriptPath: config.deployment.scriptPath,
-            });
-          }
-        }
-
-        logger.info("Deployment subsystem initialized", {
-          testCommand: config.deployment.testCommand,
-          targetBranch: config.deployment.targetBranch,
-          scriptPath: config.deployment.scriptPath ?? "(not set)",
-        });
-      } catch (error) {
-        logger.warn("Deployment initialization failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    await initializeDeploymentStage({
+      config,
+      logger,
+      daemonConfig,
+      daemonStorage,
+      approvalQueue: approvalQueueInstance,
+      triggerRegistry,
+      heartbeatLoop,
+      daemonEventBus: daemonEventBus!,
+      taskManager,
+      daemonContext: daemonContext!,
+    });
 
     // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
     if (dashboard) {
@@ -1382,100 +730,22 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
   }
 
-  // Register AgentManager with dashboard (Plan 23-03)
-  if (dashboard && agentManager) {
-    dashboard.registerAgentServices({ agentManager, agentBudgetTracker: agentBudgetTrackerOuter });
-  }
-
-  // Register consolidation & deployment services with dashboard (Plan 25-03)
-  if (dashboard && daemonContext) {
-    dashboard.registerConsolidationDeploymentServices({
-      consolidationEngine: daemonContext.consolidationEngine,
-      deploymentExecutor: daemonContext.deploymentExecutor,
-      readinessChecker: daemonContext.readinessChecker,
-    });
-  }
-
-  // Register extended services for admin pages (tools, sessions, personality, config, providers, user profiles)
-  if (dashboard) {
-    dashboard.registerExtendedServices({
-      toolRegistry: {
-        getAllTools: () => toolRegistry.getAllTools().map(t => {
-          const meta = toolRegistry.getMetadata(t.name);
-          return {
-            name: t.name,
-            description: t.description,
-            type: meta?.category ?? "builtin",
-          };
-        }),
-      },
-      orchestratorSessions: orchestrator,
-      soulLoader,
-      configSnapshot: (() => {
-        // Flatten nested config once at registration time (config is immutable after bootstrap)
-        const flat: Record<string, unknown> = {};
-        const flatten = (obj: Record<string, unknown>, prefix = "") => {
-          for (const [k, v] of Object.entries(obj)) {
-            if (typeof v === "function") continue;
-            const key = prefix ? `${prefix}.${k}` : k;
-            if (v && typeof v === "object" && !Array.isArray(v) && !(v instanceof Date)) {
-              flatten(v as Record<string, unknown>, key);
-            } else {
-              flat[key] = v;
-            }
-          }
-        };
-        flatten(config as unknown as Record<string, unknown>);
-        return () => flat;
-      })(),
-      providerManager: {
-        listAvailable: () => providerManager.listAvailable().map((provider) => ({
-          ...provider,
-          configured: true,
-          models: [provider.defaultModel],
-        })),
-        listExecutionCandidates: (identityKey?: string) => providerManager.listExecutionCandidates(identityKey).map((provider) => ({
-          ...provider,
-          configured: true,
-          models: [provider.defaultModel],
-        })),
-        listAvailableWithModels: async () => {
-          const results = await providerManager.listAvailableWithModels();
-          return results.map((provider) => ({
-            ...provider,
-            configured: true,
-            activeModel: provider.defaultModel,
-          }));
-        },
-        describeAvailable: () => providerManager.describeAvailable(),
-        getProviderCapabilities: (name: string, model?: string) => providerManager.getProviderCapabilities(name, model),
-        getActiveInfo: (chatId: string) => {
-          const info = providerManager.getActiveInfo(chatId);
-          return info ? {
-            provider: info.providerName,
-            providerName: info.providerName,
-            model: info.model,
-            isDefault: info.isDefault,
-          } : null;
-        },
-        setPreference: async (chatId: string, provider: string, model?: string) => {
-          providerManager.setPreference(chatId, provider, model);
-        },
-        refreshCatalog: async () => providerManager.refreshModelCatalog(),
-      },
-      userProfileStore,
-      embeddingStatusProvider: {
-        getStatus: () => ({ ...embeddingStatus }),
-      },
-      stradaDeps,
-      bootReport,
-    });
-  }
-
-  // Wire provider router to dashboard for /api/agent-activity and /api/routing/preset
-  if (dashboard && providerRouter) {
-    dashboard.setProviderRouter(providerRouter);
-  }
+  registerDashboardPostBootStage({
+    dashboard,
+    agentManager,
+    agentBudgetTracker: agentBudgetTrackerOuter,
+    daemonContext,
+    toolRegistry,
+    orchestrator,
+    soulLoader,
+    config,
+    providerManager,
+    userProfileStore,
+    embeddingStatus,
+    stradaDeps,
+    bootReport,
+    providerRouter,
+  });
 
   // Return result with shutdown function
   return {
@@ -2347,14 +1617,6 @@ function initializeRateLimiter(config: Config, logger: winston.Logger): RateLimi
   });
 
   return rateLimiter;
-}
-
-function initializeTaskStorage(config: Config, logger: winston.Logger): TaskStorage {
-  const dbPath = join(config.memory.dbPath, "tasks.db");
-  const storage = new TaskStorage(dbPath);
-  storage.initialize();
-  logger.info("Task storage initialized", { dbPath });
-  return storage;
 }
 
 function wireMessageHandler(
