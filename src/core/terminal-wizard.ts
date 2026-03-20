@@ -27,6 +27,7 @@ import {
   getSourceLauncherCommand,
   getSourceSetupCommand,
 } from "../common/launcher-guidance.js";
+import { resolveDotenvPath } from "../common/runtime-paths.js";
 
 const MAX_RETRIES = 3;
 const RESPONSE_PROVIDER_CHOICES = [
@@ -1059,7 +1060,7 @@ export async function runTerminalWizard(
     console.log(`  Language:        ${language}`);
     console.log(sep);
 
-    const envPath = path.join(process.cwd(), ".env");
+    const envPath = resolveDotenvPath({ moduleUrl: import.meta.url });
     if (fs.existsSync(envPath)) {
       const overwrite = await rl.question("\n\u26A0 .env already exists. Overwrite? [y/N]: ");
       if (overwrite.trim().toLowerCase() !== "y") {

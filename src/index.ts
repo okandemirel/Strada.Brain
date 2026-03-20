@@ -9,6 +9,7 @@
 import { Command } from "commander";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 import * as dotenv from "dotenv";
 import { loadConfig, loadConfigSafe, resetConfigCache } from "./config/config.js";
@@ -19,7 +20,11 @@ import { createContainer } from "./core/di-container.js";
 import { shouldEnableDaemonMode } from "./core/daemon-mode.js";
 import { SetupWizard, buildSetupAccessUrl } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
-import { initializeRuntimeEnvironment } from "./common/runtime-paths.js";
+import {
+  getSafeCurrentWorkingDirectory,
+  initializeRuntimeEnvironment,
+  resolveDotenvPath,
+} from "./common/runtime-paths.js";
 import { CHANNEL_DEFAULTS, type SupportedChannelType } from "./common/constants.js";
 import { runMetricsCommand } from "./metrics/metrics-cli.js";
 import { registerDaemonCommands } from "./daemon/daemon-cli.js";
@@ -32,6 +37,7 @@ import {
 } from "./core/launcher.js";
 
 // Setup global error handlers
+process.env["STRADA_LAUNCH_CWD"] ??= getSafeCurrentWorkingDirectory(homedir());
 const runtimePaths = initializeRuntimeEnvironment({ moduleUrl: import.meta.url });
 
 setupGlobalErrorHandlers(
@@ -211,8 +217,8 @@ program
 
 program
   .command("uninstall")
-  .description("Remove installed bare-command bindings and optionally purge repo-local runtime state")
-  .option("--purge-config", "Also remove repo-local .env, memory, logs, and other runtime files", false)
+  .description("Remove installed bare-command bindings and optionally purge Strada runtime state")
+  .option("--purge-config", "Also remove Strada runtime files and source-checkout generated artifacts for a zero-install rerun", false)
   .action(async (opts: { purgeConfig?: boolean }) => {
     const sourceLauncherPath = path.join(runtimePaths.installRoot, "scripts", "source-launcher.mjs");
     if (!existsSync(sourceLauncherPath)) {
@@ -296,9 +302,21 @@ async function startApp(
   const wizardPort = Number.parseInt(process.env["SETUP_WIZARD_PORT"] ?? "3000", 10) || 3000;
   let activeWizard: SetupWizard | null = initialWizard;
 
+  if (activeWizard) {
+    dotenv.config({ path: resolveDotenvPath({ moduleUrl: import.meta.url }), override: true });
+    resetConfigCache();
+  }
+
   // Try loading config — if invalid and using web channel, launch setup wizard
   let configResult = loadConfigSafe();
   if (configResult.kind === "err") {
+    if (activeWizard) {
+      activeWizard.markBootstrapFailed(
+        `Configuration was saved, but validation still failed: ${configResult.error}`,
+      );
+      return;
+    }
+
     if (channelType === "web") {
       for (let attempt = 1; attempt <= MAX_WIZARD_ATTEMPTS; attempt++) {
         console.log(
@@ -311,7 +329,7 @@ async function startApp(
         await wizard.start();
         console.log("Setup complete! Validating configuration...");
         // Reload .env into process.env and reset config cache
-        dotenv.config({ override: true });
+        dotenv.config({ path: resolveDotenvPath({ moduleUrl: import.meta.url }), override: true });
         resetConfigCache();
         configResult = loadConfigSafe();
         if (configResult.kind === "ok") {
@@ -335,7 +353,7 @@ async function startApp(
       await wizard.start();
       console.log("Setup complete! Validating configuration...");
       await wizard.shutdown();
-      dotenv.config({ override: true });
+      dotenv.config({ path: resolveDotenvPath({ moduleUrl: import.meta.url }), override: true });
       resetConfigCache();
       configResult = loadConfigSafe();
       if (configResult.kind === "err") {
@@ -347,6 +365,13 @@ async function startApp(
 
   const config = configResult.value;
   const logger = createLogger(config.logLevel, config.logFile);
+  logger.info("Runtime paths resolved", {
+    installRoot: runtimePaths.installRoot,
+    configRoot: runtimePaths.configRoot,
+    cwd: process.cwd(),
+    sourceCheckout: runtimePaths.sourceCheckout,
+    setupWizardPort: wizardPort,
+  });
 
   try {
     // Validate channel type
@@ -363,6 +388,11 @@ async function startApp(
 
     if (activeWizard) {
       activeWizard.markBootstrapStarting("Strada is starting the main web app.");
+      logger.info("Setup bootstrap handoff started", {
+        channelType,
+        webPort: config.web.port,
+        dashboardPort: config.dashboard.port,
+      });
     }
 
     // Bootstrap the application
@@ -381,6 +411,10 @@ async function startApp(
 
     if (activeWizard) {
       activeWizard.markBootstrapReady("/");
+      logger.info("Setup bootstrap handoff ready", {
+        readyUrl: "/",
+        channelType,
+      });
       activeWizard = null;
     }
 
@@ -411,6 +445,10 @@ async function startApp(
         // Best-effort re-open so the failure state can still be surfaced.
       }
       activeWizard.markBootstrapFailed(detail);
+      logger.error("Setup bootstrap handoff failed", {
+        detail,
+        channelType,
+      });
     }
     if (error instanceof AppError) {
       logger.error("Failed to start application", {

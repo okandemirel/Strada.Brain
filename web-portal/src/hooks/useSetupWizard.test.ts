@@ -1,14 +1,21 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  advanceSetupPollSession,
   getSetupReviewBlockingReason,
   hasAutoEmbeddingCandidate,
   hasUsableEmbeddingCredential,
   hasUsableResponseCredential,
+  isSetupPollSessionActive,
   probeSetupSurface,
+  readSetupHealthStatus,
   readSetupBootstrapStatus,
 } from './useSetupWizard'
 
 describe('useSetupWizard helpers', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('accepts OpenAI subscription for response providers only', () => {
     expect(hasUsableResponseCredential('openai', {}, { openai: 'chatgpt-subscription' })).toBe(true)
     expect(hasUsableEmbeddingCredential('openai', {})).toBe(false)
@@ -98,6 +105,66 @@ describe('useSetupWizard helpers', () => {
     })
 
     expect(result).toEqual({ state: 'booting', detail: 'Strada is starting.', readyUrl: 'http://127.0.0.1:3000/' })
+  })
+
+  it('times out a hung setup status request instead of waiting forever', async () => {
+    vi.useFakeTimers()
+
+    const resultPromise = readSetupBootstrapStatus(async () => new Promise(() => {}) as Promise<Response>)
+
+    await vi.advanceTimersByTimeAsync(3000)
+
+    await expect(resultPromise).resolves.toBeNull()
+  })
+
+  it('times out a hung health request instead of waiting forever', async () => {
+    vi.useFakeTimers()
+
+    const resultPromise = readSetupHealthStatus(async () => new Promise(() => {}) as Promise<Response>)
+
+    await vi.advanceTimersByTimeAsync(3000)
+
+    await expect(resultPromise).resolves.toBeNull()
+  })
+
+  it('falls back to health checks when the csrf endpoint hangs', async () => {
+    vi.useFakeTimers()
+
+    const fetchImpl = vi.fn(async (input) => {
+      if (String(input) === '/api/setup/csrf') {
+        return new Promise(() => {}) as Promise<Response>
+      }
+      if (String(input) === '/health') {
+        return {
+          ok: true,
+          json: async () => ({ status: 'ok' }),
+        } as Response
+      }
+      throw new Error('unexpected fetch')
+    })
+
+    const resultPromise = probeSetupSurface(fetchImpl)
+    await vi.advanceTimersByTimeAsync(3000)
+
+    await expect(resultPromise).resolves.toEqual({ kind: 'redirect' })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('invalidates older bootstrap poll sessions after polling is stopped', () => {
+    const firstSession = advanceSetupPollSession(0)
+    expect(isSetupPollSessionActive(firstSession, firstSession, true)).toBe(true)
+
+    const stoppedSession = advanceSetupPollSession(firstSession)
+    expect(isSetupPollSessionActive(firstSession, stoppedSession, true)).toBe(false)
+
+    const restartedSession = advanceSetupPollSession(stoppedSession)
+    expect(isSetupPollSessionActive(firstSession, restartedSession, true)).toBe(false)
+    expect(isSetupPollSessionActive(restartedSession, restartedSession, true)).toBe(true)
+  })
+
+  it('treats unmounted bootstrap poll sessions as inactive', () => {
+    const activeSession = advanceSetupPollSession(0)
+    expect(isSetupPollSessionActive(activeSession, activeSession, false)).toBe(false)
   })
 
   it('preserves provider warnings in setup bootstrap status responses', async () => {

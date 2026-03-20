@@ -26,6 +26,8 @@ import {
 
 describe("SetupWizard path validation", () => {
   const originalCwd = process.cwd();
+  const originalInstallRoot = process.env["STRADA_INSTALL_ROOT"];
+  const originalSourceCheckout = process.env["STRADA_SOURCE_CHECKOUT"];
   const tmpDirs: string[] = [];
 
   beforeEach(() => {
@@ -38,6 +40,16 @@ describe("SetupWizard path validation", () => {
 
   afterEach(() => {
     process.chdir(originalCwd);
+    if (originalInstallRoot === undefined) {
+      delete process.env["STRADA_INSTALL_ROOT"];
+    } else {
+      process.env["STRADA_INSTALL_ROOT"] = originalInstallRoot;
+    }
+    if (originalSourceCheckout === undefined) {
+      delete process.env["STRADA_SOURCE_CHECKOUT"];
+    } else {
+      process.env["STRADA_SOURCE_CHECKOUT"] = originalSourceCheckout;
+    }
     for (const dir of tmpDirs) {
       try {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -219,6 +231,8 @@ describe("SetupWizard path validation", () => {
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
     tmpDirs.push(tempCwd);
     process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
 
     preflightResponseProvidersMock.mockResolvedValue({
       passedProviderIds: [],
@@ -252,6 +266,8 @@ describe("SetupWizard path validation", () => {
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
     tmpDirs.push(tempCwd);
     process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
 
     const wizard = new SetupWizard({ port: 0 });
     await saveWizard(wizard);
@@ -263,6 +279,8 @@ describe("SetupWizard path validation", () => {
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
     tmpDirs.push(tempCwd);
     process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
 
     const wizard = new SetupWizard({ port: 0 });
     const earlyWait = wizard.waitForCompletion();
@@ -280,6 +298,8 @@ describe("SetupWizard path validation", () => {
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
     tmpDirs.push(tempCwd);
     process.chdir(tempCwd);
+    process.env["STRADA_INSTALL_ROOT"] = tempCwd;
+    process.env["STRADA_SOURCE_CHECKOUT"] = "true";
 
     preflightResponseProvidersMock.mockResolvedValue({
       passedProviderIds: [],

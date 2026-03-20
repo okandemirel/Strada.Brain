@@ -11,18 +11,43 @@ const DIST_ENTRY = path.join(ROOT_DIR, "dist", "index.js");
 const SOURCE_ENTRY = path.join(ROOT_DIR, "src", "index.ts");
 const MANAGED_BLOCK_START = "# >>> Strada command >>>";
 const MANAGED_BLOCK_END = "# <<< Strada command <<<";
+const STRADA_LAUNCH_CWD_ENV = "STRADA_LAUNCH_CWD";
 const DEFAULT_RUNTIME_PURGE_TARGETS = [
-  { key: "MEMORY_DB_PATH", fallback: ".strada-memory", type: "directory" },
-  { key: "WHATSAPP_SESSION_PATH", fallback: ".whatsapp-session", type: "directory" },
-  { key: "LOG_FILE", fallback: "strada-brain.log", type: "file" },
-  { key: "DAEMON_HEARTBEAT_FILE", fallback: "./HEARTBEAT.md", type: "file" },
-  { key: "", fallback: "strada-brain-error.log", type: "file" },
-  { key: "", fallback: ".strada-update.lock", type: "file" },
-  { key: "", fallback: "data/tasks.db", type: "file" },
+  { key: "MEMORY_DB_PATH", fallback: ".strada-memory" },
+  { key: "WHATSAPP_SESSION_PATH", fallback: ".whatsapp-session" },
+  { key: "LOG_FILE", fallback: "strada-brain.log" },
+  { key: "DAEMON_HEARTBEAT_FILE", fallback: "./HEARTBEAT.md" },
+  { key: "", fallback: "strada-brain-error.log" },
+  { key: "", fallback: "strada-brain-sync.log" },
+  { key: "", fallback: ".strada-update.lock" },
+  { key: "", fallback: "data/tasks.db" },
+  { key: "", fallback: "data/learning.db" },
+];
+const DEFAULT_SOURCE_PREPARED_PURGE_TARGETS = [
+  { fallback: "dist" },
+  { fallback: "node_modules" },
+  { fallback: "web-portal/dist" },
+  { fallback: "web-portal/node_modules" },
 ];
 
 function isWindows(platform = process.platform) {
   return platform === "win32";
+}
+
+function getSafeCurrentWorkingDirectory(fallback) {
+  try {
+    return process.cwd();
+  } catch {
+    return fallback;
+  }
+}
+
+function resolveLaunchCwd(env = process.env, fallback = os.homedir()) {
+  const configured = env[STRADA_LAUNCH_CWD_ENV]?.trim();
+  if (configured) {
+    return configured;
+  }
+  return getSafeCurrentWorkingDirectory(fallback);
 }
 
 function quotePosixSingle(value) {
@@ -248,6 +273,32 @@ function getWindowsInstallDir(env = process.env, homeDir = os.homedir()) {
   return path.join(getWindowsLocalAppData(env, homeDir), "Strada", "bin");
 }
 
+function resolveStradaHome(env = process.env, homeDir = os.homedir(), cwd = homeDir, platform = process.platform) {
+  const configured = env.STRADA_HOME?.trim();
+  if (configured) {
+    return path.isAbsolute(configured) ? path.normalize(configured) : path.resolve(cwd, configured);
+  }
+  if (platform === "win32") {
+    return path.join(getWindowsLocalAppData(env, homeDir), "Strada");
+  }
+  return path.join(homeDir, ".strada");
+}
+
+function resolveRuntimeRoots(options = {}) {
+  const platform = options.platform || process.platform;
+  const env = options.env || process.env;
+  const homeDir = options.homeDir || os.homedir();
+  const installRoot = options.rootDir || ROOT_DIR;
+  const cwd = options.cwd || resolveLaunchCwd(env, homeDir);
+  const sourceCheckout = options.sourceCheckout
+    ?? (env.STRADA_SOURCE_CHECKOUT === "true" || existsSync(path.join(installRoot, ".git")));
+  return {
+    installRoot,
+    sourceCheckout,
+    configRoot: sourceCheckout ? installRoot : resolveStradaHome(env, homeDir, cwd, platform),
+  };
+}
+
 function getDefaultLauncherPath(wrapperKind) {
   if (wrapperKind === "powershell") return path.join(ROOT_DIR, "strada.ps1");
   if (wrapperKind === "cmd") return path.join(ROOT_DIR, "strada.cmd");
@@ -374,6 +425,11 @@ function removeManagedPathBlock(profilePath) {
   }
 
   const updated = stripManagedPathBlock(content);
+  if (updated.trim().length === 0) {
+    rmSync(profilePath, { force: true });
+    return true;
+  }
+
   writeFileSync(profilePath, updated, "utf8");
   return true;
 }
@@ -444,26 +500,26 @@ function resolveManagedPath(rootDir, configuredValue, fallback) {
   return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(rootDir, raw);
 }
 
-function purgeSourceRuntimeState(options = {}) {
-  const rootDir = options.rootDir || ROOT_DIR;
-  const envPath = path.join(rootDir, ".env");
+function purgeRuntimeState(options = {}) {
+  const configRoot = options.configRoot;
+  const envPath = path.join(configRoot, ".env");
   const envConfig = parseDotenvFile(envPath);
   const removed = [];
   const skipped = [];
 
   for (const target of DEFAULT_RUNTIME_PURGE_TARGETS) {
-    const resolvedPath = resolveManagedPath(rootDir, target.key ? envConfig[target.key] : undefined, target.fallback);
+    const resolvedPath = resolveManagedPath(configRoot, target.key ? envConfig[target.key] : undefined, target.fallback);
     if (!resolvedPath) {
       continue;
     }
 
-    if (pathsEqual(resolvedPath, rootDir)) {
-      skipped.push(`${resolvedPath} (repo root is never removed)`);
+    if (pathsEqual(resolvedPath, configRoot)) {
+      skipped.push(`${resolvedPath} (runtime root is never removed)`);
       continue;
     }
 
-    if (!isWithinPath(resolvedPath, rootDir)) {
-      skipped.push(`${resolvedPath} (outside repo root)`);
+    if (!isWithinPath(resolvedPath, configRoot)) {
+      skipped.push(`${resolvedPath} (outside runtime root)`);
       continue;
     }
 
@@ -476,9 +532,42 @@ function purgeSourceRuntimeState(options = {}) {
     removed.push(envPath);
   }
 
-  const dataDir = path.join(rootDir, "data");
+  const dataDir = path.join(configRoot, "data");
   if (removeDirectoryIfEmpty(dataDir)) {
     removed.push(dataDir);
+  }
+
+  if (options.removeRuntimeRootIfEmpty && removeDirectoryIfEmpty(configRoot)) {
+    removed.push(configRoot);
+  }
+
+  return { removed, skipped };
+}
+
+function purgeSourcePreparedState(options = {}) {
+  const installRoot = options.installRoot;
+  const removed = [];
+  const skipped = [];
+
+  for (const target of DEFAULT_SOURCE_PREPARED_PURGE_TARGETS) {
+    const resolvedPath = resolveManagedPath(installRoot, undefined, target.fallback);
+    if (!resolvedPath) {
+      continue;
+    }
+
+    if (pathsEqual(resolvedPath, installRoot)) {
+      skipped.push(`${resolvedPath} (install root is never removed)`);
+      continue;
+    }
+
+    if (!isWithinPath(resolvedPath, installRoot)) {
+      skipped.push(`${resolvedPath} (outside install root)`);
+      continue;
+    }
+
+    if (removeEntryIfExists(resolvedPath)) {
+      removed.push(resolvedPath);
+    }
   }
 
   return { removed, skipped };
@@ -625,10 +714,17 @@ export function uninstallCommand(options = {}) {
   const env = options.env || process.env;
   const homeDir = options.homeDir || os.homedir();
   const purgeConfig = options.purgeConfig === true;
-  const rootDir = options.rootDir || ROOT_DIR;
   const launcherPath = options.launcherPath
     || env.STRADA_LAUNCHER_PATH
     || getDefaultLauncherPath(options.wrapperKind);
+  const runtimeRoots = resolveRuntimeRoots({
+    platform,
+    env,
+    homeDir,
+    rootDir: options.rootDir || ROOT_DIR,
+    sourceCheckout: options.sourceCheckout,
+    cwd: options.cwd || resolveLaunchCwd(env, homeDir),
+  });
   const removed = [];
   const skipped = [];
 
@@ -699,9 +795,17 @@ export function uninstallCommand(options = {}) {
   }
 
   if (purgeConfig) {
-    const purgeResult = purgeSourceRuntimeState({ rootDir });
+    const purgeResult = purgeRuntimeState({
+      configRoot: runtimeRoots.configRoot,
+      removeRuntimeRootIfEmpty: !runtimeRoots.sourceCheckout,
+    });
     removed.push(...purgeResult.removed);
     skipped.push(...purgeResult.skipped);
+    if (runtimeRoots.sourceCheckout) {
+      const sourcePreparedResult = purgeSourcePreparedState({ installRoot: runtimeRoots.installRoot });
+      removed.push(...sourcePreparedResult.removed);
+      skipped.push(...sourcePreparedResult.skipped);
+    }
   }
 
   console.log("Removed Strada user-local command bindings.");
@@ -723,7 +827,10 @@ export function uninstallCommand(options = {}) {
 
   if (purgeConfig) {
     console.log("");
-    console.log("Strada runtime files under this repository were purged.");
+    console.log(`Strada runtime files under ${runtimeRoots.configRoot} were purged.`);
+    if (runtimeRoots.sourceCheckout) {
+      console.log("Generated source-checkout dependencies and build artifacts were also removed for a zero-install rerun.");
+    }
   }
 
   console.log("The repository checkout itself was not deleted.");
@@ -748,6 +855,31 @@ export function shouldRunFromSource(args) {
   ].includes(arg));
 }
 
+export function requiresPreparedSourceCheckout(args) {
+  if (args.length === 0) {
+    return true;
+  }
+
+  if (args.includes("--web")) {
+    return true;
+  }
+
+  if (args[0] === "setup") {
+    return !args.includes("--terminal");
+  }
+
+  if (args[0] === "start") {
+    const channelFlagIndex = args.indexOf("--channel");
+    if (channelFlagIndex === -1) {
+      return true;
+    }
+    const requestedChannel = args[channelFlagIndex + 1];
+    return !requestedChannel || requestedChannel === "web";
+  }
+
+  return false;
+}
+
 function parseCliArgs(argv) {
   let wrapperKind = null;
   let wrapperPath = null;
@@ -770,12 +902,14 @@ function parseCliArgs(argv) {
 }
 
 function runNode(entryArgs, extraEnv = {}) {
+  const launchCwd = resolveLaunchCwd(process.env, ROOT_DIR);
   const result = spawnSync(process.execPath, entryArgs, {
     cwd: ROOT_DIR,
     stdio: "inherit",
     env: {
       ...process.env,
       STRADA_NODE_PATH: process.execPath,
+      [STRADA_LAUNCH_CWD_ENV]: launchCwd,
       ...extraEnv,
     },
   });
@@ -816,7 +950,11 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (shouldRunFromSource(userArgs)) {
-    ensureSourceCheckout();
+    if (requiresPreparedSourceCheckout(userArgs)) {
+      ensurePrepared();
+    } else {
+      ensureSourceCheckout();
+    }
     runNode(
       ["--import", "tsx", SOURCE_ENTRY, ...userArgs],
       {

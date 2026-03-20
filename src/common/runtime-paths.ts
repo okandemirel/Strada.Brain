@@ -19,6 +19,25 @@ export interface RuntimePathOptions {
   sourceCheckout?: boolean;
 }
 
+export function getSafeCurrentWorkingDirectory(fallback: string): string {
+  try {
+    return process.cwd();
+  } catch {
+    return fallback;
+  }
+}
+
+export function resolveLaunchCwd(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+): string {
+  const configured = env["STRADA_LAUNCH_CWD"]?.trim();
+  if (configured) {
+    return configured;
+  }
+  return getSafeCurrentWorkingDirectory(homeDir);
+}
+
 export function resolveInstallRoot(moduleUrl: string = import.meta.url): string {
   const moduleDir = path.dirname(fileURLToPath(moduleUrl));
   return path.resolve(moduleDir, "..", "..");
@@ -27,7 +46,7 @@ export function resolveInstallRoot(moduleUrl: string = import.meta.url): string 
 export function resolveStradaHome(
   env: NodeJS.ProcessEnv = process.env,
   homeDir: string = os.homedir(),
-  cwd: string = process.cwd(),
+  cwd: string = resolveLaunchCwd(env, homeDir),
   platform: NodeJS.Platform = process.platform,
 ): string {
   const configured = env["STRADA_HOME"]?.trim();
@@ -45,9 +64,9 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
   const installRoot = options.installRoot
     ?? env["STRADA_INSTALL_ROOT"]
     ?? resolveInstallRoot(options.moduleUrl);
-  const cwd = options.cwd ?? process.cwd();
   const homeDir = options.homeDir ?? os.homedir();
   const platform = options.platform ?? process.platform;
+  const cwd = options.cwd ?? resolveLaunchCwd(env, homeDir);
   const sourceCheckout = options.sourceCheckout
     ?? (env["STRADA_SOURCE_CHECKOUT"] === "true"
       ? true
@@ -67,12 +86,18 @@ export function resolveDotenvPath(options: RuntimePathOptions = {}): string {
 
 export function initializeRuntimeEnvironment(options: RuntimePathOptions = {}): RuntimePaths {
   const runtimePaths = resolveRuntimePaths(options);
+  const launchCwd = getSafeCurrentWorkingDirectory(runtimePaths.configRoot);
+
+  if (runtimePaths.sourceCheckout && !existsSync(runtimePaths.configRoot)) {
+    throw new Error(`Source checkout runtime root does not exist: ${runtimePaths.configRoot}`);
+  }
 
   if (!runtimePaths.sourceCheckout) {
     mkdirSync(runtimePaths.configRoot, { recursive: true });
-    if (process.cwd() !== runtimePaths.configRoot) {
-      process.chdir(runtimePaths.configRoot);
-    }
+  }
+
+  if (launchCwd !== runtimePaths.configRoot) {
+    process.chdir(runtimePaths.configRoot);
   }
 
   return runtimePaths;

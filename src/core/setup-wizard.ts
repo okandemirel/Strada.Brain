@@ -27,11 +27,19 @@ import {
   getSetupStatusDetail,
   transitionSetupStatus,
 } from "../common/setup-state.js";
+import { resolveDotenvPath } from "../common/runtime-paths.js";
 
 const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
 const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../web-portal/dist");
 const SETUP_HOST = "127.0.0.1";
+
+function logSetupLifecycle(event: string, detail: Record<string, unknown>): void {
+  if (process.env["VITEST"] === "true") {
+    return;
+  }
+  console.log(`[setup] ${event}`, detail);
+}
 
 function resolveStaticDir(): string {
   if (existsSync(SOURCE_BUILD_STATIC_DIR)) {
@@ -374,6 +382,11 @@ export class SetupWizard {
       detail,
       readyUrl: this.readyUrl,
     });
+    logSetupLifecycle("bootstrap_starting", {
+      port: this.port,
+      readyUrl: this.readyUrl,
+      detail: this.status.detail,
+    });
   }
 
   markBootstrapReady(readyUrl = this.readyUrl, detail?: string): void {
@@ -382,11 +395,21 @@ export class SetupWizard {
       readyUrl,
       detail,
     });
+    logSetupLifecycle("bootstrap_ready", {
+      port: this.port,
+      readyUrl,
+      detail: this.status.detail,
+    });
   }
 
   markBootstrapFailed(detail: string): void {
     this.status = transitionSetupStatus(this.status, {
       type: "bootstrap_failed",
+      detail,
+    });
+    logSetupLifecycle("bootstrap_failed", {
+      port: this.port,
+      readyUrl: this.readyUrl,
       detail,
     });
   }
@@ -781,7 +804,7 @@ export class SetupWizard {
     }
     const lines = buildSetupEnvLines(config, validatedProjectPath.resolved, this.port);
 
-    const envPath = join(process.cwd(), ".env");
+    const envPath = resolveDotenvPath({ moduleUrl: import.meta.url });
 
     try {
       await writeFile(envPath, lines.join("\n") + "\n", "utf-8");
@@ -798,6 +821,12 @@ export class SetupWizard {
       providerWarnings,
     });
     this.json(res, 200, { success: true, readyUrl: this.readyUrl, providerWarnings });
+    logSetupLifecycle("config_saved", {
+      envPath,
+      port: this.port,
+      readyUrl: this.readyUrl,
+      providerWarnings: providerWarnings?.length ?? 0,
+    });
     this.signalCompletion();
   }
 

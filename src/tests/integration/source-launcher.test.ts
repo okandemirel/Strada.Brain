@@ -228,7 +228,21 @@ describe("source launcher install-command", () => {
     expect(readFileSync(path.join(installDir, "strada.ps1"), "utf8")).toContain("scripts/source-launcher.mjs");
   });
 
-  it("uninstalls POSIX wrappers, removes the managed profile block, and can purge repo-local runtime files", async () => {
+  it("marks web setup and default web launches as requiring a prepared source checkout", async () => {
+    const { requiresPreparedSourceCheckout } = await loadSourceLauncherModule();
+
+    expect(requiresPreparedSourceCheckout([])).toBe(true);
+    expect(requiresPreparedSourceCheckout(["setup", "--web"])).toBe(true);
+    expect(requiresPreparedSourceCheckout(["--web"])).toBe(true);
+    expect(requiresPreparedSourceCheckout(["start"])).toBe(true);
+    expect(requiresPreparedSourceCheckout(["start", "--channel", "web"])).toBe(true);
+
+    expect(requiresPreparedSourceCheckout(["setup", "--terminal"])).toBe(false);
+    expect(requiresPreparedSourceCheckout(["doctor"])).toBe(false);
+    expect(requiresPreparedSourceCheckout(["start", "--channel", "cli"])).toBe(false);
+  });
+
+  it("uninstalls POSIX wrappers, removes managed profile files, and resets a source checkout with --purge-config", async () => {
     const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada launcher uninstall "));
     const tempBin = path.join(tempHome, ".local", "bin");
     const tempRepo = mkdtempSync(path.join(os.tmpdir(), "strada repo uninstall "));
@@ -252,6 +266,10 @@ describe("source launcher install-command", () => {
     mkdirSync(path.join(tempRepo, ".strada-memory"), { recursive: true });
     mkdirSync(path.join(tempRepo, ".whatsapp-session"), { recursive: true });
     mkdirSync(path.join(tempRepo, "data"), { recursive: true });
+    mkdirSync(path.join(tempRepo, "node_modules"), { recursive: true });
+    mkdirSync(path.join(tempRepo, "dist"), { recursive: true });
+    mkdirSync(path.join(tempRepo, "web-portal", "node_modules"), { recursive: true });
+    mkdirSync(path.join(tempRepo, "web-portal", "dist"), { recursive: true });
     writeFileSync(path.join(tempRepo, ".env"), [
       "MEMORY_DB_PATH=.strada-memory",
       "WHATSAPP_SESSION_PATH=.whatsapp-session",
@@ -259,8 +277,12 @@ describe("source launcher install-command", () => {
       "DAEMON_HEARTBEAT_FILE=./HEARTBEAT.md",
     ].join("\n"));
     writeFileSync(path.join(tempRepo, "strada-brain-error.log"), "error\n", "utf8");
+    writeFileSync(path.join(tempRepo, "strada-brain-sync.log"), "sync\n", "utf8");
     writeFileSync(path.join(tempRepo, "HEARTBEAT.md"), "# test\n", "utf8");
     writeFileSync(path.join(tempRepo, "data", "tasks.db"), "sqlite\n", "utf8");
+    writeFileSync(path.join(tempRepo, "data", "learning.db"), "sqlite\n", "utf8");
+    writeFileSync(path.join(tempRepo, "dist", "index.js"), "built\n", "utf8");
+    writeFileSync(path.join(tempRepo, "web-portal", "dist", "index.html"), "<html></html>\n", "utf8");
     writeFileSync(externalLog, "external\n", "utf8");
     tempDirs.push(externalLog);
 
@@ -270,6 +292,7 @@ describe("source launcher install-command", () => {
         env,
         homeDir: tempHome,
         rootDir: tempRepo,
+        sourceCheckout: true,
         purgeConfig: true,
       });
     } finally {
@@ -278,15 +301,114 @@ describe("source launcher install-command", () => {
 
     expect(existsSync(path.join(tempBin, "strada"))).toBe(false);
     expect(existsSync(path.join(tempBin, "strada-brain"))).toBe(false);
-    expect(readFileSync(path.join(tempHome, ".zshrc"), "utf8")).not.toContain("# >>> Strada command >>>");
+    expect(existsSync(path.join(tempHome, ".zshrc"))).toBe(false);
     expect(existsSync(path.join(tempRepo, ".env"))).toBe(false);
     expect(existsSync(path.join(tempRepo, ".strada-memory"))).toBe(false);
     expect(existsSync(path.join(tempRepo, ".whatsapp-session"))).toBe(false);
     expect(existsSync(path.join(tempRepo, "HEARTBEAT.md"))).toBe(false);
     expect(existsSync(path.join(tempRepo, "strada-brain-error.log"))).toBe(false);
+    expect(existsSync(path.join(tempRepo, "strada-brain-sync.log"))).toBe(false);
     expect(existsSync(path.join(tempRepo, "data", "tasks.db"))).toBe(false);
+    expect(existsSync(path.join(tempRepo, "data", "learning.db"))).toBe(false);
     expect(existsSync(path.join(tempRepo, "data"))).toBe(false);
+    expect(existsSync(path.join(tempRepo, "node_modules"))).toBe(false);
+    expect(existsSync(path.join(tempRepo, "dist"))).toBe(false);
+    expect(existsSync(path.join(tempRepo, "web-portal", "node_modules"))).toBe(false);
+    expect(existsSync(path.join(tempRepo, "web-portal", "dist"))).toBe(false);
     expect(existsSync(externalLog)).toBe(true);
+  });
+
+  it("purges packaged runtime state from STRADA_HOME instead of assuming the install root", async () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada packaged uninstall "));
+    const tempBin = path.join(tempHome, ".local", "bin");
+    const tempInstallRoot = mkdtempSync(path.join(os.tmpdir(), "strada packaged install "));
+    const tempRuntimeRoot = path.join(tempHome, ".portable-strada");
+    tempDirs.push(tempHome, tempInstallRoot);
+
+    const env = {
+      ...process.env,
+      HOME: tempHome,
+      XDG_BIN_HOME: tempBin,
+      SHELL: "/bin/zsh",
+      STRADA_HOME: tempRuntimeRoot,
+    };
+
+    const { installCommand, uninstallCommand } = await loadSourceLauncherModule();
+    installCommand({
+      env,
+      homeDir: tempHome,
+      launcherPath: path.join(process.cwd(), "strada"),
+    });
+
+    mkdirSync(path.join(tempRuntimeRoot, ".strada-memory"), { recursive: true });
+    writeFileSync(path.join(tempRuntimeRoot, ".env"), "MEMORY_DB_PATH=.strada-memory\n", "utf8");
+    writeFileSync(path.join(tempRuntimeRoot, "strada-brain-sync.log"), "sync\n", "utf8");
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      uninstallCommand({
+        env,
+        homeDir: tempHome,
+        rootDir: tempInstallRoot,
+        sourceCheckout: false,
+        purgeConfig: true,
+      });
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    expect(existsSync(path.join(tempBin, "strada"))).toBe(false);
+    expect(existsSync(path.join(tempBin, "strada-brain"))).toBe(false);
+    expect(existsSync(path.join(tempHome, ".zshrc"))).toBe(false);
+    expect(existsSync(tempRuntimeRoot)).toBe(false);
+  });
+
+  it("resolves relative STRADA_HOME against the original launch cwd during uninstall", async () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada relative home uninstall "));
+    const tempBin = path.join(tempHome, ".local", "bin");
+    const tempInstallRoot = mkdtempSync(path.join(os.tmpdir(), "strada relative home install "));
+    const tempLaunchCwd = mkdtempSync(path.join(os.tmpdir(), "strada relative home launch "));
+    const relativeRuntimeRoot = "portable-strada-home";
+    const tempRuntimeRoot = path.join(tempLaunchCwd, relativeRuntimeRoot);
+    tempDirs.push(tempHome, tempInstallRoot, tempLaunchCwd);
+
+    const env = {
+      ...process.env,
+      HOME: tempHome,
+      XDG_BIN_HOME: tempBin,
+      SHELL: "/bin/zsh",
+      STRADA_HOME: relativeRuntimeRoot,
+      STRADA_LAUNCH_CWD: tempLaunchCwd,
+    };
+
+    const { installCommand, uninstallCommand } = await loadSourceLauncherModule();
+    installCommand({
+      env,
+      homeDir: tempHome,
+      launcherPath: path.join(process.cwd(), "strada"),
+    });
+
+    mkdirSync(tempRuntimeRoot, { recursive: true });
+    mkdirSync(path.join(tempRuntimeRoot, ".strada-memory"), { recursive: true });
+    writeFileSync(path.join(tempRuntimeRoot, ".env"), "MEMORY_DB_PATH=.strada-memory\n", "utf8");
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      uninstallCommand({
+        env,
+        homeDir: tempHome,
+        rootDir: tempInstallRoot,
+        sourceCheckout: false,
+        purgeConfig: true,
+      });
+    } finally {
+      consoleSpy.mockRestore();
+    }
+
+    expect(existsSync(path.join(tempBin, "strada"))).toBe(false);
+    expect(existsSync(path.join(tempBin, "strada-brain"))).toBe(false);
+    expect(existsSync(tempRuntimeRoot)).toBe(false);
+    expect(existsSync(path.join(tempHome, relativeRuntimeRoot))).toBe(false);
   });
 
   it("uninstalls Windows wrappers and removes the install dir from the user PATH", async () => {

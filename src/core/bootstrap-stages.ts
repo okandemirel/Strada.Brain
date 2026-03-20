@@ -966,6 +966,7 @@ export async function initializeSessionRuntimeStage(
   },
   deps: SessionRuntimeStageDeps = {},
 ): Promise<SessionRuntimeStageResult> {
+  const runtimePaths = resolveRuntimePaths({ moduleUrl: import.meta.url });
   const soulOverrides: Record<string, string> = {};
   for (const channel of ["telegram", "discord", "slack", "whatsapp", "web"] as const) {
     const envValue = process.env[`SOUL_FILE_${channel.toUpperCase()}`];
@@ -974,7 +975,7 @@ export async function initializeSessionRuntimeStage(
     }
   }
 
-  const soulBasePath = process.cwd();
+  const soulBasePath = runtimePaths.configRoot;
   const soulLoader = deps.createSoulLoader?.(soulBasePath, {
     soulFile: process.env.SOUL_FILE ?? "soul.md",
     channelOverrides: Object.keys(soulOverrides).length > 0 ? soulOverrides : undefined,
@@ -1172,7 +1173,7 @@ export function loadDaemonTriggersStage(
   },
   deps: DaemonTriggerStageDeps = {},
 ): DaemonTriggerStageResult {
-  const projectRoot = params.projectRoot ?? process.cwd();
+  const projectRoot = params.projectRoot ?? resolveRuntimePaths({ moduleUrl: import.meta.url }).configRoot;
   const heartbeatPath = resolve(projectRoot, params.daemonConfig.heartbeat.heartbeatFile);
   if (!heartbeatPath.startsWith(projectRoot + "/") && heartbeatPath !== projectRoot) {
     throw new AppError("HEARTBEAT file path is outside project root", "DAEMON_CONFIG_ERROR", 400);

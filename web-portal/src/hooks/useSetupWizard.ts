@@ -9,6 +9,29 @@ const SETUP_AVAILABILITY_MAX_ATTEMPTS = 25
 const SETUP_AVAILABILITY_RETRY_MS = 1000
 const SETUP_BOOTSTRAP_POLL_MS = 1000
 const SETUP_BOOTSTRAP_MAX_ATTEMPTS = 80
+const SETUP_REQUEST_TIMEOUT_MS = 2500
+
+interface SetupFetchOptions {
+  signal?: AbortSignal
+  timeoutMs?: number
+}
+
+interface SetupHealthResponse {
+  status: string
+  setupState?: string
+}
+
+export function advanceSetupPollSession(currentSession: number): number {
+  return currentSession + 1
+}
+
+export function isSetupPollSessionActive(
+  pollSession: number,
+  currentSession: number,
+  mounted: boolean,
+): boolean {
+  return mounted && pollSession === currentSession
+}
 
 export function hasUsableResponseCredential(
   providerId: string,
@@ -76,11 +99,70 @@ function formatProviderIssues(failures: ProviderPreflightFailure[] | undefined):
   return failures.map((failure) => `${failure.providerName}: ${failure.detail}`).join(' ')
 }
 
+function isSetupHealthResponse(value: unknown): value is SetupHealthResponse {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.status === 'string'
+    && (candidate.setupState === undefined || typeof candidate.setupState === 'string')
+}
+
+async function fetchWithTimeout(
+  fetchImpl: typeof fetch,
+  input: Parameters<typeof fetch>[0],
+  init: (Parameters<typeof fetch>[1] & SetupFetchOptions) | undefined = undefined,
+): Promise<Response> {
+  const { timeoutMs = SETUP_REQUEST_TIMEOUT_MS, signal, ...requestInit } = init ?? {}
+  const controller = new AbortController()
+  const cleanup: Array<() => void> = []
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error(`Request timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
+    cleanup.push(() => clearTimeout(timer))
+  })
+
+  const abortPromise = signal
+    ? new Promise<never>((_, reject) => {
+        const rejectAbort = () => {
+          controller.abort()
+          reject(signal.reason instanceof Error ? signal.reason : new Error('Request aborted'))
+        }
+
+        if (signal.aborted) {
+          rejectAbort()
+          return
+        }
+
+        signal.addEventListener('abort', rejectAbort, { once: true })
+        cleanup.push(() => signal.removeEventListener('abort', rejectAbort))
+      })
+    : null
+
+  try {
+    return await Promise.race([
+      fetchImpl(input, { ...requestInit, signal: controller.signal }),
+      timeoutPromise,
+      ...(abortPromise ? [abortPromise] : []),
+    ]) as Response
+  } finally {
+    cleanup.forEach((fn) => fn())
+  }
+}
+
 export async function readSetupBootstrapStatus(
   fetchImpl: typeof fetch = fetch,
+  options: SetupFetchOptions = {},
 ): Promise<SetupStatusResponse | null> {
   try {
-    const res = await fetchImpl('/api/setup/status', { cache: 'no-store' })
+    const res = await fetchWithTimeout(fetchImpl, '/api/setup/status', {
+      cache: 'no-store',
+      ...options,
+    })
     if (!res.ok) {
       return null
     }
@@ -96,11 +178,39 @@ export async function readSetupBootstrapStatus(
   }
 }
 
+export async function readSetupHealthStatus(
+  fetchImpl: typeof fetch = fetch,
+  options: SetupFetchOptions = {},
+): Promise<SetupHealthResponse | null> {
+  try {
+    const res = await fetchWithTimeout(fetchImpl, '/health', {
+      cache: 'no-store',
+      ...options,
+    })
+    if (!res.ok) {
+      return null
+    }
+
+    const data = await res.json().catch(() => null)
+    if (!isSetupHealthResponse(data)) {
+      return null
+    }
+
+    return data
+  } catch {
+    return null
+  }
+}
+
 export async function probeSetupSurface(
   fetchImpl: typeof fetch = fetch,
+  options: SetupFetchOptions = {},
 ): Promise<SetupSurfaceProbe> {
   try {
-    const res = await fetchImpl('/api/setup/csrf', { cache: 'no-store' })
+    const res = await fetchWithTimeout(fetchImpl, '/api/setup/csrf', {
+      cache: 'no-store',
+      ...options,
+    })
     if (res.ok) {
       const data = await res.json().catch(() => ({}))
       const token = typeof data.token === 'string' ? data.token : ''
@@ -119,16 +229,9 @@ export async function probeSetupSurface(
     // setup server may still be booting or handing off
   }
 
-  try {
-    const healthRes = await fetchImpl('/health', { cache: 'no-store' })
-    if (healthRes.ok) {
-      const healthData = await healthRes.json().catch(() => null)
-      if (healthData && typeof healthData === 'object' && healthData.status === 'ok') {
-        return { kind: 'redirect' }
-      }
-    }
-  } catch {
-    // main app may not be ready yet
+  const healthData = await readSetupHealthStatus(fetchImpl, options)
+  if (healthData?.status === 'ok') {
+    return { kind: 'redirect' }
   }
 
   return { kind: 'retry' }
@@ -163,7 +266,9 @@ export function useSetupWizard() {
 
   const csrfTokenRef = useRef<string>('')
   const readyUrlRef = useRef<string | null>(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pollAbortControllerRef = useRef<AbortController | null>(null)
+  const pollSessionRef = useRef(0)
   const availabilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
   const reviewBlockingReason = getSetupReviewBlockingReason(
@@ -174,12 +279,26 @@ export function useSetupWizard() {
     providerAuthModes,
   )
 
+  const isBootstrapPollingActive = useCallback((pollSession: number) => {
+    return isSetupPollSessionActive(pollSession, pollSessionRef.current, mountedRef.current)
+  }, [])
+
   const rememberReadyUrl = useCallback((nextReadyUrl?: string | null) => {
     if (typeof nextReadyUrl !== 'string') return
     const normalized = nextReadyUrl.trim()
     if (!normalized) return
     readyUrlRef.current = normalized
     setReadyUrl(normalized)
+  }, [])
+
+  const stopBootstrapPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+    pollAbortControllerRef.current?.abort()
+    pollAbortControllerRef.current = null
+    pollSessionRef.current = advanceSetupPollSession(pollSessionRef.current)
   }, [])
 
   // Fetch CSRF token on mount
@@ -221,14 +340,12 @@ export function useSetupWizard() {
 
     return () => {
       mountedRef.current = false
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current)
-      }
+      stopBootstrapPolling()
       if (availabilityTimerRef.current) {
         clearTimeout(availabilityTimerRef.current)
       }
     }
-  }, [])
+  }, [stopBootstrapPolling])
 
   const validateCurrentStep = useCallback((): boolean => {
     switch (step) {
@@ -391,6 +508,7 @@ export function useSetupWizard() {
     setSaveWarning(null)
     setSaveCommitted(false)
     setBootstrapDetail(null)
+    stopBootstrapPolling()
     rememberReadyUrl(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
 
     if (reviewBlockingReason) {
@@ -512,16 +630,23 @@ export function useSetupWizard() {
       }
 
       let attempts = 0
+      const pollSession = pollSessionRef.current
 
-      pollTimerRef.current = setInterval(async () => {
-        if (!mountedRef.current) {
-          if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
+      const pollBootstrapStatus = async () => {
+        if (!isBootstrapPollingActive(pollSession)) {
           return
         }
+
         attempts++
+        let shouldStopPolling = false
+        const pollAbortController = new AbortController()
+        pollAbortControllerRef.current = pollAbortController
 
         try {
-          const setupStatus = await readSetupBootstrapStatus(fetch)
+          const setupStatus = await readSetupBootstrapStatus(fetch, { signal: pollAbortController.signal })
+          if (!isBootstrapPollingActive(pollSession)) {
+            return
+          }
           if (setupStatus) {
             rememberReadyUrl(setupStatus.readyUrl)
             const providerWarningMessage = formatProviderIssues(setupStatus.providerWarnings)
@@ -531,17 +656,19 @@ export function useSetupWizard() {
 
             if (applySetupBootstrapStatus(setupStatus)) {
               if (setupStatus.state === 'failed' || setupStatus.state === 'ready') {
-                if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
+                shouldStopPolling = true
               }
-              return
             }
           }
 
-          const healthRes = await fetch('/health', { cache: 'no-store' })
-          if (!healthRes.ok) return
-          const healthData = await healthRes.json().catch(() => null)
-          if (healthData.status === 'ok') {
-            if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
+          const healthData = shouldStopPolling
+            ? null
+            : await readSetupHealthStatus(fetch, { signal: pollAbortController.signal })
+          if (!isBootstrapPollingActive(pollSession)) {
+            return
+          }
+          if (healthData?.status === 'ok') {
+            shouldStopPolling = true
             if (!mountedRef.current) return
             applySetupBootstrapStatus(transitionSetupStatus(
               { state: 'booting' },
@@ -550,10 +677,23 @@ export function useSetupWizard() {
           }
         } catch {
           // Same-port handoff can briefly reject requests while the app replaces the wizard.
+        } finally {
+          if (pollAbortControllerRef.current === pollAbortController) {
+            pollAbortControllerRef.current = null
+          }
+        }
+
+        if (!isBootstrapPollingActive(pollSession)) {
+          return
+        }
+
+        if (shouldStopPolling) {
+          stopBootstrapPolling()
+          return
         }
 
         if (attempts >= SETUP_BOOTSTRAP_MAX_ATTEMPTS) {
-          if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
+          stopBootstrapPolling()
           if (!mountedRef.current) return
           const fallbackReadyUrl = readyUrlRef.current
           applySetupBootstrapStatus(transitionSetupStatus(
@@ -565,13 +705,20 @@ export function useSetupWizard() {
                 : 'Configuration was saved, but Strada did not expose a ready or failed bootstrap state in time. Re-open setup and inspect the startup error.',
             },
           ))
+          return
         }
-      }, SETUP_BOOTSTRAP_POLL_MS)
+
+        pollTimerRef.current = setTimeout(() => {
+          void pollBootstrapStatus()
+        }, SETUP_BOOTSTRAP_POLL_MS)
+      }
+
+      void pollBootstrapStatus()
     } catch (err) {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive])
 
   return {
     // State

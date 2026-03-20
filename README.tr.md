@@ -79,7 +79,7 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 `./strada install-command`, gelecekte acilacak terminallerin `strada` komutunu dogrudan gormesi icin shell profilinizi de otomatik gunceller; ayrica PATH export yazmaniz gerekmez.
 Windows'ta checkout icinden `.\strada.ps1` kullanilir. `install-command`, `strada.cmd` ve `strada.ps1` dosyalarini `%LOCALAPPDATA%\Strada\bin` altina yazar ve kullanici PATH'ini gunceller.
 
-Kullanici-local komutu kaldirmak icin daha sonra `strada uninstall` (veya checkout icinden `./strada uninstall` / `.\strada.ps1 uninstall`) calistirin. `--purge-config` eklerseniz `.env`, `.strada-memory`, `.whatsapp-session`, loglar ve `HEARTBEAT.md` gibi repo-ici runtime dosyalari da temizlenir. Repository checkout'unun kendisi otomatik olarak silinmez.
+Kullanici-local komutu kaldirmak icin daha sonra `strada uninstall` (veya checkout icinden `./strada uninstall` / `.\strada.ps1 uninstall`) calistirin. `--purge-config` eklerseniz aktif runtime root altindaki `.env`, `.strada-memory`, `.whatsapp-session`, loglar ve `HEARTBEAT.md` gibi Strada runtime dosyalari temizlenir. Source checkout kullaniyorsaniz ayni `--purge-config` secenegi `node_modules/`, `dist/`, `web-portal/node_modules` ve `web-portal/dist` gibi uretilen artefact'lari da siler; boylece checkout'u gercek bir sifir-kurulum durumuna dondurup tekrar test edebilirsiniz. Repository checkout'unun kendisi otomatik olarak silinmez.
 
 Eger bir gun `npm` komutunu manuel calistirmaniz gerekirse bunu `package.json` dosyasinin bulundugu repo kokunden yapin. `ENOENT ... /Strada/package.json` benzeri bir hata gorurseniz bir ust klasordesiniz; once `cd Strada.Brain` yapin veya komutu `cd Strada.Brain && ...` ile calistirin.
 
@@ -191,7 +191,7 @@ strada.cmd               # Windows Command Prompt yardimci launcher'i
 ./strada install-command  # Kullanici-local bare `strada` komutunu kur
 ./strada uninstall        # Kurulmus bare komutu ve yonetilen PATH/profile degisikliklerini kaldir
 .\strada.ps1 uninstall   # Windows checkout icinden bare komutu kaldir
-strada uninstall --purge-config # Strada'nin olusturdugu repo-ici runtime dosyalarini da temizle
+strada uninstall --purge-config # Runtime dosyalarini ve source checkout'ta uretilen artefact'lari sifir-kurulum yeniden testi icin temizle
 strada                    # install-command sonrasinda akilli launcher
 strada --daemon           # Kayitli varsayilan kanali daemon modunda baslat
 strada --web              # Web kanalini ac veya yeni makinada web-oncelikli kuruluma devam et

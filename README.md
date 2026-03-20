@@ -76,7 +76,7 @@ If you skip `./strada install-command`, keep using `./Strada.Brain/strada ...` f
 
 On macOS/Linux, `./strada install-command` updates your shell profile automatically so future terminals pick up the `strada` command without a manual PATH edit. On Windows, `.\strada.ps1 install-command` installs `strada.cmd` and `strada.ps1` into `%LOCALAPPDATA%\Strada\bin` and updates the user PATH.
 
-To remove the user-local command later, run `strada uninstall` (or `./strada uninstall` / `.\strada.ps1 uninstall` from the checkout). Add `--purge-config` to also remove repo-local runtime state such as `.env`, `.strada-memory`, `.whatsapp-session`, logs, and `HEARTBEAT.md`. The repository checkout itself is never deleted automatically.
+To remove the user-local command later, run `strada uninstall` (or `./strada uninstall` / `.\strada.ps1 uninstall` from the checkout). Add `--purge-config` to also remove Strada runtime state such as `.env`, `.strada-memory`, `.whatsapp-session`, logs, and `HEARTBEAT.md` under the active runtime root. On source checkouts, the same `--purge-config` flag also removes generated artifacts like `node_modules/`, `dist/`, `web-portal/node_modules`, and `web-portal/dist` so you can rerun the checkout from a true zero-install state. The repository checkout itself is never deleted automatically.
 
 If you ever run `npm` manually, do it from the repository root, the folder that contains `package.json`. If you see an error like `ENOENT ... /Strada/package.json`, you are one directory too high; either `cd Strada.Brain` first or prefix the command with `cd Strada.Brain && ...`.
 
@@ -190,7 +190,7 @@ strada.cmd               # Windows Command Prompt companion launcher inside the 
 .\strada.ps1 install-command # Windows source-checkout bare-command install
 ./strada uninstall        # Remove the installed bare command and managed PATH/profile changes
 .\strada.ps1 uninstall    # Windows source-checkout bare-command uninstall
-strada uninstall --purge-config # Also remove repo-local runtime state created by Strada
+strada uninstall --purge-config # Also remove Strada runtime state and source-checkout generated artifacts for a zero-install rerun
 strada                    # Smart launcher after install-command
 strada --daemon           # Start the configured default channel in daemon mode
 strada --web              # Open the web channel, or continue web-first setup on a fresh machine
