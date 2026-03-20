@@ -19,6 +19,7 @@ import {
   SetupWizard,
   buildSetupEnvLines,
   buildSetupAccessUrl,
+  buildSetupReadyUrl,
   hasConfiguredEmbeddingCandidate,
   injectSetupModeMarker,
 } from "./setup-wizard.js";
@@ -128,6 +129,10 @@ describe("SetupWizard path validation", () => {
     expect(buildSetupAccessUrl(3000, 12345)).toBe("http://127.0.0.1:3000/?strada-setup=1&t=12345");
   });
 
+  it("builds a canonical ready url for the target web app", () => {
+    expect(buildSetupReadyUrl(3000)).toBe("http://127.0.0.1:3000/");
+  });
+
   it("writes autonomy defaults only when setup enabled autonomy", () => {
     const enabledLines = buildSetupEnvLines({
       PROVIDER_CHAIN: "claude",
@@ -165,7 +170,7 @@ describe("SetupWizard path validation", () => {
     }).handleRequest({ url: "/?strada-setup=1", method: "GET" }, page.response);
     expect(page.read().statusCode).toBe(200);
     expect(page.read().body).toContain("Configuration saved");
-    expect(page.read().body).toContain('http-equiv="refresh" content="1;url=/"');
+    expect(page.read().body).toContain('http-equiv="refresh" content="1;url=http://127.0.0.1:0/"');
   });
 
   it("exposes explicit setup bootstrap status and allows retry after failure", async () => {
@@ -224,6 +229,7 @@ describe("SetupWizard path validation", () => {
     expect(saveResponse.read().statusCode).toBe(200);
     expect(JSON.parse(saveResponse.read().body)).toEqual({
       success: true,
+      readyUrl: "http://127.0.0.1:0/",
       providerWarnings: [{
         providerId: "kimi",
         providerName: "Kimi (Moonshot)",
@@ -276,6 +282,7 @@ describe("SetupWizard path validation", () => {
     expect(JSON.parse(status.read().body)).toEqual({
       state: "booting",
       detail: "Strada is starting the main web app.",
+      readyUrl: "http://127.0.0.1:0/",
       providerWarnings: [{
         providerId: "kimi",
         providerName: "Kimi (Moonshot)",

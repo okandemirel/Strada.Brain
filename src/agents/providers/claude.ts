@@ -9,7 +9,7 @@ import type {
   ProviderCapabilities,
 } from "./provider.interface.js";
 import type { MessageContent } from "./provider-core.interface.js";
-import { getLogger } from "../../utils/logger.js";
+import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 
 /**
  * Claude AI provider using the Anthropic SDK.
@@ -104,7 +104,7 @@ export class ClaudeProvider implements IAIProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    const logger = getLogger();
+    const logger = getLoggerSafe();
     try {
       // List models to verify API key — no tokens consumed
       await this.client.models.list({ limit: 1 });

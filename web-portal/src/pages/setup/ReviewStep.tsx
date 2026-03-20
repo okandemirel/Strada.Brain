@@ -20,6 +20,7 @@ interface ReviewStepProps {
   saveError: string | null
   saveWarning: string | null
   bootstrapDetail: string | null
+  readyUrl: string | null
   saveCommitted: boolean
   canSave: boolean
   saveBlockingReason: string | null
@@ -50,6 +51,7 @@ export default function ReviewStep({
   saveError,
   saveWarning,
   bootstrapDetail,
+  readyUrl,
   saveCommitted,
   canSave,
   saveBlockingReason,
@@ -229,6 +231,12 @@ export default function ReviewStep({
       {saveStatus === 'booting' && (
         <div className="save-message polling">
           {bootstrapDetail ?? 'Strada is still starting the main web app.'}
+          {readyUrl && (
+            <>
+              {' '}
+              If this page does not advance, open <a href={readyUrl}>{readyUrl}</a>.
+            </>
+          )}
         </div>
       )}
 
@@ -242,6 +250,12 @@ export default function ReviewStep({
       {saveStatus === 'error' && saveError && (
         <div className="save-message error">
           {saveError}
+          {readyUrl && (
+            <>
+              {' '}
+              <a href={readyUrl}>Open main app</a>
+            </>
+          )}
           {saveCommitted && (
             <>
               {' '}

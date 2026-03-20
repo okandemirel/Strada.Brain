@@ -91,13 +91,13 @@ describe('useSetupWizard helpers', () => {
       if (String(input) === '/api/setup/status') {
         return {
           ok: true,
-          json: async () => ({ state: 'booting', detail: 'Strada is starting.' }),
+          json: async () => ({ state: 'booting', detail: 'Strada is starting.', readyUrl: 'http://127.0.0.1:3000/' }),
         } as Response
       }
       throw new Error('unexpected fetch')
     })
 
-    expect(result).toEqual({ state: 'booting', detail: 'Strada is starting.' })
+    expect(result).toEqual({ state: 'booting', detail: 'Strada is starting.', readyUrl: 'http://127.0.0.1:3000/' })
   })
 
   it('preserves provider warnings in setup bootstrap status responses', async () => {

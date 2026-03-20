@@ -12,6 +12,7 @@ describe("setup-state", () => {
   it("preserves provider warnings across bootstrap transitions", () => {
     const saved = transitionSetupStatus(createSetupStatus(), {
       type: "config_saved",
+      readyUrl: "http://127.0.0.1:3000/",
       providerWarnings: [{
         providerId: "kimi",
         providerName: "Kimi (Moonshot)",
@@ -21,6 +22,7 @@ describe("setup-state", () => {
 
     const booting = transitionSetupStatus(saved, { type: "bootstrap_starting" });
     expect(booting.providerWarnings).toEqual(saved.providerWarnings);
+    expect(booting.readyUrl).toBe("http://127.0.0.1:3000/");
 
     const ready = transitionSetupStatus(booting, { type: "bootstrap_ready", readyUrl: "/app" });
     expect(ready.providerWarnings).toEqual(saved.providerWarnings);
@@ -54,6 +56,20 @@ describe("setup-state", () => {
 
   it("falls back to canonical detail text when a state omits detail", () => {
     expect(getSetupStatusDetail({ state: "booting" })).toBe("Strada is starting the main web app.");
+  });
+
+  it("preserves ready urls for booting and failed states", () => {
+    const booting = transitionSetupStatus(createSetupStatus(), {
+      type: "bootstrap_starting",
+      readyUrl: "http://127.0.0.1:3002/",
+    });
+    expect(deriveSetupBootstrapView(booting)?.readyUrl).toBe("http://127.0.0.1:3002/");
+
+    const failed = transitionSetupStatus(booting, {
+      type: "bootstrap_failed",
+      detail: "Startup timed out.",
+    });
+    expect(deriveSetupBootstrapView(failed)?.readyUrl).toBe("http://127.0.0.1:3002/");
   });
 
   it("builds a shared retry href", () => {

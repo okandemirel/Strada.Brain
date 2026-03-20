@@ -122,6 +122,7 @@ export default function SetupWizard() {
             saveError={wiz.saveError}
             saveWarning={wiz.saveWarning}
             bootstrapDetail={wiz.bootstrapDetail}
+            readyUrl={wiz.readyUrl}
             saveCommitted={wiz.saveCommitted}
             canSave={wiz.canSave}
             saveBlockingReason={wiz.reviewBlockingReason}

@@ -7,7 +7,7 @@ import type {
   ProviderCapabilities,
 } from "./provider.interface.js";
 import type { MessageContent } from "./provider-core.interface.js";
-import { getLogger } from "../../utils/logger.js";
+import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
 
 /**
@@ -77,7 +77,7 @@ export class OllamaProvider implements IAIProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    const logger = getLogger();
+    const logger = getLoggerSafe();
     try {
       const response = await fetch(`${this.baseUrl}/api/tags`, {
         method: "GET",

@@ -54,6 +54,20 @@ class RingBufferTransport extends TransportStream {
 
 let logger: winston.Logger | null = null;
 
+export interface LoggerLike {
+  debug(message: string, meta?: Record<string, unknown>): void;
+  info(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+
+const NOOP_LOGGER: LoggerLike = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
+
 export function createLogger(level: string, logFile: string): winston.Logger {
   if (logger) return logger;
 
@@ -96,4 +110,8 @@ export function getLogger(): winston.Logger {
     throw new Error("Logger not initialized. Call createLogger() first.");
   }
   return logger;
+}
+
+export function getLoggerSafe(): LoggerLike {
+  return logger ?? NOOP_LOGGER;
 }
