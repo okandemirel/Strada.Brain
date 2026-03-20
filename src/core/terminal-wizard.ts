@@ -20,7 +20,6 @@ import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { buildSetupAccessUrl, type SetupWizard } from "./setup-wizard.js";
 import {
-  formatLauncherInvocation,
   getBareCommand,
   getPlatformInstallCommandGuidance,
   getSourceDoctorCommand,
@@ -91,11 +90,6 @@ export interface WizardAnswers {
 export interface ValidationResult {
   valid: boolean;
   error?: string;
-}
-
-export interface TerminalWizardResult {
-  readonly launchWebApp?: boolean;
-  readonly wizard?: SetupWizard;
 }
 
 /**
@@ -625,130 +619,42 @@ function continueWebSetupAfterNodeUpgrade(nvmDir: string): boolean {
   return result.status === 0;
 }
 
-export function getPostSetupWebLaunchCommand(
-  env: NodeJS.ProcessEnv = process.env,
-  cwd: string = env["STRADA_INSTALL_ROOT"] ?? process.cwd(),
-  platform: NodeJS.Platform = process.platform,
-): { command: string; args: string[]; cwd: string } {
-  const launcherPath = env["STRADA_LAUNCHER_PATH"];
-  if (launcherPath) {
-    const invocation = formatLauncherInvocation(launcherPath, ["start", "--channel", "web"], platform);
-    return {
-      command: invocation.command,
-      args: invocation.args,
-      cwd,
-    };
-  }
-
-  return {
-    command: "node",
-    args: [...process.execArgv, process.argv[1] ?? "", "start", "--channel", "web"].filter(Boolean),
-    cwd,
-  };
+interface LaunchWebSetupWizardOptions {
+  requestedPort?: number;
+  findPort?: (preferredPort: number) => Promise<number>;
+  createWizard?: (port: number) => Promise<SetupWizard> | SetupWizard;
+  waitForUrlReady?: (url: string) => Promise<void>;
+  openBrowserFn?: (url: string) => void;
 }
 
-async function waitForMainWebAppReady(
-  port: number,
-  maxAttempts = 20,
-  delayMs = 1_000,
-  fetchImpl: typeof fetch = fetch,
-): Promise<boolean> {
-  const healthUrl = `http://${SETUP_HOST}:${port}/health`;
+export async function launchWebSetupWizard(
+  options: LaunchWebSetupWizardOptions = {},
+): Promise<SetupWizard> {
+  const requestedPort = options.requestedPort
+    ?? (process.env["SETUP_WIZARD_PORT"] ? parseInt(process.env["SETUP_WIZARD_PORT"], 10) : 3000);
+  const port = await (options.findPort ?? findAvailableSetupWizardPort)(requestedPort);
+  const createWizard = options.createWizard ?? (async (nextPort: number) => {
+    const { SetupWizard } = await import("./setup-wizard.js");
+    return new SetupWizard({ port: nextPort });
+  });
+  const wizard = await createWizard(port);
+  const url = buildSetupAccessUrl(port);
 
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    try {
-      const response = await fetchImpl(healthUrl, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(`health returned ${response.status}`);
-      }
-      const payload = await response.json().catch(() => ({}));
-      if (payload && typeof payload === "object" && payload.status === "ok") {
-        return true;
-      }
-    } catch {
-      // Expected while the setup server is releasing the port and the main app is booting.
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  return false;
-}
-
-export async function launchMainWebAppAfterSetup(
-  port: number,
-  options: {
-    spawnFn?: typeof spawn;
-    fetchImpl?: typeof fetch;
-    maxLaunchAttempts?: number;
-    perAttemptHealthChecks?: number;
-    perAttemptDelayMs?: number;
-  } = {},
-): Promise<{ ok: boolean; detail?: string }> {
-  const spawnFn = options.spawnFn ?? spawn;
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const maxLaunchAttempts = options.maxLaunchAttempts ?? 3;
-  const perAttemptHealthChecks = options.perAttemptHealthChecks ?? 20;
-  const perAttemptDelayMs = options.perAttemptDelayMs ?? 1_000;
-  let lastDetail: string | undefined;
-
-  for (let attempt = 1; attempt <= maxLaunchAttempts; attempt += 1) {
-    const launch = getPostSetupWebLaunchCommand();
-    const child = spawnFn(launch.command, launch.args, {
-      cwd: launch.cwd,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stderr = "";
-    let stdout = "";
-    let exited = false;
-    let exitCode: number | null = null;
-    let exitSignal: NodeJS.Signals | null = null;
-    let launchError: string | undefined;
-
-    child.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
-    });
-    child.once("error", (error) => {
-      launchError = error.message;
-    });
-    child.once("exit", (code, signal) => {
-      exited = true;
-      exitCode = code;
-      exitSignal = signal;
-    });
-
-    const ready = await waitForMainWebAppReady(
-      port,
-      perAttemptHealthChecks,
-      perAttemptDelayMs,
-      fetchImpl,
+  if (port !== requestedPort) {
+    console.log(
+      `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on ${url} instead.`,
     );
-    if (ready) {
-      child.unref?.();
-      return { ok: true };
-    }
-
-    if (!exited) {
-      child.kill("SIGTERM");
-    }
-
-    const output = `${stderr || stdout}`.trim();
-    lastDetail = launchError
-      ?? (exited
-        ? `web launch attempt ${attempt} exited${exitCode !== null ? ` with code ${exitCode}` : ""}${exitSignal ? ` (${exitSignal})` : ""}${output ? `: ${output.slice(0, 300)}` : ""}`
-        : `web launch attempt ${attempt} did not become healthy in time`);
-
-    if (attempt < maxLaunchAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, 750));
-    }
   }
 
-  return { ok: false, detail: lastDetail };
+  await wizard.listen();
+  await (options.waitForUrlReady ?? waitForSetupUrlReady)(url);
+  console.log(`\n\uD83C\uDF10 Opening setup at ${url}...`);
+  console.log("   (Open this URL in your browser if it didn't open automatically)\n");
+  (options.openBrowserFn ?? openBrowser)(url);
+  await wizard.waitForCompletion();
+  console.log(`\nConfiguration saved. Launching Strada web app at http://${SETUP_HOST}:${port}/ ...\n`);
+
+  return wizard;
 }
 
 async function promptForWebSetupUpgrade(
@@ -851,7 +757,7 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
  */
 export async function runTerminalWizard(
   options?: { mode?: "terminal" | "web" },
-): Promise<TerminalWizardResult | undefined> {
+): Promise<SetupWizard | undefined> {
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
   let intentionalClose = false;
@@ -918,26 +824,7 @@ export async function runTerminalWizard(
       } else {
         intentionalClose = true;
         rl.close();
-        const requestedPort = process.env["SETUP_WIZARD_PORT"]
-          ? parseInt(process.env["SETUP_WIZARD_PORT"], 10)
-          : 3000;
-        const port = await findAvailableSetupWizardPort(requestedPort);
-        const { SetupWizard } = await import("./setup-wizard.js");
-        const wizard = new SetupWizard({ port });
-        const url = buildSetupAccessUrl(port);
-        if (port !== requestedPort) {
-          console.log(
-            `\n\u26A0\uFE0F  Port ${requestedPort} is already in use. Starting the setup wizard on ${url} instead.`,
-          );
-        }
-        await wizard.listen();
-        await waitForSetupUrlReady(url);
-        console.log(`\n\uD83C\uDF10 Opening setup at ${url}...`);
-        console.log(`   (Open this URL in your browser if it didn't open automatically)\n`);
-        openBrowser(url);
-        await wizard.waitForCompletion();
-        console.log(`\nConfiguration saved. Launching Strada web app at http://${SETUP_HOST}:${port}/ ...\n`);
-        return { launchWebApp: true, wizard };
+        return await launchWebSetupWizard();
       }
     }
 

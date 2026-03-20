@@ -349,12 +349,23 @@ export class SetupWizard {
   private readonly port: number;
   private readonly readyUrl: string;
   private readonly csrfToken = randomUUID();
-  private onComplete: (() => void) | null = null;
   private status: SetupStatusResponse = createSetupStatus();
+  private readonly completionPromise: Promise<void>;
+  private resolveCompletion!: () => void;
+  private completionSignaled = false;
 
   constructor(opts?: { port?: number }) {
     this.port = opts?.port ?? 3000;
     this.readyUrl = buildSetupReadyUrl(this.port);
+    this.completionPromise = new Promise<void>((resolve) => {
+      this.resolveCompletion = () => {
+        if (this.completionSignaled) {
+          return;
+        }
+        this.completionSignaled = true;
+        resolve();
+      };
+    });
   }
 
   markBootstrapStarting(detail?: string): void {
@@ -412,9 +423,7 @@ export class SetupWizard {
 
   /** Resolves when the user completes the setup flow and saves config. */
   async waitForCompletion(): Promise<void> {
-    await new Promise<void>((resolve) => {
-      this.onComplete = resolve;
-    });
+    await this.completionPromise;
 
     // Keep the wizard server alive until startup either succeeds or fails so the
     // browser can keep reading explicit setup status from the same URL.
@@ -437,6 +446,10 @@ export class SetupWizard {
         resolve();
       });
     });
+  }
+
+  private signalCompletion(): void {
+    this.resolveCompletion();
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -785,11 +798,7 @@ export class SetupWizard {
       providerWarnings,
     });
     this.json(res, 200, { success: true, readyUrl: this.readyUrl, providerWarnings });
-
-    // Signal completion after a delay so the response and any follow-up polling can be handled
-    setTimeout(() => {
-      if (this.onComplete) this.onComplete();
-    }, 2000);
+    this.signalCompletion();
   }
 
   private readBody(req: IncomingMessage): Promise<string> {

@@ -161,13 +161,7 @@ program
       console.error("Choose either --web or --terminal, not both.");
       process.exit(1);
     }
-    const { runTerminalWizard } = await import("./core/terminal-wizard.js");
-    const result = await runTerminalWizard({
-      mode: opts.web ? "web" : opts.terminal ? "terminal" : undefined,
-    });
-    if (result?.launchWebApp && result.wizard) {
-      await startApp("web", false, result.wizard);
-    }
+    await runSetupFlow(opts.web ? "web" : opts.terminal ? "terminal" : undefined);
   });
 
 program
@@ -437,17 +431,24 @@ async function startApp(
   }
 }
 
+async function startWebAppFromSetupWizard(wizard: SetupWizard | undefined): Promise<void> {
+  if (!wizard) {
+    return;
+  }
+  await startApp("web", false, wizard);
+}
+
+async function runSetupFlow(mode?: "terminal" | "web"): Promise<void> {
+  const { runTerminalWizard } = await import("./core/terminal-wizard.js");
+  const wizard = await runTerminalWizard({ mode });
+  await startWebAppFromSetupWizard(wizard);
+}
+
 async function runRootLauncher(options: RootLaunchOptions): Promise<void> {
   const configResult = loadConfigSafe();
   if (configResult.kind === "err") {
     console.log("First-time setup is required before Strada can start.\n");
-    const { runTerminalWizard } = await import("./core/terminal-wizard.js");
-    const result = await runTerminalWizard({
-      mode: options.web ? "web" : options.terminal ? "terminal" : undefined,
-    });
-    if (result?.launchWebApp && result.wizard) {
-      await startApp("web", false, result.wizard);
-    }
+    await runSetupFlow(options.web ? "web" : options.terminal ? "terminal" : undefined);
     return;
   }
 
@@ -486,11 +487,7 @@ async function runLauncherAction(action: {
   }
 
   if (action.kind === "setup") {
-    const { runTerminalWizard } = await import("./core/terminal-wizard.js");
-    const result = await runTerminalWizard();
-    if (result?.launchWebApp && result.wizard) {
-      await startApp("web", false, result.wizard);
-    }
+    await runSetupFlow();
     return;
   }
 

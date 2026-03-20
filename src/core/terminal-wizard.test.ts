@@ -1,18 +1,15 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildWebSetupUpgradeShellScript,
   findAvailableSetupWizardPort,
   generateEnvContent,
-  getPostSetupWebLaunchCommand,
   getRemainingResponseProviderChoices,
+  launchWebSetupWizard,
   resolveNodeUpgradeStrategy,
   getSuggestedNodeUpgradeCommand,
-  launchMainWebAppAfterSetup,
   nodeSupportsWebPortalBuild,
   validateUnityPath,
   resolveNvmDir,
@@ -271,104 +268,86 @@ describe("buildWebSetupUpgradeShellScript", () => {
   });
 });
 
-describe("getPostSetupWebLaunchCommand", () => {
-  it("prefers relaunching through the source launcher when available", () => {
-    expect(getPostSetupWebLaunchCommand({
-      STRADA_INSTALL_ROOT: "/Users/test/Strada.Brain",
-      STRADA_LAUNCHER_PATH: "/Users/test/Strada.Brain/strada",
-    }, "/Users/test/Strada.Brain", "darwin")).toEqual({
-      command: "/Users/test/Strada.Brain/strada",
-      args: ["start", "--channel", "web"],
-      cwd: "/Users/test/Strada.Brain",
-    })
-  })
+describe("launchWebSetupWizard", () => {
+  it("waits for setup completion before returning the wizard", async () => {
+    let resolveCompletion!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      resolveCompletion = resolve;
+    });
+    const wizard = {
+      listen: vi.fn().mockResolvedValue(undefined),
+      waitForCompletion: vi.fn(() => completion),
+    } as any;
+    const waitForUrlReady = vi.fn().mockResolvedValue(undefined);
+    const openBrowserFn = vi.fn();
+    const createWizard = vi.fn(async () => wizard);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-  it("falls back to node execution when no launcher path exists", () => {
-    const command = getPostSetupWebLaunchCommand({}, "/Users/test/Strada.Brain", "darwin")
-    expect(command.command).toBe("node")
-    expect(command.args.at(-3)).toBe("start")
-    expect(command.args.at(-2)).toBe("--channel")
-    expect(command.args.at(-1)).toBe("web")
-    expect(command.cwd).toBe("/Users/test/Strada.Brain")
-  })
+    try {
+      let settled = false;
+      const launchPromise = launchWebSetupWizard({
+        requestedPort: 4100,
+        findPort: async () => 4100,
+        createWizard,
+        waitForUrlReady,
+        openBrowserFn,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
 
-  it("wraps PowerShell launchers correctly on Windows", () => {
-    expect(getPostSetupWebLaunchCommand({
-      STRADA_INSTALL_ROOT: "C:\\Repo\\Strada.Brain",
-      STRADA_LAUNCHER_PATH: "C:\\Repo\\Strada.Brain\\strada.ps1",
-    }, "C:\\Repo\\Strada.Brain", "win32")).toEqual({
-      command: "powershell.exe",
-      args: [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "C:\\Repo\\Strada.Brain\\strada.ps1",
-        "start",
-        "--channel",
-        "web",
-      ],
-      cwd: "C:\\Repo\\Strada.Brain",
-    })
-  })
-})
+      await Promise.resolve();
+      expect(settled).toBe(false);
 
-describe("launchMainWebAppAfterSetup", () => {
-  it("retries when the first web launch exits before health becomes ready", async () => {
-    class FakeChild extends EventEmitter {
-      readonly stdout = new PassThrough()
-      readonly stderr = new PassThrough()
-      killed = false
+      resolveCompletion();
 
-      kill(): boolean {
-        this.killed = true
-        this.emit("exit", 1, "SIGTERM")
-        return true
-      }
-
-      unref(): void {}
+      await expect(launchPromise).resolves.toBe(wizard);
+      expect(wizard.listen).toHaveBeenCalledOnce();
+      expect(wizard.waitForCompletion).toHaveBeenCalledOnce();
+      expect(waitForUrlReady).toHaveBeenCalledWith(
+        expect.stringContaining("http://127.0.0.1:4100/?strada-setup=1&t="),
+      );
+      expect(openBrowserFn).toHaveBeenCalledWith(
+        expect.stringContaining("http://127.0.0.1:4100/?strada-setup=1&t="),
+      );
+    } finally {
+      logSpy.mockRestore();
     }
+  });
 
-    let spawnCount = 0
-    let secondAttemptHealthChecks = 0
-    const spawnFn = ((() => {
-      spawnCount += 1
-      const child = new FakeChild()
-      if (spawnCount === 1) {
-        queueMicrotask(() => {
-          child.stderr.write("listen EADDRINUSE 127.0.0.1:3000")
-          child.emit("exit", 1, null)
-        })
-      }
-      return child
-    }) as unknown) as typeof import("node:child_process").spawn
+  it("reuses the same handoff flow when setup falls to another port", async () => {
+    const wizard = {
+      listen: vi.fn().mockResolvedValue(undefined),
+      waitForCompletion: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    const waitForUrlReady = vi.fn().mockResolvedValue(undefined);
+    const openBrowserFn = vi.fn();
+    const createWizard = vi.fn(async (port: number) => {
+      expect(port).toBe(4102);
+      return wizard;
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const fetchImpl = (async () => {
-      if (spawnCount < 2) {
-        throw new Error("server not ready")
-      }
-      secondAttemptHealthChecks += 1
-      if (secondAttemptHealthChecks < 2) {
-        throw new Error("still booting")
-      }
-      return {
-        ok: true,
-        json: async () => ({ status: "ok" }),
-      } as Response
-    }) as typeof fetch
+    try {
+      await expect(launchWebSetupWizard({
+        requestedPort: 4100,
+        findPort: async () => 4102,
+        createWizard,
+        waitForUrlReady,
+        openBrowserFn,
+      })).resolves.toBe(wizard);
 
-    const result = await launchMainWebAppAfterSetup(3000, {
-      spawnFn,
-      fetchImpl,
-      maxLaunchAttempts: 2,
-      perAttemptHealthChecks: 3,
-      perAttemptDelayMs: 0,
-    })
-
-    expect(result).toEqual({ ok: true })
-    expect(spawnCount).toBe(2)
-  })
-})
+      expect(waitForUrlReady).toHaveBeenCalledWith(
+        expect.stringContaining("http://127.0.0.1:4102/?strada-setup=1&t="),
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Port 4100 is already in use. Starting the setup wizard on http://127.0.0.1:4102/"),
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+});
 
 describe("validateUnityPath", () => {
   it("accepts temp paths when HOME resolves through a symlinked tmp directory", () => {

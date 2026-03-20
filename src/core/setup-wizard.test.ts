@@ -66,6 +66,27 @@ describe("SetupWizard path validation", () => {
     };
   };
 
+  const saveWizard = async (
+    wizard: SetupWizard,
+    config: Record<string, string> = {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi",
+      KIMI_API_KEY: "sk-kimi",
+      RAG_ENABLED: "false",
+    },
+  ) => {
+    (wizard as unknown as {
+      readBody: (req: unknown) => Promise<string>;
+      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
+    }).readBody = async () => JSON.stringify(config);
+
+    const response = makeResponse();
+    await (wizard as unknown as {
+      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
+    }).handleSaveConfig({}, response.response);
+    return response;
+  };
+
   it("re-validates the project path during save using the resolved home-directory path", async () => {
     const wizard = new SetupWizard();
 
@@ -209,22 +230,7 @@ describe("SetupWizard path validation", () => {
     });
 
     const wizard = new SetupWizard({ port: 0 });
-    const config = {
-      UNITY_PROJECT_PATH: homedir(),
-      PROVIDER_CHAIN: "kimi",
-      KIMI_API_KEY: "sk-kimi",
-      RAG_ENABLED: "false",
-    };
-
-    (wizard as unknown as {
-      readBody: (req: unknown) => Promise<string>;
-      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
-    }).readBody = async () => JSON.stringify(config);
-
-    const saveResponse = makeResponse();
-    await (wizard as unknown as {
-      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
-    }).handleSaveConfig({}, saveResponse.response);
+    const saveResponse = await saveWizard(wizard);
 
     expect(saveResponse.read().statusCode).toBe(200);
     expect(JSON.parse(saveResponse.read().body)).toEqual({
@@ -242,6 +248,34 @@ describe("SetupWizard path validation", () => {
     expect(envContent).toContain('KIMI_API_KEY="sk-kimi"');
   });
 
+  it("resolves setup completion even when waiting starts after save", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+
+    const wizard = new SetupWizard({ port: 0 });
+    await saveWizard(wizard);
+
+    await expect(wizard.waitForCompletion()).resolves.toBeUndefined();
+  });
+
+  it("resolves all setup waiters before and after save", async () => {
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
+    tmpDirs.push(tempCwd);
+    process.chdir(tempCwd);
+
+    const wizard = new SetupWizard({ port: 0 });
+    const earlyWait = wizard.waitForCompletion();
+
+    await saveWizard(wizard);
+
+    await expect(Promise.all([
+      earlyWait,
+      wizard.waitForCompletion(),
+      wizard.waitForCompletion(),
+    ])).resolves.toEqual([undefined, undefined, undefined]);
+  });
+
   it("preserves provider warnings across setup bootstrap status transitions", async () => {
     const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "strada-setup-wizard-"));
     tmpDirs.push(tempCwd);
@@ -257,20 +291,9 @@ describe("SetupWizard path validation", () => {
     });
 
     const wizard = new SetupWizard({ port: 0 });
-    (wizard as unknown as {
-      readBody: (req: unknown) => Promise<string>;
-      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
-    }).readBody = async () => JSON.stringify({
-      UNITY_PROJECT_PATH: homedir(),
-      PROVIDER_CHAIN: "kimi",
-      KIMI_API_KEY: "sk-kimi",
-      RAG_ENABLED: "false",
-    });
-
-    const saveResponse = makeResponse();
-    await (wizard as unknown as {
-      handleSaveConfig: (req: unknown, res: unknown) => Promise<void>;
-    }).handleSaveConfig({}, saveResponse.response);
+    const completion = wizard.waitForCompletion();
+    await saveWizard(wizard);
+    await completion;
 
     wizard.markBootstrapStarting("Strada is starting the main web app.");
 
