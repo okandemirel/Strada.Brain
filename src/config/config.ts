@@ -86,9 +86,16 @@ export type EnvVarName =
   | "REQUIRE_EDIT_CONFIRMATION"
   | "READ_ONLY_MODE"
   | "UNITY_PROJECT_PATH"
+  | "UNITY_BRIDGE_PORT"
+  | "UNITY_BRIDGE_AUTO_CONNECT"
+  | "UNITY_BRIDGE_TIMEOUT"
+  | "UNITY_EDITOR_PATH"
+  | "UNITY_PATH"
   | "STRADA_CORE_REPO_URL"
   | "STRADA_MODULES_REPO_URL"
   | "STRADA_MCP_PATH"
+  | "SCRIPT_EXECUTE_ENABLED"
+  | "REFLECTION_INVOKE_ENABLED"
   | "DASHBOARD_ENABLED"
   | "DASHBOARD_PORT"
   | "ENABLE_WEBSOCKET_DASHBOARD"
@@ -549,6 +556,12 @@ export interface StradaDependencyConfig {
   readonly coreRepoUrl: string;
   readonly modulesRepoUrl: string;
   readonly mcpPath?: string;
+  readonly unityBridgePort: number;
+  readonly unityBridgeAutoConnect: boolean;
+  readonly unityBridgeTimeout: number;
+  readonly unityEditorPath?: string;
+  readonly scriptExecuteEnabled: boolean;
+  readonly reflectionInvokeEnabled: boolean;
 }
 
 export const DEFAULT_STRADA_CORE_REPO_URL = "https://github.com/okandemirel/Strada.Core.git";
@@ -857,9 +870,19 @@ export const configSchema = z
 
     // Project
     unityProjectPath: z.string().min(1, "UNITY_PROJECT_PATH is required"),
+    unityBridgePort: portSchema.default("7691"),
+    unityBridgeAutoConnect: boolFromString(true),
+    unityBridgeTimeout: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1000).max(60000))
+      .default("5000"),
+    unityEditorPath: z.string().min(1).optional(),
     stradaCoreRepoUrl: z.string().url().default(DEFAULT_STRADA_CORE_REPO_URL),
     stradaModulesRepoUrl: z.string().url().default(DEFAULT_STRADA_MODULES_REPO_URL),
     stradaMcpPath: z.string().min(1).optional(),
+    scriptExecuteEnabled: boolFromString(false),
+    reflectionInvokeEnabled: boolFromString(false),
 
     // Dashboard
     dashboardEnabled: boolFromString(false),
@@ -1763,6 +1786,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       coreRepoUrl: rawConfig.stradaCoreRepoUrl,
       modulesRepoUrl: rawConfig.stradaModulesRepoUrl,
       mcpPath: rawConfig.stradaMcpPath,
+      unityBridgePort: rawConfig.unityBridgePort,
+      unityBridgeAutoConnect: rawConfig.unityBridgeAutoConnect,
+      unityBridgeTimeout: rawConfig.unityBridgeTimeout,
+      unityEditorPath: rawConfig.unityEditorPath,
+      scriptExecuteEnabled: rawConfig.scriptExecuteEnabled,
+      reflectionInvokeEnabled: rawConfig.reflectionInvokeEnabled,
     },
 
     dashboard: {
@@ -2294,9 +2323,15 @@ interface EnvVars {
   requireEditConfirmation: string | undefined;
   readOnlyMode: string | undefined;
   unityProjectPath: string | undefined;
+  unityBridgePort: string | undefined;
+  unityBridgeAutoConnect: string | undefined;
+  unityBridgeTimeout: string | undefined;
+  unityEditorPath: string | undefined;
   stradaCoreRepoUrl: string | undefined;
   stradaModulesRepoUrl: string | undefined;
   stradaMcpPath: string | undefined;
+  scriptExecuteEnabled: string | undefined;
+  reflectionInvokeEnabled: string | undefined;
   dashboardEnabled: string | undefined;
   dashboardPort: string | undefined;
   websocketDashboardEnabled: string | undefined;
@@ -2544,9 +2579,15 @@ function loadFromEnv(): EnvVars {
     requireEditConfirmation: process.env["REQUIRE_EDIT_CONFIRMATION"],
     readOnlyMode: process.env["READ_ONLY_MODE"],
     unityProjectPath: process.env["UNITY_PROJECT_PATH"],
+    unityBridgePort: process.env["UNITY_BRIDGE_PORT"],
+    unityBridgeAutoConnect: process.env["UNITY_BRIDGE_AUTO_CONNECT"],
+    unityBridgeTimeout: process.env["UNITY_BRIDGE_TIMEOUT"],
+    unityEditorPath: process.env["UNITY_EDITOR_PATH"] ?? process.env["UNITY_PATH"],
     stradaCoreRepoUrl: process.env["STRADA_CORE_REPO_URL"],
     stradaModulesRepoUrl: process.env["STRADA_MODULES_REPO_URL"],
     stradaMcpPath: process.env["STRADA_MCP_PATH"],
+    scriptExecuteEnabled: process.env["SCRIPT_EXECUTE_ENABLED"],
+    reflectionInvokeEnabled: process.env["REFLECTION_INVOKE_ENABLED"],
     dashboardEnabled: process.env["DASHBOARD_ENABLED"],
     dashboardPort: process.env["DASHBOARD_PORT"],
     websocketDashboardEnabled: process.env["ENABLE_WEBSOCKET_DASHBOARD"],

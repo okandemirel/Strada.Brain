@@ -18,7 +18,12 @@ import type { MetricsStorage } from "../metrics/metrics-storage.js";
 import { PluginLoader } from "../agents/plugins/plugin-loader.js";
 import { getLogger } from "../utils/logger.js";
 import { ValidationError } from "../common/errors.js";
-import { loadInstalledStradaMcpTools, registerStradaMcpTools } from "./strada-mcp-tool-loader.js";
+import {
+  loadInstalledStradaMcpRuntime,
+  registerStradaMcpTools,
+  type StradaMcpRuntime,
+  type StradaMcpRuntimeStatus,
+} from "./strada-mcp-tool-loader.js";
 
 // Tool category metadata
 export const ToolCategories = {
@@ -49,6 +54,13 @@ export interface ToolMetadata {
   dependencies?: string[];
   controlPlaneOnly?: boolean;
   requiresBridge?: boolean;
+  installed?: boolean;
+  available?: boolean;
+  availabilityReason?: string;
+}
+
+export interface ToolInventoryEntry extends ToolMetadata {
+  type: string;
 }
 
 // ============================================================================
@@ -133,6 +145,7 @@ export class ToolRegistry {
   private readonly metadata = new Map<string, ToolMetadata>();
   private readonly categories = new Map<ToolCategory, Set<string>>();
   private readonly pluginLoader?: PluginLoader;
+  private stradaMcpRuntime: StradaMcpRuntime | null = null;
   private initialized = false;
 
   constructor(pluginDirs?: string[]) {
@@ -157,14 +170,19 @@ export class ToolRegistry {
 
     // Load Strada.MCP tools as first-class Brain tools when available.
     try {
-      const mcpLoad = await loadInstalledStradaMcpTools(_config);
-      if (mcpLoad) {
-        const result = registerStradaMcpTools(this, mcpLoad.tools);
+      const mcpRuntime = await loadInstalledStradaMcpRuntime(_config);
+      if (mcpRuntime) {
+        this.stradaMcpRuntime = mcpRuntime;
+        const result = registerStradaMcpTools(this, mcpRuntime.tools, mcpRuntime);
+        mcpRuntime.bindToolMetadataMap(this.metadata);
         logger.info("Loaded Strada.MCP tools into main toolchain", {
-          sourcePath: mcpLoad.source.path,
-          version: mcpLoad.source.version,
+          sourcePath: mcpRuntime.source.path,
+          version: mcpRuntime.source.version,
           registered: result.registered,
           skipped: result.skipped,
+          resources: mcpRuntime.resources.length,
+          prompts: mcpRuntime.prompts.length,
+          bridgeState: mcpRuntime.getStatus().bridgeState,
         });
       }
     } catch (error) {
@@ -213,6 +231,9 @@ export class ToolRegistry {
         dependencies: metadata.dependencies,
         controlPlaneOnly: metadata.controlPlaneOnly ?? false,
         requiresBridge: metadata.requiresBridge ?? false,
+        installed: metadata.installed ?? true,
+        available: metadata.available ?? true,
+        availabilityReason: metadata.availabilityReason,
       };
       this.metadata.set(tool.name, fullMetadata);
 
@@ -320,7 +341,7 @@ export class ToolRegistry {
   }
 
   getMetadataMap(): ReadonlyMap<string, ToolMetadata> {
-    return new Map(this.metadata);
+    return this.metadata;
   }
 
   /**
@@ -328,6 +349,35 @@ export class ToolRegistry {
    */
   getToolNames(): string[] {
     return Array.from(this.tools.keys());
+  }
+
+  getAvailableToolNames(): string[] {
+    return Array.from(this.tools.keys()).filter((name) => this.metadata.get(name)?.available !== false);
+  }
+
+  getToolInventory(): ToolInventoryEntry[] {
+    return this.getAllTools().map((tool) => {
+      const meta = this.metadata.get(tool.name);
+      return {
+        name: tool.name,
+        description: tool.description,
+        category: meta?.category ?? "custom",
+        dangerous: meta?.dangerous ?? false,
+        requiresConfirmation: meta?.requiresConfirmation ?? false,
+        readOnly: meta?.readOnly ?? true,
+        dependencies: meta?.dependencies,
+        controlPlaneOnly: meta?.controlPlaneOnly ?? false,
+        requiresBridge: meta?.requiresBridge ?? false,
+        installed: meta?.installed ?? true,
+        available: meta?.available ?? true,
+        availabilityReason: meta?.availabilityReason,
+        type: meta?.category ?? "builtin",
+      };
+    });
+  }
+
+  getStradaMcpRuntimeStatus(): StradaMcpRuntimeStatus | null {
+    return this.stradaMcpRuntime?.getStatus() ?? null;
   }
 
   /**
@@ -374,10 +424,17 @@ export class ToolRegistry {
    * Clear all tools (useful for testing)
    */
   clear(): void {
+    this.stradaMcpRuntime?.shutdown();
+    this.stradaMcpRuntime = null;
     this.tools.clear();
     this.metadata.clear();
     this.categories.clear();
     this.initialized = false;
+  }
+
+  shutdown(): void {
+    this.stradaMcpRuntime?.shutdown();
+    this.stradaMcpRuntime = null;
   }
 
   // ============================================================================
@@ -586,8 +643,8 @@ export class ToolRegistry {
       this.register(
         new AgentStatusTool(
           metricsCollector,
-          () => this.count,
-          () => this.getToolNames(),
+          () => this.getAvailableToolNames().length,
+          () => this.getAvailableToolNames(),
           memoryManager
             ? () => {
                 const stats = memoryManager.getStats();

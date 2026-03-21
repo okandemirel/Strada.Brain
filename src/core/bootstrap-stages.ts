@@ -2067,14 +2067,7 @@ export function registerDashboardPostBootStage(
 
   params.dashboard.registerExtendedServices({
     toolRegistry: {
-      getAllTools: () => params.toolRegistry.getAllTools().map((tool) => {
-        const meta = params.toolRegistry.getMetadata(tool.name);
-        return {
-          name: tool.name,
-          description: tool.description,
-          type: meta?.category ?? "builtin",
-        };
-      }),
+      getAllTools: () => params.toolRegistry.getToolInventory(),
     },
     orchestratorSessions: params.orchestrator,
     soulLoader: params.soulLoader,
@@ -2148,6 +2141,7 @@ export async function finalizeChannelStartupStage(params: {
   deploymentWired: boolean;
   alertingWired: boolean;
   backupWired: boolean;
+  stradaMcpRuntime?: ReturnType<ToolRegistry["getStradaMcpRuntimeStatus"]>;
   startupNotices: string[];
   moduleUrl: string;
 }): Promise<BootReport> {
@@ -2169,6 +2163,7 @@ export async function finalizeChannelStartupStage(params: {
     deploymentWired: params.deploymentWired,
     alertingWired: params.alertingWired,
     backupWired: params.backupWired,
+    stradaMcpRuntime: params.stradaMcpRuntime ?? undefined,
     startupNotices: params.startupNotices,
   });
 

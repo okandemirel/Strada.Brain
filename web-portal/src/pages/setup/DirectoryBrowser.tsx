@@ -1,10 +1,13 @@
-import type { BrowseEntry } from '../../types/setup'
+import type { BrowseEntry, McpRecommendation, StradaDepsStatus } from '../../types/setup'
 
 interface DirectoryBrowserProps {
   isOpen: boolean
   currentPath: string
   entries: BrowseEntry[]
   isUnityProject: boolean
+  stradaDeps: StradaDepsStatus | null
+  dependencyWarnings: string[]
+  mcpRecommendation: McpRecommendation | null
   loading: boolean
   error: string | null
   browseTo: (path: string) => void
@@ -55,6 +58,9 @@ export default function DirectoryBrowser({
   currentPath,
   entries,
   isUnityProject,
+  stradaDeps,
+  dependencyWarnings,
+  mcpRecommendation,
   loading,
   error,
   browseTo,
@@ -94,6 +100,29 @@ export default function DirectoryBrowser({
         <Breadcrumbs path={currentPath} onNavigate={browseTo} />
 
         <div className="browser-entries">
+          {!loading && !error && isUnityProject && stradaDeps && (
+            <div className="browser-empty" style={{ textAlign: 'left' }}>
+              <strong>Dependencies</strong>
+              <div>Core: {stradaDeps.coreInstalled ? 'installed' : 'missing'}</div>
+              <div>Modules: {stradaDeps.modulesInstalled ? 'installed' : 'missing'}</div>
+              <div>MCP: {stradaDeps.mcpInstalled ? 'installed' : 'missing'}</div>
+              {dependencyWarnings.slice(0, 2).map((warning) => (
+                <div key={warning} className="browser-error" style={{ marginTop: 8 }}>
+                  {warning}
+                </div>
+              ))}
+              {!stradaDeps.mcpInstalled && mcpRecommendation && (
+                <div style={{ marginTop: 8 }}>
+                  <strong>MCP recommendation</strong>
+                  <div>{mcpRecommendation.reason}</div>
+                  <div>{mcpRecommendation.featureList.join(' • ')}</div>
+                  {mcpRecommendation.discoveryHint && (
+                    <div>{mcpRecommendation.discoveryHint}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {loading && <div className="browser-loading">Loading...</div>}
 
           {error && <div className="browser-error">{error}</div>}

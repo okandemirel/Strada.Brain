@@ -744,6 +744,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     deploymentWired: Boolean(daemonContext?.deploymentExecutor),
     alertingWired: false,
     backupWired: false,
+    stradaMcpRuntime: toolRegistry.getStradaMcpRuntimeStatus(),
     startupNotices,
     moduleUrl: import.meta.url,
   });
@@ -800,6 +801,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       metricsStorage,
       goalStorage,
       chainManager,
+      toolRegistry,
       identityManager,
       modelIntelligence,
       uptimeInterval,
@@ -1772,6 +1774,7 @@ interface ShutdownOptions {
   metricsStorage?: MetricsStorage;
   goalStorage?: GoalStorage;
   chainManager?: ChainManager;
+  toolRegistry?: ToolRegistry;
   identityManager?: IdentityStateManager;
   modelIntelligence?: import("../agents/providers/model-intelligence.js").ModelIntelligenceService;
   uptimeInterval?: ReturnType<typeof setInterval>;
@@ -1864,6 +1867,8 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
       if (options.providerManager) {
         options.providerManager.shutdown();
       }
+
+      options.toolRegistry?.shutdown();
 
       if (options.modelIntelligence) {
         options.modelIntelligence.shutdown();

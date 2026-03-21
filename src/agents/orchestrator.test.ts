@@ -296,6 +296,7 @@ describe("Orchestrator", () => {
       readOnly: true,
       controlPlaneOnly: false,
       requiresBridge: true,
+      available: false,
     });
 
     const promise = bridgeOrch.handleMessage({
@@ -1586,7 +1587,7 @@ describe("Orchestrator", () => {
       requireConfirmation: true,
       runtimeArtifactManager,
       toolMetadataByName: {
-        bridge_tool: { readOnly: true, requiresBridge: true },
+        bridge_tool: { readOnly: true, requiresBridge: true, available: false },
       },
       memoryManager: {
         getCachedAnalysis: vi.fn().mockResolvedValue({

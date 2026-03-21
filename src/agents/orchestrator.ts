@@ -258,6 +258,8 @@ interface WorkerToolMetadata {
   readonly readOnly?: boolean;
   readonly controlPlaneOnly?: boolean;
   readonly requiresBridge?: boolean;
+  readonly available?: boolean;
+  readonly availabilityReason?: string;
 }
 
 interface TaskExecutionContext {
@@ -1753,7 +1755,7 @@ export class Orchestrator {
       if (metadata?.controlPlaneOnly) {
         return false;
       }
-      if (metadata?.requiresBridge) {
+      if (metadata?.requiresBridge && metadata.available === false) {
         return false;
       }
       if (!allowWriteTools && metadata?.readOnly === false) {
@@ -6994,6 +6996,8 @@ export class Orchestrator {
       requiresBridge: Boolean(
         metadata?.requiresBridge ?? existingMetadata?.requiresBridge ?? intrinsicRequiresBridge,
       ),
+      available: metadata?.available ?? existingMetadata?.available ?? true,
+      availabilityReason: metadata?.availabilityReason ?? existingMetadata?.availabilityReason,
     });
     const def = {
       name: tool.name,

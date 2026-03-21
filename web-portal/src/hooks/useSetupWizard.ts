@@ -1,5 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { ProviderPreflightFailure, SaveStatus, SetupSaveResponse, SetupStatusResponse } from '../types/setup'
+import type {
+  McpRecommendation,
+  PathValidationResult,
+  ProviderPreflightFailure,
+  SaveStatus,
+  SetupSaveResponse,
+  SetupStatusResponse,
+  StradaDepsStatus,
+} from '../types/setup'
 import {
   PRESETS,
   PROVIDER_MAP,
@@ -271,6 +279,10 @@ export function useSetupWizard() {
   const [projectPath, setProjectPathState] = useState('')
   const [pathValid, setPathValid] = useState<boolean | null>(null)
   const [pathError, setPathError] = useState<string | null>(null)
+  const [pathIsUnityProject, setPathIsUnityProject] = useState(false)
+  const [pathStradaDeps, setPathStradaDeps] = useState<StradaDepsStatus | null>(null)
+  const [pathDependencyWarnings, setPathDependencyWarnings] = useState<string[]>([])
+  const [pathMcpRecommendation, setPathMcpRecommendation] = useState<McpRecommendation | null>(null)
   const [channel, setChannelState] = useState('web')
   const [channelConfig, setChannelConfig] = useState<Record<string, string>>({})
   const [language, setLanguageState] = useState('en')
@@ -450,22 +462,38 @@ export function useSetupWizard() {
     setProjectPathState(path)
     setPathValid(null)
     setPathError(null)
+    setPathIsUnityProject(false)
+    setPathStradaDeps(null)
+    setPathDependencyWarnings([])
+    setPathMcpRecommendation(null)
   }, [])
 
   const validatePath = useCallback(async () => {
     if (!projectPath.trim()) {
       setPathValid(false)
       setPathError('Path is required')
+      setPathIsUnityProject(false)
+      setPathStradaDeps(null)
+      setPathDependencyWarnings([])
+      setPathMcpRecommendation(null)
       return
     }
     try {
       const res = await fetch(`/api/setup/validate-path?path=${encodeURIComponent(projectPath)}`)
-      const data = await res.json()
+      const data = await res.json() as PathValidationResult
       setPathValid(data.valid ?? false)
       setPathError(data.error ?? null)
+      setPathIsUnityProject(data.isUnityProject ?? false)
+      setPathStradaDeps(data.stradaDeps ?? null)
+      setPathDependencyWarnings(data.dependencyWarnings ?? [])
+      setPathMcpRecommendation(data.mcpRecommendation ?? null)
     } catch {
       setPathValid(false)
       setPathError('Failed to validate path')
+      setPathIsUnityProject(false)
+      setPathStradaDeps(null)
+      setPathDependencyWarnings([])
+      setPathMcpRecommendation(null)
     }
   }, [projectPath])
 
@@ -772,6 +800,10 @@ export function useSetupWizard() {
     projectPath,
     pathValid,
     pathError,
+    pathIsUnityProject,
+    pathStradaDeps,
+    pathDependencyWarnings,
+    pathMcpRecommendation,
     channel,
     channelConfig,
     language,

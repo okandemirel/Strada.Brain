@@ -29,6 +29,14 @@ export interface StradaDepsStatus {
   readonly warnings: string[];
 }
 
+export interface McpRecommendation {
+  readonly recommended: boolean;
+  readonly reason: string;
+  readonly featureList: string[];
+  readonly discoveryHint?: string;
+  readonly installHint?: string;
+}
+
 export interface StradaMcpInstall {
   readonly installed: boolean;
   readonly path: string | null;
@@ -41,12 +49,25 @@ const STRADA_MCP_PACKAGE_NAME = "strada-mcp";
 const DEFAULT_STRADA_DEPENDENCY_CONFIG: StradaDependencyConfig = {
   coreRepoUrl: DEFAULT_STRADA_CORE_REPO_URL,
   modulesRepoUrl: DEFAULT_STRADA_MODULES_REPO_URL,
+  unityBridgePort: 7691,
+  unityBridgeAutoConnect: true,
+  unityBridgeTimeout: 5000,
+  scriptExecuteEnabled: false,
+  reflectionInvokeEnabled: false,
 };
 
 const TARGET_PATHS = {
   core: "Packages/strada.core",
   modules: "Packages/strada.modules",
 } as const;
+const MCP_FEATURE_LIST = [
+  "Live Unity console reading and error analysis",
+  "Unity editor command execution and menu actions",
+  "Scene, prefab, GameObject, and component operations",
+  "Project, player, quality, build settings, and editor preferences control",
+  "Unity Package Manager operations across registry, git, local, and supported asset imports",
+  "Multi-platform Unity builds for Android, iOS, WebGL, and standalone targets",
+] as const;
 
 function resolveStradaDependencyConfig(
   config?: Partial<StradaDependencyConfig>,
@@ -55,6 +76,12 @@ function resolveStradaDependencyConfig(
   return {
     coreRepoUrl: config?.coreRepoUrl ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.coreRepoUrl,
     modulesRepoUrl: config?.modulesRepoUrl ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.modulesRepoUrl,
+    unityBridgePort: config?.unityBridgePort ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.unityBridgePort,
+    unityBridgeAutoConnect: config?.unityBridgeAutoConnect ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.unityBridgeAutoConnect,
+    unityBridgeTimeout: config?.unityBridgeTimeout ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.unityBridgeTimeout,
+    unityEditorPath: config?.unityEditorPath,
+    scriptExecuteEnabled: config?.scriptExecuteEnabled ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.scriptExecuteEnabled,
+    reflectionInvokeEnabled: config?.reflectionInvokeEnabled ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.reflectionInvokeEnabled,
     ...(mcpPath ? { mcpPath } : {}),
   };
 }
@@ -205,6 +232,38 @@ export function detectStradaMcp(config?: Partial<StradaDependencyConfig>): Strad
   }
 
   return { installed: false, path: null, version: null };
+}
+
+export function buildMcpRecommendation(
+  status: StradaDepsStatus,
+  config?: Partial<StradaDependencyConfig>,
+): McpRecommendation {
+  const discoveryHint = config?.mcpPath
+    ? (status.mcpInstalled
+        ? `STRADA_MCP_PATH is set and resolves to ${status.mcpPath}.`
+        : `STRADA_MCP_PATH is set to ${config.mcpPath}, but that location is not a valid Strada.MCP package root. Brain also auto-detects a sibling ../Strada.MCP checkout when present.`)
+    : (status.mcpInstalled
+        ? (status.mcpPath?.includes("/Strada.MCP")
+            ? `Strada.MCP was auto-detected at ${status.mcpPath}.`
+            : `Strada.MCP was detected at ${status.mcpPath}.`)
+        : "Brain will auto-detect a sibling ../Strada.MCP checkout or honor STRADA_MCP_PATH when provided.");
+
+  if (status.mcpInstalled) {
+    return {
+      recommended: false,
+      reason: `Strada.MCP is installed${status.mcpVersion ? ` (v${status.mcpVersion})` : ""}.`,
+      featureList: [...MCP_FEATURE_LIST],
+      discoveryHint,
+    };
+  }
+
+  return {
+    recommended: true,
+    reason: "Strada.MCP is not installed. Installing it unlocks the live Unity runtime surface inside Strada.Brain.",
+    featureList: [...MCP_FEATURE_LIST],
+    discoveryHint,
+    installHint: "Install Strada.MCP to expose live Unity console analysis, editor actions, package management, settings control, and build execution.",
+  };
 }
 
 function readStradaMcpInstall(candidatePath: string): StradaMcpInstall | null {

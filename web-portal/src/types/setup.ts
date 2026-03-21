@@ -49,11 +49,42 @@ export interface BrowseEntry {
   name: string
 }
 
+export interface StradaDepsStatus {
+  coreInstalled: boolean
+  corePath: string | null
+  modulesInstalled: boolean
+  modulesPath: string | null
+  mcpInstalled: boolean
+  mcpPath: string | null
+  mcpVersion: string | null
+  warnings: string[]
+}
+
+export interface McpRecommendation {
+  recommended: boolean
+  reason: string
+  featureList: string[]
+  discoveryHint?: string
+  installHint?: string
+}
+
 export interface BrowseResult {
   path: string
   entries: BrowseEntry[]
   isUnityProject: boolean
+  stradaDeps?: StradaDepsStatus
+  dependencyWarnings?: string[]
+  mcpRecommendation?: McpRecommendation
   error?: string
+}
+
+export interface PathValidationResult {
+  valid: boolean
+  error?: string
+  isUnityProject?: boolean
+  stradaDeps?: StradaDepsStatus
+  dependencyWarnings?: string[]
+  mcpRecommendation?: McpRecommendation
 }
 
 export type SaveStatus = 'idle' | 'saving' | SetupBootstrapViewStatus
@@ -78,6 +109,10 @@ export interface WizardState {
   projectPath: string
   pathValid: boolean | null
   pathError: string | null
+  pathIsUnityProject: boolean
+  pathStradaDeps: StradaDepsStatus | null
+  pathDependencyWarnings: string[]
+  pathMcpRecommendation: McpRecommendation | null
   channel: string
   channelConfig: Record<string, string>
   language: string

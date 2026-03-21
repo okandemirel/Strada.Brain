@@ -6,6 +6,11 @@ interface ToolInfo {
   name: string
   description: string
   type: 'builtin' | 'chain' | 'composite' | 'delegation' | string
+  installed?: boolean
+  available?: boolean
+  requiresBridge?: boolean
+  readOnly?: boolean
+  availabilityReason?: string
   paramCount?: number
 }
 
@@ -126,6 +131,17 @@ export default function ToolsPage() {
                     {tool.type}
                   </span>
                 )}
+                {tool.available === false && (
+                  <span className="tool-tag" style={{ background: 'rgba(255, 159, 10, 0.12)', color: 'var(--warning, #ff9f0a)' }}>
+                    unavailable
+                  </span>
+                )}
+                {tool.requiresBridge && (
+                  <span className="tool-tag">bridge</span>
+                )}
+                {tool.readOnly === true && (
+                  <span className="tool-tag">read-only</span>
+                )}
                 {calls > 0 && (
                   <span className="tool-tag">{calls} calls</span>
                 )}
@@ -135,6 +151,9 @@ export default function ToolsPage() {
                   </span>
                 )}
               </div>
+              {tool.available === false && tool.availabilityReason && (
+                <div className="tool-card-desc">{tool.availabilityReason}</div>
+              )}
             </div>
           )
         })}

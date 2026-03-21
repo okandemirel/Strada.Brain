@@ -17,6 +17,22 @@ interface EmbeddingStatusLike {
   notice?: string;
 }
 
+interface StradaMcpRuntimeStatusLike {
+  installed: boolean;
+  sourcePath: string | null;
+  version: string | null;
+  toolCount: number;
+  resourceCount: number;
+  promptCount: number;
+  bridgeConfigured: boolean;
+  bridgeConnected: boolean;
+  bridgeState: string;
+  availableToolCount: number;
+  unavailableToolCount: number;
+  bridgeUnavailableReason?: string;
+  lastError?: string;
+}
+
 export interface CapabilitySnapshotOptions {
   config: Config;
   installRoot?: string;
@@ -28,6 +44,7 @@ export interface CapabilitySnapshotOptions {
   deploymentWired?: boolean;
   alertingWired?: boolean;
   backupWired?: boolean;
+  stradaMcpRuntime?: StradaMcpRuntimeStatusLike;
 }
 
 export interface CapabilityHealthSummary {
@@ -103,8 +120,128 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       || options.config.irc.server
       || options.config.teams.appId,
   );
+  const stradaMcpRuntime = options.stradaMcpRuntime;
+  const stradaMcpInstalled = stradaMcpRuntime?.installed === true;
+  const unityBridgeStatus: CapabilityStatus = !stradaMcpInstalled
+    ? "inactive"
+    : stradaMcpRuntime?.bridgeConnected
+      ? "active"
+      : "degraded";
+  const unityBridgeTruth: CapabilityTruth = stradaMcpRuntime?.bridgeConnected
+    ? "health-checked"
+    : stradaMcpInstalled
+      ? "wired"
+      : "declared-only";
+  const unityBridgeDetail = !stradaMcpInstalled
+    ? "Strada.MCP is not installed, so live Unity bridge features are unavailable."
+    : stradaMcpRuntime?.bridgeConnected
+      ? `Unity bridge is connected (${stradaMcpRuntime.bridgeState}).`
+      : stradaMcpRuntime?.bridgeUnavailableReason
+        ?? "Strada.MCP is installed, but the Unity bridge is not connected.";
+  const unitySurfaceStatus: CapabilityStatus = !stradaMcpInstalled
+    ? "inactive"
+    : stradaMcpRuntime?.bridgeConnected
+      ? "active"
+      : "degraded";
+  const unitySurfaceTruth: CapabilityTruth = stradaMcpRuntime?.bridgeConnected
+    ? "health-checked"
+    : stradaMcpInstalled
+      ? "wired"
+      : "declared-only";
 
   return [
+    createCapability(
+      "strada-mcp-runtime",
+      "Strada.MCP Runtime",
+      "Unity",
+      "beta",
+      stradaMcpInstalled ? "active" : "inactive",
+      stradaMcpInstalled ? "wired" : "declared-only",
+      stradaMcpInstalled
+        ? `Strada.MCP is installed with ${stradaMcpRuntime?.toolCount ?? 0} tools, ${stradaMcpRuntime?.resourceCount ?? 0} resources, and ${stradaMcpRuntime?.promptCount ?? 0} prompts.`
+        : "Install Strada.MCP to expose the Unity runtime surface inside Brain.",
+      true,
+    ),
+    createCapability(
+      "unity-bridge",
+      "Unity Bridge",
+      "Unity",
+      "beta",
+      unityBridgeStatus,
+      unityBridgeTruth,
+      unityBridgeDetail,
+      true,
+    ),
+    createCapability(
+      "unity-console",
+      "Unity Console",
+      "Unity",
+      "beta",
+      unitySurfaceStatus,
+      unitySurfaceTruth,
+      stradaMcpInstalled
+        ? (stradaMcpRuntime?.bridgeConnected
+            ? "Live Unity console reads and error analysis are available."
+            : "Unity console tools are installed but unavailable until the live bridge connects.")
+        : "Install Strada.MCP to unlock live Unity console reads and analysis.",
+      true,
+    ),
+    createCapability(
+      "unity-build",
+      "Unity Build Pipeline",
+      "Unity",
+      "beta",
+      unitySurfaceStatus,
+      unitySurfaceTruth,
+      stradaMcpInstalled
+        ? (stradaMcpRuntime?.bridgeConnected
+            ? "Multi-platform Unity build execution is available through the live bridge."
+            : "Unity build pipeline tools are installed but unavailable until the live bridge connects.")
+        : "Install Strada.MCP to unlock Unity build execution.",
+      false,
+    ),
+    createCapability(
+      "unity-package-manager",
+      "Unity Package Manager",
+      "Unity",
+      "beta",
+      unitySurfaceStatus,
+      unitySurfaceTruth,
+      stradaMcpInstalled
+        ? (stradaMcpRuntime?.bridgeConnected
+            ? "Unity Package Manager operations are available through the live bridge."
+            : "Unity Package Manager tools are installed but unavailable until the live bridge connects.")
+        : "Install Strada.MCP to unlock Unity package management.",
+      false,
+    ),
+    createCapability(
+      "unity-project-settings",
+      "Unity Project Settings",
+      "Unity",
+      "beta",
+      unitySurfaceStatus,
+      unitySurfaceTruth,
+      stradaMcpInstalled
+        ? (stradaMcpRuntime?.bridgeConnected
+            ? "Typed Unity project and player/build/quality settings access is available."
+            : "Unity settings tools are installed but unavailable until the live bridge connects.")
+        : "Install Strada.MCP to unlock live Unity settings control.",
+      false,
+    ),
+    createCapability(
+      "unity-editor-preferences",
+      "Unity Editor Preferences",
+      "Unity",
+      "beta",
+      unitySurfaceStatus,
+      unitySurfaceTruth,
+      stradaMcpInstalled
+        ? (stradaMcpRuntime?.bridgeConnected
+            ? "Unity EditorPrefs/Preferences access is available."
+            : "Unity editor preference tools are installed but unavailable until the live bridge connects.")
+        : "Install Strada.MCP to unlock Unity editor preferences control.",
+      false,
+    ),
     createCapability(
       "web-surface",
       "Web Surface",

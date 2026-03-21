@@ -28,6 +28,7 @@ import {
   getSourceSetupCommand,
 } from "../common/launcher-guidance.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
+import { buildMcpRecommendation, checkStradaDeps } from "../config/strada-deps.js";
 
 const MAX_RETRIES = 3;
 const RESPONSE_PROVIDER_CHOICES = [
@@ -838,6 +839,31 @@ export async function runTerminalWizard(
       "? Unity project path: ",
       validateUnityPath,
     );
+
+    const stradaDeps = checkStradaDeps(unityPath, {
+      mcpPath: process.env["STRADA_MCP_PATH"],
+    });
+    const mcpRecommendation = buildMcpRecommendation(stradaDeps, {
+      mcpPath: process.env["STRADA_MCP_PATH"],
+    });
+    console.log("");
+    console.log("  Strada dependency summary:");
+    console.log(`    Core: ${stradaDeps.coreInstalled ? "installed" : "missing"}`);
+    console.log(`    Modules: ${stradaDeps.modulesInstalled ? "installed" : "missing"}`);
+    console.log(`    MCP: ${stradaDeps.mcpInstalled ? "installed" : "missing"}${stradaDeps.mcpInstalled ? "" : " (recommended)"}`);
+    if (!stradaDeps.coreInstalled) {
+      console.log("    Warning: reduced Strada framework awareness until Strada.Core is available.");
+    }
+    if (!stradaDeps.mcpInstalled) {
+      console.log(`    Why MCP is recommended: ${mcpRecommendation.reason}`);
+      console.log(`    Unlocks: ${mcpRecommendation.featureList.join("; ")}`);
+      if (mcpRecommendation.discoveryHint) {
+        console.log(`    Detection: ${mcpRecommendation.discoveryHint}`);
+      }
+    } else if (mcpRecommendation.discoveryHint) {
+      console.log(`    MCP detection: ${mcpRecommendation.discoveryHint}`);
+    }
+    console.log("");
 
     const providerAnswer = await askWithRetry(
       rl,

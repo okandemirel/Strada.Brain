@@ -125,7 +125,19 @@ interface DashboardReadinessChecker {
 
 /** Structural interface for tool registry used by dashboard /api/tools endpoint */
 interface DashboardToolRegistry {
-  getAllTools(): Array<{ name: string; description: string; parameters?: unknown }>;
+  getAllTools(): Array<{
+    name: string;
+    description: string;
+    type?: string;
+    category?: string;
+    installed?: boolean;
+    available?: boolean;
+    requiresBridge?: boolean;
+    readOnly?: boolean;
+    availabilityReason?: string;
+    dependencies?: string[];
+    parameters?: unknown;
+  }>;
 }
 
 /** Structural interface for orchestrator sessions used by dashboard /api/sessions endpoint */

@@ -9,6 +9,7 @@ import {
 } from "../common/launcher-guidance.js";
 import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 import { loadConfigSafe, type Config } from "../config/config.js";
+import { checkStradaDeps } from "../config/strada-deps.js";
 import { resolveEmbeddingProvider, describeEmbeddingResolutionFailure } from "../rag/embeddings/embedding-resolver.js";
 import { AutoUpdater } from "./auto-updater.js";
 import { ChannelActivityRegistry } from "./channel-activity-registry.js";
@@ -258,6 +259,25 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
     }
 
     const capabilities = buildCapabilitySnapshot({
+      stradaMcpRuntime: (() => {
+        const deps = checkStradaDeps(configResult.value.unityProjectPath, configResult.value.strada);
+        return {
+          installed: deps.mcpInstalled,
+          sourcePath: deps.mcpPath,
+          version: deps.mcpVersion,
+          toolCount: 0,
+          resourceCount: 0,
+          promptCount: 0,
+          bridgeConfigured: deps.mcpInstalled && configResult.value.strada.unityBridgeAutoConnect,
+          bridgeConnected: false,
+          bridgeState: deps.mcpInstalled ? "disconnected" : "inactive",
+          availableToolCount: 0,
+          unavailableToolCount: 0,
+          bridgeUnavailableReason: deps.mcpInstalled
+            ? "Doctor cannot confirm a live Unity bridge connection from static config alone."
+            : "Strada.MCP is not installed.",
+        };
+      })(),
       config: configResult.value,
       installRoot,
       channelType: "doctor",

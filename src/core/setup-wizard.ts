@@ -14,6 +14,12 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { PROVIDER_PRESETS } from "../agents/providers/provider-registry.js";
 import {
+  buildMcpRecommendation,
+  checkStradaDeps,
+  type McpRecommendation,
+  type StradaDepsStatus,
+} from "../config/strada-deps.js";
+import {
   preflightResponseProviders,
   type ResponseProviderPreflightFailure,
 } from "./response-provider-preflight.js";
@@ -37,6 +43,13 @@ const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
 const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../web-portal/dist");
 const SETUP_HOST = "127.0.0.1";
+
+interface SetupPathDependencyPayload {
+  isUnityProject: boolean;
+  stradaDeps?: StradaDepsStatus;
+  dependencyWarnings?: string[];
+  mcpRecommendation?: McpRecommendation;
+}
 
 function logSetupLifecycle(event: string, detail: Record<string, unknown>): void {
   if (process.env["VITEST"] === "true") {
@@ -742,13 +755,46 @@ export class SetupWizard {
     return { valid: true, resolved };
   }
 
+  private buildPathDependencyPayload(
+    resolved: string,
+    isUnityProject: boolean,
+  ): SetupPathDependencyPayload {
+    if (!isUnityProject) {
+      return { isUnityProject: false };
+    }
+
+    const stradaDeps = checkStradaDeps(resolved, {
+      mcpPath: process.env["STRADA_MCP_PATH"],
+    });
+
+    return {
+      isUnityProject: true,
+      stradaDeps,
+      dependencyWarnings: stradaDeps.warnings,
+      mcpRecommendation: buildMcpRecommendation(stradaDeps, {
+        mcpPath: process.env["STRADA_MCP_PATH"],
+      }),
+    };
+  }
+
   private async handleValidatePath(url: string, res: ServerResponse): Promise<void> {
     const params = new URL(url, "http://localhost").searchParams;
     const rawPath = params.get("path") ?? "";
 
     const result = await this.validateProjectPathForSave(rawPath);
     if (result.valid) {
-      this.json(res, 200, { valid: true });
+      let isUnityProject = false;
+      try {
+        const dirents = await readdir(result.resolved, { withFileTypes: true });
+        const entryNames = new Set(dirents.map((d) => d.name));
+        isUnityProject = entryNames.has("Assets") && entryNames.has("ProjectSettings");
+      } catch {
+        isUnityProject = false;
+      }
+      this.json(res, 200, {
+        valid: true,
+        ...this.buildPathDependencyPayload(result.resolved, isUnityProject),
+      });
     } else {
       this.json(res, 200, { valid: false, error: result.error });
     }
@@ -801,7 +847,11 @@ export class SetupWizard {
       const entryNames = new Set(dirents.map((d) => d.name));
       const isUnityProject = entryNames.has("Assets") && entryNames.has("ProjectSettings");
 
-      this.json(res, 200, { path: resolved, entries, isUnityProject });
+      this.json(res, 200, {
+        path: resolved,
+        entries,
+        ...this.buildPathDependencyPayload(resolved, isUnityProject),
+      });
     } catch {
       this.json(res, 200, {
         path: rawPath,

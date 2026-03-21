@@ -69,6 +69,10 @@ export default function SetupWizard() {
             setProjectPath={wiz.setProjectPath}
             pathValid={wiz.pathValid}
             pathError={wiz.pathError}
+            pathIsUnityProject={wiz.pathIsUnityProject}
+            pathStradaDeps={wiz.pathStradaDeps}
+            pathDependencyWarnings={wiz.pathDependencyWarnings}
+            pathMcpRecommendation={wiz.pathMcpRecommendation}
             validatePath={wiz.validatePath}
             openBrowser={browser.open}
             onNext={wiz.nextStep}
@@ -141,6 +145,9 @@ export default function SetupWizard() {
           currentPath={browser.currentPath}
           entries={browser.entries}
           isUnityProject={browser.isUnityProject}
+          stradaDeps={browser.stradaDeps}
+          dependencyWarnings={browser.dependencyWarnings}
+          mcpRecommendation={browser.mcpRecommendation}
           loading={browser.loading}
           error={browser.error}
           browseTo={browser.browseTo}
