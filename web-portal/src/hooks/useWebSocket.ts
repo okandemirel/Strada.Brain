@@ -6,7 +6,7 @@ import type {
   ConnectionStatus,
   IncomingMessage,
 } from '../types/messages'
-import { readSessionMessages, writeSessionMessages } from './websocket-storage'
+import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from './websocket-storage'
 
 const MAX_RECONNECT_DELAY = 30000
 const MAX_RECONNECT_ATTEMPTS = 8
@@ -110,7 +110,7 @@ export function useWebSocket(): UseWebSocketReturn {
     localStorage.setItem(RECONNECT_TOKEN_STORAGE_KEY, reconnectToken)
 
     if (previousChatId !== chatId) {
-      setMessages(readSessionMessages(nextProfileId))
+      setMessages((prev) => mergeSessionMessages(readSessionMessages(nextProfileId), prev))
     }
   }, [])
 

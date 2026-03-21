@@ -2038,7 +2038,7 @@ export class Orchestrator {
     session.conversationScope ??= context.profileId;
     session.mixedParticipants = false;
 
-    await this.sendVisibleAssistantText(
+    await this.sendVisibleAssistantMarkdown(
       context.chatId,
       session,
       buildPostSetupWelcomeMessage(bootstrap.language),

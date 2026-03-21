@@ -2,6 +2,7 @@ import type { ChatMessage } from '../types/messages'
 
 const SESSION_MESSAGE_STORAGE_PREFIX = 'strada-session-messages:'
 const MAX_STORED_MESSAGES = 100
+const TRANSIENT_SESSION_MESSAGE_WINDOW_MS = 5000
 
 type StorageReader = Pick<Storage, 'getItem'>
 type StorageWriter = Pick<Storage, 'setItem'>
@@ -81,4 +82,39 @@ export function writeSessionMessages(
   } catch {
     // Ignore storage quota or privacy-mode failures.
   }
+}
+
+export function mergeSessionMessages(
+  storedMessages: ChatMessage[],
+  currentMessages: ChatMessage[],
+  nowMs: number = Date.now(),
+): ChatMessage[] {
+  const cutoff = nowMs - TRANSIENT_SESSION_MESSAGE_WINDOW_MS
+  const merged = [...storedMessages]
+
+  for (const message of currentMessages) {
+    if (message.sender !== 'assistant' || message.timestamp < cutoff) {
+      continue
+    }
+
+    const alreadyPresent = merged.some((entry) =>
+      entry.id === message.id
+      || (
+        entry.sender === message.sender
+        && entry.text === message.text
+        && Math.abs(entry.timestamp - message.timestamp) < 1000
+      ),
+    )
+
+    if (!alreadyPresent) {
+      merged.push({
+        ...message,
+        isStreaming: false,
+      })
+    }
+  }
+
+  return merged
+    .sort((left, right) => left.timestamp - right.timestamp)
+    .slice(-MAX_STORED_MESSAGES)
 }

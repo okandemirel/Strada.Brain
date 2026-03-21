@@ -154,6 +154,8 @@ export interface BootstrapResult {
   bootReport?: import("../common/capability-contract.js").BootReport;
 }
 
+const POST_SETUP_BOOTSTRAP_DELAY_MS = 1200;
+
 /**
  * Bootstrap the application with all services
  */
@@ -707,6 +709,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const postSetupBootstrap = options.postSetupBootstrap;
   if (postSetupBootstrap && channel.setPostSetupBootstrapHandler) {
     channel.setPostSetupBootstrapHandler(async (context) => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, POST_SETUP_BOOTSTRAP_DELAY_MS);
+      });
+
       await orchestrator.deliverPostSetupBootstrap(context, postSetupBootstrap);
 
       if (postSetupBootstrap.autonomy?.enabled) {

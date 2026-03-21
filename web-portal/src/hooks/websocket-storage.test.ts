@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../types/messages'
-import { readSessionMessages, writeSessionMessages } from './websocket-storage'
+import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from './websocket-storage'
 
 function createStorage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial))
@@ -65,5 +65,51 @@ describe('websocket session storage', () => {
     })
 
     expect(readSessionMessages('chat-1', storage)).toEqual([])
+  })
+
+  it('preserves very recent assistant messages while switching session identities', () => {
+    const stored: ChatMessage[] = [
+      {
+        id: 'm1',
+        sender: 'user',
+        text: 'hello',
+        isMarkdown: false,
+        timestamp: 100,
+      },
+    ]
+    const current: ChatMessage[] = [
+      {
+        id: 'bootstrap-1',
+        sender: 'assistant',
+        text: 'Welcome to Strada',
+        isMarkdown: true,
+        timestamp: 4_900,
+      },
+      {
+        id: 'old-assistant',
+        sender: 'assistant',
+        text: 'stale',
+        isMarkdown: true,
+        timestamp: 1,
+      },
+    ]
+
+    expect(mergeSessionMessages(stored, current, 6_000)).toEqual([
+      {
+        id: 'm1',
+        sender: 'user',
+        text: 'hello',
+        isMarkdown: false,
+        timestamp: 100,
+      },
+      {
+        id: 'bootstrap-1',
+        sender: 'assistant',
+        text: 'Welcome to Strada',
+        isMarkdown: true,
+        isStreaming: false,
+        timestamp: 4_900,
+      },
+    ])
   })
 })

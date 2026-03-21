@@ -77,6 +77,17 @@ function ProviderGrid({
   )
 }
 
+function formatTierLabel(tier: 'budget' | 'standard' | 'premium'): string {
+  switch (tier) {
+    case 'budget':
+      return 'Budget'
+    case 'standard':
+      return 'Balanced'
+    case 'premium':
+      return 'Frontier'
+  }
+}
+
 export default function ProvidersStep({
   selectedPreset,
   selectPreset,
@@ -120,45 +131,68 @@ export default function ProvidersStep({
 
             return (
               <div key={provider.id} className="provider-key-field">
+                <div className="provider-access-header">
+                  <div>
+                    <div className="provider-access-name">{provider.name}</div>
+                    <div className="provider-access-summary">
+                      Configure the default worker model and access mode Strada should use after setup.
+                    </div>
+                  </div>
+                  {selectedModel && (
+                    <div className="provider-access-pill">{selectedModel}</div>
+                  )}
+                </div>
+
                 {provider.authModes && provider.authModes.length > 1 && (
-                  <div className="provider-auth-modes" style={{ marginBottom: '0.7rem' }}>
+                  <div className="provider-choice-group">
+                    <div className="provider-field-label">Access Mode</div>
+                    <div className="provider-auth-grid">
                     {provider.authModes.map((mode) => (
-                      <label
+                      <button
+                        type="button"
                         key={mode.id}
-                        className="provider-option"
-                        style={{ display: 'block', marginBottom: '0.45rem' }}
+                        className={`provider-choice-card ${
+                          (providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id) === mode.id
+                            ? 'selected'
+                            : ''
+                        }`}
+                        onClick={() => setProviderAuthMode(provider.id, mode.id)}
                       >
-                        <input
-                          type="radio"
-                          name={`auth-mode-${provider.id}`}
-                          checked={(providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id) === mode.id}
-                          onChange={() => setProviderAuthMode(provider.id, mode.id)}
-                        />
-                        <div className="provider-card">
-                          <span className="provider-name">{mode.label}</span>
-                          <span className="provider-desc" style={{ fontSize: '0.9rem', opacity: 0.8 }}>
-                            {mode.description}
-                          </span>
-                        </div>
-                      </label>
+                        <span className="provider-choice-title">{mode.label}</span>
+                        <span className="provider-choice-copy">{mode.description}</span>
+                      </button>
                     ))}
+                    </div>
                   </div>
                 )}
 
-                <div className="provider-model-field" style={{ marginTop: '0.8rem' }}>
-                  <label htmlFor={`model-${provider.id}`}>Model</label>
+                <div className="provider-choice-group">
+                  <div className="provider-field-label">Default Model</div>
                   {modelOptions.length > 0 ? (
-                    <select
-                      id={`model-${provider.id}`}
-                      value={selectedModel}
-                      onChange={(e) => setProviderModel(provider.id, e.target.value)}
-                    >
+                    <div className="provider-model-grid">
                       {modelOptions.map((option) => (
-                        <option key={option.model} value={option.model}>
-                          {option.label} · {option.model}
-                        </option>
+                        <button
+                          type="button"
+                          key={option.model}
+                          className={`provider-model-card ${selectedModel === option.model ? 'selected' : ''}`}
+                          onClick={() => setProviderModel(provider.id, option.model)}
+                        >
+                          <div className="provider-model-header">
+                            <span className="provider-model-title">{option.label}</span>
+                            <span className={`provider-model-tier tier-${option.tier}`}>
+                              {formatTierLabel(option.tier)}
+                            </span>
+                          </div>
+                          <div className="provider-model-id">{option.model}</div>
+                          <div className="provider-model-stats">
+                            <span>{option.contextWindow}</span>
+                            <span>${option.inputPer1M.toFixed(2)} in</span>
+                            <span>${option.outputPer1M.toFixed(2)} out</span>
+                          </div>
+                          <div className="provider-model-notes">{option.notes}</div>
+                        </button>
                       ))}
-                    </select>
+                    </div>
                   ) : (
                     <input
                       id={`model-${provider.id}`}
@@ -168,11 +202,6 @@ export default function ProvidersStep({
                       onChange={(e) => setProviderModel(provider.id, e.target.value)}
                       autoComplete="off"
                     />
-                  )}
-                  {selectedModel && (
-                    <p className="step-subtitle" style={{ marginTop: '0.35rem' }}>
-                      {selectedModel}
-                    </p>
                   )}
                 </div>
 
@@ -207,14 +236,14 @@ export default function ProvidersStep({
                 )}
 
                 {usingOpenAISubscription && (
-                  <>
-                    <p className="step-subtitle" style={{ marginTop: '0.25rem' }}>
+                  <div className="provider-helper-copy">
+                    <p>
                       Strada will use the local Codex/ChatGPT subscription session available on this machine for OpenAI conversation turns.
                     </p>
-                    <p className="step-subtitle warning" style={{ marginTop: '0.35rem' }}>
+                    <p className="warning">
                       This does not grant OpenAI API or embedding quota. If you later choose OpenAI for embeddings, you still need an OpenAI API key.
                     </p>
-                  </>
+                  </div>
                 )}
               </div>
             )

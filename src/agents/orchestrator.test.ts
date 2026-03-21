@@ -1025,9 +1025,9 @@ describe("Orchestrator", () => {
     );
 
     const bootstrapSession = (bootstrapOrch as any).getOrCreateSession("chat-post-setup");
-    expect(mockChannel.sendText).toHaveBeenCalledWith(
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
       "chat-post-setup",
-      expect.stringContaining("Merhaba"),
+      expect.stringContaining("Strada'ya Hoş Geldin"),
     );
     expect(
       ((bootstrapSession.visibleMessages ?? []) as Array<{ role: string }>).filter((message) => message.role === "assistant"),

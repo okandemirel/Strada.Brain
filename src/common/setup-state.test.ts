@@ -119,7 +119,7 @@ describe("setup-state", () => {
   });
 
   it("formats a localized post-setup welcome message", () => {
-    expect(buildPostSetupWelcomeMessage("tr")).toContain("Merhaba");
+    expect(buildPostSetupWelcomeMessage("tr")).toContain("Strada'ya Hoş Geldin");
     expect(buildPostSetupWelcomeMessage("en")).toContain("brief");
   });
 });

@@ -155,14 +155,86 @@ export function buildSetupRetryHref(): string {
 }
 
 const POST_SETUP_WELCOME_MESSAGES: Record<PostSetupBootstrapLanguage, string> = {
-  en: "Hi, I'm Strada. What should I call you, and do you want replies brief, detailed, formal, or casual?",
-  tr: "Merhaba, ben Strada. Sana nasıl sesleneyim; yanıtlarımı kısa, detaylı, daha resmi ya da daha rahat mı istersin?",
-  ja: "こんにちは、Stradaです。何とお呼びすればよく、返答は簡潔・詳しめ・フォーマル・カジュアルのどれが好みですか？",
-  ko: "안녕하세요, 저는 Strada입니다. 어떻게 불러드리면 될지, 그리고 답변은 간결하게, 자세하게, 더 공식적으로, 혹은 편하게 드릴지 알려주세요.",
-  zh: "你好，我是 Strada。你希望我怎么称呼你，以及回复更适合简短、详细、正式还是轻松一些？",
-  de: "Hallo, ich bin Strada. Wie soll ich dich nennen, und möchtest du eher kurze, detaillierte, formelle oder lockere Antworten?",
-  es: "Hola, soy Strada. ¿Cómo quieres que te llame y prefieres respuestas breves, detalladas, formales o más relajadas?",
-  fr: "Bonjour, je suis Strada. Comment dois-je t'appeler, et préfères-tu des réponses brèves, détaillées, formelles ou plus décontractées ?",
+  en: `## Welcome to Strada
+
+I'm ready to help with your project right away.
+
+Tell me in one message:
+- what I should call you
+- whether you want replies brief, detailed, formal, or casual
+- and, if you already have a task, send it directly so I can start immediately
+
+You can always change these later in Settings.`,
+  tr: `## Strada'ya Hoş Geldin
+
+Projende hemen yardımcı olmaya hazırım.
+
+İstersen tek mesajda şunları yaz:
+- sana nasıl hitap etmemi istediğini
+- yanıtlarımın kısa mı detaylı mı, daha resmi mi daha rahat mı olmasını istediğini
+- ve elinde bir görev varsa doğrudan onu; ben hemen başlayayım
+
+Bunları daha sonra Settings üzerinden de değiştirebilirsin.`,
+  ja: `## Stradaへようこそ
+
+すぐにプロジェクトを手伝えます。
+
+よければ1つのメッセージで教えてください:
+- 何とお呼びすればよいか
+- 返答は簡潔・詳しめ・フォーマル・カジュアルのどれがよいか
+- すでに頼みたい作業があれば、そのまま送ってください。すぐに着手します
+
+これらは後で Settings からいつでも変更できます。`,
+  ko: `## Strada에 오신 것을 환영합니다
+
+지금 바로 프로젝트 작업을 도와드릴 수 있습니다.
+
+원하면 한 메시지로 알려주세요:
+- 어떻게 불러드리면 될지
+- 답변을 간결하게, 자세하게, 더 공식적으로, 혹은 편하게 드릴지
+- 그리고 이미 할 일이 있다면 그대로 보내 주세요. 바로 시작하겠습니다
+
+이 설정들은 나중에 Settings에서 언제든 바꿀 수 있습니다.`,
+  zh: `## 欢迎来到 Strada
+
+我已经可以立即开始帮你处理项目。
+
+如果方便，可以在一条消息里告诉我:
+- 我该怎么称呼你
+- 你更喜欢简短、详细、正式还是轻松一点的回复
+- 如果你已经有具体任务，也可以直接发给我，我会马上开始
+
+这些偏好之后也可以在 Settings 里随时修改。`,
+  de: `## Willkommen bei Strada
+
+Ich kann dir sofort mit deinem Projekt helfen.
+
+Wenn du magst, sag mir in einer Nachricht:
+- wie ich dich nennen soll
+- ob du eher kurze, detaillierte, formelle oder lockere Antworten willst
+- und falls du schon eine konkrete Aufgabe hast, schick sie direkt mit, damit ich sofort loslegen kann
+
+Das kannst du später jederzeit in den Settings ändern.`,
+  es: `## Bienvenido a Strada
+
+Puedo ayudarte con tu proyecto de inmediato.
+
+Si quieres, dime en un solo mensaje:
+- cómo quieres que te llame
+- si prefieres respuestas breves, detalladas, formales o más relajadas
+- y, si ya tienes una tarea concreta, envíamela directamente para que empiece enseguida
+
+Siempre podrás cambiar esto después en Settings.`,
+  fr: `## Bienvenue sur Strada
+
+Je peux t'aider sur ton projet tout de suite.
+
+Si tu veux, dis-moi dans un seul message :
+- comment tu veux que je t'appelle
+- si tu préfères des réponses brèves, détaillées, formelles ou plus décontractées
+- et, si tu as déjà une tâche précise, envoie-la directement pour que je commence tout de suite
+
+Tu pourras toujours changer cela plus tard dans Settings.`,
 };
 
 export function buildPostSetupWelcomeMessage(language: string): string {
