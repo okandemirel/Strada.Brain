@@ -114,57 +114,59 @@ export default function DirectoryBrowser({
           )}
         </div>
 
-        <Breadcrumbs path={currentPath} onNavigate={browseTo} />
+        <div className="browser-scroll-region">
+          <Breadcrumbs path={currentPath} onNavigate={browseTo} />
 
-        {!loading && !error && isUnityProject && stradaDeps && (
-          <div className="browser-context-panel">
-            <McpInstallPanel
-              projectPath={currentPath}
-              stradaDeps={stradaDeps}
-              dependencyWarnings={dependencyWarnings}
-              mcpRecommendation={mcpRecommendation}
-              mcpInstallStatus={mcpInstallStatus}
-              mcpInstallError={mcpInstallError}
-              mcpInstallMessage={mcpInstallMessage}
-              mcpInstallPlan={mcpInstallPlan}
-              installButtonLabel="Install into this project"
-              onInstall={(target) => {
-                void installMcp(target, currentPath).then((installed) => {
-                  if (installed) {
-                    browseTo(currentPath)
-                  }
-                })
-              }}
-            />
-          </div>
-        )}
-
-        <div className="browser-entries">
-          {loading && <div className="browser-loading">Loading...</div>}
-
-          {error && <div className="browser-error">{error}</div>}
-
-          {!loading && !error && (
-            <>
-              {currentPath && currentPath !== separator && (
-                <button className="browser-entry parent" onClick={handleParent}>
-                  ..
-                </button>
-              )}
-              {entries.map((entry) => (
-                <button
-                  key={entry.name}
-                  className="browser-entry"
-                  onClick={() => handleEntryClick(entry)}
-                >
-                  {entry.name}
-                </button>
-              ))}
-              {entries.length === 0 && !currentPath && (
-                <div className="browser-empty">No entries found</div>
-              )}
-            </>
+          {!loading && !error && isUnityProject && stradaDeps && (
+            <div className="browser-context-panel">
+              <McpInstallPanel
+                projectPath={currentPath}
+                stradaDeps={stradaDeps}
+                dependencyWarnings={dependencyWarnings}
+                mcpRecommendation={mcpRecommendation}
+                mcpInstallStatus={mcpInstallStatus}
+                mcpInstallError={mcpInstallError}
+                mcpInstallMessage={mcpInstallMessage}
+                mcpInstallPlan={mcpInstallPlan}
+                installButtonLabel="Install into this project"
+                onInstall={(target) => {
+                  void installMcp(target, currentPath).then((installed) => {
+                    if (installed) {
+                      browseTo(currentPath)
+                    }
+                  })
+                }}
+              />
+            </div>
           )}
+
+          <div className="browser-entries">
+            {loading && <div className="browser-loading">Loading...</div>}
+
+            {error && <div className="browser-error">{error}</div>}
+
+            {!loading && !error && (
+              <>
+                {currentPath && currentPath !== separator && (
+                  <button className="browser-entry parent" onClick={handleParent}>
+                    ..
+                  </button>
+                )}
+                {entries.map((entry) => (
+                  <button
+                    key={entry.name}
+                    className="browser-entry"
+                    onClick={() => handleEntryClick(entry)}
+                  >
+                    {entry.name}
+                  </button>
+                ))}
+                {entries.length === 0 && !currentPath && (
+                  <div className="browser-empty">No entries found</div>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         <div className="browser-actions">
