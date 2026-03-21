@@ -68,6 +68,17 @@ export interface McpRecommendation {
   installHint?: string
 }
 
+export type McpInstallTarget = 'assets' | 'packages'
+
+export interface McpInstallPlan {
+  target: McpInstallTarget
+  submodulePath: string
+  unityPackagePath: string
+  manifestPath: string
+  manifestDependency: string
+  npmInstallRan: boolean
+}
+
 export interface BrowseResult {
   path: string
   entries: BrowseEntry[]
@@ -81,6 +92,16 @@ export interface BrowseResult {
 export interface PathValidationResult {
   valid: boolean
   error?: string
+  isUnityProject?: boolean
+  stradaDeps?: StradaDepsStatus
+  dependencyWarnings?: string[]
+  mcpRecommendation?: McpRecommendation
+}
+
+export interface McpInstallResponse {
+  success?: boolean
+  error?: string
+  install?: McpInstallPlan
   isUnityProject?: boolean
   stradaDeps?: StradaDepsStatus
   dependencyWarnings?: string[]
@@ -113,6 +134,9 @@ export interface WizardState {
   pathStradaDeps: StradaDepsStatus | null
   pathDependencyWarnings: string[]
   pathMcpRecommendation: McpRecommendation | null
+  mcpInstallStatus: 'idle' | 'installing' | 'success' | 'error'
+  mcpInstallError: string | null
+  mcpInstallMessage: string | null
   channel: string
   channelConfig: Record<string, string>
   language: string

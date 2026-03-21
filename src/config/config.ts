@@ -555,6 +555,7 @@ export interface InteractionConfig {
 export interface StradaDependencyConfig {
   readonly coreRepoUrl: string;
   readonly modulesRepoUrl: string;
+  readonly mcpRepoUrl: string;
   readonly mcpPath?: string;
   readonly unityBridgePort: number;
   readonly unityBridgeAutoConnect: boolean;
@@ -566,6 +567,7 @@ export interface StradaDependencyConfig {
 
 export const DEFAULT_STRADA_CORE_REPO_URL = "https://github.com/okandemirel/Strada.Core.git";
 export const DEFAULT_STRADA_MODULES_REPO_URL = "https://github.com/okandemirel/Strada.Modules.git";
+export const DEFAULT_STRADA_MCP_REPO_URL = "https://github.com/okandemirel/Strada.MCP.git";
 export const DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS = 10 * 60 * 1000;
 export const DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS = 2 * 60 * 1000;
 export const DEFAULT_INTERACTION_CONFIG: InteractionConfig = {
@@ -880,6 +882,7 @@ export const configSchema = z
     unityEditorPath: z.string().min(1).optional(),
     stradaCoreRepoUrl: z.string().url().default(DEFAULT_STRADA_CORE_REPO_URL),
     stradaModulesRepoUrl: z.string().url().default(DEFAULT_STRADA_MODULES_REPO_URL),
+    stradaMcpRepoUrl: z.string().url().default(DEFAULT_STRADA_MCP_REPO_URL),
     stradaMcpPath: z.string().min(1).optional(),
     scriptExecuteEnabled: boolFromString(false),
     reflectionInvokeEnabled: boolFromString(false),
@@ -1785,6 +1788,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     strada: {
       coreRepoUrl: rawConfig.stradaCoreRepoUrl,
       modulesRepoUrl: rawConfig.stradaModulesRepoUrl,
+      mcpRepoUrl: rawConfig.stradaMcpRepoUrl,
       mcpPath: rawConfig.stradaMcpPath,
       unityBridgePort: rawConfig.unityBridgePort,
       unityBridgeAutoConnect: rawConfig.unityBridgeAutoConnect,
@@ -2329,6 +2333,7 @@ interface EnvVars {
   unityEditorPath: string | undefined;
   stradaCoreRepoUrl: string | undefined;
   stradaModulesRepoUrl: string | undefined;
+  stradaMcpRepoUrl: string | undefined;
   stradaMcpPath: string | undefined;
   scriptExecuteEnabled: string | undefined;
   reflectionInvokeEnabled: string | undefined;
@@ -2585,6 +2590,7 @@ function loadFromEnv(): EnvVars {
     unityEditorPath: process.env["UNITY_EDITOR_PATH"] ?? process.env["UNITY_PATH"],
     stradaCoreRepoUrl: process.env["STRADA_CORE_REPO_URL"],
     stradaModulesRepoUrl: process.env["STRADA_MODULES_REPO_URL"],
+    stradaMcpRepoUrl: process.env["STRADA_MCP_REPO_URL"],
     stradaMcpPath: process.env["STRADA_MCP_PATH"],
     scriptExecuteEnabled: process.env["SCRIPT_EXECUTE_ENABLED"],
     reflectionInvokeEnabled: process.env["REFLECTION_INVOKE_ENABLED"],

@@ -64,12 +64,17 @@ interface BridgeAware {
   setBridgeClient(client: unknown): void;
 }
 
+interface EditorRouterAware {
+  setEditorRouter(router: unknown): void;
+}
+
 interface StradaMcpBootstrapResult {
   readonly tools?: StradaMcpToolLike[];
   readonly resources?: StradaMcpResourceLike[];
   readonly prompts?: StradaMcpPromptLike[];
   readonly bridgeAwareTools?: BridgeAware[];
   readonly bridgeAwareResources?: BridgeAware[];
+  readonly editorRouterAwareTools?: EditorRouterAware[];
   readonly toolContext?: {
     projectPath?: string;
     workingDirectory?: string;
@@ -77,6 +82,14 @@ interface StradaMcpBootstrapResult {
     unityBridgeConnected?: boolean;
     allowedPaths?: string[];
   };
+}
+
+interface StradaMcpToolContext {
+  projectPath: string;
+  workingDirectory: string;
+  readOnly: boolean;
+  unityBridgeConnected: boolean;
+  allowedPaths?: string[];
 }
 
 interface StradaMcpBootstrapModule {
@@ -115,6 +128,56 @@ interface StradaMcpBridgeManagerModule {
   };
 }
 
+interface StradaMcpUnityEditorRouteStatus {
+  readonly connected?: boolean;
+  readonly connectionState?: string;
+  readonly activePort?: number | null;
+  readonly activeInstance?: {
+    readonly instanceId?: string;
+    readonly projectName?: string;
+    readonly projectPath?: string;
+  } | null;
+  readonly selectionSource?: string | null;
+  readonly warnings?: string[];
+  readonly discoveredCount?: number;
+}
+
+interface StradaMcpUnityEditorRouterLike {
+  initialize(): Promise<StradaMcpUnityEditorRouteStatus | void>;
+  getStatus(options?: { includeDiscovered?: boolean }): StradaMcpUnityEditorRouteStatus;
+  destroy(): void;
+}
+
+interface StradaMcpUnityEditorRouterModule {
+  UnityEditorRouter: new (options: {
+    projectPath: string;
+    preferredPort: number;
+    preferredInstanceId?: string;
+    discoveryEnabled: boolean;
+    staleAfterMs: number;
+    autoConnect: boolean;
+    timeoutMs: number;
+    logLevel?: "debug" | "info" | "warn" | "error";
+    logger: {
+      debug(message: string, meta?: Record<string, unknown>): void;
+      info(message: string, meta?: Record<string, unknown>): void;
+      warn(message: string, meta?: Record<string, unknown>): void;
+      error(message: string, meta?: Record<string, unknown>): void;
+      child(_component: string): unknown;
+    };
+    toolContext: {
+      projectPath: string;
+      workingDirectory: string;
+      readOnly: boolean;
+      unityBridgeConnected: boolean;
+      allowedPaths?: string[];
+    };
+    bridgeAwareTools: BridgeAware[];
+    bridgeAwareResources: BridgeAware[];
+    editorRouterAwareTools?: EditorRouterAware[];
+  }) => StradaMcpUnityEditorRouterLike;
+}
+
 export interface StradaMcpToolLoadResult {
   readonly source: StradaMcpInstall;
   readonly tools: StradaMcpToolLike[];
@@ -132,6 +195,11 @@ export interface StradaMcpRuntimeStatus {
   readonly bridgeState: string;
   readonly availableToolCount: number;
   readonly unavailableToolCount: number;
+  readonly activeEditorPort?: number | null;
+  readonly activeEditorInstanceId?: string | null;
+  readonly activeEditorProjectName?: string | null;
+  readonly editorSelectionSource?: string | null;
+  readonly editorDiscoveryCount?: number;
   readonly bridgeUnavailableReason?: string;
   readonly lastError?: string;
 }
@@ -237,16 +305,24 @@ function isBridgeAware(value: unknown): value is BridgeAware {
     && typeof (value as { setBridgeClient?: unknown }).setBridgeClient === "function";
 }
 
+function isEditorRouterAware(value: unknown): value is EditorRouterAware {
+  return typeof value === "object"
+    && value !== null
+    && "setEditorRouter" in value
+    && typeof (value as { setEditorRouter?: unknown }).setEditorRouter === "function";
+}
+
 function normalizeBootstrapResult(
   result: StradaMcpBootstrapResult,
   config: Config,
-): Required<StradaMcpBootstrapResult> {
+): Omit<Required<StradaMcpBootstrapResult>, "toolContext"> & { toolContext: StradaMcpToolContext } {
   return {
     tools: [...(result.tools ?? [])],
     resources: [...(result.resources ?? [])],
     prompts: [...(result.prompts ?? [])],
     bridgeAwareTools: (result.bridgeAwareTools ?? []).filter(isBridgeAware),
     bridgeAwareResources: (result.bridgeAwareResources ?? []).filter(isBridgeAware),
+    editorRouterAwareTools: (result.editorRouterAwareTools ?? []).filter(isEditorRouterAware),
     toolContext: {
       projectPath: result.toolContext?.projectPath ?? config.unityProjectPath,
       workingDirectory: result.toolContext?.workingDirectory ?? config.unityProjectPath,
@@ -264,22 +340,30 @@ export class StradaMcpRuntime {
   readonly prompts: readonly StradaMcpPromptLike[];
   readonly bridgeAwareTools: readonly BridgeAware[];
   readonly bridgeAwareResources: readonly BridgeAware[];
+  readonly editorRouterAwareTools: readonly EditorRouterAware[];
 
-  private readonly toolContext: Required<StradaMcpBootstrapResult>["toolContext"];
+  private readonly toolContext: StradaMcpToolContext;
   private readonly bridgeConfigured: boolean;
   private readonly registeredBridgeTools = new Set<string>();
   private readonly registeredTools = new Set<string>();
   private metadataMap?: Map<string, BrainToolMetadata>;
   private bridgeManager: StradaMcpBridgeManagerLike | null = null;
+  private unityEditorRouter: StradaMcpUnityEditorRouterLike | null = null;
   private bridgeConnected = false;
   private bridgeState = "disconnected";
   private bridgeUnavailableReason = DEFAULT_BRIDGE_UNAVAILABLE_REASON;
+  private activeEditorPort: number | null = null;
+  private activeEditorInstanceId: string | null = null;
+  private activeEditorProjectName: string | null = null;
+  private editorSelectionSource: string | null = null;
+  private editorDiscoveryCount = 0;
   private lastError?: string;
 
   constructor(
     private readonly config: Config,
     source: StradaMcpInstall,
-    normalizedBootstrap: Required<StradaMcpBootstrapResult>,
+    normalizedBootstrap: Omit<Required<StradaMcpBootstrapResult>, "toolContext"> & { toolContext: StradaMcpToolContext },
+    unityEditorRouter: StradaMcpUnityEditorRouterLike | null,
     bridgeManager: StradaMcpBridgeManagerLike | null,
   ) {
     this.source = source;
@@ -288,13 +372,31 @@ export class StradaMcpRuntime {
     this.prompts = normalizedBootstrap.prompts;
     this.bridgeAwareTools = normalizedBootstrap.bridgeAwareTools;
     this.bridgeAwareResources = normalizedBootstrap.bridgeAwareResources;
+    this.editorRouterAwareTools = normalizedBootstrap.editorRouterAwareTools;
     this.toolContext = normalizedBootstrap.toolContext;
     this.bridgeConfigured = Boolean(this.config.strada.unityBridgeAutoConnect);
+    this.unityEditorRouter = unityEditorRouter;
     this.bridgeManager = bridgeManager;
     this.syncBridgeState(false, this.bridgeConfigured ? "disconnected" : "disabled", this.getInitialBridgeReason());
   }
 
   async start(): Promise<void> {
+    if (this.unityEditorRouter) {
+      try {
+        await this.unityEditorRouter.initialize();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.lastError = message;
+        this.syncBridgeState(false, "error", message);
+        getLogger().warn("Failed to initialize Strada.MCP Unity editor router", {
+          error: message,
+          sourcePath: this.source.path,
+        });
+      }
+      this.refreshIntegrationState();
+      return;
+    }
+
     if (!this.bridgeManager) {
       return;
     }
@@ -335,9 +437,34 @@ export class StradaMcpRuntime {
   shutdown(): void {
     this.bridgeAwareTools.forEach((tool) => tool.setBridgeClient(null));
     this.bridgeAwareResources.forEach((resource) => resource.setBridgeClient(null));
+    this.editorRouterAwareTools.forEach((tool) => tool.setEditorRouter(null));
     this.toolContext.unityBridgeConnected = false;
+    this.unityEditorRouter?.destroy();
+    this.unityEditorRouter = null;
     this.bridgeManager?.destroy();
     this.bridgeManager = null;
+  }
+
+  refreshIntegrationState(): void {
+    if (!this.unityEditorRouter) {
+      return;
+    }
+
+    const status = this.unityEditorRouter.getStatus({ includeDiscovered: false });
+    const connected = status.connected === true;
+    this.activeEditorPort = status.activePort ?? null;
+    this.activeEditorInstanceId = status.activeInstance?.instanceId ?? null;
+    this.activeEditorProjectName = status.activeInstance?.projectName ?? null;
+    this.editorSelectionSource = status.selectionSource ?? null;
+    this.editorDiscoveryCount = status.discoveredCount ?? 0;
+    this.syncBridgeState(
+      connected,
+      status.connectionState ?? (connected ? "connected" : "disconnected"),
+      connected
+        ? undefined
+        : (status.warnings?.[0]
+          ?? DEFAULT_BRIDGE_UNAVAILABLE_REASON),
+    );
   }
 
   registerTool(name: string, requiresBridge: boolean): void {
@@ -396,12 +523,23 @@ export class StradaMcpRuntime {
       bridgeState: this.bridgeState,
       availableToolCount: this.tools.length - unavailableToolCount,
       unavailableToolCount,
+      activeEditorPort: this.activeEditorPort,
+      activeEditorInstanceId: this.activeEditorInstanceId,
+      activeEditorProjectName: this.activeEditorProjectName,
+      editorSelectionSource: this.editorSelectionSource,
+      editorDiscoveryCount: this.editorDiscoveryCount,
       bridgeUnavailableReason: unavailableToolCount > 0 ? this.bridgeUnavailableReason : undefined,
       lastError: this.lastError,
     };
   }
 
   private getInitialBridgeReason(): string {
+    if (this.unityEditorRouter) {
+      if (!this.bridgeConfigured) {
+        return "UNITY_BRIDGE_AUTO_CONNECT=false. Unity editor routing is available, but live bridge tools stay unavailable until you connect to an editor.";
+      }
+      return DEFAULT_BRIDGE_UNAVAILABLE_REASON;
+    }
     if (!this.bridgeManager) {
       return "Strada.MCP bridge manager is not available in this installation.";
     }
@@ -429,9 +567,11 @@ export class StradaMcpRuntime {
     this.bridgeState = state;
     this.bridgeUnavailableReason = connected ? "" : (reason ?? DEFAULT_BRIDGE_UNAVAILABLE_REASON);
     this.toolContext.unityBridgeConnected = connected;
-    const client = connected ? (this.bridgeManager?.client ?? null) : null;
-    this.bridgeAwareTools.forEach((tool) => tool.setBridgeClient(client));
-    this.bridgeAwareResources.forEach((resource) => resource.setBridgeClient(client));
+    if (!this.unityEditorRouter) {
+      const client = connected ? (this.bridgeManager?.client ?? null) : null;
+      this.bridgeAwareTools.forEach((tool) => tool.setBridgeClient(client));
+      this.bridgeAwareResources.forEach((resource) => resource.setBridgeClient(client));
+    }
     this.syncAllToolMetadata();
   }
 
@@ -460,7 +600,7 @@ export class StradaMcpRuntime {
 }
 
 export async function loadInstalledStradaMcpRuntime(config: Config): Promise<StradaMcpRuntime | null> {
-  const install = detectStradaMcp(config.strada);
+  const install = detectStradaMcp(config.strada, config.unityProjectPath);
   if (!install.installed || !install.path) {
     return null;
   }
@@ -469,10 +609,11 @@ export async function loadInstalledStradaMcpRuntime(config: Config): Promise<Str
     throw new Error(`Refusing to load Strada.MCP from untrusted path: ${install.path}`);
   }
 
-  const [{ bootstrap }, { ToolRegistry }, bridgeModule] = await Promise.all([
+  const [{ bootstrap }, { ToolRegistry }, bridgeModule, unityEditorRouterModule] = await Promise.all([
     importFirstAvailable<StradaMcpBootstrapModule>(resolveModuleCandidates(install.path, "bootstrap.ts")),
     importFirstAvailable<StradaMcpToolRegistryModule>(resolveModuleCandidates(install.path, "tools/tool-registry.ts")),
     importOptionalFirstAvailable<StradaMcpBridgeManagerModule>(resolveModuleCandidates(install.path, "bridge/bridge-manager.ts")),
+    importOptionalFirstAvailable<StradaMcpUnityEditorRouterModule>(resolveModuleCandidates(install.path, "bridge/unity-editor-router.ts")),
   ]);
 
   const externalToolRegistry = new ToolRegistry();
@@ -502,14 +643,43 @@ export async function loadInstalledStradaMcpRuntime(config: Config): Promise<Str
   });
 
   const normalized = normalizeBootstrapResult(bootstrapResult, config);
-  const bridgeManager = bridgeModule?.BridgeManager?.fromConfig({
-    unityBridgePort: config.strada.unityBridgePort,
-    unityBridgeAutoConnect: config.strada.unityBridgeAutoConnect,
-    unityBridgeTimeout: config.strada.unityBridgeTimeout,
-    logLevel: config.logLevel,
-  }) ?? null;
+  const unityEditorRouter = unityEditorRouterModule?.UnityEditorRouter
+    ? new unityEditorRouterModule.UnityEditorRouter({
+      projectPath: config.unityProjectPath,
+      preferredPort: config.strada.unityBridgePort,
+      preferredInstanceId: undefined,
+      discoveryEnabled: true,
+      staleAfterMs: 20_000,
+      autoConnect: config.strada.unityBridgeAutoConnect,
+      timeoutMs: config.strada.unityBridgeTimeout,
+      logLevel: config.logLevel,
+      logger: (() => {
+        const logger = getLogger();
+        return {
+          debug(message: string, meta?: Record<string, unknown>) { logger.debug(message, meta); },
+          info(message: string, meta?: Record<string, unknown>) { logger.info(message, meta); },
+          warn(message: string, meta?: Record<string, unknown>) { logger.warn(message, meta); },
+          error(message: string, meta?: Record<string, unknown>) { logger.error(message, meta); },
+          child() { return this; },
+        };
+      })(),
+      toolContext: normalized.toolContext,
+      bridgeAwareTools: normalized.bridgeAwareTools,
+      bridgeAwareResources: normalized.bridgeAwareResources,
+      editorRouterAwareTools: normalized.editorRouterAwareTools,
+    })
+    : null;
 
-  const runtime = new StradaMcpRuntime(config, install, normalized, bridgeManager);
+  const bridgeManager = unityEditorRouter
+    ? null
+    : (bridgeModule?.BridgeManager?.fromConfig({
+      unityBridgePort: config.strada.unityBridgePort,
+      unityBridgeAutoConnect: config.strada.unityBridgeAutoConnect,
+      unityBridgeTimeout: config.strada.unityBridgeTimeout,
+      logLevel: config.logLevel,
+    }) ?? null);
+
+  const runtime = new StradaMcpRuntime(config, install, normalized, unityEditorRouter, bridgeManager);
   await runtime.start();
   return runtime;
 }
@@ -551,6 +721,7 @@ class StradaMcpToolAdapter implements ITool {
         allowedPaths: [context.projectPath],
       },
     );
+    this.runtime?.refreshIntegrationState();
 
     return {
       content: result.content,

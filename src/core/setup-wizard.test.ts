@@ -4,16 +4,25 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { preflightResponseProvidersMock } = vi.hoisted(() => ({
+const { preflightResponseProvidersMock, installStradaMcpSubmoduleMock } = vi.hoisted(() => ({
   preflightResponseProvidersMock: vi.fn().mockResolvedValue({
     passedProviderIds: ["kimi"],
     failures: [],
   }),
+  installStradaMcpSubmoduleMock: vi.fn(),
 }));
 
 vi.mock("./response-provider-preflight.js", () => ({
   preflightResponseProviders: preflightResponseProvidersMock,
 }));
+
+vi.mock("../config/strada-deps.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/strada-deps.js")>();
+  return {
+    ...actual,
+    installStradaMcpSubmodule: installStradaMcpSubmoduleMock,
+  };
+});
 
 import {
   SetupWizard,
@@ -36,6 +45,7 @@ describe("SetupWizard path validation", () => {
       passedProviderIds: ["kimi"],
       failures: [],
     });
+    installStradaMcpSubmoduleMock.mockReset();
   });
 
   afterEach(() => {
@@ -392,5 +402,87 @@ describe("SetupWizard path validation", () => {
         language: "en",
       },
     });
+  });
+
+  it("installs Strada.MCP through the setup API for a Unity project", async () => {
+    const wizard = new SetupWizard({ port: 0 });
+    const unityProjectDir = fs.mkdtempSync(path.join(homedir(), "strada-setup-mcp-"));
+    tmpDirs.push(unityProjectDir);
+    fs.mkdirSync(path.join(unityProjectDir, "Assets"), { recursive: true });
+    fs.mkdirSync(path.join(unityProjectDir, "ProjectSettings"), { recursive: true });
+    fs.mkdirSync(path.join(unityProjectDir, "Packages"), { recursive: true });
+    fs.writeFileSync(
+      path.join(unityProjectDir, "Packages", "manifest.json"),
+      JSON.stringify({ dependencies: {} }),
+      "utf-8",
+    );
+
+    installStradaMcpSubmoduleMock.mockImplementation(async (projectPath: string, target: "assets" | "packages") => {
+      const submodulePath = target === "packages"
+        ? path.join(projectPath, "Packages", "Submodules", "Strada.MCP")
+        : path.join(projectPath, "Assets", "Strada.MCP");
+      fs.mkdirSync(submodulePath, { recursive: true });
+      fs.writeFileSync(
+        path.join(submodulePath, "package.json"),
+        JSON.stringify({ name: "strada-mcp", version: "9.9.9" }),
+        "utf-8",
+      );
+      return {
+        kind: "ok" as const,
+        value: {
+          target,
+          submodulePath,
+          unityPackagePath: path.join(submodulePath, "unity-package", "com.strada.mcp"),
+          manifestPath: path.join(projectPath, "Packages", "manifest.json"),
+          manifestDependency: target === "packages"
+            ? "file:Submodules/Strada.MCP/unity-package/com.strada.mcp"
+            : "file:../Assets/Strada.MCP/unity-package/com.strada.mcp",
+          npmInstallRan: true,
+        },
+      };
+    });
+
+    (wizard as unknown as {
+      readBody: (req: unknown) => Promise<string>;
+      csrfToken: string;
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).readBody = async () => JSON.stringify({
+      projectPath: unityProjectDir,
+      target: "packages",
+    });
+
+    const response = makeResponse();
+    await (wizard as unknown as {
+      csrfToken: string;
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({
+      url: "/api/setup/install-mcp",
+      method: "POST",
+      headers: {
+        "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken,
+      },
+    }, response.response);
+
+    expect(response.read().statusCode).toBe(200);
+    expect(JSON.parse(response.read().body)).toMatchObject({
+      success: true,
+      isUnityProject: true,
+      stradaDeps: {
+        mcpInstalled: true,
+        mcpVersion: "9.9.9",
+      },
+      install: {
+        target: "packages",
+        npmInstallRan: true,
+      },
+    });
+    expect(installStradaMcpSubmoduleMock).toHaveBeenCalledWith(
+      unityProjectDir,
+      "packages",
+      expect.objectContaining({
+        mcpPath: process.env["STRADA_MCP_PATH"],
+        mcpRepoUrl: process.env["STRADA_MCP_REPO_URL"],
+      }),
+    );
   });
 });

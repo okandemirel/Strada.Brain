@@ -16,6 +16,8 @@ import { PROVIDER_PRESETS } from "../agents/providers/provider-registry.js";
 import {
   buildMcpRecommendation,
   checkStradaDeps,
+  installStradaMcpSubmodule,
+  type McpInstallTarget,
   type McpRecommendation,
   type StradaDepsStatus,
 } from "../config/strada-deps.js";
@@ -49,6 +51,11 @@ interface SetupPathDependencyPayload {
   stradaDeps?: StradaDepsStatus;
   dependencyWarnings?: string[];
   mcpRecommendation?: McpRecommendation;
+}
+
+interface SetupInstallMcpRequest {
+  projectPath?: string;
+  target?: McpInstallTarget;
 }
 
 function logSetupLifecycle(event: string, detail: Record<string, unknown>): void {
@@ -647,6 +654,25 @@ export class SetupWizard {
         return;
       }
 
+      if (url === "/api/setup/install-mcp" && method === "POST") {
+        if (this.handoffInProgress) {
+          this.json(res, 409, {
+            success: false,
+            handoff: true,
+            readyUrl: this.readyUrl,
+            error: "Configuration was already saved. Wait for Strada to finish starting.",
+          });
+          return;
+        }
+        const token = req.headers["x-csrf-token"];
+        if (token !== this.csrfToken) {
+          this.json(res, 403, { success: false, error: "Invalid CSRF token" });
+          return;
+        }
+        await this.handleInstallMcp(req, res);
+        return;
+      }
+
       // Static files
       if (method === "GET") {
         await this.serveStatic(url, res);
@@ -765,6 +791,7 @@ export class SetupWizard {
 
     const stradaDeps = checkStradaDeps(resolved, {
       mcpPath: process.env["STRADA_MCP_PATH"],
+      mcpRepoUrl: process.env["STRADA_MCP_REPO_URL"],
     });
 
     return {
@@ -773,8 +800,19 @@ export class SetupWizard {
       dependencyWarnings: stradaDeps.warnings,
       mcpRecommendation: buildMcpRecommendation(stradaDeps, {
         mcpPath: process.env["STRADA_MCP_PATH"],
+        mcpRepoUrl: process.env["STRADA_MCP_REPO_URL"],
       }),
     };
+  }
+
+  private async detectUnityProject(resolvedPath: string): Promise<boolean> {
+    try {
+      const dirents = await readdir(resolvedPath, { withFileTypes: true });
+      const entryNames = new Set(dirents.map((d) => d.name));
+      return entryNames.has("Assets") && entryNames.has("ProjectSettings");
+    } catch {
+      return false;
+    }
   }
 
   private async handleValidatePath(url: string, res: ServerResponse): Promise<void> {
@@ -783,14 +821,7 @@ export class SetupWizard {
 
     const result = await this.validateProjectPathForSave(rawPath);
     if (result.valid) {
-      let isUnityProject = false;
-      try {
-        const dirents = await readdir(result.resolved, { withFileTypes: true });
-        const entryNames = new Set(dirents.map((d) => d.name));
-        isUnityProject = entryNames.has("Assets") && entryNames.has("ProjectSettings");
-      } catch {
-        isUnityProject = false;
-      }
+      const isUnityProject = await this.detectUnityProject(result.resolved);
       this.json(res, 200, {
         valid: true,
         ...this.buildPathDependencyPayload(result.resolved, isUnityProject),
@@ -798,6 +829,53 @@ export class SetupWizard {
     } else {
       this.json(res, 200, { valid: false, error: result.error });
     }
+  }
+
+  private async handleInstallMcp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await this.readBody(req);
+    let payload: SetupInstallMcpRequest;
+
+    try {
+      payload = JSON.parse(body) as SetupInstallMcpRequest;
+    } catch {
+      this.json(res, 400, { success: false, error: "Invalid JSON" });
+      return;
+    }
+
+    const rawProjectPath = typeof payload.projectPath === "string" ? payload.projectPath : "";
+    const target = payload.target;
+    if (target !== "assets" && target !== "packages") {
+      this.json(res, 400, { success: false, error: "Invalid MCP install target" });
+      return;
+    }
+
+    const validatedProjectPath = await this.validateProjectPathForSave(rawProjectPath);
+    if (!validatedProjectPath.valid) {
+      this.json(res, 400, { success: false, error: validatedProjectPath.error });
+      return;
+    }
+
+    const isUnityProject = await this.detectUnityProject(validatedProjectPath.resolved);
+    if (!isUnityProject) {
+      this.json(res, 400, { success: false, error: "Selected path is not a Unity project" });
+      return;
+    }
+
+    const installResult = await installStradaMcpSubmodule(validatedProjectPath.resolved, target, {
+      mcpPath: process.env["STRADA_MCP_PATH"],
+      mcpRepoUrl: process.env["STRADA_MCP_REPO_URL"],
+    });
+
+    if (installResult.kind === "err") {
+      this.json(res, 400, { success: false, error: installResult.error });
+      return;
+    }
+
+    this.json(res, 200, {
+      success: true,
+      install: installResult.value,
+      ...this.buildPathDependencyPayload(validatedProjectPath.resolved, true),
+    });
   }
 
   private async handleBrowse(url: string, res: ServerResponse): Promise<void> {

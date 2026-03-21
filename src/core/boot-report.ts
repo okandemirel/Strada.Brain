@@ -29,6 +29,11 @@ interface StradaMcpRuntimeStatusLike {
   bridgeState: string;
   availableToolCount: number;
   unavailableToolCount: number;
+  activeEditorPort?: number | null;
+  activeEditorInstanceId?: string | null;
+  activeEditorProjectName?: string | null;
+  editorSelectionSource?: string | null;
+  editorDiscoveryCount?: number;
   bridgeUnavailableReason?: string;
   lastError?: string;
 }
@@ -135,7 +140,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
   const unityBridgeDetail = !stradaMcpInstalled
     ? "Strada.MCP is not installed, so live Unity bridge features are unavailable."
     : stradaMcpRuntime?.bridgeConnected
-      ? `Unity bridge is connected (${stradaMcpRuntime.bridgeState}).`
+      ? `Unity bridge is connected (${stradaMcpRuntime.bridgeState})${stradaMcpRuntime.activeEditorProjectName ? ` to ${stradaMcpRuntime.activeEditorProjectName}` : ""}${stradaMcpRuntime.activeEditorPort ? ` on port ${stradaMcpRuntime.activeEditorPort}` : ""}${stradaMcpRuntime.editorSelectionSource ? ` via ${stradaMcpRuntime.editorSelectionSource}` : ""}.`
       : stradaMcpRuntime?.bridgeUnavailableReason
         ?? "Strada.MCP is installed, but the Unity bridge is not connected.";
   const unitySurfaceStatus: CapabilityStatus = !stradaMcpInstalled
@@ -158,7 +163,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       stradaMcpInstalled ? "active" : "inactive",
       stradaMcpInstalled ? "wired" : "declared-only",
       stradaMcpInstalled
-        ? `Strada.MCP is installed with ${stradaMcpRuntime?.toolCount ?? 0} tools, ${stradaMcpRuntime?.resourceCount ?? 0} resources, and ${stradaMcpRuntime?.promptCount ?? 0} prompts.`
+        ? `Strada.MCP is installed with ${stradaMcpRuntime?.toolCount ?? 0} tools, ${stradaMcpRuntime?.resourceCount ?? 0} resources, and ${stradaMcpRuntime?.promptCount ?? 0} prompts${typeof stradaMcpRuntime?.editorDiscoveryCount === "number" ? ` across ${stradaMcpRuntime.editorDiscoveryCount} discovered Unity editor instance(s)` : ""}.`
         : "Install Strada.MCP to expose the Unity runtime surface inside Brain.",
       true,
     ),

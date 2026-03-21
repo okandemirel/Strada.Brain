@@ -6,7 +6,7 @@
  * the Orchestrator to decide how to handle.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import { ok, err } from "../types/index.js";
 import type { Result } from "../types/index.js";
 import {
   DEFAULT_STRADA_CORE_REPO_URL,
+  DEFAULT_STRADA_MCP_REPO_URL,
   DEFAULT_STRADA_MODULES_REPO_URL,
   type StradaDependencyConfig,
 } from "./config.js";
@@ -37,6 +38,17 @@ export interface McpRecommendation {
   readonly installHint?: string;
 }
 
+export type McpInstallTarget = "assets" | "packages";
+
+export interface StradaMcpInstallPlan {
+  readonly target: McpInstallTarget;
+  readonly submodulePath: string;
+  readonly unityPackagePath: string;
+  readonly manifestPath: string;
+  readonly manifestDependency: string;
+  readonly npmInstallRan: boolean;
+}
+
 export interface StradaMcpInstall {
   readonly installed: boolean;
   readonly path: string | null;
@@ -49,6 +61,7 @@ const STRADA_MCP_PACKAGE_NAME = "strada-mcp";
 const DEFAULT_STRADA_DEPENDENCY_CONFIG: StradaDependencyConfig = {
   coreRepoUrl: DEFAULT_STRADA_CORE_REPO_URL,
   modulesRepoUrl: DEFAULT_STRADA_MODULES_REPO_URL,
+  mcpRepoUrl: DEFAULT_STRADA_MCP_REPO_URL,
   unityBridgePort: 7691,
   unityBridgeAutoConnect: true,
   unityBridgeTimeout: 5000,
@@ -60,6 +73,20 @@ const TARGET_PATHS = {
   core: "Packages/strada.core",
   modules: "Packages/strada.modules",
 } as const;
+const MCP_SUBMODULE_TARGETS: Record<McpInstallTarget, string> = {
+  packages: "Packages/Submodules/Strada.MCP",
+  assets: "Assets/Strada.MCP",
+};
+const MCP_MANIFEST_REFERENCES: Record<McpInstallTarget, string> = {
+  packages: "file:Submodules/Strada.MCP/unity-package/com.strada.mcp",
+  assets: "file:../Assets/Strada.MCP/unity-package/com.strada.mcp",
+};
+const MCP_PROJECT_LOCAL_CANDIDATES = [
+  MCP_SUBMODULE_TARGETS.packages,
+  MCP_SUBMODULE_TARGETS.assets,
+  "Packages/Strada.MCP",
+  "Assets/Strada.MCP",
+] as const;
 const MCP_FEATURE_LIST = [
   "Live Unity console reading and error analysis",
   "Unity editor command execution and menu actions",
@@ -82,6 +109,7 @@ function resolveStradaDependencyConfig(
     unityEditorPath: config?.unityEditorPath,
     scriptExecuteEnabled: config?.scriptExecuteEnabled ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.scriptExecuteEnabled,
     reflectionInvokeEnabled: config?.reflectionInvokeEnabled ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.reflectionInvokeEnabled,
+    mcpRepoUrl: config?.mcpRepoUrl ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.mcpRepoUrl,
     ...(mcpPath ? { mcpPath } : {}),
   };
 }
@@ -106,7 +134,7 @@ export function checkStradaDeps(
     if (configuredMcpPath && !readStradaMcpInstall(configuredMcpPath)) {
       warnings.push("Configured STRADA_MCP_PATH is not a valid Strada.MCP package root");
     }
-    const mcp = detectStradaMcp(resolvedConfig);
+    const mcp = detectStradaMcp(resolvedConfig, unityProjectPath);
     return {
       coreInstalled: false,
       corePath: null,
@@ -142,7 +170,7 @@ export function checkStradaDeps(
   if (configuredMcpPath && !readStradaMcpInstall(configuredMcpPath)) {
     warnings.push("Configured STRADA_MCP_PATH is not a valid Strada.MCP package root");
   }
-  const mcp = detectStradaMcp(resolvedConfig);
+  const mcp = detectStradaMcp(resolvedConfig, unityProjectPath);
 
   return {
     coreInstalled: corePath !== null || coreInManifest,
@@ -190,18 +218,79 @@ export async function installStradaDep(
   });
 }
 
+export async function installStradaMcpSubmodule(
+  unityProjectPath: string,
+  target: McpInstallTarget,
+  config?: Partial<StradaDependencyConfig>,
+): Promise<Result<StradaMcpInstallPlan, string>> {
+  if (!isGitRepo(unityProjectPath)) {
+    return err("Project is not a git repository. Cannot add Strada.MCP as a submodule.");
+  }
+
+  const resolvedConfig = resolveStradaDependencyConfig(config);
+  const submodulePath = MCP_SUBMODULE_TARGETS[target];
+  const manifestDependency = MCP_MANIFEST_REFERENCES[target];
+  const fullSubmodulePath = join(unityProjectPath, submodulePath);
+  const fullManifestPath = join(unityProjectPath, "Packages", "manifest.json");
+  const unityPackagePath = join(fullSubmodulePath, "unity-package", "com.strada.mcp");
+
+  if (existsSync(fullSubmodulePath)) {
+    return err(`Target path already exists: ${fullSubmodulePath}`);
+  }
+  if (!existsSync(fullManifestPath)) {
+    return err("Packages/manifest.json not found in Unity project.");
+  }
+
+  try {
+    await runExecFile("git", ["submodule", "add", resolvedConfig.mcpRepoUrl, submodulePath], unityProjectPath);
+  } catch (error) {
+    return err(`Failed to add Strada.MCP submodule: ${formatExecError(error)}`);
+  }
+
+  try {
+    updateUnityManifestDependency(fullManifestPath, "com.strada.mcp", manifestDependency);
+  } catch (error) {
+    return err(`Strada.MCP submodule was added, but Packages/manifest.json could not be updated: ${formatExecError(error)}`);
+  }
+
+  try {
+    await runExecFile("npm", ["install", "--no-fund", "--no-audit"], fullSubmodulePath);
+  } catch (error) {
+    return err(`Strada.MCP submodule was added and manifest updated, but npm install failed: ${formatExecError(error)}`);
+  }
+
+  return ok({
+    target,
+    submodulePath: fullSubmodulePath,
+    unityPackagePath,
+    manifestPath: fullManifestPath,
+    manifestDependency,
+    npmInstallRan: true,
+  });
+}
+
 /**
  * Detect Strada.MCP installation.
  * Checks: 1) configured STRADA_MCP_PATH
  *         2) sibling directory ../Strada.MCP relative to project root
  *         3) global npm install via `which strada-mcp`
  */
-export function detectStradaMcp(config?: Partial<StradaDependencyConfig>): StradaMcpInstall {
+export function detectStradaMcp(
+  config?: Partial<StradaDependencyConfig>,
+  unityProjectPath?: string,
+): StradaMcpInstall {
   const resolvedConfig = resolveStradaDependencyConfig(config);
   if (resolvedConfig.mcpPath) {
     const configuredInstall = readStradaMcpInstall(resolvedConfig.mcpPath);
     if (configuredInstall) {
       return configuredInstall;
+    }
+  }
+
+  if (unityProjectPath) {
+    const projectInstall = readProjectLocalStradaMcpInstall(unityProjectPath);
+    if (projectInstall) {
+      return projectInstall;
     }
   }
 
@@ -262,8 +351,20 @@ export function buildMcpRecommendation(
     reason: "Strada.MCP is not installed. Installing it unlocks the live Unity runtime surface inside Strada.Brain.",
     featureList: [...MCP_FEATURE_LIST],
     discoveryHint,
-    installHint: "Install Strada.MCP to expose live Unity console analysis, editor actions, package management, settings control, and build execution.",
+    installHint: "Install Strada.MCP as a git submodule, wire com.strada.mcp into Packages/manifest.json, and bootstrap the checkout with npm install so Brain can load the runtime.",
   };
+}
+
+function readProjectLocalStradaMcpInstall(unityProjectPath: string): StradaMcpInstall | null {
+  for (const relativePath of MCP_PROJECT_LOCAL_CANDIDATES) {
+    const candidate = join(unityProjectPath, relativePath);
+    const install = readStradaMcpInstall(candidate);
+    if (install) {
+      return install;
+    }
+  }
+
+  return null;
 }
 
 function readStradaMcpInstall(candidatePath: string): StradaMcpInstall | null {
@@ -315,5 +416,49 @@ function checkManifest(packagesDir: string, names: readonly string[]): boolean {
 }
 
 function isGitRepo(dir: string): boolean {
-  return existsSync(join(dir, ".git"));
+  try {
+    execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: dir,
+      encoding: "utf-8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function updateUnityManifestDependency(
+  manifestPath: string,
+  dependencyName: string,
+  dependencyValue: string,
+): void {
+  const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+    dependencies?: Record<string, string>;
+    [key: string]: unknown;
+  };
+  const dependencies = { ...(parsed.dependencies ?? {}) };
+  dependencies[dependencyName] = dependencyValue;
+  const next = {
+    ...parsed,
+    dependencies: Object.fromEntries(Object.entries(dependencies).sort(([a], [b]) => a.localeCompare(b))),
+  };
+  writeFileSync(manifestPath, JSON.stringify(next, null, 2) + "\n", "utf-8");
+}
+
+function runExecFile(command: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { cwd }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || stdout || error.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function formatExecError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

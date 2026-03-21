@@ -2,11 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { checkStradaDeps, installStradaDep } from "./strada-deps.js";
+import { checkStradaDeps, installStradaDep, installStradaMcpSubmodule } from "./strada-deps.js";
 
 const TEST_STRADA_CONFIG = {
   coreRepoUrl: "https://example.com/Strada.Core.git",
   modulesRepoUrl: "https://example.com/Strada.Modules.git",
+  mcpRepoUrl: "https://example.com/Strada.MCP.git",
 };
 
 describe("checkStradaDeps", () => {
@@ -117,6 +118,21 @@ describe("checkStradaDeps", () => {
     expect(result.mcpVersion).toBe("1.2.3");
   });
 
+  it("detects a project-local Strada.MCP install inside Packages/Submodules", () => {
+    const localMcpDir = join(testDir, "Packages", "Submodules", "Strada.MCP");
+    mkdirSync(localMcpDir, { recursive: true });
+    writeFileSync(
+      join(localMcpDir, "package.json"),
+      JSON.stringify({ name: "strada-mcp", version: "2.0.0" }),
+    );
+
+    const result = checkStradaDeps(testDir, TEST_STRADA_CONFIG);
+
+    expect(result.mcpInstalled).toBe(true);
+    expect(result.mcpPath).toBe(localMcpDir);
+    expect(result.mcpVersion).toBe("2.0.0");
+  });
+
   it("warns when configured STRADA_MCP_PATH is invalid", () => {
     const invalidMcpDir = join(testDir, "invalid-mcp");
     mkdirSync(invalidMcpDir, { recursive: true });
@@ -153,6 +169,12 @@ describe("installStradaDep", () => {
 
   it("returns err when project is not a git repo", async () => {
     const result = await installStradaDep(testDir, "core");
+    expect(result.kind).toBe("err");
+    expect(result.kind === "err" && result.error).toContain("not a git repository");
+  });
+
+  it("returns err when installing Strada.MCP into a project that is not a git repo", async () => {
+    const result = await installStradaMcpSubmodule(testDir, "packages", TEST_STRADA_CONFIG);
     expect(result.kind).toBe("err");
     expect(result.kind === "err" && result.error).toContain("not a git repository");
   });

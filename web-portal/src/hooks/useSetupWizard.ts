@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type {
+  McpInstallResponse,
+  McpInstallTarget,
   McpRecommendation,
   PathValidationResult,
   ProviderPreflightFailure,
@@ -283,6 +285,9 @@ export function useSetupWizard() {
   const [pathStradaDeps, setPathStradaDeps] = useState<StradaDepsStatus | null>(null)
   const [pathDependencyWarnings, setPathDependencyWarnings] = useState<string[]>([])
   const [pathMcpRecommendation, setPathMcpRecommendation] = useState<McpRecommendation | null>(null)
+  const [mcpInstallStatus, setMcpInstallStatus] = useState<'idle' | 'installing' | 'success' | 'error'>('idle')
+  const [mcpInstallError, setMcpInstallError] = useState<string | null>(null)
+  const [mcpInstallMessage, setMcpInstallMessage] = useState<string | null>(null)
   const [channel, setChannelState] = useState('web')
   const [channelConfig, setChannelConfig] = useState<Record<string, string>>({})
   const [language, setLanguageState] = useState('en')
@@ -466,6 +471,21 @@ export function useSetupWizard() {
     setPathStradaDeps(null)
     setPathDependencyWarnings([])
     setPathMcpRecommendation(null)
+    setMcpInstallStatus('idle')
+    setMcpInstallError(null)
+    setMcpInstallMessage(null)
+  }, [])
+
+  const applyPathAnalysis = useCallback((data: {
+    isUnityProject?: boolean
+    stradaDeps?: StradaDepsStatus
+    dependencyWarnings?: string[]
+    mcpRecommendation?: McpRecommendation
+  }) => {
+    setPathIsUnityProject(data.isUnityProject ?? false)
+    setPathStradaDeps(data.stradaDeps ?? null)
+    setPathDependencyWarnings(data.dependencyWarnings ?? [])
+    setPathMcpRecommendation(data.mcpRecommendation ?? null)
   }, [])
 
   const validatePath = useCallback(async () => {
@@ -483,19 +503,62 @@ export function useSetupWizard() {
       const data = await res.json() as PathValidationResult
       setPathValid(data.valid ?? false)
       setPathError(data.error ?? null)
-      setPathIsUnityProject(data.isUnityProject ?? false)
-      setPathStradaDeps(data.stradaDeps ?? null)
-      setPathDependencyWarnings(data.dependencyWarnings ?? [])
-      setPathMcpRecommendation(data.mcpRecommendation ?? null)
+      applyPathAnalysis(data)
     } catch {
       setPathValid(false)
       setPathError('Failed to validate path')
-      setPathIsUnityProject(false)
-      setPathStradaDeps(null)
-      setPathDependencyWarnings([])
-      setPathMcpRecommendation(null)
+      applyPathAnalysis({})
     }
-  }, [projectPath])
+  }, [applyPathAnalysis, projectPath])
+
+  const installMcp = useCallback(async (target: McpInstallTarget, overridePath?: string): Promise<boolean> => {
+    const installPath = (overridePath ?? projectPath).trim()
+    if (!installPath) {
+      setMcpInstallStatus('error')
+      setMcpInstallError('Project path is required before Strada.MCP can be installed.')
+      setMcpInstallMessage(null)
+      return false
+    }
+
+    setMcpInstallStatus('installing')
+    setMcpInstallError(null)
+    setMcpInstallMessage(null)
+
+    try {
+      const res = await fetch('/api/setup/install-mcp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfTokenRef.current,
+        },
+        body: JSON.stringify({
+          projectPath: installPath,
+          target,
+        }),
+      })
+      const data = await res.json().catch(() => ({})) as McpInstallResponse
+      if (!res.ok || !data.success) {
+        throw new Error(data.error ?? `Strada.MCP install failed (${res.status})`)
+      }
+
+      setProjectPathState(installPath)
+      setPathValid(true)
+      setPathError(null)
+      applyPathAnalysis(data)
+      setMcpInstallStatus('success')
+      setMcpInstallMessage(
+        data.install
+          ? `Strada.MCP installed into ${data.install.submodulePath}. Unity manifest updated and npm install completed.`
+          : 'Strada.MCP installed successfully.',
+      )
+      return true
+    } catch (err) {
+      setMcpInstallStatus('error')
+      setMcpInstallError(err instanceof Error ? err.message : 'Strada.MCP install failed')
+      setMcpInstallMessage(null)
+      return false
+    }
+  }, [applyPathAnalysis, projectPath])
 
   const setChannel = useCallback((id: string) => {
     setChannelState(id)
@@ -804,6 +867,9 @@ export function useSetupWizard() {
     pathStradaDeps,
     pathDependencyWarnings,
     pathMcpRecommendation,
+    mcpInstallStatus,
+    mcpInstallError,
+    mcpInstallMessage,
     channel,
     channelConfig,
     language,
@@ -833,6 +899,7 @@ export function useSetupWizard() {
     setProviderModel,
     setProjectPath,
     validatePath,
+    installMcp,
     setChannel,
     setChannelConfigField,
     setLanguage,

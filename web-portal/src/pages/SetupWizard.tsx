@@ -73,7 +73,11 @@ export default function SetupWizard() {
             pathStradaDeps={wiz.pathStradaDeps}
             pathDependencyWarnings={wiz.pathDependencyWarnings}
             pathMcpRecommendation={wiz.pathMcpRecommendation}
+            mcpInstallStatus={wiz.mcpInstallStatus}
+            mcpInstallError={wiz.mcpInstallError}
+            mcpInstallMessage={wiz.mcpInstallMessage}
             validatePath={wiz.validatePath}
+            installMcp={wiz.installMcp}
             openBrowser={browser.open}
             onNext={wiz.nextStep}
             onBack={wiz.prevStep}
@@ -148,9 +152,13 @@ export default function SetupWizard() {
           stradaDeps={browser.stradaDeps}
           dependencyWarnings={browser.dependencyWarnings}
           mcpRecommendation={browser.mcpRecommendation}
+          mcpInstallStatus={wiz.mcpInstallStatus}
+          mcpInstallError={wiz.mcpInstallError}
+          mcpInstallMessage={wiz.mcpInstallMessage}
           loading={browser.loading}
           error={browser.error}
           browseTo={browser.browseTo}
+          installMcp={wiz.installMcp}
           onSelect={handleBrowserSelect}
           onClose={browser.close}
         />

@@ -28,7 +28,12 @@ import {
   getSourceSetupCommand,
 } from "../common/launcher-guidance.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
-import { buildMcpRecommendation, checkStradaDeps } from "../config/strada-deps.js";
+import {
+  buildMcpRecommendation,
+  checkStradaDeps,
+  installStradaMcpSubmodule,
+  type McpInstallTarget,
+} from "../config/strada-deps.js";
 
 const MAX_RETRIES = 3;
 const RESPONSE_PROVIDER_CHOICES = [
@@ -860,10 +865,52 @@ export async function runTerminalWizard(
       if (mcpRecommendation.discoveryHint) {
         console.log(`    Detection: ${mcpRecommendation.discoveryHint}`);
       }
+      if (mcpRecommendation.installHint) {
+        console.log(`    Install flow: ${mcpRecommendation.installHint}`);
+      }
     } else if (mcpRecommendation.discoveryHint) {
       console.log(`    MCP detection: ${mcpRecommendation.discoveryHint}`);
     }
     console.log("");
+
+    if (!stradaDeps.mcpInstalled) {
+      console.log("  Strada.Brain can install Strada.MCP for this project as a git submodule.");
+      console.log("  It will add the checkout to your Unity project, wire `com.strada.mcp` into Packages/manifest.json, and run `npm install` inside the checkout so Brain can load the MCP runtime.\n");
+      const installMcpNow = await rl.question("  Install Strada.MCP now? [Y/n]: ");
+      if (installMcpNow.trim().toLowerCase() !== "n") {
+        const targetAnswer = await askWithRetry(
+          rl,
+          "  Install location [packages/assets] (default: packages): ",
+          (input) => {
+            const normalized = input.trim().toLowerCase();
+            if (!normalized || normalized === "packages" || normalized === "assets") {
+              return { valid: true };
+            }
+            return { valid: false, error: "Choose `packages` or `assets`." };
+          },
+        );
+        const installTarget: McpInstallTarget = targetAnswer.trim().toLowerCase() === "assets"
+          ? "assets"
+          : "packages";
+        console.log("");
+        console.log(`  Installing Strada.MCP into ${installTarget === "packages" ? "Packages/Submodules" : "Assets"}...`);
+        const installResult = await installStradaMcpSubmodule(unityPath, installTarget, {
+          mcpPath: process.env["STRADA_MCP_PATH"],
+          mcpRepoUrl: process.env["STRADA_MCP_REPO_URL"],
+        });
+        if (installResult.kind === "err") {
+          console.log(`  Failed to install Strada.MCP: ${installResult.error}`);
+        } else {
+          console.log("  Strada.MCP installed.");
+          console.log(`    Submodule: ${installResult.value.submodulePath}`);
+          console.log(`    Unity package: ${installResult.value.manifestDependency}`);
+          if (installResult.value.npmInstallRan) {
+            console.log("    Runtime bootstrap: npm install completed in the submodule checkout.");
+          }
+        }
+        console.log("");
+      }
+    }
 
     const providerAnswer = await askWithRetry(
       rl,
