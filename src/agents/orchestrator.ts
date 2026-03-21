@@ -10,7 +10,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import { getToolMetadata, type ITool, type ToolContext } from "./tools/tool.interface.js";
-import type { IChannelAdapter, IncomingMessage, Attachment } from "../channels/channel.interface.js";
+import type {
+  IChannelAdapter,
+  IncomingMessage,
+  Attachment,
+} from "../channels/channel.interface.js";
 import { supportsInteractivity, supportsRichMessaging } from "../channels/channel.interface.js";
 import { isVisionCompatible, toBase64ImageSource } from "../utils/media-processor.js";
 import type { MessageContent, AssistantMessage } from "./providers/provider-core.interface.js";
@@ -36,8 +40,19 @@ import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
 import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/setup-contract.js";
-import { AgentPhase, createInitialState, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
-import { buildPlanningPrompt, buildReflectionPrompt, buildReplanningPrompt, buildExecutionContext } from "./paor-prompts.js";
+import {
+  AgentPhase,
+  createInitialState,
+  transitionPhase,
+  type AgentState,
+  type StepResult,
+} from "./agent-state.js";
+import {
+  buildPlanningPrompt,
+  buildReflectionPrompt,
+  buildReplanningPrompt,
+  buildExecutionContext,
+} from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import { MemoryRefresher } from "./memory-refresher.js";
@@ -45,9 +60,11 @@ import {
   DEFAULT_INTERACTION_CONFIG,
   DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
   DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS,
+  DEFAULT_TASK_CONFIG,
   type InteractionConfig,
   type ReRetrievalConfig,
   type StradaDependencyConfig,
+  type TaskConfig,
 } from "../config/config.js";
 import type { IEmbeddingProvider } from "../rag/rag.interface.js";
 import { shouldForceReplan } from "./failure-classifier.js";
@@ -108,8 +125,15 @@ import {
   resolveAutonomousModeWithDefault,
   type UserProfileStore,
 } from "../memory/unified/user-profile-store.js";
-import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/task-execution-store.js";
-import type { RuntimeArtifactManager, TrajectoryPhaseReplay, TrajectoryReplayContext } from "../learning/index.js";
+import type {
+  TaskExecutionMemory,
+  TaskExecutionStore,
+} from "../memory/unified/task-execution-store.js";
+import type {
+  RuntimeArtifactManager,
+  TrajectoryPhaseReplay,
+  TrajectoryReplayContext,
+} from "../learning/index.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import type {
@@ -163,7 +187,6 @@ import {
   transitionToVerifierReplan as transitionToVerifierReplanModel,
 } from "./orchestrator-phase-telemetry.js";
 
-const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
@@ -181,9 +204,12 @@ You are operating in AUTONOMOUS MODE. The user has explicitly granted you full a
 - Do not narrate routine milestone updates or "next I will..." progress memos to the user; continue until you have the final result, a sparse heartbeat, or a real hard blocker
 - Do NOT return internal tool-run checklists or "first run X / then run Y" operational memos in plain text; use the tools directly when you can
 - Budget and safety limits are still enforced automatically\n`;
-const INTERNAL_DECISION_LINE_RE = /^\s*\*{0,2}(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\*{0,2}\s*$/gim;
+const INTERNAL_DECISION_LINE_RE =
+  /^\s*\*{0,2}(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\*{0,2}\s*$/gim;
 const INTERNAL_TECHNICAL_CHOICE_RE =
   /\b(?:package|dependency|library|provider|refactor|architecture|implementation|approach|path|module|service|screen|tool|install|upgrade|downgrade|split|merge|integration)\b/iu;
+const LOW_SIGNAL_EXECUTION_ACK_RE =
+  /^(?:adjusted|done|ok(?:ay)?|noted|ack(?:nowledged)?|revised|updated|handled|understood|fixed)\.?$/iu;
 const HARD_BLOCKER_TEXT_RE =
   /\b(?:credential|token|api[_ -]?key|login|account|subscription|permission|access|billing|quota|approval|approve|destructive|irreversible|delete|drop|wipe|deploy|upload|attach|artifact|external)\b/iu;
 const HARD_BLOCKER_CLARIFICATION_TYPES = new Set<ClarificationBlockingType>([
@@ -279,7 +305,10 @@ interface SupervisorExecutionStrategy {
   usesMultipleProviders: boolean;
 }
 
-function createStreamingProgressTimeout(initialTimeoutMs: number, stallTimeoutMs: number): {
+function createStreamingProgressTimeout(
+  initialTimeoutMs: number,
+  stallTimeoutMs: number,
+): {
   markProgress: () => void;
   timeoutPromise: Promise<never>;
   clear: () => void;
@@ -445,6 +474,7 @@ export class Orchestrator {
   private readonly autonomousDefaultEnabled: boolean;
   private readonly autonomousDefaultHours: number;
   private readonly interactionConfig: InteractionConfig;
+  private readonly taskConfig: TaskConfig;
   private readonly taskExecutionStore?: TaskExecutionStore;
   private readonly runtimeArtifactManager?: RuntimeArtifactManager;
   /** Multi-provider routing: selects best provider per task/phase. */
@@ -458,10 +488,13 @@ export class Orchestrator {
   private readonly taskClassifier = new TaskClassifier();
   private readonly onUsage?: (usage: TaskUsageEvent) => void;
   private readonly taskContext = new AsyncLocalStorage<TaskExecutionContext>();
-  private readonly runtimeArtifactMatches = new Map<string, {
-    activeGuidanceIds: string[];
-    shadowIds: string[];
-  }>();
+  private readonly runtimeArtifactMatches = new Map<
+    string,
+    {
+      activeGuidanceIds: string[];
+      shadowIds: string[];
+    }
+  >();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -498,9 +531,12 @@ export class Orchestrator {
     autonomousDefaultEnabled?: boolean;
     autonomousDefaultHours?: number;
     interactionConfig?: InteractionConfig;
+    taskConfig?: TaskConfig;
     taskExecutionStore?: TaskExecutionStore;
     runtimeArtifactManager?: RuntimeArtifactManager;
-    toolMetadataByName?: ReadonlyMap<string, WorkerToolMetadata> | Record<string, WorkerToolMetadata>;
+    toolMetadataByName?:
+      | ReadonlyMap<string, WorkerToolMetadata>
+      | Record<string, WorkerToolMetadata>;
     providerRouter?: import("../agent-core/routing/provider-router.js").ProviderRouter;
     modelIntelligence?: ModelIntelligenceLookup;
     consensusManager?: import("../agent-core/routing/consensus-manager.js").ConsensusManager;
@@ -520,8 +556,7 @@ export class Orchestrator {
     this.defaultLanguage = opts.defaultLanguage ?? "en";
     this.streamInitialTimeoutMs =
       opts.streamInitialTimeoutMs ?? DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS;
-    this.streamStallTimeoutMs =
-      opts.streamStallTimeoutMs ?? DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS;
+    this.streamStallTimeoutMs = opts.streamStallTimeoutMs ?? DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS;
     this.stradaConfig = opts.stradaConfig;
     this.instinctRetriever = opts.instinctRetriever ?? null;
     this.trajectoryReplayRetriever = opts.trajectoryReplayRetriever ?? null;
@@ -542,6 +577,7 @@ export class Orchestrator {
     this.autonomousDefaultEnabled = opts.autonomousDefaultEnabled ?? false;
     this.autonomousDefaultHours = opts.autonomousDefaultHours ?? 24;
     this.interactionConfig = opts.interactionConfig ?? DEFAULT_INTERACTION_CONFIG;
+    this.taskConfig = opts.taskConfig ?? DEFAULT_TASK_CONFIG;
     this.taskExecutionStore = opts.taskExecutionStore;
     this.runtimeArtifactManager = opts.runtimeArtifactManager;
     if (opts.toolMetadataByName) {
@@ -601,6 +637,31 @@ export class Orchestrator {
     return undefined;
   }
 
+  private getInteractiveIterationLimit(): number {
+    return Math.max(1, this.taskConfig.interactiveMaxIterations);
+  }
+
+  private getBackgroundEpochIterationLimit(): number {
+    return Math.max(1, this.taskConfig.backgroundEpochMaxIterations);
+  }
+
+  private canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean {
+    if (!this.taskConfig.backgroundAutoContinue) {
+      return false;
+    }
+
+    const maxEpochs = this.taskConfig.backgroundMaxEpochs;
+    return maxEpochs === 0 || completedEpochCount < maxEpochs;
+  }
+
+  private buildBackgroundIterationBudgetStopMessage(epochCount: number): string {
+    const epochLabel = epochCount === 1 ? "epoch" : "epochs";
+    return (
+      `Background task reached the configured iteration budget after ${epochCount} ${epochLabel}. ` +
+      "A checkpoint summary was persisted, but full resume is not yet supported."
+    );
+  }
+
   private rebuildBaseSystemPrompt(): void {
     this.systemPrompt =
       STRADA_SYSTEM_PROMPT +
@@ -637,10 +698,7 @@ export class Orchestrator {
     };
   }
 
-  private resolveProviderModelId(
-    providerName: string,
-    identityKey: string,
-  ): string | undefined {
+  private resolveProviderModelId(providerName: string, identityKey: string): string | undefined {
     const normalizedProvider = providerName.trim().toLowerCase();
     const activeInfo = this.providerManager.getActiveInfo?.(identityKey);
     if (activeInfo?.providerName === normalizedProvider && activeInfo.model) {
@@ -750,7 +808,10 @@ export class Orchestrator {
       prompt,
       projectWorldFingerprint,
     );
-    if (reviewer.providerName === executor.providerName && planner.providerName !== executor.providerName) {
+    if (
+      reviewer.providerName === executor.providerName &&
+      planner.providerName !== executor.providerName
+    ) {
       reviewer = this.buildStaticSupervisorAssignment(
         "reviewer",
         planner.providerName,
@@ -939,13 +1000,14 @@ export class Orchestrator {
     return toExecutionPhaseModel(phase);
   }
 
-  private toPhaseOutcomeStatus(
-    decision: "approve" | "continue" | "replan",
-  ): PhaseOutcomeStatus {
+  private toPhaseOutcomeStatus(decision: "approve" | "continue" | "replan"): PhaseOutcomeStatus {
     return toPhaseOutcomeStatusModel(decision);
   }
 
-  private transitionToVerifierReplan(state: AgentState, reflectionText?: string | null): AgentState {
+  private transitionToVerifierReplan(
+    state: AgentState,
+    reflectionText?: string | null,
+  ): AgentState {
     return transitionToVerifierReplanModel(state, reflectionText);
   }
 
@@ -966,17 +1028,19 @@ export class Orchestrator {
     reason?: string;
     taskRunId?: string;
   }): void {
-    this.providerRouter?.recordExecutionTrace?.(buildExecutionTraceRecord({
-      identityKey: params.identityKey,
-      assignment: params.assignment,
-      phase: params.phase,
-      source: params.source,
-      task: params.task,
-      reason: params.reason,
-      timestampMs: Date.now(),
-      chatId: params.chatId,
-      taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
-    }));
+    this.providerRouter?.recordExecutionTrace?.(
+      buildExecutionTraceRecord({
+        identityKey: params.identityKey,
+        assignment: params.assignment,
+        phase: params.phase,
+        source: params.source,
+        task: params.task,
+        reason: params.reason,
+        timestampMs: Date.now(),
+        chatId: params.chatId,
+        taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
+      }),
+    );
   }
 
   private recordPhaseOutcome(params: {
@@ -991,19 +1055,21 @@ export class Orchestrator {
     telemetry?: PhaseOutcomeTelemetry;
     taskRunId?: string;
   }): void {
-    this.providerRouter?.recordPhaseOutcome?.(buildPhaseOutcomeRecord({
-      identityKey: params.identityKey,
-      assignment: params.assignment,
-      phase: params.phase,
-      status: params.status,
-      task: params.task,
-      timestampMs: Date.now(),
-      source: params.source,
-      reason: params.reason,
-      telemetry: params.telemetry,
-      chatId: params.chatId,
-      taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
-    }));
+    this.providerRouter?.recordPhaseOutcome?.(
+      buildPhaseOutcomeRecord({
+        identityKey: params.identityKey,
+        assignment: params.assignment,
+        phase: params.phase,
+        status: params.status,
+        task: params.task,
+        timestampMs: Date.now(),
+        source: params.source,
+        reason: params.reason,
+        telemetry: params.telemetry,
+        chatId: params.chatId,
+        taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
+      }),
+    );
   }
 
   private buildPhaseOutcomeTelemetry(params: {
@@ -1079,8 +1145,12 @@ export class Orchestrator {
       "",
       `Original user request:\n${params.prompt}`,
       "",
-      params.agentState.plan ? `Current plan:\n${params.agentState.plan}\n` : "Current plan:\n(none)\n",
-      recentSteps ? `Verified execution evidence:\n${recentSteps}\n` : "Verified execution evidence:\n(no tool evidence)\n",
+      params.agentState.plan
+        ? `Current plan:\n${params.agentState.plan}\n`
+        : "Current plan:\n(none)\n",
+      recentSteps
+        ? `Verified execution evidence:\n${recentSteps}\n`
+        : "Verified execution evidence:\n(no tool evidence)\n",
       `Worker draft:\n${cleanedDraft}`,
       "",
       "Requirements:",
@@ -1119,7 +1189,12 @@ export class Orchestrator {
       const synthesizedText = this.stripInternalDecisionMarkers(synthesisResponse.text).trim();
       const visibleText = synthesizedText
         ? applyVisibleResponseContract(params.prompt, synthesizedText)
-        : this.buildSafeVisibleFallbackFromDraft(params.prompt, cleanedDraft, params.strategy.task, false);
+        : this.buildSafeVisibleFallbackFromDraft(
+            params.prompt,
+            cleanedDraft,
+            params.strategy.task,
+            false,
+          );
       this.recordPhaseOutcome({
         chatId: params.chatId,
         identityKey: params.identityKey,
@@ -1151,7 +1226,12 @@ export class Orchestrator {
           failureReason: cleanedDraft,
         }),
       });
-      return this.buildSafeVisibleFallbackFromDraft(params.prompt, cleanedDraft, params.strategy.task, false);
+      return this.buildSafeVisibleFallbackFromDraft(
+        params.prompt,
+        cleanedDraft,
+        params.strategy.task,
+        false,
+      );
     }
   }
 
@@ -1166,7 +1246,11 @@ export class Orchestrator {
   }): Promise<string> {
     const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId);
     const fallbackProvider = this.providerManager.getProvider(identityKey);
-    const strategy = this.buildSupervisorExecutionStrategy(params.prompt, identityKey, fallbackProvider);
+    const strategy = this.buildSupervisorExecutionStrategy(
+      params.prompt,
+      identityKey,
+      fallbackProvider,
+    );
     const synthesisProvider = strategy.synthesizer.provider;
     const rawDraft = params.executionResult.results
       .filter((result) => result.result)
@@ -1193,7 +1277,9 @@ export class Orchestrator {
       "",
       `Goal summary:\n${summarizeTree(params.goalTree)}`,
       "",
-      verifiedSteps ? `Verified sub-goal outcomes:\n${verifiedSteps}` : "Verified sub-goal outcomes:\n(none)",
+      verifiedSteps
+        ? `Verified sub-goal outcomes:\n${verifiedSteps}`
+        : "Verified sub-goal outcomes:\n(none)",
       "",
       `Raw sub-goal draft:\n${rawDraft}`,
       "",
@@ -1255,11 +1341,7 @@ export class Orchestrator {
           failureReason: rawDraft,
         }),
       });
-      return this.buildSafeVisibleFallbackFromDraft(
-        params.prompt,
-        rawDraft,
-        strategy.task,
-      );
+      return this.buildSafeVisibleFallbackFromDraft(params.prompt, rawDraft, strategy.task);
     }
   }
 
@@ -1278,7 +1360,7 @@ export class Orchestrator {
   removeTool(name: string): void {
     this.tools.delete(name);
     this.toolMetadataByName.delete(name);
-    const idx = this.toolDefinitions.findIndex(td => td.name === name);
+    const idx = this.toolDefinitions.findIndex((td) => td.name === name);
     if (idx >= 0) {
       this.toolDefinitions.splice(idx, 1);
     }
@@ -1343,12 +1425,12 @@ export class Orchestrator {
     input_schema: import("../types/index.js").JsonObject;
   }> {
     const allowWriteTools =
-      role === "executor"
-      && task.type !== "analysis"
-      && task.type !== "simple-question"
-      && phase !== AgentPhase.PLANNING
-      && phase !== AgentPhase.REPLANNING
-      && phase !== AgentPhase.REFLECTING;
+      role === "executor" &&
+      task.type !== "analysis" &&
+      task.type !== "simple-question" &&
+      phase !== AgentPhase.PLANNING &&
+      phase !== AgentPhase.REPLANNING &&
+      phase !== AgentPhase.REFLECTING;
 
     return this.toolDefinitions.filter((definition) => {
       const metadata = this.toolMetadataByName.get(definition.name);
@@ -1387,7 +1469,9 @@ export class Orchestrator {
     task: TaskClassification,
     availableToolNames: readonly string[],
   ): boolean {
-    const hasReadableTool = availableToolNames.some((name) => this.toolMetadataByName.get(name)?.readOnly !== false);
+    const hasReadableTool = availableToolNames.some(
+      (name) => this.toolMetadataByName.get(name)?.readOnly !== false,
+    );
     return hasReadableTool && this.hasLocalInspectionScope(prompt, task);
   }
 
@@ -1481,7 +1565,11 @@ export class Orchestrator {
       return applyVisibleResponseContract(prompt, fallbackDecision.visibleText);
     }
 
-    if (allowDirectFinalAnswer && fallbackDecision.kind === "final_answer" && fallbackDecision.visibleText) {
+    if (
+      allowDirectFinalAnswer &&
+      fallbackDecision.kind === "final_answer" &&
+      fallbackDecision.visibleText
+    ) {
       return applyVisibleResponseContract(prompt, fallbackDecision.visibleText);
     }
 
@@ -1499,6 +1587,65 @@ export class Orchestrator {
       "",
       "Reply with your approval or requested changes before write-capable execution continues.",
     ].join("\n");
+  }
+
+  private getPendingPlanReviewVisibleText(chatId: string): string | null {
+    const gate = this.interactionPolicy.get(chatId);
+    if (gate?.kind !== "plan-review-required") {
+      return null;
+    }
+    if (gate.planText?.trim()) {
+      return this.formatPlanReviewMessage(gate.planText);
+    }
+    return [
+      "Plan review requested before execution.",
+      "",
+      "A concrete plan still needs to be shown before write-capable execution continues.",
+      "",
+      "Reply with your approval or requested changes before write-capable execution continues.",
+    ].join("\n");
+  }
+
+  private getPendingSelfManagedWriteRejectionVisibleText(
+    session: Session,
+    draft: string | null | undefined,
+  ): string | null {
+    const normalizedDraft = this.stripInternalDecisionMarkers(draft ?? "").trim();
+    if (normalizedDraft && !LOW_SIGNAL_EXECUTION_ACK_RE.test(normalizedDraft)) {
+      return null;
+    }
+
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      const message = session.messages[index];
+      if (!message || message.role !== "user" || !Array.isArray(message.content)) {
+        continue;
+      }
+
+      for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
+        const block = message.content[blockIndex];
+        if (!block || block.type !== "tool_result" || typeof block.content !== "string") {
+          continue;
+        }
+        if (!block.content.startsWith("Self-managed write review rejected")) {
+          continue;
+        }
+
+        const match = block.content.match(
+          /for '([^']+)':\s*(.+?)\.\s*Choose a safer bounded operation/iu,
+        );
+        const toolName = match?.[1] ?? "write-capable action";
+        const reason = match?.[2]?.trim() ?? block.content.trim();
+        return [
+          `Execution stopped because the proposed '${toolName}' operation was rejected by autonomous safety review.`,
+          "",
+          `Reason: ${reason}.`,
+          "",
+          "No safer bounded replacement was produced in the same turn.",
+        ].join("\n");
+      }
+    }
+
+    return null;
   }
 
   private formatBoundaryVisibleText(decision: InteractionBoundaryDecision): string | undefined {
@@ -1527,12 +1674,16 @@ export class Orchestrator {
     const cleanedDraft = this.stripInternalDecisionMarkers(params.draft).trim();
     const explicitPlanReview = userExplicitlyAskedForPlan(params.prompt);
 
-    if (explicitPlanReview && draftLooksLikeInternalPlanArtifact(cleanedDraft, {
-      toolNames: params.availableToolNames,
-    })) {
+    if (
+      explicitPlanReview &&
+      draftLooksLikeInternalPlanArtifact(cleanedDraft, {
+        toolNames: params.availableToolNames,
+      })
+    ) {
       this.interactionPolicy.requirePlanReview(
         params.chatId,
         "user explicitly asked to review a plan first",
+        cleanedDraft,
       );
       return {
         kind: "plan_review",
@@ -1583,7 +1734,11 @@ export class Orchestrator {
   }
 
   /** Append soul personality section to a system prompt if available. */
-  private injectSoulPersonality(systemPrompt: string, channelType?: string, personaOverride?: string): string {
+  private injectSoulPersonality(
+    systemPrompt: string,
+    channelType?: string,
+    personaOverride?: string,
+  ): string {
     if (personaOverride) {
       return systemPrompt + `\n\n## Agent Personality\n\n${personaOverride}\n`;
     }
@@ -1653,10 +1808,12 @@ export class Orchestrator {
     try {
       const reviewResponse = await reviewer.provider.chat(
         `${this.systemPrompt}\n\n${CLARIFICATION_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(reviewStrategy, reviewer)}`,
-        [{
-          role: "user",
-          content: buildClarificationReviewRequest(evidence),
-        }],
+        [
+          {
+            role: "user",
+            content: buildClarificationReviewRequest(evidence),
+          },
+        ],
         [],
       );
       this.recordExecutionTrace({
@@ -1667,25 +1824,24 @@ export class Orchestrator {
         source: "clarification-review",
         task: reviewTask,
       });
-      this.recordAuxiliaryUsage(
-        reviewer.providerName,
-        reviewResponse.usage,
-        params.usageHandler,
+      this.recordAuxiliaryUsage(reviewer.providerName, reviewResponse.usage, params.usageHandler);
+      const decision = sanitizeClarificationReviewDecision(
+        parseClarificationReviewDecision(reviewResponse.text),
       );
-      const decision = sanitizeClarificationReviewDecision(parseClarificationReviewDecision(reviewResponse.text));
       this.recordPhaseOutcome({
         chatId: params.chatId,
         identityKey: params.identityKey,
         assignment: reviewer,
         phase: "clarification-review",
         source: "clarification-review",
-        status: decision?.decision === "ask_user"
-          ? "blocked"
-          : decision?.decision === "blocked"
+        status:
+          decision?.decision === "ask_user"
             ? "blocked"
-            : decision?.decision === "internal_continue"
-              ? "continued"
-              : "approved",
+            : decision?.decision === "blocked"
+              ? "blocked"
+              : decision?.decision === "internal_continue"
+                ? "continued"
+                : "approved",
         task: reviewTask,
         reason: decision?.reason ?? "Clarification review completed.",
         telemetry: this.buildPhaseOutcomeTelemetry({
@@ -1719,11 +1875,13 @@ export class Orchestrator {
         ? {
             decision: "internal_continue",
             reason: "Strada still has a local inspection path and should continue internally.",
-            recommendedNextAction: "Inspect local files, logs, tests, or runtime state before asking the user anything else.",
+            recommendedNextAction:
+              "Inspect local files, logs, tests, or runtime state before asking the user anything else.",
           }
         : {
             decision: "blocked",
-            reason: "External clarification is still required because no local inspection path remains.",
+            reason:
+              "External clarification is still required because no local inspection path remains.",
             blockingType: "missing_external_info",
             question: "Please share the missing external detail needed to continue.",
           },
@@ -1755,8 +1913,8 @@ export class Orchestrator {
     });
 
     if (
-      decision?.decision === "internal_continue"
-      || this.shouldKeepClarificationInternal(decision, cleanedDraft)
+      decision?.decision === "internal_continue" ||
+      this.shouldKeepClarificationInternal(decision, cleanedDraft)
     ) {
       return {
         kind: "continue",
@@ -1792,7 +1950,9 @@ export class Orchestrator {
     const question = this.normalizeInteractiveText(params.toolCall.input["question"]);
     const context = this.normalizeInteractiveText(params.toolCall.input["context"]);
     const options = Array.isArray(params.toolCall.input["options"])
-      ? params.toolCall.input["options"].map((option) => this.normalizeInteractiveText(option)).filter(Boolean)
+      ? params.toolCall.input["options"]
+          .map((option) => this.normalizeInteractiveText(option))
+          .filter(Boolean)
       : [];
     const recommended = this.normalizeInteractiveText(params.toolCall.input["recommended"]);
     const draft = [
@@ -1800,7 +1960,9 @@ export class Orchestrator {
       question ? `Question: ${question}` : "",
       options.length > 0 ? `Options: ${options.join(" | ")}` : "",
       recommended ? `Recommended: ${recommended}` : "",
-    ].filter(Boolean).join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     const { decision, evidence } = await this.reviewClarification({
       ...params,
@@ -1808,8 +1970,8 @@ export class Orchestrator {
     });
 
     if (
-      decision?.decision === "internal_continue"
-      || this.shouldKeepClarificationInternal(decision, draft)
+      decision?.decision === "internal_continue" ||
+      this.shouldKeepClarificationInternal(decision, draft)
     ) {
       return {
         kind: "continue",
@@ -1822,7 +1984,8 @@ export class Orchestrator {
 
     if (decision?.decision === "ask_user" || decision?.decision === "blocked") {
       const approvedQuestion = decision.question?.trim() || question;
-      const approvedOptions = decision.options?.filter((option) => option.trim().length > 0) ?? options;
+      const approvedOptions =
+        decision.options?.filter((option) => option.trim().length > 0) ?? options;
       const approvedRecommended = decision.recommendedOption?.trim() || recommended || undefined;
 
       return {
@@ -1831,7 +1994,11 @@ export class Orchestrator {
           question: approvedQuestion,
           ...(approvedOptions.length > 0 ? { options: approvedOptions } : {}),
           ...(approvedRecommended ? { recommended: approvedRecommended } : {}),
-          ...(decision.reason?.trim() ? { context: decision.reason.trim() } : context ? { context } : {}),
+          ...(decision.reason?.trim()
+            ? { context: decision.reason.trim() }
+            : context
+              ? { context }
+              : {}),
         },
       };
     }
@@ -1863,10 +2030,12 @@ export class Orchestrator {
   ): ClarificationReviewDecision {
     return {
       decision: "internal_continue",
-      reason: decision?.reason?.trim()
-        || "Silent-first autonomy keeps local engineering decisions inside Strada until a real hard blocker exists.",
-      recommendedNextAction: decision?.recommendedNextAction?.trim()
-        || "Resolve the local technical decision internally and continue execution without user escalation.",
+      reason:
+        decision?.reason?.trim() ||
+        "Silent-first autonomy keeps local engineering decisions inside Strada until a real hard blocker exists.",
+      recommendedNextAction:
+        decision?.recommendedNextAction?.trim() ||
+        "Resolve the local technical decision internally and continue execution without user escalation.",
     };
   }
 
@@ -1905,12 +2074,18 @@ export class Orchestrator {
     // Layer 1: User Profile
     if (profile) {
       const parts = buildProfileParts(profile);
-      if (parts.length > 0) layers.push(`## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${parts.join("\n")}`);
+      if (parts.length > 0)
+        layers.push(
+          `## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${parts.join("\n")}`,
+        );
     }
 
     // Layer 2: Task Execution Memory
     const taskExecutionMemory = this.taskExecutionStore?.getMemory(executionScope) ?? null;
-    const taskExecutionLayer = this.buildTaskExecutionMemoryLayer(taskExecutionMemory, profile?.contextSummary);
+    const taskExecutionLayer = this.buildTaskExecutionMemoryLayer(
+      taskExecutionMemory,
+      profile?.contextSummary,
+    );
     if (taskExecutionLayer) {
       layers.push(taskExecutionLayer.content);
       contentHashes.push(...taskExecutionLayer.contentHashes);
@@ -1980,9 +2155,7 @@ export class Orchestrator {
         if (isOk(memoriesResult)) {
           const memories = memoriesResult.value;
           if (memories.length > 0) {
-            const memoryContext = memories
-              .map((m) => m.entry.content)
-              .join("\n---\n");
+            const memoryContext = memories.map((m) => m.entry.content).join("\n---\n");
             layers.push(`## Relevant Memory\n${memoryContext}`);
             for (const m of memories) {
               contentHashes.push(m.entry.content);
@@ -1994,9 +2167,10 @@ export class Orchestrator {
       }
     }
 
-    const context = layers.length > 0
-      ? `\n\n<!-- context-layers:start -->\n${layers.join("\n\n")}\n<!-- context-layers:end -->\n`
-      : "";
+    const context =
+      layers.length > 0
+        ? `\n\n<!-- context-layers:start -->\n${layers.join("\n\n")}\n<!-- context-layers:end -->\n`
+        : "";
 
     return { context, contentHashes, projectWorldSummary, projectWorldFingerprint };
   }
@@ -2013,7 +2187,13 @@ export class Orchestrator {
     channelType?: string;
     prompt: string;
     personaContent?: string;
-    profile: { displayName?: string; language: string; activePersona: string; preferences: unknown; contextSummary?: string } | null;
+    profile: {
+      displayName?: string;
+      language: string;
+      activePersona: string;
+      preferences: unknown;
+      contextSummary?: string;
+    } | null;
     preComputedEmbedding?: number[];
   }): Promise<{
     systemPrompt: string;
@@ -2030,7 +2210,9 @@ export class Orchestrator {
     const langDirective = `\n## LANGUAGE RULE\nYour current language is ${langName}. Respond in ${langName} unless the user clearly switches to a different language — in that case, follow their lead.\n`;
 
     // 2. Soul personality injection (with optional persona override)
-    let systemPrompt = langDirective + this.injectSoulPersonality(this.systemPrompt, params.channelType, params.personaContent);
+    let systemPrompt =
+      langDirective +
+      this.injectSoulPersonality(this.systemPrompt, params.channelType, params.personaContent);
 
     // 2.5. Exact literal-output requests need a hard response contract.
     systemPrompt += buildExactResponseDirective(params.prompt);
@@ -2041,7 +2223,12 @@ export class Orchestrator {
     }
 
     // 4. Context layers (user profile, session summary, open tasks, semantic memory)
-    const { context: contextLayers, contentHashes, projectWorldSummary, projectWorldFingerprint } = await this.buildContextLayers(
+    const {
+      context: contextLayers,
+      contentHashes,
+      projectWorldSummary,
+      projectWorldFingerprint,
+    } = await this.buildContextLayers(
       params.conversationScope,
       params.identityKey,
       params.prompt,
@@ -2113,15 +2300,20 @@ export class Orchestrator {
     );
 
     if (bootstrap.autonomy?.enabled) {
-      const expiresAt = typeof bootstrap.autonomy.hours === "number"
-        ? Date.now() + (bootstrap.autonomy.hours * 3600_000)
-        : undefined;
+      const expiresAt =
+        typeof bootstrap.autonomy.hours === "number"
+          ? Date.now() + bootstrap.autonomy.hours * 3600_000
+          : undefined;
 
       await this.userProfileStore?.setAutonomousMode(context.profileId, true, expiresAt);
-      this.dmPolicy?.initFromProfile(context.chatId, {
-        autonomousMode: true,
-        ...(expiresAt ? { autonomousExpiresAt: expiresAt } : {}),
-      }, context.profileId);
+      this.dmPolicy?.initFromProfile(
+        context.chatId,
+        {
+          autonomousMode: true,
+          ...(expiresAt ? { autonomousExpiresAt: expiresAt } : {}),
+        },
+        context.profileId,
+      );
     }
   }
 
@@ -2160,7 +2352,9 @@ export class Orchestrator {
 
     // Per-session concurrency lock: queue messages for the same chat
     const prev = this.sessionLocks.get(chatId) ?? Promise.resolve();
-    const current = prev.then(() => this.withTaskExecutionContext(taskContext, async () => this.processMessage(msg)));
+    const current = prev.then(() =>
+      this.withTaskExecutionContext(taskContext, async () => this.processMessage(msg)),
+    );
     const tracked = current.catch((err) => {
       getLogger().error("Session lock error", {
         chatId,
@@ -2186,1006 +2380,1223 @@ export class Orchestrator {
     const { signal, onProgress, chatId } = options;
     const conversationScope = resolveConversationScope(chatId, options.conversationId);
     const identityKey = resolveIdentityKey(chatId, options.userId, options.conversationId);
-    const taskRunId = options.taskRunId?.trim()
-      || this.getTaskExecutionContext()?.taskRunId
-      || `taskrun_${randomUUID()}`;
+    const taskRunId =
+      options.taskRunId?.trim() ||
+      this.getTaskExecutionContext()?.taskRunId ||
+      `taskrun_${randomUUID()}`;
 
-    return await this.withTaskExecutionContext({
-      chatId,
-      conversationId: options.conversationId,
-      userId: options.userId,
-      identityKey,
-      taskRunId,
-    }, async () => {
-      const logger = getLogger();
-      const fallbackProvider = this.providerManager.getProvider(identityKey);
-      let executionStrategy = this.buildSupervisorExecutionStrategy(prompt, identityKey, fallbackProvider);
-
-    // ─── Metrics: start recording ────────────────────────────────────
-    const taskType = options.parentMetricId ? "subtask" as const : "background" as const;
-    const metricId = this.metricsRecorder?.startTask({
-      sessionId: chatId,
-      taskDescription: prompt.slice(0, 200),
-      taskType,
-      parentTaskId: options.parentMetricId,
-    });
-    // ────────────────────────────────────────────────────────────────
-
-    // Build user content with vision support if attachments present
-    const supportsVision = fallbackProvider.capabilities.vision;
-    const userContent = buildUserContent(prompt || DEFAULT_IMAGE_PROMPT, options.attachments, supportsVision);
-    const initialUserMessage: ConversationMessage = { role: "user", content: userContent };
-    const session: Session = {
-      messages: [initialUserMessage],
-      visibleMessages: [initialUserMessage],
-      lastActivity: new Date(),
-    };
-
-    let profile = this.userProfileStore?.getProfile(identityKey) ?? null;
-
-    // Touch user profile (debounced)
-    if (this.userProfileStore && profile) {
-      const lastTouch = this.lastPersistTime.get(`touch:${identityKey}`) ?? 0;
-      if (Date.now() - lastTouch > 60_000) {
-        this.userProfileStore.touchLastSeen(identityKey);
-        this.lastPersistTime.set(`touch:${identityKey}`, Date.now());
-      }
-    }
-
-    await this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, prompt, options.userId);
-    profile = this.userProfileStore?.getProfile(identityKey) ?? profile;
-
-    // Load autonomous mode from profile at session start
-    if (this.dmPolicy && this.userProfileStore) {
-      try {
-        const autonomousState = await resolveAutonomousModeWithDefault(
-          this.userProfileStore,
+    return await this.withTaskExecutionContext(
+      {
+        chatId,
+        conversationId: options.conversationId,
+        userId: options.userId,
+        identityKey,
+        taskRunId,
+      },
+      async () => {
+        const logger = getLogger();
+        const fallbackProvider = this.providerManager.getProvider(identityKey);
+        let executionStrategy = this.buildSupervisorExecutionStrategy(
+          prompt,
           identityKey,
-          {
-            enabled: this.autonomousDefaultEnabled,
-            hours: this.autonomousDefaultHours,
-          },
+          fallbackProvider,
         );
-        if (autonomousState.enabled) {
-          this.dmPolicy.initFromProfile(chatId, {
-            autonomousMode: true,
-            autonomousExpiresAt: autonomousState.expiresAt,
-          }, options.userId);
-        } else {
-          this.dmPolicy.initFromProfile(chatId, { autonomousMode: false }, options.userId);
-        }
-      } catch {
-        // Autonomous mode restoration failure is non-fatal
-      }
-    }
-    // ────────────────────────────────────────────────────────────────────
 
-    // Pre-compute embedding once for memory + RAG search (avoids redundant calls)
-    let bgEmbedding: number[] | undefined;
-    if (this.embeddingProvider && prompt) {
-      try {
-        const batch = await this.embeddingProvider.embed([prompt]);
-        bgEmbedding = batch.embeddings[0];
-      } catch {
-        // Embedding failure is non-fatal; downstream calls will embed on demand
-      }
-    }
-
-    // Build system prompt with all context layers (DRY: shared with runAgentLoop)
-    const {
-      systemPrompt: builtPrompt,
-      initialContentHashes: bgInitialContentHashes,
-      projectWorldSummary: bgProjectWorldSummary,
-      projectWorldFingerprint: bgProjectWorldFingerprint,
-    } = await this.buildSystemPromptWithContext({
-      chatId,
-      conversationScope,
-      identityKey,
-      channelType: options.channelType,
-      prompt,
-      profile,
-      preComputedEmbedding: bgEmbedding,
-    });
-    let systemPrompt = builtPrompt;
-    executionStrategy = this.buildSupervisorExecutionStrategy(
-      prompt,
-      identityKey,
-      fallbackProvider,
-      bgProjectWorldFingerprint,
-    );
-
-    // ─── PAOR State Machine ──────────────────────────────────────────────
-    let bgAgentState = createInitialState(prompt);
-
-    if (this.instinctRetriever) {
-      try {
-        const insightResult = await this.instinctRetriever.getInsightsForTask(prompt);
-        if (insightResult.insights.length > 0) {
-          bgAgentState = { ...bgAgentState, learnedInsights: insightResult.insights };
-          const insightsText = insightResult.insights.join("\n");
-          systemPrompt += `\n\n## Learned Insights\n${insightsText}\n`;
-        }
-      } catch {
-        // Non-fatal
-      }
-    }
-
-    const BG_REFLECT_INTERVAL = 3;
-    // ────────────────────────────────────────────────────────────────────
-
-    // ─── Memory Re-retrieval: create refresher for background path ───
-    const bgMemoryRefresher = this.createMemoryRefresher(bgInitialContentHashes);
-    // ────────────────────────────────────────────────────────────────
-
-    // Autonomy layer
-    const errorRecovery = new ErrorRecoveryEngine();
-    const taskPlanner = new TaskPlanner();
-    const selfVerification = new SelfVerification();
-    const executionJournal = new ExecutionJournal(prompt);
-    if (bgProjectWorldSummary && bgProjectWorldFingerprint) {
-      executionJournal.attachProjectWorldContext({
-        summary: bgProjectWorldSummary,
-        fingerprint: bgProjectWorldFingerprint,
-      });
-    }
-    const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
-    const taskStartedAtMs = Date.now();
-    const buildBgPhaseOutcomeTelemetry = (params: {
-      state?: AgentState;
-      usage?: ProviderResponse["usage"];
-      verifierDecision?: VerifierDecision;
-      failureReason?: string | null;
-    }) => this.buildPhaseOutcomeTelemetry({
-      ...params,
-      projectWorldFingerprint: bgProjectWorldFingerprint,
-    });
-    stradaConformance.trackPrompt(prompt);
-    let toolTurnAffinity: SupervisorAssignment | null = null;
-
-    let bgIteration = 0;
-    let bgToolCallCount = 0;
-
-    try {
-      for (bgIteration = 0; bgIteration < MAX_TOOL_ITERATIONS; bgIteration++) {
-        // Check cancellation
-        if (signal.aborted) {
-          throw new Error("Task cancelled");
-        }
-
-        // ─── PAOR: Build phase-aware system prompt ──────────────────────
-      let activePrompt = systemPrompt;
-      switch (bgAgentState.phase) {
-        case AgentPhase.PLANNING:
-          activePrompt += "\n\n" + buildPlanningPrompt(
-              bgAgentState.taskDescription,
-              mergeLearnedInsights(bgAgentState.learnedInsights, executionJournal.getLearnedInsights()),
-              { enableGoalDetection: false }, // Background tasks don't spawn sub-goals
-            );
-            break;
-        case AgentPhase.EXECUTING:
-          activePrompt += buildExecutionContext(bgAgentState);
-            break;
-          case AgentPhase.REPLANNING:
-            activePrompt += "\n\n" + buildReplanningPrompt(bgAgentState);
-            break;
-        }
-        activePrompt += executionJournal.buildPromptSection(bgAgentState.phase);
+        // ─── Metrics: start recording ────────────────────────────────────
+        const taskType = options.parentMetricId ? ("subtask" as const) : ("background" as const);
+        const metricId = this.metricsRecorder?.startTask({
+          sessionId: chatId,
+          taskDescription: prompt.slice(0, 200),
+          taskType,
+          parentTaskId: options.parentMetricId,
+        });
         // ────────────────────────────────────────────────────────────────
 
-        const currentAssignment = this.getPinnedToolTurnAssignment(
-          executionStrategy,
-          bgAgentState.phase,
-          toolTurnAffinity,
+        // Build user content with vision support if attachments present
+        const supportsVision = fallbackProvider.capabilities.vision;
+        const userContent = buildUserContent(
+          prompt || DEFAULT_IMAGE_PROMPT,
+          options.attachments,
+          supportsVision,
         );
-        const currentProvider = currentAssignment.provider;
-        const currentToolDefinitions = this.buildWorkerToolDefinitions(
-          executionStrategy.task,
-          bgAgentState.phase,
-          currentAssignment.role,
-        );
-        activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
+        const initialUserMessage: ConversationMessage = { role: "user", content: userContent };
+        const session: Session = {
+          messages: [initialUserMessage],
+          visibleMessages: [initialUserMessage],
+          lastActivity: new Date(),
+        };
 
-        const response = await currentProvider.chat(
-          activePrompt,
-          session.messages,
-          currentToolDefinitions,
-        );
-        this.recordExecutionTrace({
-          chatId,
-          identityKey,
-          assignment: currentAssignment,
-          phase: this.toExecutionPhase(bgAgentState.phase),
-          source: this.resolveExecutionTraceSource(currentAssignment),
-          task: executionStrategy.task,
-        });
+        let profile = this.userProfileStore?.getProfile(identityKey) ?? null;
 
-        logger.debug("Background task LLM response", {
-          chatId,
-          iteration: bgIteration,
-          phase: bgAgentState.phase,
-          stopReason: response.stopReason,
-          toolCallCount: response.toolCalls.length,
-        });
-        if (
-          response.toolCalls.length > 0 &&
-          !toolTurnAffinity &&
-          bgAgentState.phase !== AgentPhase.PLANNING &&
-          bgAgentState.phase !== AgentPhase.REPLANNING
-        ) {
-          toolTurnAffinity = currentAssignment;
-        }
-        this.recordProviderUsage(
-          currentAssignment.providerName,
-          response.usage,
-          options.onUsage ?? this.onUsage,
-        );
-
-        // ─── PAOR: Handle REFLECTING phase response ─────────────────────
-        if (bgAgentState.phase === AgentPhase.REFLECTING) {
-          const decision = parseReflectionDecision(response.text);
-          executionJournal.recordReflection(
-            decision,
-            response.text,
-            currentAssignment.providerName,
-            currentAssignment.modelId,
-          );
-
-          if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-            const clarificationIntervention = await this.resolveDraftClarificationIntervention({
-              chatId,
-              identityKey,
-              prompt,
-              draft: response.text ?? "",
-              state: bgAgentState,
-              strategy: executionStrategy,
-              touchedFiles: [...selfVerification.getState().touchedFiles],
-              usageHandler: options.onUsage ?? this.onUsage,
-            });
-            if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
-              bgAgentState = {
-                ...bgAgentState,
-                lastReflection: response.text ?? bgAgentState.lastReflection,
-                reflectionCount: bgAgentState.reflectionCount + 1,
-                consecutiveErrors: 0,
-              };
-              bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              session.messages.push({ role: "user", content: clarificationIntervention.gate });
-              onProgress("Clarification review kept the task internal");
-              continue;
-            }
-            if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
-              this.appendVisibleAssistantMessage(session, clarificationIntervention.message);
-              this.recordMetricEnd(metricId, {
-                agentPhase: AgentPhase.COMPLETE,
-                iterations: bgAgentState.iteration,
-                toolCallCount: bgToolCallCount,
-                hitMaxIterations: false,
-              });
-              await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
-              return clarificationIntervention.message;
-            }
-
-            const rawBoundary = this.decideUserVisibleBoundary({
-              chatId,
-              prompt,
-              workerDraft: response.text ?? "",
-              task: executionStrategy.task,
-              state: bgAgentState,
-              selfVerification,
-              taskStartedAtMs,
-              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-              terminalFailureReported: isTerminalFailureReport(response.text),
-            });
-            if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
-              bgAgentState = {
-                ...bgAgentState,
-                lastReflection: response.text ?? bgAgentState.lastReflection,
-                reflectionCount: bgAgentState.reflectionCount + 1,
-                consecutiveErrors: 0,
-              };
-              bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              session.messages.push({ role: "user", content: rawBoundary.gate });
-              onProgress("Visibility boundary kept the task internal");
-              continue;
-            }
-            if (
-              (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure")
-              && rawBoundary.visibleText
-            ) {
-              const surfacedText = this.formatBoundaryVisibleText(rawBoundary)!;
-              this.appendVisibleAssistantMessage(session, surfacedText);
-              this.recordMetricEnd(metricId, {
-                agentPhase: AgentPhase.COMPLETE,
-                iterations: bgAgentState.iteration,
-                toolCallCount: bgToolCallCount,
-                hitMaxIterations: false,
-              });
-              await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
-              return surfacedText;
-            }
-
-            const verifierIntervention = await this.resolveVerifierIntervention({
-              chatId,
-              identityKey,
-              prompt,
-              state: bgAgentState,
-              draft: response.text,
-              selfVerification,
-              stradaConformance,
-              strategy: executionStrategy,
-              taskStartedAtMs,
-              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-              usageHandler: options.onUsage ?? this.onUsage,
-            });
-            executionJournal.recordVerifierResult(
-              verifierIntervention.result,
-              executionStrategy.reviewer.providerName,
-              executionStrategy.reviewer.modelId,
-            );
-            if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
-              this.recordPhaseOutcome({
-                chatId,
-                identityKey,
-                assignment: currentAssignment,
-                phase: "reflecting",
-                status: "continued",
-                task: executionStrategy.task,
-                reason: verifierIntervention.result.summary,
-                telemetry: buildBgPhaseOutcomeTelemetry({
-                  state: bgAgentState,
-                  usage: response.usage,
-                  verifierDecision: "continue",
-                  failureReason: verifierIntervention.result.summary,
-                }),
-              });
-              bgAgentState = {
-                ...bgAgentState,
-                lastReflection: response.text ?? bgAgentState.lastReflection,
-                reflectionCount: bgAgentState.reflectionCount + 1,
-                consecutiveErrors: 0,
-              };
-              bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              session.messages.push({ role: "user", content: verifierIntervention.gate });
-              onProgress("Verification required before completion");
-              continue;
-            }
-            if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-              executionJournal.beginReplan({
-                state: bgAgentState,
-                reason: verifierIntervention.result.summary,
-                providerName: executionStrategy.reviewer.providerName,
-                modelId: executionStrategy.reviewer.modelId,
-              });
-              this.recordPhaseOutcome({
-                chatId,
-                identityKey,
-                assignment: currentAssignment,
-                phase: "reflecting",
-                status: "replanned",
-                task: executionStrategy.task,
-                reason: verifierIntervention.result.summary,
-                telemetry: buildBgPhaseOutcomeTelemetry({
-                  state: bgAgentState,
-                  usage: response.usage,
-                  verifierDecision: "replan",
-                  failureReason: verifierIntervention.result.summary,
-                }),
-              });
-              bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              session.messages.push({ role: "user", content: verifierIntervention.gate });
-              onProgress("Verifier pipeline requested a replan");
-              continue;
-            }
-
-            const finalText = await this.synthesizeUserFacingResponse({
-              chatId,
-              identityKey,
-              prompt,
-              draft: response.text ?? "",
-              agentState: bgAgentState,
-              strategy: executionStrategy,
-              systemPrompt,
-              usageHandler: options.onUsage ?? this.onUsage,
-            });
-            const finalBoundary = this.decideUserVisibleBoundary({
-              chatId,
-              prompt,
-              workerDraft: response.text ?? "",
-              visibleDraft: finalText,
-              task: executionStrategy.task,
-              state: bgAgentState,
-              selfVerification,
-              taskStartedAtMs,
-              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-              terminalFailureReported: isTerminalFailureReport(response.text),
-            });
-            if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
-              bgAgentState = {
-                ...bgAgentState,
-                lastReflection: response.text ?? bgAgentState.lastReflection,
-                reflectionCount: bgAgentState.reflectionCount + 1,
-                consecutiveErrors: 0,
-              };
-              bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              session.messages.push({ role: "user", content: finalBoundary.gate });
-              onProgress("Visibility boundary rejected the draft");
-              continue;
-            }
-            const surfacedFinalText = finalBoundary.visibleText ?? finalText;
-            if (surfacedFinalText) {
-              this.appendVisibleAssistantMessage(session, surfacedFinalText);
-            }
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: "reflecting",
-              status: "approved",
-              task: executionStrategy.task,
-              reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
-              telemetry: buildBgPhaseOutcomeTelemetry({
-                state: bgAgentState,
-                usage: response.usage,
-                verifierDecision: "approve",
-              }),
-            });
-            this.recordMetricEnd(metricId, {
-              agentPhase: AgentPhase.COMPLETE,
-              iterations: bgAgentState.iteration,
-              toolCallCount: bgToolCallCount,
-              hitMaxIterations: false,
-            });
-            await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
-            return surfacedFinalText || "Task completed without output.";
-          }
-
-          if (decision === "REPLAN") {
-            executionJournal.beginReplan({
-              state: bgAgentState,
-              reason: response.text ?? "reflection requested a new plan",
-              providerName: currentAssignment.providerName,
-              modelId: currentAssignment.modelId,
-            });
-            bgAgentState = {
-              ...bgAgentState,
-              failedApproaches: [...bgAgentState.failedApproaches, extractApproachSummary(bgAgentState)],
-              lastReflection: response.text ?? null,
-              reflectionCount: bgAgentState.reflectionCount + 1,
-            };
-            bgAgentState = transitionPhase(bgAgentState, AgentPhase.REPLANNING);
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: "reflecting",
-              status: "replanned",
-              task: executionStrategy.task,
-              reason: response.text ?? "reflection requested a new plan",
-              telemetry: buildBgPhaseOutcomeTelemetry({
-                state: bgAgentState,
-                usage: response.usage,
-                failureReason: response.text,
-              }),
-            });
-            session.messages.push({ role: "user", content: "Please create a new plan." });
-            onProgress("Replanning: current approach needs adjustment");
-            continue;
-          }
-
-          // CONTINUE
-          bgAgentState = {
-            ...bgAgentState,
-            reflectionCount: bgAgentState.reflectionCount + 1,
-            consecutiveErrors: 0,
-          };
-          bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
-
-          if (response.toolCalls.length === 0) {
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({ role: "user", content: "Please continue." });
-            continue;
+        // Touch user profile (debounced)
+        if (this.userProfileStore && profile) {
+          const lastTouch = this.lastPersistTime.get(`touch:${identityKey}`) ?? 0;
+          if (Date.now() - lastTouch > 60_000) {
+            this.userProfileStore.touchLastSeen(identityKey);
+            this.lastPersistTime.set(`touch:${identityKey}`, Date.now());
           }
         }
-        // ────────────────────────────────────────────────────────────────
 
-        if (
-          (bgAgentState.phase === AgentPhase.PLANNING || bgAgentState.phase === AgentPhase.REPLANNING)
-          && response.toolCalls.length === 0
-          && userExplicitlyAskedForPlan(prompt)
-          && draftLooksLikeInternalPlanArtifact(response.text ?? "", {
-            toolNames: currentToolDefinitions.map((definition) => definition.name),
-          })
-        ) {
-          executionJournal.recordPlan(
-            response.text,
-            bgAgentState.phase,
-            currentAssignment.providerName,
-            currentAssignment.modelId,
-          );
-          bgAgentState = { ...bgAgentState, plan: response.text ?? null };
-          const planText = applyVisibleResponseContract(
-            prompt,
-            this.stripInternalDecisionMarkers(response.text) || response.text || "",
-          );
-          if (planText) {
-            this.interactionPolicy.requirePlanReview(
-              chatId,
-              "user explicitly asked to review a plan first",
-            );
-            this.appendVisibleAssistantMessage(session, this.formatPlanReviewMessage(planText));
-          }
-          this.recordMetricEnd(metricId, {
-            agentPhase: AgentPhase.COMPLETE,
-            iterations: bgAgentState.iteration,
-            toolCallCount: bgToolCallCount,
-            hitMaxIterations: false,
-          });
-          await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
-          return planText ? this.formatPlanReviewMessage(planText) : "Plan prepared for review.";
-        }
+        await this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, prompt, options.userId);
+        profile = this.userProfileStore?.getProfile(identityKey) ?? profile;
 
-        // Final response — return text
-        if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-          const clarificationIntervention = await this.resolveDraftClarificationIntervention({
-            chatId,
-            identityKey,
-            prompt,
-            draft: response.text ?? "",
-            state: bgAgentState,
-            strategy: executionStrategy,
-            touchedFiles: [...selfVerification.getState().touchedFiles],
-            usageHandler: options.onUsage ?? this.onUsage,
-          });
-          if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({ role: "user", content: clarificationIntervention.gate });
-            continue;
-          }
-          if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
-            this.appendVisibleAssistantMessage(session, clarificationIntervention.message);
-            this.recordMetricEnd(metricId, {
-              agentPhase: AgentPhase.COMPLETE,
-              iterations: bgAgentState.iteration,
-              toolCallCount: bgToolCallCount,
-              hitMaxIterations: false,
-            });
-            await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
-            return clarificationIntervention.message;
-          }
-
-          const rawBoundary = this.decideUserVisibleBoundary({
-            chatId,
-            prompt,
-            workerDraft: response.text ?? "",
-            task: executionStrategy.task,
-            state: bgAgentState,
-            selfVerification,
-            taskStartedAtMs,
-            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-            terminalFailureReported: isTerminalFailureReport(response.text),
-          });
-          if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({ role: "user", content: rawBoundary.gate });
-            continue;
-          }
-          if (
-            (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure")
-            && rawBoundary.visibleText
-          ) {
-            const surfacedText = this.formatBoundaryVisibleText(rawBoundary)!;
-            this.appendVisibleAssistantMessage(session, surfacedText);
-            this.recordMetricEnd(metricId, {
-              agentPhase: AgentPhase.COMPLETE,
-              iterations: bgAgentState.iteration,
-              toolCallCount: bgToolCallCount,
-              hitMaxIterations: false,
-            });
-            await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
-            return surfacedText;
-          }
-
-          const verifierIntervention = await this.resolveVerifierIntervention({
-            chatId,
-            identityKey,
-            prompt,
-            state: bgAgentState,
-            draft: response.text,
-            selfVerification,
-            stradaConformance,
-            strategy: executionStrategy,
-            taskStartedAtMs,
-            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-            usageHandler: options.onUsage ?? this.onUsage,
-          });
-          if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: this.toExecutionPhase(bgAgentState.phase),
-              status: "continued",
-              task: executionStrategy.task,
-              reason: verifierIntervention.result.summary,
-              telemetry: buildBgPhaseOutcomeTelemetry({
-                state: bgAgentState,
-                usage: response.usage,
-                verifierDecision: "continue",
-                failureReason: verifierIntervention.result.summary,
-              }),
-            });
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({ role: "user", content: verifierIntervention.gate });
-            continue;
-          }
-          if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: this.toExecutionPhase(bgAgentState.phase),
-              status: "replanned",
-              task: executionStrategy.task,
-              reason: verifierIntervention.result.summary,
-              telemetry: buildBgPhaseOutcomeTelemetry({
-                state: bgAgentState,
-                usage: response.usage,
-                verifierDecision: "replan",
-                failureReason: verifierIntervention.result.summary,
-              }),
-            });
-            bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({ role: "user", content: verifierIntervention.gate });
-            continue;
-          }
-
-          const finalText = await this.synthesizeUserFacingResponse({
-            chatId,
-            identityKey,
-            prompt,
-            draft: response.text ?? "",
-            agentState: bgAgentState,
-            strategy: executionStrategy,
-            systemPrompt,
-            usageHandler: options.onUsage ?? this.onUsage,
-          });
-          const finalBoundary = this.decideUserVisibleBoundary({
-            chatId,
-            prompt,
-            workerDraft: response.text ?? "",
-            visibleDraft: finalText,
-            task: executionStrategy.task,
-            state: bgAgentState,
-            selfVerification,
-            taskStartedAtMs,
-            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-            terminalFailureReported: isTerminalFailureReport(response.text),
-          });
-          if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({ role: "user", content: finalBoundary.gate });
-            continue;
-          }
-          const surfacedFinalText = finalBoundary.visibleText ?? finalText;
-          if (surfacedFinalText) {
-            this.appendVisibleAssistantMessage(session, surfacedFinalText);
-          }
-          this.recordPhaseOutcome({
-            chatId,
-            identityKey,
-            assignment: currentAssignment,
-            phase: this.toExecutionPhase(bgAgentState.phase),
-            status: "approved",
-            task: executionStrategy.task,
-            reason: "Execution produced a final response after the verifier pipeline cleared the task.",
-            telemetry: buildBgPhaseOutcomeTelemetry({
-              state: bgAgentState,
-              usage: response.usage,
-              verifierDecision: "approve",
-            }),
-          });
-
-          // ─── Metrics: record success ────────────────────────────────
-          this.recordMetricEnd(metricId, {
-            agentPhase: AgentPhase.COMPLETE,
-            iterations: bgAgentState.iteration,
-            toolCallCount: bgToolCallCount,
-            hitMaxIterations: false,
-          });
-          // ────────────────────────────────────────────────────────────
-
-          // Persist background task conversation to memory
-          await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), /* force */ true);
-
-          return surfacedFinalText || "Task completed without output.";
-        }
-
-        // ─── PAOR: Phase transitions ────────────────────────────────────
-        if (bgAgentState.phase === AgentPhase.PLANNING) {
-          executionJournal.recordPlan(
-            response.text,
-            bgAgentState.phase,
-            currentAssignment.providerName,
-            currentAssignment.modelId,
-          );
-          bgAgentState = { ...bgAgentState, plan: response.text ?? null };
-          bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
-        }
-        if (bgAgentState.phase === AgentPhase.REPLANNING) {
-          executionJournal.recordPlan(
-            response.text,
-            bgAgentState.phase,
-            currentAssignment.providerName,
-            currentAssignment.modelId,
-          );
-          bgAgentState = { ...bgAgentState, plan: response.text ?? null };
-          bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
-        }
-        // ────────────────────────────────────────────────────────────────
-
-        // Handle tool calls
-        session.messages.push({
-          role: "assistant",
-          content: response.text,
-          tool_calls: response.toolCalls,
-        });
-
-        const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
-          mode: "background",
-          taskPrompt: prompt,
-          sessionMessages: session.messages,
-          onUsage: options.onUsage ?? this.onUsage,
-          identityKey,
-          strategy: executionStrategy,
-          agentState: bgAgentState,
-          touchedFiles: [...selfVerification.getState().touchedFiles],
-        });
-        bgToolCallCount += response.toolCalls.length;
-
-        // Autonomy tracking
-        for (let i = 0; i < response.toolCalls.length; i++) {
-          const tc = response.toolCalls[i]!;
-          const tr = toolResults[i]!;
-          taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
-          selfVerification.track(tc.name, tc.input, tr);
-          stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
-
-          const analysis = errorRecovery.analyze(tc.name, tr);
-          if (analysis) {
-            taskPlanner.recordError(analysis.summary);
-            toolResults[i] = {
-              toolCallId: tr.toolCallId,
-              content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
-              isError: tr.isError,
-            };
-          }
-
-          this.emitToolResult(chatId, tc, toolResults[i]!);
-        }
-        executionJournal.recordToolBatch({
-          phase: bgAgentState.phase,
-          toolCalls: response.toolCalls,
-          toolResults,
-          providerName: currentAssignment.providerName,
-          modelId: currentAssignment.modelId,
-        });
-
-        // Progress report: summarize tool calls
-        const toolNames = response.toolCalls.map((tc) => tc.name).join(", ");
-        onProgress(`Running tools: ${toolNames}`);
-
-        // ─── Consensus: verify output with second provider if confidence is low ───
-        if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
+        // Load autonomous mode from profile at session start
+        if (this.dmPolicy && this.userProfileStore) {
           try {
-            const bgTaskClass = this.taskClassifier.classify(prompt);
-            const bgConfidence = this.confidenceEstimator.estimate({
-              task: bgTaskClass,
-              providerName: currentAssignment.providerName,
-              providerCapabilities: currentProvider.capabilities,
-              agentState: bgAgentState,
-              responseLength: (response.text ?? "").length,
-            });
-
-            const bgAvailableCount = this.providerManager.listAvailable().length;
-            const bgStrategy = this.consensusManager.shouldConsult(bgConfidence, bgTaskClass, bgAvailableCount);
-
-            if (bgStrategy !== "skip" && bgAvailableCount >= 2) {
-              const bgReviewAssignment = this.resolveConsensusReviewAssignment(
-                executionStrategy.reviewer,
-                currentAssignment,
-                identityKey,
+            const autonomousState = await resolveAutonomousModeWithDefault(
+              this.userProfileStore,
+              identityKey,
+              {
+                enabled: this.autonomousDefaultEnabled,
+                hours: this.autonomousDefaultHours,
+              },
+            );
+            if (autonomousState.enabled) {
+              this.dmPolicy.initFromProfile(
+                chatId,
+                {
+                  autonomousMode: true,
+                  autonomousExpiresAt: autonomousState.expiresAt,
+                },
+                options.userId,
               );
-              if (bgReviewAssignment) {
-                if (bgReviewAssignment.provider) {
-                  const bgConsensusResult = await this.consensusManager.verify({
-                    originalOutput: {
-                      text: response.text ?? undefined,
-                      toolCalls: response.toolCalls.map((tc: ToolCall) => ({
-                        name: tc.name,
-                        input: tc.input,
-                      })),
-                    },
-                    originalProvider: currentAssignment.providerName,
-                    task: bgTaskClass,
-                    confidence: bgConfidence,
-                    reviewProvider: bgReviewAssignment.provider,
-                    prompt,
-                  });
-                  this.recordExecutionTrace({
-                    chatId,
-                    identityKey,
-                    assignment: bgReviewAssignment,
-                    phase: "consensus-review",
-                    source: "consensus-review",
-                    task: bgTaskClass,
-                    reason: bgReviewAssignment.reason,
-                  });
-                  this.recordPhaseOutcome({
-                    chatId,
-                    identityKey,
-                    assignment: bgReviewAssignment,
-                    phase: "consensus-review",
-                    source: "consensus-review",
-                    status: bgConsensusResult.agreed ? "approved" : "continued",
-                    task: bgTaskClass,
-                    reason: bgConsensusResult.reasoning?.trim() || (bgConsensusResult.agreed
-                      ? "Consensus review agreed with the current path."
-                      : "Consensus review found a disagreement and kept execution open."),
-                  });
-
-                  if (!bgConsensusResult.agreed) {
-                    logger.warn("Consensus disagreement (background)", {
-                      chatId,
-                      strategy: bgConsensusResult.strategy,
-                      reasoning: bgConsensusResult.reasoning?.slice(0, 200),
-                    });
-                  }
-                }
-              }
+            } else {
+              this.dmPolicy.initFromProfile(chatId, { autonomousMode: false }, options.userId);
             }
           } catch {
-            // Consensus failure is non-fatal
+            // Autonomous mode restoration failure is non-fatal
           }
         }
         // ────────────────────────────────────────────────────────────────────
 
-        // ─── PAOR: Record step results ──────────────────────────────────
-        for (let i = 0; i < response.toolCalls.length; i++) {
-          const tc = response.toolCalls[i]!;
-          const tr = toolResults[i]!;
-          const stepResult: StepResult = {
-            toolName: tc.name,
-            success: !(tr.isError ?? false),
-            summary: tr.content.slice(0, 200),
-            timestamp: Date.now(),
-          };
-          bgAgentState = {
-            ...bgAgentState,
-            stepResults: [...bgAgentState.stepResults, stepResult],
-            iteration: bgAgentState.iteration + 1,
-            consecutiveErrors: tr.isError ? bgAgentState.consecutiveErrors + 1 : 0,
-          };
-        }
-
-        const hasErrors = toolResults.some(tr => tr.isError);
-        const failedSteps = bgAgentState.stepResults.filter(s => !s.success);
-        const shouldReflect =
-          hasErrors ||
-          (bgAgentState.stepResults.length > 0 && bgAgentState.stepResults.length % BG_REFLECT_INTERVAL === 0) ||
-          shouldForceReplan(failedSteps);
-
-        if (shouldReflect && bgAgentState.phase === AgentPhase.EXECUTING) {
-          bgAgentState = transitionPhase(bgAgentState, AgentPhase.REFLECTING);
-          onProgress("Reflecting on progress...");
-        }
-        // ────────────────────────────────────────────────────────────────
-
-        // Add tool results
-        const stateCtx = taskPlanner.getStateInjection();
-        const contentBlocks: Array<
-          | { type: "text"; text: string }
-          | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
-        > = [];
-        if (stateCtx) {
-          contentBlocks.push({ type: "text" as const, text: stateCtx });
-        }
-        if (bgAgentState.phase === AgentPhase.REFLECTING) {
-          contentBlocks.push({ type: "text" as const, text: buildReflectionPrompt(bgAgentState) });
-        }
-        for (const tr of toolResults) {
-          contentBlocks.push({
-            type: "tool_result" as const,
-            tool_use_id: tr.toolCallId,
-            content: tr.content,
-            is_error: tr.isError,
-          });
-        }
-        session.messages.push({
-          role: "user",
-          content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
-        });
-
-        // ─── Memory Re-retrieval (background path) ───────────────────────
-        if (bgMemoryRefresher) {
+        // Pre-compute embedding once for memory + RAG search (avoids redundant calls)
+        let bgEmbedding: number[] | undefined;
+        if (this.embeddingProvider && prompt) {
           try {
-            const check = await bgMemoryRefresher.shouldRefresh(bgIteration, prompt, chatId);
-            if (check.should) {
-              const refreshed = await bgMemoryRefresher.refresh(prompt, chatId, check.reason, bgIteration, check.cosineDistance);
-              if (refreshed.triggered) {
-                if (refreshed.newMemoryContext) {
-                  systemPrompt = replaceSection(systemPrompt, "re-retrieval:memory", `## Relevant Memory\n${refreshed.newMemoryContext}`);
-                }
-                if (refreshed.newRagContext) {
-                  systemPrompt = replaceSection(systemPrompt, "re-retrieval:rag", refreshed.newRagContext);
-                }
-                if (refreshed.newInsights?.length) {
-                  bgAgentState = { ...bgAgentState, learnedInsights: refreshed.newInsights };
-                }
-              }
-            }
+            const batch = await this.embeddingProvider.embed([prompt]);
+            bgEmbedding = batch.embeddings[0];
           } catch {
-            // Re-retrieval failure is non-fatal
+            // Embedding failure is non-fatal; downstream calls will embed on demand
           }
         }
-        // ─────────────────────────────────────────────────────────────────
-      }
 
-      // ─── Metrics: record max iterations ──────────────────────────────
-      this.recordMetricEnd(metricId, {
-        agentPhase: bgAgentState.phase,
-        iterations: bgAgentState.iteration,
-        toolCallCount: bgToolCallCount,
-        hitMaxIterations: true,
-      });
-      // ────────────────────────────────────────────────────────────────
+        // Build system prompt with all context layers (DRY: shared with runAgentLoop)
+        const {
+          systemPrompt: builtPrompt,
+          initialContentHashes: bgInitialContentHashes,
+          projectWorldSummary: bgProjectWorldSummary,
+          projectWorldFingerprint: bgProjectWorldFingerprint,
+        } = await this.buildSystemPromptWithContext({
+          chatId,
+          conversationScope,
+          identityKey,
+          channelType: options.channelType,
+          prompt,
+          profile,
+          preComputedEmbedding: bgEmbedding,
+        });
+        let systemPrompt = builtPrompt;
+        executionStrategy = this.buildSupervisorExecutionStrategy(
+          prompt,
+          identityKey,
+          fallbackProvider,
+          bgProjectWorldFingerprint,
+        );
 
-      return "Task reached maximum iterations. The work done so far has been saved.";
-    } catch (error) {
-      bgAgentState = transitionPhase(bgAgentState, AgentPhase.FAILED);
-      throw error;
-    } finally {
-      this.persistExecutionMemory(identityKey, executionJournal);
-      // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
-      this.recordMetricEnd(metricId, {
-        agentPhase: bgAgentState.phase,
-        iterations: bgAgentState.iteration,
-        toolCallCount: bgToolCallCount,
-        hitMaxIterations: false,
-      });
-      // ────────────────────────────────────────────────────────────────
-    }
-    });
+        // ─── PAOR State Machine ──────────────────────────────────────────────
+        let bgAgentState = createInitialState(prompt);
+
+        if (this.instinctRetriever) {
+          try {
+            const insightResult = await this.instinctRetriever.getInsightsForTask(prompt);
+            if (insightResult.insights.length > 0) {
+              bgAgentState = { ...bgAgentState, learnedInsights: insightResult.insights };
+              const insightsText = insightResult.insights.join("\n");
+              systemPrompt += `\n\n## Learned Insights\n${insightsText}\n`;
+            }
+          } catch {
+            // Non-fatal
+          }
+        }
+
+        const BG_REFLECT_INTERVAL = 3;
+        // ────────────────────────────────────────────────────────────────────
+
+        // ─── Memory Re-retrieval: create refresher for background path ───
+        const bgMemoryRefresher = this.createMemoryRefresher(bgInitialContentHashes);
+        // ────────────────────────────────────────────────────────────────
+
+        // Autonomy layer
+        const errorRecovery = new ErrorRecoveryEngine();
+        const taskPlanner = new TaskPlanner({
+          iterationBudget: this.getBackgroundEpochIterationLimit(),
+        });
+        const selfVerification = new SelfVerification();
+        const executionJournal = new ExecutionJournal(prompt);
+        if (bgProjectWorldSummary && bgProjectWorldFingerprint) {
+          executionJournal.attachProjectWorldContext({
+            summary: bgProjectWorldSummary,
+            fingerprint: bgProjectWorldFingerprint,
+          });
+        }
+        const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
+        const taskStartedAtMs = Date.now();
+        const buildBgPhaseOutcomeTelemetry = (params: {
+          state?: AgentState;
+          usage?: ProviderResponse["usage"];
+          verifierDecision?: VerifierDecision;
+          failureReason?: string | null;
+        }) =>
+          this.buildPhaseOutcomeTelemetry({
+            ...params,
+            projectWorldFingerprint: bgProjectWorldFingerprint,
+          });
+        stradaConformance.trackPrompt(prompt);
+        let toolTurnAffinity: SupervisorAssignment | null = null;
+
+        const bgEpochIterationLimit = this.getBackgroundEpochIterationLimit();
+        let bgIteration = 0;
+        let bgEpochIteration = 0;
+        let bgEpochCount = 1;
+        let bgToolCallCount = 0;
+
+        try {
+          while (true) {
+            for (
+              bgEpochIteration = 0;
+              bgEpochIteration < bgEpochIterationLimit;
+              bgEpochIteration++, bgIteration++
+            ) {
+              // Check cancellation
+              if (signal.aborted) {
+                throw new Error("Task cancelled");
+              }
+
+              // ─── PAOR: Build phase-aware system prompt ──────────────────────
+              let activePrompt = systemPrompt;
+              switch (bgAgentState.phase) {
+                case AgentPhase.PLANNING:
+                  activePrompt +=
+                    "\n\n" +
+                    buildPlanningPrompt(
+                      bgAgentState.taskDescription,
+                      mergeLearnedInsights(
+                        bgAgentState.learnedInsights,
+                        executionJournal.getLearnedInsights(),
+                      ),
+                      { enableGoalDetection: false }, // Background tasks don't spawn sub-goals
+                    );
+                  break;
+                case AgentPhase.EXECUTING:
+                  activePrompt += buildExecutionContext(bgAgentState);
+                  break;
+                case AgentPhase.REPLANNING:
+                  activePrompt += "\n\n" + buildReplanningPrompt(bgAgentState);
+                  break;
+              }
+              activePrompt += executionJournal.buildPromptSection(bgAgentState.phase);
+              // ────────────────────────────────────────────────────────────────
+
+              const currentAssignment = this.getPinnedToolTurnAssignment(
+                executionStrategy,
+                bgAgentState.phase,
+                toolTurnAffinity,
+              );
+              const currentProvider = currentAssignment.provider;
+              const currentToolDefinitions = this.buildWorkerToolDefinitions(
+                executionStrategy.task,
+                bgAgentState.phase,
+                currentAssignment.role,
+              );
+              activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
+
+              const response = await currentProvider.chat(
+                activePrompt,
+                session.messages,
+                currentToolDefinitions,
+              );
+              this.recordExecutionTrace({
+                chatId,
+                identityKey,
+                assignment: currentAssignment,
+                phase: this.toExecutionPhase(bgAgentState.phase),
+                source: this.resolveExecutionTraceSource(currentAssignment),
+                task: executionStrategy.task,
+              });
+
+              logger.debug("Background task LLM response", {
+                chatId,
+                epoch: bgEpochCount,
+                epochIteration: bgEpochIteration,
+                iteration: bgIteration,
+                phase: bgAgentState.phase,
+                stopReason: response.stopReason,
+                toolCallCount: response.toolCalls.length,
+              });
+              if (
+                response.toolCalls.length > 0 &&
+                !toolTurnAffinity &&
+                bgAgentState.phase !== AgentPhase.PLANNING &&
+                bgAgentState.phase !== AgentPhase.REPLANNING
+              ) {
+                toolTurnAffinity = currentAssignment;
+              }
+              this.recordProviderUsage(
+                currentAssignment.providerName,
+                response.usage,
+                options.onUsage ?? this.onUsage,
+              );
+
+              // ─── PAOR: Handle REFLECTING phase response ─────────────────────
+              if (bgAgentState.phase === AgentPhase.REFLECTING) {
+                const decision = parseReflectionDecision(response.text);
+                executionJournal.recordReflection(
+                  decision,
+                  response.text,
+                  currentAssignment.providerName,
+                  currentAssignment.modelId,
+                );
+
+                if (response.toolCalls.length === 0) {
+                  const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
+                  if (pendingPlanReviewText) {
+                    this.appendVisibleAssistantMessage(session, pendingPlanReviewText);
+                    this.recordMetricEnd(metricId, {
+                      agentPhase: AgentPhase.COMPLETE,
+                      iterations: bgAgentState.iteration,
+                      toolCallCount: bgToolCallCount,
+                      hitMaxIterations: false,
+                    });
+                    await this.persistSessionToMemory(
+                      chatId,
+                      this.getVisibleTranscript(session),
+                      /* force */ true,
+                    );
+                    return pendingPlanReviewText;
+                  }
+
+                  const pendingWriteRejectionText =
+                    this.getPendingSelfManagedWriteRejectionVisibleText(session, response.text);
+                  if (pendingWriteRejectionText) {
+                    this.appendVisibleAssistantMessage(session, pendingWriteRejectionText);
+                    this.recordMetricEnd(metricId, {
+                      agentPhase: AgentPhase.COMPLETE,
+                      iterations: bgAgentState.iteration,
+                      toolCallCount: bgToolCallCount,
+                      hitMaxIterations: false,
+                    });
+                    await this.persistSessionToMemory(
+                      chatId,
+                      this.getVisibleTranscript(session),
+                      /* force */ true,
+                    );
+                    return pendingWriteRejectionText;
+                  }
+                }
+
+                if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
+                  const clarificationIntervention =
+                    await this.resolveDraftClarificationIntervention({
+                      chatId,
+                      identityKey,
+                      prompt,
+                      draft: response.text ?? "",
+                      state: bgAgentState,
+                      strategy: executionStrategy,
+                      touchedFiles: [...selfVerification.getState().touchedFiles],
+                      usageHandler: options.onUsage ?? this.onUsage,
+                    });
+                  if (
+                    clarificationIntervention.kind === "continue" &&
+                    clarificationIntervention.gate
+                  ) {
+                    bgAgentState = {
+                      ...bgAgentState,
+                      lastReflection: response.text ?? bgAgentState.lastReflection,
+                      reflectionCount: bgAgentState.reflectionCount + 1,
+                      consecutiveErrors: 0,
+                    };
+                    bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+                    if (response.text) {
+                      session.messages.push({ role: "assistant", content: response.text });
+                    }
+                    session.messages.push({
+                      role: "user",
+                      content: clarificationIntervention.gate,
+                    });
+                    onProgress("Clarification review kept the task internal");
+                    continue;
+                  }
+                  if (
+                    (clarificationIntervention.kind === "ask_user" ||
+                      clarificationIntervention.kind === "blocked") &&
+                    clarificationIntervention.message
+                  ) {
+                    this.appendVisibleAssistantMessage(session, clarificationIntervention.message);
+                    this.recordMetricEnd(metricId, {
+                      agentPhase: AgentPhase.COMPLETE,
+                      iterations: bgAgentState.iteration,
+                      toolCallCount: bgToolCallCount,
+                      hitMaxIterations: false,
+                    });
+                    await this.persistSessionToMemory(
+                      chatId,
+                      this.getVisibleTranscript(session),
+                      /* force */ true,
+                    );
+                    return clarificationIntervention.message;
+                  }
+
+                  const rawBoundary = this.decideUserVisibleBoundary({
+                    chatId,
+                    prompt,
+                    workerDraft: response.text ?? "",
+                    task: executionStrategy.task,
+                    state: bgAgentState,
+                    selfVerification,
+                    taskStartedAtMs,
+                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    terminalFailureReported: isTerminalFailureReport(response.text),
+                  });
+                  if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
+                    bgAgentState = {
+                      ...bgAgentState,
+                      lastReflection: response.text ?? bgAgentState.lastReflection,
+                      reflectionCount: bgAgentState.reflectionCount + 1,
+                      consecutiveErrors: 0,
+                    };
+                    bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+                    if (response.text) {
+                      session.messages.push({ role: "assistant", content: response.text });
+                    }
+                    session.messages.push({ role: "user", content: rawBoundary.gate });
+                    onProgress("Visibility boundary kept the task internal");
+                    continue;
+                  }
+                  if (
+                    (rawBoundary.kind === "plan_review" ||
+                      rawBoundary.kind === "terminal_failure") &&
+                    rawBoundary.visibleText
+                  ) {
+                    const surfacedText = this.formatBoundaryVisibleText(rawBoundary)!;
+                    this.appendVisibleAssistantMessage(session, surfacedText);
+                    this.recordMetricEnd(metricId, {
+                      agentPhase: AgentPhase.COMPLETE,
+                      iterations: bgAgentState.iteration,
+                      toolCallCount: bgToolCallCount,
+                      hitMaxIterations: false,
+                    });
+                    await this.persistSessionToMemory(
+                      chatId,
+                      this.getVisibleTranscript(session),
+                      /* force */ true,
+                    );
+                    return surfacedText;
+                  }
+
+                  const verifierIntervention = await this.resolveVerifierIntervention({
+                    chatId,
+                    identityKey,
+                    prompt,
+                    state: bgAgentState,
+                    draft: response.text,
+                    selfVerification,
+                    stradaConformance,
+                    strategy: executionStrategy,
+                    taskStartedAtMs,
+                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    usageHandler: options.onUsage ?? this.onUsage,
+                  });
+                  executionJournal.recordVerifierResult(
+                    verifierIntervention.result,
+                    executionStrategy.reviewer.providerName,
+                    executionStrategy.reviewer.modelId,
+                  );
+                  if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+                    this.recordPhaseOutcome({
+                      chatId,
+                      identityKey,
+                      assignment: currentAssignment,
+                      phase: "reflecting",
+                      status: "continued",
+                      task: executionStrategy.task,
+                      reason: verifierIntervention.result.summary,
+                      telemetry: buildBgPhaseOutcomeTelemetry({
+                        state: bgAgentState,
+                        usage: response.usage,
+                        verifierDecision: "continue",
+                        failureReason: verifierIntervention.result.summary,
+                      }),
+                    });
+                    bgAgentState = {
+                      ...bgAgentState,
+                      lastReflection: response.text ?? bgAgentState.lastReflection,
+                      reflectionCount: bgAgentState.reflectionCount + 1,
+                      consecutiveErrors: 0,
+                    };
+                    bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+                    if (response.text) {
+                      session.messages.push({ role: "assistant", content: response.text });
+                    }
+                    session.messages.push({ role: "user", content: verifierIntervention.gate });
+                    onProgress("Verification required before completion");
+                    continue;
+                  }
+                  if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+                    executionJournal.beginReplan({
+                      state: bgAgentState,
+                      reason: verifierIntervention.result.summary,
+                      providerName: executionStrategy.reviewer.providerName,
+                      modelId: executionStrategy.reviewer.modelId,
+                    });
+                    this.recordPhaseOutcome({
+                      chatId,
+                      identityKey,
+                      assignment: currentAssignment,
+                      phase: "reflecting",
+                      status: "replanned",
+                      task: executionStrategy.task,
+                      reason: verifierIntervention.result.summary,
+                      telemetry: buildBgPhaseOutcomeTelemetry({
+                        state: bgAgentState,
+                        usage: response.usage,
+                        verifierDecision: "replan",
+                        failureReason: verifierIntervention.result.summary,
+                      }),
+                    });
+                    bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                    if (response.text) {
+                      session.messages.push({ role: "assistant", content: response.text });
+                    }
+                    session.messages.push({ role: "user", content: verifierIntervention.gate });
+                    onProgress("Verifier pipeline requested a replan");
+                    continue;
+                  }
+
+                  const finalText = await this.synthesizeUserFacingResponse({
+                    chatId,
+                    identityKey,
+                    prompt,
+                    draft: response.text ?? "",
+                    agentState: bgAgentState,
+                    strategy: executionStrategy,
+                    systemPrompt,
+                    usageHandler: options.onUsage ?? this.onUsage,
+                  });
+                  const finalBoundary = this.decideUserVisibleBoundary({
+                    chatId,
+                    prompt,
+                    workerDraft: response.text ?? "",
+                    visibleDraft: finalText,
+                    task: executionStrategy.task,
+                    state: bgAgentState,
+                    selfVerification,
+                    taskStartedAtMs,
+                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    terminalFailureReported: isTerminalFailureReport(response.text),
+                  });
+                  if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
+                    bgAgentState = {
+                      ...bgAgentState,
+                      lastReflection: response.text ?? bgAgentState.lastReflection,
+                      reflectionCount: bgAgentState.reflectionCount + 1,
+                      consecutiveErrors: 0,
+                    };
+                    bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+                    if (response.text) {
+                      session.messages.push({ role: "assistant", content: response.text });
+                    }
+                    session.messages.push({ role: "user", content: finalBoundary.gate });
+                    onProgress("Visibility boundary rejected the draft");
+                    continue;
+                  }
+                  const surfacedFinalText = finalBoundary.visibleText ?? finalText;
+                  if (surfacedFinalText) {
+                    this.appendVisibleAssistantMessage(session, surfacedFinalText);
+                  }
+                  this.recordPhaseOutcome({
+                    chatId,
+                    identityKey,
+                    assignment: currentAssignment,
+                    phase: "reflecting",
+                    status: "approved",
+                    task: executionStrategy.task,
+                    reason:
+                      "Reflection accepted completion after the verifier pipeline cleared the task.",
+                    telemetry: buildBgPhaseOutcomeTelemetry({
+                      state: bgAgentState,
+                      usage: response.usage,
+                      verifierDecision: "approve",
+                    }),
+                  });
+                  this.recordMetricEnd(metricId, {
+                    agentPhase: AgentPhase.COMPLETE,
+                    iterations: bgAgentState.iteration,
+                    toolCallCount: bgToolCallCount,
+                    hitMaxIterations: false,
+                  });
+                  await this.persistSessionToMemory(
+                    chatId,
+                    this.getVisibleTranscript(session),
+                    /* force */ true,
+                  );
+                  return surfacedFinalText || "Task completed without output.";
+                }
+
+                if (decision === "REPLAN") {
+                  executionJournal.beginReplan({
+                    state: bgAgentState,
+                    reason: response.text ?? "reflection requested a new plan",
+                    providerName: currentAssignment.providerName,
+                    modelId: currentAssignment.modelId,
+                  });
+                  bgAgentState = {
+                    ...bgAgentState,
+                    failedApproaches: [
+                      ...bgAgentState.failedApproaches,
+                      extractApproachSummary(bgAgentState),
+                    ],
+                    lastReflection: response.text ?? null,
+                    reflectionCount: bgAgentState.reflectionCount + 1,
+                  };
+                  bgAgentState = transitionPhase(bgAgentState, AgentPhase.REPLANNING);
+                  if (response.text) {
+                    session.messages.push({ role: "assistant", content: response.text });
+                  }
+                  this.recordPhaseOutcome({
+                    chatId,
+                    identityKey,
+                    assignment: currentAssignment,
+                    phase: "reflecting",
+                    status: "replanned",
+                    task: executionStrategy.task,
+                    reason: response.text ?? "reflection requested a new plan",
+                    telemetry: buildBgPhaseOutcomeTelemetry({
+                      state: bgAgentState,
+                      usage: response.usage,
+                      failureReason: response.text,
+                    }),
+                  });
+                  session.messages.push({ role: "user", content: "Please create a new plan." });
+                  onProgress("Replanning: current approach needs adjustment");
+                  continue;
+                }
+
+                // CONTINUE
+                bgAgentState = {
+                  ...bgAgentState,
+                  reflectionCount: bgAgentState.reflectionCount + 1,
+                  consecutiveErrors: 0,
+                };
+                bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+
+                if (response.toolCalls.length === 0) {
+                  if (response.text) {
+                    session.messages.push({ role: "assistant", content: response.text });
+                  }
+                  session.messages.push({ role: "user", content: "Please continue." });
+                  continue;
+                }
+              }
+              // ────────────────────────────────────────────────────────────────
+
+              if (
+                (bgAgentState.phase === AgentPhase.PLANNING ||
+                  bgAgentState.phase === AgentPhase.REPLANNING) &&
+                response.toolCalls.length === 0 &&
+                userExplicitlyAskedForPlan(prompt) &&
+                draftLooksLikeInternalPlanArtifact(response.text ?? "", {
+                  toolNames: currentToolDefinitions.map((definition) => definition.name),
+                })
+              ) {
+                executionJournal.recordPlan(
+                  response.text,
+                  bgAgentState.phase,
+                  currentAssignment.providerName,
+                  currentAssignment.modelId,
+                );
+                bgAgentState = { ...bgAgentState, plan: response.text ?? null };
+                const planText = applyVisibleResponseContract(
+                  prompt,
+                  this.stripInternalDecisionMarkers(response.text) || response.text || "",
+                );
+                if (planText) {
+                  this.interactionPolicy.requirePlanReview(
+                    chatId,
+                    "user explicitly asked to review a plan first",
+                    planText,
+                  );
+                  this.appendVisibleAssistantMessage(
+                    session,
+                    this.formatPlanReviewMessage(planText),
+                  );
+                }
+                this.recordMetricEnd(metricId, {
+                  agentPhase: AgentPhase.COMPLETE,
+                  iterations: bgAgentState.iteration,
+                  toolCallCount: bgToolCallCount,
+                  hitMaxIterations: false,
+                });
+                await this.persistSessionToMemory(
+                  chatId,
+                  this.getVisibleTranscript(session),
+                  /* force */ true,
+                );
+                return planText
+                  ? this.formatPlanReviewMessage(planText)
+                  : "Plan prepared for review.";
+              }
+
+              // Final response — return text
+              if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
+                const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
+                if (pendingPlanReviewText) {
+                  this.appendVisibleAssistantMessage(session, pendingPlanReviewText);
+                  this.recordMetricEnd(metricId, {
+                    agentPhase: AgentPhase.COMPLETE,
+                    iterations: bgAgentState.iteration,
+                    toolCallCount: bgToolCallCount,
+                    hitMaxIterations: false,
+                  });
+                  await this.persistSessionToMemory(
+                    chatId,
+                    this.getVisibleTranscript(session),
+                    /* force */ true,
+                  );
+                  return pendingPlanReviewText;
+                }
+
+                const pendingWriteRejectionText = this.getPendingSelfManagedWriteRejectionVisibleText(
+                  session,
+                  response.text,
+                );
+                if (pendingWriteRejectionText) {
+                  this.appendVisibleAssistantMessage(session, pendingWriteRejectionText);
+                  this.recordMetricEnd(metricId, {
+                    agentPhase: AgentPhase.COMPLETE,
+                    iterations: bgAgentState.iteration,
+                    toolCallCount: bgToolCallCount,
+                    hitMaxIterations: false,
+                  });
+                  await this.persistSessionToMemory(
+                    chatId,
+                    this.getVisibleTranscript(session),
+                    /* force */ true,
+                  );
+                  return pendingWriteRejectionText;
+                }
+
+                const clarificationIntervention = await this.resolveDraftClarificationIntervention({
+                  chatId,
+                  identityKey,
+                  prompt,
+                  draft: response.text ?? "",
+                  state: bgAgentState,
+                  strategy: executionStrategy,
+                  touchedFiles: [...selfVerification.getState().touchedFiles],
+                  usageHandler: options.onUsage ?? this.onUsage,
+                });
+                if (
+                  clarificationIntervention.kind === "continue" &&
+                  clarificationIntervention.gate
+                ) {
+                  if (response.text) {
+                    session.messages.push({ role: "assistant", content: response.text });
+                  }
+                  session.messages.push({ role: "user", content: clarificationIntervention.gate });
+                  continue;
+                }
+                if (
+                  (clarificationIntervention.kind === "ask_user" ||
+                    clarificationIntervention.kind === "blocked") &&
+                  clarificationIntervention.message
+                ) {
+                  this.appendVisibleAssistantMessage(session, clarificationIntervention.message);
+                  this.recordMetricEnd(metricId, {
+                    agentPhase: AgentPhase.COMPLETE,
+                    iterations: bgAgentState.iteration,
+                    toolCallCount: bgToolCallCount,
+                    hitMaxIterations: false,
+                  });
+                  await this.persistSessionToMemory(
+                    chatId,
+                    this.getVisibleTranscript(session),
+                    /* force */ true,
+                  );
+                  return clarificationIntervention.message;
+                }
+
+                const rawBoundary = this.decideUserVisibleBoundary({
+                  chatId,
+                  prompt,
+                  workerDraft: response.text ?? "",
+                  task: executionStrategy.task,
+                  state: bgAgentState,
+                  selfVerification,
+                  taskStartedAtMs,
+                  availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                  terminalFailureReported: isTerminalFailureReport(response.text),
+                });
+                if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
+                  if (response.text) {
+                    session.messages.push({ role: "assistant", content: response.text });
+                  }
+                  session.messages.push({ role: "user", content: rawBoundary.gate });
+                  continue;
+                }
+                if (
+                  (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure") &&
+                  rawBoundary.visibleText
+                ) {
+                  const surfacedText = this.formatBoundaryVisibleText(rawBoundary)!;
+                  this.appendVisibleAssistantMessage(session, surfacedText);
+                  this.recordMetricEnd(metricId, {
+                    agentPhase: AgentPhase.COMPLETE,
+                    iterations: bgAgentState.iteration,
+                    toolCallCount: bgToolCallCount,
+                    hitMaxIterations: false,
+                  });
+                  await this.persistSessionToMemory(
+                    chatId,
+                    this.getVisibleTranscript(session),
+                    /* force */ true,
+                  );
+                  return surfacedText;
+                }
+
+                const verifierIntervention = await this.resolveVerifierIntervention({
+                  chatId,
+                  identityKey,
+                  prompt,
+                  state: bgAgentState,
+                  draft: response.text,
+                  selfVerification,
+                  stradaConformance,
+                  strategy: executionStrategy,
+                  taskStartedAtMs,
+                  availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                  usageHandler: options.onUsage ?? this.onUsage,
+                });
+                if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+                  this.recordPhaseOutcome({
+                    chatId,
+                    identityKey,
+                    assignment: currentAssignment,
+                    phase: this.toExecutionPhase(bgAgentState.phase),
+                    status: "continued",
+                    task: executionStrategy.task,
+                    reason: verifierIntervention.result.summary,
+                    telemetry: buildBgPhaseOutcomeTelemetry({
+                      state: bgAgentState,
+                      usage: response.usage,
+                      verifierDecision: "continue",
+                      failureReason: verifierIntervention.result.summary,
+                    }),
+                  });
+                  if (response.text) {
+                    session.messages.push({ role: "assistant", content: response.text });
+                  }
+                  session.messages.push({ role: "user", content: verifierIntervention.gate });
+                  continue;
+                }
+                if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+                  this.recordPhaseOutcome({
+                    chatId,
+                    identityKey,
+                    assignment: currentAssignment,
+                    phase: this.toExecutionPhase(bgAgentState.phase),
+                    status: "replanned",
+                    task: executionStrategy.task,
+                    reason: verifierIntervention.result.summary,
+                    telemetry: buildBgPhaseOutcomeTelemetry({
+                      state: bgAgentState,
+                      usage: response.usage,
+                      verifierDecision: "replan",
+                      failureReason: verifierIntervention.result.summary,
+                    }),
+                  });
+                  bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                  if (response.text) {
+                    session.messages.push({ role: "assistant", content: response.text });
+                  }
+                  session.messages.push({ role: "user", content: verifierIntervention.gate });
+                  continue;
+                }
+
+                const finalText = await this.synthesizeUserFacingResponse({
+                  chatId,
+                  identityKey,
+                  prompt,
+                  draft: response.text ?? "",
+                  agentState: bgAgentState,
+                  strategy: executionStrategy,
+                  systemPrompt,
+                  usageHandler: options.onUsage ?? this.onUsage,
+                });
+                const finalBoundary = this.decideUserVisibleBoundary({
+                  chatId,
+                  prompt,
+                  workerDraft: response.text ?? "",
+                  visibleDraft: finalText,
+                  task: executionStrategy.task,
+                  state: bgAgentState,
+                  selfVerification,
+                  taskStartedAtMs,
+                  availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                  terminalFailureReported: isTerminalFailureReport(response.text),
+                });
+                if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
+                  if (response.text) {
+                    session.messages.push({ role: "assistant", content: response.text });
+                  }
+                  session.messages.push({ role: "user", content: finalBoundary.gate });
+                  continue;
+                }
+                const surfacedFinalText = finalBoundary.visibleText ?? finalText;
+                if (surfacedFinalText) {
+                  this.appendVisibleAssistantMessage(session, surfacedFinalText);
+                }
+                this.recordPhaseOutcome({
+                  chatId,
+                  identityKey,
+                  assignment: currentAssignment,
+                  phase: this.toExecutionPhase(bgAgentState.phase),
+                  status: "approved",
+                  task: executionStrategy.task,
+                  reason:
+                    "Execution produced a final response after the verifier pipeline cleared the task.",
+                  telemetry: buildBgPhaseOutcomeTelemetry({
+                    state: bgAgentState,
+                    usage: response.usage,
+                    verifierDecision: "approve",
+                  }),
+                });
+
+                // ─── Metrics: record success ────────────────────────────────
+                this.recordMetricEnd(metricId, {
+                  agentPhase: AgentPhase.COMPLETE,
+                  iterations: bgAgentState.iteration,
+                  toolCallCount: bgToolCallCount,
+                  hitMaxIterations: false,
+                });
+                // ────────────────────────────────────────────────────────────
+
+                // Persist background task conversation to memory
+                await this.persistSessionToMemory(
+                  chatId,
+                  this.getVisibleTranscript(session),
+                  /* force */ true,
+                );
+
+                return surfacedFinalText || "Task completed without output.";
+              }
+
+              // ─── PAOR: Phase transitions ────────────────────────────────────
+              if (bgAgentState.phase === AgentPhase.PLANNING) {
+                executionJournal.recordPlan(
+                  response.text,
+                  bgAgentState.phase,
+                  currentAssignment.providerName,
+                  currentAssignment.modelId,
+                );
+                bgAgentState = { ...bgAgentState, plan: response.text ?? null };
+                bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+              }
+              if (bgAgentState.phase === AgentPhase.REPLANNING) {
+                executionJournal.recordPlan(
+                  response.text,
+                  bgAgentState.phase,
+                  currentAssignment.providerName,
+                  currentAssignment.modelId,
+                );
+                bgAgentState = { ...bgAgentState, plan: response.text ?? null };
+                bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+              }
+              // ────────────────────────────────────────────────────────────────
+
+              // Handle tool calls
+              session.messages.push({
+                role: "assistant",
+                content: response.text,
+                tool_calls: response.toolCalls,
+              });
+
+              const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
+                mode: "background",
+                taskPrompt: prompt,
+                sessionMessages: session.messages,
+                onUsage: options.onUsage ?? this.onUsage,
+                identityKey,
+                strategy: executionStrategy,
+                agentState: bgAgentState,
+                touchedFiles: [...selfVerification.getState().touchedFiles],
+              });
+              bgToolCallCount += response.toolCalls.length;
+
+              // Autonomy tracking
+              for (let i = 0; i < response.toolCalls.length; i++) {
+                const tc = response.toolCalls[i]!;
+                const tr = toolResults[i]!;
+                taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
+                selfVerification.track(tc.name, tc.input, tr);
+                stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
+
+                const analysis = errorRecovery.analyze(tc.name, tr);
+                if (analysis) {
+                  taskPlanner.recordError(analysis.summary);
+                  toolResults[i] = {
+                    toolCallId: tr.toolCallId,
+                    content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
+                    isError: tr.isError,
+                  };
+                }
+
+                this.emitToolResult(chatId, tc, toolResults[i]!);
+              }
+              executionJournal.recordToolBatch({
+                phase: bgAgentState.phase,
+                toolCalls: response.toolCalls,
+                toolResults,
+                providerName: currentAssignment.providerName,
+                modelId: currentAssignment.modelId,
+              });
+
+              // Progress report: summarize tool calls
+              const toolNames = response.toolCalls.map((tc) => tc.name).join(", ");
+              onProgress(`Running tools: ${toolNames}`);
+
+              // ─── Consensus: verify output with second provider if confidence is low ───
+              if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
+                try {
+                  const bgTaskClass = this.taskClassifier.classify(prompt);
+                  const bgConfidence = this.confidenceEstimator.estimate({
+                    task: bgTaskClass,
+                    providerName: currentAssignment.providerName,
+                    providerCapabilities: currentProvider.capabilities,
+                    agentState: bgAgentState,
+                    responseLength: (response.text ?? "").length,
+                  });
+
+                  const bgAvailableCount = this.providerManager.listAvailable().length;
+                  const bgStrategy = this.consensusManager.shouldConsult(
+                    bgConfidence,
+                    bgTaskClass,
+                    bgAvailableCount,
+                  );
+
+                  if (bgStrategy !== "skip" && bgAvailableCount >= 2) {
+                    const bgReviewAssignment = this.resolveConsensusReviewAssignment(
+                      executionStrategy.reviewer,
+                      currentAssignment,
+                      identityKey,
+                    );
+                    if (bgReviewAssignment) {
+                      if (bgReviewAssignment.provider) {
+                        const bgConsensusResult = await this.consensusManager.verify({
+                          originalOutput: {
+                            text: response.text ?? undefined,
+                            toolCalls: response.toolCalls.map((tc: ToolCall) => ({
+                              name: tc.name,
+                              input: tc.input,
+                            })),
+                          },
+                          originalProvider: currentAssignment.providerName,
+                          task: bgTaskClass,
+                          confidence: bgConfidence,
+                          reviewProvider: bgReviewAssignment.provider,
+                          prompt,
+                        });
+                        this.recordExecutionTrace({
+                          chatId,
+                          identityKey,
+                          assignment: bgReviewAssignment,
+                          phase: "consensus-review",
+                          source: "consensus-review",
+                          task: bgTaskClass,
+                          reason: bgReviewAssignment.reason,
+                        });
+                        this.recordPhaseOutcome({
+                          chatId,
+                          identityKey,
+                          assignment: bgReviewAssignment,
+                          phase: "consensus-review",
+                          source: "consensus-review",
+                          status: bgConsensusResult.agreed ? "approved" : "continued",
+                          task: bgTaskClass,
+                          reason:
+                            bgConsensusResult.reasoning?.trim() ||
+                            (bgConsensusResult.agreed
+                              ? "Consensus review agreed with the current path."
+                              : "Consensus review found a disagreement and kept execution open."),
+                        });
+
+                        if (!bgConsensusResult.agreed) {
+                          logger.warn("Consensus disagreement (background)", {
+                            chatId,
+                            strategy: bgConsensusResult.strategy,
+                            reasoning: bgConsensusResult.reasoning?.slice(0, 200),
+                          });
+                        }
+                      }
+                    }
+                  }
+                } catch {
+                  // Consensus failure is non-fatal
+                }
+              }
+              // ────────────────────────────────────────────────────────────────────
+
+              // ─── PAOR: Record step results ──────────────────────────────────
+              for (let i = 0; i < response.toolCalls.length; i++) {
+                const tc = response.toolCalls[i]!;
+                const tr = toolResults[i]!;
+                const stepResult: StepResult = {
+                  toolName: tc.name,
+                  success: !(tr.isError ?? false),
+                  summary: tr.content.slice(0, 200),
+                  timestamp: Date.now(),
+                };
+                bgAgentState = {
+                  ...bgAgentState,
+                  stepResults: [...bgAgentState.stepResults, stepResult],
+                  iteration: bgAgentState.iteration + 1,
+                  consecutiveErrors: tr.isError ? bgAgentState.consecutiveErrors + 1 : 0,
+                };
+              }
+
+              const hasErrors = toolResults.some((tr) => tr.isError);
+              const failedSteps = bgAgentState.stepResults.filter((s) => !s.success);
+              const shouldReflect =
+                hasErrors ||
+                (bgAgentState.stepResults.length > 0 &&
+                  bgAgentState.stepResults.length % BG_REFLECT_INTERVAL === 0) ||
+                shouldForceReplan(failedSteps);
+
+              if (shouldReflect && bgAgentState.phase === AgentPhase.EXECUTING) {
+                bgAgentState = transitionPhase(bgAgentState, AgentPhase.REFLECTING);
+                onProgress("Reflecting on progress...");
+              }
+              // ────────────────────────────────────────────────────────────────
+
+              // Add tool results
+              const stateCtx = taskPlanner.getStateInjection();
+              const contentBlocks: Array<
+                | { type: "text"; text: string }
+                | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
+              > = [];
+              if (stateCtx) {
+                contentBlocks.push({ type: "text" as const, text: stateCtx });
+              }
+              if (bgAgentState.phase === AgentPhase.REFLECTING) {
+                contentBlocks.push({
+                  type: "text" as const,
+                  text: buildReflectionPrompt(bgAgentState),
+                });
+              }
+              for (const tr of toolResults) {
+                contentBlocks.push({
+                  type: "tool_result" as const,
+                  tool_use_id: tr.toolCallId,
+                  content: tr.content,
+                  is_error: tr.isError,
+                });
+              }
+              session.messages.push({
+                role: "user",
+                content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
+              });
+
+              // ─── Memory Re-retrieval (background path) ───────────────────────
+              if (bgMemoryRefresher) {
+                try {
+                  const check = await bgMemoryRefresher.shouldRefresh(bgIteration, prompt, chatId);
+                  if (check.should) {
+                    const refreshed = await bgMemoryRefresher.refresh(
+                      prompt,
+                      chatId,
+                      check.reason,
+                      bgIteration,
+                      check.cosineDistance,
+                    );
+                    if (refreshed.triggered) {
+                      if (refreshed.newMemoryContext) {
+                        systemPrompt = replaceSection(
+                          systemPrompt,
+                          "re-retrieval:memory",
+                          `## Relevant Memory\n${refreshed.newMemoryContext}`,
+                        );
+                      }
+                      if (refreshed.newRagContext) {
+                        systemPrompt = replaceSection(
+                          systemPrompt,
+                          "re-retrieval:rag",
+                          refreshed.newRagContext,
+                        );
+                      }
+                      if (refreshed.newInsights?.length) {
+                        bgAgentState = { ...bgAgentState, learnedInsights: refreshed.newInsights };
+                      }
+                    }
+                  }
+                } catch {
+                  // Re-retrieval failure is non-fatal
+                }
+              }
+              // ─────────────────────────────────────────────────────────────────
+            }
+            const completedEpochCount = bgEpochCount;
+            const continuedAfterBudget = this.canAutoContinueBackgroundEpoch(completedEpochCount);
+
+            this.recordPhaseOutcome({
+              chatId,
+              identityKey,
+              assignment: executionStrategy.executor,
+              phase: this.toExecutionPhase(bgAgentState.phase),
+              status: continuedAfterBudget ? "continued" : "blocked",
+              task: executionStrategy.task,
+              reason: continuedAfterBudget
+                ? "Background execution window reached its iteration budget and rolled into a new autonomous epoch."
+                : "Background execution stopped after reaching the configured iteration budget.",
+              telemetry: buildBgPhaseOutcomeTelemetry({
+                state: bgAgentState,
+              }),
+            });
+            this.persistExecutionMemory(identityKey, executionJournal);
+
+            if (continuedAfterBudget) {
+              taskPlanner.resetBudgetWindow();
+              bgEpochCount++;
+              continue;
+            }
+
+            this.recordMetricEnd(metricId, {
+              agentPhase: bgAgentState.phase,
+              iterations: bgAgentState.iteration,
+              toolCallCount: bgToolCallCount,
+              iterationBudgetReached: true,
+              continuedAfterBudget: false,
+              epochCount: completedEpochCount,
+              terminatedByIterationBudget: true,
+            });
+
+            return this.buildBackgroundIterationBudgetStopMessage(completedEpochCount);
+          }
+        } catch (error) {
+          bgAgentState = transitionPhase(bgAgentState, AgentPhase.FAILED);
+          throw error;
+        } finally {
+          this.persistExecutionMemory(identityKey, executionJournal);
+          // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
+          this.recordMetricEnd(metricId, {
+            agentPhase: bgAgentState.phase,
+            iterations: bgAgentState.iteration,
+            toolCallCount: bgToolCallCount,
+            hitMaxIterations: false,
+          });
+          // ────────────────────────────────────────────────────────────────
+        }
+      },
+    );
   }
 
   /**
@@ -3207,7 +3618,11 @@ export class Orchestrator {
           this.stradaDeps = checkStradaDeps(this.projectPath, this.stradaConfig);
           this.rebuildBaseSystemPrompt();
           this.depsSetupComplete = true;
-          await this.sendVisibleAssistantText(chatId, session, "Strada.Core kuruldu! Artık kullanabilirsiniz.");
+          await this.sendVisibleAssistantText(
+            chatId,
+            session,
+            "Strada.Core kuruldu! Artık kullanabilirsiniz.",
+          );
 
           if (!this.stradaDeps.modulesInstalled) {
             this.pendingModulesPrompt.set(chatId, true);
@@ -3219,7 +3634,11 @@ export class Orchestrator {
             return;
           }
         } else {
-          await this.sendVisibleAssistantText(chatId, session, `Kurulum başarısız: ${result.error}`);
+          await this.sendVisibleAssistantText(
+            chatId,
+            session,
+            `Kurulum başarısız: ${result.error}`,
+          );
           this.depsSetupComplete = true;
         }
       } else {
@@ -3263,10 +3682,18 @@ export class Orchestrator {
         this.rebuildBaseSystemPrompt();
         await this.sendVisibleAssistantText(chatId, session, "Strada.Modules kuruldu!");
       } else {
-        await this.sendVisibleAssistantText(chatId, session, `Modules kurulumu başarısız: ${result.error}`);
+        await this.sendVisibleAssistantText(
+          chatId,
+          session,
+          `Modules kurulumu başarısız: ${result.error}`,
+        );
       }
     } else {
-      await this.sendVisibleAssistantText(chatId, session, "Anlaşıldı. Strada.Modules olmadan devam ediyoruz.");
+      await this.sendVisibleAssistantText(
+        chatId,
+        session,
+        "Anlaşıldı. Strada.Modules olmadan devam ediyoruz.",
+      );
     }
   }
 
@@ -3297,12 +3724,20 @@ export class Orchestrator {
           const prepared = prepareTreeForResume(tree);
           this.activeGoalTrees.set(tree.sessionId, prepared);
         }
-        await this.sendVisibleAssistantMarkdown(chatId, session, "Resuming interrupted goal trees...");
+        await this.sendVisibleAssistantMarkdown(
+          chatId,
+          session,
+          "Resuming interrupted goal trees...",
+        );
         return;
       } else if (normalized === "discard" || normalized === "discard all") {
         this.appendVisibleUserMessage(session, text);
         await this.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
-        await this.sendVisibleAssistantMarkdown(chatId, session, "Interrupted goal trees discarded.");
+        await this.sendVisibleAssistantMarkdown(
+          chatId,
+          session,
+          "Interrupted goal trees discarded.",
+        );
         return;
       }
     }
@@ -3365,10 +3800,14 @@ export class Orchestrator {
           },
         );
         if (autonomousState.enabled) {
-          this.dmPolicy.initFromProfile(chatId, {
-            autonomousMode: true,
-            autonomousExpiresAt: autonomousState.expiresAt,
-          }, userId);
+          this.dmPolicy.initFromProfile(
+            chatId,
+            {
+              autonomousMode: true,
+              autonomousExpiresAt: autonomousState.expiresAt,
+            },
+            userId,
+          );
         } else {
           this.dmPolicy.initFromProfile(chatId, { autonomousMode: false }, userId);
         }
@@ -3388,13 +3827,19 @@ export class Orchestrator {
     // Trim old messages to manage context window (provider-aware threshold)
     // Persist trimmed messages to memory before discarding
     const providerInfo = this.providerManager.getActiveInfo?.(identityKey);
-    const trimmed = this.trimSession(session, getRecommendedMaxMessages(
-      providerInfo?.providerName ?? provider.name,
-      providerInfo?.model,
-      this.modelIntelligence,
-      this.providerManager.getProviderCapabilities?.(providerInfo?.providerName ?? provider.name, providerInfo?.model),
-      providerInfo?.providerName ?? provider.name,
-    ));
+    const trimmed = this.trimSession(
+      session,
+      getRecommendedMaxMessages(
+        providerInfo?.providerName ?? provider.name,
+        providerInfo?.model,
+        this.modelIntelligence,
+        this.providerManager.getProviderCapabilities?.(
+          providerInfo?.providerName ?? provider.name,
+          providerInfo?.model,
+        ),
+        providerInfo?.providerName ?? provider.name,
+      ),
+    );
     if (trimmed.length > 0) {
       await this.persistSessionToMemory(chatId, trimmed, /* force */ true);
     }
@@ -3423,9 +3868,16 @@ export class Orchestrator {
       const visibleMessages = this.getVisibleTranscript(session);
       await this.persistSessionToMemory(chatId, visibleMessages.slice(-10), /* force */ true);
       // Periodic summarization: every 10 messages, generate an LLM summary
-      if (this.sessionSummarizer && visibleMessages.length > 0 && visibleMessages.length % 10 === 0) {
-        void this.sessionSummarizer.summarizeAndUpdateProfile(session.profileKey ?? chatId, visibleMessages)
-          .catch(() => { /* periodic summarization failure is non-fatal */ });
+      if (
+        this.sessionSummarizer &&
+        visibleMessages.length > 0 &&
+        visibleMessages.length % 10 === 0
+      ) {
+        void this.sessionSummarizer
+          .summarizeAndUpdateProfile(session.profileKey ?? chatId, visibleMessages)
+          .catch(() => {
+            /* periodic summarization failure is non-fatal */
+          });
       }
     }
   }
@@ -3451,7 +3903,8 @@ export class Orchestrator {
     // Per-user persona override (from profile, not global SoulLoader mutation)
     let personaContent: string | undefined;
     if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
-      personaContent = await this.soulLoader.getProfileContent(profile.activePersona) ?? undefined;
+      personaContent =
+        (await this.soulLoader.getProfileContent(profile.activePersona)) ?? undefined;
     }
 
     // Extract query text from last user message for embedding + context
@@ -3501,7 +3954,9 @@ export class Orchestrator {
     // ─── Autonomy layer ──────────────────────────────────────────────────
     const lastUserMessage = this.extractLastUserMessage(session);
     const errorRecovery = new ErrorRecoveryEngine();
-    const taskPlanner = new TaskPlanner();
+    const taskPlanner = new TaskPlanner({
+      iterationBudget: this.getInteractiveIterationLimit(),
+    });
     const selfVerification = new SelfVerification();
     const executionJournal = new ExecutionJournal(lastUserMessage);
     if (projectWorldSummary && projectWorldFingerprint) {
@@ -3517,10 +3972,11 @@ export class Orchestrator {
       usage?: ProviderResponse["usage"];
       verifierDecision?: VerifierDecision;
       failureReason?: string | null;
-    }) => this.buildPhaseOutcomeTelemetry({
-      ...params,
-      projectWorldFingerprint,
-    });
+    }) =>
+      this.buildPhaseOutcomeTelemetry({
+        ...params,
+        projectWorldFingerprint,
+      });
     // ────────────────────────────────────────────────────────────────────
 
     // ─── PAOR State Machine ──────────────────────────────────────────────
@@ -3564,97 +4020,648 @@ export class Orchestrator {
     // ────────────────────────────────────────────────────────────────────
 
     logger.debug("System prompt built", { chatId, promptLength: systemPrompt.length });
+    const interactiveIterationLimit = this.getInteractiveIterationLimit();
 
     try {
-    for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-      // ─── PAOR: Build phase-aware system prompt ──────────────────────
-      let activePrompt = systemPrompt;
-      switch (agentState.phase) {
-        case AgentPhase.PLANNING:
-          activePrompt += "\n\n" + buildPlanningPrompt(
-            agentState.taskDescription,
-            mergeLearnedInsights(agentState.learnedInsights, executionJournal.getLearnedInsights()),
-            { enableGoalDetection: !!this.taskManager },
-          );
-          break;
-        case AgentPhase.EXECUTING:
-          activePrompt += buildExecutionContext(agentState);
-          break;
-        case AgentPhase.REPLANNING:
-          activePrompt += "\n\n" + buildReplanningPrompt(agentState);
-          break;
-      }
-      activePrompt += executionJournal.buildPromptSection(agentState.phase);
-      // ────────────────────────────────────────────────────────────────
+      for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
+        // ─── PAOR: Build phase-aware system prompt ──────────────────────
+        let activePrompt = systemPrompt;
+        switch (agentState.phase) {
+          case AgentPhase.PLANNING:
+            activePrompt +=
+              "\n\n" +
+              buildPlanningPrompt(
+                agentState.taskDescription,
+                mergeLearnedInsights(
+                  agentState.learnedInsights,
+                  executionJournal.getLearnedInsights(),
+                ),
+                { enableGoalDetection: !!this.taskManager },
+              );
+            break;
+          case AgentPhase.EXECUTING:
+            activePrompt += buildExecutionContext(agentState);
+            break;
+          case AgentPhase.REPLANNING:
+            activePrompt += "\n\n" + buildReplanningPrompt(agentState);
+            break;
+        }
+        activePrompt += executionJournal.buildPromptSection(agentState.phase);
+        // ────────────────────────────────────────────────────────────────
 
-      const currentAssignment = this.getPinnedToolTurnAssignment(
-        executionStrategy,
-        agentState.phase,
-        toolTurnAffinity,
-      );
-      const currentProvider = currentAssignment.provider;
-      activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
-      const canStream =
-        this.streamingEnabled &&
-        "chatStream" in currentProvider &&
-        typeof currentProvider.chatStream === "function" &&
-        "startStreamingMessage" in this.channel &&
-        typeof this.channel.startStreamingMessage === "function";
-
-      logger.debug("Calling LLM", { chatId, canStream, provider: currentAssignment.providerName, iteration });
-      const currentToolDefinitions = this.buildWorkerToolDefinitions(
-        executionStrategy.task,
-        agentState.phase,
-        currentAssignment.role,
-      );
-      let response;
-      if (canStream) {
-        // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
-        // but don't create visible messages. User sees only the final response via sendMarkdown.
-        response = await this.silentStream(chatId, activePrompt, session, currentProvider, currentToolDefinitions);
-      } else {
-        response = await currentProvider.chat(activePrompt, session.messages, currentToolDefinitions);
-      }
-      this.recordExecutionTrace({
-        chatId,
-        identityKey,
-        assignment: currentAssignment,
-        phase: this.toExecutionPhase(agentState.phase),
-        source: this.resolveExecutionTraceSource(currentAssignment),
-        task: executionStrategy.task,
-      });
-      logger.debug("LLM responded", { chatId, hasText: !!response.text, textLen: response.text?.length ?? 0, toolCalls: response.toolCalls.length });
-
-      logger.debug("LLM response", {
-        chatId,
-        iteration,
-        stopReason: response.stopReason,
-        toolCallCount: response.toolCalls.length,
-        inputTokens: response.usage?.inputTokens ?? 0,
-        outputTokens: response.usage?.outputTokens ?? 0,
-        streamed: canStream,
-      });
-      if (
-        response.toolCalls.length > 0 &&
-        !toolTurnAffinity &&
-        agentState.phase !== AgentPhase.PLANNING &&
-        agentState.phase !== AgentPhase.REPLANNING
-      ) {
-        toolTurnAffinity = currentAssignment;
-      }
-      this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
-
-      // ─── PAOR: Handle REFLECTING phase response ─────────────────────
-      if (agentState.phase === AgentPhase.REFLECTING) {
-        const decision = parseReflectionDecision(response.text);
-        executionJournal.recordReflection(
-          decision,
-          response.text,
-          currentAssignment.providerName,
-          currentAssignment.modelId,
+        const currentAssignment = this.getPinnedToolTurnAssignment(
+          executionStrategy,
+          agentState.phase,
+          toolTurnAffinity,
         );
+        const currentProvider = currentAssignment.provider;
+        activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
+        const canStream =
+          this.streamingEnabled &&
+          "chatStream" in currentProvider &&
+          typeof currentProvider.chatStream === "function" &&
+          "startStreamingMessage" in this.channel &&
+          typeof this.channel.startStreamingMessage === "function";
 
-        if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
+        logger.debug("Calling LLM", {
+          chatId,
+          canStream,
+          provider: currentAssignment.providerName,
+          iteration,
+        });
+        const currentToolDefinitions = this.buildWorkerToolDefinitions(
+          executionStrategy.task,
+          agentState.phase,
+          currentAssignment.role,
+        );
+        let response;
+        if (canStream) {
+          // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
+          // but don't create visible messages. User sees only the final response via sendMarkdown.
+          response = await this.silentStream(
+            chatId,
+            activePrompt,
+            session,
+            currentProvider,
+            currentToolDefinitions,
+          );
+        } else {
+          response = await currentProvider.chat(
+            activePrompt,
+            session.messages,
+            currentToolDefinitions,
+          );
+        }
+        this.recordExecutionTrace({
+          chatId,
+          identityKey,
+          assignment: currentAssignment,
+          phase: this.toExecutionPhase(agentState.phase),
+          source: this.resolveExecutionTraceSource(currentAssignment),
+          task: executionStrategy.task,
+        });
+        logger.debug("LLM responded", {
+          chatId,
+          hasText: !!response.text,
+          textLen: response.text?.length ?? 0,
+          toolCalls: response.toolCalls.length,
+        });
+
+        logger.debug("LLM response", {
+          chatId,
+          iteration,
+          stopReason: response.stopReason,
+          toolCallCount: response.toolCalls.length,
+          inputTokens: response.usage?.inputTokens ?? 0,
+          outputTokens: response.usage?.outputTokens ?? 0,
+          streamed: canStream,
+        });
+        if (
+          response.toolCalls.length > 0 &&
+          !toolTurnAffinity &&
+          agentState.phase !== AgentPhase.PLANNING &&
+          agentState.phase !== AgentPhase.REPLANNING
+        ) {
+          toolTurnAffinity = currentAssignment;
+        }
+        this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
+
+        // ─── PAOR: Handle REFLECTING phase response ─────────────────────
+        if (agentState.phase === AgentPhase.REFLECTING) {
+          const decision = parseReflectionDecision(response.text);
+          executionJournal.recordReflection(
+            decision,
+            response.text,
+            currentAssignment.providerName,
+            currentAssignment.modelId,
+          );
+
+          if (response.toolCalls.length === 0) {
+            const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
+            if (pendingPlanReviewText) {
+              await this.sendVisibleAssistantMarkdown(chatId, session, pendingPlanReviewText);
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: agentState.iteration,
+                toolCallCount: agentState.stepResults.length,
+                hitMaxIterations: false,
+              });
+              return;
+            }
+
+            const pendingWriteRejectionText = this.getPendingSelfManagedWriteRejectionVisibleText(
+              session,
+              response.text,
+            );
+            if (pendingWriteRejectionText) {
+              await this.sendVisibleAssistantMarkdown(
+                chatId,
+                session,
+                pendingWriteRejectionText,
+              );
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: agentState.iteration,
+                toolCallCount: agentState.stepResults.length,
+                hitMaxIterations: false,
+              });
+              return;
+            }
+          }
+
+          if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
+            const clarificationIntervention = await this.resolveDraftClarificationIntervention({
+              chatId,
+              identityKey,
+              prompt: lastUserMessage,
+              draft: response.text ?? "",
+              state: agentState,
+              strategy: executionStrategy,
+              touchedFiles: [...selfVerification.getState().touchedFiles],
+              usageHandler: this.onUsage,
+            });
+            if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
+              agentState = {
+                ...agentState,
+                lastReflection: response.text ?? agentState.lastReflection,
+                reflectionCount: agentState.reflectionCount + 1,
+                consecutiveErrors: 0,
+              };
+              agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: clarificationIntervention.gate });
+              continue;
+            }
+            if (
+              (clarificationIntervention.kind === "ask_user" ||
+                clarificationIntervention.kind === "blocked") &&
+              clarificationIntervention.message
+            ) {
+              await this.sendVisibleAssistantMarkdown(
+                chatId,
+                session,
+                clarificationIntervention.message,
+              );
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: agentState.iteration,
+                toolCallCount: agentState.stepResults.length,
+                hitMaxIterations: false,
+              });
+              return;
+            }
+
+            const verifierIntervention = await this.resolveVerifierIntervention({
+              chatId,
+              identityKey,
+              prompt: lastUserMessage,
+              state: agentState,
+              draft: response.text,
+              selfVerification,
+              stradaConformance,
+              strategy: executionStrategy,
+              taskStartedAtMs,
+              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+              usageHandler: this.onUsage,
+            });
+            executionJournal.recordVerifierResult(
+              verifierIntervention.result,
+              executionStrategy.reviewer.providerName,
+              executionStrategy.reviewer.modelId,
+            );
+            if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+              this.recordPhaseOutcome({
+                chatId,
+                identityKey,
+                assignment: currentAssignment,
+                phase: "reflecting",
+                status: "continued",
+                task: executionStrategy.task,
+                reason: verifierIntervention.result.summary,
+                telemetry: buildInteractivePhaseOutcomeTelemetry({
+                  state: agentState,
+                  usage: response.usage,
+                  verifierDecision: "continue",
+                  failureReason: verifierIntervention.result.summary,
+                }),
+              });
+              agentState = {
+                ...agentState,
+                lastReflection: response.text ?? agentState.lastReflection,
+                reflectionCount: agentState.reflectionCount + 1,
+                consecutiveErrors: 0,
+              };
+              agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: verifierIntervention.gate });
+              continue;
+            }
+            if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+              executionJournal.beginReplan({
+                state: agentState,
+                reason: verifierIntervention.result.summary,
+                providerName: executionStrategy.reviewer.providerName,
+                modelId: executionStrategy.reviewer.modelId,
+              });
+              this.recordPhaseOutcome({
+                chatId,
+                identityKey,
+                assignment: currentAssignment,
+                phase: "reflecting",
+                status: "replanned",
+                task: executionStrategy.task,
+                reason: verifierIntervention.result.summary,
+                telemetry: buildInteractivePhaseOutcomeTelemetry({
+                  state: agentState,
+                  usage: response.usage,
+                  verifierDecision: "replan",
+                  failureReason: verifierIntervention.result.summary,
+                }),
+              });
+              agentState = this.transitionToVerifierReplan(agentState, response.text);
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: verifierIntervention.gate });
+              continue;
+            }
+
+            const visibilityDecision = await this.resolveVisibleDraftDecision({
+              chatId,
+              identityKey,
+              prompt: lastUserMessage,
+              draft: response.text ?? "",
+              agentState,
+              strategy: executionStrategy,
+              systemPrompt,
+              selfVerification,
+              taskStartedAtMs,
+              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+              usageHandler: this.onUsage,
+            });
+            if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
+              if (response.text) {
+                session.messages.push({ role: "assistant", content: response.text });
+              }
+              session.messages.push({ role: "user", content: visibilityDecision.gate });
+              agentState = {
+                ...agentState,
+                lastReflection: response.text ?? agentState.lastReflection,
+                reflectionCount: agentState.reflectionCount + 1,
+                consecutiveErrors: 0,
+              };
+              agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+              continue;
+            }
+            if (
+              (visibilityDecision.kind === "plan_review" ||
+                visibilityDecision.kind === "blocked" ||
+                visibilityDecision.kind === "ask_user") &&
+              visibilityDecision.visibleText
+            ) {
+              await this.sendVisibleAssistantMarkdown(
+                chatId,
+                session,
+                visibilityDecision.visibleText,
+              );
+              this.recordPhaseOutcome({
+                chatId,
+                identityKey,
+                assignment: currentAssignment,
+                phase: "reflecting",
+                status: "blocked",
+                task: executionStrategy.task,
+                reason: visibilityDecision.reason,
+                telemetry: buildInteractivePhaseOutcomeTelemetry({
+                  state: agentState,
+                  usage: response.usage,
+                  verifierDecision: "approve",
+                }),
+              });
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: agentState.iteration,
+                toolCallCount: agentState.stepResults.length,
+                hitMaxIterations: false,
+              });
+              return;
+            }
+            const finalText = visibilityDecision.visibleText?.trim() ?? "";
+            if (finalText) {
+              await this.sendVisibleAssistantMarkdown(chatId, session, finalText);
+            }
+            this.recordPhaseOutcome({
+              chatId,
+              identityKey,
+              assignment: currentAssignment,
+              phase: "reflecting",
+              status: "approved",
+              task: executionStrategy.task,
+              reason: visibilityDecision.reason,
+              telemetry: buildInteractivePhaseOutcomeTelemetry({
+                state: agentState,
+                usage: response.usage,
+                verifierDecision: "approve",
+              }),
+            });
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
+            });
+            return;
+          }
+
+          if (decision === "REPLAN") {
+            executionJournal.beginReplan({
+              state: agentState,
+              reason: response.text ?? "reflection requested a new plan",
+              providerName: currentAssignment.providerName,
+              modelId: currentAssignment.modelId,
+            });
+            agentState = {
+              ...agentState,
+              failedApproaches: [
+                ...agentState.failedApproaches,
+                extractApproachSummary(agentState),
+              ],
+              lastReflection: response.text ?? null,
+              reflectionCount: agentState.reflectionCount + 1,
+            };
+
+            // ─── Goal Decomposition: reactive decomposition when stuck ──────
+            if (this.goalDecomposer && this.activeGoalTrees.has(conversationScope)) {
+              try {
+                const goalTree = this.activeGoalTrees.get(conversationScope)!;
+                // Find the currently-executing node
+                let executingNodeId: GoalNodeId | null = null;
+                for (const [, node] of goalTree.nodes) {
+                  if (node.status === "executing") {
+                    executingNodeId = node.id;
+                    break;
+                  }
+                }
+                if (executingNodeId) {
+                  const executingNode = goalTree.nodes.get(executingNodeId)!;
+                  this.emitGoalEvent(
+                    goalTree.rootId,
+                    executingNodeId,
+                    "failed",
+                    executingNode.depth,
+                  );
+                  const updatedTree = await this.goalDecomposer.decomposeReactive(
+                    goalTree,
+                    executingNodeId,
+                    response.text ?? "",
+                  );
+                  if (updatedTree) {
+                    this.activeGoalTrees.set(conversationScope, updatedTree);
+                    const treeViz = renderGoalTree(updatedTree);
+                    await this.sendVisibleAssistantMarkdown(
+                      chatId,
+                      session,
+                      "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```",
+                    );
+                  } else {
+                    getLogger().info("Reactive decomposition skipped (depth limit reached)", {
+                      chatId,
+                      nodeId: executingNodeId,
+                    });
+                  }
+                }
+              } catch (reactiveError) {
+                // Reactive decomposition failure is non-fatal
+                getLogger().warn("Reactive goal decomposition failed", {
+                  chatId,
+                  error:
+                    reactiveError instanceof Error ? reactiveError.message : String(reactiveError),
+                });
+              }
+            }
+            // ────────────────────────────────────────────────────────────────
+
+            agentState = transitionPhase(agentState, AgentPhase.REPLANNING);
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            this.recordPhaseOutcome({
+              chatId,
+              identityKey,
+              assignment: currentAssignment,
+              phase: "reflecting",
+              status: "replanned",
+              task: executionStrategy.task,
+              reason: response.text ?? "reflection requested a new plan",
+              telemetry: buildInteractivePhaseOutcomeTelemetry({
+                state: agentState,
+                usage: response.usage,
+                failureReason: response.text,
+              }),
+            });
+            session.messages.push({ role: "user", content: "Please create a new plan." });
+            continue;
+          }
+
+          // CONTINUE
+          agentState = {
+            ...agentState,
+            reflectionCount: agentState.reflectionCount + 1,
+            consecutiveErrors: 0,
+          };
+          agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+
+          if (response.toolCalls.length === 0) {
+            if (shouldSurfaceTerminalFailureFromReflection(response)) {
+              const visibilityDecision = await this.resolveVisibleDraftDecision({
+                chatId,
+                identityKey,
+                prompt: lastUserMessage,
+                draft: response.text ?? "",
+                agentState,
+                strategy: executionStrategy,
+                systemPrompt,
+                selfVerification,
+                taskStartedAtMs,
+                availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                terminalFailureReported: true,
+                usageHandler: this.onUsage,
+              });
+              if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
+                if (response.text) {
+                  session.messages.push({ role: "assistant", content: response.text });
+                }
+                session.messages.push({ role: "user", content: visibilityDecision.gate });
+                continue;
+              }
+              if (visibilityDecision.visibleText) {
+                await this.sendVisibleAssistantMarkdown(
+                  chatId,
+                  session,
+                  visibilityDecision.visibleText,
+                );
+              }
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: agentState.iteration,
+                toolCallCount: agentState.stepResults.length,
+                hitMaxIterations: false,
+              });
+              return;
+            }
+
+            if (response.text) {
+              session.messages.push({ role: "assistant", content: response.text });
+            }
+            session.messages.push({ role: "user", content: "Please continue." });
+            continue;
+          }
+        }
+        // ────────────────────────────────────────────────────────────────
+
+        // ─── Goal Detection: check for goal block in Plan phase response ───
+        // Must run BEFORE end_turn early return since goal detection responses
+        // may have no tool calls but should short-circuit to background execution.
+        if (agentState.phase === AgentPhase.PLANNING && this.taskManager) {
+          const goalBlock = parseGoalBlock(response.text ?? "");
+          if (goalBlock && goalBlock.isGoal) {
+            // Build GoalTree from LLM output using shared factory
+            const goalTree = buildGoalTreeFromBlock(
+              goalBlock,
+              conversationScope,
+              lastUserMessage,
+              response.text ?? undefined,
+            );
+
+            // Send acknowledgment
+            const nodeCount = goalTree.nodes.size - 1;
+            const ackMsg =
+              `Working on: ${lastUserMessage.slice(0, 80)}` +
+              ` (${nodeCount} step${nodeCount !== 1 ? "s" : ""}, ~${goalBlock.estimatedMinutes} min). I'll update you as I go.`;
+            await this.sendVisibleAssistantText(chatId, session, ackMsg);
+
+            // Submit as background task with pre-decomposed tree
+            this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, {
+              goalTree,
+              conversationId: conversationScope,
+              userId: identityKey,
+            });
+
+            // Record metric end for the interactive session (goal runs separately)
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: 0,
+              hitMaxIterations: false,
+            });
+
+            // Short-circuit: return immediately, session lock releases
+            return;
+          }
+        }
+        // ────────────────────────────────────────────────────────────────────
+
+        if (
+          (agentState.phase === AgentPhase.PLANNING ||
+            agentState.phase === AgentPhase.REPLANNING) &&
+          response.toolCalls.length === 0 &&
+          userExplicitlyAskedForPlan(lastUserMessage) &&
+          draftLooksLikeInternalPlanArtifact(response.text ?? "", {
+            toolNames: currentToolDefinitions.map((definition) => definition.name),
+          })
+        ) {
+          executionJournal.recordPlan(
+            response.text,
+            agentState.phase,
+            currentAssignment.providerName,
+            currentAssignment.modelId,
+          );
+          agentState = { ...agentState, plan: response.text ?? null };
+
+          if (
+            agentState.phase === AgentPhase.PLANNING &&
+            this.goalDecomposer &&
+            this.goalDecomposer.shouldDecompose(lastUserMessage)
+          ) {
+            try {
+              const goalTree = await this.goalDecomposer.decomposeProactive(
+                conversationScope,
+                lastUserMessage,
+              );
+              this.activeGoalTrees.set(conversationScope, goalTree);
+              this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
+              const treeViz = renderGoalTree(goalTree);
+              await this.sendVisibleAssistantMarkdown(
+                chatId,
+                session,
+                "Goal decomposition:\n```\n" + treeViz + "\n```",
+              );
+              const treeSummary = summarizeTree(goalTree);
+              agentState = {
+                ...agentState,
+                plan: (agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]",
+              };
+            } catch (decompError) {
+              getLogger().warn("Proactive goal decomposition failed", {
+                chatId,
+                error: decompError instanceof Error ? decompError.message : String(decompError),
+              });
+            }
+          }
+
+          this.interactionPolicy.requirePlanReview(
+            chatId,
+            "user explicitly asked to review a plan first",
+            applyVisibleResponseContract(
+              lastUserMessage,
+              this.stripInternalDecisionMarkers(response.text) || response.text || "",
+            ),
+          );
+          const planText = this.getPendingPlanReviewVisibleText(chatId)!;
+          await this.sendVisibleAssistantMarkdown(chatId, session, planText);
+          this.recordMetricEnd(metricId, {
+            agentPhase: AgentPhase.COMPLETE,
+            iterations: agentState.iteration,
+            toolCallCount: agentState.stepResults.length,
+            hitMaxIterations: false,
+          });
+          return;
+        }
+
+        // If no tool calls, send the final text response
+        // (streaming already sent it, so skip for streamed end_turn)
+        if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
+          const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
+          if (pendingPlanReviewText) {
+            await this.sendVisibleAssistantMarkdown(chatId, session, pendingPlanReviewText);
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
+            });
+            return;
+          }
+
+          const pendingWriteRejectionText = this.getPendingSelfManagedWriteRejectionVisibleText(
+            session,
+            response.text,
+          );
+          if (pendingWriteRejectionText) {
+            await this.sendVisibleAssistantMarkdown(chatId, session, pendingWriteRejectionText);
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
+            });
+            return;
+          }
+
           const clarificationIntervention = await this.resolveDraftClarificationIntervention({
             chatId,
             identityKey,
@@ -3666,21 +4673,25 @@ export class Orchestrator {
             usageHandler: this.onUsage,
           });
           if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
-            agentState = {
-              ...agentState,
-              lastReflection: response.text ?? agentState.lastReflection,
-              reflectionCount: agentState.reflectionCount + 1,
-              consecutiveErrors: 0,
-            };
-            agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
-            session.messages.push({ role: "user", content: clarificationIntervention.gate });
+            session.messages.push({
+              role: "user",
+              content: clarificationIntervention.gate,
+            });
             continue;
           }
-          if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
-            await this.sendVisibleAssistantMarkdown(chatId, session, clarificationIntervention.message);
+          if (
+            (clarificationIntervention.kind === "ask_user" ||
+              clarificationIntervention.kind === "blocked") &&
+            clarificationIntervention.message
+          ) {
+            await this.sendVisibleAssistantMarkdown(
+              chatId,
+              session,
+              clarificationIntervention.message,
+            );
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
               iterations: agentState.iteration,
@@ -3690,6 +4701,7 @@ export class Orchestrator {
             return;
           }
 
+          // ─── Verification gate: catch unverified exits ──────────────────
           const verifierIntervention = await this.resolveVerifierIntervention({
             chatId,
             identityKey,
@@ -3697,23 +4709,18 @@ export class Orchestrator {
             state: agentState,
             draft: response.text,
             selfVerification,
-              stradaConformance,
-              strategy: executionStrategy,
-              taskStartedAtMs,
-              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-              usageHandler: this.onUsage,
-            });
-          executionJournal.recordVerifierResult(
-            verifierIntervention.result,
-            executionStrategy.reviewer.providerName,
-            executionStrategy.reviewer.modelId,
-          );
+            stradaConformance,
+            strategy: executionStrategy,
+            taskStartedAtMs,
+            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+            usageHandler: this.onUsage,
+          });
           if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
             this.recordPhaseOutcome({
               chatId,
               identityKey,
               assignment: currentAssignment,
-              phase: "reflecting",
+              phase: this.toExecutionPhase(agentState.phase),
               status: "continued",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
@@ -3724,31 +4731,22 @@ export class Orchestrator {
                 failureReason: verifierIntervention.result.summary,
               }),
             });
-            agentState = {
-              ...agentState,
-              lastReflection: response.text ?? agentState.lastReflection,
-              reflectionCount: agentState.reflectionCount + 1,
-              consecutiveErrors: 0,
-            };
-            agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
-            session.messages.push({ role: "user", content: verifierIntervention.gate });
-            continue;
+            session.messages.push({
+              role: "user",
+              content: verifierIntervention.gate,
+            });
+            logger.debug("Verification gate triggered", { chatId, iteration });
+            continue; // send back to LLM with verification reminder
           }
           if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-            executionJournal.beginReplan({
-              state: agentState,
-              reason: verifierIntervention.result.summary,
-              providerName: executionStrategy.reviewer.providerName,
-              modelId: executionStrategy.reviewer.modelId,
-            });
             this.recordPhaseOutcome({
               chatId,
               identityKey,
               assignment: currentAssignment,
-              phase: "reflecting",
+              phase: this.toExecutionPhase(agentState.phase),
               status: "replanned",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
@@ -3763,45 +4761,151 @@ export class Orchestrator {
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
-            session.messages.push({ role: "user", content: verifierIntervention.gate });
+            session.messages.push({
+              role: "user",
+              content: verifierIntervention.gate,
+            });
+            logger.debug("Verifier pipeline triggered replan", { chatId, iteration });
             continue;
           }
+          // ────────────────────────────────────────────────────────────────
 
-          const visibilityDecision = await this.resolveVisibleDraftDecision({
-            chatId,
-            identityKey,
-            prompt: lastUserMessage,
-            draft: response.text ?? "",
-            agentState,
-            strategy: executionStrategy,
-            systemPrompt,
-            selfVerification,
-            taskStartedAtMs,
-            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-            usageHandler: this.onUsage,
-          });
-          if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
+          // ─── Consensus for text-only responses on critical tasks ──────
+          if (this.consensusManager && this.confidenceEstimator && response.text) {
+            try {
+              const textTaskClass = this.taskClassifier.classify(lastUserMessage);
+              if (textTaskClass.criticality === "critical") {
+                const textConfidence = this.confidenceEstimator.estimate({
+                  task: textTaskClass,
+                  providerName: currentAssignment.providerName,
+                  providerCapabilities: currentProvider.capabilities,
+                  agentState,
+                  responseLength: response.text.length,
+                });
+                const textAvailableCount = this.providerManager.listAvailable().length;
+                const textStrategy = this.consensusManager.shouldConsult(
+                  textConfidence,
+                  textTaskClass,
+                  textAvailableCount,
+                );
+                if (textStrategy !== "skip" && textAvailableCount >= 2) {
+                  const textReviewAssignment = this.resolveConsensusReviewAssignment(
+                    executionStrategy.reviewer,
+                    currentAssignment,
+                    identityKey,
+                  );
+                  if (textReviewAssignment) {
+                    if (textReviewAssignment.provider) {
+                      const textConsensus = await this.consensusManager.verify({
+                        originalOutput: { text: response.text },
+                        originalProvider: currentAssignment.providerName,
+                        task: textTaskClass,
+                        confidence: textConfidence,
+                        reviewProvider: textReviewAssignment.provider,
+                        prompt: lastUserMessage,
+                      });
+                      this.recordExecutionTrace({
+                        chatId,
+                        identityKey,
+                        assignment: textReviewAssignment,
+                        phase: "consensus-review",
+                        source: "consensus-review",
+                        task: textTaskClass,
+                        reason: textReviewAssignment.reason,
+                      });
+                      this.recordPhaseOutcome({
+                        chatId,
+                        identityKey,
+                        assignment: textReviewAssignment,
+                        phase: "consensus-review",
+                        source: "consensus-review",
+                        status: textConsensus.agreed ? "approved" : "continued",
+                        task: textTaskClass,
+                        reason:
+                          textConsensus.reasoning?.trim() ||
+                          (textConsensus.agreed
+                            ? "Consensus review agreed with the current path."
+                            : "Consensus review found a disagreement and kept execution open."),
+                      });
+                      if (!textConsensus.agreed) {
+                        logger.warn("Consensus disagreement (text-only, critical)", {
+                          chatId,
+                          strategy: textConsensus.strategy,
+                          reasoning: textConsensus.reasoning?.slice(0, 200),
+                        });
+                      }
+                    }
+                  }
+                }
+              }
+            } catch {
+              // Consensus failure is non-fatal
             }
-            session.messages.push({ role: "user", content: visibilityDecision.gate });
-            agentState = {
-              ...agentState,
-              lastReflection: response.text ?? agentState.lastReflection,
-              reflectionCount: agentState.reflectionCount + 1,
-              consecutiveErrors: 0,
-            };
-            agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
-            continue;
           }
-          if ((visibilityDecision.kind === "plan_review" || visibilityDecision.kind === "blocked" || visibilityDecision.kind === "ask_user") && visibilityDecision.visibleText) {
-            await this.sendVisibleAssistantMarkdown(chatId, session, visibilityDecision.visibleText);
+          // ────────────────────────────────────────────────────────────────
+
+          if (response.text) {
+            const visibilityDecision = await this.resolveVisibleDraftDecision({
+              chatId,
+              identityKey,
+              prompt: lastUserMessage,
+              draft: response.text,
+              agentState,
+              strategy: executionStrategy,
+              systemPrompt,
+              selfVerification,
+              taskStartedAtMs,
+              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+              usageHandler: this.onUsage,
+            });
+            if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
+              session.messages.push({ role: "assistant", content: response.text });
+              session.messages.push({ role: "user", content: visibilityDecision.gate });
+              continue;
+            }
+            if (
+              (visibilityDecision.kind === "plan_review" ||
+                visibilityDecision.kind === "blocked" ||
+                visibilityDecision.kind === "ask_user") &&
+              visibilityDecision.visibleText
+            ) {
+              await this.sendVisibleAssistantMarkdown(
+                chatId,
+                session,
+                visibilityDecision.visibleText,
+              );
+              this.recordPhaseOutcome({
+                chatId,
+                identityKey,
+                assignment: currentAssignment,
+                phase: this.toExecutionPhase(agentState.phase),
+                status: "blocked",
+                task: executionStrategy.task,
+                reason: visibilityDecision.reason,
+                telemetry: buildInteractivePhaseOutcomeTelemetry({
+                  state: agentState,
+                  usage: response.usage,
+                  verifierDecision: "approve",
+                }),
+              });
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: agentState.iteration,
+                toolCallCount: agentState.stepResults.length,
+                hitMaxIterations: false,
+              });
+              return;
+            }
+            const finalText = visibilityDecision.visibleText?.trim() ?? "";
+            if (finalText) {
+              await this.sendVisibleAssistantMarkdown(chatId, session, finalText);
+            }
             this.recordPhaseOutcome({
               chatId,
               identityKey,
               assignment: currentAssignment,
-              phase: "reflecting",
-              status: "blocked",
+              phase: this.toExecutionPhase(agentState.phase),
+              status: "approved",
               task: executionStrategy.task,
               reason: visibilityDecision.reason,
               telemetry: buildInteractivePhaseOutcomeTelemetry({
@@ -3810,416 +4914,230 @@ export class Orchestrator {
                 verifierDecision: "approve",
               }),
             });
-            this.recordMetricEnd(metricId, {
-              agentPhase: AgentPhase.COMPLETE,
-              iterations: agentState.iteration,
-              toolCallCount: agentState.stepResults.length,
-              hitMaxIterations: false,
+          } else {
+            // LLM returned empty response — send fallback to user
+            const lang = profile?.language ?? this.defaultLanguage;
+            const fallback =
+              lang === "tr"
+                ? "Bir yanıt oluşturamadım. Sorunuzu yeniden ifade edebilir misiniz?"
+                : lang === "ja"
+                  ? "応答を生成できませんでした。質問を言い換えていただけますか？"
+                  : lang === "ko"
+                    ? "응답을 생성할 수 없었습니다. 질문을 다시 표현해 주시겠어요?"
+                    : lang === "zh"
+                      ? "我无法生成回复。您能重新表述您的问题吗？"
+                      : lang === "de"
+                        ? "Ich konnte keine Antwort generieren. Könnten Sie Ihre Frage umformulieren?"
+                        : lang === "es"
+                          ? "No pude generar una respuesta. ¿Podría reformular su pregunta?"
+                          : lang === "fr"
+                            ? "Je n'ai pas pu générer de réponse. Pourriez-vous reformuler votre question ?"
+                            : "I wasn't able to generate a response. Could you rephrase your question?";
+            logger.warn("LLM returned empty response", {
+              chatId,
+              canStream,
+              provider: currentAssignment.providerName,
             });
-            return;
+            await this.sendVisibleAssistantMarkdown(chatId, session, fallback);
           }
-          const finalText = visibilityDecision.visibleText?.trim() ?? "";
-          if (finalText) {
-            await this.sendVisibleAssistantMarkdown(chatId, session, finalText);
-          }
-          this.recordPhaseOutcome({
-            chatId,
-            identityKey,
-            assignment: currentAssignment,
-            phase: "reflecting",
-            status: "approved",
-            task: executionStrategy.task,
-            reason: visibilityDecision.reason,
-            telemetry: buildInteractivePhaseOutcomeTelemetry({
-              state: agentState,
-              usage: response.usage,
-              verifierDecision: "approve",
-            }),
-          });
+          // ─── Metrics: record end_turn ───────────────────────────────
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
             iterations: agentState.iteration,
             toolCallCount: agentState.stepResults.length,
             hitMaxIterations: false,
           });
+          // ──────────────────────────────────────────────────────────
           return;
         }
 
-        if (decision === "REPLAN") {
-          executionJournal.beginReplan({
-            state: agentState,
-            reason: response.text ?? "reflection requested a new plan",
-            providerName: currentAssignment.providerName,
-            modelId: currentAssignment.modelId,
-          });
-          agentState = {
-            ...agentState,
-            failedApproaches: [...agentState.failedApproaches, extractApproachSummary(agentState)],
-            lastReflection: response.text ?? null,
-            reflectionCount: agentState.reflectionCount + 1,
-          };
+        // ─── PAOR: Phase transitions ────────────────────────────────────
+        if (agentState.phase === AgentPhase.PLANNING) {
+          executionJournal.recordPlan(
+            response.text,
+            agentState.phase,
+            currentAssignment.providerName,
+            currentAssignment.modelId,
+          );
+          agentState = { ...agentState, plan: response.text ?? null };
 
-          // ─── Goal Decomposition: reactive decomposition when stuck ──────
-          if (this.goalDecomposer && this.activeGoalTrees.has(conversationScope)) {
+          // ─── Goal Decomposition: proactive decomposition for complex tasks ───
+          if (this.goalDecomposer && this.goalDecomposer.shouldDecompose(lastUserMessage)) {
             try {
-              const goalTree = this.activeGoalTrees.get(conversationScope)!;
-              // Find the currently-executing node
-              let executingNodeId: GoalNodeId | null = null;
-              for (const [, node] of goalTree.nodes) {
-                if (node.status === "executing") {
-                  executingNodeId = node.id;
-                  break;
-                }
-              }
-              if (executingNodeId) {
-                const executingNode = goalTree.nodes.get(executingNodeId)!;
-                this.emitGoalEvent(goalTree.rootId, executingNodeId, "failed", executingNode.depth);
-                const updatedTree = await this.goalDecomposer.decomposeReactive(
-                  goalTree,
-                  executingNodeId,
-                  response.text ?? "",
-                );
-                if (updatedTree) {
-                  this.activeGoalTrees.set(conversationScope, updatedTree);
-                  const treeViz = renderGoalTree(updatedTree);
-                  await this.sendVisibleAssistantMarkdown(chatId, session, "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```");
-                } else {
-                  getLogger().info("Reactive decomposition skipped (depth limit reached)", { chatId, nodeId: executingNodeId });
-                }
-              }
-            } catch (reactiveError) {
-              // Reactive decomposition failure is non-fatal
-              getLogger().warn("Reactive goal decomposition failed", {
+              const goalTree = await this.goalDecomposer.decomposeProactive(
+                conversationScope,
+                lastUserMessage,
+              );
+              this.activeGoalTrees.set(conversationScope, goalTree);
+              this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
+              const treeViz = renderGoalTree(goalTree);
+              await this.sendVisibleAssistantMarkdown(
                 chatId,
-                error: reactiveError instanceof Error ? reactiveError.message : String(reactiveError),
+                session,
+                "Goal decomposition:\n```\n" + treeViz + "\n```",
+              );
+              // Augment plan with decomposition summary
+              const treeSummary = summarizeTree(goalTree);
+              agentState = {
+                ...agentState,
+                plan: (agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]",
+              };
+            } catch (decompError) {
+              // Decomposition failure is non-fatal -- continue without decomposition
+              getLogger().warn("Proactive goal decomposition failed", {
+                chatId,
+                error: decompError instanceof Error ? decompError.message : String(decompError),
               });
             }
           }
-          // ────────────────────────────────────────────────────────────────
+          // ────────────────────────────────────────────────────────────────────
 
-          agentState = transitionPhase(agentState, AgentPhase.REPLANNING);
-          if (response.text) {
-            session.messages.push({ role: "assistant", content: response.text });
-          }
-          this.recordPhaseOutcome({
-            chatId,
-            identityKey,
-            assignment: currentAssignment,
-            phase: "reflecting",
-            status: "replanned",
-            task: executionStrategy.task,
-            reason: response.text ?? "reflection requested a new plan",
-            telemetry: buildInteractivePhaseOutcomeTelemetry({
-              state: agentState,
-              usage: response.usage,
-              failureReason: response.text,
-            }),
-          });
-          session.messages.push({ role: "user", content: "Please create a new plan." });
-          continue;
+          agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
         }
-
-        // CONTINUE
-        agentState = {
-          ...agentState,
-          reflectionCount: agentState.reflectionCount + 1,
-          consecutiveErrors: 0,
-        };
-        agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
-
-        if (response.toolCalls.length === 0) {
-          if (shouldSurfaceTerminalFailureFromReflection(response)) {
-            const visibilityDecision = await this.resolveVisibleDraftDecision({
-              chatId,
-              identityKey,
-              prompt: lastUserMessage,
-              draft: response.text ?? "",
-              agentState,
-              strategy: executionStrategy,
-              systemPrompt,
-              selfVerification,
-              taskStartedAtMs,
-              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-              terminalFailureReported: true,
-              usageHandler: this.onUsage,
-            });
-            if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              session.messages.push({ role: "user", content: visibilityDecision.gate });
-              continue;
-            }
-            if (visibilityDecision.visibleText) {
-              await this.sendVisibleAssistantMarkdown(chatId, session, visibilityDecision.visibleText);
-            }
-            this.recordMetricEnd(metricId, {
-              agentPhase: AgentPhase.COMPLETE,
-              iterations: agentState.iteration,
-              toolCallCount: agentState.stepResults.length,
-              hitMaxIterations: false,
-            });
-            return;
-          }
-
-          if (response.text) {
-            session.messages.push({ role: "assistant", content: response.text });
-          }
-          session.messages.push({ role: "user", content: "Please continue." });
-          continue;
-        }
-      }
-      // ────────────────────────────────────────────────────────────────
-
-      // ─── Goal Detection: check for goal block in Plan phase response ───
-      // Must run BEFORE end_turn early return since goal detection responses
-      // may have no tool calls but should short-circuit to background execution.
-      if (agentState.phase === AgentPhase.PLANNING && this.taskManager) {
-        const goalBlock = parseGoalBlock(response.text ?? "");
-        if (goalBlock && goalBlock.isGoal) {
-          // Build GoalTree from LLM output using shared factory
-          const goalTree = buildGoalTreeFromBlock(
-            goalBlock, conversationScope, lastUserMessage, response.text ?? undefined,
+        if (agentState.phase === AgentPhase.REPLANNING) {
+          executionJournal.recordPlan(
+            response.text,
+            agentState.phase,
+            currentAssignment.providerName,
+            currentAssignment.modelId,
           );
-
-          // Send acknowledgment
-          const nodeCount = goalTree.nodes.size - 1;
-          const ackMsg = `Working on: ${lastUserMessage.slice(0, 80)}` +
-            ` (${nodeCount} step${nodeCount !== 1 ? "s" : ""}, ~${goalBlock.estimatedMinutes} min). I'll update you as I go.`;
-          await this.sendVisibleAssistantText(chatId, session, ackMsg);
-
-          // Submit as background task with pre-decomposed tree
-          this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, {
-            goalTree,
-            conversationId: conversationScope,
-            userId: identityKey,
-          });
-
-          // Record metric end for the interactive session (goal runs separately)
-          this.recordMetricEnd(metricId, {
-            agentPhase: AgentPhase.COMPLETE,
-            iterations: agentState.iteration,
-            toolCallCount: 0,
-            hitMaxIterations: false,
-          });
-
-          // Short-circuit: return immediately, session lock releases
-          return;
-        }
-      }
-      // ────────────────────────────────────────────────────────────────────
-
-      if (
-        (agentState.phase === AgentPhase.PLANNING || agentState.phase === AgentPhase.REPLANNING)
-        && response.toolCalls.length === 0
-        && userExplicitlyAskedForPlan(lastUserMessage)
-        && draftLooksLikeInternalPlanArtifact(response.text ?? "", {
-          toolNames: currentToolDefinitions.map((definition) => definition.name),
-        })
-      ) {
-        executionJournal.recordPlan(
-          response.text,
-          agentState.phase,
-          currentAssignment.providerName,
-          currentAssignment.modelId,
-        );
-        agentState = { ...agentState, plan: response.text ?? null };
-
-        if (agentState.phase === AgentPhase.PLANNING && this.goalDecomposer && this.goalDecomposer.shouldDecompose(lastUserMessage)) {
-          try {
-            const goalTree = await this.goalDecomposer.decomposeProactive(conversationScope, lastUserMessage);
-            this.activeGoalTrees.set(conversationScope, goalTree);
-            this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
-            const treeViz = renderGoalTree(goalTree);
-            await this.sendVisibleAssistantMarkdown(chatId, session, "Goal decomposition:\n```\n" + treeViz + "\n```");
-            const treeSummary = summarizeTree(goalTree);
-            agentState = { ...agentState, plan: (agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]" };
-          } catch (decompError) {
-            getLogger().warn("Proactive goal decomposition failed", {
-              chatId,
-              error: decompError instanceof Error ? decompError.message : String(decompError),
-            });
-          }
-        }
-
-        this.interactionPolicy.requirePlanReview(chatId, "user explicitly asked to review a plan first");
-        const planText = this.formatPlanReviewMessage(
-          applyVisibleResponseContract(
-            lastUserMessage,
-            this.stripInternalDecisionMarkers(response.text) || response.text || "",
-          ),
-        );
-        await this.sendVisibleAssistantMarkdown(chatId, session, planText);
-        this.recordMetricEnd(metricId, {
-          agentPhase: AgentPhase.COMPLETE,
-          iterations: agentState.iteration,
-          toolCallCount: agentState.stepResults.length,
-          hitMaxIterations: false,
-        });
-        return;
-      }
-
-      // If no tool calls, send the final text response
-      // (streaming already sent it, so skip for streamed end_turn)
-      if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-        const clarificationIntervention = await this.resolveDraftClarificationIntervention({
-          chatId,
-          identityKey,
-          prompt: lastUserMessage,
-          draft: response.text ?? "",
-          state: agentState,
-          strategy: executionStrategy,
-          touchedFiles: [...selfVerification.getState().touchedFiles],
-          usageHandler: this.onUsage,
-        });
-        if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
-          if (response.text) {
-            session.messages.push({ role: "assistant", content: response.text });
-          }
-          session.messages.push({
-            role: "user",
-            content: clarificationIntervention.gate,
-          });
-          continue;
-        }
-        if ((clarificationIntervention.kind === "ask_user" || clarificationIntervention.kind === "blocked") && clarificationIntervention.message) {
-          await this.sendVisibleAssistantMarkdown(chatId, session, clarificationIntervention.message);
-          this.recordMetricEnd(metricId, {
-            agentPhase: AgentPhase.COMPLETE,
-            iterations: agentState.iteration,
-            toolCallCount: agentState.stepResults.length,
-            hitMaxIterations: false,
-          });
-          return;
-        }
-
-        // ─── Verification gate: catch unverified exits ──────────────────
-        const verifierIntervention = await this.resolveVerifierIntervention({
-          chatId,
-          identityKey,
-          prompt: lastUserMessage,
-          state: agentState,
-          draft: response.text,
-          selfVerification,
-          stradaConformance,
-          strategy: executionStrategy,
-          taskStartedAtMs,
-          availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-          usageHandler: this.onUsage,
-        });
-        if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
-          this.recordPhaseOutcome({
-            chatId,
-            identityKey,
-            assignment: currentAssignment,
-            phase: this.toExecutionPhase(agentState.phase),
-            status: "continued",
-            task: executionStrategy.task,
-            reason: verifierIntervention.result.summary,
-            telemetry: buildInteractivePhaseOutcomeTelemetry({
-              state: agentState,
-              usage: response.usage,
-              verifierDecision: "continue",
-              failureReason: verifierIntervention.result.summary,
-            }),
-          });
-          if (response.text) {
-            session.messages.push({ role: "assistant", content: response.text });
-          }
-          session.messages.push({
-            role: "user",
-            content: verifierIntervention.gate,
-          });
-          logger.debug("Verification gate triggered", { chatId, iteration });
-          continue; // send back to LLM with verification reminder
-        }
-        if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-          this.recordPhaseOutcome({
-            chatId,
-            identityKey,
-            assignment: currentAssignment,
-            phase: this.toExecutionPhase(agentState.phase),
-            status: "replanned",
-            task: executionStrategy.task,
-            reason: verifierIntervention.result.summary,
-            telemetry: buildInteractivePhaseOutcomeTelemetry({
-              state: agentState,
-              usage: response.usage,
-              verifierDecision: "replan",
-              failureReason: verifierIntervention.result.summary,
-            }),
-          });
-          agentState = this.transitionToVerifierReplan(agentState, response.text);
-          if (response.text) {
-            session.messages.push({ role: "assistant", content: response.text });
-          }
-          session.messages.push({
-            role: "user",
-            content: verifierIntervention.gate,
-          });
-          logger.debug("Verifier pipeline triggered replan", { chatId, iteration });
-          continue;
+          agentState = { ...agentState, plan: response.text ?? null };
+          agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
         }
         // ────────────────────────────────────────────────────────────────
 
-        // ─── Consensus for text-only responses on critical tasks ──────
-        if (this.consensusManager && this.confidenceEstimator && response.text) {
+        // Handle tool calls
+        // First, add the assistant message with tool calls
+        session.messages.push({
+          role: "assistant",
+          content: response.text,
+          tool_calls: response.toolCalls,
+        });
+
+        // Intermediate text is stored in session for LLM context but NOT sent to user.
+        // User only sees the final response (end_turn without tool calls).
+
+        // Execute all tool calls
+        const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
+          mode: "interactive",
+          userId,
+          taskPrompt: lastUserMessage,
+          sessionMessages: session.messages,
+          onUsage: this.onUsage,
+          identityKey,
+          strategy: executionStrategy,
+          agentState,
+          touchedFiles: [...selfVerification.getState().touchedFiles],
+        });
+
+        // ─── Autonomy: track + analyze results ─────────────────────────────
+        for (let i = 0; i < response.toolCalls.length; i++) {
+          const tc = response.toolCalls[i]!;
+          const tr = toolResults[i]!;
+
+          // O(1) tracking in planner & verifier
+          taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
+          selfVerification.track(tc.name, tc.input, tr);
+          stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
+
+          // Error recovery: analyze and enrich the tool result
+          const analysis = errorRecovery.analyze(tc.name, tr);
+          if (analysis) {
+            taskPlanner.recordError(analysis.summary);
+            // Re-sanitize after appending (prevents API key leakage + enforces length cap)
+            // Create new result with sanitized content (ToolResult is immutable)
+            toolResults[i] = {
+              toolCallId: tr.toolCallId,
+              content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
+              isError: tr.isError,
+            };
+          }
+
+          this.emitToolResult(chatId, tc, toolResults[i]!);
+        }
+        executionJournal.recordToolBatch({
+          phase: agentState.phase,
+          toolCalls: response.toolCalls,
+          toolResults,
+          providerName: currentAssignment.providerName,
+          modelId: currentAssignment.modelId,
+        });
+
+        // Inject state-aware context (stall detection, budget warnings)
+        const stateCtx = taskPlanner.getStateInjection();
+        // ────────────────────────────────────────────────────────────────────
+
+        // ─── Consensus: verify output with second provider if confidence is low ───
+        if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
           try {
-            const textTaskClass = this.taskClassifier.classify(lastUserMessage);
-            if (textTaskClass.criticality === "critical") {
-              const textConfidence = this.confidenceEstimator.estimate({
-                task: textTaskClass,
-                providerName: currentAssignment.providerName,
-                providerCapabilities: currentProvider.capabilities,
-                agentState,
-                responseLength: response.text.length,
-              });
-              const textAvailableCount = this.providerManager.listAvailable().length;
-              const textStrategy = this.consensusManager.shouldConsult(textConfidence, textTaskClass, textAvailableCount);
-              if (textStrategy !== "skip" && textAvailableCount >= 2) {
-                const textReviewAssignment = this.resolveConsensusReviewAssignment(
-                  executionStrategy.reviewer,
-                  currentAssignment,
-                  identityKey,
-                );
-                if (textReviewAssignment) {
-                  if (textReviewAssignment.provider) {
-                    const textConsensus = await this.consensusManager.verify({
-                      originalOutput: { text: response.text },
-                      originalProvider: currentAssignment.providerName,
-                      task: textTaskClass,
-                      confidence: textConfidence,
-                      reviewProvider: textReviewAssignment.provider,
-                      prompt: lastUserMessage,
-                    });
+            const taskClass = this.taskClassifier.classify(lastUserMessage);
+            const confidence = this.confidenceEstimator.estimate({
+              task: taskClass,
+              providerName: currentAssignment.providerName,
+              providerCapabilities: currentProvider.capabilities,
+              agentState,
+              responseLength: (response.text ?? "").length,
+            });
+
+            const availableCount = this.providerManager.listAvailable().length;
+            const strategy = this.consensusManager.shouldConsult(
+              confidence,
+              taskClass,
+              availableCount,
+            );
+
+            if (strategy !== "skip" && availableCount >= 2) {
+              const reviewAssignment = this.resolveConsensusReviewAssignment(
+                executionStrategy.reviewer,
+                currentAssignment,
+                identityKey,
+              );
+              if (reviewAssignment) {
+                if (reviewAssignment.provider) {
+                  const consensusResult = await this.consensusManager.verify({
+                    originalOutput: {
+                      text: response.text ?? undefined,
+                      toolCalls: response.toolCalls.map((tc: ToolCall) => ({
+                        name: tc.name,
+                        input: tc.input,
+                      })),
+                    },
+                    originalProvider: currentAssignment.providerName,
+                    task: taskClass,
+                    confidence,
+                    reviewProvider: reviewAssignment.provider,
+                    prompt: lastUserMessage,
+                  });
                   this.recordExecutionTrace({
                     chatId,
                     identityKey,
-                    assignment: textReviewAssignment,
-                      phase: "consensus-review",
-                      source: "consensus-review",
-                      task: textTaskClass,
-                      reason: textReviewAssignment.reason,
-                    });
+                    assignment: reviewAssignment,
+                    phase: "consensus-review",
+                    source: "consensus-review",
+                    task: taskClass,
+                    reason: reviewAssignment.reason,
+                  });
                   this.recordPhaseOutcome({
                     chatId,
                     identityKey,
-                    assignment: textReviewAssignment,
-                      phase: "consensus-review",
-                      source: "consensus-review",
-                      status: textConsensus.agreed ? "approved" : "continued",
-                      task: textTaskClass,
-                      reason: textConsensus.reasoning?.trim() || (textConsensus.agreed
+                    assignment: reviewAssignment,
+                    phase: "consensus-review",
+                    source: "consensus-review",
+                    status: consensusResult.agreed ? "approved" : "continued",
+                    task: taskClass,
+                    reason:
+                      consensusResult.reasoning?.trim() ||
+                      (consensusResult.agreed
                         ? "Consensus review agreed with the current path."
                         : "Consensus review found a disagreement and kept execution open."),
+                  });
+
+                  if (!consensusResult.agreed) {
+                    logger.warn("Consensus disagreement", {
+                      chatId,
+                      strategy: consensusResult.strategy,
+                      reasoning: consensusResult.reasoning?.slice(0, 200),
                     });
-                    if (!textConsensus.agreed) {
-                      logger.warn("Consensus disagreement (text-only, critical)", {
-                        chatId,
-                        strategy: textConsensus.strategy,
-                        reasoning: textConsensus.reasoning?.slice(0, 200),
-                      });
-                    }
                   }
                 }
               }
@@ -4228,379 +5146,130 @@ export class Orchestrator {
             // Consensus failure is non-fatal
           }
         }
-        // ────────────────────────────────────────────────────────────────
-
-        if (response.text) {
-          const visibilityDecision = await this.resolveVisibleDraftDecision({
-            chatId,
-            identityKey,
-            prompt: lastUserMessage,
-            draft: response.text,
-            agentState,
-            strategy: executionStrategy,
-            systemPrompt,
-            selfVerification,
-            taskStartedAtMs,
-            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-            usageHandler: this.onUsage,
-          });
-          if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
-            session.messages.push({ role: "assistant", content: response.text });
-            session.messages.push({ role: "user", content: visibilityDecision.gate });
-            continue;
-          }
-          if ((visibilityDecision.kind === "plan_review" || visibilityDecision.kind === "blocked" || visibilityDecision.kind === "ask_user") && visibilityDecision.visibleText) {
-            await this.sendVisibleAssistantMarkdown(chatId, session, visibilityDecision.visibleText);
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: this.toExecutionPhase(agentState.phase),
-              status: "blocked",
-              task: executionStrategy.task,
-              reason: visibilityDecision.reason,
-              telemetry: buildInteractivePhaseOutcomeTelemetry({
-                state: agentState,
-                usage: response.usage,
-                verifierDecision: "approve",
-              }),
-            });
-            this.recordMetricEnd(metricId, {
-              agentPhase: AgentPhase.COMPLETE,
-              iterations: agentState.iteration,
-              toolCallCount: agentState.stepResults.length,
-              hitMaxIterations: false,
-            });
-            return;
-          }
-          const finalText = visibilityDecision.visibleText?.trim() ?? "";
-          if (finalText) {
-            await this.sendVisibleAssistantMarkdown(chatId, session, finalText);
-          }
-          this.recordPhaseOutcome({
-            chatId,
-            identityKey,
-            assignment: currentAssignment,
-            phase: this.toExecutionPhase(agentState.phase),
-            status: "approved",
-            task: executionStrategy.task,
-            reason: visibilityDecision.reason,
-            telemetry: buildInteractivePhaseOutcomeTelemetry({
-              state: agentState,
-              usage: response.usage,
-              verifierDecision: "approve",
-            }),
-          });
-        } else {
-          // LLM returned empty response — send fallback to user
-          const lang = profile?.language ?? this.defaultLanguage;
-          const fallback = lang === "tr" ? "Bir yanıt oluşturamadım. Sorunuzu yeniden ifade edebilir misiniz?"
-            : lang === "ja" ? "応答を生成できませんでした。質問を言い換えていただけますか？"
-            : lang === "ko" ? "응답을 생성할 수 없었습니다. 질문을 다시 표현해 주시겠어요?"
-            : lang === "zh" ? "我无法生成回复。您能重新表述您的问题吗？"
-            : lang === "de" ? "Ich konnte keine Antwort generieren. Könnten Sie Ihre Frage umformulieren?"
-            : lang === "es" ? "No pude generar una respuesta. ¿Podría reformular su pregunta?"
-            : lang === "fr" ? "Je n'ai pas pu générer de réponse. Pourriez-vous reformuler votre question ?"
-            : "I wasn't able to generate a response. Could you rephrase your question?";
-          logger.warn("LLM returned empty response", { chatId, canStream, provider: currentAssignment.providerName });
-          await this.sendVisibleAssistantMarkdown(chatId, session, fallback);
-        }
-        // ─── Metrics: record end_turn ───────────────────────────────
-        this.recordMetricEnd(metricId, {
-          agentPhase: AgentPhase.COMPLETE,
-          iterations: agentState.iteration,
-          toolCallCount: agentState.stepResults.length,
-          hitMaxIterations: false,
-        });
-        // ──────────────────────────────────────────────────────────
-        return;
-      }
-
-      // ─── PAOR: Phase transitions ────────────────────────────────────
-      if (agentState.phase === AgentPhase.PLANNING) {
-        executionJournal.recordPlan(
-          response.text,
-          agentState.phase,
-          currentAssignment.providerName,
-          currentAssignment.modelId,
-        );
-        agentState = { ...agentState, plan: response.text ?? null };
-
-        // ─── Goal Decomposition: proactive decomposition for complex tasks ───
-        if (this.goalDecomposer && this.goalDecomposer.shouldDecompose(lastUserMessage)) {
-          try {
-            const goalTree = await this.goalDecomposer.decomposeProactive(conversationScope, lastUserMessage);
-            this.activeGoalTrees.set(conversationScope, goalTree);
-            this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
-            const treeViz = renderGoalTree(goalTree);
-            await this.sendVisibleAssistantMarkdown(chatId, session, "Goal decomposition:\n```\n" + treeViz + "\n```");
-            // Augment plan with decomposition summary
-            const treeSummary = summarizeTree(goalTree);
-            agentState = { ...agentState, plan: (agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]" };
-          } catch (decompError) {
-            // Decomposition failure is non-fatal -- continue without decomposition
-            getLogger().warn("Proactive goal decomposition failed", {
-              chatId,
-              error: decompError instanceof Error ? decompError.message : String(decompError),
-            });
-          }
-        }
         // ────────────────────────────────────────────────────────────────────
 
-        agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
-      }
-      if (agentState.phase === AgentPhase.REPLANNING) {
-        executionJournal.recordPlan(
-          response.text,
-          agentState.phase,
-          currentAssignment.providerName,
-          currentAssignment.modelId,
-        );
-        agentState = { ...agentState, plan: response.text ?? null };
-        agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
-      }
-      // ────────────────────────────────────────────────────────────────
-
-      // Handle tool calls
-      // First, add the assistant message with tool calls
-      session.messages.push({
-        role: "assistant",
-        content: response.text,
-        tool_calls: response.toolCalls,
-      });
-
-      // Intermediate text is stored in session for LLM context but NOT sent to user.
-      // User only sees the final response (end_turn without tool calls).
-
-      // Execute all tool calls
-      const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
-        mode: "interactive",
-        userId,
-        taskPrompt: lastUserMessage,
-        sessionMessages: session.messages,
-        onUsage: this.onUsage,
-        identityKey,
-        strategy: executionStrategy,
-        agentState,
-        touchedFiles: [...selfVerification.getState().touchedFiles],
-      });
-
-      // ─── Autonomy: track + analyze results ─────────────────────────────
-      for (let i = 0; i < response.toolCalls.length; i++) {
-        const tc = response.toolCalls[i]!;
-        const tr = toolResults[i]!;
-
-        // O(1) tracking in planner & verifier
-        taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
-        selfVerification.track(tc.name, tc.input, tr);
-        stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
-
-        // Error recovery: analyze and enrich the tool result
-        const analysis = errorRecovery.analyze(tc.name, tr);
-        if (analysis) {
-          taskPlanner.recordError(analysis.summary);
-          // Re-sanitize after appending (prevents API key leakage + enforces length cap)
-          // Create new result with sanitized content (ToolResult is immutable)
-          toolResults[i] = {
-            toolCallId: tr.toolCallId,
-            content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
-            isError: tr.isError,
+        // ─── PAOR: Record step results ──────────────────────────────────
+        for (let i = 0; i < response.toolCalls.length; i++) {
+          const tc = response.toolCalls[i]!;
+          const tr = toolResults[i]!;
+          const stepResult: StepResult = {
+            toolName: tc.name,
+            success: !(tr.isError ?? false),
+            summary: tr.content.slice(0, 200),
+            timestamp: Date.now(),
+          };
+          agentState = {
+            ...agentState,
+            stepResults: [...agentState.stepResults, stepResult],
+            iteration: agentState.iteration + 1,
+            consecutiveErrors: tr.isError ? agentState.consecutiveErrors + 1 : 0,
           };
         }
 
-        this.emitToolResult(chatId, tc, toolResults[i]!);
-      }
-      executionJournal.recordToolBatch({
-        phase: agentState.phase,
-        toolCalls: response.toolCalls,
-        toolResults,
-        providerName: currentAssignment.providerName,
-        modelId: currentAssignment.modelId,
-      });
+        const hasErrors = toolResults.some((tr) => tr.isError);
+        const failedSteps = agentState.stepResults.filter((s) => !s.success);
+        const shouldReflect =
+          hasErrors ||
+          (agentState.stepResults.length > 0 &&
+            agentState.stepResults.length % REFLECT_INTERVAL === 0) ||
+          shouldForceReplan(failedSteps);
 
-      // Inject state-aware context (stall detection, budget warnings)
-      const stateCtx = taskPlanner.getStateInjection();
-      // ────────────────────────────────────────────────────────────────────
+        if (shouldReflect && agentState.phase === AgentPhase.EXECUTING) {
+          agentState = transitionPhase(agentState, AgentPhase.REFLECTING);
+        }
+        // ────────────────────────────────────────────────────────────────
 
-      // ─── Consensus: verify output with second provider if confidence is low ───
-      if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
-        try {
-          const taskClass = this.taskClassifier.classify(lastUserMessage);
-          const confidence = this.confidenceEstimator.estimate({
-            task: taskClass,
-            providerName: currentAssignment.providerName,
-            providerCapabilities: currentProvider.capabilities,
-            agentState,
-            responseLength: (response.text ?? "").length,
+        // Add tool results as a user message
+        // Build content blocks for tool results
+        const contentBlocks: Array<
+          | { type: "text"; text: string }
+          | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
+        > = [];
+        if (stateCtx) {
+          contentBlocks.push({ type: "text" as const, text: stateCtx });
+        }
+        if (agentState.phase === AgentPhase.REFLECTING) {
+          contentBlocks.push({ type: "text" as const, text: buildReflectionPrompt(agentState) });
+        }
+        for (const tr of toolResults) {
+          contentBlocks.push({
+            type: "tool_result" as const,
+            tool_use_id: tr.toolCallId,
+            content: tr.content,
+            is_error: tr.isError,
           });
+        }
+        session.messages.push({
+          role: "user",
+          content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
+        });
 
-          const availableCount = this.providerManager.listAvailable().length;
-          const strategy = this.consensusManager.shouldConsult(confidence, taskClass, availableCount);
-
-          if (strategy !== "skip" && availableCount >= 2) {
-            const reviewAssignment = this.resolveConsensusReviewAssignment(
-              executionStrategy.reviewer,
-              currentAssignment,
-              identityKey,
-            );
-            if (reviewAssignment) {
-              if (reviewAssignment.provider) {
-                const consensusResult = await this.consensusManager.verify({
-                  originalOutput: {
-                    text: response.text ?? undefined,
-                    toolCalls: response.toolCalls.map((tc: ToolCall) => ({
-                      name: tc.name,
-                      input: tc.input,
-                    })),
-                  },
-                  originalProvider: currentAssignment.providerName,
-                  task: taskClass,
-                  confidence,
-                  reviewProvider: reviewAssignment.provider,
-                  prompt: lastUserMessage,
-                });
-                this.recordExecutionTrace({
-                  chatId,
-                  identityKey,
-                  assignment: reviewAssignment,
-                  phase: "consensus-review",
-                  source: "consensus-review",
-                  task: taskClass,
-                  reason: reviewAssignment.reason,
-                });
-                this.recordPhaseOutcome({
-                  chatId,
-                  identityKey,
-                  assignment: reviewAssignment,
-                  phase: "consensus-review",
-                  source: "consensus-review",
-                  status: consensusResult.agreed ? "approved" : "continued",
-                  task: taskClass,
-                  reason: consensusResult.reasoning?.trim() || (consensusResult.agreed
-                    ? "Consensus review agreed with the current path."
-                    : "Consensus review found a disagreement and kept execution open."),
-                });
-
-                if (!consensusResult.agreed) {
-                  logger.warn("Consensus disagreement", {
-                    chatId,
-                    strategy: consensusResult.strategy,
-                    reasoning: consensusResult.reasoning?.slice(0, 200),
-                  });
+        // ─── Memory Re-retrieval ─────────────────────────────────────────
+        if (memoryRefresher) {
+          try {
+            const recentContext = this.extractLastUserMessage(session);
+            const check = await memoryRefresher.shouldRefresh(iteration, recentContext, chatId);
+            if (check.should) {
+              const refreshed = await memoryRefresher.refresh(
+                recentContext,
+                chatId,
+                check.reason,
+                iteration,
+                check.cosineDistance,
+              );
+              if (refreshed.triggered) {
+                if (refreshed.newMemoryContext) {
+                  systemPrompt = replaceSection(
+                    systemPrompt,
+                    "re-retrieval:memory",
+                    `## Relevant Memory\n${refreshed.newMemoryContext}`,
+                  );
+                }
+                if (refreshed.newRagContext) {
+                  systemPrompt = replaceSection(
+                    systemPrompt,
+                    "re-retrieval:rag",
+                    refreshed.newRagContext,
+                  );
+                }
+                if (refreshed.newInsights?.length) {
+                  agentState = { ...agentState, learnedInsights: refreshed.newInsights };
+                }
+                if (refreshed.newInstinctIds?.length) {
+                  // Deduplicate and cap instinct IDs to prevent unbounded growth
+                  const idSet = new Set(matchedInstinctIds);
+                  for (const id of refreshed.newInstinctIds) idSet.add(id);
+                  matchedInstinctIds = [...idSet].slice(0, 200);
+                  this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
                 }
               }
             }
+          } catch {
+            // Re-retrieval failure is non-fatal
           }
-        } catch {
-          // Consensus failure is non-fatal
         }
-      }
-      // ────────────────────────────────────────────────────────────────────
-
-      // ─── PAOR: Record step results ──────────────────────────────────
-      for (let i = 0; i < response.toolCalls.length; i++) {
-        const tc = response.toolCalls[i]!;
-        const tr = toolResults[i]!;
-        const stepResult: StepResult = {
-          toolName: tc.name,
-          success: !(tr.isError ?? false),
-          summary: tr.content.slice(0, 200),
-          timestamp: Date.now(),
-        };
-        agentState = {
-          ...agentState,
-          stepResults: [...agentState.stepResults, stepResult],
-          iteration: agentState.iteration + 1,
-          consecutiveErrors: tr.isError ? agentState.consecutiveErrors + 1 : 0,
-        };
+        // ─────────────────────────────────────────────────────────────────
       }
 
-      const hasErrors = toolResults.some(tr => tr.isError);
-      const failedSteps = agentState.stepResults.filter(s => !s.success);
-      const shouldReflect =
-        hasErrors ||
-        (agentState.stepResults.length > 0 && agentState.stepResults.length % REFLECT_INTERVAL === 0) ||
-        shouldForceReplan(failedSteps);
-
-      if (shouldReflect && agentState.phase === AgentPhase.EXECUTING) {
-        agentState = transitionPhase(agentState, AgentPhase.REFLECTING);
-      }
+      // Hit max iterations
+      // ─── Metrics: record max iterations ──────────────────────────────
+      this.recordMetricEnd(metricId, {
+        agentPhase: agentState.phase,
+        iterations: agentState.iteration,
+        toolCallCount: agentState.stepResults.length,
+        iterationBudgetReached: true,
+        continuedAfterBudget: false,
+        epochCount: 1,
+        terminatedByIterationBudget: true,
+      });
       // ────────────────────────────────────────────────────────────────
 
-      // Add tool results as a user message
-      // Build content blocks for tool results
-      const contentBlocks: Array<
-        | { type: "text"; text: string }
-        | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
-      > = [];
-      if (stateCtx) {
-        contentBlocks.push({ type: "text" as const, text: stateCtx });
-      }
-      if (agentState.phase === AgentPhase.REFLECTING) {
-        contentBlocks.push({ type: "text" as const, text: buildReflectionPrompt(agentState) });
-      }
-      for (const tr of toolResults) {
-        contentBlocks.push({
-          type: "tool_result" as const,
-          tool_use_id: tr.toolCallId,
-          content: tr.content,
-          is_error: tr.isError,
-        });
-      }
-      session.messages.push({
-        role: "user",
-        content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
-      });
-
-      // ─── Memory Re-retrieval ─────────────────────────────────────────
-      if (memoryRefresher) {
-        try {
-          const recentContext = this.extractLastUserMessage(session);
-          const check = await memoryRefresher.shouldRefresh(iteration, recentContext, chatId);
-          if (check.should) {
-            const refreshed = await memoryRefresher.refresh(recentContext, chatId, check.reason, iteration, check.cosineDistance);
-            if (refreshed.triggered) {
-              if (refreshed.newMemoryContext) {
-                systemPrompt = replaceSection(systemPrompt, "re-retrieval:memory", `## Relevant Memory\n${refreshed.newMemoryContext}`);
-              }
-              if (refreshed.newRagContext) {
-                systemPrompt = replaceSection(systemPrompt, "re-retrieval:rag", refreshed.newRagContext);
-              }
-              if (refreshed.newInsights?.length) {
-                agentState = { ...agentState, learnedInsights: refreshed.newInsights };
-              }
-              if (refreshed.newInstinctIds?.length) {
-                // Deduplicate and cap instinct IDs to prevent unbounded growth
-                const idSet = new Set(matchedInstinctIds);
-                for (const id of refreshed.newInstinctIds) idSet.add(id);
-                matchedInstinctIds = [...idSet].slice(0, 200);
-                this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
-              }
-            }
-          }
-        } catch {
-          // Re-retrieval failure is non-fatal
-        }
-      }
-      // ─────────────────────────────────────────────────────────────────
-    }
-
-    // Hit max iterations
-    // ─── Metrics: record max iterations ──────────────────────────────
-    this.recordMetricEnd(metricId, {
-      agentPhase: agentState.phase,
-      iterations: agentState.iteration,
-      toolCallCount: agentState.stepResults.length,
-      hitMaxIterations: true,
-    });
-    // ────────────────────────────────────────────────────────────────
-
-    await this.sendVisibleAssistantText(
-      chatId,
-      session,
-      "I've reached the maximum number of steps for this request. " +
-        "Please send a follow-up message to continue.",
-    );
+      await this.sendVisibleAssistantText(
+        chatId,
+        session,
+        "I've reached the maximum number of steps for this request. " +
+          "Please send a follow-up message to continue.",
+      );
     } catch (error) {
       agentState = transitionPhase(agentState, AgentPhase.FAILED);
       throw error;
@@ -4624,7 +5293,16 @@ export class Orchestrator {
   /** Record a metric end event (idempotent — endTask is a no-op for already-completed or unknown IDs) */
   private recordMetricEnd(
     metricId: string | undefined,
-    result: { agentPhase: AgentPhase; iterations: number; toolCallCount: number; hitMaxIterations: boolean },
+    result: {
+      agentPhase: AgentPhase;
+      iterations: number;
+      toolCallCount: number;
+      hitMaxIterations?: boolean;
+      iterationBudgetReached?: boolean;
+      continuedAfterBudget?: boolean;
+      epochCount?: number;
+      terminatedByIterationBudget?: boolean;
+    },
   ): void {
     if (metricId) {
       this.metricsRecorder?.endTask(metricId, result);
@@ -4661,10 +5339,7 @@ export class Orchestrator {
           timeoutGuard.markProgress();
         },
       );
-      const response = await Promise.race([
-        streamPromise,
-        timeoutGuard.timeoutPromise,
-      ]);
+      const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
       return response;
     } catch (err) {
@@ -4748,7 +5423,6 @@ export class Orchestrator {
       this.streamStallTimeoutMs,
     );
     try {
-
       const streamPromise = (provider as IStreamingProvider).chatStream(
         systemPrompt,
         session.messages,
@@ -4760,10 +5434,7 @@ export class Orchestrator {
       );
 
       // Race against abort signal
-      response = await Promise.race([
-        streamPromise,
-        timeoutGuard.timeoutPromise,
-      ]);
+      response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
 
       timeoutGuard.clear();
     } catch (streamError) {
@@ -4812,7 +5483,11 @@ export class Orchestrator {
   /**
    * Execute tool calls, handling confirmations for write operations.
    */
-  private isSelfManagedInteractiveMode(chatId: string, mode: ToolExecutionMode, userId?: string): boolean {
+  private isSelfManagedInteractiveMode(
+    chatId: string,
+    mode: ToolExecutionMode,
+    userId?: string,
+  ): boolean {
     return mode === "background" || this.dmPolicy.isAutonomousActive(chatId, userId);
   }
 
@@ -4828,11 +5503,14 @@ export class Orchestrator {
     userId?: string,
   ): Promise<ToolResult | null> {
     if (toolCall.name === "show_plan") {
-      const explicitPlanReview = taskPrompt && userExplicitlyAskedForPlan(taskPrompt);
-      if (explicitPlanReview) {
-        const planText = formatRequestedPlan(toolCall.input);
-        if (!planText) {
-          this.interactionPolicy.requirePlanReview(chatId, "user explicitly asked to review a plan first");
+        const explicitPlanReview = taskPrompt && userExplicitlyAskedForPlan(taskPrompt);
+        if (explicitPlanReview) {
+          const planText = formatRequestedPlan(toolCall.input);
+          if (!planText) {
+            this.interactionPolicy.requirePlanReview(
+              chatId,
+              "user explicitly asked to review a plan first",
+          );
           return {
             toolCallId: toolCall.id,
             content:
@@ -4843,7 +5521,11 @@ export class Orchestrator {
           };
         }
 
-        this.interactionPolicy.requirePlanReview(chatId, "user explicitly asked to review a plan first");
+        this.interactionPolicy.requirePlanReview(
+          chatId,
+          "user explicitly asked to review a plan first",
+          planText,
+        );
 
         if (mode === "interactive" && this.channel && supportsInteractivity(this.channel)) {
           const response = await this.channel.requestConfirmation({
@@ -4857,21 +5539,26 @@ export class Orchestrator {
           if (response === "timeout") {
             return {
               toolCallId: toolCall.id,
-              content: "User did not respond to the requested plan review. Wait for their decision before proceeding with write-capable actions.",
+              content:
+                "User did not respond to the requested plan review. Wait for their decision before proceeding with write-capable actions.",
               isError: true,
             };
           }
 
           if (response === "Approve") {
             this.interactionPolicy.clear(chatId);
-            return { toolCallId: toolCall.id, content: "Plan approved by user. Proceed with execution." };
+            return {
+              toolCallId: toolCall.id,
+              content: "Plan approved by user. Proceed with execution.",
+            };
           }
 
           return {
             toolCallId: toolCall.id,
-            content: response === "Reject"
-              ? "Plan rejected by user. Revise the approach or ask one focused follow-up question only if a real decision blocker remains. Do not execute write-capable actions until the revised plan is approved."
-              : `User requested plan changes: "${response}". Revise the plan accordingly and show it again before proceeding. Do not execute write-capable actions until the revised plan is approved.`,
+            content:
+              response === "Reject"
+                ? "Plan rejected by user. Revise the approach or ask one focused follow-up question only if a real decision blocker remains. Do not execute write-capable actions until the revised plan is approved."
+                : `User requested plan changes: "${response}". Revise the plan accordingly and show it again before proceeding. Do not execute write-capable actions until the revised plan is approved.`,
             isError: response === "Reject",
           };
         }
@@ -4922,7 +5609,10 @@ export class Orchestrator {
         const oldPath = this.normalizeInteractiveText(input["old_path"]);
         const newPath = this.normalizeInteractiveText(input["new_path"]);
         if (!oldPath || !newPath) {
-          return { approved: false, reason: "rename operation is missing a source or destination path" };
+          return {
+            approved: false,
+            reason: "rename operation is missing a source or destination path",
+          };
         }
         return { approved: true };
       }
@@ -5082,7 +5772,12 @@ export class Orchestrator {
         failureReason: params.draft,
       });
       return {
-        kind: plan.initialDecision === "replan" ? "replan" : plan.initialDecision === "continue" ? "continue" : "approve",
+        kind:
+          plan.initialDecision === "replan"
+            ? "replan"
+            : plan.initialDecision === "continue"
+              ? "continue"
+              : "approve",
         gate: plan.gate,
         result: {
           decision: plan.initialDecision,
@@ -5098,15 +5793,17 @@ export class Orchestrator {
     try {
       const reviewResponse = await reviewer.provider.chat(
         `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
-        [{
-          role: "user",
-          content: buildVerifierPipelineReviewRequest({
-            prompt: params.prompt,
-            draft: params.draft ?? "",
-            state: params.state,
-            plan,
-          }),
-        }],
+        [
+          {
+            role: "user",
+            content: buildVerifierPipelineReviewRequest({
+              prompt: params.prompt,
+              draft: params.draft ?? "",
+              state: params.state,
+              plan,
+            }),
+          },
+        ],
         [],
       );
       this.recordExecutionTrace({
@@ -5117,11 +5814,7 @@ export class Orchestrator {
         source: "completion-review",
         task: params.strategy.task,
       });
-      this.recordAuxiliaryUsage(
-        reviewer.providerName,
-        reviewResponse.usage,
-        params.usageHandler,
-      );
+      this.recordAuxiliaryUsage(reviewer.providerName, reviewResponse.usage, params.usageHandler);
       const result = finalizeVerifierPipelineReview(
         plan,
         parseCompletionReviewDecision(reviewResponse.text),
@@ -5151,7 +5844,12 @@ export class Orchestrator {
         failureReason: params.draft,
       });
       return {
-        kind: result.decision === "replan" ? "replan" : result.decision === "continue" ? "continue" : "approve",
+        kind:
+          result.decision === "replan"
+            ? "replan"
+            : result.decision === "continue"
+              ? "continue"
+              : "approve",
         gate: result.gate,
         result,
       };
@@ -5186,7 +5884,12 @@ export class Orchestrator {
       failureReason: params.draft,
     });
     return {
-      kind: fallbackResult.decision === "replan" ? "replan" : fallbackResult.decision === "continue" ? "continue" : "approve",
+      kind:
+        fallbackResult.decision === "replan"
+          ? "replan"
+          : fallbackResult.decision === "continue"
+            ? "continue"
+            : "approve",
       gate: fallbackResult.gate,
       result: fallbackResult,
     };
@@ -5217,16 +5920,18 @@ export class Orchestrator {
     try {
       const response = await provider.chat(
         SHELL_REVIEW_SYSTEM_PROMPT,
-        [{
-          role: "user",
-          content:
-            `Mode: ${mode}\n` +
-            `Task: ${taskPrompt || "(not provided)"}\n` +
-            `Working directory: ${workingDirectory}\n` +
-            `Timeout ms: ${Number.isFinite(timeoutMs) ? timeoutMs : 30000}\n` +
-            `Recent context:\n${recentContext || "(none)"}\n\n` +
-            `Command:\n${command}`,
-        }],
+        [
+          {
+            role: "user",
+            content:
+              `Mode: ${mode}\n` +
+              `Task: ${taskPrompt || "(not provided)"}\n` +
+              `Working directory: ${workingDirectory}\n` +
+              `Timeout ms: ${Number.isFinite(timeoutMs) ? timeoutMs : 30000}\n` +
+              `Recent context:\n${recentContext || "(none)"}\n\n` +
+              `Command:\n${command}`,
+          },
+        ],
         [],
       );
       this.recordExecutionTrace({
@@ -5241,7 +5946,11 @@ export class Orchestrator {
       this.recordAuxiliaryUsage(provider.name, response.usage, options.onUsage ?? this.onUsage);
       const decision = parseShellReviewDecision(response.text);
 
-      if (decision?.decision === "approve" && decision.taskAligned !== false && decision.bounded !== false) {
+      if (
+        decision?.decision === "approve" &&
+        decision.taskAligned !== false &&
+        decision.bounded !== false
+      ) {
         this.recordPhaseOutcome({
           chatId,
           identityKey,
@@ -5258,7 +5967,11 @@ export class Orchestrator {
         return { approved: true, reason: decision.reason };
       }
 
-      if (decision?.decision === "reject" || decision?.taskAligned === false || decision?.bounded === false) {
+      if (
+        decision?.decision === "reject" ||
+        decision?.taskAligned === false ||
+        decision?.bounded === false
+      ) {
         this.recordPhaseOutcome({
           chatId,
           identityKey,
@@ -5293,7 +6006,10 @@ export class Orchestrator {
     }
 
     if (isSafeShellFallback(command)) {
-      return { approved: true, reason: "shell review fallback approved a bounded development command" };
+      return {
+        approved: true,
+        reason: "shell review fallback approved a bounded development command",
+      };
     }
 
     return { approved: false, reason: "shell review was inconclusive for this command" };
@@ -5367,7 +6083,8 @@ export class Orchestrator {
         if (clarificationIntervention.kind === "continue") {
           results.push({
             toolCallId: activeToolCall.id,
-            content: clarificationIntervention.gate ?? "Continue internally without asking the user yet.",
+            content:
+              clarificationIntervention.gate ?? "Continue internally without asking the user yet.",
             isError: false,
           });
           continue;
@@ -5375,7 +6092,8 @@ export class Orchestrator {
         if (clarificationIntervention.input) {
           activeToolCall = {
             ...activeToolCall,
-            input: clarificationIntervention.input as unknown as import("../types/index.js").JsonObject,
+            input:
+              clarificationIntervention.input as unknown as import("../types/index.js").JsonObject,
           };
         }
       }
@@ -5417,7 +6135,13 @@ export class Orchestrator {
       // Confirmation flow via DMPolicy for write operations
       if (this.requireConfirmation && this.isWriteOperation(activeToolCall.name)) {
         if (this.isSelfManagedInteractiveMode(chatId, mode, options.userId)) {
-          const review = await this.reviewSelfManagedWriteOperation(chatId, activeToolCall.name, activeToolCall.input, mode, options);
+          const review = await this.reviewSelfManagedWriteOperation(
+            chatId,
+            activeToolCall.name,
+            activeToolCall.input,
+            mode,
+            options,
+          );
           if (!review.approved) {
             results.push(
               this.buildSelfManagedWriteRejection(
@@ -5445,7 +6169,12 @@ export class Orchestrator {
             isRename: false,
           };
           if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
-            const confirmed = await this.requestWriteConfirmation(chatId, options.userId, activeToolCall.name, activeToolCall.input);
+            const confirmed = await this.requestWriteConfirmation(
+              chatId,
+              options.userId,
+              activeToolCall.name,
+              activeToolCall.input,
+            );
             if (!confirmed) {
               results.push({
                 toolCallId: activeToolCall.id,
@@ -5505,19 +6234,16 @@ export class Orchestrator {
         : false;
     const defaultControlPlaneOnly = tool.name === "ask_user" || tool.name === "show_plan";
     this.toolMetadataByName.set(tool.name, {
-      readOnly: metadata?.readOnly
-        ?? existingMetadata?.readOnly
-        ?? intrinsicMetadata?.isReadOnly
-        ?? !WRITE_OPERATIONS.has(tool.name),
+      readOnly:
+        metadata?.readOnly ??
+        existingMetadata?.readOnly ??
+        intrinsicMetadata?.isReadOnly ??
+        !WRITE_OPERATIONS.has(tool.name),
       controlPlaneOnly: Boolean(
-        metadata?.controlPlaneOnly
-        ?? existingMetadata?.controlPlaneOnly
-        ?? defaultControlPlaneOnly,
+        metadata?.controlPlaneOnly ?? existingMetadata?.controlPlaneOnly ?? defaultControlPlaneOnly,
       ),
       requiresBridge: Boolean(
-        metadata?.requiresBridge
-        ?? existingMetadata?.requiresBridge
-        ?? intrinsicRequiresBridge,
+        metadata?.requiresBridge ?? existingMetadata?.requiresBridge ?? intrinsicRequiresBridge,
       ),
     });
     const def = {
@@ -5525,7 +6251,7 @@ export class Orchestrator {
       description: tool.description,
       input_schema: tool.inputSchema as import("../types/index.js").JsonObject,
     };
-    const existingIdx = this.toolDefinitions.findIndex(td => td.name === tool.name);
+    const existingIdx = this.toolDefinitions.findIndex((td) => td.name === tool.name);
     if (existingIdx >= 0) {
       this.toolDefinitions[existingIdx] = def;
     } else {
@@ -5628,7 +6354,12 @@ export class Orchestrator {
       this.activeGoalTrees.delete(oldestSession?.conversationScope ?? oldestKey);
     }
 
-    session = { messages: [], visibleMessages: [], lastActivity: new Date(), mixedParticipants: false };
+    session = {
+      messages: [],
+      visibleMessages: [],
+      lastActivity: new Date(),
+      mixedParticipants: false,
+    };
     this.sessions.set(chatId, session);
     return session;
   }
@@ -5652,7 +6383,9 @@ export class Orchestrator {
       }
       const removedSet = new Set(removed);
       const removedVisible = session.visibleMessages.filter((message) => removedSet.has(message));
-      session.visibleMessages = session.visibleMessages.filter((message) => !removedSet.has(message));
+      session.visibleMessages = session.visibleMessages.filter(
+        (message) => !removedSet.has(message),
+      );
       return removedVisible;
     };
 
@@ -5725,7 +6458,8 @@ export class Orchestrator {
         // Session-end summarization (fire-and-forget)
         const visibleMessages = this.getVisibleTranscript(session);
         if (this.sessionSummarizer && visibleMessages.length >= 2) {
-          void this.sessionSummarizer.summarizeAndUpdateProfile(session.profileKey ?? chatId, visibleMessages)
+          void this.sessionSummarizer
+            .summarizeAndUpdateProfile(session.profileKey ?? chatId, visibleMessages)
             .catch(() => {
               // Session summarization failure is non-fatal
             });
@@ -5784,7 +6518,10 @@ export class Orchestrator {
         const userMsg = messages.find((m) => m.role === "user");
         let assistantMsg: ConversationMessage | undefined;
         for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i]!.role === "assistant") { assistantMsg = messages[i]; break; }
+          if (messages[i]!.role === "assistant") {
+            assistantMsg = messages[i];
+            break;
+          }
         }
         const extractText = (msg: ConversationMessage | undefined): string | undefined => {
           if (!msg) return undefined;
@@ -5803,15 +6540,26 @@ export class Orchestrator {
           assistantMessage: extractText(assistantMsg),
         });
         if (result && typeof result === "object" && "kind" in result && result.kind === "err") {
-          getLogger().warn("Memory storeConversation failed", { chatId, error: String((result as { error: unknown }).error) });
+          getLogger().warn("Memory storeConversation failed", {
+            chatId,
+            error: String((result as { error: unknown }).error),
+          });
         }
       }
     } catch (error) {
-      getLogger().warn("Memory persistence failed", { chatId, error: error instanceof Error ? error.message : String(error) });
+      getLogger().warn("Memory persistence failed", {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
-  private async maybeUpdateUserProfileFromPrompt(chatId: string, profileKey: string, prompt: string, userId?: string): Promise<void> {
+  private async maybeUpdateUserProfileFromPrompt(
+    chatId: string,
+    profileKey: string,
+    prompt: string,
+    userId?: string,
+  ): Promise<void> {
     if (!this.userProfileStore || !prompt.trim()) {
       return;
     }
@@ -5850,10 +6598,14 @@ export class Orchestrator {
         updates.autonomousMode.enabled,
         updates.autonomousMode.expiresAt,
       );
-      this.dmPolicy?.initFromProfile(chatId, {
-        autonomousMode: updates.autonomousMode.enabled,
-        autonomousExpiresAt: updates.autonomousMode.expiresAt,
-      }, userId);
+      this.dmPolicy?.initFromProfile(
+        chatId,
+        {
+          autonomousMode: updates.autonomousMode.enabled,
+          autonomousExpiresAt: updates.autonomousMode.expiresAt,
+        },
+        userId,
+      );
     }
   }
 
@@ -5876,11 +6628,11 @@ export class Orchestrator {
     legacyContextSummary?: string,
   ): { content: string; contentHashes: string[] } | null {
     if (
-      !taskExecutionMemory?.sessionSummary
-      && !taskExecutionMemory?.branchSummary
-      && !taskExecutionMemory?.verifierSummary
-      && !(taskExecutionMemory?.learnedInsights.length)
-      && !legacyContextSummary
+      !taskExecutionMemory?.sessionSummary &&
+      !taskExecutionMemory?.branchSummary &&
+      !taskExecutionMemory?.verifierSummary &&
+      !taskExecutionMemory?.learnedInsights.length &&
+      !legacyContextSummary
     ) {
       return null;
     }
@@ -5904,7 +6656,9 @@ export class Orchestrator {
       contentHashes.push(taskExecutionMemory.branchSummary);
     }
     if (taskExecutionMemory?.verifierSummary) {
-      lines.push(`Verifier memory: ${sanitizePromptInjection(taskExecutionMemory.verifierSummary)}`);
+      lines.push(
+        `Verifier memory: ${sanitizePromptInjection(taskExecutionMemory.verifierSummary)}`,
+      );
       contentHashes.push(taskExecutionMemory.verifierSummary);
     }
     if (taskExecutionMemory && taskExecutionMemory.learnedInsights.length > 0) {
@@ -5950,7 +6704,9 @@ export class Orchestrator {
         availableToolNames,
         maxMatches: 6,
       });
-      const activeGuidance = matches.active.filter((match) => match.usableForExecutionGuidance).slice(0, 3);
+      const activeGuidance = matches.active
+        .filter((match) => match.usableForExecutionGuidance)
+        .slice(0, 3);
       const key = this.getRuntimeArtifactMatchKey(taskRunId, chatId);
       if (key) {
         const matchedIds = {
@@ -5975,7 +6731,9 @@ export class Orchestrator {
       const contentHashes: string[] = [];
       for (const match of activeGuidance) {
         const scope = match.projectWorldMatched ? "same-world" : "general";
-        lines.push(`- [${match.artifact.kind}] ${sanitizePromptInjection(match.artifact.guidance)} (score ${match.matchScore.toFixed(2)}, ${scope})`);
+        lines.push(
+          `- [${match.artifact.kind}] ${sanitizePromptInjection(match.artifact.guidance)} (score ${match.matchScore.toFixed(2)}, ${scope})`,
+        );
         contentHashes.push(match.artifact.guidance);
       }
 
@@ -6014,13 +6772,19 @@ export class Orchestrator {
       return;
     }
 
-    const fingerprint = params.decision === "approve"
-      ? ""
-      : normalizeFailureFingerprint(params.failureReason ?? params.summary);
+    const fingerprint =
+      params.decision === "approve"
+        ? ""
+        : normalizeFailureFingerprint(params.failureReason ?? params.summary);
     this.runtimeArtifactManager.recordEvaluation({
       artifactIds,
       identityKey: this.getTaskExecutionContext()?.identityKey,
-      verdict: params.decision === "approve" ? "clean" : params.decision === "continue" ? "retry" : "failure",
+      verdict:
+        params.decision === "approve"
+          ? "clean"
+          : params.decision === "continue"
+            ? "retry"
+            : "failure",
       blocker: params.decision === "replan",
       reason: params.summary,
       failureFingerprint: fingerprint || undefined,
@@ -6074,9 +6838,8 @@ export class Orchestrator {
 
     try {
       const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
-      const analysis = isOk(analysisResult) && isSome(analysisResult.value)
-        ? analysisResult.value.value
-        : null;
+      const analysis =
+        isOk(analysisResult) && isSome(analysisResult.value) ? analysisResult.value.value : null;
       return buildProjectWorldMemorySection({
         projectPath: this.projectPath,
         analysis,
@@ -6102,12 +6865,20 @@ export class Orchestrator {
     const correlatedTaskRunId = this.resolveTaskRunId(chatId, taskRunId);
     const traces = (this.providerRouter.getRecentExecutionTraces?.(100, identityKey) ?? [])
       .filter((trace) => trace.chatId === chatId)
-      .filter((trace) => correlatedTaskRunId ? trace.taskRunId === correlatedTaskRunId : true)
-      .filter((trace) => correlatedTaskRunId || sinceTimestamp === undefined || trace.timestamp >= sinceTimestamp);
+      .filter((trace) => (correlatedTaskRunId ? trace.taskRunId === correlatedTaskRunId : true))
+      .filter(
+        (trace) =>
+          correlatedTaskRunId || sinceTimestamp === undefined || trace.timestamp >= sinceTimestamp,
+      );
     const outcomes = (this.providerRouter.getRecentPhaseOutcomes?.(100, identityKey) ?? [])
       .filter((outcome) => outcome.chatId === chatId)
-      .filter((outcome) => correlatedTaskRunId ? outcome.taskRunId === correlatedTaskRunId : true)
-      .filter((outcome) => correlatedTaskRunId || sinceTimestamp === undefined || outcome.timestamp >= sinceTimestamp);
+      .filter((outcome) => (correlatedTaskRunId ? outcome.taskRunId === correlatedTaskRunId : true))
+      .filter(
+        (outcome) =>
+          correlatedTaskRunId ||
+          sinceTimestamp === undefined ||
+          outcome.timestamp >= sinceTimestamp,
+      );
     if (traces.length === 0 && outcomes.length === 0) {
       return [];
     }
@@ -6135,14 +6906,10 @@ export class Orchestrator {
       keyed.set(key, this.mergeReplayOutcome(existing, outcome));
     }
 
-    return [...keyed.values()]
-      .sort((left, right) => left.timestamp - right.timestamp)
-      .slice(-12);
+    return [...keyed.values()].sort((left, right) => left.timestamp - right.timestamp).slice(-12);
   }
 
-  private toTrajectoryPhaseReplay(
-    event: ExecutionTrace | PhaseOutcome,
-  ): TrajectoryPhaseReplay {
+  private toTrajectoryPhaseReplay(event: ExecutionTrace | PhaseOutcome): TrajectoryPhaseReplay {
     return {
       phase: event.phase,
       role: event.role,
@@ -6174,7 +6941,11 @@ export class Orchestrator {
     };
   }
 
-  private emitToolResult(chatId: string, tc: { name: string; input: unknown }, tr: { content: string; isError?: boolean }): void {
+  private emitToolResult(
+    chatId: string,
+    tc: { name: string; input: unknown },
+    tr: { content: string; isError?: boolean },
+  ): void {
     if (!this.eventEmitter) return;
     this.eventEmitter.emit("tool:result", {
       sessionId: chatId,
@@ -6195,17 +6966,13 @@ export class Orchestrator {
     sinceTimestamp?: number;
     taskRunId?: string;
   }): Promise<TrajectoryReplayContext | null> {
-    const identityKey = resolveIdentityKey(
-      params.chatId,
-      params.userId,
-      params.conversationId,
-    );
+    const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId);
     const taskExecutionMemory = this.taskExecutionStore?.getMemory(identityKey) ?? null;
     const exactReplayMatch = params.taskRunId
       ? (this.trajectoryReplayRetriever?.getReplayContextForTaskRun({
-        taskRunId: params.taskRunId,
-        chatId: params.chatId,
-      }) ?? null)
+          taskRunId: params.taskRunId,
+          chatId: params.chatId,
+        }) ?? null)
       : null;
     const exactReplayContext = exactReplayMatch?.replayContext ?? null;
     const hasExactReplayMatch = exactReplayMatch?.found ?? false;
@@ -6228,29 +6995,36 @@ export class Orchestrator {
       ? exactReplayContext?.verifierSummary
       : (exactReplayContext?.verifierSummary ?? taskExecutionMemory?.verifierSummary);
     if (
-      !projectWorldLayer
-      && !exactReplayContext?.projectWorldFingerprint
-      && !branchSummary
-      && !verifierSummary
-      && learnedInsights.length === 0
-      && phaseTelemetry.length === 0
-      && !(exactReplayContext?.phaseTelemetry?.length)
+      !projectWorldLayer &&
+      !exactReplayContext?.projectWorldFingerprint &&
+      !branchSummary &&
+      !verifierSummary &&
+      learnedInsights.length === 0 &&
+      phaseTelemetry.length === 0 &&
+      !exactReplayContext?.phaseTelemetry?.length
     ) {
       return null;
     }
 
     return {
-      projectWorldFingerprint: exactReplayContext?.projectWorldFingerprint ?? projectWorldLayer?.fingerprint,
+      projectWorldFingerprint:
+        exactReplayContext?.projectWorldFingerprint ?? projectWorldLayer?.fingerprint,
       projectWorldSummary: exactReplayContext?.projectWorldSummary ?? projectWorldLayer?.summary,
       branchSummary,
       verifierSummary,
       learnedInsights,
-      phaseTelemetry: phaseTelemetry.length > 0 ? phaseTelemetry : (exactReplayContext?.phaseTelemetry ?? []),
+      phaseTelemetry:
+        phaseTelemetry.length > 0 ? phaseTelemetry : (exactReplayContext?.phaseTelemetry ?? []),
     };
   }
 
   /** Emit a goal lifecycle event on the event bus */
-  private emitGoalEvent(rootId: GoalNodeId | string, nodeId: GoalNodeId | string, status: GoalStatus, depth: number): void {
+  private emitGoalEvent(
+    rootId: GoalNodeId | string,
+    nodeId: GoalNodeId | string,
+    status: GoalStatus,
+    depth: number,
+  ): void {
     if (!this.eventEmitter) return;
     this.eventEmitter.emit("goal:status-changed", {
       rootId: rootId as GoalNodeId,

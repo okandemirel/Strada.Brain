@@ -7,6 +7,7 @@ export interface InteractionGateState {
   readonly reason: string;
   readonly requestedAt: number;
   readonly blocksWrite: boolean;
+  readonly planText?: string;
 }
 
 export interface InteractionWriteBlock {
@@ -19,12 +20,15 @@ const PLAN_APPROVAL_MESSAGE_RE = /^(?:\s*)(?:approve|approved|go ahead|proceed|c
 export class InteractionPolicyStateMachine {
   private readonly gates = new Map<string, InteractionGateState>();
 
-  requirePlanReview(chatId: string, reason: string): void {
+  requirePlanReview(chatId: string, reason: string, planText?: string): void {
+    const existingGate = this.gates.get(chatId);
+    const normalizedPlanText = planText?.trim() || existingGate?.planText;
     this.gates.set(chatId, {
       kind: "plan-review-required",
       reason: reason.trim() || "user explicitly asked to review a plan first",
       requestedAt: Date.now(),
       blocksWrite: true,
+      planText: normalizedPlanText,
     });
   }
 

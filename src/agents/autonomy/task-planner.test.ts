@@ -17,9 +17,10 @@ describe("TaskPlanner", () => {
     it("should reset to initial state", () => {
       planner.trackToolCall("file_write", false);
       planner.reset();
-      
+
       const state = planner.getState();
       expect(state.iterationsUsed).toBe(0);
+      expect(state.budgetWindowIterationsUsed).toBe(0);
       expect(state.consecutiveErrors).toBe(0);
     });
 
@@ -29,7 +30,7 @@ describe("TaskPlanner", () => {
       const storage = new LearningStorage(dbPath);
       storage.initialize();
       const pipeline = new LearningPipeline(storage);
-      
+
       planner.startTask({
         sessionId: "test-session",
         taskDescription: "Test task",
@@ -51,7 +52,7 @@ describe("TaskPlanner", () => {
       const storage = new LearningStorage(dbPath);
       storage.initialize();
       const pipeline = new LearningPipeline(storage);
-      
+
       planner.startTask({
         sessionId: "test-session",
         taskDescription: "Test task",
@@ -59,7 +60,7 @@ describe("TaskPlanner", () => {
       });
 
       planner.trackToolCall("file_write", false);
-      
+
       planner.endTask({
         success: true,
         hadErrors: false,
@@ -122,18 +123,20 @@ describe("TaskPlanner", () => {
         branchSummary: "stable checkpoint: inspected Level_031",
         verifierSummary: "runtime replay still required",
         learnedInsights: ["Avoid trusting serialized YAML alone."],
-        phaseTelemetry: [{
-          phase: "planning",
-          role: "planner",
-          provider: "kimi",
-          model: "kimi-k2",
-          source: "supervisor-strategy",
-          status: "approved",
-          verifierDecision: "approve",
-          phaseVerdict: "clean",
-          phaseVerdictScore: 1,
-          timestamp: Date.now(),
-        }],
+        phaseTelemetry: [
+          {
+            phase: "planning",
+            role: "planner",
+            provider: "kimi",
+            model: "kimi-k2",
+            source: "supervisor-strategy",
+            status: "approved",
+            verifierDecision: "approve",
+            phaseVerdict: "clean",
+            phaseVerdictScore: 1,
+            timestamp: Date.now(),
+          },
+        ],
       });
 
       planner.endTask({
@@ -143,7 +146,9 @@ describe("TaskPlanner", () => {
       });
 
       const trajectory = storage.getTrajectories({ limit: 1 })[0];
-      expect(trajectory?.outcome.replayContext?.projectWorldFingerprint).toContain("castle systems 9");
+      expect(trajectory?.outcome.replayContext?.projectWorldFingerprint).toContain(
+        "castle systems 9",
+      );
       expect(trajectory?.outcome.replayContext?.branchSummary).toContain("Level_031");
       expect(trajectory?.outcome.replayContext?.learnedInsights).toEqual([
         "Avoid trusting serialized YAML alone.",
@@ -167,7 +172,7 @@ describe("TaskPlanner", () => {
     it("should track mutations", () => {
       planner.trackToolCall("file_write", false);
       planner.trackToolCall("file_edit", false);
-      
+
       const state = planner.getState();
       expect(state.mutationsSinceVerify).toBe(2);
     });
@@ -176,7 +181,7 @@ describe("TaskPlanner", () => {
       planner.trackToolCall("file_write", false);
       planner.trackToolCall("file_write", false);
       planner.trackToolCall("dotnet_build", false);
-      
+
       const state = planner.getState();
       expect(state.mutationsSinceVerify).toBe(0);
       expect(state.buildVerified).toBe(true);
@@ -218,7 +223,7 @@ describe("TaskPlanner", () => {
       planner.trackToolCall("file_write", true);
       planner.trackToolCall("file_edit", true);
       planner.trackToolCall("dotnet_build", true);
-      
+
       const state = planner.getState();
       expect(state.consecutiveErrors).toBe(3);
     });
@@ -227,7 +232,7 @@ describe("TaskPlanner", () => {
       planner.trackToolCall("file_write", true);
       planner.trackToolCall("file_write", true);
       planner.trackToolCall("file_read", false);
-      
+
       const state = planner.getState();
       expect(state.consecutiveErrors).toBe(0);
     });
@@ -236,16 +241,28 @@ describe("TaskPlanner", () => {
       planner.trackToolCall("file_read", false);
       planner.trackToolCall("file_write", false);
       planner.trackToolCall("dotnet_build", false);
-      
+
       const state = planner.getState();
       expect(state.iterationsUsed).toBe(3);
+      expect(state.budgetWindowIterationsUsed).toBe(3);
+    });
+
+    it("should reset only the active budget window", () => {
+      planner.trackToolCall("file_read", false);
+      planner.trackToolCall("file_read", false);
+
+      planner.resetBudgetWindow();
+
+      const state = planner.getState();
+      expect(state.iterationsUsed).toBe(2);
+      expect(state.budgetWindowIterationsUsed).toBe(0);
     });
   });
 
   describe("Error Tracking", () => {
     it("should record error summary", () => {
       planner.recordError("missing_type error in File.cs");
-      
+
       const state = planner.getState();
       expect(state.errorHistory).toContain("missing_type error in File.cs");
     });
@@ -254,7 +271,7 @@ describe("TaskPlanner", () => {
       for (let i = 0; i < 15; i++) {
         planner.recordError(`Error ${i}`);
       }
-      
+
       const state = planner.getState();
       expect(state.errorHistory.length).toBeLessThanOrEqual(10);
     });
@@ -263,7 +280,7 @@ describe("TaskPlanner", () => {
   describe("State Injection", () => {
     it("should return empty string when no intervention needed", () => {
       planner.trackToolCall("file_read", false);
-      
+
       const injection = planner.getStateInjection();
       expect(injection).toBe("");
     });
@@ -272,7 +289,7 @@ describe("TaskPlanner", () => {
       planner.trackToolCall("file_write", false);
       planner.trackToolCall("file_write", false);
       planner.trackToolCall("file_write", false);
-      
+
       const injection = planner.getStateInjection();
       expect(injection).toContain("[VERIFY]");
       expect(injection).toContain("Run dotnet_build");
@@ -284,31 +301,33 @@ describe("TaskPlanner", () => {
       planner.trackToolCall("file_write", true);
       planner.trackToolCall("file_write", true);
       planner.trackToolCall("file_write", true);
-      
+
       const injection = planner.getStateInjection();
       expect(injection).toContain("[STALL]");
       expect(injection).toContain("Consider a different approach");
     });
 
-    it("should warn about budget when iterations exceed threshold", () => {
-      // Simulate many iterations
-      for (let i = 0; i < 42; i++) {
+    it("should warn about budget when iterations exceed the configured threshold", () => {
+      planner = new TaskPlanner({ iterationBudget: 10 });
+
+      for (let i = 0; i < 8; i++) {
         planner.trackToolCall("file_read", false);
       }
-      
+
       const injection = planner.getStateInjection();
       expect(injection).toContain("[BUDGET]");
-      expect(injection).toContain("iterations used");
+      expect(injection).toContain("8/10");
+      expect(injection).toContain("current execution window");
     });
 
     it("should include multiple warnings when applicable", () => {
       planner.recordError("Error 1");
       planner.recordError("Error 2");
-      
+
       planner.trackToolCall("file_write", true);
       planner.trackToolCall("file_write", true);
       planner.trackToolCall("file_write", true);
-      
+
       const injection = planner.getStateInjection();
       expect(injection).toContain("[VERIFY]");
       expect(injection).toContain("[STALL]");

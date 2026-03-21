@@ -17,7 +17,11 @@ import { resolveDotenvPath } from "../common/runtime-paths.js";
 import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
 import type { ToolChainConfig } from "../learning/chains/index.js";
 import type { DaemonConfig } from "../daemon/daemon-types.js";
-import type { NotificationConfig, QuietHoursConfig, DigestConfig } from "../daemon/reporting/notification-types.js";
+import type {
+  NotificationConfig,
+  QuietHoursConfig,
+  DigestConfig,
+} from "../daemon/reporting/notification-types.js";
 import type { AgentConfig } from "../agents/multi/agent-types.js";
 import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
 import type { DeploymentConfig } from "../daemon/deployment/deployment-types.js";
@@ -122,14 +126,31 @@ export type EnvVarName =
   | "LOG_LEVEL"
   | "LOG_FILE"
   | "PLUGIN_DIRS"
-  | "OPENAI_MODEL" | "DEEPSEEK_MODEL" | "QWEN_MODEL" | "KIMI_MODEL"
-  | "MINIMAX_MODEL" | "GROQ_MODEL" | "MISTRAL_MODEL" | "TOGETHER_MODEL"
-  | "FIREWORKS_MODEL" | "GEMINI_MODEL" | "CLAUDE_MODEL" | "OLLAMA_MODEL"
-  | "BAYESIAN_ENABLED" | "BAYESIAN_DEPRECATED_THRESHOLD" | "BAYESIAN_ACTIVE_THRESHOLD"
-  | "BAYESIAN_EVOLUTION_THRESHOLD" | "BAYESIAN_AUTO_EVOLVE_THRESHOLD" | "BAYESIAN_MAX_INITIAL"
-  | "BAYESIAN_COOLING_PERIOD_DAYS" | "BAYESIAN_COOLING_MIN_OBSERVATIONS"
-  | "BAYESIAN_COOLING_MAX_FAILURES" | "BAYESIAN_PROMOTION_MIN_OBSERVATIONS"
-  | "BAYESIAN_VERDICT_CLEAN_SUCCESS" | "BAYESIAN_VERDICT_RETRY_SUCCESS" | "BAYESIAN_VERDICT_FAILURE"
+  | "OPENAI_MODEL"
+  | "DEEPSEEK_MODEL"
+  | "QWEN_MODEL"
+  | "KIMI_MODEL"
+  | "MINIMAX_MODEL"
+  | "GROQ_MODEL"
+  | "MISTRAL_MODEL"
+  | "TOGETHER_MODEL"
+  | "FIREWORKS_MODEL"
+  | "GEMINI_MODEL"
+  | "CLAUDE_MODEL"
+  | "OLLAMA_MODEL"
+  | "BAYESIAN_ENABLED"
+  | "BAYESIAN_DEPRECATED_THRESHOLD"
+  | "BAYESIAN_ACTIVE_THRESHOLD"
+  | "BAYESIAN_EVOLUTION_THRESHOLD"
+  | "BAYESIAN_AUTO_EVOLVE_THRESHOLD"
+  | "BAYESIAN_MAX_INITIAL"
+  | "BAYESIAN_COOLING_PERIOD_DAYS"
+  | "BAYESIAN_COOLING_MIN_OBSERVATIONS"
+  | "BAYESIAN_COOLING_MAX_FAILURES"
+  | "BAYESIAN_PROMOTION_MIN_OBSERVATIONS"
+  | "BAYESIAN_VERDICT_CLEAN_SUCCESS"
+  | "BAYESIAN_VERDICT_RETRY_SUCCESS"
+  | "BAYESIAN_VERDICT_FAILURE"
   | "GOAL_MAX_DEPTH"
   | "GOAL_MAX_RETRIES"
   | "GOAL_MAX_FAILURES"
@@ -160,7 +181,6 @@ export type EnvVarName =
   | "STRADA_CHECKLIST_MORNING_HOUR"
   | "STRADA_CHECKLIST_AFTERNOON_HOUR"
   | "STRADA_CHECKLIST_EVENING_HOUR"
-
   | "STRADA_GOAL_ESCALATION_TIMEOUT_MINUTES"
   | "STRADA_GOAL_MAX_REDECOMPOSITIONS"
 
@@ -222,6 +242,10 @@ export type EnvVarName =
   | "DELEGATION_VERBOSITY"
   | "DELEGATION_TYPES"
   | "DELEGATION_MAX_ITERATIONS_PER_TYPE"
+  | "TASK_INTERACTIVE_MAX_ITERATIONS"
+  | "TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"
+  | "TASK_BACKGROUND_AUTO_CONTINUE"
+  | "TASK_BACKGROUND_MAX_EPOCHS"
   | "INTERACTION_MODE"
   | "INTERACTION_HEARTBEAT_AFTER_MS"
   | "INTERACTION_HEARTBEAT_INTERVAL_MS"
@@ -507,6 +531,10 @@ export interface TaskConfig {
   readonly concurrencyLimit: number;
   readonly messageBurstWindowMs: number;
   readonly messageBurstMaxMessages: number;
+  readonly interactiveMaxIterations: number;
+  readonly backgroundEpochMaxIterations: number;
+  readonly backgroundAutoContinue: boolean;
+  readonly backgroundMaxEpochs: number;
 }
 
 export interface InteractionConfig {
@@ -524,8 +552,7 @@ export interface StradaDependencyConfig {
 }
 
 export const DEFAULT_STRADA_CORE_REPO_URL = "https://github.com/okandemirel/Strada.Core.git";
-export const DEFAULT_STRADA_MODULES_REPO_URL =
-  "https://github.com/okandemirel/Strada.Modules.git";
+export const DEFAULT_STRADA_MODULES_REPO_URL = "https://github.com/okandemirel/Strada.Modules.git";
 export const DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS = 10 * 60 * 1000;
 export const DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS = 2 * 60 * 1000;
 export const DEFAULT_INTERACTION_CONFIG: InteractionConfig = {
@@ -533,6 +560,15 @@ export const DEFAULT_INTERACTION_CONFIG: InteractionConfig = {
   heartbeatAfterMs: 120_000,
   heartbeatIntervalMs: 300_000,
   escalationPolicy: "hard-blockers-only",
+};
+export const DEFAULT_TASK_CONFIG: TaskConfig = {
+  concurrencyLimit: 3,
+  messageBurstWindowMs: 350,
+  messageBurstMaxMessages: 8,
+  interactiveMaxIterations: 50,
+  backgroundEpochMaxIterations: 50,
+  backgroundAutoContinue: true,
+  backgroundMaxEpochs: 0,
 };
 
 // =============================================================================
@@ -707,8 +743,15 @@ const logLevelSchema = z.enum(["error", "warn", "info", "debug"]);
 
 /** Embedding provider schema */
 const embeddingProviderSchema = z.enum([
-  "auto", "openai", "deepseek", "mistral", "together",
-  "fireworks", "qwen", "gemini", "ollama",
+  "auto",
+  "openai",
+  "deepseek",
+  "mistral",
+  "together",
+  "fireworks",
+  "qwen",
+  "gemini",
+  "ollama",
 ]);
 
 /** Port number schema */
@@ -840,11 +883,16 @@ export const configSchema = z
       .pipe(z.number().int().min(1).max(168))
       .default("24"),
     modelIntelligenceDbPath: z.string().default(".strada-memory/model-intelligence.db"),
-    modelIntelligenceProviderSourcesPath: z.string().default("src/agents/providers/provider-sources.json"),
+    modelIntelligenceProviderSourcesPath: z
+      .string()
+      .default("src/agents/providers/provider-sources.json"),
 
     // Memory
     memoryEnabled: boolFromString(true),
-    memoryDbPath: z.string().refine((p) => !p.includes(".."), { message: "Path must not contain '..' (path traversal)" }).default(".strada-memory"),
+    memoryDbPath: z
+      .string()
+      .refine((p) => !p.includes(".."), { message: "Path must not contain '..' (path traversal)" })
+      .default(".strada-memory"),
     memoryBackend: z.enum(["agentdb", "file"]).default("agentdb"),
     memoryDimensions: z
       .string()
@@ -890,27 +938,69 @@ export const configSchema = z
 
     // Memory Decay (Phase 21)
     memoryDecayEnabled: boolFromString(true),
-    memoryDecayLambdaWorking: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.001).max(1.0)).default("0.10"),
-    memoryDecayLambdaEphemeral: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.001).max(1.0)).default("0.05"),
-    memoryDecayLambdaPersistent: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.001).max(1.0)).default("0.01"),
+    memoryDecayLambdaWorking: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.001).max(1.0))
+      .default("0.10"),
+    memoryDecayLambdaEphemeral: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.001).max(1.0))
+      .default("0.05"),
+    memoryDecayLambdaPersistent: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.001).max(1.0))
+      .default("0.01"),
     memoryDecayExemptDomains: z.string().default("instinct,analysis-cache"),
-    memoryDecayTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1000).max(300000)).default("30000"),
+    memoryDecayTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1000).max(300000))
+      .default("30000"),
 
     // Memory Consolidation (Phase 25)
     memoryConsolidationEnabled: boolFromString(true),
-    memoryConsolidationIdleMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1440)).default("5"),
-    memoryConsolidationThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(0.99)).default("0.85"),
-    memoryConsolidationBatchSize: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(5).max(200)).default("50"),
-    memoryConsolidationMinClusterSize: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(20)).default("2"),
-    memoryConsolidationMaxDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
-    memoryConsolidationModelTier: z.enum(["local", "cheap", "standard", "premium"]).default("cheap"),
+    memoryConsolidationIdleMinutes: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(1440))
+      .default("5"),
+    memoryConsolidationThreshold: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.5).max(0.99))
+      .default("0.85"),
+    memoryConsolidationBatchSize: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(5).max(200))
+      .default("50"),
+    memoryConsolidationMinClusterSize: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(2).max(20))
+      .default("2"),
+    memoryConsolidationMaxDepth: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(10))
+      .default("3"),
+    memoryConsolidationModelTier: z
+      .enum(["local", "cheap", "standard", "premium"])
+      .default("cheap"),
 
     // RAG
     ragEnabled: boolFromString(true),
     embeddingProvider: embeddingProviderSchema.default("auto"),
     embeddingModel: z.string().optional(),
     embeddingBaseUrl: z.string().optional(),
-    embeddingDimensions: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(128).max(3072)).optional(),
+    embeddingDimensions: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(128).max(3072))
+      .optional(),
     ragContextMaxTokens: z
       .string()
       .transform((s) => parseInt(s, 10))
@@ -923,12 +1013,24 @@ export const configSchema = z
     llmStreamInitialTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(1).max(60 * 60 * 1000))
+      .pipe(
+        z
+          .number()
+          .int()
+          .min(1)
+          .max(60 * 60 * 1000),
+      )
       .default(String(DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS)),
     llmStreamStallTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(1).max(60 * 60 * 1000))
+      .pipe(
+        z
+          .number()
+          .int()
+          .min(1)
+          .max(60 * 60 * 1000),
+      )
       .default(String(DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS)),
 
     // Rate Limiting
@@ -971,56 +1073,186 @@ export const configSchema = z
 
     // Bayesian Confidence System
     bayesianEnabled: boolFromString(true),
-    bayesianDeprecatedThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.1).max(0.5)).default("0.3"),
-    bayesianActiveThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(0.9)).default("0.7"),
-    bayesianEvolutionThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.8).max(0.99)).default("0.9"),
-    bayesianAutoEvolveThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.9).max(1.0)).default("0.95"),
-    bayesianMaxInitial: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.3).max(0.8)).default("0.5"),
-    bayesianCoolingPeriodDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(30)).default("7"),
-    bayesianCoolingMinObservations: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(3).max(50)).default("10"),
-    bayesianCoolingMaxFailures: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(10)).default("3"),
-    bayesianPromotionMinObservations: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10).max(100)).default("25"),
-    bayesianVerdictCleanSuccess: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(1.0)).default("0.9"),
-    bayesianVerdictRetrySuccess: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.3).max(0.8)).default("0.6"),
-    bayesianVerdictFailure: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.0).max(0.5)).default("0.2"),
+    bayesianDeprecatedThreshold: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.1).max(0.5))
+      .default("0.3"),
+    bayesianActiveThreshold: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.5).max(0.9))
+      .default("0.7"),
+    bayesianEvolutionThreshold: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.8).max(0.99))
+      .default("0.9"),
+    bayesianAutoEvolveThreshold: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.9).max(1.0))
+      .default("0.95"),
+    bayesianMaxInitial: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.3).max(0.8))
+      .default("0.5"),
+    bayesianCoolingPeriodDays: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(30))
+      .default("7"),
+    bayesianCoolingMinObservations: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(3).max(50))
+      .default("10"),
+    bayesianCoolingMaxFailures: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(2).max(10))
+      .default("3"),
+    bayesianPromotionMinObservations: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10).max(100))
+      .default("25"),
+    bayesianVerdictCleanSuccess: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.5).max(1.0))
+      .default("0.9"),
+    bayesianVerdictRetrySuccess: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.3).max(0.8))
+      .default("0.6"),
+    bayesianVerdictFailure: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.0).max(0.5))
+      .default("0.2"),
 
     // Goal Decomposition
-    goalMaxDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(5)).default("3"),
+    goalMaxDepth: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(5))
+      .default("3"),
 
     // Goal Execution Policy
-    goalMaxRetries: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(5)).default("1"),
-    goalMaxFailures: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
+    goalMaxRetries: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(5))
+      .default("1"),
+    goalMaxFailures: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(20))
+      .default("3"),
     goalParallelExecution: boolFromString(true),
-    goalMaxParallel: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
+    goalMaxParallel: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(10))
+      .default("3"),
 
     // Goal Interactive Execution (Phase 16)
-    stradaGoalEscalationTimeoutMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(120)).default("10"),
-    stradaGoalMaxRedecompositions: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(10)).default("2"),
+    stradaGoalEscalationTimeoutMinutes: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(120))
+      .default("10"),
+    stradaGoalMaxRedecompositions: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(10))
+      .default("2"),
 
     // Tool Chain Synthesis
     toolChainEnabled: boolFromString(true),
-    toolChainMinOccurrences: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(20)).default("3"),
-    toolChainSuccessRateThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(1.0)).default("0.8"),
-    toolChainMaxActive: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("10"),
-    toolChainMaxAgeDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(365)).default("30"),
-    toolChainLlmBudgetPerCycle: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
-    toolChainMinChainLength: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(5)).default("2"),
-    toolChainMaxChainLength: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(3).max(10)).default("5"),
-    toolChainDetectionIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000).max(3600000)).default("300000"),
+    toolChainMinOccurrences: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(2).max(20))
+      .default("3"),
+    toolChainSuccessRateThreshold: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.5).max(1.0))
+      .default("0.8"),
+    toolChainMaxActive: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(50))
+      .default("10"),
+    toolChainMaxAgeDays: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(365))
+      .default("30"),
+    toolChainLlmBudgetPerCycle: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(20))
+      .default("3"),
+    toolChainMinChainLength: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(2).max(5))
+      .default("2"),
+    toolChainMaxChainLength: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(3).max(10))
+      .default("5"),
+    toolChainDetectionIntervalMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(60000).max(3600000))
+      .default("300000"),
 
     // Chain Resilience (Phase 22)
     chainRollbackEnabled: boolFromString(false),
     chainParallelEnabled: boolFromString(false),
-    chainMaxParallelBranches: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("4"),
-    chainCompensationTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1000).max(300000)).default("30000"),
+    chainMaxParallelBranches: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(10))
+      .default("4"),
+    chainCompensationTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1000).max(300000))
+      .default("30000"),
 
     // Cross-Session Learning
     crossSessionEnabled: boolFromString(true),
-    crossSessionMaxAgeDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(365)).default("90"),
-    crossSessionScopeFilter: z.enum(["project-only", "project+universal", "all"]).default("project+universal"),
-    crossSessionRecencyBoost: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(3.0)).default("1.0"),
-    crossSessionScopeBoost: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.5).max(3.0)).default("1.1"),
-    crossSessionPromotionThreshold: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(2).max(10)).default("3"),
+    crossSessionMaxAgeDays: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(365))
+      .default("90"),
+    crossSessionScopeFilter: z
+      .enum(["project-only", "project+universal", "all"])
+      .default("project+universal"),
+    crossSessionRecencyBoost: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.5).max(3.0))
+      .default("1.0"),
+    crossSessionScopeBoost: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.5).max(3.0))
+      .default("1.1"),
+    crossSessionPromotionThreshold: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(2).max(10))
+      .default("3"),
 
     // Identity
     agentName: z.string().default("Strada Brain"),
@@ -1029,29 +1261,89 @@ export const configSchema = z
     language: z.enum(["en", "tr", "ja", "ko", "zh", "de", "es", "fr"]).default("en"),
 
     // Daemon
-    daemonIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10000).max(300000)).default("60000"),
+    daemonIntervalMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10000).max(300000))
+      .default("60000"),
     daemonTimezone: z.string().default(""),
     daemonHeartbeatFile: z.string().default("./HEARTBEAT.md"),
-    daemonDailyBudget: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.01).max(1000)).optional(),
-    daemonBudgetWarnPct: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.1).max(0.99)).default("0.8"),
-    daemonApprovalTimeoutMin: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1440)).default("30"),
-    daemonAutoApproveTools: z.string().transform((s) => s.split(",").map((t) => t.trim()).filter(Boolean)).default(""),
-    daemonBackoffBase: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10000).max(600000)).default("60000"),
-    daemonBackoffMax: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000).max(86400000)).default("3600000"),
-    daemonFailureThreshold: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("3"),
+    daemonDailyBudget: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.01).max(1000))
+      .optional(),
+    daemonBudgetWarnPct: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.1).max(0.99))
+      .default("0.8"),
+    daemonApprovalTimeoutMin: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(1440))
+      .default("30"),
+    daemonAutoApproveTools: z
+      .string()
+      .transform((s) =>
+        s
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
+      )
+      .default(""),
+    daemonBackoffBase: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10000).max(600000))
+      .default("60000"),
+    daemonBackoffMax: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(60000).max(86400000))
+      .default("3600000"),
+    daemonFailureThreshold: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(20))
+      .default("3"),
     daemonIdlePause: boolFromString(false),
 
     // Daemon Triggers (Phase 15)
     webhookSecret: z.string().optional(),
     webhookRateLimit: z.string().default("10/min"),
-    daemonDedupWindowMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(3600000)).default("300000"),
-    daemonDefaultDebounceMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100).max(60000)).default("500"),
-    checklistMorningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("9"),
-    checklistAfternoonHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("14"),
-    checklistEveningHour: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("18"),
+    daemonDedupWindowMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(3600000))
+      .default("300000"),
+    daemonDefaultDebounceMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(100).max(60000))
+      .default("500"),
+    checklistMorningHour: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(23))
+      .default("9"),
+    checklistAfternoonHour: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(23))
+      .default("14"),
+    checklistEveningHour: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(23))
+      .default("18"),
 
     // Trigger Fire History Pruning (Phase 21)
-    triggerFireRetentionDays: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(365)).default("30"),
+    triggerFireRetentionDays: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(365))
+      .default("30"),
 
     // Notification, Quiet Hours, Digest (Phase 18)
     stradaDigestEnabled: boolFromString(true),
@@ -1062,39 +1354,107 @@ export const configSchema = z
     stradaNotifyMedium: z.string().default("dashboard"),
     stradaNotifyHigh: z.string().default("chat,dashboard"),
     stradaNotifyCritical: z.string().default("chat,dashboard"),
-    stradaQuietStart: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).optional(),
-    stradaQuietEnd: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).default("8"),
-    stradaQuietBufferMax: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10).max(10000)).default("100"),
-    stradaDashboardHistoryDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1000)).default("10"),
+    stradaQuietStart: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(23))
+      .optional(),
+    stradaQuietEnd: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(23))
+      .default("8"),
+    stradaQuietBufferMax: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10).max(10000))
+      .default("100"),
+    stradaDashboardHistoryDepth: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(1000))
+      .default("10"),
 
     // Memory Re-Retrieval (Phase 17)
     stradaMemoryReRetrievalEnabled: boolFromString(true),
-    stradaMemoryReRetrievalInterval: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(100)).default("5"),
+    stradaMemoryReRetrievalInterval: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(100))
+      .default("5"),
     stradaMemoryTopicShiftEnabled: boolFromString(true),
-    stradaMemoryTopicShiftThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0.1).max(1.0)).default("0.4"),
-    stradaMemoryMaxReRetrievals: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(100)).default("10"),
-    stradaMemoryReRetrievalTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100).max(60000)).default("5000"),
-    stradaMemoryReRetrievalMemoryLimit: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("3"),
-    stradaMemoryReRetrievalRagTopK: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("6"),
+    stradaMemoryTopicShiftThreshold: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.1).max(1.0))
+      .default("0.4"),
+    stradaMemoryMaxReRetrievals: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(100))
+      .default("10"),
+    stradaMemoryReRetrievalTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(100).max(60000))
+      .default("5000"),
+    stradaMemoryReRetrievalMemoryLimit: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(50))
+      .default("3"),
+    stradaMemoryReRetrievalRagTopK: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(50))
+      .default("6"),
 
     // Multi-Agent (Phase 23)
     multiAgentEnabled: boolFromString(false),
-    agentDefaultBudgetUsd: z.string().transform(parseFloat).pipe(z.number().min(0.01).max(100)).default("5.00"),
-    agentMaxConcurrent: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
-    agentIdleTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(60000)).default("3600000"),
-    agentMaxMemoryEntries: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(100)).default("5000"),
+    agentDefaultBudgetUsd: z
+      .string()
+      .transform(parseFloat)
+      .pipe(z.number().min(0.01).max(100))
+      .default("5.00"),
+    agentMaxConcurrent: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(10))
+      .default("3"),
+    agentIdleTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(60000))
+      .default("3600000"),
+    agentMaxMemoryEntries: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(100))
+      .default("5000"),
 
     // Task Delegation (Phase 24)
     taskDelegationEnabled: boolFromString(false),
-    agentMaxDelegationDepth: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(5)).default("2"),
-    agentMaxConcurrentDelegations: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
+    agentMaxDelegationDepth: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(5))
+      .default("2"),
+    agentMaxConcurrentDelegations: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(10))
+      .default("3"),
     delegationTierLocal: z.string().default("ollama:llama3.3"),
     delegationTierCheap: z.string().default("deepseek:deepseek-chat"),
     delegationTierStandard: z.string().default("claude:claude-sonnet-4-6-20250514"),
     delegationTierPremium: z.string().default("claude:claude-opus-4-6-20250514"),
     delegationVerbosity: z.enum(["quiet", "normal", "verbose"]).default("normal"),
     delegationTypes: z.string().optional(),
-    delegationMaxIterationsPerType: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(50)).default("10"),
+    delegationMaxIterationsPerType: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(50))
+      .default("10"),
 
     // Deployment (Phase 25)
     deployEnabled: boolFromString(false),
@@ -1102,26 +1462,80 @@ export const configSchema = z
     deployTestCommand: z.string().default("npm test"),
     deployTargetBranch: z.string().default("main"),
     deployRequireCleanGit: boolFromString(true),
-    deployTestTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(10000).max(600000)).default("300000"),
-    deployExecutionTimeoutMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(30000).max(1800000)).default("600000"),
-    deployCooldownMinutes: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(1440)).default("30"),
+    deployTestTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10000).max(600000))
+      .default("300000"),
+    deployExecutionTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(30000).max(1800000))
+      .default("600000"),
+    deployCooldownMinutes: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(1440))
+      .default("30"),
     deployNotificationUrgency: z.enum(["low", "medium", "high", "critical"]).default("high"),
     deployPostScriptPath: z.string().optional(),
 
     // Autonomous Mode
     autonomousDefaultEnabled: boolFromString(false),
-    autonomousDefaultHours: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(168)).default("24"),
+    autonomousDefaultHours: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(168))
+      .default("24"),
 
     // Interaction Policy
     interactionMode: z.enum(["silent-first", "standard"]).default("silent-first"),
-    interactionHeartbeatAfterMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(86_400_000)).default("120000"),
-    interactionHeartbeatIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1000).max(86_400_000)).default("300000"),
-    interactionEscalationPolicy: z.enum(["hard-blockers-only", "standard"]).default("hard-blockers-only"),
+    interactionHeartbeatAfterMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(86_400_000))
+      .default("120000"),
+    interactionHeartbeatIntervalMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1000).max(86_400_000))
+      .default("300000"),
+    interactionEscalationPolicy: z
+      .enum(["hard-blockers-only", "standard"])
+      .default("hard-blockers-only"),
 
     // Tasks
-    taskMaxConcurrent: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
-    taskMessageBurstWindowMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(5000)).default("350"),
-    taskMessageBurstMaxMessages: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(20)).default("8"),
+    taskMaxConcurrent: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(10))
+      .default("3"),
+    taskMessageBurstWindowMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(5000))
+      .default("350"),
+    taskMessageBurstMaxMessages: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(20))
+      .default("8"),
+    taskInteractiveMaxIterations: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(10_000))
+      .default("50"),
+    taskBackgroundEpochMaxIterations: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(10_000))
+      .default("50"),
+    taskBackgroundAutoContinue: boolFromString(true),
+    taskBackgroundMaxEpochs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(1_000_000))
+      .default("0"),
 
     // Provider Routing
     routingPreset: z.enum(["budget", "balanced", "performance"]).default("balanced"),
@@ -1129,13 +1543,29 @@ export const configSchema = z
 
     // Consensus
     consensusMode: z.enum(["auto", "critical-only", "always", "disabled"]).default("auto"),
-    consensusThreshold: z.string().transform((s) => parseFloat(s)).pipe(z.number().min(0).max(1)).default("0.5"),
-    consensusMaxProviders: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(5)).default("3"),
+    consensusThreshold: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0).max(1))
+      .default("0.5"),
+    consensusMaxProviders: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(5))
+      .default("3"),
 
     // Auto-Update
     autoUpdateEnabled: boolFromString(true),
-    autoUpdateIntervalHours: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().positive()).default("24"),
-    autoUpdateIdleTimeoutMin: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().positive()).default("5"),
+    autoUpdateIntervalHours: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().positive())
+      .default("24"),
+    autoUpdateIdleTimeoutMin: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().positive())
+      .default("5"),
     autoUpdateChannel: z.enum(["stable", "latest"]).default("stable"),
     autoUpdateNotify: boolFromString(true),
     autoUpdateAutoRestart: boolFromString(true),
@@ -1185,9 +1615,9 @@ export const configSchema = z
       data.geminiApiKey,
     ].some((k) => k && k.length > 0);
     const hasOpenAISubscription =
-      data.openaiAuthMode === "chatgpt-subscription"
-      || Boolean(data.openaiSubscriptionAccessToken && data.openaiSubscriptionAccountId)
-      || Boolean(data.openaiChatgptAuthFile);
+      data.openaiAuthMode === "chatgpt-subscription" ||
+      Boolean(data.openaiSubscriptionAccessToken && data.openaiSubscriptionAccountId) ||
+      Boolean(data.openaiChatgptAuthFile);
 
     const hasOllama = data.providerChain?.includes("ollama") ?? false;
 
@@ -1315,6 +1745,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       concurrencyLimit: rawConfig.taskMaxConcurrent,
       messageBurstWindowMs: rawConfig.taskMessageBurstWindowMs,
       messageBurstMaxMessages: rawConfig.taskMessageBurstMaxMessages,
+      interactiveMaxIterations: rawConfig.taskInteractiveMaxIterations,
+      backgroundEpochMaxIterations: rawConfig.taskBackgroundEpochMaxIterations,
+      backgroundAutoContinue: rawConfig.taskBackgroundAutoContinue,
+      backgroundMaxEpochs: rawConfig.taskBackgroundMaxEpochs,
     },
 
     interaction: {
@@ -1379,7 +1813,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
           ephemeral: rawConfig.memoryDecayLambdaEphemeral,
           persistent: rawConfig.memoryDecayLambdaPersistent,
         },
-        exemptDomains: rawConfig.memoryDecayExemptDomains.split(",").map((s: string) => s.trim()).filter(Boolean),
+        exemptDomains: rawConfig.memoryDecayExemptDomains
+          .split(",")
+          .map((s: string) => s.trim())
+          .filter(Boolean),
         timeoutMs: rawConfig.memoryDecayTimeoutMs,
       },
       consolidation: {
@@ -1617,13 +2054,15 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
 }
 
 /** Zod schema for DELEGATION_TYPES env var validation */
-const DelegationTypeConfigSchema = z.array(z.object({
-  name: z.string().regex(/^[a-z][a-z0-9_]*$/),
-  tier: z.enum(["local", "cheap", "standard", "premium"]),
-  timeoutMs: z.number().int().min(5000).max(300000),
-  maxIterations: z.number().int().min(1).max(50),
-  systemPrompt: z.string().optional(),
-}));
+const DelegationTypeConfigSchema = z.array(
+  z.object({
+    name: z.string().regex(/^[a-z][a-z0-9_]*$/),
+    tier: z.enum(["local", "cheap", "standard", "premium"]),
+    timeoutMs: z.number().int().min(5000).max(300000),
+    maxIterations: z.number().int().min(1).max(50),
+    systemPrompt: z.string().optional(),
+  }),
+);
 
 /** Parse and validate DELEGATION_TYPES JSON env var */
 function parseDelegationTypes(raw: string): DelegationConfig["types"] {
@@ -1645,7 +2084,11 @@ const VALID_CHANNELS = new Set(["chat", "dashboard"]);
 
 /** Split a comma-separated string into a trimmed, non-empty, allowlist-validated array */
 function splitCsv(value: string): string[] {
-  return value.split(",").map((s) => s.trim()).filter(Boolean).filter((ch) => VALID_CHANNELS.has(ch));
+  return value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((ch) => VALID_CHANNELS.has(ch));
 }
 
 /**
@@ -2018,6 +2461,10 @@ interface EnvVars {
   taskMaxConcurrent: string | undefined;
   taskMessageBurstWindowMs: string | undefined;
   taskMessageBurstMaxMessages: string | undefined;
+  taskInteractiveMaxIterations: string | undefined;
+  taskBackgroundEpochMaxIterations: string | undefined;
+  taskBackgroundAutoContinue: string | undefined;
+  taskBackgroundMaxEpochs: string | undefined;
   // Interaction Policy
   interactionMode: string | undefined;
   interactionHeartbeatAfterMs: string | undefined;
@@ -2263,6 +2710,10 @@ function loadFromEnv(): EnvVars {
     taskMaxConcurrent: process.env["TASK_MAX_CONCURRENT"],
     taskMessageBurstWindowMs: process.env["TASK_MESSAGE_BURST_WINDOW_MS"],
     taskMessageBurstMaxMessages: process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"],
+    taskInteractiveMaxIterations: process.env["TASK_INTERACTIVE_MAX_ITERATIONS"],
+    taskBackgroundEpochMaxIterations: process.env["TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"],
+    taskBackgroundAutoContinue: process.env["TASK_BACKGROUND_AUTO_CONTINUE"],
+    taskBackgroundMaxEpochs: process.env["TASK_BACKGROUND_MAX_EPOCHS"],
     interactionMode: process.env["INTERACTION_MODE"],
     interactionHeartbeatAfterMs: process.env["INTERACTION_HEARTBEAT_AFTER_MS"],
     interactionHeartbeatIntervalMs: process.env["INTERACTION_HEARTBEAT_INTERVAL_MS"],
@@ -2329,7 +2780,20 @@ export function loadConfig(): Config {
   if (preset) {
     Object.assign(providerModels, preset.providerModels);
   }
-  for (const p of ["openai", "deepseek", "qwen", "kimi", "minimax", "groq", "mistral", "together", "fireworks", "gemini", "claude", "ollama"]) {
+  for (const p of [
+    "openai",
+    "deepseek",
+    "qwen",
+    "kimi",
+    "minimax",
+    "groq",
+    "mistral",
+    "together",
+    "fireworks",
+    "gemini",
+    "claude",
+    "ollama",
+  ]) {
     const val = process.env[`${p.toUpperCase()}_MODEL`];
     if (val) providerModels[p] = val;
   }
@@ -2341,13 +2805,25 @@ export function loadConfig(): Config {
     providerModels,
     // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)
     ...(preset && !process.env["PROVIDER_CHAIN"] ? { providerChain: preset.providerChain } : {}),
-    ...(preset && !process.env["EMBEDDING_PROVIDER"] ? { embeddingProvider: preset.embeddingProvider } : {}),
+    ...(preset && !process.env["EMBEDDING_PROVIDER"]
+      ? { embeddingProvider: preset.embeddingProvider }
+      : {}),
     ...(preset && !process.env["EMBEDDING_MODEL"] ? { embeddingModel: preset.embeddingModel } : {}),
-    ...(preset && !process.env["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { embeddingBaseUrl: preset.embeddingBaseUrl } : {}),
-    ...(preset && !process.env["DELEGATION_TIER_LOCAL"] ? { delegationTierLocal: preset.delegationTierLocal } : {}),
-    ...(preset && !process.env["DELEGATION_TIER_CHEAP"] ? { delegationTierCheap: preset.delegationTierCheap } : {}),
-    ...(preset && !process.env["DELEGATION_TIER_STANDARD"] ? { delegationTierStandard: preset.delegationTierStandard } : {}),
-    ...(preset && !process.env["DELEGATION_TIER_PREMIUM"] ? { delegationTierPremium: preset.delegationTierPremium } : {}),
+    ...(preset && !process.env["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl
+      ? { embeddingBaseUrl: preset.embeddingBaseUrl }
+      : {}),
+    ...(preset && !process.env["DELEGATION_TIER_LOCAL"]
+      ? { delegationTierLocal: preset.delegationTierLocal }
+      : {}),
+    ...(preset && !process.env["DELEGATION_TIER_CHEAP"]
+      ? { delegationTierCheap: preset.delegationTierCheap }
+      : {}),
+    ...(preset && !process.env["DELEGATION_TIER_STANDARD"]
+      ? { delegationTierStandard: preset.delegationTierStandard }
+      : {}),
+    ...(preset && !process.env["DELEGATION_TIER_PREMIUM"]
+      ? { delegationTierPremium: preset.delegationTierPremium }
+      : {}),
   };
 
   return cachedConfig;
@@ -2391,14 +2867,13 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
     const keyMap: Record<string, string | undefined> = {
       claude: config.anthropicApiKey,
       anthropic: config.anthropicApiKey,
-      openai: config.openaiApiKey
-        ?? (
-          config.openaiAuthMode === "chatgpt-subscription"
-          || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
-          || Boolean(config.openaiChatgptAuthFile)
-        ? "[chatgpt-subscription]"
-        : undefined
-        ),
+      openai:
+        config.openaiApiKey ??
+        (config.openaiAuthMode === "chatgpt-subscription" ||
+        Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId) ||
+        Boolean(config.openaiChatgptAuthFile)
+          ? "[chatgpt-subscription]"
+          : undefined),
       deepseek: config.deepseekApiKey,
       qwen: config.qwenApiKey,
       kimi: config.kimiApiKey,
@@ -2414,9 +2889,9 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
       if (!keyMap[name]) {
         if (name === "openai") {
           const hasSubscription =
-            config.openaiAuthMode === "chatgpt-subscription"
-            || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
-            || Boolean(config.openaiChatgptAuthFile);
+            config.openaiAuthMode === "chatgpt-subscription" ||
+            Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId) ||
+            Boolean(config.openaiChatgptAuthFile);
           if (!hasSubscription) {
             missing.push("OPENAI_API_KEY");
           }
@@ -2428,14 +2903,12 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
   } else if (!config.anthropicApiKey) {
     // No chain specified and no Anthropic key — check if any key exists
     const hasAny = [
-      config.openaiApiKey
-        ?? (
-          config.openaiAuthMode === "chatgpt-subscription"
-          || Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId)
-          || Boolean(config.openaiChatgptAuthFile)
+      config.openaiApiKey ??
+        (config.openaiAuthMode === "chatgpt-subscription" ||
+        Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId) ||
+        Boolean(config.openaiChatgptAuthFile)
           ? "[chatgpt-subscription]"
-          : undefined
-        ),
+          : undefined),
       config.deepseekApiKey,
       config.qwenApiKey,
       config.kimiApiKey,
@@ -2463,7 +2936,16 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
  */
 export function checkChannelConfig(
   config: Config,
-  channelType: "telegram" | "discord" | "slack" | "whatsapp" | "matrix" | "irc" | "teams" | "cli" | "web",
+  channelType:
+    | "telegram"
+    | "discord"
+    | "slack"
+    | "whatsapp"
+    | "matrix"
+    | "irc"
+    | "teams"
+    | "cli"
+    | "web",
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
@@ -2481,7 +2963,10 @@ export function checkChannelConfig(
       if (!config.discord.botToken) {
         errors.push("DISCORD_BOT_TOKEN is required");
       }
-      if (config.discord.allowedUserIds.length === 0 && config.discord.allowedRoleIds.length === 0) {
+      if (
+        config.discord.allowedUserIds.length === 0 &&
+        config.discord.allowedRoleIds.length === 0
+      ) {
         errors.push("ALLOWED_DISCORD_USER_IDS or ALLOWED_DISCORD_ROLE_IDS must be set");
       }
       break;
@@ -2538,8 +3023,10 @@ export function createPartialConfig(env: Partial<EnvVarMap>): PartialConfig {
   if (env.OPENAI_API_KEY) raw.openaiApiKey = env.OPENAI_API_KEY;
   if (env.OPENAI_AUTH_MODE) raw.openaiAuthMode = env.OPENAI_AUTH_MODE;
   if (env.OPENAI_CHATGPT_AUTH_FILE) raw.openaiChatgptAuthFile = env.OPENAI_CHATGPT_AUTH_FILE;
-  if (env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN) raw.openaiSubscriptionAccessToken = env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN;
-  if (env.OPENAI_SUBSCRIPTION_ACCOUNT_ID) raw.openaiSubscriptionAccountId = env.OPENAI_SUBSCRIPTION_ACCOUNT_ID;
+  if (env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN)
+    raw.openaiSubscriptionAccessToken = env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN;
+  if (env.OPENAI_SUBSCRIPTION_ACCOUNT_ID)
+    raw.openaiSubscriptionAccountId = env.OPENAI_SUBSCRIPTION_ACCOUNT_ID;
   if (env.LOG_LEVEL) raw.logLevel = env.LOG_LEVEL;
   if (env.READ_ONLY_MODE) raw.security = { readOnlyMode: env.READ_ONLY_MODE === "true" };
 
@@ -2593,9 +3080,11 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     goalMaxDepth: (partial as Partial<Config>).goalMaxDepth ?? base.goalMaxDepth,
     goalMaxRetries: (partial as Partial<Config>).goalMaxRetries ?? base.goalMaxRetries,
     goalMaxFailures: (partial as Partial<Config>).goalMaxFailures ?? base.goalMaxFailures,
-    goalParallelExecution: (partial as Partial<Config>).goalParallelExecution ?? base.goalParallelExecution,
+    goalParallelExecution:
+      (partial as Partial<Config>).goalParallelExecution ?? base.goalParallelExecution,
     goalMaxParallel: (partial as Partial<Config>).goalMaxParallel ?? base.goalMaxParallel,
     goal: { ...base.goal, ...((partial as Partial<Config>).goal ?? {}) },
+    tasks: { ...base.tasks, ...((partial as Partial<Config>).tasks ?? {}) },
     interaction: { ...base.interaction, ...((partial as Partial<Config>).interaction ?? {}) },
     toolChain: { ...base.toolChain, ...(partial as Partial<Config>).toolChain },
     crossSession: { ...base.crossSession, ...(partial as Partial<Config>).crossSession },

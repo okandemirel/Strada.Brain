@@ -28,31 +28,33 @@ Defines all application configuration types, Zod schemas, validation, secret pat
 
 The `Config` type groups settings into nested sub-configs:
 
-| Sub-config | Interface | Key env vars |
-|------------|-----------|-------------|
-| runtime home | launcher/runtime | `STRADA_HOME` overrides the packaged-install app home (`~/.strada` on macOS/Linux, `%LOCALAPPDATA%\Strada` on Windows). Source checkouts still keep `.env` and related runtime files in the repository root. |
-| AI providers | top-level fields | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, etc. At least one usable hosted credential is required unless `PROVIDER_CHAIN` only uses local providers such as `ollama`; OpenAI can also authenticate via `OPENAI_AUTH_MODE=chatgpt-subscription` plus the local Codex auth session file. |
-| `telegram` | `TelegramConfig` | `TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_IDS` |
-| `discord` | `DiscordConfig` | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `ALLOWED_DISCORD_USER_IDS`, `ALLOWED_DISCORD_ROLE_IDS` |
-| `slack` | `SlackConfig` | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APP_TOKEN`, `SLACK_SOCKET_MODE` |
-| `whatsapp` | `WhatsAppConfig` | `WHATSAPP_SESSION_PATH`, `WHATSAPP_ALLOWED_NUMBERS` |
-| `matrix` | `MatrixConfig` | `MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, `MATRIX_USER_ID`, `MATRIX_ALLOWED_USER_IDS`, `MATRIX_ALLOWED_ROOM_IDS`, `MATRIX_ALLOW_OPEN_ACCESS` |
-| `irc` | `IRCConfig` | `IRC_SERVER`, `IRC_NICK`, `IRC_CHANNELS`, `IRC_ALLOWED_USERS`, `IRC_ALLOW_OPEN_ACCESS` |
-| `teams` | `TeamsConfig` | `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `TEAMS_ALLOWED_USER_IDS`, `TEAMS_ALLOW_OPEN_ACCESS` |
-| `security` | `SecurityConfig` | `REQUIRE_EDIT_CONFIRMATION` (default true), `READ_ONLY_MODE` (default false), `JWT_SECRET` (optional unless internal system auth is used), `REQUIRE_MFA` (default false) |
-| `strada` | `StradaDependencyConfig` | `STRADA_CORE_REPO_URL` and `STRADA_MODULES_REPO_URL` (official defaults), optional `STRADA_MCP_PATH` override for a local Strada.MCP checkout |
-| `dashboard` | `DashboardConfig` | `DASHBOARD_ENABLED`, `DASHBOARD_PORT` (default 3100) |
-| `websocketDashboard` | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100), `WEBSOCKET_DASHBOARD_AUTH_TOKEN`, `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` (`WEBSOCKET_DASHBOARD_AUTH_TOKEN` also protects dashboard APIs when present) |
-| `prometheus` | `PrometheusConfig` | `ENABLE_PROMETHEUS`, `PROMETHEUS_PORT` (default 9090) |
-| `modelIntelligence` | `ModelIntelligenceConfig` | `MODEL_INTELLIGENCE_ENABLED`, `MODEL_INTELLIGENCE_REFRESH_HOURS`, `MODEL_INTELLIGENCE_DB_PATH`, `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` |
-| `memory` | `MemoryConfig` | `MEMORY_ENABLED` (default true), `MEMORY_DB_PATH` (default `.strada-memory`) |
-| `rag` | `RAGConfig` | `RAG_ENABLED` (default true), `EMBEDDING_PROVIDER` (default `auto`), `RAG_CONTEXT_MAX_TOKENS` (default 4000, range 500..16000) |
-| `rateLimit` | `RateLimitConfig` | `RATE_LIMIT_ENABLED`, `RATE_LIMIT_MESSAGES_PER_MINUTE`, `RATE_LIMIT_DAILY_BUDGET_USD`, etc. |
-| `web` | Web config | `WEB_CHANNEL_PORT` (default 3000) |
-| top-level streaming safety | numeric fields | `LLM_STREAM_INITIAL_TIMEOUT_MS` (default 600000), `LLM_STREAM_STALL_TIMEOUT_MS` (default 120000) |
-| `agent` | `AgentConfig` | `MULTI_AGENT_ENABLED` (default true), `AGENT_DEFAULT_BUDGET_USD`, `AGENT_MAX_CONCURRENT`, `AGENT_IDLE_TIMEOUT_MS`, `AGENT_MAX_MEMORY_ENTRIES` |
-| `delegation` | `DelegationConfig` | `TASK_DELEGATION_ENABLED` (default false), `AGENT_MAX_DELEGATION_DEPTH`, `AGENT_MAX_CONCURRENT_DELEGATIONS`, `DELEGATION_TIER_LOCAL`, `DELEGATION_TIER_CHEAP`, `DELEGATION_TIER_STANDARD`, `DELEGATION_TIER_PREMIUM`, `DELEGATION_VERBOSITY`, `DELEGATION_TYPES`, `DELEGATION_MAX_ITERATIONS_PER_TYPE` |
-| `autoUpdate` | auto-update config | `AUTO_UPDATE_ENABLED`, `AUTO_UPDATE_INTERVAL_HOURS`, `AUTO_UPDATE_IDLE_TIMEOUT_MIN`, `AUTO_UPDATE_CHANNEL`, `AUTO_UPDATE_NOTIFY`, `AUTO_UPDATE_AUTO_RESTART` |
+| Sub-config                 | Interface                  | Key env vars                                                                                                                                                                                                                                                                                                             |
+| -------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| runtime home               | launcher/runtime           | `STRADA_HOME` overrides the packaged-install app home (`~/.strada` on macOS/Linux, `%LOCALAPPDATA%\Strada` on Windows). Source checkouts still keep `.env` and related runtime files in the repository root.                                                                                                             |
+| AI providers               | top-level fields           | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, etc. At least one usable hosted credential is required unless `PROVIDER_CHAIN` only uses local providers such as `ollama`; OpenAI can also authenticate via `OPENAI_AUTH_MODE=chatgpt-subscription` plus the local Codex auth session file. |
+| `telegram`                 | `TelegramConfig`           | `TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_IDS`                                                                                                                                                                                                                                                                        |
+| `discord`                  | `DiscordConfig`            | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `ALLOWED_DISCORD_USER_IDS`, `ALLOWED_DISCORD_ROLE_IDS`                                                                                                                                                                                                                          |
+| `slack`                    | `SlackConfig`              | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APP_TOKEN`, `SLACK_SOCKET_MODE`                                                                                                                                                                                                                                        |
+| `whatsapp`                 | `WhatsAppConfig`           | `WHATSAPP_SESSION_PATH`, `WHATSAPP_ALLOWED_NUMBERS`                                                                                                                                                                                                                                                                      |
+| `matrix`                   | `MatrixConfig`             | `MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, `MATRIX_USER_ID`, `MATRIX_ALLOWED_USER_IDS`, `MATRIX_ALLOWED_ROOM_IDS`, `MATRIX_ALLOW_OPEN_ACCESS`                                                                                                                                                                           |
+| `irc`                      | `IRCConfig`                | `IRC_SERVER`, `IRC_NICK`, `IRC_CHANNELS`, `IRC_ALLOWED_USERS`, `IRC_ALLOW_OPEN_ACCESS`                                                                                                                                                                                                                                   |
+| `teams`                    | `TeamsConfig`              | `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `TEAMS_ALLOWED_USER_IDS`, `TEAMS_ALLOW_OPEN_ACCESS`                                                                                                                                                                                                                                |
+| `security`                 | `SecurityConfig`           | `REQUIRE_EDIT_CONFIRMATION` (default true), `READ_ONLY_MODE` (default false), `JWT_SECRET` (optional unless internal system auth is used), `REQUIRE_MFA` (default false)                                                                                                                                                 |
+| `strada`                   | `StradaDependencyConfig`   | `STRADA_CORE_REPO_URL` and `STRADA_MODULES_REPO_URL` (official defaults), optional `STRADA_MCP_PATH` override for a local Strada.MCP checkout                                                                                                                                                                            |
+| `dashboard`                | `DashboardConfig`          | `DASHBOARD_ENABLED`, `DASHBOARD_PORT` (default 3100)                                                                                                                                                                                                                                                                     |
+| `websocketDashboard`       | `WebSocketDashboardConfig` | `ENABLE_WEBSOCKET_DASHBOARD`, `WEBSOCKET_DASHBOARD_PORT` (default 3100), `WEBSOCKET_DASHBOARD_AUTH_TOKEN`, `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` (`WEBSOCKET_DASHBOARD_AUTH_TOKEN` also protects dashboard APIs when present)                                                                                            |
+| `prometheus`               | `PrometheusConfig`         | `ENABLE_PROMETHEUS`, `PROMETHEUS_PORT` (default 9090)                                                                                                                                                                                                                                                                    |
+| `modelIntelligence`        | `ModelIntelligenceConfig`  | `MODEL_INTELLIGENCE_ENABLED`, `MODEL_INTELLIGENCE_REFRESH_HOURS`, `MODEL_INTELLIGENCE_DB_PATH`, `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH`                                                                                                                                                                               |
+| `memory`                   | `MemoryConfig`             | `MEMORY_ENABLED` (default true), `MEMORY_DB_PATH` (default `.strada-memory`)                                                                                                                                                                                                                                             |
+| `rag`                      | `RAGConfig`                | `RAG_ENABLED` (default true), `EMBEDDING_PROVIDER` (default `auto`), `RAG_CONTEXT_MAX_TOKENS` (default 4000, range 500..16000)                                                                                                                                                                                           |
+| `rateLimit`                | `RateLimitConfig`          | `RATE_LIMIT_ENABLED`, `RATE_LIMIT_MESSAGES_PER_MINUTE`, `RATE_LIMIT_DAILY_BUDGET_USD`, etc.                                                                                                                                                                                                                              |
+| `tasks`                    | `TaskConfig`               | `TASK_MAX_CONCURRENT`, `TASK_MESSAGE_BURST_WINDOW_MS`, `TASK_MESSAGE_BURST_MAX_MESSAGES`, `TASK_INTERACTIVE_MAX_ITERATIONS`, `TASK_BACKGROUND_EPOCH_MAX_ITERATIONS`, `TASK_BACKGROUND_AUTO_CONTINUE`, `TASK_BACKGROUND_MAX_EPOCHS`                                                                                       |
+| `interaction`              | `InteractionConfig`        | `INTERACTION_MODE`, `INTERACTION_HEARTBEAT_AFTER_MS`, `INTERACTION_HEARTBEAT_INTERVAL_MS`, `INTERACTION_ESCALATION_POLICY`                                                                                                                                                                                               |
+| `web`                      | Web config                 | `WEB_CHANNEL_PORT` (default 3000)                                                                                                                                                                                                                                                                                        |
+| top-level streaming safety | numeric fields             | `LLM_STREAM_INITIAL_TIMEOUT_MS` (default 600000), `LLM_STREAM_STALL_TIMEOUT_MS` (default 120000)                                                                                                                                                                                                                         |
+| `agent`                    | `AgentConfig`              | `MULTI_AGENT_ENABLED` (default true), `AGENT_DEFAULT_BUDGET_USD`, `AGENT_MAX_CONCURRENT`, `AGENT_IDLE_TIMEOUT_MS`, `AGENT_MAX_MEMORY_ENTRIES`                                                                                                                                                                            |
+| `delegation`               | `DelegationConfig`         | `TASK_DELEGATION_ENABLED` (default false), `AGENT_MAX_DELEGATION_DEPTH`, `AGENT_MAX_CONCURRENT_DELEGATIONS`, `DELEGATION_TIER_LOCAL`, `DELEGATION_TIER_CHEAP`, `DELEGATION_TIER_STANDARD`, `DELEGATION_TIER_PREMIUM`, `DELEGATION_VERBOSITY`, `DELEGATION_TYPES`, `DELEGATION_MAX_ITERATIONS_PER_TYPE`                   |
+| `autoUpdate`               | auto-update config         | `AUTO_UPDATE_ENABLED`, `AUTO_UPDATE_INTERVAL_HOURS`, `AUTO_UPDATE_IDLE_TIMEOUT_MIN`, `AUTO_UPDATE_CHANNEL`, `AUTO_UPDATE_NOTIFY`, `AUTO_UPDATE_AUTO_RESTART`                                                                                                                                                             |
 
 - `PROVIDER_CHAIN` - comma-separated provider names for Strada's default orchestration pool and fallback ordering
 - `OPENAI_AUTH_MODE` - `api-key` (default) or `chatgpt-subscription`; when set to subscription mode Strada reuses the local Codex/ChatGPT login instead of the OpenAI platform API key
@@ -66,6 +68,10 @@ The `Config` type groups settings into nested sub-configs:
 - `STRADA_MCP_PATH` - optional absolute/local path that pins Strada.MCP discovery to a specific checkout before sibling/global detection
 - `LLM_STREAM_INITIAL_TIMEOUT_MS` / `LLM_STREAM_STALL_TIMEOUT_MS` - progress-aware stream watchdog thresholds used by interactive and background streaming paths
 - `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` - path to the JSON registry of official provider docs/changelog URLs used to mine dynamic feature signals
+- `TASK_INTERACTIVE_MAX_ITERATIONS` - PAOR turn budget for interactive requests before Strada asks for a follow-up message
+- `TASK_BACKGROUND_EPOCH_MAX_ITERATIONS` - PAOR turn budget for one autonomous/background epoch before Strada rolls into the next epoch
+- `TASK_BACKGROUND_AUTO_CONTINUE` - whether background/autonomous work automatically starts a fresh epoch when the current one reaches budget
+- `TASK_BACKGROUND_MAX_EPOCHS` - cap on autonomous background epochs (`0` = unlimited; stop message notes that only checkpoint summaries persist, not full task resume state)
 - `LOG_LEVEL` - one of `error`, `warn`, `info`, `debug` (default `info`)
 - `LOG_FILE` - default `strada-brain.log`
 - `WEBSOCKET_DASHBOARD_AUTH_TOKEN` - optional; when unset, the embedded same-origin dashboard bootstraps a process-scoped token automatically
@@ -89,24 +95,24 @@ The `Config` type groups settings into nested sub-configs:
 
 Exports a `secretPatterns: SecretPattern[]` array with 15 regex patterns for sanitizing secrets in output:
 
-| Pattern name | Matches |
-|-------------|---------|
-| `openai_api_key` | `sk-` followed by 48+ alphanumeric chars |
-| `openai_project_key` | `sk-proj-` prefix |
-| `github_token` | `gh[pousr]_` prefix |
-| `github_pat` | `github_pat_` prefix |
-| `slack_token` | `xox[bpas]-` prefix |
-| `slack_webhook` | `hooks.slack.com/services/` URLs |
-| `bearer_token` | `Bearer` header values |
-| `basic_auth` | `Basic` header values |
-| `private_key` | PEM-encoded private keys |
-| `connection_password` | `password=` or `pwd=` in connection strings |
-| `database_url` | postgres/mysql/mongodb/redis URIs with credentials |
-| `jwt_token` | `eyJ` base64 JWT structure |
-| `env_value` | `KEY=value` lines |
-| `discord_token` / `telegram_token` | Platform-specific token formats |
-| `aws_access_key` | `AKIA` prefix |
-| `secret_value` | Generic `secret/token/password/key` assignments |
+| Pattern name                       | Matches                                            |
+| ---------------------------------- | -------------------------------------------------- |
+| `openai_api_key`                   | `sk-` followed by 48+ alphanumeric chars           |
+| `openai_project_key`               | `sk-proj-` prefix                                  |
+| `github_token`                     | `gh[pousr]_` prefix                                |
+| `github_pat`                       | `github_pat_` prefix                               |
+| `slack_token`                      | `xox[bpas]-` prefix                                |
+| `slack_webhook`                    | `hooks.slack.com/services/` URLs                   |
+| `bearer_token`                     | `Bearer` header values                             |
+| `basic_auth`                       | `Basic` header values                              |
+| `private_key`                      | PEM-encoded private keys                           |
+| `connection_password`              | `password=` or `pwd=` in connection strings        |
+| `database_url`                     | postgres/mysql/mongodb/redis URIs with credentials |
+| `jwt_token`                        | `eyJ` base64 JWT structure                         |
+| `env_value`                        | `KEY=value` lines                                  |
+| `discord_token` / `telegram_token` | Platform-specific token formats                    |
+| `aws_access_key`                   | `AKIA` prefix                                      |
+| `secret_value`                     | Generic `secret/token/password/key` assignments    |
 
 ### Config Merging
 
@@ -115,6 +121,6 @@ Exports a `secretPatterns: SecretPattern[]` array with 15 regex patterns for san
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
+| File        | Purpose                                                                           |
+| ----------- | --------------------------------------------------------------------------------- |
 | `config.ts` | Zod-validated env-based configuration with types, secret patterns, and validation |

@@ -11,7 +11,7 @@ Centralized numeric limits, thresholds, and default values grouped by domain.
 - `FILE_LIMITS` — max read size 512 KB, max write size 1 MB, max lines 2,000
 - `SESSION_CONFIG` — max 100 concurrent sessions, 1-hour timeout, 40-message baseline trimming constant, 30-minute cleanup interval
 - `MEMORY_CONFIG` — default DB path `.strada-memory`, max 10 retrieval results, min similarity 0.15, 24-hour analysis cache
-- `TOOL_LIMITS` — max 50 iterations per request, 8 KB result length, 5-minute execution timeout
+- `TOOL_LIMITS` — legacy default interactive iteration budget alias (50), 8 KB result length, 5-minute execution timeout
 - `DEFAULT_RATE_LIMITS` — messages/minute, messages/hour, tokens/day, daily/monthly budget (all default 0 = unlimited)
 - `RAG_DEFAULTS` — 4,000 context tokens, top-K 6, min score 0.2, 1,000-char chunks with 200-char overlap, OpenAI `text-embedding-3-small` or Ollama `nomic-embed-text`
 - `LEARNING_DEFAULTS` — batch size 10, 5-minute detection interval, 1-hour evolution interval, 0.6 min confidence, max 1,000 instincts
@@ -43,6 +43,7 @@ Hierarchy of typed errors extending a base `AppError` class.
 - `NetworkError` (503), `TimeoutError` with `timeoutMs`
 
 Utility functions:
+
 - `isOperationalError()` — checks if error is expected/recoverable
 - `isErrorOfType()` — type-narrowing guard
 - `wrapError()` — wraps unknown values in `AppError`
@@ -70,10 +71,10 @@ Platform-aware command helpers shared by setup, doctor, and startup handoff code
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `constants.ts` | All application-wide numeric limits, thresholds, defaults, and configuration constants |
-| `errors.ts` | Typed error hierarchy, error utilities, global error handlers, retry logic |
-| `launcher-guidance.ts` | Shared platform-aware launcher command strings and Windows wrapper invocation helpers |
-| `../../scripts/build-package.mjs` | Cross-platform package build helper for `npm run build` |
-| `index.ts` | Barrel re-export of constants and errors |
+| File                              | Purpose                                                                                |
+| --------------------------------- | -------------------------------------------------------------------------------------- |
+| `constants.ts`                    | All application-wide numeric limits, thresholds, defaults, and configuration constants |
+| `errors.ts`                       | Typed error hierarchy, error utilities, global error handlers, retry logic             |
+| `launcher-guidance.ts`            | Shared platform-aware launcher command strings and Windows wrapper invocation helpers  |
+| `../../scripts/build-package.mjs` | Cross-platform package build helper for `npm run build`                                |
+| `index.ts`                        | Barrel re-export of constants and errors                                               |

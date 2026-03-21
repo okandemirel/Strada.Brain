@@ -7,6 +7,7 @@ The agents subsystem contains the orchestrator (agent loop), AI providers, tools
 The `Orchestrator` class implements a single-agent, multi-tool loop. There is one orchestrator instance — the tool set defines what it can do.
 
 **Message processing:**
+
 1. Messages are serialized per-chat via `sessionLocks` (concurrent messages for the same chat are queued)
 2. Memory retrieval: top 3 matches (TF-IDF, score >= 0.15)
 3. RAG retrieval: top 6 C# code chunks (HNSW vectors, score >= 0.2)
@@ -16,7 +17,7 @@ The `Orchestrator` class implements a single-agent, multi-tool loop. There is on
 7. LLM call with system prompt + all context + tool definitions
 8. Tool execution with autonomy layer analysis (error recovery, stall detection)
 9. Self-verification gate: forces `dotnet_build` before responding if `.cs` files were modified
-10. Loop repeats up to `MAX_TOOL_ITERATIONS = 50`
+10. Interactive turns use the configured `tasks.interactiveMaxIterations` budget; background/autonomous runs use `tasks.backgroundEpochMaxIterations` and can roll into a fresh epoch automatically when `tasks.backgroundAutoContinue` is enabled
 
 **Session management:** LRU map capped at 100 sessions. Session trimming uses provider-aware thresholds (40-message baseline by default); trimmed slices are persisted to memory before leaving the active context window.
 
@@ -78,7 +79,7 @@ Runtime artifact telemetry is surfaced through `/routing info`, the dashboard, a
 Three components instantiated fresh per-message:
 
 - **ErrorRecoveryEngine** — Categorizes C# build errors into 14 classes with recovery guidance
-- **TaskPlanner** — Detects stalls (3+ consecutive errors), missing verification (2+ mutations without build), budget warnings (40+ iterations)
+- **TaskPlanner** — Detects stalls (3+ consecutive errors), missing verification (2+ mutations without build), and budget pressure once the active execution window crosses 80% of its configured iteration budget
 - **SelfVerification** — Tracks `.cs`/`.csproj`/`.sln` modifications and blocks final response until `dotnet_build` succeeds
 
 The autonomy layer now also includes:
@@ -109,17 +110,17 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `orchestrator.ts` | Agent loop, session management, streaming, tool dispatch |
-| `autonomy/error-recovery.ts` | C# error categorization and recovery injection |
-| `autonomy/task-planner.ts` | Stall detection, budget warnings, learning trajectory |
-| `autonomy/self-verification.ts` | Build verification gate |
-| `autonomy/constants.ts` | MUTATION_TOOLS, VERIFY_TOOLS, COMPILABLE_EXT |
-| `context/strada-knowledge.ts` | System prompt, project context builder |
-| `plugins/plugin-loader.ts` | External plugin discovery and loading |
-| `providers/claude.ts` | Primary provider (Anthropic SDK) |
-| `providers/fallback-chain.ts` | Multi-provider failover |
-| `providers/provider-registry.ts` | Provider presets and chain builder |
-| `tools/tool.interface.ts` | ITool, IEnhancedTool interfaces |
-| `tools/tool-core.interface.ts` | ToolContext, ToolExecutionResult types |
+| File                             | Purpose                                                  |
+| -------------------------------- | -------------------------------------------------------- |
+| `orchestrator.ts`                | Agent loop, session management, streaming, tool dispatch |
+| `autonomy/error-recovery.ts`     | C# error categorization and recovery injection           |
+| `autonomy/task-planner.ts`       | Stall detection, budget warnings, learning trajectory    |
+| `autonomy/self-verification.ts`  | Build verification gate                                  |
+| `autonomy/constants.ts`          | MUTATION_TOOLS, VERIFY_TOOLS, COMPILABLE_EXT             |
+| `context/strada-knowledge.ts`    | System prompt, project context builder                   |
+| `plugins/plugin-loader.ts`       | External plugin discovery and loading                    |
+| `providers/claude.ts`            | Primary provider (Anthropic SDK)                         |
+| `providers/fallback-chain.ts`    | Multi-provider failover                                  |
+| `providers/provider-registry.ts` | Provider presets and chain builder                       |
+| `tools/tool.interface.ts`        | ITool, IEnhancedTool interfaces                          |
+| `tools/tool-core.interface.ts`   | ToolContext, ToolExecutionResult types                   |

@@ -26,4 +26,19 @@ describe("InteractionPolicyStateMachine", () => {
     expect(policy.get("chat-1")).toBeUndefined();
     expect(policy.getWriteBlock("chat-1", "file_edit")).toBeNull();
   });
+
+  it("retains the latest concrete plan text for deferred plan-review surfacing", () => {
+    const policy = new InteractionPolicyStateMachine();
+    policy.requirePlanReview(
+      "chat-1",
+      "user explicitly asked to review a plan first",
+      "Plan: Inspect the failing path\n\nSteps:\n1. Read the logs\n2. Patch the bug",
+    );
+    policy.requirePlanReview("chat-1", "user explicitly asked to review a plan first");
+
+    expect(policy.get("chat-1")).toMatchObject({
+      kind: "plan-review-required",
+      planText: "Plan: Inspect the failing path\n\nSteps:\n1. Read the logs\n2. Patch the bug",
+    });
+  });
 });

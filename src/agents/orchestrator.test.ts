@@ -17,6 +17,7 @@ import { buildGoalTreeFromBlock } from "../goals/types.js";
 import { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import type { SessionId, TimestampMs, ToolName } from "../types/index.js";
 import { createInitialState } from "./agent-state.js";
+import { DEFAULT_TASK_CONFIG } from "../config/config.js";
 
 const mockLogRingBuffer: Array<{
   timestamp: string;
@@ -39,14 +40,24 @@ vi.mock("./context/strada-knowledge.js", () => ({
   STRADA_SYSTEM_PROMPT: "Test system prompt.",
   buildProjectContext: () => "",
   buildAnalysisSummary: () => "",
-  buildProjectWorldMemorySection: (params: { projectPath: string; analysis?: { modules?: Array<{ name: string }> } | null }) => ({
+  buildProjectWorldMemorySection: (params: {
+    projectPath: string;
+    analysis?: { modules?: Array<{ name: string }> } | null;
+  }) => ({
     content: `## Project/World Memory\nActive project root: ${params.projectPath}\n${params.analysis?.modules?.[0]?.name ?? "No cached analysis"}`,
-    contentHashes: [params.projectPath, params.analysis?.modules?.[0]?.name ?? "No cached analysis"],
+    contentHashes: [
+      params.projectPath,
+      params.analysis?.modules?.[0]?.name ?? "No cached analysis",
+    ],
     summary: `root=${params.projectPath} | modules=${params.analysis?.modules?.[0]?.name ?? "none"}`,
-    fingerprint: `root ${params.projectPath.replace(/[^a-z0-9]+/gi, " ").trim().toLowerCase()} modules ${(params.analysis?.modules?.[0]?.name ?? "none").toLowerCase()}`,
+    fingerprint: `root ${params.projectPath
+      .replace(/[^a-z0-9]+/gi, " ")
+      .trim()
+      .toLowerCase()} modules ${(params.analysis?.modules?.[0]?.name ?? "none").toLowerCase()}`,
   }),
   buildDepsContext: () => "",
-  buildCapabilityManifest: () => "\n## Agent Capability Manifest\nGoal Decomposition\nLearning Pipeline\nIntrospection\n",
+  buildCapabilityManifest: () =>
+    "\n## Agent Capability Manifest\nGoal Decomposition\nLearning Pipeline\nIntrospection\n",
 }));
 
 function createMockProvider() {
@@ -95,13 +106,17 @@ function createMockChannel() {
     name: "mock",
     connect: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
-    onMessage: vi.fn((handler: any) => { messageHandler = handler; }),
+    onMessage: vi.fn((handler: any) => {
+      messageHandler = handler;
+    }),
     sendText: vi.fn().mockResolvedValue(undefined),
     sendMarkdown: vi.fn().mockResolvedValue(undefined),
     sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
     requestConfirmation: vi.fn().mockResolvedValue("Yes"),
     isHealthy: vi.fn().mockReturnValue(true),
-    _trigger: async (msg: any) => { if (messageHandler) await messageHandler(msg); },
+    _trigger: async (msg: any) => {
+      if (messageHandler) await messageHandler(msg);
+    },
   };
 }
 
@@ -116,9 +131,7 @@ function createMockTool(name: string, isWrite = false) {
 
 function getToolResultBlock(callArgs: any[] | undefined): any {
   const messages = (callArgs?.[1] as any[]) ?? [];
-  const toolResultMsg = messages.find((m: any) =>
-    m.role === "user" && Array.isArray(m.content)
-  );
+  const toolResultMsg = messages.find((m: any) => m.role === "user" && Array.isArray(m.content));
   return toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
 }
 
@@ -148,17 +161,19 @@ function createReplayTrajectory(params: {
     chatId: params.chatId,
     taskRunId: params.taskRunId,
     taskDescription: params.taskDescription,
-    steps: [{
-      stepNumber: 1,
-      toolName: "file_read" as ToolName,
-      input: {},
-      result: {
-        kind: "success",
-        output: "ok",
+    steps: [
+      {
+        stepNumber: 1,
+        toolName: "file_read" as ToolName,
+        input: {},
+        result: {
+          kind: "success",
+          output: "ok",
+        },
+        timestamp: params.createdAt as TimestampMs,
+        durationMs: 0 as any,
       },
-      timestamp: params.createdAt as TimestampMs,
-      durationMs: 0 as any,
-    }],
+    ],
     outcome: {
       success: true,
       totalSteps: 3,
@@ -197,7 +212,11 @@ describe("Orchestrator", () => {
     writeTool = createMockTool("file_write", true);
 
     orch = new Orchestrator({
-      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
       tools: [readTool, writeTool],
       channel: mockChannel,
       projectPath: "/tmp/test-project",
@@ -207,6 +226,8 @@ describe("Orchestrator", () => {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.clearAllMocks();
     vi.useRealTimers();
   });
 
@@ -227,7 +248,11 @@ describe("Orchestrator", () => {
 
   it("keeps control-plane tools out of worker tool pools", async () => {
     const toolSurfaceOrch = new Orchestrator({
-      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
       tools: [new AskUserTool(), new ShowPlanTool(), readTool, writeTool],
       channel: mockChannel,
       projectPath: "/tmp/test-project",
@@ -245,8 +270,9 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    const toolNames = ((mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? [])
-      .map((tool) => tool.name);
+    const toolNames = (
+      (mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? []
+    ).map((tool) => tool.name);
     expect(toolNames).toContain("file_read");
     expect(toolNames).not.toContain("ask_user");
     expect(toolNames).not.toContain("show_plan");
@@ -255,7 +281,11 @@ describe("Orchestrator", () => {
   it("filters bridge-required MCP tools from worker tool pools", async () => {
     const bridgeTool = createMockTool("unity_scene_info");
     const bridgeOrch = new Orchestrator({
-      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
       tools: [bridgeTool, readTool],
       channel: mockChannel,
       projectPath: "/tmp/test-project",
@@ -278,15 +308,20 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    const toolNames = ((mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? [])
-      .map((tool) => tool.name);
+    const toolNames = (
+      (mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? []
+    ).map((tool) => tool.name);
     expect(toolNames).toContain("file_read");
     expect(toolNames).not.toContain("unity_scene_info");
   });
 
   it("refreshes dynamic tool metadata when a tool is removed and re-added", async () => {
     const dynamicOrch = new Orchestrator({
-      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
       tools: [readTool],
       channel: mockChannel,
       projectPath: "/tmp/test-project",
@@ -316,14 +351,19 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    const toolNames = ((mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? [])
-      .map((tool) => tool.name);
+    const toolNames = (
+      (mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? []
+    ).map((tool) => tool.name);
     expect(toolNames).toContain("dynamic_probe");
   });
 
   it("derives dynamic worker-tool metadata from enhanced tools added after construction", async () => {
     const planningOrch = new Orchestrator({
-      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
       tools: [readTool],
       channel: mockChannel,
       projectPath: "/tmp/test-project",
@@ -353,15 +393,20 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    const toolNames = ((mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? [])
-      .map((tool) => tool.name);
+    const toolNames = (
+      (mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? []
+    ).map((tool) => tool.name);
     expect(toolNames).not.toContain("delegate_specialist");
   });
 
   it("persists only the visible transcript to conversation memory", async () => {
     const storeConversation = vi.fn().mockResolvedValue({ kind: "ok", value: undefined });
     const memoryOrch = new Orchestrator({
-      providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
       tools: [readTool],
       channel: mockChannel,
       projectPath: "/tmp/test-project",
@@ -411,22 +456,29 @@ describe("Orchestrator", () => {
       requireConfirmation: false,
     });
 
-    const goalTree = buildGoalTreeFromBlock({
-      isGoal: true,
-      estimatedMinutes: 5,
-      nodes: [{ id: "sub-1", task: "Inspect Level_031.asset", dependsOn: [] }],
-    }, "goal-session", "Investigate the freeze");
+    const goalTree = buildGoalTreeFromBlock(
+      {
+        isGoal: true,
+        estimatedMinutes: 5,
+        nodes: [{ id: "sub-1", task: "Inspect Level_031.asset", dependsOn: [] }],
+      },
+      "goal-session",
+      "Investigate the freeze",
+    );
 
     const visible = await goalOrch.synthesizeGoalExecutionResult({
       prompt: "Investigate the freeze",
       goalTree,
       executionResult: {
         tree: goalTree,
-        results: [{
-          nodeId: [...goalTree.nodes.keys()][1]!,
-          task: "Inspect Level_031.asset",
-          result: "## Sub-goal: Inspect Level_031.asset\n\nGeçmiş bağlamı çıkar\nmemory_search ile ara.",
-        }],
+        results: [
+          {
+            nodeId: [...goalTree.nodes.keys()][1]!,
+            task: "Inspect Level_031.asset",
+            result:
+              "## Sub-goal: Inspect Level_031.asset\n\nGeçmiş bağlamı çıkar\nmemory_search ile ara.",
+          },
+        ],
         totalDurationMs: 1000,
         failureCount: 0,
         aborted: false,
@@ -465,9 +517,24 @@ describe("Orchestrator", () => {
       strategy: {
         task: { type: "analysis", complexity: "moderate", criticality: "high" },
         planner: { role: "planner", providerName: "mock", provider: mockProvider, reason: "test" },
-        executor: { role: "executor", providerName: "mock", provider: mockProvider, reason: "test" },
-        reviewer: { role: "reviewer", providerName: "mock", provider: mockProvider, reason: "test" },
-        synthesizer: { role: "synthesizer", providerName: "synth", provider: synthProvider, reason: "test" },
+        executor: {
+          role: "executor",
+          providerName: "mock",
+          provider: mockProvider,
+          reason: "test",
+        },
+        reviewer: {
+          role: "reviewer",
+          providerName: "mock",
+          provider: mockProvider,
+          reason: "test",
+        },
+        synthesizer: {
+          role: "synthesizer",
+          providerName: "synth",
+          provider: synthProvider,
+          reason: "test",
+        },
         usesMultipleProviders: true,
       },
       systemPrompt: "Test system prompt",
@@ -481,9 +548,11 @@ describe("Orchestrator", () => {
   it("builds provider intelligence from the identity-scoped preference instead of the raw chat id", async () => {
     const scopedProviderManager = {
       getProvider: () => mockProvider,
-      getActiveInfo: vi.fn((key: string) => key === "user-scoped"
-        ? { providerName: "persona-worker", model: "persona-model", isDefault: false }
-        : { providerName: "chat-worker", model: "chat-model", isDefault: false }),
+      getActiveInfo: vi.fn((key: string) =>
+        key === "user-scoped"
+          ? { providerName: "persona-worker", model: "persona-model", isDefault: false }
+          : { providerName: "chat-worker", model: "chat-model", isDefault: false },
+      ),
       getProviderCapabilities: () => ({
         contextWindow: 64000,
         thinkingSupported: true,
@@ -575,7 +644,8 @@ describe("Orchestrator", () => {
         getProvider: () => executorProvider,
         getProviderByName: (name: string) => providers.get(name) ?? null,
         getActiveInfo: () => ({ providerName: "executor", model: "default", isDefault: false }),
-        listAvailable: () => [...providers.keys()].map((name) => ({ name, label: name, defaultModel: "default" })),
+        listAvailable: () =>
+          [...providers.keys()].map((name) => ({ name, label: name, defaultModel: "default" })),
         shutdown: vi.fn(),
       } as any,
       providerRouter: {
@@ -620,7 +690,10 @@ describe("Orchestrator", () => {
     expect(executorProvider.chat.mock.calls[0]?.[0]).toContain("Provider: executor");
     expect(synthProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: synthesizer");
     expect(synthProvider.chat.mock.calls[0]?.[0]).toContain("Provider: synth");
-    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-supervisor", "Supervisor final answer");
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-supervisor",
+      "Supervisor final answer",
+    );
   });
 
   it("injects an exact response contract into orchestrated worker prompts for literal-output requests", async () => {
@@ -660,7 +733,8 @@ describe("Orchestrator", () => {
         getProvider: () => executorProvider,
         getProviderByName: (name: string) => providers.get(name) ?? null,
         getActiveInfo: () => ({ providerName: "executor", model: "default", isDefault: false }),
-        listAvailable: () => [...providers.keys()].map((name) => ({ name, label: name, defaultModel: "default" })),
+        listAvailable: () =>
+          [...providers.keys()].map((name) => ({ name, label: name, defaultModel: "default" })),
         shutdown: vi.fn(),
       } as any,
       providerRouter: {
@@ -695,9 +769,13 @@ describe("Orchestrator", () => {
     await promise;
 
     expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("## STRICT RESPONSE CONTRACT");
-    expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain('The user requested an exact output literal: "Atlas"');
+    expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain(
+      'The user requested an exact output literal: "Atlas"',
+    );
     expect(synthProvider.chat.mock.calls[0]?.[0]).toContain("## STRICT RESPONSE CONTRACT");
-    expect(synthProvider.chat.mock.calls[0]?.[0]).toContain('The user requested an exact output literal: "Atlas"');
+    expect(synthProvider.chat.mock.calls[0]?.[0]).toContain(
+      'The user requested an exact output literal: "Atlas"',
+    );
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-exact-output", "Atlas");
   });
 
@@ -766,7 +844,8 @@ describe("Orchestrator", () => {
         getProvider: () => executorProvider,
         getProviderByName: (name: string) => providers.get(name) ?? null,
         getActiveInfo: () => ({ providerName: "executor", model: "default", isDefault: false }),
-        listAvailable: () => [...providers.keys()].map((name) => ({ name, label: name, defaultModel: "default" })),
+        listAvailable: () =>
+          [...providers.keys()].map((name) => ({ name, label: name, defaultModel: "default" })),
         shutdown: vi.fn(),
       } as any,
       providerRouter: {
@@ -805,7 +884,10 @@ describe("Orchestrator", () => {
     expect(executorProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: executor");
     expect(executorProvider.chat.mock.calls[1]?.[0]).toContain("Current worker role: executor");
     expect(synthProvider.chat).toHaveBeenCalledTimes(1);
-    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-pinned", "Pinned tool-turn response");
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-pinned",
+      "Pinned tool-turn response",
+    );
   });
 
   it("captures an interactive user's name and injects it into later prompts", async () => {
@@ -902,12 +984,18 @@ describe("Orchestrator", () => {
     const profile = userProfileStore.getProfile("user1");
     expect(profile?.preferences.assistantName).toBe("Atlas");
     expect(profile?.preferences.ultrathinkMode).toBe(true);
-    expect(String(profile?.preferences.responseFormatInstruction ?? "")).toContain("önce kısa başlık");
+    expect(String(profile?.preferences.responseFormatInstruction ?? "")).toContain(
+      "önce kısa başlık",
+    );
 
     const firstPrompt = mockProvider.chat.mock.calls[0]?.[0] as string;
-    expect(firstPrompt).toContain('Assistant Identity: When referring to yourself, use the name "Atlas".');
+    expect(firstPrompt).toContain(
+      'Assistant Identity: When referring to yourself, use the name "Atlas".',
+    );
     expect(firstPrompt).toContain("Response Format Instruction: önce kısa başlık, sonra 3 madde");
-    expect(firstPrompt).toContain("Reasoning Mode: Use extra-careful, multi-step internal reasoning before answering.");
+    expect(firstPrompt).toContain(
+      "Reasoning Mode: Use extra-careful, multi-step internal reasoning before answering.",
+    );
     db.close();
   });
 
@@ -953,7 +1041,9 @@ describe("Orchestrator", () => {
     expect(profile?.preferences.verbosity).toBe("brief");
 
     const firstPrompt = mockProvider.chat.mock.calls[0]?.[0] as string;
-    expect(firstPrompt).toContain('Assistant Identity: When referring to yourself, use the name "Nova".');
+    expect(firstPrompt).toContain(
+      'Assistant Identity: When referring to yourself, use the name "Nova".',
+    );
     expect(firstPrompt).toContain("Active Persona Profile: formal");
     expect(firstPrompt).toContain("Assistant Persona Preference: teknik mentor");
     expect(firstPrompt).toContain("Assistant Personality Preference: sakin");
@@ -1079,10 +1169,14 @@ describe("Orchestrator", () => {
       expect.stringContaining("Strada'ya Hoş Geldin"),
     );
     expect(
-      ((bootstrapSession.visibleMessages ?? []) as Array<{ role: string }>).filter((message) => message.role === "assistant"),
+      ((bootstrapSession.visibleMessages ?? []) as Array<{ role: string }>).filter(
+        (message) => message.role === "assistant",
+      ),
     ).toHaveLength(1);
     expect(
-      ((bootstrapSession.visibleMessages ?? []) as Array<{ role: string }>).filter((message) => message.role === "user"),
+      ((bootstrapSession.visibleMessages ?? []) as Array<{ role: string }>).filter(
+        (message) => message.role === "user",
+      ),
     ).toHaveLength(0);
 
     mockProvider.chat.mockResolvedValueOnce({
@@ -1172,16 +1266,18 @@ describe("Orchestrator", () => {
         value: {
           kind: "some",
           value: {
-            modules: [{
-              name: "Combat",
-              className: "CombatModuleConfig",
-              filePath: "Assets/Modules/Combat/CombatModuleConfig.cs",
-              namespace: "Game.Combat",
-              systems: [],
-              services: [],
-              dependencies: [],
-              lineNumber: 1,
-            }],
+            modules: [
+              {
+                name: "Combat",
+                className: "CombatModuleConfig",
+                filePath: "Assets/Modules/Combat/CombatModuleConfig.cs",
+                namespace: "Game.Combat",
+                systems: [],
+                services: [],
+                dependencies: [],
+                lineNumber: 1,
+              },
+            ],
             systems: [],
             components: [],
             services: [],
@@ -1327,7 +1423,8 @@ describe("Orchestrator", () => {
       state: "active",
       name: "Compile Fix Loop",
       description: "Reusable compile-fix workflow.",
-      guidance: "Read the compiler output, inspect the failing files, and rerun dotnet build after each patch.",
+      guidance:
+        "Read the compiler output, inspect the failing files, and rerun dotnet build after each patch.",
       taskTypes: ["debugging"],
       taskPatterns: ["compile", "build", "pooling", "fix"],
       projectWorldFingerprint: "unity:pooling",
@@ -1392,7 +1489,13 @@ describe("Orchestrator", () => {
       requireConfirmation: true,
       runtimeArtifactManager,
       memoryManager: {
-        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "some", value: { summary: "Unity pooling world", fingerprint: "unity:pooling" } } }),
+        getCachedAnalysis: vi.fn().mockResolvedValue({
+          kind: "ok",
+          value: {
+            kind: "some",
+            value: { summary: "Unity pooling world", fingerprint: "unity:pooling" },
+          },
+        }),
       } as any,
     });
 
@@ -1469,7 +1572,13 @@ describe("Orchestrator", () => {
         bridge_tool: { readOnly: true, requiresBridge: true },
       },
       memoryManager: {
-        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "some", value: { summary: "Unity pooling world", fingerprint: "unity:pooling" } } }),
+        getCachedAnalysis: vi.fn().mockResolvedValue({
+          kind: "ok",
+          value: {
+            kind: "some",
+            value: { summary: "Unity pooling world", fingerprint: "unity:pooling" },
+          },
+        }),
       } as any,
     });
 
@@ -1505,39 +1614,45 @@ describe("Orchestrator", () => {
     const replayStorage = new LearningStorage(join(replayStorageDir, "learning.db"));
     try {
       replayStorage.initialize();
-      replayStorage.createTrajectoryImmediate(createReplayTrajectory({
-        id: "traj-current",
-        chatId: "chat-replay",
-        taskRunId: "taskrun-current",
-        taskDescription: "Fix Unity editor crash during level generation",
-        branchSummary: "stable checkpoint: inspected Level_031 asset import path",
-        verifierSummary: "runtime replay still required before final completion",
-        learnedInsights: ["Avoid trusting serialized YAML alone."],
-        projectWorldFingerprint: "root tmp test project modules castle",
-        createdAt: 400,
-      }));
-      replayStorage.createTrajectoryImmediate(createReplayTrajectory({
-        id: "traj-other-task",
-        chatId: "chat-replay",
-        taskRunId: "taskrun-other",
-        taskDescription: "Fix a different level import path bug",
-        branchSummary: "stable checkpoint: inspected Level_032 asset import path",
-        verifierSummary: "runtime replay for Level_032 still pending",
-        learnedInsights: ["Different task in same chat should stay isolated."],
-        projectWorldFingerprint: "root tmp test project modules castle",
-        createdAt: 410,
-      }));
-      replayStorage.createTrajectoryImmediate(createReplayTrajectory({
-        id: "traj-other-chat",
-        chatId: "chat-other",
-        taskRunId: "taskrun-current",
-        taskDescription: "Same taskRunId in another chat should not leak",
-        branchSummary: "foreign chat replay branch",
-        verifierSummary: "foreign chat verifier summary",
-        learnedInsights: ["Chat scope must be respected during exact replay lookup."],
-        projectWorldFingerprint: "root tmp test project modules castle",
-        createdAt: 420,
-      }));
+      replayStorage.createTrajectoryImmediate(
+        createReplayTrajectory({
+          id: "traj-current",
+          chatId: "chat-replay",
+          taskRunId: "taskrun-current",
+          taskDescription: "Fix Unity editor crash during level generation",
+          branchSummary: "stable checkpoint: inspected Level_031 asset import path",
+          verifierSummary: "runtime replay still required before final completion",
+          learnedInsights: ["Avoid trusting serialized YAML alone."],
+          projectWorldFingerprint: "root tmp test project modules castle",
+          createdAt: 400,
+        }),
+      );
+      replayStorage.createTrajectoryImmediate(
+        createReplayTrajectory({
+          id: "traj-other-task",
+          chatId: "chat-replay",
+          taskRunId: "taskrun-other",
+          taskDescription: "Fix a different level import path bug",
+          branchSummary: "stable checkpoint: inspected Level_032 asset import path",
+          verifierSummary: "runtime replay for Level_032 still pending",
+          learnedInsights: ["Different task in same chat should stay isolated."],
+          projectWorldFingerprint: "root tmp test project modules castle",
+          createdAt: 410,
+        }),
+      );
+      replayStorage.createTrajectoryImmediate(
+        createReplayTrajectory({
+          id: "traj-other-chat",
+          chatId: "chat-other",
+          taskRunId: "taskrun-current",
+          taskDescription: "Same taskRunId in another chat should not leak",
+          branchSummary: "foreign chat replay branch",
+          verifierSummary: "foreign chat verifier summary",
+          learnedInsights: ["Chat scope must be respected during exact replay lookup."],
+          projectWorldFingerprint: "root tmp test project modules castle",
+          createdAt: 420,
+        }),
+      );
       const replayRetriever = new TrajectoryReplayRetriever(replayStorage);
 
       const mockMemMgr = {
@@ -1546,16 +1661,18 @@ describe("Orchestrator", () => {
           value: {
             kind: "some",
             value: {
-              modules: [{
-                name: "Castle",
-                className: "CastleModuleConfig",
-                filePath: "Assets/Modules/Castle/CastleModuleConfig.cs",
-                namespace: "Game.Castle",
-                systems: [],
-                services: [],
-                dependencies: [],
-                lineNumber: 1,
-              }],
+              modules: [
+                {
+                  name: "Castle",
+                  className: "CastleModuleConfig",
+                  filePath: "Assets/Modules/Castle/CastleModuleConfig.cs",
+                  namespace: "Game.Castle",
+                  systems: [],
+                  services: [],
+                  dependencies: [],
+                  lineNumber: 1,
+                },
+              ],
               systems: [],
               components: [],
               services: [],
@@ -1589,130 +1706,130 @@ describe("Orchestrator", () => {
         trajectoryReplayRetriever: replayRetriever,
         providerRouter: {
           getRecentExecutionTraces: vi.fn(() => [
-          {
-            provider: "kimi",
-            model: "kimi-k2",
-            role: "planner",
-            phase: "planning",
-            source: "supervisor-strategy",
-            reason: "planned the task cleanly",
-            task: {
-              type: "planning",
-              complexity: "complex",
-              criticality: "high",
+            {
+              provider: "kimi",
+              model: "kimi-k2",
+              role: "planner",
+              phase: "planning",
+              source: "supervisor-strategy",
+              reason: "planned the task cleanly",
+              task: {
+                type: "planning",
+                complexity: "complex",
+                criticality: "high",
+              },
+              timestamp: 250,
+              identityKey: "user-replay",
+              chatId: "chat-replay",
+              taskRunId: "taskrun-current",
             },
-            timestamp: 250,
-            identityKey: "user-replay",
-            chatId: "chat-replay",
-            taskRunId: "taskrun-current",
-          },
-          {
-            provider: "gemini",
-            model: "gemini-2.5-pro",
-            role: "planner",
-            phase: "planning",
-            source: "supervisor-strategy",
-            reason: "same chat but different task should not leak",
-            task: {
-              type: "planning",
-              complexity: "complex",
-              criticality: "high",
+            {
+              provider: "gemini",
+              model: "gemini-2.5-pro",
+              role: "planner",
+              phase: "planning",
+              source: "supervisor-strategy",
+              reason: "same chat but different task should not leak",
+              task: {
+                type: "planning",
+                complexity: "complex",
+                criticality: "high",
+              },
+              timestamp: 255,
+              identityKey: "user-replay",
+              chatId: "chat-replay",
+              taskRunId: "taskrun-other",
             },
-            timestamp: 255,
-            identityKey: "user-replay",
-            chatId: "chat-replay",
-            taskRunId: "taskrun-other",
-          },
-          {
-            provider: "gemini",
-            model: "gemini-2.5-pro",
-            role: "planner",
-            phase: "planning",
-            source: "supervisor-strategy",
-            reason: "different chat should not leak",
-            task: {
-              type: "planning",
-              complexity: "complex",
-              criticality: "high",
+            {
+              provider: "gemini",
+              model: "gemini-2.5-pro",
+              role: "planner",
+              phase: "planning",
+              source: "supervisor-strategy",
+              reason: "different chat should not leak",
+              task: {
+                type: "planning",
+                complexity: "complex",
+                criticality: "high",
+              },
+              timestamp: 260,
+              identityKey: "user-replay",
+              chatId: "chat-other",
+              taskRunId: "taskrun-foreign-chat",
             },
-            timestamp: 260,
-            identityKey: "user-replay",
-            chatId: "chat-other",
-            taskRunId: "taskrun-foreign-chat",
-          },
-        ]),
-        getRecentPhaseOutcomes: vi.fn(() => [
-          {
-            provider: "kimi",
-            model: "kimi-k2",
-            role: "planner",
-            phase: "planning",
-            source: "supervisor-strategy",
-            status: "approved",
-            reason: "planning completed cleanly",
-            task: {
-              type: "planning",
-              complexity: "complex",
-              criticality: "high",
+          ]),
+          getRecentPhaseOutcomes: vi.fn(() => [
+            {
+              provider: "kimi",
+              model: "kimi-k2",
+              role: "planner",
+              phase: "planning",
+              source: "supervisor-strategy",
+              status: "approved",
+              reason: "planning completed cleanly",
+              task: {
+                type: "planning",
+                complexity: "complex",
+                criticality: "high",
+              },
+              timestamp: 300,
+              identityKey: "user-replay",
+              chatId: "chat-replay",
+              taskRunId: "taskrun-current",
+              telemetry: {
+                verifierDecision: "approve",
+                phaseVerdict: "clean",
+                phaseVerdictScore: 1,
+                retryCount: 0,
+                rollbackDepth: 0,
+              },
             },
-            timestamp: 300,
-            identityKey: "user-replay",
-            chatId: "chat-replay",
-            taskRunId: "taskrun-current",
-            telemetry: {
-              verifierDecision: "approve",
-              phaseVerdict: "clean",
-              phaseVerdictScore: 1,
-              retryCount: 0,
-              rollbackDepth: 0,
+            {
+              provider: "gemini",
+              model: "gemini-2.5-pro",
+              role: "planner",
+              phase: "planning",
+              source: "supervisor-strategy",
+              status: "replanned",
+              reason: "same chat but different task should not leak",
+              task: {
+                type: "planning",
+                complexity: "complex",
+                criticality: "high",
+              },
+              timestamp: 310,
+              identityKey: "user-replay",
+              chatId: "chat-replay",
+              taskRunId: "taskrun-other",
+              telemetry: {
+                verifierDecision: "replan",
+                retryCount: 2,
+                rollbackDepth: 1,
+              },
             },
-          },
-          {
-            provider: "gemini",
-            model: "gemini-2.5-pro",
-            role: "planner",
-            phase: "planning",
-            source: "supervisor-strategy",
-            status: "replanned",
-            reason: "same chat but different task should not leak",
-            task: {
-              type: "planning",
-              complexity: "complex",
-              criticality: "high",
+            {
+              provider: "gemini",
+              model: "gemini-2.5-pro",
+              role: "planner",
+              phase: "planning",
+              source: "supervisor-strategy",
+              status: "approved",
+              reason: "different chat should not leak",
+              task: {
+                type: "planning",
+                complexity: "complex",
+                criticality: "high",
+              },
+              timestamp: 320,
+              identityKey: "user-replay",
+              chatId: "chat-other",
+              taskRunId: "taskrun-foreign-chat",
+              telemetry: {
+                verifierDecision: "approve",
+                retryCount: 0,
+                rollbackDepth: 0,
+              },
             },
-            timestamp: 310,
-            identityKey: "user-replay",
-            chatId: "chat-replay",
-            taskRunId: "taskrun-other",
-            telemetry: {
-              verifierDecision: "replan",
-              retryCount: 2,
-              rollbackDepth: 1,
-            },
-          },
-          {
-            provider: "gemini",
-            model: "gemini-2.5-pro",
-            role: "planner",
-            phase: "planning",
-            source: "supervisor-strategy",
-            status: "approved",
-            reason: "different chat should not leak",
-            task: {
-              type: "planning",
-              complexity: "complex",
-              criticality: "high",
-            },
-            timestamp: 320,
-            identityKey: "user-replay",
-            chatId: "chat-other",
-            taskRunId: "taskrun-foreign-chat",
-            telemetry: {
-              verifierDecision: "approve",
-              retryCount: 0,
-              rollbackDepth: 0,
-            },
-          },
           ]),
         } as any,
       });
@@ -1765,14 +1882,16 @@ describe("Orchestrator", () => {
         chatId: "chat-replay",
         taskRunId: "taskrun-current",
         taskDescription: "Fix Unity editor crash during level generation",
-        steps: [{
-          stepNumber: 1,
-          toolName: "file_read" as ToolName,
-          input: {},
-          result: { kind: "success", output: "ok" },
-          timestamp: 500 as TimestampMs,
-          durationMs: 0 as any,
-        }],
+        steps: [
+          {
+            stepNumber: 1,
+            toolName: "file_read" as ToolName,
+            input: {},
+            result: { kind: "success", output: "ok" },
+            timestamp: 500 as TimestampMs,
+            durationMs: 0 as any,
+          },
+        ],
         outcome: {
           success: true,
           totalSteps: 1,
@@ -1898,11 +2017,15 @@ describe("Orchestrator", () => {
   });
 
   it("does not surface interrupted goal trees to unrelated conversations", async () => {
-    const interruptedTree = buildGoalTreeFromBlock({
-      isGoal: true,
-      estimatedMinutes: 5,
-      nodes: [{ id: "fix", task: "Fix the failing test", dependsOn: [] }],
-    }, "stable-profile", "Fix the failing test");
+    const interruptedTree = buildGoalTreeFromBlock(
+      {
+        isGoal: true,
+        estimatedMinutes: 5,
+        nodes: [{ id: "fix", task: "Fix the failing test", dependsOn: [] }],
+      },
+      "stable-profile",
+      "Fix the failing test",
+    );
 
     const resumeOrch = new Orchestrator({
       providerManager: {
@@ -1937,11 +2060,15 @@ describe("Orchestrator", () => {
   });
 
   it("resumes interrupted goal trees for the matching stable conversation identity", async () => {
-    const interruptedTree = buildGoalTreeFromBlock({
-      isGoal: true,
-      estimatedMinutes: 5,
-      nodes: [{ id: "fix", task: "Fix the failing test", dependsOn: [] }],
-    }, "stable-profile", "Fix the failing test");
+    const interruptedTree = buildGoalTreeFromBlock(
+      {
+        isGoal: true,
+        estimatedMinutes: 5,
+        nodes: [{ id: "fix", task: "Fix the failing test", dependsOn: [] }],
+      },
+      "stable-profile",
+      "Fix the failing test",
+    );
 
     const resumeOrch = new Orchestrator({
       providerManager: {
@@ -1997,11 +2124,15 @@ describe("Orchestrator", () => {
   });
 
   it("records the triggering message once when showing a resume prompt and continuing normally", async () => {
-    const interruptedTree = buildGoalTreeFromBlock({
-      isGoal: true,
-      estimatedMinutes: 5,
-      nodes: [{ id: "fix", task: "Fix the failing test", dependsOn: [] }],
-    }, "stable-profile", "Fix the failing test");
+    const interruptedTree = buildGoalTreeFromBlock(
+      {
+        isGoal: true,
+        estimatedMinutes: 5,
+        nodes: [{ id: "fix", task: "Fix the failing test", dependsOn: [] }],
+      },
+      "stable-profile",
+      "Fix the failing test",
+    );
 
     const resumeOrch = new Orchestrator({
       providerManager: {
@@ -2029,8 +2160,9 @@ describe("Orchestrator", () => {
     await promise;
 
     const session = (resumeOrch as any).getOrCreateSession("ephemeral-chat");
-    const visibleUserMessages = ((session.visibleMessages ?? []) as Array<{ role: string; content: unknown }>)
-      .filter((message) => message.role === "user" && message.content === "hello");
+    const visibleUserMessages = (
+      (session.visibleMessages ?? []) as Array<{ role: string; content: unknown }>
+    ).filter((message) => message.role === "user" && message.content === "hello");
     expect(visibleUserMessages).toHaveLength(1);
   });
 
@@ -2195,9 +2327,7 @@ describe("Orchestrator", () => {
       usage: { inputTokens: 100, outputTokens: 60 },
     };
 
-    mockProvider.chat
-      .mockResolvedValueOnce(toolResponse)
-      .mockResolvedValueOnce(finalResponse);
+    mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
     const promise = orch.handleMessage({
       channelType: "cli",
@@ -2231,9 +2361,7 @@ describe("Orchestrator", () => {
       usage: { inputTokens: 100, outputTokens: 60 },
     };
 
-    mockProvider.chat
-      .mockResolvedValueOnce(toolResponse)
-      .mockResolvedValueOnce(finalResponse);
+    mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
     mockChannel.requestConfirmation.mockResolvedValue("Yes");
 
@@ -2279,13 +2407,21 @@ describe("Orchestrator", () => {
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Plan: update the system",
-        toolCalls: [{ id: "tc-conformance-write", name: "file_write", input: { path: "Assets/FooSystem.cs" } }],
+        toolCalls: [
+          {
+            id: "tc-conformance-write",
+            name: "file_write",
+            input: { path: "Assets/FooSystem.cs" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
       .mockResolvedValueOnce({
         text: "Running verification",
-        toolCalls: [{ id: "tc-conformance-verify", name: "shell_exec", input: { command: "dotnet build" } }],
+        toolCalls: [
+          { id: "tc-conformance-verify", name: "shell_exec", input: { command: "dotnet build" } },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2297,7 +2433,13 @@ describe("Orchestrator", () => {
       })
       .mockResolvedValueOnce({
         text: "Checking Strada.Core guidance",
-        toolCalls: [{ id: "tc-conformance-read", name: "file_read", input: { path: "/tmp/test-project/Packages/Strada.Core/README.md" } }],
+        toolCalls: [
+          {
+            id: "tc-conformance-read",
+            name: "file_read",
+            input: { path: "/tmp/test-project/Packages/Strada.Core/README.md" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2375,13 +2517,17 @@ describe("Orchestrator", () => {
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Plan: implement the fix",
-        toolCalls: [{ id: "tc-review-write", name: "file_write", input: { path: "src/runtime/reviewer.ts" } }],
+        toolCalls: [
+          { id: "tc-review-write", name: "file_write", input: { path: "src/runtime/reviewer.ts" } },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
       .mockResolvedValueOnce({
         text: "Running verification",
-        toolCalls: [{ id: "tc-review-verify", name: "shell_exec", input: { command: "npm run test:unit" } }],
+        toolCalls: [
+          { id: "tc-review-verify", name: "shell_exec", input: { command: "npm run test:unit" } },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2418,7 +2564,13 @@ describe("Orchestrator", () => {
       })
       .mockResolvedValueOnce({
         text: "Fixing the logged runtime issue",
-        toolCalls: [{ id: "tc-review-reverify", name: "shell_exec", input: { command: "npm run typecheck:src" } }],
+        toolCalls: [
+          {
+            id: "tc-review-reverify",
+            name: "shell_exec",
+            input: { command: "npm run typecheck:src" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2457,14 +2609,19 @@ describe("Orchestrator", () => {
     await promise;
 
     expect(mockProvider.chat).toHaveBeenCalledTimes(7);
-    const gatedMessages = mockProvider.chat.mock.calls[4]?.[1] as Array<{ role: string; content: unknown }>;
+    const gatedMessages = mockProvider.chat.mock.calls[4]?.[1] as Array<{
+      role: string;
+      content: unknown;
+    }>;
     const gateMessage = gatedMessages.find(
       (message) =>
         message.role === "user" &&
         typeof message.content === "string" &&
         message.content.includes("[COMPLETION REVIEW REQUIRED]"),
     );
-    expect(String(gateMessage?.content ?? "")).toContain("Console error appeared after the worker claimed completion.");
+    expect(String(gateMessage?.content ?? "")).toContain(
+      "Console error appeared after the worker claimed completion.",
+    );
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
       "chat-review",
       expect.stringContaining("All fixed"),
@@ -2489,7 +2646,13 @@ describe("Orchestrator", () => {
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Checking the level directory",
-        toolCalls: [{ id: "tc-levels-dir", name: "list_directory", input: { path: "Assets/Resources/Levels" } }],
+        toolCalls: [
+          {
+            id: "tc-levels-dir",
+            name: "list_directory",
+            input: { path: "Assets/Resources/Levels" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2501,7 +2664,13 @@ describe("Orchestrator", () => {
       })
       .mockResolvedValueOnce({
         text: "Continuing autonomously with direct asset inspection",
-        toolCalls: [{ id: "tc-level-read", name: "file_read", input: { path: "Assets/Resources/Levels/Level_031.asset" } }],
+        toolCalls: [
+          {
+            id: "tc-level-read",
+            name: "file_read",
+            input: { path: "Assets/Resources/Levels/Level_031.asset" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2575,7 +2744,13 @@ describe("Orchestrator", () => {
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Inspecting the runtime path first.",
-        toolCalls: [{ id: "tc-runtime-read-1", name: "file_read", input: { path: "Assets/Scripts/ArrowInputSystem.cs" } }],
+        toolCalls: [
+          {
+            id: "tc-runtime-read-1",
+            name: "file_read",
+            input: { path: "Assets/Scripts/ArrowInputSystem.cs" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2617,7 +2792,13 @@ DONE`,
       })
       .mockResolvedValueOnce({
         text: "Continuing with runtime-path inspection.",
-        toolCalls: [{ id: "tc-runtime-read-2", name: "file_read", input: { path: "Assets/Scripts/GameRenderer.cs" } }],
+        toolCalls: [
+          {
+            id: "tc-runtime-read-2",
+            name: "file_read",
+            input: { path: "Assets/Scripts/GameRenderer.cs" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2696,7 +2877,13 @@ DONE`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Inspecting the level asset first.",
-        toolCalls: [{ id: "tc-level-read-1", name: "file_read", input: { path: "Assets/Resources/Levels/Level_031.asset" } }],
+        toolCalls: [
+          {
+            id: "tc-level-read-1",
+            name: "file_read",
+            input: { path: "Assets/Resources/Levels/Level_031.asset" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2711,7 +2898,9 @@ DONE`,
           decision: "replan",
           summary: "The current path did not verify the real failing behavior.",
           findings: ["The asset was inspected, but the failing path itself was not reproduced."],
-          requiredActions: ["Create a new plan around the concrete failing path before claiming success."],
+          requiredActions: [
+            "Create a new plan around the concrete failing path before claiming success.",
+          ],
           reviews: {
             security: "not_applicable",
             code: "issues",
@@ -2725,7 +2914,13 @@ DONE`,
       })
       .mockResolvedValueOnce({
         text: "1. Reproduce the failing path.\n2. Re-read the asset with that path in mind.",
-        toolCalls: [{ id: "tc-level-read-2", name: "file_read", input: { path: "Assets/Resources/Levels/Level_031.asset" } }],
+        toolCalls: [
+          {
+            id: "tc-level-read-2",
+            name: "file_read",
+            input: { path: "Assets/Resources/Levels/Level_031.asset" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2793,7 +2988,8 @@ DONE`,
       kind: "workflow",
       state: "shadow",
       name: "Unity asset inspection",
-      description: "Keep going with local asset inspection instead of handing the work back to the user.",
+      description:
+        "Keep going with local asset inspection instead of handing the work back to the user.",
       guidance: "Inspect the relevant Unity asset directly.",
       taskTypes: ["analysis", "debugging"],
       taskPatterns: ["analyze", "unity", "level", "assets", "inspect", "issue"],
@@ -2833,61 +3029,75 @@ DONE`,
     try {
       mockProvider.chat
         .mockResolvedValueOnce({
-        text: "Need more context before proceeding.",
-        toolCalls: [{
-          id: "tc-clarify-intake",
-          name: "ask_user",
-          input: {
-            question: "Clarify the objective you want me to act on.",
-            options: ["Fix a bug", "Add a feature", "Create a new module", "Run a project health check"],
-            recommended: "Run a project health check",
-            context: "Collect the minimum inputs to proceed.",
-          },
-        }],
-        stopReason: "tool_use",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
+          text: "Need more context before proceeding.",
+          toolCalls: [
+            {
+              id: "tc-clarify-intake",
+              name: "ask_user",
+              input: {
+                question: "Clarify the objective you want me to act on.",
+                options: [
+                  "Fix a bug",
+                  "Add a feature",
+                  "Create a new module",
+                  "Run a project health check",
+                ],
+                recommended: "Run a project health check",
+                context: "Collect the minimum inputs to proceed.",
+              },
+            },
+          ],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
         .mockResolvedValueOnce({
-        text: JSON.stringify({
-          decision: "internal_continue",
-          reason: "Strada still has local project access and can inspect the Unity assets directly.",
-          recommendedNextAction: "Read the relevant asset files and continue internally.",
-        }),
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
+          text: JSON.stringify({
+            decision: "internal_continue",
+            reason:
+              "Strada still has local project access and can inspect the Unity assets directly.",
+            recommendedNextAction: "Read the relevant asset files and continue internally.",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
         .mockResolvedValueOnce({
-        text: "Continuing with direct asset inspection.",
-        toolCalls: [{ id: "tc-level-read", name: "file_read", input: { path: "Assets/Resources/Levels/Level_031.asset" } }],
-        stopReason: "tool_use",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
+          text: "Continuing with direct asset inspection.",
+          toolCalls: [
+            {
+              id: "tc-level-read",
+              name: "file_read",
+              input: { path: "Assets/Resources/Levels/Level_031.asset" },
+            },
+          ],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
         .mockResolvedValueOnce({
-        text: "Level_031 is the problematic asset and the issue is now isolated.",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
+          text: "Level_031 is the problematic asset and the issue is now isolated.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
         .mockResolvedValueOnce({
-        text: JSON.stringify({
-          decision: "approve",
-          summary: "The issue is isolated cleanly.",
-          closureStatus: "verified",
-          openInvestigations: [],
-          findings: [],
-          requiredActions: [],
-          reviews: {
-            security: "not_applicable",
-            code: "clean",
-            simplify: "clean",
-          },
-          logStatus: "clean",
-        }),
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      });
+          text: JSON.stringify({
+            decision: "approve",
+            summary: "The issue is isolated cleanly.",
+            closureStatus: "verified",
+            openInvestigations: [],
+            findings: [],
+            requiredActions: [],
+            reviews: {
+              security: "not_applicable",
+              code: "clean",
+              simplify: "clean",
+            },
+            logStatus: "clean",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
 
       const promise = clarificationOrch.handleMessage({
         channelType: "cli",
@@ -2900,7 +3110,10 @@ DONE`,
       await promise;
 
       expect(askUserTool.execute).not.toHaveBeenCalled();
-      const continuationMessages = mockProvider.chat.mock.calls[2]?.[1] as Array<{ role: string; content: unknown }>;
+      const continuationMessages = mockProvider.chat.mock.calls[2]?.[1] as Array<{
+        role: string;
+        content: unknown;
+      }>;
       expect(continuationMessages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -2943,16 +3156,18 @@ DONE`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Need a technical choice before continuing.",
-        toolCalls: [{
-          id: "tc-clarify-technical",
-          name: "ask_user",
-          input: {
-            question: "Which refactor path should I take for the routing layer?",
-            options: ["Keep the current service", "Split the routing module"],
-            recommended: "Split the routing module",
-            context: "This is the next implementation choice.",
+        toolCalls: [
+          {
+            id: "tc-clarify-technical",
+            name: "ask_user",
+            input: {
+              question: "Which refactor path should I take for the routing layer?",
+              options: ["Keep the current service", "Split the routing module"],
+              recommended: "Split the routing module",
+              context: "This is the next implementation choice.",
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -2971,7 +3186,13 @@ DONE`,
       })
       .mockResolvedValueOnce({
         text: "Continuing with the split refactor internally.",
-        toolCalls: [{ id: "tc-routing-read", name: "list_directory", input: { path: "src/agent-core/routing" } }],
+        toolCalls: [
+          {
+            id: "tc-routing-read",
+            name: "list_directory",
+            input: { path: "src/agent-core/routing" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -3012,7 +3233,10 @@ DONE`,
     await promise;
 
     expect(askUserTool.execute).not.toHaveBeenCalled();
-    const continuationMessages = mockProvider.chat.mock.calls[2]?.[1] as Array<{ role: string; content: unknown }>;
+    const continuationMessages = mockProvider.chat.mock.calls[2]?.[1] as Array<{
+      role: string;
+      content: unknown;
+    }>;
     expect(continuationMessages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -3060,7 +3284,13 @@ DONE`,
       })
       .mockResolvedValueOnce({
         text: "Continuing with direct asset inspection.",
-        toolCalls: [{ id: "tc-level-read-plan", name: "file_read", input: { path: "Assets/Resources/Levels/Level_031.asset" } }],
+        toolCalls: [
+          {
+            id: "tc-level-read-plan",
+            name: "file_read",
+            input: { path: "Assets/Resources/Levels/Level_031.asset" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -3100,7 +3330,10 @@ DONE`,
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    const continuationMessages = mockProvider.chat.mock.calls[1]?.[1] as Array<{ role: string; content: unknown }>;
+    const continuationMessages = mockProvider.chat.mock.calls[1]?.[1] as Array<{
+      role: string;
+      content: unknown;
+    }>;
     expect(continuationMessages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -3144,7 +3377,13 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
       })
       .mockResolvedValueOnce({
         text: "Searching prior context first.",
-        toolCalls: [{ id: "tc-memory-search", name: "memory_search", input: { query: "100 level unity freeze arrows Tiki" } }],
+        toolCalls: [
+          {
+            id: "tc-memory-search",
+            name: "memory_search",
+            input: { query: "100 level unity freeze arrows Tiki" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -3227,18 +3466,20 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-plan-interactive",
-          name: "show_plan",
-          input: {
-            summary: "Inspect the failing workflow and land the minimal verified fix",
-            steps: [
-              "Read the failing workflow output and inspect the related implementation files",
-              "Apply the minimal code change needed to remove the regression",
-              "Run the relevant verification command and confirm the fix holds",
-            ],
+        toolCalls: [
+          {
+            id: "tc-plan-interactive",
+            name: "show_plan",
+            input: {
+              summary: "Inspect the failing workflow and land the minimal verified fix",
+              steps: [
+                "Read the failing workflow output and inspect the related implementation files",
+                "Apply the minimal code change needed to remove the regression",
+                "Run the relevant verification command and confirm the fix holds",
+              ],
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
@@ -3283,18 +3524,20 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-plan-explicit-review",
-          name: "show_plan",
-          input: {
-            summary: "Inspect the failing workflow and land the minimal verified fix",
-            steps: [
-              "Read the failing workflow output and inspect the related implementation files",
-              "Apply the minimal code change needed to remove the regression",
-              "Run the relevant verification command and confirm the fix holds",
-            ],
+        toolCalls: [
+          {
+            id: "tc-plan-explicit-review",
+            name: "show_plan",
+            input: {
+              summary: "Inspect the failing workflow and land the minimal verified fix",
+              steps: [
+                "Read the failing workflow output and inspect the related implementation files",
+                "Apply the minimal code change needed to remove the regression",
+                "Run the relevant verification command and confirm the fix holds",
+              ],
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
@@ -3339,28 +3582,32 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-plan-reject-write-guard",
-          name: "show_plan",
-          input: {
-            summary: "Inspect the failing workflow and land the minimal verified fix",
-            steps: [
-              "Read the failing workflow output and inspect the related implementation files",
-              "Apply the minimal code change needed to remove the regression",
-              "Run the relevant verification command and confirm the fix holds",
-            ],
+        toolCalls: [
+          {
+            id: "tc-plan-reject-write-guard",
+            name: "show_plan",
+            input: {
+              summary: "Inspect the failing workflow and land the minimal verified fix",
+              steps: [
+                "Read the failing workflow output and inspect the related implementation files",
+                "Apply the minimal code change needed to remove the regression",
+                "Run the relevant verification command and confirm the fix holds",
+              ],
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-write-after-plan-reject",
-          name: "file_write",
-          input: { path: "src/fix.ts", content: "export const ok = true;" },
-        }],
+        toolCalls: [
+          {
+            id: "tc-write-after-plan-reject",
+            name: "file_write",
+            input: { path: "src/fix.ts", content: "export const ok = true;" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
@@ -3382,8 +3629,12 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     await promise;
 
     expect(writeTool.execute).not.toHaveBeenCalled();
-    const toolResultContents = mockProvider.chat.mock.calls.flatMap((call) => getToolResultContents(call));
-    expect(toolResultContents.some((content) => content.includes("Plan approval is still required"))).toBe(true);
+    const toolResultContents = mockProvider.chat.mock.calls.flatMap((call) =>
+      getToolResultContents(call),
+    );
+    expect(
+      toolResultContents.some((content) => content.includes("Plan approval is still required")),
+    ).toBe(true);
   });
 
   it("cancels write operation when user denies confirmation", async () => {
@@ -3400,9 +3651,7 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
       usage: { inputTokens: 100, outputTokens: 60 },
     };
 
-    mockProvider.chat
-      .mockResolvedValueOnce(toolResponse)
-      .mockResolvedValueOnce(finalResponse);
+    mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
     mockChannel.requestConfirmation.mockResolvedValue("No");
 
@@ -3422,12 +3671,8 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     const secondCallArgs = mockProvider.chat.mock.calls[1]!;
     const messages = secondCallArgs[1] as any[];
     // Tool results are now in content array with tool_result blocks
-    const toolResultMsg = messages.find((m: any) => 
-      m.role === "user" && Array.isArray(m.content)
-    );
-    const toolResultBlock = toolResultMsg?.content?.find((c: any) => 
-      c.type === "tool_result"
-    );
+    const toolResultMsg = messages.find((m: any) => m.role === "user" && Array.isArray(m.content));
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
     expect(toolResultBlock?.content).toContain("Operation cancelled");
   });
 
@@ -3479,12 +3724,8 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
 
     const secondCallArgs = mockProvider.chat.mock.calls[1]!;
     const messages = secondCallArgs[1] as any[];
-    const toolResultMsg = messages.find((m: any) =>
-      m.role === "user" && Array.isArray(m.content)
-    );
-    const toolResultBlock = toolResultMsg?.content?.find((c: any) =>
-      c.type === "tool_result"
-    );
+    const toolResultMsg = messages.find((m: any) => m.role === "user" && Array.isArray(m.content));
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
     expect(toolResultBlock?.content).toContain("disabled in read-only mode");
     expect(toolResultBlock?.is_error).toBe(true);
   });
@@ -3510,19 +3751,21 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-plan",
-          name: "show_plan",
-          input: {
-            summary: "Inspect the failing workflow and land the minimal verified fix",
-            steps: [
-              "Read the failing workflow output and inspect the related implementation files",
-              "Apply the minimal code change needed to remove the regression",
-              "Run the relevant verification command and confirm the fix holds",
-            ],
-            reasoning: "This keeps the change small and verified before completion.",
+        toolCalls: [
+          {
+            id: "tc-plan",
+            name: "show_plan",
+            input: {
+              summary: "Inspect the failing workflow and land the minimal verified fix",
+              steps: [
+                "Read the failing workflow output and inspect the related implementation files",
+                "Apply the minimal code change needed to remove the regression",
+                "Run the relevant verification command and confirm the fix holds",
+              ],
+              reasoning: "This keeps the change small and verified before completion.",
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
@@ -3567,28 +3810,32 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-bg-plan-review",
-          name: "show_plan",
-          input: {
-            summary: "Inspect the failing workflow and land the minimal verified fix",
-            steps: [
-              "Read the failing workflow output and inspect the related implementation files",
-              "Apply the minimal code change needed to remove the regression",
-              "Run the relevant verification command and confirm the fix holds",
-            ],
+        toolCalls: [
+          {
+            id: "tc-bg-plan-review",
+            name: "show_plan",
+            input: {
+              summary: "Inspect the failing workflow and land the minimal verified fix",
+              steps: [
+                "Read the failing workflow output and inspect the related implementation files",
+                "Apply the minimal code change needed to remove the regression",
+                "Run the relevant verification command and confirm the fix holds",
+              ],
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-bg-write-without-plan-approval",
-          name: "file_write",
-          input: { path: "src/fix.ts", content: "export const ok = true;" },
-        }],
+        toolCalls: [
+          {
+            id: "tc-bg-write-without-plan-approval",
+            name: "file_write",
+            input: { path: "src/fix.ts", content: "export const ok = true;" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
@@ -3611,8 +3858,12 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     const planGate = getToolResultBlock(mockProvider.chat.mock.calls[1]);
     expect(planGate?.content).toContain("Present the plan in your next user-facing response");
     expect(planGate?.is_error).toBe(true);
-    const toolResultContents = mockProvider.chat.mock.calls.flatMap((call) => getToolResultContents(call));
-    expect(toolResultContents.some((content) => content.includes("Plan approval is still required"))).toBe(true);
+    const toolResultContents = mockProvider.chat.mock.calls.flatMap((call) =>
+      getToolResultContents(call),
+    );
+    expect(
+      toolResultContents.some((content) => content.includes("Plan approval is still required")),
+    ).toBe(true);
   });
 
   it("wraps raw background planning drafts in plan-review framing when the user explicitly asked for a plan first", async () => {
@@ -3651,7 +3902,9 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     );
 
     expect(result).toContain("Plan review requested before execution.");
-    expect(result).toContain("Reply with your approval or requested changes before write-capable execution continues.");
+    expect(result).toContain(
+      "Reply with your approval or requested changes before write-capable execution continues.",
+    );
   });
 
   it("rejects weak plans in autonomous mode and asks the agent to revise them", async () => {
@@ -3675,14 +3928,16 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-plan-reject",
-          name: "show_plan",
-          input: {
-            summary: "Do stuff",
-            steps: ["TODO", "Wait for approval"],
+        toolCalls: [
+          {
+            id: "tc-plan-reject",
+            name: "show_plan",
+            input: {
+              summary: "Do stuff",
+              steps: ["TODO", "Wait for approval"],
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
@@ -3706,7 +3961,9 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
     const toolResultBlock = getToolResultBlock(mockProvider.chat.mock.calls[1]);
     expect(toolResultBlock?.content).toContain("Autonomous plan review rejected");
-    expect(toolResultBlock?.content).toContain("Revise the plan with concrete, executable, non-interactive steps");
+    expect(toolResultBlock?.content).toContain(
+      "Revise the plan with concrete, executable, non-interactive steps",
+    );
     expect(toolResultBlock?.is_error).toBe(false);
   });
 
@@ -3727,16 +3984,18 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-ask-bg",
-          name: "ask_user",
-          input: {
-            question: "Should I proceed with the verified implementation?",
-            options: ["Proceed", "Cancel"],
-            recommended: "Proceed",
-            context: "The implementation is ready and the relevant checks passed.",
+        toolCalls: [
+          {
+            id: "tc-ask-bg",
+            name: "ask_user",
+            input: {
+              question: "Should I proceed with the verified implementation?",
+              options: ["Proceed", "Cancel"],
+              recommended: "Proceed",
+              context: "The implementation is ready and the relevant checks passed.",
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
@@ -3758,7 +4017,7 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
     const toolResultBlock = getToolResultBlock(mockProvider.chat.mock.calls[1]);
     expect(toolResultBlock?.content).toContain("Autonomous question review (background mode)");
-    expect(toolResultBlock?.content).toContain("Selected \"Proceed\"");
+    expect(toolResultBlock?.content).toContain('Selected "Proceed"');
     expect(toolResultBlock?.is_error).toBe(false);
   });
 
@@ -3779,7 +4038,13 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Inspecting the runtime path first.",
-        toolCalls: [{ id: "tc-bg-runtime-read-1", name: "file_read", input: { path: "Assets/Scripts/ArrowInputSystem.cs" } }],
+        toolCalls: [
+          {
+            id: "tc-bg-runtime-read-1",
+            name: "file_read",
+            input: { path: "Assets/Scripts/ArrowInputSystem.cs" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -3819,7 +4084,13 @@ DONE`,
       })
       .mockResolvedValueOnce({
         text: "Continuing with runtime-path inspection.",
-        toolCalls: [{ id: "tc-bg-runtime-read-2", name: "file_read", input: { path: "Assets/Scripts/GameRenderer.cs" } }],
+        toolCalls: [
+          {
+            id: "tc-bg-runtime-read-2",
+            name: "file_read",
+            input: { path: "Assets/Scripts/GameRenderer.cs" },
+          },
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
@@ -3894,13 +4165,15 @@ DONE`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-shell-bg",
-          name: "shell_exec",
-          input: {
-            command: "npm test",
+        toolCalls: [
+          {
+            id: "tc-shell-bg",
+            name: "shell_exec",
+            input: {
+              command: "npm test",
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
@@ -3956,13 +4229,15 @@ DONE`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-shell-fallback",
-          name: "shell_exec",
-          input: {
-            command: "test -f Assets/paor-proof.txt && grep -qx 'paor ok' Assets/paor-proof.txt",
+        toolCalls: [
+          {
+            id: "tc-shell-fallback",
+            name: "shell_exec",
+            input: {
+              command: "test -f Assets/paor-proof.txt && grep -qx 'paor ok' Assets/paor-proof.txt",
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
@@ -4011,20 +4286,23 @@ DONE`,
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "",
-        toolCalls: [{
-          id: "tc-shell-bg-reject",
-          name: "shell_exec",
-          input: {
-            command: "cat ~/.ssh/config",
+        toolCalls: [
+          {
+            id: "tc-shell-bg-reject",
+            name: "shell_exec",
+            input: {
+              command: "cat ~/.ssh/config",
+            },
           },
-        }],
+        ],
         stopReason: "tool_use",
         usage: { inputTokens: 20, outputTokens: 20 },
       })
       .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "reject",
-          reason: "The command is unrelated to the requested coding task and probes sensitive host data.",
+          reason:
+            "The command is unrelated to the requested coding task and probes sensitive host data.",
           taskAligned: false,
           bounded: false,
         }),
@@ -4050,7 +4328,9 @@ DONE`,
     expect(mockChannel.requestConfirmation).not.toHaveBeenCalled();
     expect(shellTool.execute).not.toHaveBeenCalled();
     const toolResultBlock = getToolResultBlock(mockProvider.chat.mock.calls[2]);
-    expect(toolResultBlock?.content).toContain("Self-managed write review rejected (background mode)");
+    expect(toolResultBlock?.content).toContain(
+      "Self-managed write review rejected (background mode)",
+    );
     expect(toolResultBlock?.content).toContain("unrelated to the requested coding task");
     expect(toolResultBlock?.is_error).toBe(true);
   });
@@ -4069,9 +4349,7 @@ DONE`,
       usage: { inputTokens: 100, outputTokens: 60 },
     };
 
-    mockProvider.chat
-      .mockResolvedValueOnce(toolResponse)
-      .mockResolvedValueOnce(finalResponse);
+    mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
     const promise = orch.handleMessage({
       channelType: "cli",
@@ -4089,12 +4367,8 @@ DONE`,
     const secondCallArgs = mockProvider.chat.mock.calls[1]!;
     const messages = secondCallArgs[1] as any[];
     // Tool results are now in content array with tool_result blocks
-    const toolResultMsg = messages.find((m: any) => 
-      m.role === "user" && Array.isArray(m.content)
-    );
-    const toolResultBlock = toolResultMsg?.content?.find((c: any) => 
-      c.type === "tool_result"
-    );
+    const toolResultMsg = messages.find((m: any) => m.role === "user" && Array.isArray(m.content));
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
     expect(toolResultBlock?.content).toContain("unknown tool");
     expect(toolResultBlock?.is_error).toBe(true);
   });
@@ -4115,9 +4389,7 @@ DONE`,
       usage: { inputTokens: 100, outputTokens: 60 },
     };
 
-    mockProvider.chat
-      .mockResolvedValueOnce(toolResponse)
-      .mockResolvedValueOnce(finalResponse);
+    mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
     const promise = orch.handleMessage({
       channelType: "cli",
@@ -4132,12 +4404,8 @@ DONE`,
     const secondCallArgs = mockProvider.chat.mock.calls[1]!;
     const messages = secondCallArgs[1] as any[];
     // Tool results are now in content array with tool_result blocks
-    const toolResultMsg = messages.find((m: any) => 
-      m.role === "user" && Array.isArray(m.content)
-    );
-    const toolResultBlock = toolResultMsg?.content?.find((c: any) => 
-      c.type === "tool_result"
-    );
+    const toolResultMsg = messages.find((m: any) => m.role === "user" && Array.isArray(m.content));
+    const toolResultBlock = toolResultMsg?.content?.find((c: any) => c.type === "tool_result");
     expect(toolResultBlock?.content).toContain("Tool execution failed");
     expect(toolResultBlock?.is_error).toBe(true);
   });
@@ -4220,9 +4488,7 @@ DONE`,
         usage: { inputTokens: 10, outputTokens: 10 },
       };
 
-      mockProvider.chat
-        .mockResolvedValueOnce(toolResponse)
-        .mockResolvedValueOnce(finalResponse);
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
       const promise = orch.handleMessage({
         channelType: "cli",
@@ -4251,9 +4517,7 @@ DONE`,
         usage: { inputTokens: 10, outputTokens: 10 },
       };
 
-      mockProvider.chat
-        .mockResolvedValueOnce(toolResponse)
-        .mockResolvedValueOnce(finalResponse);
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
       const promise = orch.handleMessage({
         channelType: "cli",
@@ -4271,7 +4535,11 @@ DONE`,
     it("treats strada_create_system as a write operation", async () => {
       const systemTool = createMockTool("strada_create_system", true);
       const orchWithSystemTool = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [systemTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4293,9 +4561,7 @@ DONE`,
         usage: { inputTokens: 10, outputTokens: 10 },
       };
 
-      mockProvider.chat
-        .mockResolvedValueOnce(toolResponse)
-        .mockResolvedValueOnce(finalResponse);
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
       const promise = orchWithSystemTool.handleMessage({
         channelType: "cli",
@@ -4317,15 +4583,22 @@ DONE`,
         emit: vi.fn(),
       };
 
-      expect(() => new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
-        tools: [readTool],
-        channel: mockChannel,
-        projectPath: "/tmp/test-project",
-        readOnly: false,
-        requireConfirmation: false,
-        eventEmitter: mockEmitter,
-      })).not.toThrow();
+      expect(
+        () =>
+          new Orchestrator({
+            providerManager: {
+              getProvider: () => mockProvider,
+              getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+              shutdown: vi.fn(),
+            } as any,
+            tools: [readTool],
+            channel: mockChannel,
+            projectPath: "/tmp/test-project",
+            readOnly: false,
+            requireConfirmation: false,
+            eventEmitter: mockEmitter,
+          }),
+      ).not.toThrow();
     });
 
     it("should emit tool:result event for each tool call result", async () => {
@@ -4337,7 +4610,11 @@ DONE`,
       };
 
       const orchWithEmitter = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4359,9 +4636,7 @@ DONE`,
         usage: { inputTokens: 10, outputTokens: 10 },
       };
 
-      mockProvider.chat
-        .mockResolvedValueOnce(toolResponse)
-        .mockResolvedValueOnce(finalResponse);
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
       const promise = orchWithEmitter.handleMessage({
         channelType: "cli",
@@ -4373,10 +4648,13 @@ DONE`,
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      expect(mockEmitter.emit).toHaveBeenCalledWith("tool:result", expect.objectContaining({
-        toolName: "file_read",
-        success: true,
-      }));
+      expect(mockEmitter.emit).toHaveBeenCalledWith(
+        "tool:result",
+        expect.objectContaining({
+          toolName: "file_read",
+          success: true,
+        }),
+      );
       expect(emittedEvents).toHaveLength(1);
       expect(emittedEvents[0]!.toolName).toBe("file_read");
       expect(emittedEvents[0]!.success).toBe(true);
@@ -4392,7 +4670,11 @@ DONE`,
       };
 
       const orchWithEmitter = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4414,9 +4696,7 @@ DONE`,
         usage: { inputTokens: 10, outputTokens: 10 },
       };
 
-      mockProvider.chat
-        .mockResolvedValueOnce(toolResponse)
-        .mockResolvedValueOnce(finalResponse);
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
       const promise = orchWithEmitter.handleMessage({
         channelType: "cli",
@@ -4452,9 +4732,7 @@ DONE`,
         usage: { inputTokens: 10, outputTokens: 10 },
       };
 
-      mockProvider.chat
-        .mockResolvedValueOnce(toolResponse)
-        .mockResolvedValueOnce(finalResponse);
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
       const promise = orch.handleMessage({
         channelType: "cli",
@@ -4486,7 +4764,11 @@ DONE`,
       };
 
       const orchWithIds = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4509,9 +4791,7 @@ DONE`,
         usage: { inputTokens: 10, outputTokens: 10 },
       };
 
-      mockProvider.chat
-        .mockResolvedValueOnce(toolResponse)
-        .mockResolvedValueOnce(finalResponse);
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
       const promise = orchWithIds.handleMessage({
         channelType: "cli",
@@ -4524,7 +4804,10 @@ DONE`,
       await promise;
 
       expect(emittedEvents).toHaveLength(1);
-      expect(emittedEvents[0]!.appliedInstinctIds).toEqual(["instinct_abc_123", "instinct_def_456"]);
+      expect(emittedEvents[0]!.appliedInstinctIds).toEqual([
+        "instinct_abc_123",
+        "instinct_def_456",
+      ]);
     });
 
     it("should send empty array when no instincts are matched", async () => {
@@ -4537,7 +4820,11 @@ DONE`,
 
       // No instinctRetriever provided
       const orchNoRetriever = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4559,9 +4846,7 @@ DONE`,
         usage: { inputTokens: 10, outputTokens: 10 },
       };
 
-      mockProvider.chat
-        .mockResolvedValueOnce(toolResponse)
-        .mockResolvedValueOnce(finalResponse);
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
       const promise = orchNoRetriever.handleMessage({
         channelType: "cli",
@@ -4597,7 +4882,11 @@ DONE`,
       };
 
       const orchPerMessage = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4621,9 +4910,7 @@ DONE`,
       };
 
       // First message
-      mockProvider.chat
-        .mockResolvedValueOnce(toolResponse)
-        .mockResolvedValueOnce(finalResponse);
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
 
       const promise1 = orchPerMessage.handleMessage({
         channelType: "cli",
@@ -4637,7 +4924,10 @@ DONE`,
 
       // Second message
       mockProvider.chat
-        .mockResolvedValueOnce({ ...toolResponse, toolCalls: [{ id: "tc2", name: "file_read", input: { path: "other.cs" } }] })
+        .mockResolvedValueOnce({
+          ...toolResponse,
+          toolCalls: [{ id: "tc2", name: "file_read", input: { path: "other.cs" } }],
+        })
         .mockResolvedValueOnce(finalResponse);
 
       const promise2 = orchPerMessage.handleMessage({
@@ -4664,7 +4954,11 @@ DONE`,
       };
 
       const goalOrch = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4715,7 +5009,11 @@ DONE`,
       };
 
       const goalOrch = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4745,7 +5043,10 @@ DONE`,
       // TaskManager should NOT have been called
       expect(mockTaskManager.submit).not.toHaveBeenCalled();
       // Normal response sent
-      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("goal-detect-2", "Hello! How can I help you today?");
+      expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+        "goal-detect-2",
+        "Hello! How can I help you today?",
+      );
     });
 
     it("sends acknowledgment message before submitting goal", async () => {
@@ -4754,7 +5055,11 @@ DONE`,
       };
 
       const goalOrch = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4803,7 +5108,11 @@ DONE`,
       };
 
       const goalOrch = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -4843,7 +5152,8 @@ DONE`,
 
   describe("PAOR State Machine", () => {
     it("injects planning prompt on first call", async () => {
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce({
           text: "Plan:\n1. Read file\n2. Fix error",
           toolCalls: [{ id: "tc1", name: "file_read", input: { path: "test.cs" } }],
@@ -4893,7 +5203,8 @@ DONE`,
         requireConfirmation: false,
       });
 
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce({
           text: "Plan: 1. Build project",
           toolCalls: [{ id: "tc1", name: "dotnet_build", input: {} }],
@@ -4938,7 +5249,8 @@ DONE`,
 
     it("does not allow reflection to finish while failures remain unverified", async () => {
       const buildTool = createMockTool("dotnet_build");
-      buildTool.execute = vi.fn()
+      buildTool.execute = vi
+        .fn()
         .mockResolvedValueOnce({
           content: "Build failed: error CS0103",
           isError: true,
@@ -4961,7 +5273,8 @@ DONE`,
         requireConfirmation: false,
       });
 
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce({
           text: "Plan: 1. Reproduce 2. Fix 3. Verify",
           toolCalls: [{ id: "tc-build-1", name: "dotnet_build", input: {} }],
@@ -5021,10 +5334,12 @@ DONE`,
         const messages = call[1] as Array<{ role: string; content: unknown }> | undefined;
         return messages ?? [];
       });
-      const gateMessage = flattenedMessages.find((message) =>
-        message.role === "user" &&
-        typeof message.content === "string" &&
-        (message.content.includes("[VERIFIER PIPELINE]") || message.content.includes("[TARGETED VERIFICATION REQUIRED]")),
+      const gateMessage = flattenedMessages.find(
+        (message) =>
+          message.role === "user" &&
+          typeof message.content === "string" &&
+          (message.content.includes("[VERIFIER PIPELINE]") ||
+            message.content.includes("[TARGETED VERIFICATION REQUIRED]")),
       );
       expect(gateMessage).toBeDefined();
       expect(chatSpy.mock.calls.length).toBeGreaterThanOrEqual(5);
@@ -5050,7 +5365,8 @@ DONE`,
         requireConfirmation: false,
       });
 
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce({
           text: "Attempting build",
           toolCalls: [{ id: "tc-build-1", name: "dotnet_build", input: {} }],
@@ -5109,10 +5425,13 @@ DONE`,
         requireConfirmation: false,
       });
 
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce({
           text: "Let me read that file.",
-          toolCalls: [{ id: "tc-read-1", name: "file_read", input: { path: "Assets/Scripts/Missing.cs" } }],
+          toolCalls: [
+            { id: "tc-read-1", name: "file_read", input: { path: "Assets/Scripts/Missing.cs" } },
+          ],
           stopReason: "tool_use",
           usage: { inputTokens: 10, outputTokens: 20 },
         })
@@ -5162,7 +5481,8 @@ DONE`,
         requireConfirmation: false,
       });
 
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce({
           text: "Attempting build",
           toolCalls: [{ id: "tc-build-ongoing-1", name: "dotnet_build", input: {} }],
@@ -5213,7 +5533,11 @@ DONE`,
     it("should call startTask when processMessage begins", async () => {
       const mockRecorder = createMockRecorder();
       const orchWithMetrics = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -5232,16 +5556,22 @@ DONE`,
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      expect(mockRecorder.startTask).toHaveBeenCalledWith(expect.objectContaining({
-        sessionId: "metrics1",
-        taskType: "interactive",
-      }));
+      expect(mockRecorder.startTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "metrics1",
+          taskType: "interactive",
+        }),
+      );
     });
 
     it("should call endTask with correct agentPhase on completion", async () => {
       const mockRecorder = createMockRecorder();
       const orchWithMetrics = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -5287,14 +5617,22 @@ DONE`,
       const badProvider = {
         name: "bad",
         capabilities: {
-          maxTokens: 4096, streaming: false, structuredStreaming: false,
-          toolCalling: true, vision: false, systemPrompt: true,
+          maxTokens: 4096,
+          streaming: false,
+          structuredStreaming: false,
+          toolCalling: true,
+          vision: false,
+          systemPrompt: true,
         },
         chat: vi.fn().mockRejectedValue(new Error("API down")),
       };
 
       const orchWithMetrics = new Orchestrator({
-        providerManager: { getProvider: () => badProvider, getActiveInfo: () => ({ providerName: "bad", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => badProvider,
+          getActiveInfo: () => ({ providerName: "bad", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -5345,12 +5683,19 @@ DONE`,
           systemPrompt: true,
         },
         chat: vi.fn(),
-        chatStream: vi.fn((_system: string, _messages: unknown[], _tools: unknown[], onChunk: (chunk: string) => void) =>
-          new Promise<ProviderResponse>((resolve) => {
-            setTimeout(() => onChunk("a"), 40);
-            setTimeout(() => onChunk("b"), 80);
-            setTimeout(() => resolve(streamedResponse), 120);
-          })),
+        chatStream: vi.fn(
+          (
+            _system: string,
+            _messages: unknown[],
+            _tools: unknown[],
+            onChunk: (chunk: string) => void,
+          ) =>
+            new Promise<ProviderResponse>((resolve) => {
+              setTimeout(() => onChunk("a"), 40);
+              setTimeout(() => onChunk("b"), 80);
+              setTimeout(() => resolve(streamedResponse), 120);
+            }),
+        ),
       };
       const timeoutOrch = new Orchestrator({
         providerManager: { getProvider: () => streamingProvider, shutdown: vi.fn() } as any,
@@ -5462,7 +5807,8 @@ DONE`,
       };
 
       // Provider gives 3 tool iterations then end_turn
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce(createToolResponse("Plan: read file", "file_read"))
         .mockResolvedValueOnce(createToolResponse("CONTINUE - next step", "file_read"))
         .mockResolvedValueOnce(createToolResponse("CONTINUE - another step", "file_read"))
@@ -5470,7 +5816,11 @@ DONE`,
       mockProvider.chat = chatSpy;
 
       const orchWithReRetrieval = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -5521,7 +5871,8 @@ DONE`,
 
       // Provider gives 3 tool iterations, then reflection (PAOR triggers after 3 steps),
       // then end_turn. The reflection response returns **DONE** to complete.
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce(createToolResponse("Step 1", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Step 2", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Step 3", "file_read"))
@@ -5549,7 +5900,11 @@ DONE`,
       mockProvider.chat = chatSpy;
 
       const orchBg = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -5574,8 +5929,12 @@ DONE`,
 
     it("re-retrieval failure does not break loop", async () => {
       const mockMemMgr = {
-        retrieve: vi.fn()
-          .mockResolvedValueOnce({ kind: "ok", value: [{ entry: { content: "initial memory" }, score: 0.9 }] })
+        retrieve: vi
+          .fn()
+          .mockResolvedValueOnce({
+            kind: "ok",
+            value: [{ entry: { content: "initial memory" }, score: 0.9 }],
+          })
           .mockRejectedValueOnce(new Error("DB crashed")), // re-retrieval fails
         getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
       };
@@ -5591,13 +5950,18 @@ DONE`,
       };
 
       // Provider gives 1 tool iteration then end_turn
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce(createToolResponse("Plan", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Done!", undefined));
       mockProvider.chat = chatSpy;
 
       const orchFail = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -5635,7 +5999,11 @@ DONE`,
       mockProvider.chat = chatSpy;
 
       const orchInstinct = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -5667,7 +6035,8 @@ DONE`,
       const mockEmbedding = {
         name: "mock",
         dimensions: 3,
-        embed: vi.fn()
+        embed: vi
+          .fn()
           .mockResolvedValueOnce({ embeddings: [[1, 0, 0]], usage: { totalTokens: 10 } }) // initial baseline
           .mockResolvedValueOnce({ embeddings: [[1, 0, 0]], usage: { totalTokens: 10 } }) // 1st re-retrieval check: same topic
           .mockResolvedValueOnce({ embeddings: [[0, 1, 0]], usage: { totalTokens: 10 } }), // 2nd: shifted topic
@@ -5683,14 +6052,19 @@ DONE`,
         ragTopK: 6,
       };
 
-      const chatSpy = vi.fn()
+      const chatSpy = vi
+        .fn()
         .mockResolvedValueOnce(createToolResponse("Plan", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Step 2", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Done!", undefined));
       mockProvider.chat = chatSpy;
 
       const orchTopic = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -5744,7 +6118,11 @@ DONE`,
       mockProvider.chat = chatSpy;
 
       const orchDedup = new Orchestrator({
-        providerManager: { getProvider: () => mockProvider, getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }), shutdown: vi.fn() } as any,
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
         tools: [readTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
@@ -5943,7 +6321,7 @@ DONE`,
       expect(buildTool.execute).toHaveBeenCalledTimes(1);
     });
 
-    it("MAX_TOOL_ITERATIONS enforcement: stops after 50 iterations", async () => {
+    it("interactive iteration budget is configurable and still stops with a follow-up prompt", async () => {
       // Provider always returns tool_use - never ends
       const infiniteToolResponse: ProviderResponse = {
         text: "Continuing...",
@@ -5954,7 +6332,24 @@ DONE`,
 
       mockProvider.chat.mockResolvedValue(infiniteToolResponse);
 
-      const promise = orch.handleMessage({
+      const limitedOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: true,
+        taskConfig: {
+          ...DEFAULT_TASK_CONFIG,
+          interactiveMaxIterations: 3,
+        },
+      });
+
+      const promise = limitedOrch.handleMessage({
         channelType: "cli",
         chatId: "paor-e2e-maxiter",
         userId: "user1",
@@ -5964,8 +6359,7 @@ DONE`,
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      // Provider should have been called at most ~52 times (50 iterations + overhead for PAOR phases)
-      expect(mockProvider.chat.mock.calls.length).toBeLessThanOrEqual(52);
+      expect(mockProvider.chat.mock.calls.length).toBeLessThanOrEqual(3);
       // Should have sent the max iterations message
       expect(mockChannel.sendText).toHaveBeenCalledWith(
         "paor-e2e-maxiter",
@@ -5973,12 +6367,136 @@ DONE`,
       );
     });
 
+    it("background iteration budget rolls into a new epoch by default", async () => {
+      const mockRecorder = {
+        startTask: vi.fn().mockReturnValue("metric_bg_rollover"),
+        endTask: vi.fn(),
+      };
+      const backgroundOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        metricsRecorder: mockRecorder as any,
+        taskConfig: {
+          ...DEFAULT_TASK_CONFIG,
+          backgroundEpochMaxIterations: 2,
+        },
+      });
+
+      mockProvider.chat
+        .mockResolvedValueOnce({
+          text: "Keep going.",
+          toolCalls: [{ id: "tc-bg-epoch-1", name: "file_read", input: { path: "loop-1.cs" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 10 },
+        })
+        .mockResolvedValueOnce({
+          text: "Still working.",
+          toolCalls: [{ id: "tc-bg-epoch-2", name: "file_read", input: { path: "loop-2.cs" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 10 },
+        })
+        .mockResolvedValueOnce({
+          text: "Finished after rollover.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 10 },
+        });
+
+      const result = await backgroundOrch.runBackgroundTask("Continue until complete", {
+        chatId: "bg-epoch-rollover",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+      });
+
+      expect(result).toBe("Finished after rollover.");
+      expect(mockProvider.chat).toHaveBeenCalledTimes(3);
+      expect(readTool.execute).toHaveBeenCalledTimes(2);
+      expect(mockRecorder.endTask).toHaveBeenCalledWith(
+        "metric_bg_rollover",
+        expect.objectContaining({
+          agentPhase: "complete",
+        }),
+      );
+      expect(mockRecorder.endTask).not.toHaveBeenCalledWith(
+        "metric_bg_rollover",
+        expect.objectContaining({
+          terminatedByIterationBudget: true,
+        }),
+      );
+    });
+
+    it("background iteration budget can stop with an honest checkpoint message when auto-continue is disabled", async () => {
+      const mockRecorder = {
+        startTask: vi.fn().mockReturnValue("metric_bg_budget_stop"),
+        endTask: vi.fn(),
+      };
+      const backgroundOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        metricsRecorder: mockRecorder as any,
+        taskConfig: {
+          ...DEFAULT_TASK_CONFIG,
+          backgroundEpochMaxIterations: 2,
+          backgroundAutoContinue: false,
+        },
+      });
+
+      mockProvider.chat.mockResolvedValue({
+        text: "Continuing...",
+        toolCalls: [{ id: "tc-bg-stop", name: "file_read", input: { path: "loop.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      });
+
+      const result = await backgroundOrch.runBackgroundTask("Infinite background task", {
+        chatId: "bg-budget-stop",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+      });
+
+      expect(result).toContain("configured iteration budget");
+      expect(result).toContain("checkpoint summary was persisted");
+      expect(result).toContain("full resume is not yet supported");
+      expect(mockProvider.chat).toHaveBeenCalledTimes(2);
+      expect(mockRecorder.endTask).toHaveBeenCalledWith(
+        "metric_bg_budget_stop",
+        expect.objectContaining({
+          iterationBudgetReached: true,
+          continuedAfterBudget: false,
+          epochCount: 1,
+          terminatedByIterationBudget: true,
+        }),
+      );
+    });
+
     it("streaming error handling: chatStream throws gracefully handled", async () => {
       const streamingProvider = {
         name: "mock-stream",
         capabilities: {
-          maxTokens: 4096, streaming: true, structuredStreaming: false,
-          toolCalling: true, vision: false, systemPrompt: true,
+          maxTokens: 4096,
+          streaming: true,
+          structuredStreaming: false,
+          toolCalling: true,
+          vision: false,
+          systemPrompt: true,
         },
         chat: vi.fn().mockResolvedValue({
           text: "Fallback",

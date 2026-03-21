@@ -5,7 +5,7 @@
  * Handles three-state completion mapping from AgentPhase:
  *   - AgentPhase.COMPLETE -> 'success'
  *   - AgentPhase.FAILED -> 'failure'
- *   - hitMaxIterations=true -> 'partial'
+ *   - terminatedByIterationBudget=true -> 'partial'
  */
 
 import { randomUUID } from "node:crypto";
@@ -66,7 +66,11 @@ export class MetricsRecorder {
       agentPhase: AgentPhase;
       iterations: number;
       toolCallCount: number;
-      hitMaxIterations: boolean;
+      hitMaxIterations?: boolean;
+      iterationBudgetReached?: boolean;
+      continuedAfterBudget?: boolean;
+      epochCount?: number;
+      terminatedByIterationBudget?: boolean;
     },
   ): void {
     const pendingTask = this.pending.get(metricId);
@@ -75,7 +79,10 @@ export class MetricsRecorder {
     }
 
     const completedAt = Date.now();
-    const completionStatus = this.mapCompletionStatus(result.agentPhase, result.hitMaxIterations);
+    const completionStatus = this.mapCompletionStatus(
+      result.agentPhase,
+      result.terminatedByIterationBudget ?? result.hitMaxIterations ?? false,
+    );
 
     this.storage.recordTaskMetric({
       id: metricId,
@@ -130,13 +137,16 @@ export class MetricsRecorder {
 
   /**
    * Three-state completion mapping:
-   *   hitMaxIterations=true -> 'partial' (work done but not finished)
+   *   terminatedByIterationBudget=true -> 'partial' (work done but not finished)
    *   AgentPhase.COMPLETE -> 'success'
    *   AgentPhase.FAILED -> 'failure'
    *   Any other phase -> 'partial' (unexpected exit)
    */
-  private mapCompletionStatus(phase: AgentPhase, hitMaxIterations: boolean): CompletionStatus {
-    if (hitMaxIterations) {
+  private mapCompletionStatus(
+    phase: AgentPhase,
+    terminatedByIterationBudget: boolean,
+  ): CompletionStatus {
+    if (terminatedByIterationBudget) {
       return "partial";
     }
     if (phase === AgentPhase.COMPLETE) {

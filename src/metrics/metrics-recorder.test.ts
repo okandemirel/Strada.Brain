@@ -80,7 +80,7 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.COMPLETE,
         iterations: 3,
         toolCallCount: 5,
-        hitMaxIterations: false,
+        terminatedByIterationBudget: false,
       });
 
       expect(mockStorage.recordTaskMetric).toHaveBeenCalledOnce();
@@ -99,14 +99,14 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.FAILED,
         iterations: 2,
         toolCallCount: 4,
-        hitMaxIterations: false,
+        terminatedByIterationBudget: false,
       });
 
       const metric = (mockStorage.recordTaskMetric as ReturnType<typeof vi.fn>).mock.calls[0]![0];
       expect(metric.completionStatus).toBe("failure");
     });
 
-    it("should map hitMaxIterations=true to partial", () => {
+    it("should map terminatedByIterationBudget=true to partial", () => {
       const id = recorder.startTask({
         sessionId: "chat_001",
         taskDescription: "Build project",
@@ -117,7 +117,10 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.EXECUTING,
         iterations: 50,
         toolCallCount: 100,
-        hitMaxIterations: true,
+        iterationBudgetReached: true,
+        continuedAfterBudget: false,
+        epochCount: 1,
+        terminatedByIterationBudget: true,
       });
 
       const metric = (mockStorage.recordTaskMetric as ReturnType<typeof vi.fn>).mock.calls[0]![0];
@@ -135,7 +138,7 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.COMPLETE,
         iterations: 7,
         toolCallCount: 15,
-        hitMaxIterations: false,
+        terminatedByIterationBudget: false,
       });
 
       const metric = (mockStorage.recordTaskMetric as ReturnType<typeof vi.fn>).mock.calls[0]![0];
@@ -155,7 +158,7 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.COMPLETE,
         iterations: 1,
         toolCallCount: 2,
-        hitMaxIterations: false,
+        terminatedByIterationBudget: false,
       });
 
       const metric = (mockStorage.recordTaskMetric as ReturnType<typeof vi.fn>).mock.calls[0]![0];
@@ -175,7 +178,7 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.COMPLETE,
         iterations: 1,
         toolCallCount: 2,
-        hitMaxIterations: false,
+        terminatedByIterationBudget: false,
       });
 
       const metric = (mockStorage.recordTaskMetric as ReturnType<typeof vi.fn>).mock.calls[0]![0];
@@ -195,7 +198,7 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.COMPLETE,
         iterations: 1,
         toolCallCount: 1,
-        hitMaxIterations: false,
+        terminatedByIterationBudget: false,
       });
 
       const metric = (mockStorage.recordTaskMetric as ReturnType<typeof vi.fn>).mock.calls[0]![0];
@@ -216,7 +219,7 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.COMPLETE,
         iterations: 1,
         toolCallCount: 1,
-        hitMaxIterations: false,
+        terminatedByIterationBudget: false,
       });
 
       // Second call should be a no-op (not throw, not double-record)
@@ -224,7 +227,7 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.FAILED,
         iterations: 2,
         toolCallCount: 5,
-        hitMaxIterations: false,
+        terminatedByIterationBudget: false,
       });
 
       // Only one record call
@@ -237,7 +240,7 @@ describe("MetricsRecorder", () => {
         agentPhase: AgentPhase.COMPLETE,
         iterations: 1,
         toolCallCount: 1,
-        hitMaxIterations: false,
+        terminatedByIterationBudget: false,
       });
 
       expect(mockStorage.recordTaskMetric).not.toHaveBeenCalled();

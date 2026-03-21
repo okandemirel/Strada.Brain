@@ -121,10 +121,7 @@ import { AutoUpdater } from "./auto-updater.js";
 import type { PostSetupBootstrap } from "../common/setup-contract.js";
 
 // Task system imports
-import {
-  TaskStorage,
-  MessageRouter,
-} from "../tasks/index.js";
+import { TaskStorage, MessageRouter } from "../tasks/index.js";
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
@@ -197,7 +194,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     void (async () => {
       try {
         const { StradaCoreExtractor } = await import("../intelligence/strada-core-extractor.js");
-        const { validateDrift, formatDriftReport } = await import("../intelligence/strada-drift-validator.js");
+        const { validateDrift, formatDriftReport } =
+          await import("../intelligence/strada-drift-validator.js");
         const extractor = new StradaCoreExtractor(corePath);
         const snapshot = await extractor.extract();
         const driftReport = validateDrift(snapshot);
@@ -228,54 +226,54 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     cachedEmbeddingProvider,
     embeddingStatus,
     startupNotices: runtimeStageNotices,
-  } = await initializeProviderRuntimeStage({
-    channelType,
-    config,
-    logger,
-  }, {
-    initializeAuth,
-    resolveAndCacheEmbeddings,
-    initializeAIProvider,
-    initializeMemory,
-    initializeChannel,
-    isTransientEmbeddingVerificationError,
-  });
+  } = await initializeProviderRuntimeStage(
+    {
+      channelType,
+      config,
+      logger,
+    },
+    {
+      initializeAuth,
+      resolveAndCacheEmbeddings,
+      initializeAIProvider,
+      initializeMemory,
+      initializeChannel,
+      isTransientEmbeddingVerificationError,
+    },
+  );
   const providerManager = providerInit.manager;
   const activityRegistry = new ChannelActivityRegistry();
 
-  const {
-    ragPipeline,
-    learningResult,
-    startupNotices,
-  } = await initializeKnowledgeStage({
-    config,
-    logger,
-    cachedEmbeddingProvider,
-    startupNotices: runtimeStageNotices,
-  }, {
-    initializeRAG,
-    initializeLearning,
-  });
+  const { ragPipeline, learningResult, startupNotices } = await initializeKnowledgeStage(
+    {
+      config,
+      logger,
+      cachedEmbeddingProvider,
+      startupNotices: runtimeStageNotices,
+    },
+    {
+      initializeRAG,
+      initializeLearning,
+    },
+  );
 
   // Initialize tools (registry created here, initialized after metricsStorage below)
   const toolRegistry = new ToolRegistry(config.pluginDirs);
 
   const metrics = new MetricsCollector();
-  const {
-    dashboard,
-    stoppableServers,
-    rateLimiter,
-    metricsStorage,
-    metricsRecorder,
-  } = await initializeOpsMonitoringStage({
-    config,
-    logger,
-    metrics,
-    memoryManager,
-  }, {
-    initializeDashboard,
-    initializeRateLimiter,
-  });
+  const { dashboard, stoppableServers, rateLimiter, metricsStorage, metricsRecorder } =
+    await initializeOpsMonitoringStage(
+      {
+        config,
+        logger,
+        metrics,
+        memoryManager,
+      },
+      {
+        initializeDashboard,
+        initializeRateLimiter,
+      },
+    );
   const {
     identityManager,
     uptimeInterval,
@@ -299,59 +297,46 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let agentManager: AgentManagerType | undefined;
   let agentBudgetTrackerOuter: AgentBudgetTrackerType | undefined;
   let delegationManager: DelegationManagerType | undefined;
-  await initializeToolRegistryStage({
-    toolRegistry,
-    config,
-    memoryManager,
-    ragPipeline,
-    metrics,
-    learningStorage: learningResult.storage,
-    metricsStorage,
-    getIdentityState: identityManager
-      ? () => identityManager!.getState()
-      : undefined,
-  }, {
-    getDaemonStatus: () => heartbeatLoop?.getDaemonStatus(),
-  });
+  await initializeToolRegistryStage(
+    {
+      toolRegistry,
+      config,
+      memoryManager,
+      ragPipeline,
+      metrics,
+      learningStorage: learningResult.storage,
+      metricsStorage,
+      getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
+    },
+    {
+      getDaemonStatus: () => heartbeatLoop?.getDaemonStatus(),
+    },
+  );
 
-  const {
-    goalStorage,
-    goalDecomposer,
-    interruptedGoalTrees,
-    crashContext,
-    goalExecutorConfig,
-  } = initializeGoalContextStage({
-    config,
-    logger,
-    provider: providerManager.getProvider(""),
-    identityManager,
-  });
+  const { goalStorage, goalDecomposer, interruptedGoalTrees, crashContext, goalExecutorConfig } =
+    initializeGoalContextStage({
+      config,
+      logger,
+      provider: providerManager.getProvider(""),
+      identityManager,
+    });
 
-  const {
-    soulLoader,
-    sessionSummarizer,
-    userProfileStore,
-    taskExecutionStore,
-    dmPolicy,
-  } = await initializeSessionRuntimeStage({
-    config,
-    logger,
-    memoryManager,
-    providerManager,
-    channel,
-  });
+  const { soulLoader, sessionSummarizer, userProfileStore, taskExecutionStore, dmPolicy } =
+    await initializeSessionRuntimeStage({
+      config,
+      logger,
+      memoryManager,
+      providerManager,
+      channel,
+    });
 
-  const {
-    modelIntelligence,
-    providerRouter,
-    consensusManager,
-    confidenceEstimator,
-  } = await initializeRuntimeIntelligenceStage({
-    config,
-    logger,
-    providerManager,
-    learningStorage: learningResult.storage,
-  });
+  const { modelIntelligence, providerRouter, consensusManager, confidenceEstimator } =
+    await initializeRuntimeIntelligenceStage({
+      config,
+      logger,
+      providerManager,
+      learningStorage: learningResult.storage,
+    });
 
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
@@ -388,6 +373,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     autonomousDefaultEnabled: config.autonomousDefaultEnabled,
     autonomousDefaultHours: config.autonomousDefaultHours,
     interactionConfig: config.interaction,
+    taskConfig: config.tasks,
     taskExecutionStore,
     runtimeArtifactManager,
     toolMetadataByName: toolRegistry.getMetadataMap(),
@@ -464,7 +450,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       startupNotices.push(notice);
       logger.warn(notice);
     } else {
-
       // daemonEventBus is guaranteed defined when daemonMode is true
       const daemonBus = daemonEventBus!;
       const {
@@ -492,7 +477,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         const { AgentCore } = await import("../agent-core/agent-core.js");
         const { ObservationEngine } = await import("../agent-core/observation-engine.js");
         const { PriorityScorer } = await import("../agent-core/priority-scorer.js");
-        const { TriggerObserver, UserActivityObserver, GitStateObserver } = await import("../agent-core/observers/index.js");
+        const { TriggerObserver, UserActivityObserver, GitStateObserver } =
+          await import("../agent-core/observers/index.js");
 
         const observationEngine = new ObservationEngine();
 
@@ -554,94 +540,94 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       });
       digestReporterInstance.start();
 
-    // Build daemon context for CLI commands (Plan 05 + Plan 18-02 reporting + Plan 21-03 decay stats + Plan 22-04 chain resilience)
-    daemonContext = {
-      heartbeatLoop,
-      registry: triggerRegistry,
-      budgetTracker: budgetTrackerInstance,
-      approvalQueue: approvalQueueInstance,
-      storage: daemonStorage,
-      config: daemonConfig,
-      digestReporter: digestReporterInstance,
-      notificationRouter: notificationRouterInstance,
-      memoryManager,
-      learningStorage: learningResult.storage,
-      chainResilienceConfig: config.toolChain.resilience,
-    };
-
-    const multiAgentStage = await initializeMultiAgentDelegationStage({
-      config,
-      logger,
-      daemonMode: Boolean(options.daemonMode),
-      daemonStorage,
-      daemonContext: daemonContext!,
-      taskManager,
-      orchestrator,
-      learningEventBus: learningResult.eventBus,
-      providerManager,
-      toolRegistry,
-      channel,
-      metrics,
-      ragPipeline,
-      rateLimiter,
-      instinctRetriever,
-      metricsRecorder,
-      goalDecomposer,
-      identityManager,
-      cachedEmbeddingProvider,
-      soulLoader,
-      dmPolicy,
-      userProfileStore,
-      providerRouter,
-      dashboard,
-      stradaDeps,
-    });
-    agentManager = multiAgentStage.agentManager;
-    agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
-    delegationManager = multiAgentStage.delegationManager;
-
-    await initializeMemoryConsolidationStage({
-      config,
-      logger,
-      memoryManager,
-      cachedEmbeddingProvider,
-      providerManager,
-      learningEventBus: learningResult.eventBus,
-      heartbeatLoop,
-      daemonContext: daemonContext!,
-    });
-
-    await initializeDeploymentStage({
-      config,
-      logger,
-      daemonConfig,
-      daemonStorage,
-      approvalQueue: approvalQueueInstance,
-      triggerRegistry,
-      heartbeatLoop,
-      daemonEventBus: daemonEventBus!,
-      taskManager,
-      daemonContext: daemonContext!,
-    });
-
-    // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
-    if (dashboard) {
-      dashboard.setDaemonContext({
+      // Build daemon context for CLI commands (Plan 05 + Plan 18-02 reporting + Plan 21-03 decay stats + Plan 22-04 chain resilience)
+      daemonContext = {
         heartbeatLoop,
         registry: triggerRegistry,
+        budgetTracker: budgetTrackerInstance,
         approvalQueue: approvalQueueInstance,
-        webhookTriggers,
-        webhookSecret: daemonConfig.triggers.webhookSecret,
-        webhookRateLimit: daemonConfig.triggers.webhookRateLimit,
-        dashboardToken: config.websocketDashboard.authToken,
-        identityManager,
-        capabilityManifest: buildCapabilityManifest(),
-        startupNotices: [...new Set(startupNotices)],
+        storage: daemonStorage,
+        config: daemonConfig,
+        digestReporter: digestReporterInstance,
+        notificationRouter: notificationRouterInstance,
+        memoryManager,
+        learningStorage: learningResult.storage,
+        chainResilienceConfig: config.toolChain.resilience,
+      };
+
+      const multiAgentStage = await initializeMultiAgentDelegationStage({
+        config,
+        logger,
+        daemonMode: Boolean(options.daemonMode),
         daemonStorage,
-        historyDepth: 10,
-        triggerFireRetentionDays: daemonConfig.triggerFireRetentionDays,
+        daemonContext: daemonContext!,
+        taskManager,
+        orchestrator,
+        learningEventBus: learningResult.eventBus,
+        providerManager,
+        toolRegistry,
+        channel,
+        metrics,
+        ragPipeline,
+        rateLimiter,
+        instinctRetriever,
+        metricsRecorder,
+        goalDecomposer,
+        identityManager,
+        cachedEmbeddingProvider,
+        soulLoader,
+        dmPolicy,
+        userProfileStore,
+        providerRouter,
+        dashboard,
+        stradaDeps,
       });
-    }
+      agentManager = multiAgentStage.agentManager;
+      agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
+      delegationManager = multiAgentStage.delegationManager;
+
+      await initializeMemoryConsolidationStage({
+        config,
+        logger,
+        memoryManager,
+        cachedEmbeddingProvider,
+        providerManager,
+        learningEventBus: learningResult.eventBus,
+        heartbeatLoop,
+        daemonContext: daemonContext!,
+      });
+
+      await initializeDeploymentStage({
+        config,
+        logger,
+        daemonConfig,
+        daemonStorage,
+        approvalQueue: approvalQueueInstance,
+        triggerRegistry,
+        heartbeatLoop,
+        daemonEventBus: daemonEventBus!,
+        taskManager,
+        daemonContext: daemonContext!,
+      });
+
+      // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
+      if (dashboard) {
+        dashboard.setDaemonContext({
+          heartbeatLoop,
+          registry: triggerRegistry,
+          approvalQueue: approvalQueueInstance,
+          webhookTriggers,
+          webhookSecret: daemonConfig.triggers.webhookSecret,
+          webhookRateLimit: daemonConfig.triggers.webhookRateLimit,
+          dashboardToken: config.websocketDashboard.authToken,
+          identityManager,
+          capabilityManifest: buildCapabilityManifest(),
+          startupNotices: [...new Set(startupNotices)],
+          daemonStorage,
+          historyDepth: 10,
+          triggerFireRetentionDays: daemonConfig.triggerFireRetentionDays,
+        });
+      }
     }
   }
 
@@ -672,39 +658,54 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       }
 
       let routeError: unknown;
-      await orchestrator.withTaskExecutionContext({
-        chatId: msg.chatId,
-        conversationId: msg.conversationId,
-        userId: msg.userId,
-        taskRunId,
-      }, async () => {
-        try {
-          await agentManager!.routeMessage(msg);
-        } catch (error) {
-          routeError = error;
-          throw error;
-        } finally {
-          if (learningResult.taskPlanner?.isActive()) {
-            learningResult.taskPlanner.attachReplayContext(await orchestrator.buildTrajectoryReplayContext({
-              chatId: msg.chatId,
-              userId: msg.userId,
-              conversationId: msg.conversationId,
-              sinceTimestamp: learningResult.taskPlanner.getTaskStartedAt() ?? undefined,
-              taskRunId,
-            }));
-            learningResult.taskPlanner.endTask({
-              success: routeError === undefined,
-              finalOutput: routeError instanceof Error ? routeError.message : undefined,
-              hadErrors: routeError !== undefined,
-              errorCount: routeError === undefined ? 0 : 1,
-            });
+      await orchestrator.withTaskExecutionContext(
+        {
+          chatId: msg.chatId,
+          conversationId: msg.conversationId,
+          userId: msg.userId,
+          taskRunId,
+        },
+        async () => {
+          try {
+            await agentManager!.routeMessage(msg);
+          } catch (error) {
+            routeError = error;
+            throw error;
+          } finally {
+            if (learningResult.taskPlanner?.isActive()) {
+              learningResult.taskPlanner.attachReplayContext(
+                await orchestrator.buildTrajectoryReplayContext({
+                  chatId: msg.chatId,
+                  userId: msg.userId,
+                  conversationId: msg.conversationId,
+                  sinceTimestamp: learningResult.taskPlanner.getTaskStartedAt() ?? undefined,
+                  taskRunId,
+                }),
+              );
+              learningResult.taskPlanner.endTask({
+                success: routeError === undefined,
+                finalOutput: routeError instanceof Error ? routeError.message : undefined,
+                hadErrors: routeError !== undefined,
+                errorCount: routeError === undefined ? 0 : 1,
+              });
+            }
           }
-        }
-      });
+        },
+      );
     });
   } else {
     // v2.0 single-agent mode: unchanged path (AGENT-07)
-    wireMessageHandler(channel, messageRouter, orchestrator, learningResult.taskPlanner, learningResult.pipeline, identityManager, heartbeatLoop, activityRegistry, channelType);
+    wireMessageHandler(
+      channel,
+      messageRouter,
+      orchestrator,
+      learningResult.taskPlanner,
+      learningResult.pipeline,
+      identityManager,
+      heartbeatLoop,
+      activityRegistry,
+      channelType,
+    );
   }
 
   const postSetupBootstrap = options.postSetupBootstrap;
@@ -717,9 +718,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       await orchestrator.deliverPostSetupBootstrap(context, postSetupBootstrap);
 
       if (postSetupBootstrap.autonomy?.enabled) {
-        const expiresAt = typeof postSetupBootstrap.autonomy.hours === "number"
-          ? Date.now() + (postSetupBootstrap.autonomy.hours * 3600_000)
-          : undefined;
+        const expiresAt =
+          typeof postSetupBootstrap.autonomy.hours === "number"
+            ? Date.now() + postSetupBootstrap.autonomy.hours * 3600_000
+            : undefined;
         heartbeatLoop?.getSecurityPolicy().setAutonomousOverride(true, expiresAt);
       }
     });
@@ -913,8 +915,7 @@ export async function initializeAIProvider(
       config.providerModels,
     );
     if (preflightResult.failures.length > 0) {
-      const notice =
-        `Configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
+      const notice = `Configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
       notices.push(notice);
       logger.warn("Configured AI providers failed preflight", {
         failedProviders: preflightResult.failures,
@@ -1050,14 +1051,24 @@ export async function initializeMemory(
     // Fire-and-forget: migrate hash embeddings to real embeddings
     const agentdbAny = agentdb as unknown as Record<string, unknown>;
     if (embeddingProvider && typeof agentdbAny.reEmbedHashEntries === "function") {
-      (agentdbAny.reEmbedHashEntries as () => Promise<{ migrated: number; total: number; skipped: number }>)()
-        .then(result => {
+      (
+        agentdbAny.reEmbedHashEntries as () => Promise<{
+          migrated: number;
+          total: number;
+          skipped: number;
+        }>
+      )()
+        .then((result) => {
           if (result.migrated > 0 || result.skipped > 0) {
-            logger.info(`[Bootstrap] Re-embedded ${result.migrated}/${result.total} hash entries${result.skipped > 0 ? ` (${result.skipped} skipped)` : ""}`);
+            logger.info(
+              `[Bootstrap] Re-embedded ${result.migrated}/${result.total} hash entries${result.skipped > 0 ? ` (${result.skipped} skipped)` : ""}`,
+            );
           }
         })
-        .catch(err => {
-          logger.warn(`[Bootstrap] Re-embed migration failed: ${err instanceof Error ? err.message : String(err)}`);
+        .catch((err) => {
+          logger.warn(
+            `[Bootstrap] Re-embed migration failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
         });
     }
 
@@ -1134,7 +1145,7 @@ async function triggerLegacyMigration(
   try {
     const migrationStatus = await runAutomaticMigration(
       config.memory.dbPath, // sourcePath where memory.json lives
-      agentdb,              // IUnifiedMemory target
+      agentdb, // IUnifiedMemory target
     );
     if (migrationStatus) {
       logger.info("Legacy memory migration completed", {
@@ -1214,7 +1225,9 @@ export async function resolveAndCacheEmbeddings(
 ): Promise<EmbeddingResolutionResult> {
   const embeddingConsumers = describeEmbeddingConsumers(config);
   if (embeddingConsumers.length === 0) {
-    logger.info("Embeddings: semantic subsystems disabled by configuration, no embedding provider resolved");
+    logger.info(
+      "Embeddings: semantic subsystems disabled by configuration, no embedding provider resolved",
+    );
     return {
       status: {
         state: "disabled",
@@ -1239,7 +1252,9 @@ export async function resolveAndCacheEmbeddings(
     const resolution = resolveEmbeddingProvider(config);
     if (!resolution) {
       const notice = describeEmbeddingResolutionFailure(config, consumerLabel);
-      logger.warn("Embeddings: no compatible embedding provider found", { consumers: embeddingConsumers });
+      logger.warn("Embeddings: no compatible embedding provider found", {
+        consumers: embeddingConsumers,
+      });
       return {
         notice,
         status: {
@@ -1393,7 +1408,11 @@ async function initializeRAG(
   }
 }
 
-async function initializeLearning(config: Config, logger: winston.Logger, embeddingProvider?: CachedEmbeddingProvider): Promise<LearningResult> {
+async function initializeLearning(
+  config: Config,
+  logger: winston.Logger,
+  embeddingProvider?: CachedEmbeddingProvider,
+): Promise<LearningResult> {
   const notices: string[] = [];
   try {
     const learningDbPath = join(config.memory.dbPath, "learning.db");
@@ -1422,21 +1441,28 @@ async function initializeLearning(config: Config, logger: winston.Logger, embedd
     const learningQueue = new LearningQueue();
 
     if (!embeddingProvider) {
-      const notice =
-        "Instinct embeddings disabled: learning continues with lexical matching only.";
+      const notice = "Instinct embeddings disabled: learning continues with lexical matching only.";
       notices.push(notice);
-      logger.warn("Learning initialized without embedding provider; semantic instinct features disabled");
+      logger.warn(
+        "Learning initialized without embedding provider; semantic instinct features disabled",
+      );
     }
 
-    const pipeline = new LearningPipeline(learningStorage, {
-      dbPath: learningDbPath,
-      enabled: LEARNING_DEFAULTS.enabled,
-      batchSize: LEARNING_DEFAULTS.batchSize,
-      detectionIntervalMs: LEARNING_DEFAULTS.detectionIntervalMs as DurationMs,
-      evolutionIntervalMs: LEARNING_DEFAULTS.evolutionIntervalMs as DurationMs,
-      minConfidenceForCreation: LEARNING_DEFAULTS.minConfidenceForCreation,
-      maxInstincts: LEARNING_DEFAULTS.maxInstincts,
-    }, embeddingProvider, config.bayesian, eventBus);
+    const pipeline = new LearningPipeline(
+      learningStorage,
+      {
+        dbPath: learningDbPath,
+        enabled: LEARNING_DEFAULTS.enabled,
+        batchSize: LEARNING_DEFAULTS.batchSize,
+        detectionIntervalMs: LEARNING_DEFAULTS.detectionIntervalMs as DurationMs,
+        evolutionIntervalMs: LEARNING_DEFAULTS.evolutionIntervalMs as DurationMs,
+        minConfidenceForCreation: LEARNING_DEFAULTS.minConfidenceForCreation,
+        maxInstincts: LEARNING_DEFAULTS.maxInstincts,
+      },
+      embeddingProvider,
+      config.bayesian,
+      eventBus,
+    );
 
     pipeline.start();
 
@@ -1582,7 +1608,14 @@ async function initializeChannel(
           "MISSING_TEAMS_CONFIG",
         );
       }
-      return new TeamsChannel(teamsAppId, teamsAppPassword, 3978, allowedUserIds, "127.0.0.1", allowOpenAccess);
+      return new TeamsChannel(
+        teamsAppId,
+        teamsAppPassword,
+        3978,
+        allowedUserIds,
+        "127.0.0.1",
+        allowOpenAccess,
+      );
     }
 
     case "telegram":
@@ -1680,37 +1713,42 @@ function wireMessageHandler(
     }
 
     let routeError: unknown;
-    await orchestrator.withTaskExecutionContext({
-      chatId: msg.chatId,
-      conversationId: msg.conversationId,
-      userId: msg.userId,
-      taskRunId,
-    }, async () => {
-      try {
-        // Route through the message router (handles commands and task submission)
-        await messageRouter.route(msg);
-      } catch (error) {
-        routeError = error;
-        throw error;
-      } finally {
-        // End task tracking
-        if (taskPlanner?.isActive()) {
-          taskPlanner.attachReplayContext(await orchestrator.buildTrajectoryReplayContext({
-            chatId: msg.chatId,
-            userId: msg.userId,
-            conversationId: msg.conversationId,
-            sinceTimestamp: taskPlanner.getTaskStartedAt() ?? undefined,
-            taskRunId,
-          }));
-          taskPlanner.endTask({
-            success: routeError === undefined,
-            finalOutput: routeError instanceof Error ? routeError.message : undefined,
-            hadErrors: routeError !== undefined,
-            errorCount: routeError === undefined ? 0 : 1,
-          });
+    await orchestrator.withTaskExecutionContext(
+      {
+        chatId: msg.chatId,
+        conversationId: msg.conversationId,
+        userId: msg.userId,
+        taskRunId,
+      },
+      async () => {
+        try {
+          // Route through the message router (handles commands and task submission)
+          await messageRouter.route(msg);
+        } catch (error) {
+          routeError = error;
+          throw error;
+        } finally {
+          // End task tracking
+          if (taskPlanner?.isActive()) {
+            taskPlanner.attachReplayContext(
+              await orchestrator.buildTrajectoryReplayContext({
+                chatId: msg.chatId,
+                userId: msg.userId,
+                conversationId: msg.conversationId,
+                sinceTimestamp: taskPlanner.getTaskStartedAt() ?? undefined,
+                taskRunId,
+              }),
+            );
+            taskPlanner.endTask({
+              success: routeError === undefined,
+              finalOutput: routeError instanceof Error ? routeError.message : undefined,
+              hadErrors: routeError !== undefined,
+              errorCount: routeError === undefined ? 0 : 1,
+            });
+          }
         }
-      }
-    });
+      },
+    );
   });
 }
 
@@ -1836,7 +1874,7 @@ function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
       }
 
       if (options.stoppableServers) {
-        await Promise.all(options.stoppableServers.map(s => s.stop()));
+        await Promise.all(options.stoppableServers.map((s) => s.stop()));
       }
 
       if (ragPipeline) {

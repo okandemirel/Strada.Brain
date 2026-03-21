@@ -3,7 +3,7 @@
  *
  * Injects autonomous planning behavior into the LLM via system prompt
  * and tracks execution state to detect stalls and enforce verification gates.
- * 
+ *
  * Learning Integration:
  *   - Records successful trajectories
  *   - Observes tool usage patterns
@@ -27,31 +27,43 @@ import type {
   TrajectoryStepResult,
   ErrorDetails,
 } from "../../learning/index.js";
-import { createBrand, now, durationMs, type JsonObject, type JsonValue } from "../../types/index.js";
+import {
+  createBrand,
+  now,
+  durationMs,
+  type JsonObject,
+  type JsonValue,
+} from "../../types/index.js";
 
 /** Convert Record<string, unknown> to JsonObject, filtering non-JSON values */
 function toJsonObject(input: Record<string, unknown>): JsonObject {
   return Object.fromEntries(
     Object.entries(input)
-      .filter(([, v]) =>
-        typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null ||
-        Array.isArray(v) || (typeof v === "object" && v !== null)
+      .filter(
+        ([, v]) =>
+          typeof v === "string" ||
+          typeof v === "number" ||
+          typeof v === "boolean" ||
+          v === null ||
+          Array.isArray(v) ||
+          (typeof v === "object" && v !== null),
       )
       .map(([k, v]) => {
         if (typeof v === "object" && v !== null && !Array.isArray(v)) {
           return [k, v as JsonObject];
         }
         return [k, v as JsonValue];
-      })
+      }),
   ) as JsonObject;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
 const MAX_ERROR_HISTORY = 10;
-const VERIFY_THRESHOLD = 2;   // mutations before nagging about verification
-const STALL_THRESHOLD = 3;    // consecutive errors before suggesting new approach
-const BUDGET_WARNING = 40;    // iteration count to warn about budget
+const VERIFY_THRESHOLD = 2; // mutations before nagging about verification
+const STALL_THRESHOLD = 3; // consecutive errors before suggesting new approach
+const DEFAULT_ITERATION_BUDGET = 50;
+const BUDGET_WARNING_RATIO = 0.8;
 
 // ─── State ──────────────────────────────────────────────────────────────────────
 
@@ -60,11 +72,16 @@ export interface TaskState {
   readonly consecutiveErrors: number;
   readonly buildVerified: boolean;
   readonly iterationsUsed: number;
+  readonly budgetWindowIterationsUsed: number;
   readonly errorHistory: readonly string[];
   /** Current session ID for learning */
   readonly sessionId: string;
   /** Task description */
   readonly taskDescription: string;
+}
+
+export interface TaskPlannerOptions {
+  readonly iterationBudget?: number;
 }
 
 // ─── Planner ────────────────────────────────────────────────────────────────────
@@ -74,6 +91,7 @@ export class TaskPlanner {
   private consecutiveErrors = 0;
   private buildVerified = false;
   private iterationsUsed = 0;
+  private budgetWindowIterationsUsed = 0;
   private errorHistory: string[] = [];
   private sessionId = "";
   private chatId: string | undefined;
@@ -85,6 +103,16 @@ export class TaskPlanner {
   private trajectorySteps: TrajectoryStep[] = [];
   private trajectoryStartTime: number = 0;
   private trajectoryReplayContext: TrajectoryReplayContext | undefined;
+  private readonly iterationBudget: number;
+  private readonly budgetWarningThreshold: number;
+
+  constructor(options: TaskPlannerOptions = {}) {
+    this.iterationBudget = Math.max(1, options.iterationBudget ?? DEFAULT_ITERATION_BUDGET);
+    this.budgetWarningThreshold = Math.max(
+      1,
+      Math.min(this.iterationBudget, Math.ceil(this.iterationBudget * BUDGET_WARNING_RATIO)),
+    );
+  }
 
   /** Reset for a new task. */
   reset(): void {
@@ -92,6 +120,7 @@ export class TaskPlanner {
     this.consecutiveErrors = 0;
     this.buildVerified = false;
     this.iterationsUsed = 0;
+    this.budgetWindowIterationsUsed = 0;
     this.errorHistory = [];
     this.sessionId = "";
     this.chatId = undefined;
@@ -119,7 +148,7 @@ export class TaskPlanner {
     this.taskRunId = `taskrun_${randomUUID()}`;
     this.isTaskActive = true;
     this.trajectoryStartTime = Date.now();
-    
+
     if (params.learningPipeline) {
       this.learningPipeline = params.learningPipeline;
     }
@@ -137,8 +166,8 @@ export class TaskPlanner {
     if (!this.isTaskActive) return;
 
     // Calculate completion rate (steps used / max budget of 50)
-    const completionRate = Math.min(this.iterationsUsed / 50, 1);
-    
+    const completionRate = Math.min(this.budgetWindowIterationsUsed / this.iterationBudget, 1);
+
     const outcome: TrajectoryOutcome = {
       success: params.success,
       finalOutput: params.finalOutput,
@@ -221,8 +250,10 @@ export class TaskPlanner {
           verifierDecision: phase.verifierDecision,
           phaseVerdict: phase.phaseVerdict,
           phaseVerdictScore: phase.phaseVerdictScore,
-          retryCount: typeof phase.retryCount === "number" ? Math.max(0, phase.retryCount) : undefined,
-          rollbackDepth: typeof phase.rollbackDepth === "number" ? Math.max(0, phase.rollbackDepth) : undefined,
+          retryCount:
+            typeof phase.retryCount === "number" ? Math.max(0, phase.retryCount) : undefined,
+          rollbackDepth:
+            typeof phase.rollbackDepth === "number" ? Math.max(0, phase.rollbackDepth) : undefined,
           timestamp: phase.timestamp,
         };
       })
@@ -248,14 +279,15 @@ export class TaskPlanner {
     input?: Record<string, unknown>,
     output?: string,
   ): void {
-    const executedTools = expandExecutedToolCalls(
-      toolName,
-      input ?? {},
-      { toolCallId: "planner-track", content: output ?? "", isError },
-    );
+    const executedTools = expandExecutedToolCalls(toolName, input ?? {}, {
+      toolCallId: "planner-track",
+      content: output ?? "",
+      isError,
+    });
 
     for (const executedTool of executedTools) {
       this.iterationsUsed++;
+      this.budgetWindowIterationsUsed++;
 
       // Mutation tracking — O(1)
       if (MUTATION_TOOLS.has(executedTool.toolName)) {
@@ -282,8 +314,8 @@ export class TaskPlanner {
 
     // Record step for trajectory
     if (this.isTaskActive) {
-      const jsonInput = input ? toJsonObject(input) : {} as JsonObject;
-      
+      const jsonInput = input ? toJsonObject(input) : ({} as JsonObject);
+
       // Build TrajectoryStepResult based on isError
       let result: TrajectoryStepResult;
       if (isError) {
@@ -295,7 +327,7 @@ export class TaskPlanner {
       } else {
         result = { kind: "success", output: output ?? "" };
       }
-      
+
       const step: TrajectoryStep = {
         stepNumber: this.iterationsUsed,
         toolName: createBrand(toolName, "ToolName"),
@@ -334,7 +366,7 @@ export class TaskPlanner {
 
     // Also record as a step
     const jsonInput = toJsonObject(params.originalInput);
-    
+
     const step: TrajectoryStep = {
       stepNumber: this.iterationsUsed + 1,
       toolName: createBrand("correction", "ToolName"),
@@ -358,14 +390,24 @@ export class TaskPlanner {
   }
 
   /**
+   * Reset the active budget window without losing total task history.
+   * Used when long-running autonomous work rolls into a new background epoch.
+   */
+  resetBudgetWindow(): void {
+    this.budgetWindowIterationsUsed = 0;
+  }
+
+  /**
    * Get iteration-aware state injection.
    * Returns empty string when no intervention needed (fast path).
    */
   getStateInjection(): string {
     // Fast path: nothing to say
-    if (this.mutationsSinceVerify < VERIFY_THRESHOLD
-        && this.consecutiveErrors < STALL_THRESHOLD
-        && this.iterationsUsed < BUDGET_WARNING) {
+    if (
+      this.mutationsSinceVerify < VERIFY_THRESHOLD &&
+      this.consecutiveErrors < STALL_THRESHOLD &&
+      this.budgetWindowIterationsUsed < this.budgetWarningThreshold
+    ) {
       return "";
     }
 
@@ -374,7 +416,7 @@ export class TaskPlanner {
     if (this.mutationsSinceVerify >= VERIFY_THRESHOLD && !this.buildVerified) {
       parts.push(
         `[VERIFY] ${this.mutationsSinceVerify} files modified without build check. ` +
-        `Run dotnet_build before continuing.`
+          `Run dotnet_build before continuing.`,
       );
     }
 
@@ -382,13 +424,13 @@ export class TaskPlanner {
       const recent = this.errorHistory.slice(-3).join(" | ");
       parts.push(
         `[STALL] ${this.consecutiveErrors} consecutive errors. ` +
-        `Consider a different approach. Recent: ${recent}`
+          `Consider a different approach. Recent: ${recent}`,
       );
     }
 
-    if (this.iterationsUsed >= BUDGET_WARNING) {
+    if (this.budgetWindowIterationsUsed >= this.budgetWarningThreshold) {
       parts.push(
-        `[BUDGET] ${this.iterationsUsed}/50 iterations used. Wrap up and verify.`
+        `[BUDGET] ${this.budgetWindowIterationsUsed}/${this.iterationBudget} iterations used in the current execution window. Wrap up and verify.`,
       );
     }
 
@@ -402,6 +444,7 @@ export class TaskPlanner {
       consecutiveErrors: this.consecutiveErrors,
       buildVerified: this.buildVerified,
       iterationsUsed: this.iterationsUsed,
+      budgetWindowIterationsUsed: this.budgetWindowIterationsUsed,
       errorHistory: [...this.errorHistory],
       sessionId: this.sessionId,
       taskDescription: this.taskDescription,

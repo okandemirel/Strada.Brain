@@ -61,6 +61,28 @@ const EXACT_RULES: Record<string, ConfigDescriptor> = {
     tier: "core",
     description: "Interactive write confirmation policy for the golden path.",
   },
+  "tasks.interactiveMaxIterations": {
+    category: "Execution",
+    tier: "advanced",
+    description: "Interactive PAOR loop budget before Strada asks for a follow-up message.",
+  },
+  "tasks.backgroundEpochMaxIterations": {
+    category: "Execution",
+    tier: "advanced",
+    description: "Iteration budget for a single background/autonomous execution epoch.",
+  },
+  "tasks.backgroundAutoContinue": {
+    category: "Execution",
+    tier: "advanced",
+    description:
+      "Whether background/autonomous work rolls into a new epoch when the current one hits budget.",
+  },
+  "tasks.backgroundMaxEpochs": {
+    category: "Execution",
+    tier: "advanced",
+    description:
+      "Maximum number of autonomous background epochs before Strada stops on budget (0 = unlimited).",
+  },
   logLevel: {
     category: "Operations",
     tier: "advanced",
@@ -215,7 +237,8 @@ const PREFIX_RULES: Array<{ prefix: string; descriptor: ConfigDescriptor }> = [
     descriptor: {
       category: "Execution",
       tier: "advanced",
-      description: "Task concurrency and routing controls.",
+      description:
+        "Task concurrency, message burst controls, and interactive/background iteration budgets.",
     },
   },
   {
@@ -352,8 +375,11 @@ export function buildConfigCatalogEntries(config: Record<string, unknown>): Conf
 }
 
 export function summarizeConfigCatalog(entries: ConfigCatalogEntry[]): ConfigCatalogSummary {
-  return entries.reduce<ConfigCatalogSummary>((summary, entry) => {
-    summary[entry.tier] += 1;
-    return summary;
-  }, { core: 0, advanced: 0, experimental: 0 });
+  return entries.reduce<ConfigCatalogSummary>(
+    (summary, entry) => {
+      summary[entry.tier] += 1;
+      return summary;
+    },
+    { core: 0, advanced: 0, experimental: 0 },
+  );
 }

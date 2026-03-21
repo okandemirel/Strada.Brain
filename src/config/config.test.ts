@@ -134,6 +134,10 @@ describe("loadConfig", () => {
     delete process.env["TASK_MAX_CONCURRENT"];
     delete process.env["TASK_MESSAGE_BURST_WINDOW_MS"];
     delete process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"];
+    delete process.env["TASK_INTERACTIVE_MAX_ITERATIONS"];
+    delete process.env["TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"];
+    delete process.env["TASK_BACKGROUND_AUTO_CONTINUE"];
+    delete process.env["TASK_BACKGROUND_MAX_EPOCHS"];
     delete process.env["INTERACTION_MODE"];
     delete process.env["INTERACTION_HEARTBEAT_AFTER_MS"];
     delete process.env["INTERACTION_HEARTBEAT_INTERVAL_MS"];
@@ -311,6 +315,10 @@ describe("loadConfig", () => {
       TASK_MAX_CONCURRENT: "4",
       TASK_MESSAGE_BURST_WINDOW_MS: "500",
       TASK_MESSAGE_BURST_MAX_MESSAGES: "6",
+      TASK_INTERACTIVE_MAX_ITERATIONS: "60",
+      TASK_BACKGROUND_EPOCH_MAX_ITERATIONS: "75",
+      TASK_BACKGROUND_AUTO_CONTINUE: "false",
+      TASK_BACKGROUND_MAX_EPOCHS: "3",
     });
 
     const config = loadConfig();
@@ -319,6 +327,10 @@ describe("loadConfig", () => {
       concurrencyLimit: 4,
       messageBurstWindowMs: 500,
       messageBurstMaxMessages: 6,
+      interactiveMaxIterations: 60,
+      backgroundEpochMaxIterations: 75,
+      backgroundAutoContinue: false,
+      backgroundMaxEpochs: 3,
     });
   });
 
@@ -391,6 +403,10 @@ describe("loadConfig", () => {
       concurrencyLimit: 3,
       messageBurstWindowMs: 350,
       messageBurstMaxMessages: 8,
+      interactiveMaxIterations: 50,
+      backgroundEpochMaxIterations: 50,
+      backgroundAutoContinue: true,
+      backgroundMaxEpochs: 0,
     });
     expect(config.logLevel).toBe("info");
     expect(config.logFile).toBe("strada-brain.log");
@@ -437,7 +453,9 @@ describe("loadConfig", () => {
 
   it("throws when project path is not a directory", () => {
     setEnv();
-    vi.mocked(statSync).mockReturnValue({ isDirectory: () => false } as ReturnType<typeof statSync>);
+    vi.mocked(statSync).mockReturnValue({ isDirectory: () => false } as ReturnType<
+      typeof statSync
+    >);
     expect(() => loadConfig()).toThrow("not a directory");
   });
 
@@ -574,7 +592,7 @@ describe("loadConfig", () => {
         decay: {
           enabled: true,
           lambdas: {
-            working: 0.10,
+            working: 0.1,
             ephemeral: 0.05,
             persistent: 0.01,
           },
@@ -684,7 +702,11 @@ describe("loadConfig", () => {
     it("accepts comma-separated STRADA_DAEMON_AUTO_APPROVE_TOOLS", () => {
       setEnv({ STRADA_DAEMON_AUTO_APPROVE_TOOLS: "file_read,git_status,search" });
       const config = loadConfig();
-      expect(config.daemon.security.autoApproveTools).toEqual(["file_read", "git_status", "search"]);
+      expect(config.daemon.security.autoApproveTools).toEqual([
+        "file_read",
+        "git_status",
+        "search",
+      ]);
     });
 
     it("returns Config with daemon property matching DaemonConfig shape", () => {
@@ -746,7 +768,7 @@ describe("loadConfig", () => {
       expect(config.daemon.heartbeat.intervalMs).toBe(30000);
       expect(config.daemon.timezone).toBe("America/New_York");
       expect(config.daemon.heartbeat.heartbeatFile).toBe("./custom.md");
-      expect(config.daemon.budget.dailyBudgetUsd).toBe(10.50);
+      expect(config.daemon.budget.dailyBudgetUsd).toBe(10.5);
       expect(config.daemon.budget.warnPct).toBe(0.9);
       expect(config.daemon.security.approvalTimeoutMin).toBe(60);
       expect(config.daemon.backoff.baseCooldownMs).toBe(30000);
