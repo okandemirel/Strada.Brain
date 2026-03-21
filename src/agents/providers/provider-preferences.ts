@@ -10,10 +10,13 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { configureSqlitePragmas } from "../../memory/unified/sqlite-pragmas.js";
 
+export type ProviderSelectionMode = "strada-preference-bias" | "strada-hard-pin";
+
 export interface ChatProviderPreference {
   chatId: string;
   providerName: string;
   model?: string;
+  selectionMode: ProviderSelectionMode;
   updatedAt: number;
 }
 
@@ -41,15 +44,22 @@ export class ProviderPreferenceStore {
           chat_id TEXT PRIMARY KEY,
           provider_name TEXT NOT NULL,
           model TEXT,
+          selection_mode TEXT NOT NULL DEFAULT 'strada-preference-bias',
           updated_at INTEGER NOT NULL
         )
       `);
+      const columns = this.db.pragma("table_info(provider_preferences)") as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === "selection_mode")) {
+        this.db.exec(
+          "ALTER TABLE provider_preferences ADD COLUMN selection_mode TEXT NOT NULL DEFAULT 'strada-preference-bias'",
+        );
+      }
 
       this.stmtGet = this.db.prepare(
-        "SELECT chat_id, provider_name, model, updated_at FROM provider_preferences WHERE chat_id = ?",
+        "SELECT chat_id, provider_name, model, selection_mode, updated_at FROM provider_preferences WHERE chat_id = ?",
       );
       this.stmtSet = this.db.prepare(
-        "INSERT OR REPLACE INTO provider_preferences (chat_id, provider_name, model, updated_at) VALUES (?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO provider_preferences (chat_id, provider_name, model, selection_mode, updated_at) VALUES (?, ?, ?, ?, ?)",
       );
       this.stmtDelete = this.db.prepare(
         "DELETE FROM provider_preferences WHERE chat_id = ?",
@@ -63,19 +73,33 @@ export class ProviderPreferenceStore {
 
   get(chatId: string): ChatProviderPreference | undefined {
     const row = this.stmtGet.get(chatId) as
-      | { chat_id: string; provider_name: string; model: string | null; updated_at: number }
+      | {
+        chat_id: string;
+        provider_name: string;
+        model: string | null;
+        selection_mode: string | null;
+        updated_at: number;
+      }
       | undefined;
     if (!row) return undefined;
     return {
       chatId: row.chat_id,
       providerName: row.provider_name,
       model: row.model ?? undefined,
+      selectionMode: row.selection_mode === "strada-hard-pin"
+        ? "strada-hard-pin"
+        : "strada-preference-bias",
       updatedAt: row.updated_at,
     };
   }
 
-  set(chatId: string, providerName: string, model?: string): void {
-    this.stmtSet.run(chatId, providerName, model ?? null, Date.now());
+  set(
+    chatId: string,
+    providerName: string,
+    model?: string,
+    selectionMode: ProviderSelectionMode = "strada-preference-bias",
+  ): void {
+    this.stmtSet.run(chatId, providerName, model ?? null, selectionMode, Date.now());
   }
 
   delete(chatId: string): void {

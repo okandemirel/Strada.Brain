@@ -6,7 +6,9 @@ import {
   collectCompletionReviewEvidence,
   hasOpenReviewFindings,
   hasOpenReviewFindingsForDraft,
+  mergeCompletionReviewDecisionWithStages,
   parseCompletionReviewDecision,
+  parseCompletionReviewStageResult,
   shouldRunCompletionReview,
   userExplicitlyAskedForPlan,
 } from "./completion-review.js";
@@ -110,6 +112,41 @@ describe("completion-review", () => {
     expect(gate).toContain("Security review: clean");
     expect(gate).toContain("Closure status: partial");
     expect(gate).toContain("Open investigations:");
+  });
+
+  it("parses stage review decisions and merges them into the final decision", () => {
+    const stage = parseCompletionReviewStageResult(`\`\`\`json
+{"status":"issues","summary":"Security review found a workspace boundary gap.","findings":["Workspace lease path is not enforced on one shell path."],"requiredActions":["Enforce workspace boundary before finalizing."],"openInvestigations":[]}
+\`\`\``, "security");
+
+    expect(stage).toEqual({
+      stage: "security",
+      status: "issues",
+      summary: "Security review found a workspace boundary gap.",
+      findings: ["Workspace lease path is not enforced on one shell path."],
+      requiredActions: ["Enforce workspace boundary before finalizing."],
+      openInvestigations: [],
+    });
+
+    const merged = mergeCompletionReviewDecisionWithStages({
+      decision: "approve",
+      summary: "Base reviewer approved.",
+      closureStatus: "verified",
+      reviews: {
+        code: "clean",
+        simplify: "clean",
+      },
+      logStatus: "clean",
+    }, [stage!]);
+
+    expect(merged).toEqual(expect.objectContaining({
+      decision: "continue",
+      closureStatus: "unverified",
+      reviews: expect.objectContaining({
+        security: "issues",
+      }),
+    }));
+    expect(merged?.findings).toContain("Workspace lease path is not enforced on one shell path.");
   });
 
   it("forces review when the draft makes a broad completion claim after tool activity", () => {

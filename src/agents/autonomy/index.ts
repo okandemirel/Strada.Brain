@@ -8,17 +8,28 @@ export {
   buildAutonomyDeflectionGate,
   classifyAutonomyDrift,
   COMPLETION_REVIEW_SYSTEM_PROMPT,
+  COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
   buildCompletionReviewGate,
   buildCompletionReviewRequest,
+  buildCompletionReviewStageRequest,
+  buildCompletionReviewStageSystemPrompt,
+  buildCompletionReviewSynthesisRequest,
   collectCompletionReviewEvidence,
   draftLooksLikeInternalPlanArtifact,
   draftLooksLikeInternalToolingChecklist,
   hasOpenReviewFindings,
+  mergeCompletionReviewDecisionWithStages,
   parseCompletionReviewDecision,
+  parseCompletionReviewStageResult,
   shouldRunCompletionReview,
   userExplicitlyAskedForPlan,
 } from "./completion-review.js";
-export type { CompletionReviewDecision, CompletionReviewEvidence } from "./completion-review.js";
+export type {
+  CompletionReviewDecision,
+  CompletionReviewEvidence,
+  CompletionReviewStageName,
+  CompletionReviewStageResult,
+} from "./completion-review.js";
 export {
   CLARIFICATION_REVIEW_SYSTEM_PROMPT,
   analyzeClarificationDraft,

@@ -77,7 +77,7 @@ import {
   buildClarificationContinuationGate,
   buildClarificationReviewRequest,
   CLARIFICATION_REVIEW_SYSTEM_PROMPT,
-  COMPLETION_REVIEW_SYSTEM_PROMPT,
+  COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
   collectCompletionReviewEvidence,
   decideInteractionBoundary,
   draftLooksLikeInternalPlanArtifact,
@@ -86,17 +86,22 @@ import {
   TaskPlanner,
   SelfVerification,
   collectClarificationReviewEvidence,
-  buildVerifierPipelineReviewRequest,
+  buildCompletionReviewStageRequest,
+  buildCompletionReviewStageSystemPrompt,
+  buildCompletionReviewSynthesisRequest,
   formatClarificationPrompt,
   finalizeVerifierPipelineReview,
   isTerminalFailureReport,
   parseCompletionReviewDecision,
+  parseCompletionReviewStageResult,
   parseClarificationReviewDecision,
   planVerifierPipeline,
   sanitizeClarificationReviewDecision,
   shouldRunClarificationReview,
   InteractionPolicyStateMachine,
   userExplicitlyAskedForPlan,
+  type CompletionReviewStageName,
+  type CompletionReviewStageResult,
   type ClarificationBlockingType,
   type ClarificationReviewDecision,
   type InteractionBoundaryDecision,
@@ -186,6 +191,16 @@ import {
   toPhaseOutcomeStatus as toPhaseOutcomeStatusModel,
   transitionToVerifierReplan as transitionToVerifierReplanModel,
 } from "./orchestrator-phase-telemetry.js";
+import {
+  createCatalogVersion,
+  type WorkerArtifactMetadata,
+  type WorkerReviewFinding,
+  type WorkerRunRequest,
+  type WorkerRunResult,
+  type WorkerToolTrace,
+  type WorkerVerificationResult,
+  type WorkspaceLease,
+} from "./supervisor/supervisor-types.js";
 
 const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
@@ -253,7 +268,7 @@ interface TaskExecutionContext {
   readonly taskRunId?: string;
 }
 
-type ToolExecutionMode = "interactive" | "background";
+type ToolExecutionMode = "interactive" | "background" | "delegated";
 
 interface ToolExecutionOptions {
   mode?: ToolExecutionMode;
@@ -265,6 +280,9 @@ interface ToolExecutionOptions {
   strategy?: SupervisorExecutionStrategy;
   agentState?: AgentState;
   touchedFiles?: readonly string[];
+  projectPathOverride?: string;
+  workingDirectoryOverride?: string;
+  workspaceLease?: WorkspaceLease;
 }
 
 interface SelfManagedWriteReview {
@@ -294,6 +312,8 @@ interface SupervisorAssignment {
   provider: IAIProvider;
   reason: string;
   traceSource?: ExecutionTraceSource;
+  assignmentVersion?: number;
+  catalogVersion?: string;
 }
 
 interface SupervisorExecutionStrategy {
@@ -303,6 +323,18 @@ interface SupervisorExecutionStrategy {
   reviewer: SupervisorAssignment;
   synthesizer: SupervisorAssignment;
   usesMultipleProviders: boolean;
+}
+
+interface WorkerRunCollector {
+  toolTrace: WorkerToolTrace[];
+  childWorkerResults: WorkerRunResult[];
+  verifierResult?: VerifierPipelineResult;
+  touchedFiles?: readonly string[];
+  finalVisibleResponse?: string;
+  finalSummary?: string;
+  lastAssignment?: SupervisorAssignment;
+  status?: WorkerRunResult["status"];
+  reason?: string;
 }
 
 function createStreamingProgressTimeout(
@@ -680,8 +712,61 @@ export class Orchestrator {
     provider: IAIProvider,
     reason: string,
     traceSource?: ExecutionTraceSource,
+    metadata?: {
+      assignmentVersion?: number;
+      catalogVersion?: string;
+    },
   ): SupervisorAssignment {
-    return { role, providerName, modelId, provider, reason, traceSource };
+    return {
+      role,
+      providerName,
+      modelId,
+      provider,
+      reason,
+      traceSource,
+      assignmentVersion: metadata?.assignmentVersion,
+      catalogVersion: metadata?.catalogVersion,
+    };
+  }
+
+  private buildCatalogAssignmentMetadata(
+    providerName: string,
+    modelId: string | undefined,
+    identityKey: string,
+    assignmentVersion?: number,
+  ): {
+    assignmentVersion?: number;
+    catalogVersion?: string;
+  } {
+    const routingMetadata = this.providerManager.getRoutingMetadata?.(
+      providerName,
+      modelId,
+      identityKey,
+    );
+
+    if (!routingMetadata) {
+      return {
+        assignmentVersion,
+        catalogVersion: createCatalogVersion({
+          provider: providerName,
+          model: modelId,
+          updatedAt: undefined,
+          stale: false,
+          degraded: false,
+        }),
+      };
+    }
+
+    return {
+      assignmentVersion: assignmentVersion ?? routingMetadata.assignmentVersion,
+      catalogVersion: createCatalogVersion({
+        provider: routingMetadata.provider,
+        model: routingMetadata.model,
+        updatedAt: routingMetadata.catalog.updatedAt,
+        stale: routingMetadata.catalog.stale,
+        degraded: routingMetadata.catalog.degraded,
+      }),
+    };
   }
 
   private getProviderByNameOrFallback(
@@ -728,40 +813,83 @@ export class Orchestrator {
     taskDescription?: string,
     projectWorldFingerprint?: string,
   ): SupervisorAssignment {
+    const activeInfo = this.providerManager.getActiveInfo?.(identityKey);
+    if (activeInfo?.selectionMode === "strada-hard-pin") {
+      return this.buildStaticSupervisorAssignment(
+        role,
+        activeInfo.providerName,
+        activeInfo.model,
+        this.providerManager.getProvider(identityKey),
+        `honored the explicit user hard pin for ${role}`,
+        "supervisor-strategy",
+        this.buildCatalogAssignmentMetadata(
+          activeInfo.providerName,
+          activeInfo.model,
+          identityKey,
+        ),
+      );
+    }
+
     if (!this.providerRouter) {
+      const modelId = this.resolveProviderModelId(fallbackName, identityKey);
       return this.buildStaticSupervisorAssignment(
         role,
         fallbackName,
-        this.resolveProviderModelId(fallbackName, identityKey),
+        modelId,
         fallbackProvider,
         "routing unavailable, reusing the current worker",
+        undefined,
+        this.buildCatalogAssignmentMetadata(fallbackName, modelId, identityKey),
       );
     }
 
     try {
-      const routed = this.providerRouter.resolve(task, phase, {
-        identityKey,
-        taskDescription,
-        projectWorldFingerprint,
-      });
+      const routed =
+        "resolveWithCatalog" in this.providerRouter &&
+        typeof this.providerRouter.resolveWithCatalog === "function"
+          ? this.providerRouter.resolveWithCatalog(task, phase, {
+            identityKey,
+            taskDescription,
+            projectWorldFingerprint,
+          })
+          : this.providerRouter.resolve(task, phase, {
+            identityKey,
+            taskDescription,
+            projectWorldFingerprint,
+          });
       const resolved = this.getProviderByNameOrFallback(routed.provider, fallbackProvider);
+      const modelId = "model" in routed && typeof routed.model === "string"
+        ? routed.model
+        : this.resolveProviderModelId(resolved.providerName, identityKey);
       return this.buildStaticSupervisorAssignment(
         role,
         resolved.providerName,
-        this.resolveProviderModelId(resolved.providerName, identityKey),
+        modelId,
         resolved.provider,
         routed.reason,
+        undefined,
+        this.buildCatalogAssignmentMetadata(
+          resolved.providerName,
+          modelId,
+          identityKey,
+          "assignmentVersion" in routed && typeof routed.assignmentVersion === "number"
+            ? routed.assignmentVersion
+            : undefined,
+        ),
       );
     } catch {
       // Routing failure is non-fatal — use fallback provider
     }
 
+    const modelId = this.resolveProviderModelId(fallbackName, identityKey);
     return this.buildStaticSupervisorAssignment(
       role,
       fallbackName,
-      this.resolveProviderModelId(fallbackName, identityKey),
+      modelId,
       fallbackProvider,
       "routing fallback, reusing the current worker",
+      undefined,
+      this.buildCatalogAssignmentMetadata(fallbackName, modelId, identityKey),
     );
   }
 
@@ -773,6 +901,47 @@ export class Orchestrator {
   ): SupervisorExecutionStrategy {
     const task = this.taskClassifier.classify(prompt);
     const activeInfo = this.providerManager.getActiveInfo?.(identityKey);
+    if (activeInfo?.selectionMode === "strada-hard-pin") {
+      const metadata = this.buildCatalogAssignmentMetadata(
+        activeInfo.providerName,
+        activeInfo.model,
+        identityKey,
+      );
+      const buildPinnedAssignment = (
+        role: SupervisorRole,
+        reason: string,
+      ): SupervisorAssignment =>
+        this.buildStaticSupervisorAssignment(
+          role,
+          activeInfo.providerName,
+          activeInfo.model,
+          fallbackProvider,
+          reason,
+          "supervisor-strategy",
+          metadata,
+        );
+
+      return {
+        task,
+        planner: buildPinnedAssignment(
+          "planner",
+          "honored the explicit user hard pin for planning",
+        ),
+        executor: buildPinnedAssignment(
+          "executor",
+          "honored the explicit user hard pin for execution",
+        ),
+        reviewer: buildPinnedAssignment(
+          "reviewer",
+          "honored the explicit user hard pin for review",
+        ),
+        synthesizer: buildPinnedAssignment(
+          "synthesizer",
+          "honored the explicit user hard pin for synthesis",
+        ),
+        usesMultipleProviders: false,
+      };
+    }
     const selected = this.getProviderByNameOrFallback(activeInfo?.providerName, fallbackProvider);
     const selectedProviderName = selected.providerName;
     const selectedProvider = selected.provider;
@@ -788,14 +957,15 @@ export class Orchestrator {
       projectWorldFingerprint,
     );
 
-    const executor = this.buildStaticSupervisorAssignment(
+    const executor = this.resolveSupervisorAssignment(
       "executor",
+      task,
+      "executing",
+      identityKey,
       selectedProviderName,
-      activeInfo?.model ?? this.resolveProviderModelId(selectedProviderName, identityKey),
       selectedProvider,
-      activeInfo?.isDefault
-        ? "selected system-default provider as the primary execution worker"
-        : "kept the user-selected provider as the primary execution worker",
+      prompt,
+      projectWorldFingerprint,
     );
 
     let reviewer = this.resolveSupervisorAssignment(
@@ -818,6 +988,11 @@ export class Orchestrator {
         planner.modelId,
         planner.provider,
         "reused the planning worker as reviewer to keep execution and review separated",
+        undefined,
+        {
+          assignmentVersion: planner.assignmentVersion,
+          catalogVersion: planner.catalogVersion,
+        },
       );
     }
 
@@ -839,6 +1014,11 @@ export class Orchestrator {
           reviewer.modelId,
           reviewer.provider,
           "reused the reviewer as the user-facing synthesis worker to keep execution separate",
+          undefined,
+          {
+            assignmentVersion: reviewer.assignmentVersion,
+            catalogVersion: reviewer.catalogVersion,
+          },
         );
       } else if (planner.providerName !== executor.providerName) {
         synthesizer = this.buildStaticSupervisorAssignment(
@@ -847,6 +1027,11 @@ export class Orchestrator {
           planner.modelId,
           planner.provider,
           "reused the planner as the user-facing synthesis worker to keep execution separate",
+          undefined,
+          {
+            assignmentVersion: planner.assignmentVersion,
+            catalogVersion: planner.catalogVersion,
+          },
         );
       }
     }
@@ -903,6 +1088,10 @@ export class Orchestrator {
       pinnedProvider.provider,
       "kept the active tool-turn provider pinned to preserve provider-specific tool context",
       "tool-turn-affinity",
+      {
+        assignmentVersion: pinnedProvider.assignmentVersion,
+        catalogVersion: pinnedProvider.catalogVersion,
+      },
     );
   }
 
@@ -1108,6 +1297,12 @@ export class Orchestrator {
       this.resolveProviderModelId(fallbackReviewProvider.providerName, identityKey),
       fallbackReviewProvider.provider,
       "selected an alternate reviewer to keep consensus verification cross-provider",
+      undefined,
+      this.buildCatalogAssignmentMetadata(
+        fallbackReviewProvider.providerName,
+        this.resolveProviderModelId(fallbackReviewProvider.providerName, identityKey),
+        identityKey,
+      ),
     );
   }
 
@@ -1243,6 +1438,7 @@ export class Orchestrator {
     conversationId?: string;
     userId?: string;
     onUsage?: (usage: TaskUsageEvent) => void;
+    childWorkerResults?: readonly WorkerRunResult[];
   }): Promise<string> {
     const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId);
     const fallbackProvider = this.providerManager.getProvider(identityKey);
@@ -1269,6 +1465,19 @@ export class Orchestrator {
         return `- [FAIL] ${result.task}: ${result.error ?? "Unknown failure"}`;
       })
       .join("\n");
+    const childEvidence = params.childWorkerResults?.length
+      ? params.childWorkerResults
+        .map((result) => {
+          const touchedSummary = result.touchedFiles.length > 0
+            ? ` touched=${result.touchedFiles.join(", ")}`
+            : "";
+          const findingSummary = result.reviewFindings.length > 0
+            ? ` findings=${result.reviewFindings.map((finding) => finding.message).join(" | ")}`
+            : "";
+          return `- [${result.status.toUpperCase()}] ${result.provider}${touchedSummary}${findingSummary}`;
+        })
+        .join("\n")
+      : "(none)";
 
     const synthesisRequest = [
       "Create the final user-facing response for this completed decomposed task.",
@@ -1280,6 +1489,8 @@ export class Orchestrator {
       verifiedSteps
         ? `Verified sub-goal outcomes:\n${verifiedSteps}`
         : "Verified sub-goal outcomes:\n(none)",
+      "",
+      `Child worker evidence:\n${childEvidence}`,
       "",
       `Raw sub-goal draft:\n${rawDraft}`,
       "",
@@ -1343,6 +1554,111 @@ export class Orchestrator {
       });
       return this.buildSafeVisibleFallbackFromDraft(params.prompt, rawDraft, strategy.task);
     }
+  }
+
+  private toWorkerVerificationResults(
+    result: VerifierPipelineResult | null | undefined,
+  ): WorkerVerificationResult[] {
+    if (!result) {
+      return [];
+    }
+
+    return result.checks.map((check) => ({
+      name: check.name,
+      status: check.status,
+      summary: check.summary,
+    }));
+  }
+
+  private toWorkerReviewFindings(
+    result: VerifierPipelineResult | null | undefined,
+  ): WorkerReviewFinding[] {
+    if (!result) {
+      return [];
+    }
+
+    const findings: WorkerReviewFinding[] = [];
+    for (const check of result.checks) {
+      if (check.status === "issues") {
+        findings.push({
+          source: check.name === "completion-review" ? "completion-review" : "integration",
+          severity: check.gate ? "error" : "warning",
+          message: check.summary,
+        });
+      }
+    }
+
+    const reviewDecision = result.reviewDecision;
+    if (reviewDecision?.reviews) {
+      const reviewSources: Array<{
+        key: keyof NonNullable<typeof reviewDecision.reviews>;
+        source: WorkerReviewFinding["source"];
+      }> = [
+        { key: "code", source: "code-review" },
+        { key: "simplify", source: "simplify" },
+        { key: "security", source: "security-review" },
+      ];
+      for (const reviewSource of reviewSources) {
+        if (reviewDecision.reviews[reviewSource.key] === "issues") {
+          findings.push({
+            source: reviewSource.source,
+            severity: "error",
+            message: `${reviewSource.source} found issues during completion review.`,
+          });
+        }
+      }
+    }
+
+    for (const finding of reviewDecision?.findings ?? []) {
+      findings.push({
+        source: "completion-review",
+        severity: result.decision === "approve" ? "info" : "warning",
+        message: finding,
+      });
+    }
+
+    for (const stageResult of result.stageResults ?? []) {
+      const source = stageResult.stage === "code"
+        ? "code-review"
+        : stageResult.stage === "simplify"
+          ? "simplify"
+          : "security-review";
+      for (const finding of stageResult.findings ?? []) {
+        findings.push({
+          source,
+          severity: stageResult.status === "issues" ? "warning" : "info",
+          message: finding,
+        });
+      }
+    }
+
+    return findings;
+  }
+
+  private buildWorkerArtifacts(params: {
+    workspaceLease?: WorkspaceLease;
+    touchedFiles: readonly string[];
+    finalSummary: string;
+  }): WorkerArtifactMetadata[] {
+    const artifacts: WorkerArtifactMetadata[] = [];
+    if (params.workspaceLease) {
+      artifacts.push({
+        kind: "workspace",
+        summary: `Worker executed in isolated workspace ${params.workspaceLease.id}.`,
+        path: params.workspaceLease.path,
+      });
+    }
+    if (params.touchedFiles.length > 0) {
+      artifacts.push({
+        kind: "patch",
+        summary: `Touched ${params.touchedFiles.length} file(s).`,
+      });
+    }
+    artifacts.push({
+      kind: "result",
+      summary: params.finalSummary,
+    });
+    return artifacts;
   }
 
   /**
@@ -1760,6 +2076,10 @@ export class Orchestrator {
         strategy.reviewer.provider,
         "reviewed whether clarification should stay internal or be surfaced to the user",
         "clarification-review",
+        {
+          assignmentVersion: strategy.reviewer.assignmentVersion,
+          catalogVersion: strategy.reviewer.catalogVersion,
+        },
       );
     }
 
@@ -1771,6 +2091,11 @@ export class Orchestrator {
       fallbackProvider,
       "reviewed whether clarification should stay internal or be surfaced to the user",
       "clarification-review",
+      this.buildCatalogAssignmentMetadata(
+        fallbackProvider.name,
+        this.resolveProviderModelId(fallbackProvider.name, identityKey),
+        identityKey,
+      ),
     );
   }
 
@@ -2376,8 +2701,98 @@ export class Orchestrator {
    * Run a task in the background with abort support and progress reporting.
    * Used by the task system for async execution.
    */
+  async runWorkerTask(request: WorkerRunRequest & {
+    signal: AbortSignal;
+    onProgress: (message: string) => void;
+    attachments?: Attachment[];
+    onUsage?: (usage: TaskUsageEvent) => void;
+    parentMetricId?: string;
+  }): Promise<WorkerRunResult> {
+    const collector: WorkerRunCollector = {
+      toolTrace: [],
+      childWorkerResults: [],
+    };
+    let visibleResponse = "";
+    let thrownReason: string | undefined;
+    try {
+      visibleResponse = await this.runBackgroundTask(
+        request.prompt,
+        {
+          signal: request.signal,
+          onProgress: request.onProgress,
+          chatId: request.chatId,
+          channelType: request.channelType ?? "cli",
+          taskRunId: request.taskRunId,
+          conversationId: request.conversationId,
+          userId: request.userId,
+          attachments: request.attachments,
+          onUsage: request.onUsage,
+          parentMetricId: request.parentMetricId,
+          workspaceLease: request.workspaceLease,
+          __workerCollector: collector,
+          __workerMode: request.mode,
+        } as BackgroundTaskOptions & {
+          __workerCollector: WorkerRunCollector;
+          __workerMode?: ToolExecutionMode;
+        },
+      );
+    } catch (error) {
+      thrownReason = error instanceof Error ? error.message : String(error);
+      visibleResponse = collector.finalVisibleResponse ?? "";
+    }
+
+    const finalAssignment = collector.lastAssignment;
+    const providerName = finalAssignment?.providerName ?? "unknown";
+    const modelId = finalAssignment?.modelId;
+    const catalogVersion =
+      finalAssignment?.catalogVersion ??
+      createCatalogVersion({
+        provider: providerName,
+        model: modelId,
+        updatedAt: undefined,
+        stale: false,
+        degraded: false,
+      });
+    const verificationResults = this.toWorkerVerificationResults(collector.verifierResult);
+    const reviewFindings = this.toWorkerReviewFindings(collector.verifierResult);
+    const touchedFiles = [
+      ...new Set([
+        ...(collector.touchedFiles ?? []),
+        ...collector.childWorkerResults.flatMap((result) => [...result.touchedFiles]),
+      ]),
+    ];
+    const finalSummary = collector.finalSummary ?? (visibleResponse || thrownReason || "");
+
+    return {
+      status: collector.status ?? (thrownReason ? "failed" : "completed"),
+      finalSummary,
+      visibleResponse,
+      provider: providerName,
+      model: modelId,
+      catalogVersion,
+      assignmentVersion: finalAssignment?.assignmentVersion ?? 0,
+      workspaceId: request.workspaceLease?.id,
+      touchedFiles,
+      toolTrace: collector.toolTrace,
+      verificationResults,
+      reviewFindings,
+      artifacts: this.buildWorkerArtifacts({
+        workspaceLease: request.workspaceLease,
+        touchedFiles,
+        finalSummary,
+      }),
+      reason: collector.reason ?? thrownReason,
+    };
+  }
+
   async runBackgroundTask(prompt: string, options: BackgroundTaskOptions): Promise<string> {
     const { signal, onProgress, chatId } = options;
+    const workerCollector = (
+      options as BackgroundTaskOptions & { __workerCollector?: WorkerRunCollector }
+    ).__workerCollector;
+    const workerMode = (
+      options as BackgroundTaskOptions & { __workerMode?: ToolExecutionMode }
+    ).__workerMode ?? "background";
     const conversationScope = resolveConversationScope(chatId, options.conversationId);
     const identityKey = resolveIdentityKey(chatId, options.userId, options.conversationId);
     const taskRunId =
@@ -2559,6 +2974,19 @@ export class Orchestrator {
         let bgEpochIteration = 0;
         let bgEpochCount = 1;
         let bgToolCallCount = 0;
+        let finalVisibleResponse = "";
+        let finalStatus: WorkerRunResult["status"] | undefined;
+        let finalReason: string | undefined;
+        const finish = (
+          response: string,
+          status: WorkerRunResult["status"] = "completed",
+          reason?: string,
+        ): string => {
+          finalVisibleResponse = response;
+          finalStatus = status;
+          finalReason = reason;
+          return response;
+        };
 
         try {
           while (true) {
@@ -2567,6 +2995,13 @@ export class Orchestrator {
               bgEpochIteration < bgEpochIterationLimit;
               bgEpochIteration++, bgIteration++
             ) {
+              executionStrategy = this.buildSupervisorExecutionStrategy(
+                prompt,
+                identityKey,
+                fallbackProvider,
+                bgProjectWorldFingerprint,
+              );
+
               // Check cancellation
               if (signal.aborted) {
                 throw new Error("Task cancelled");
@@ -2602,6 +3037,9 @@ export class Orchestrator {
                 bgAgentState.phase,
                 toolTurnAffinity,
               );
+              if (workerCollector) {
+                workerCollector.lastAssignment = currentAssignment;
+              }
               const currentProvider = currentAssignment.provider;
               const currentToolDefinitions = this.buildWorkerToolDefinitions(
                 executionStrategy.task,
@@ -2672,7 +3110,7 @@ export class Orchestrator {
                       this.getVisibleTranscript(session),
                       /* force */ true,
                     );
-                    return pendingPlanReviewText;
+                    return finish(pendingPlanReviewText, "blocked", pendingPlanReviewText);
                   }
 
                   const pendingWriteRejectionText =
@@ -2690,7 +3128,7 @@ export class Orchestrator {
                       this.getVisibleTranscript(session),
                       /* force */ true,
                     );
-                    return pendingWriteRejectionText;
+                    return finish(pendingWriteRejectionText, "blocked", pendingWriteRejectionText);
                   }
                 }
 
@@ -2744,7 +3182,11 @@ export class Orchestrator {
                       this.getVisibleTranscript(session),
                       /* force */ true,
                     );
-                    return clarificationIntervention.message;
+                    return finish(
+                      clarificationIntervention.message,
+                      "blocked",
+                      clarificationIntervention.message,
+                    );
                   }
 
                   const rawBoundary = this.decideUserVisibleBoundary({
@@ -2791,7 +3233,11 @@ export class Orchestrator {
                       this.getVisibleTranscript(session),
                       /* force */ true,
                     );
-                    return surfacedText;
+                    return finish(
+                      surfacedText,
+                      rawBoundary.kind === "plan_review" ? "blocked" : "completed",
+                      surfacedText,
+                    );
                   }
 
                   const verifierIntervention = await this.resolveVerifierIntervention({
@@ -2807,6 +3253,9 @@ export class Orchestrator {
                     availableToolNames: currentToolDefinitions.map((definition) => definition.name),
                     usageHandler: options.onUsage ?? this.onUsage,
                   });
+                  if (workerCollector) {
+                    workerCollector.verifierResult = verifierIntervention.result;
+                  }
                   executionJournal.recordVerifierResult(
                     verifierIntervention.result,
                     executionStrategy.reviewer.providerName,
@@ -2883,6 +3332,9 @@ export class Orchestrator {
                     systemPrompt,
                     usageHandler: options.onUsage ?? this.onUsage,
                   });
+                  if (workerCollector) {
+                    workerCollector.lastAssignment = executionStrategy.synthesizer;
+                  }
                   const finalBoundary = this.decideUserVisibleBoundary({
                     chatId,
                     prompt,
@@ -2940,7 +3392,7 @@ export class Orchestrator {
                     this.getVisibleTranscript(session),
                     /* force */ true,
                   );
-                  return surfacedFinalText || "Task completed without output.";
+                  return finish(surfacedFinalText || "Task completed without output.");
                 }
 
                 if (decision === "REPLAN") {
@@ -3042,9 +3494,13 @@ export class Orchestrator {
                   this.getVisibleTranscript(session),
                   /* force */ true,
                 );
-                return planText
-                  ? this.formatPlanReviewMessage(planText)
-                  : "Plan prepared for review.";
+                return finish(
+                  planText
+                    ? this.formatPlanReviewMessage(planText)
+                    : "Plan prepared for review.",
+                  "blocked",
+                  planText ?? "Plan prepared for review.",
+                );
               }
 
               // Final response — return text
@@ -3063,7 +3519,7 @@ export class Orchestrator {
                     this.getVisibleTranscript(session),
                     /* force */ true,
                   );
-                  return pendingPlanReviewText;
+                  return finish(pendingPlanReviewText, "blocked", pendingPlanReviewText);
                 }
 
                 const pendingWriteRejectionText = this.getPendingSelfManagedWriteRejectionVisibleText(
@@ -3083,7 +3539,7 @@ export class Orchestrator {
                     this.getVisibleTranscript(session),
                     /* force */ true,
                   );
-                  return pendingWriteRejectionText;
+                  return finish(pendingWriteRejectionText, "blocked", pendingWriteRejectionText);
                 }
 
                 const clarificationIntervention = await this.resolveDraftClarificationIntervention({
@@ -3123,7 +3579,11 @@ export class Orchestrator {
                     this.getVisibleTranscript(session),
                     /* force */ true,
                   );
-                  return clarificationIntervention.message;
+                  return finish(
+                    clarificationIntervention.message,
+                    "blocked",
+                    clarificationIntervention.message,
+                  );
                 }
 
                 const rawBoundary = this.decideUserVisibleBoundary({
@@ -3161,7 +3621,11 @@ export class Orchestrator {
                     this.getVisibleTranscript(session),
                     /* force */ true,
                   );
-                  return surfacedText;
+                  return finish(
+                    surfacedText,
+                    rawBoundary.kind === "plan_review" ? "blocked" : "completed",
+                    surfacedText,
+                  );
                 }
 
                 const verifierIntervention = await this.resolveVerifierIntervention({
@@ -3177,6 +3641,9 @@ export class Orchestrator {
                   availableToolNames: currentToolDefinitions.map((definition) => definition.name),
                   usageHandler: options.onUsage ?? this.onUsage,
                 });
+                if (workerCollector) {
+                  workerCollector.verifierResult = verifierIntervention.result;
+                }
                 if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
                   this.recordPhaseOutcome({
                     chatId,
@@ -3233,6 +3700,9 @@ export class Orchestrator {
                   systemPrompt,
                   usageHandler: options.onUsage ?? this.onUsage,
                 });
+                if (workerCollector) {
+                  workerCollector.lastAssignment = executionStrategy.synthesizer;
+                }
                 const finalBoundary = this.decideUserVisibleBoundary({
                   chatId,
                   prompt,
@@ -3288,7 +3758,7 @@ export class Orchestrator {
                   /* force */ true,
                 );
 
-                return surfacedFinalText || "Task completed without output.";
+                return finish(surfacedFinalText || "Task completed without output.");
               }
 
               // ─── PAOR: Phase transitions ────────────────────────────────────
@@ -3322,7 +3792,7 @@ export class Orchestrator {
               });
 
               const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
-                mode: "background",
+                mode: workerMode,
                 taskPrompt: prompt,
                 sessionMessages: session.messages,
                 onUsage: options.onUsage ?? this.onUsage,
@@ -3330,6 +3800,7 @@ export class Orchestrator {
                 strategy: executionStrategy,
                 agentState: bgAgentState,
                 touchedFiles: [...selfVerification.getState().touchedFiles],
+                workspaceLease: options.workspaceLease,
               });
               bgToolCallCount += response.toolCalls.length;
 
@@ -3337,9 +3808,21 @@ export class Orchestrator {
               for (let i = 0; i < response.toolCalls.length; i++) {
                 const tc = response.toolCalls[i]!;
                 const tr = toolResults[i]!;
+                const delegatedWorkerResult = tr.metadata?.["workerResult"] as WorkerRunResult | undefined;
                 taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
                 selfVerification.track(tc.name, tc.input, tr);
+                if (delegatedWorkerResult) {
+                  selfVerification.ingestWorkerResult(delegatedWorkerResult);
+                  workerCollector?.childWorkerResults.push(delegatedWorkerResult);
+                }
                 stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
+                workerCollector?.toolTrace.push({
+                  toolName: tc.name,
+                  success: !(tr.isError ?? false),
+                  summary: tr.content.slice(0, 200),
+                  timestamp: Date.now(),
+                  workspaceId: options.workspaceLease?.id,
+                });
 
                 const analysis = errorRecovery.analyze(tc.name, tr);
                 if (analysis) {
@@ -3348,6 +3831,7 @@ export class Orchestrator {
                     toolCallId: tr.toolCallId,
                     content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
                     isError: tr.isError,
+                    metadata: tr.metadata,
                   };
                 }
 
@@ -3579,10 +4063,16 @@ export class Orchestrator {
               terminatedByIterationBudget: true,
             });
 
-            return this.buildBackgroundIterationBudgetStopMessage(completedEpochCount);
+            return finish(
+              this.buildBackgroundIterationBudgetStopMessage(completedEpochCount),
+              "blocked",
+              "Background execution reached its configured iteration budget.",
+            );
           }
         } catch (error) {
           bgAgentState = transitionPhase(bgAgentState, AgentPhase.FAILED);
+          finalStatus = "failed";
+          finalReason = error instanceof Error ? error.message : String(error);
           throw error;
         } finally {
           this.persistExecutionMemory(identityKey, executionJournal);
@@ -3594,6 +4084,13 @@ export class Orchestrator {
             hitMaxIterations: false,
           });
           // ────────────────────────────────────────────────────────────────
+          if (workerCollector) {
+            workerCollector.touchedFiles = [...selfVerification.getState().touchedFiles];
+            workerCollector.finalVisibleResponse = finalVisibleResponse;
+            workerCollector.finalSummary = finalVisibleResponse || finalReason || "";
+            workerCollector.status = finalStatus;
+            workerCollector.reason = finalReason;
+          }
         }
       },
     );
@@ -3982,7 +4479,7 @@ export class Orchestrator {
     // ─── PAOR State Machine ──────────────────────────────────────────────
     stradaConformance.trackPrompt(lastUserMessage);
     let agentState = createInitialState(lastUserMessage);
-    const executionStrategy = this.buildSupervisorExecutionStrategy(
+    let executionStrategy = this.buildSupervisorExecutionStrategy(
       lastUserMessage,
       identityKey,
       fallbackProvider,
@@ -4024,6 +4521,13 @@ export class Orchestrator {
 
     try {
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
+        executionStrategy = this.buildSupervisorExecutionStrategy(
+          lastUserMessage,
+          identityKey,
+          fallbackProvider,
+          projectWorldFingerprint,
+        );
+
         // ─── PAOR: Build phase-aware system prompt ──────────────────────
         let activePrompt = systemPrompt;
         switch (agentState.phase) {
@@ -5034,10 +5538,14 @@ export class Orchestrator {
         for (let i = 0; i < response.toolCalls.length; i++) {
           const tc = response.toolCalls[i]!;
           const tr = toolResults[i]!;
+          const delegatedWorkerResult = tr.metadata?.["workerResult"] as WorkerRunResult | undefined;
 
           // O(1) tracking in planner & verifier
           taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
           selfVerification.track(tc.name, tc.input, tr);
+          if (delegatedWorkerResult) {
+            selfVerification.ingestWorkerResult(delegatedWorkerResult);
+          }
           stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
 
           // Error recovery: analyze and enrich the tool result
@@ -5050,6 +5558,7 @@ export class Orchestrator {
               toolCallId: tr.toolCallId,
               content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
               isError: tr.isError,
+              metadata: tr.metadata,
             };
           }
 
@@ -5502,6 +6011,7 @@ export class Orchestrator {
     taskPrompt: string | undefined,
     userId?: string,
   ): Promise<ToolResult | null> {
+    const interactionMode = mode === "delegated" ? "background" : mode;
     if (toolCall.name === "show_plan") {
         const explicitPlanReview = taskPrompt && userExplicitlyAskedForPlan(taskPrompt);
         if (explicitPlanReview) {
@@ -5571,7 +6081,7 @@ export class Orchestrator {
         };
       }
 
-      const review = reviewAutonomousPlan(toolCall.input, mode);
+      const review = reviewAutonomousPlan(toolCall.input, interactionMode);
       return { toolCallId: toolCall.id, content: review.content, isError: review.isError };
     }
 
@@ -5580,7 +6090,7 @@ export class Orchestrator {
     }
 
     if (toolCall.name === "ask_user") {
-      const review = reviewAutonomousQuestion(toolCall.input, mode);
+      const review = reviewAutonomousQuestion(toolCall.input, interactionMode);
       return { toolCallId: toolCall.id, content: review.content, isError: review.isError };
     }
 
@@ -5789,48 +6299,34 @@ export class Orchestrator {
       };
     }
 
-    const reviewer = params.strategy.reviewer;
     try {
-      const reviewResponse = await reviewer.provider.chat(
-        `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
-        [
-          {
-            role: "user",
-            content: buildVerifierPipelineReviewRequest({
-              prompt: params.prompt,
-              draft: params.draft ?? "",
-              state: params.state,
-              plan,
-            }),
-          },
-        ],
-        [],
-      );
-      this.recordExecutionTrace({
+      const stagedReview = await this.runCompletionReviewStages({
         chatId: params.chatId,
         identityKey: params.identityKey,
-        assignment: reviewer,
-        phase: "completion-review",
-        source: "completion-review",
-        task: params.strategy.task,
+        prompt: params.prompt,
+        state: params.state,
+        draft: params.draft ?? "",
+        plan,
+        strategy: params.strategy,
+        usageHandler: params.usageHandler,
       });
-      this.recordAuxiliaryUsage(reviewer.providerName, reviewResponse.usage, params.usageHandler);
       const result = finalizeVerifierPipelineReview(
         plan,
-        parseCompletionReviewDecision(reviewResponse.text),
+        stagedReview.decision,
         params.draft,
+        stagedReview.stageResults,
       );
       this.recordPhaseOutcome({
         chatId: params.chatId,
         identityKey: params.identityKey,
-        assignment: reviewer,
+        assignment: params.strategy.reviewer,
         phase: "completion-review",
         source: "completion-review",
         status: this.toPhaseOutcomeStatus(result.decision),
         task: params.strategy.task,
         reason: result.summary,
         telemetry: this.buildPhaseOutcomeTelemetry({
-          usage: reviewResponse.usage,
+          usage: stagedReview.usage,
           verifierDecision: result.decision,
           state: params.state,
           failureReason: params.draft,
@@ -5856,13 +6352,13 @@ export class Orchestrator {
     } catch (error) {
       getLogger().warn("Completion review provider failed", {
         chatId: params.chatId,
-        provider: reviewer.providerName,
+        provider: params.strategy.reviewer.providerName,
         error: error instanceof Error ? error.message : String(error),
       });
       this.recordPhaseOutcome({
         chatId: params.chatId,
         identityKey: params.identityKey,
-        assignment: reviewer,
+        assignment: params.strategy.reviewer,
         phase: "completion-review",
         source: "completion-review",
         status: "failed",
@@ -5892,6 +6388,254 @@ export class Orchestrator {
             : "approve",
       gate: fallbackResult.gate,
       result: fallbackResult,
+    };
+  }
+
+  private resolveCompletionReviewStageAssignment(
+    stage: CompletionReviewStageName,
+    params: {
+      prompt: string;
+      identityKey: string;
+      strategy: SupervisorExecutionStrategy;
+    },
+  ): SupervisorAssignment {
+    const task =
+      stage === "code"
+        ? { ...params.strategy.task, type: "code-review" as const }
+        : stage === "simplify"
+          ? { ...params.strategy.task, type: "refactoring" as const }
+          : {
+            ...params.strategy.task,
+            type: "analysis" as const,
+            criticality: params.strategy.task.criticality === "low" ? "medium" : params.strategy.task.criticality,
+          };
+
+    return this.resolveSupervisorAssignment(
+      "reviewer",
+      task,
+      "completion-review",
+      params.identityKey,
+      params.strategy.reviewer.providerName,
+      params.strategy.reviewer.provider,
+      `${params.prompt}\n\nCompletion review stage: ${stage}.`,
+    );
+  }
+
+  private buildCompletionReviewStageFallback(
+    stage: CompletionReviewStageName,
+    summary: string,
+    requiredAction: string,
+  ): CompletionReviewStageResult {
+    return {
+      stage,
+      status: "issues",
+      summary,
+      findings: [summary],
+      requiredActions: [requiredAction],
+    };
+  }
+
+  private deriveStageResultsFromLegacyReviewDecision(
+    decision: ReturnType<typeof parseCompletionReviewDecision>,
+  ): CompletionReviewStageResult[] {
+    if (!decision?.reviews) {
+      return [];
+    }
+
+    return [
+      {
+        stage: "code",
+        status: decision.reviews.code === "issues" || decision.reviews.code === "not_applicable"
+          ? decision.reviews.code
+          : "clean",
+        summary: decision.summary,
+      },
+      {
+        stage: "simplify",
+        status: decision.reviews.simplify === "issues" || decision.reviews.simplify === "not_applicable"
+          ? decision.reviews.simplify
+          : "clean",
+        summary: decision.summary,
+      },
+      {
+        stage: "security",
+        status: decision.reviews.security === "issues" || decision.reviews.security === "not_applicable"
+          ? decision.reviews.security
+          : "clean",
+        summary: decision.summary,
+      },
+    ];
+  }
+
+  private async runCompletionReviewStages(params: {
+    chatId: string;
+    identityKey: string;
+    prompt: string;
+    state: AgentState;
+    draft: string;
+    plan: ReturnType<typeof planVerifierPipeline>;
+    strategy: SupervisorExecutionStrategy;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }): Promise<{
+    decision: ReturnType<typeof parseCompletionReviewDecision>;
+    stageResults: CompletionReviewStageResult[];
+    usage?: ProviderResponse["usage"];
+  }> {
+    const verifierChecks = params.plan.checks.map(
+      (check) => `- ${check.name}: ${check.status} — ${check.summary}`,
+    );
+    const stageResults: CompletionReviewStageResult[] = [];
+    const stages: CompletionReviewStageName[] = ["code", "simplify", "security"];
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
+    const recordUsage = (usage: ProviderResponse["usage"] | undefined) => {
+      if (!usage) {
+        return;
+      }
+      totalInputTokens += usage.inputTokens ?? 0;
+      totalOutputTokens += usage.outputTokens ?? 0;
+    };
+
+    for (const stage of stages) {
+      const assignment = this.resolveCompletionReviewStageAssignment(stage, params);
+      try {
+        const reviewResponse = await assignment.provider.chat(
+          `${this.systemPrompt}\n\n${buildCompletionReviewStageSystemPrompt(stage)}${this.buildSupervisorRolePrompt(params.strategy, assignment)}`,
+          [
+            {
+              role: "user",
+              content: buildCompletionReviewStageRequest({
+                stage,
+                prompt: params.prompt,
+                draft: params.draft,
+                state: params.state,
+                evidence: params.plan.evidence,
+                verifierChecks,
+              }),
+            },
+          ],
+          [],
+        );
+        this.recordExecutionTrace({
+          chatId: params.chatId,
+          identityKey: params.identityKey,
+          assignment,
+          phase: "completion-review",
+          source: "completion-review",
+          task: params.strategy.task,
+          reason: `${stage} stage review`,
+        });
+        this.recordAuxiliaryUsage(assignment.providerName, reviewResponse.usage, params.usageHandler);
+        recordUsage(reviewResponse.usage);
+        const legacyDecision = parseCompletionReviewDecision(reviewResponse.text);
+        const looksLikeLegacyCompletionDecision = Boolean(
+          legacyDecision?.decision
+          || legacyDecision?.closureStatus
+          || legacyDecision?.logStatus
+          || legacyDecision?.reviews,
+        );
+        if (looksLikeLegacyCompletionDecision && stageResults.length === 0) {
+          return {
+            decision: legacyDecision,
+            stageResults: this.deriveStageResultsFromLegacyReviewDecision(legacyDecision),
+            usage: {
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens,
+              totalTokens: totalInputTokens + totalOutputTokens,
+            },
+          };
+        }
+        stageResults.push(
+          parseCompletionReviewStageResult(reviewResponse.text, stage)
+          ?? this.buildCompletionReviewStageFallback(
+            stage,
+            `${stage} review returned an invalid response.`,
+            `Rerun the ${stage} review and continue conservatively until it is clean.`,
+          ),
+        );
+      } catch (error) {
+        getLogger().warn("Completion review stage failed", {
+          chatId: params.chatId,
+          stage,
+          provider: assignment.providerName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        stageResults.push(
+          this.buildCompletionReviewStageFallback(
+            stage,
+            `${stage} review failed before Strada could validate completion.`,
+            `Investigate the ${stage} review failure, rerun that review, and continue conservatively.`,
+          ),
+        );
+      }
+    }
+
+    const reviewer = this.resolveSupervisorAssignment(
+      "reviewer",
+      { ...params.strategy.task, type: "code-review" },
+      "completion-review",
+      params.identityKey,
+      params.strategy.reviewer.providerName,
+      params.strategy.reviewer.provider,
+      `${params.prompt}\n\nCompletion review synthesis.`,
+    );
+    const synthesisRequest = buildCompletionReviewSynthesisRequest({
+      prompt: params.prompt,
+      draft: params.draft,
+      state: params.state,
+      evidence: params.plan.evidence,
+      verifierChecks,
+      stageResults,
+    });
+
+    const reviewResponse = await reviewer.provider.chat(
+      `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
+      [
+        {
+          role: "user",
+          content: synthesisRequest,
+        },
+      ],
+      [],
+    ).catch((error) => {
+      getLogger().warn("Completion review synthesis failed", {
+        chatId: params.chatId,
+        provider: reviewer.providerName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+    if (!reviewResponse) {
+      return {
+        decision: null,
+        stageResults,
+        usage: {
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          totalTokens: totalInputTokens + totalOutputTokens,
+        },
+      };
+    }
+    this.recordExecutionTrace({
+      chatId: params.chatId,
+      identityKey: params.identityKey,
+      assignment: reviewer,
+      phase: "completion-review",
+      source: "completion-review",
+      task: params.strategy.task,
+      reason: "aggregated staged completion review",
+    });
+    this.recordAuxiliaryUsage(reviewer.providerName, reviewResponse.usage, params.usageHandler);
+    recordUsage(reviewResponse.usage);
+    return {
+      decision: parseCompletionReviewDecision(reviewResponse.text),
+      stageResults,
+      usage: {
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        totalTokens: totalInputTokens + totalOutputTokens,
+      },
     };
   }
 
@@ -6038,10 +6782,14 @@ export class Orchestrator {
     const logger = getLogger();
     const results: ToolResult[] = [];
     const mode = options.mode ?? "interactive";
+    const workspacePath = options.workspaceLease?.path;
+    const projectPath = options.projectPathOverride ?? workspacePath ?? this.projectPath;
+    const workingDirectory =
+      options.workingDirectoryOverride ?? workspacePath ?? this.projectPath;
 
     const toolContext: ToolContext & { soulLoader?: SoulLoader | null } = {
-      projectPath: this.projectPath,
-      workingDirectory: this.projectPath,
+      projectPath,
+      workingDirectory,
       readOnly: this.readOnly,
       userId: options.userId,
       chatId,
@@ -6195,6 +6943,7 @@ export class Orchestrator {
           toolCallId: activeToolCall.id,
           content: sanitizeToolResult(result.content),
           isError: result.isError,
+          metadata: result.metadata,
         });
       } catch (error) {
         this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, false);

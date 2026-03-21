@@ -227,8 +227,8 @@ describe("DashboardServer", () => {
           providerName: "kimi",
           model: "kimi-for-coding",
           isDefault: false,
-          selectionMode: "strada-primary-worker",
-          executionPolicyNote: "Strada remains the control plane. This selection sets the primary execution worker; planning, review, and synthesis may still route to other providers.",
+          selectionMode: "strada-preference-bias",
+          executionPolicyNote: "Strada remains the control plane. This selection biases routing toward the preferred provider/model, but planning, execution, review, and synthesis may still route dynamically unless an explicit hard pin is requested.",
         }),
         setPreference: async () => {},
       },
@@ -269,7 +269,7 @@ describe("DashboardServer", () => {
       providerName: "kimi",
       model: "kimi-for-coding",
       isDefault: false,
-      selectionMode: "strada-primary-worker",
+      selectionMode: "strada-preference-bias",
       executionPolicyNote: expect.stringContaining("Strada remains the control plane"),
     }));
     expect(activeData.executionPool).toEqual([
@@ -564,7 +564,7 @@ describe("DashboardServer", () => {
       providerName: "kimi",
       model: "accounts/fireworks/models/llama4-maverick-instruct-basic",
       isDefault: false,
-      selectionMode: "strada-primary-worker",
+      selectionMode: "strada-preference-bias",
       executionPolicyNote: "Strada remains the control plane.",
     }));
     const setPreference = vi.fn().mockResolvedValue(undefined);
@@ -636,6 +636,7 @@ describe("DashboardServer", () => {
       "user-42",
       "kimi",
       "accounts/fireworks/models/llama4-maverick-instruct-basic",
+      "strada-preference-bias",
     );
 
     const autonomousRes = await fetch(

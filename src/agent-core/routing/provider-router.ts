@@ -11,6 +11,7 @@ import type {
   RoutingPreset,
   RoutingWeights,
   RoutingDecision,
+  ProviderRoutingDecision,
   TaskType,
   ExecutionTrace,
   PhaseOutcome,
@@ -19,6 +20,7 @@ import type {
 } from "./routing-types.js";
 import { ROUTING_PRESETS } from "./routing-presets.js";
 import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
+import type { ProviderCatalogSnapshot } from "../../agents/providers/provider-catalog.js";
 import {
   getProviderIntelligenceSnapshot,
   type ModelIntelligenceLookup,
@@ -48,6 +50,7 @@ export interface ProviderManagerRef {
     capabilities: ProviderCapabilities | null;
   } & CatalogTelemetry>;
   getProviderCapabilities?(name: string, model?: string): ProviderCapabilities | undefined;
+  getCatalogSnapshot?(identityKey?: string): ProviderCatalogSnapshot;
   isAvailable(name: string): boolean;
 }
 
@@ -254,6 +257,43 @@ export class ProviderRouter {
     this.recordDecision(decision);
     this.lastExecutingProvider = bestProvider;
     return decision;
+  }
+
+  /**
+   * Resolve a provider and enrich the decision with catalog assignment metadata.
+   * This does not change selection behavior; it only exposes the catalog state
+   * that informed the choice.
+   */
+  resolveWithCatalog(
+    task: TaskClassification,
+    phase?: string,
+    options: {
+      identityKey?: string;
+      allowedProviderNames?: readonly string[];
+      taskDescription?: string;
+      projectWorldFingerprint?: string;
+    } = {},
+  ): ProviderRoutingDecision {
+    const decision = this.resolve(task, phase, options);
+    const catalog = this.providerManager.getCatalogSnapshot?.(options.identityKey);
+    const provider = catalog?.providers.find(
+      (entry) => entry.name.trim().toLowerCase() === decision.provider.trim().toLowerCase(),
+    );
+
+    return {
+      provider: decision.provider,
+      model: provider?.model ?? provider?.defaultModel ?? decision.provider,
+      reason: decision.reason,
+      timestamp: decision.timestamp,
+      assignmentVersion: catalog?.assignmentVersion ?? 0,
+      catalog: {
+        stale: provider?.catalogStale ?? catalog?.stale ?? false,
+        degraded: catalog?.degraded ?? false,
+        freshnessScore: provider?.catalogFreshnessScore ?? catalog?.health.freshnessScore ?? PHASE_SCORE_NEUTRAL,
+        alignmentScore: provider?.officialAlignmentScore ?? catalog?.health.alignmentScore ?? PHASE_SCORE_NEUTRAL,
+        updatedAt: provider?.catalogUpdatedAt ?? catalog?.health.updatedAt,
+      },
+    };
   }
 
   /**

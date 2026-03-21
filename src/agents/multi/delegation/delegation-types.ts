@@ -9,6 +9,7 @@
 
 import type { AgentId } from "../agent-types.js";
 import type { ToolContext } from "../../tools/tool-core.interface.js";
+import type { WorkerRunResult } from "../../supervisor/supervisor-types.js";
 
 // =============================================================================
 // CORE TYPES
@@ -64,6 +65,7 @@ export interface DelegationRequest {
 /** Result returned by a sub-agent after delegation completes */
 export interface DelegationResult {
   readonly content: string;
+  readonly workerResult?: WorkerRunResult;
   readonly metadata: {
     readonly model: string;
     readonly tier: ModelTier;

@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IAIProvider } from "./provider.interface.js";
 
 const { preferenceState, buildProviderChainMock } = vi.hoisted(() => ({
-  preferenceState: new Map<string, { providerName: string; model?: string }>(),
+  preferenceState: new Map<string, {
+    providerName: string;
+    model?: string;
+    selectionMode: "strada-preference-bias" | "strada-hard-pin";
+  }>(),
   buildProviderChainMock: vi.fn(),
 }));
 
@@ -52,8 +56,13 @@ vi.mock("./provider-preferences.js", () => ({
   ProviderPreferenceStore: vi.fn().mockImplementation(() => ({
     initialize: vi.fn(),
     get: vi.fn((chatId: string) => preferenceState.get(chatId)),
-    set: vi.fn((chatId: string, providerName: string, model?: string) => {
-      preferenceState.set(chatId, { providerName, model });
+    set: vi.fn((
+      chatId: string,
+      providerName: string,
+      model?: string,
+      selectionMode: "strada-preference-bias" | "strada-hard-pin" = "strada-preference-bias",
+    ) => {
+      preferenceState.set(chatId, { providerName, model, selectionMode });
     }),
     delete: vi.fn((chatId: string) => {
       preferenceState.delete(chatId);
@@ -108,14 +117,18 @@ describe("ProviderManager", () => {
       providerName: "qwen",
       model: "qwen-max",
       isDefault: true,
-      selectionMode: "strada-primary-worker",
-      executionPolicyNote: "Strada remains the control plane. This selection sets the primary execution worker; planning, review, and synthesis may still route to other providers.",
+      selectionMode: "strada-preference-bias",
+      executionPolicyNote: "Strada remains the control plane. This selection biases routing toward the preferred provider/model, but planning, execution, review, and synthesis may still route dynamically unless an explicit hard pin is requested.",
     });
   });
 
   it("wraps a preferred provider with the configured fallback chain", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
-    preferenceState.set("chat-1", { providerName: "kimi", model: "kimi-long-context" });
+    preferenceState.set("chat-1", {
+      providerName: "kimi",
+      model: "kimi-long-context",
+      selectionMode: "strada-preference-bias",
+    });
     const manager = new ProviderManager(
       defaultProvider,
       { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
@@ -183,7 +196,11 @@ describe("ProviderManager", () => {
 
   it("prepends the active worker to the execution pool when selected outside the default chain", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
-    preferenceState.set("chat-1", { providerName: "openai", model: "gpt-5.2" });
+    preferenceState.set("chat-1", {
+      providerName: "openai",
+      model: "gpt-5.2",
+      selectionMode: "strada-preference-bias",
+    });
     const manager = new ProviderManager(
       defaultProvider,
       {
@@ -205,7 +222,10 @@ describe("ProviderManager", () => {
 
   it("falls back to the default provider when resilient chain creation fails", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
-    preferenceState.set("chat-1", { providerName: "kimi" });
+    preferenceState.set("chat-1", {
+      providerName: "kimi",
+      selectionMode: "strada-preference-bias",
+    });
     buildProviderChainMock.mockImplementationOnce(() => {
       throw new Error("boom");
     });
@@ -245,6 +265,35 @@ describe("ProviderManager", () => {
     const capabilities = manager.getProviderCapabilities("kimi", "kimi-for-coding");
 
     expect(capabilities?.specialFeatures).toEqual(expect.arrayContaining(["agents", "planning"]));
+  });
+
+  it("materializes a direct provider and singleton execution pool when hard-pinned", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    preferenceState.set("chat-1", {
+      providerName: "kimi",
+      model: "kimi-long-context",
+      selectionMode: "strada-hard-pin",
+    });
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    const provider = manager.getProvider("chat-1");
+
+    expect(provider.name).toBe("kimi");
+    expect(buildProviderChainMock).not.toHaveBeenCalled();
+    expect(manager.getActiveInfo("chat-1")).toEqual({
+      providerName: "kimi",
+      model: "kimi-long-context",
+      isDefault: false,
+      selectionMode: "strada-hard-pin",
+      executionPolicyNote: "Strada remains the control plane, but this conversation is hard-pinned to the selected provider/model. Planning, execution, review, and synthesis must stay on that provider until the pin is removed.",
+    });
+    expect(manager.listExecutionCandidates("chat-1").map((entry) => entry.name)).toEqual(["kimi"]);
   });
 
   it("surfaces official model signals in the provider model list when the shared catalog lags", async () => {

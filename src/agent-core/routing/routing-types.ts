@@ -53,6 +53,21 @@ export interface RoutingDecision {
   };
 }
 
+export interface ProviderRoutingDecision {
+  readonly provider: string;
+  readonly model: string;
+  readonly reason: string;
+  readonly timestamp: number;
+  readonly assignmentVersion: number;
+  readonly catalog: {
+    readonly stale: boolean;
+    readonly degraded: boolean;
+    readonly freshnessScore: number;
+    readonly alignmentScore: number;
+    readonly updatedAt?: number;
+  };
+}
+
 export type ExecutionRole = "planner" | "executor" | "reviewer" | "synthesizer";
 export type ExecutionPhase =
   | "planning"

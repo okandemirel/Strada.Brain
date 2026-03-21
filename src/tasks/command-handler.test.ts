@@ -4,6 +4,84 @@ import { CommandHandler } from "./command-handler.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 
+describe("CommandHandler /model", () => {
+  const sendMarkdown = vi.fn().mockResolvedValue(undefined);
+  const sendText = vi.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    sendMarkdown.mockReset();
+    sendText.mockReset();
+    sendMarkdown.mockResolvedValue(undefined);
+    sendText.mockResolvedValue(undefined);
+  });
+
+  it("sets a hard pin explicitly", async () => {
+    const setPreference = vi.fn();
+    const getActiveInfo = vi.fn(() => ({
+      providerName: "kimi",
+      model: "kimi-max",
+      isDefault: false,
+      selectionMode: "strada-hard-pin",
+      executionPolicyNote: "Hard pin active.",
+    }));
+    const handler = new CommandHandler(
+      {} as never,
+      {
+        sendMarkdown,
+        sendText,
+      } as never,
+      {
+        isAvailable: () => true,
+        setPreference,
+        getActiveInfo,
+        listExecutionCandidates: () => [],
+        listAvailable: () => [],
+      } as never,
+    );
+
+    await handler.handle("chat-1", "model", ["pin", "kimi/kimi-max"], "user-42");
+
+    expect(setPreference).toHaveBeenCalledWith("user-42", "kimi", "kimi-max", "strada-hard-pin");
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("hard-pinned"),
+    );
+  });
+
+  it("removes a hard pin by converting it back into a routing bias", async () => {
+    const setPreference = vi.fn();
+    const getActiveInfo = vi.fn(() => ({
+      providerName: "kimi",
+      model: "kimi-max",
+      isDefault: false,
+      selectionMode: "strada-hard-pin",
+      executionPolicyNote: "Bias active.",
+    }));
+    const handler = new CommandHandler(
+      {} as never,
+      {
+        sendMarkdown,
+        sendText,
+      } as never,
+      {
+        isAvailable: () => true,
+        setPreference,
+        getActiveInfo,
+        listExecutionCandidates: () => [],
+        listAvailable: () => [],
+      } as never,
+    );
+
+    await handler.handle("chat-1", "model", ["unpin"], "user-42");
+
+    expect(setPreference).toHaveBeenCalledWith("user-42", "kimi", "kimi-max", "strada-preference-bias");
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Removed the hard pin"),
+    );
+  });
+});
+
 describe("CommandHandler /routing", () => {
   const sendMarkdown = vi.fn().mockResolvedValue(undefined);
   const sendText = vi.fn().mockResolvedValue(undefined);

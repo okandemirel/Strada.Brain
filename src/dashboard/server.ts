@@ -310,10 +310,15 @@ interface DashboardProviderManager {
     providerName?: string;
     model?: string;
     isDefault?: boolean;
-    selectionMode?: "strada-primary-worker";
+    selectionMode?: "strada-preference-bias" | "strada-hard-pin";
     executionPolicyNote?: string;
   } | null;
-  setPreference(chatId: string, provider: string, model?: string): Promise<void>;
+  setPreference(
+    chatId: string,
+    provider: string,
+    model?: string,
+    selectionMode?: "strada-preference-bias" | "strada-hard-pin",
+  ): Promise<void>;
 }
 
 /** Structural interface for user profile store used by dashboard /api/user endpoints */
@@ -1479,7 +1484,15 @@ export class DashboardServer {
           res.end(JSON.stringify({ error: "Provider manager not available" }));
           return;
         }
-        void this.readJsonBody<{ chatId?: string; userId?: string; conversationId?: string; provider?: string; model?: string }>(req, res).then((parsed) => {
+        void this.readJsonBody<{
+          chatId?: string;
+          userId?: string;
+          conversationId?: string;
+          provider?: string;
+          model?: string;
+          selectionMode?: "strada-preference-bias" | "strada-hard-pin";
+          hardPin?: boolean;
+        }>(req, res).then((parsed) => {
           if (!parsed) return;
           if (!parsed.chatId || !parsed.provider) {
             res.writeHead(400, { "Content-Type": "application/json" });
@@ -1509,10 +1522,18 @@ export class DashboardServer {
             res.end(JSON.stringify({ error: `Provider "${parsed.provider}" is not available` }));
             return;
           }
+          const selectionMode = parsed.selectionMode === "strada-hard-pin" || parsed.hardPin === true
+            ? "strada-hard-pin"
+            : "strada-preference-bias";
           const identityKey = resolveDashboardIdentityKey(parsed.chatId, parsed.userId, parsed.conversationId);
-          void this.providerManager!.setPreference(identityKey, parsed.provider, parsed.model).then(() => {
+          void this.providerManager!.setPreference(identityKey, parsed.provider, parsed.model, selectionMode).then(() => {
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ success: true, provider: parsed.provider, model: parsed.model ?? null }));
+            res.end(JSON.stringify({
+              success: true,
+              provider: parsed.provider,
+              model: parsed.model ?? null,
+              selectionMode,
+            }));
           }).catch((err) => {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));

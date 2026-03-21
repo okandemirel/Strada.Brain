@@ -13,6 +13,7 @@
 import type { ToolResult } from "../providers/provider.interface.js";
 import { MUTATION_TOOLS, COMPILABLE_EXT, extractFilePath, isVerificationToolName } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
+import type { WorkerRunResult } from "../supervisor/supervisor-types.js";
 
 const VERIFICATION_SHELL_COMMAND_RE = /\b(?:test|build|check|lint|typecheck|verify|compile|tsc|eslint|vitest|jest|pytest)\b/iu;
 
@@ -88,6 +89,35 @@ export class SelfVerification {
 
   hasTouchedFiles(): boolean {
     return this.touchedFiles.size > 0;
+  }
+
+  ingestWorkerResult(result: WorkerRunResult): void {
+    for (const file of result.touchedFiles) {
+      this.touchedFiles.add(file);
+      const dotIdx = file.lastIndexOf(".");
+      if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
+        this.hasCompilableChanges = true;
+      }
+    }
+
+    const hasVerificationIssues = result.verificationResults.some(
+      (entry) => entry.status === "issues",
+    );
+    const hasReviewErrors = result.reviewFindings.some(
+      (finding) => finding.severity === "error",
+    );
+
+    if (hasVerificationIssues || hasReviewErrors || result.status !== "completed") {
+      for (const file of result.touchedFiles) {
+        this.pendingFiles.add(file);
+      }
+      this.lastBuildOk = false;
+      return;
+    }
+
+    if (result.touchedFiles.length > 0) {
+      this.lastVerificationAt = Date.now();
+    }
   }
 
   /**

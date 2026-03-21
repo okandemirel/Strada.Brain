@@ -241,12 +241,14 @@ export class CommandHandler {
       "",
       "*Model Commands*",
       "",
-      "`/model` - Show Strada's primary execution worker",
+      "`/model` - Show Strada's current provider routing policy",
       "`/model list` - List available worker providers",
-      "`/model <provider>` - Set Strada's primary execution provider",
-      "`/model <provider>/<model>` - Set Strada's primary execution model",
+      "`/model <provider>` - Bias routing toward a provider",
+      "`/model <provider>/<model>` - Bias routing toward a provider/model",
+      "`/model pin <provider>[/model]` - Hard-pin all phases to one provider/model",
+      "`/model unpin` - Remove a hard pin and keep the same provider/model as a bias",
       "`/model info [provider]` - Show provider capabilities",
-      "`/model reset` - Return to Strada's system default worker",
+      "`/model reset` - Return to Strada's system default routing bias",
       "",
       "*Autonomous Mode*",
       "",
@@ -331,12 +333,16 @@ export class CommandHandler {
         .map((entry) => `\`${entry.name}\``)
         .join(", ");
       const status = info.isDefault ? " (system default)" : "";
+      const selectionModeLabel = info.selectionMode === "strada-hard-pin"
+        ? "Hard pin"
+        : "Preference bias";
       await this.channel.sendMarkdown(
         chatId,
         [
           "*Strada Execution Policy*",
-          `Primary worker provider: \`${info.providerName}\``,
-          `Primary worker model: \`${info.model}\`${status}`,
+          `Mode: ${selectionModeLabel}`,
+          `Provider: \`${info.providerName}\``,
+          `Model: \`${info.model}\`${status}`,
           executionPool ? `Execution pool: ${executionPool}` : "",
           "",
           info.executionPolicyNote,
@@ -366,9 +372,9 @@ export class CommandHandler {
           "",
           poolLines.join("\n") || "(none)",
           "",
-          "Usage: `/model provider` or `/model provider/model`",
+          "Usage: `/model provider`, `/model provider/model`, `/model pin provider`, `/model pin provider/model`, `/model unpin`",
           "",
-          "Strada remains the control plane; this only changes the primary execution worker.",
+          "Strada remains the control plane; default selection is a routing bias unless you explicitly hard-pin it.",
         ].join("\n"),
       );
       return;
@@ -446,24 +452,85 @@ export class CommandHandler {
       const info = this.providerManager.getActiveInfo(identityKey);
       await this.channel.sendMarkdown(
         chatId,
-        `Strada reset to the system-default execution worker: \`${info.providerName}\` (model: \`${info.model}\`)`,
+        `Strada reset to the system-default routing bias: \`${info.providerName}\` (model: \`${info.model}\`)`,
       );
       return;
     }
 
-    // provider/model or just provider
-    const slashIndex = subcommand.indexOf("/");
-    let providerName: string;
-    let model: string | undefined;
-
-    if (slashIndex > 0) {
-      providerName = subcommand.slice(0, slashIndex);
-      model = subcommand.slice(slashIndex + 1);
-    } else {
-      providerName = subcommand;
+    if (subcommand === "pin" || subcommand === "sabitle") {
+      const selectionArg = args[1] && args[2] ? `${args[1]}/${args[2]}` : args[1];
+      if (!selectionArg) {
+        await this.channel.sendText(chatId, "Usage: `/model pin <provider>` or `/model pin <provider>/<model>`");
+        return;
+      }
+      await this.applyProviderSelection(chatId, identityKey, selectionArg, "strada-hard-pin");
+      return;
     }
 
-    if (!this.providerManager.isAvailable(providerName)) {
+    if (subcommand === "unpin" || subcommand === "cikart") {
+      const info = this.providerManager.getActiveInfo(identityKey);
+      if (info.selectionMode !== "strada-hard-pin") {
+        await this.channel.sendMarkdown(
+          chatId,
+          info.isDefault
+            ? `No hard pin is active. Strada is already using the system-default routing bias: \`${info.providerName}\` (model: \`${info.model}\`)`
+            : `No hard pin is active. Strada is already biasing routing toward \`${info.providerName}\` (model: \`${info.model}\`)`,
+        );
+        return;
+      }
+      this.providerManager.setPreference(identityKey, info.providerName, info.model, "strada-preference-bias");
+      await this.channel.sendMarkdown(
+        chatId,
+        [
+          `Removed the hard pin. Strada will now bias routing toward \`${info.providerName}\` (model: \`${info.model}\`).`,
+          "",
+          this.providerManager.getActiveInfo(identityKey).executionPolicyNote,
+        ].join("\n"),
+      );
+      return;
+    }
+
+    if (subcommand === "bias" || subcommand === "prefer" || subcommand === "tercih") {
+      const selectionArg = args[1] && args[2] ? `${args[1]}/${args[2]}` : args[1];
+      if (!selectionArg) {
+        await this.channel.sendText(chatId, "Usage: `/model bias <provider>` or `/model bias <provider>/<model>`");
+        return;
+      }
+      await this.applyProviderSelection(chatId, identityKey, selectionArg, "strada-preference-bias");
+      return;
+    }
+
+    await this.applyProviderSelection(chatId, identityKey, args[0] ?? "", "strada-preference-bias");
+  }
+
+  private parseProviderSelectionArg(selectionArg: string): { providerName: string; model?: string } {
+    const trimmed = selectionArg.trim();
+    const slashIndex = trimmed.indexOf("/");
+    if (slashIndex <= 0) {
+      return { providerName: trimmed.toLowerCase() };
+    }
+    return {
+      providerName: trimmed.slice(0, slashIndex).trim().toLowerCase(),
+      model: trimmed.slice(slashIndex + 1).trim() || undefined,
+    };
+  }
+
+  private async applyProviderSelection(
+    chatId: string,
+    identityKey: string,
+    selectionArg: string,
+    selectionMode: "strada-preference-bias" | "strada-hard-pin",
+  ): Promise<void> {
+    const { providerName, model } = this.parseProviderSelectionArg(selectionArg);
+    if (!providerName) {
+      await this.channel.sendText(
+        chatId,
+        "Usage: `/model <provider>`, `/model <provider>/<model>`, `/model pin <provider>`, or `/model pin <provider>/<model>`",
+      );
+      return;
+    }
+
+    if (!this.providerManager?.isAvailable(providerName)) {
       await this.channel.sendText(
         chatId,
         `Provider "${providerName}" is not available. Use \`/model list\` to see options.`,
@@ -471,12 +538,15 @@ export class CommandHandler {
       return;
     }
 
-    this.providerManager.setPreference(identityKey, providerName, model);
+    this.providerManager.setPreference(identityKey, providerName, model, selectionMode);
     const info = this.providerManager.getActiveInfo(identityKey);
+    const intro = selectionMode === "strada-hard-pin"
+      ? `Strada is now hard-pinned to \`${info.providerName}\` (model: \`${info.model}\`).`
+      : `Strada will bias routing toward \`${info.providerName}\` (model: \`${info.model}\`).`;
     await this.channel.sendMarkdown(
       chatId,
       [
-        `Strada will use \`${info.providerName}\` (model: \`${info.model}\`) as the primary execution worker.`,
+        intro,
         "",
         info.executionPolicyNote,
       ].join("\n"),

@@ -12,16 +12,18 @@ import type { ProviderCapabilities } from "./provider.interface.js";
 import { buildProviderChain, createProvider, PROVIDER_PRESETS } from "./provider-registry.js";
 import type { ProviderCredentialMap } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
+import type { ProviderSelectionMode } from "./provider-preferences.js";
 import { getLogger } from "../../utils/logger.js";
 import { LRUCache } from "../../common/lru-cache.js";
 import type { ProviderOfficialSnapshot } from "./provider-source-registry.js";
 import type { RefreshResult } from "./model-intelligence.js";
+import { ProviderCatalog, type ProviderCatalogSnapshot } from "./provider-catalog.js";
 
 export interface ProviderActiveInfo {
   providerName: string;
   model: string;
   isDefault: boolean;
-  selectionMode: "strada-primary-worker";
+  selectionMode: ProviderSelectionMode;
   executionPolicyNote: string;
 }
 
@@ -65,7 +67,9 @@ interface ProviderModelCatalogLookup {
 
 const MAX_CACHED_PROVIDERS = 50;
 const EXECUTION_POLICY_NOTE =
-  "Strada remains the control plane. This selection sets the primary execution worker; planning, review, and synthesis may still route to other providers.";
+  "Strada remains the control plane. This selection biases routing toward the preferred provider/model, but planning, execution, review, and synthesis may still route dynamically unless an explicit hard pin is requested.";
+const HARD_PIN_EXECUTION_POLICY_NOTE =
+  "Strada remains the control plane, but this conversation is hard-pinned to the selected provider/model. Planning, execution, review, and synthesis must stay on that provider until the pin is removed.";
 
 const CAPABILITY_ALIGNMENT_NEUTRAL = 0.5;
 const CAPABILITY_ALIGNMENT_MISMATCH = 0.25;
@@ -162,6 +166,7 @@ export class ProviderManager {
   private readonly preferences: ProviderPreferenceStore;
   private readonly providerCache = new LRUCache<string, IAIProvider>(MAX_CACHED_PROVIDERS);
   private readonly primaryProviderCache = new LRUCache<string, IAIProvider>(MAX_CACHED_PROVIDERS);
+  private readonly catalog: ProviderCatalog;
   private ollamaVerified = false;
   private modelCatalog?: ProviderModelCatalogLookup;
 
@@ -177,13 +182,16 @@ export class ProviderManager {
       join(dbPath, "provider-preferences.db"),
     );
     this.preferences.initialize();
+    this.catalog = new ProviderCatalog(this);
   }
 
   getProvider(chatId: string): IAIProvider {
     const pref = this.preferences.get(chatId);
     if (!pref) return this.defaultProvider;
 
-    const provider = this.buildResilientProvider(pref.providerName, pref.model);
+    const provider = pref.selectionMode === "strada-hard-pin"
+      ? this.buildPrimaryProvider(pref.providerName, pref.model)
+      : this.buildResilientProvider(pref.providerName, pref.model);
     if (provider) {
       return provider;
     }
@@ -307,7 +315,7 @@ export class ProviderManager {
         providerName: defaultProviderName,
         model: this.getDefaultModelForProvider(defaultProviderName),
         isDefault: true,
-        selectionMode: "strada-primary-worker",
+        selectionMode: "strada-preference-bias",
         executionPolicyNote: EXECUTION_POLICY_NOTE,
       };
     }
@@ -317,14 +325,21 @@ export class ProviderManager {
       providerName: pref.providerName,
       model: pref.model ?? this.modelOverrides?.[pref.providerName] ?? preset?.defaultModel ?? "default",
       isDefault: false,
-      selectionMode: "strada-primary-worker",
-      executionPolicyNote: EXECUTION_POLICY_NOTE,
+      selectionMode: pref.selectionMode,
+      executionPolicyNote: pref.selectionMode === "strada-hard-pin"
+        ? HARD_PIN_EXECUTION_POLICY_NOTE
+        : EXECUTION_POLICY_NOTE,
     };
   }
 
-  setPreference(chatId: string, providerName: string, model?: string): void {
-    this.preferences.set(chatId, providerName, model);
-    getLogger().info("Provider preference set", { chatId, providerName, model });
+  setPreference(
+    chatId: string,
+    providerName: string,
+    model?: string,
+    selectionMode: ProviderSelectionMode = "strada-preference-bias",
+  ): void {
+    this.preferences.set(chatId, providerName, model, selectionMode);
+    getLogger().info("Provider preference set", { chatId, providerName, model, selectionMode });
   }
 
   clearPreference(chatId: string): void {
@@ -341,6 +356,14 @@ export class ProviderManager {
       return null;
     }
     return this.modelCatalog.refresh();
+  }
+
+  getCatalogSnapshot(identityKey?: string): ProviderCatalogSnapshot {
+    return this.catalog.snapshot(identityKey);
+  }
+
+  getRoutingMetadata(providerName: string, model?: string, identityKey?: string) {
+    return this.catalog.getRoutingMetadata(providerName, model, identityKey);
   }
 
   async listAvailableWithModels(): Promise<
@@ -520,8 +543,12 @@ export class ProviderManager {
   }
 
   private resolveExecutionPoolNames(chatId?: string): string[] {
-    const preferredProvider = chatId ? this.preferences.get(chatId)?.providerName : undefined;
+    const preferred = chatId ? this.preferences.get(chatId) : undefined;
+    const preferredProvider = preferred?.providerName;
     const primaryName = preferredProvider?.trim().toLowerCase() || this.getDefaultPrimaryName();
+    if (preferred?.selectionMode === "strada-hard-pin") {
+      return this.isAvailable(primaryName) ? [primaryName] : [];
+    }
     const orderedPool = this.buildFallbackOrder(primaryName).filter((name) => this.isAvailable(name));
 
     if (orderedPool.length > 0) {

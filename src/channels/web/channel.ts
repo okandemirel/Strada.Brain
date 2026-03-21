@@ -656,7 +656,9 @@ export class WebChannel
         const provider = String(data.provider ?? "").trim();
         if (!provider || !this.handler) break;
         const model = typeof data.model === "string" ? data.model.trim() : "";
-        const text = `/model ${provider}${model ? "/" + model : ""}`;
+        const hardPin = data.hardPin === true || data.selectionMode === "strada-hard-pin";
+        const selection = `${provider}${model ? "/" + model : ""}`;
+        const text = hardPin ? `/model pin ${selection}` : `/model ${selection}`;
         const msg: IncomingMessage = {
           channelType: "web",
           chatId,

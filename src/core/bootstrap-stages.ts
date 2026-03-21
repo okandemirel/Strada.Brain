@@ -75,6 +75,7 @@ import {
   type ToolChainConfig,
 } from "../learning/chains/index.js";
 import { ConfidenceScorer } from "../learning/index.js";
+import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 
 export interface ProviderInitResult {
   manager: ProviderManager;
@@ -1059,6 +1060,17 @@ export async function initializeTaskRuntimeStage(
   taskStorage.initialize();
   params.logger.info("Task storage initialized", { dbPath: taskDbPath });
 
+  let workspaceLeaseManager: WorkspaceLeaseManager | undefined;
+  try {
+    workspaceLeaseManager = new WorkspaceLeaseManager({
+      projectRoot: params.config.unityProjectPath,
+    });
+  } catch (error) {
+    params.logger.warn("Workspace isolation disabled for background executor", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   const backgroundExecutorOptions: ConstructorParameters<typeof BackgroundExecutor>[0] = {
     orchestrator: params.orchestrator,
     concurrencyLimit: params.config.tasks.concurrencyLimit,
@@ -1070,6 +1082,7 @@ export async function initializeTaskRuntimeStage(
     daemonEventBus,
     goalConfig: params.config.goal,
     learningEventBus: params.learningEventBus,
+    workspaceLeaseManager,
   };
   const backgroundExecutor = deps.createBackgroundExecutor?.(backgroundExecutorOptions)
     ?? new BackgroundExecutor(backgroundExecutorOptions);
@@ -1489,6 +1502,16 @@ export async function initializeMultiAgentDelegationStage(
     const delegationTypes = params.config.delegation.types.length > 0
       ? [...params.config.delegation.types]
       : [...(deps.defaultDelegationTypes ?? DEFAULT_DELEGATION_TYPES)];
+    let workspaceLeaseManager: WorkspaceLeaseManager | undefined;
+    try {
+      workspaceLeaseManager = new WorkspaceLeaseManager({
+        projectRoot: params.config.unityProjectPath,
+      });
+    } catch (error) {
+      params.logger.warn("Workspace isolation disabled for delegation manager", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     const delegationManagerOptions = {
       config: {
@@ -1516,6 +1539,8 @@ export async function initializeMultiAgentDelegationStage(
       providerCredentials: collectProviderCredentials(params.config),
       preferencesDbPath: params.config.memory.dbPath,
       verifiedLocalProviders: params.providerManager.isAvailable("ollama") ? ["ollama"] : [],
+      workspaceLeaseManager,
+      providerRouter: params.providerRouter as ConstructorParameters<typeof DelegationManager>[0]["providerRouter"],
     };
     delegationManager = deps.createDelegationManager?.(delegationManagerOptions)
       ?? new DelegationManager(delegationManagerOptions);
@@ -2084,10 +2109,17 @@ export function registerDashboardPostBootStage(
           providerName: info.providerName,
           model: info.model,
           isDefault: info.isDefault,
+          selectionMode: info.selectionMode,
+          executionPolicyNote: info.executionPolicyNote,
         } : null;
       },
-      setPreference: async (chatId: string, provider: string, model?: string) => {
-        params.providerManager.setPreference(chatId, provider, model);
+      setPreference: async (
+        chatId: string,
+        provider: string,
+        model?: string,
+        selectionMode?: "strada-preference-bias" | "strada-hard-pin",
+      ) => {
+        params.providerManager.setPreference(chatId, provider, model, selectionMode);
       },
       refreshCatalog: async () => params.providerManager.refreshModelCatalog(),
     },

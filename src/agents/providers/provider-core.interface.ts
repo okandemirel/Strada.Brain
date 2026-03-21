@@ -73,6 +73,7 @@ export interface ToolResult {
   readonly toolCallId: string;
   readonly content: string;
   readonly isError?: boolean;
+  readonly metadata?: Record<string, unknown>;
 }
 
 // =============================================================================

@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
+import type { WorkspaceLease } from "../agents/supervisor/supervisor-types.js";
 
 // ─── Task Identity ──────────────────────────────────────────────────────────────
 
@@ -121,6 +122,8 @@ export interface BackgroundTaskOptions {
   parentMetricId?: string;
   /** Optional usage callback for recording provider/token consumption. */
   onUsage?: (usage: TaskUsageEvent) => void;
+  /** Optional isolated workspace for parallel worker execution. */
+  workspaceLease?: WorkspaceLease;
 }
 
 export interface TaskUsageEvent {

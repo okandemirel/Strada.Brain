@@ -41,6 +41,8 @@ import type { GoalConfig } from "../config/config.js";
 import { estimateCost } from "../security/rate-limiter.js";
 import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import { getLogger } from "../utils/logger.js";
+import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
+import type { WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
 
 const LLM_TIMEOUT_MS = 10_000;
 
@@ -82,6 +84,7 @@ interface GoalResultSynthesizer {
     conversationId?: string;
     userId?: string;
     onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
+    childWorkerResults?: readonly WorkerRunResult[];
   }) => Promise<string>;
 }
 
@@ -96,6 +99,7 @@ export interface BackgroundExecutorOptions {
   daemonEventBus?: IEventEmitter<DaemonEventMap>;
   goalConfig?: GoalConfig;
   learningEventBus?: IEventEmitter<LearningEventMap>;
+  workspaceLeaseManager?: WorkspaceLeaseManager;
 }
 
 export class BackgroundExecutor {
@@ -113,6 +117,7 @@ export class BackgroundExecutor {
   private readonly daemonEventBus?: IEventEmitter<DaemonEventMap>;
   private readonly goalConfig?: GoalConfig;
   private readonly learningEventBus?: IEventEmitter<LearningEventMap>;
+  private readonly workspaceLeaseManager?: WorkspaceLeaseManager;
   private daemonBudgetTracker?: BudgetTracker;
 
   constructor(opts: BackgroundExecutorOptions) {
@@ -126,6 +131,7 @@ export class BackgroundExecutor {
     this.daemonEventBus = opts.daemonEventBus;
     this.goalConfig = opts.goalConfig;
     this.learningEventBus = opts.learningEventBus;
+    this.workspaceLeaseManager = opts.workspaceLeaseManager;
   }
 
   /**
@@ -246,6 +252,76 @@ export class BackgroundExecutor {
     return -1;
   }
 
+  private async executeWorkerRun(
+    orchestrator: Orchestrator,
+    params: {
+      prompt: string;
+      signal: AbortSignal;
+      onProgress: (message: string) => void;
+      chatId: string;
+      taskRunId: string;
+      channelType: string;
+      conversationId?: string;
+      userId?: string;
+      attachments?: import("../channels/channel.interface.js").Attachment[];
+      onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
+      workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
+    },
+  ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
+    if (typeof (orchestrator as Orchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
+      const workerResult = await (
+        orchestrator as Orchestrator & {
+          runWorkerTask: (request: {
+            prompt: string;
+            mode: "background";
+            signal: AbortSignal;
+            onProgress: (message: string) => void;
+            chatId: string;
+            taskRunId: string;
+            channelType: string;
+            conversationId?: string;
+            userId?: string;
+            attachments?: import("../channels/channel.interface.js").Attachment[];
+            onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
+            workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
+          }) => Promise<WorkerRunResult>;
+        }
+      ).runWorkerTask({
+        prompt: params.prompt,
+        mode: "background",
+        signal: params.signal,
+        onProgress: params.onProgress,
+        chatId: params.chatId,
+        taskRunId: params.taskRunId,
+        channelType: params.channelType,
+        conversationId: params.conversationId,
+        userId: params.userId,
+        attachments: params.attachments,
+        onUsage: params.onUsage,
+        workspaceLease: params.workspaceLease,
+      });
+      return {
+        output: workerResult.visibleResponse,
+        workerResult,
+      };
+    }
+
+    return {
+      output: await orchestrator.runBackgroundTask(params.prompt, {
+        signal: params.signal,
+        onProgress: params.onProgress,
+        chatId: params.chatId,
+        taskRunId: params.taskRunId,
+        channelType: params.channelType,
+        conversationId: params.conversationId,
+        userId: params.userId,
+        attachments: params.attachments,
+        onUsage: params.onUsage,
+        workspaceLease: params.workspaceLease,
+      }),
+    };
+  }
+
   private async executeTask(entry: QueueEntry): Promise<void> {
     const { task, signal, onProgress } = entry;
     const logger = getLogger();
@@ -264,6 +340,7 @@ export class BackgroundExecutor {
     this.taskManager.updateStatus(task.id, TaskStatus.executing);
     onProgress("Task started");
 
+    let taskLease: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>> | undefined;
     try {
       // Check for pre-decomposed goal tree (from inline goal detection)
       if (task.goalTree) {
@@ -289,7 +366,14 @@ export class BackgroundExecutor {
         return;
       }
 
-      const result = await taskOrchestrator.runBackgroundTask(task.prompt, {
+      taskLease = this.workspaceLeaseManager
+        ? await this.workspaceLeaseManager.acquireLease({
+          label: `task-${task.id}`,
+          workerId: task.id,
+        })
+        : undefined;
+      const result = await this.executeWorkerRun(taskOrchestrator, {
+        prompt: task.prompt,
         signal,
         onProgress,
         chatId: task.chatId,
@@ -299,6 +383,7 @@ export class BackgroundExecutor {
         userId: task.userId,
         attachments: task.attachments,
         onUsage: this.buildUsageRecorder(task),
+        workspaceLease: taskLease,
       });
 
       if (signal.aborted) {
@@ -306,7 +391,15 @@ export class BackgroundExecutor {
         return;
       }
 
-      this.taskManager.complete(task.id, result);
+      if (result.workerResult && result.workerResult.status === "failed") {
+        this.taskManager.fail(
+          task.id,
+          result.workerResult.reason ?? (result.output || "Task failed"),
+        );
+        return;
+      }
+
+      this.taskManager.complete(task.id, result.output);
     } catch (error) {
       if (signal.aborted) {
         return;
@@ -325,6 +418,8 @@ export class BackgroundExecutor {
           timestamp: Date.now(),
         });
       }
+    } finally {
+      await taskLease?.release().catch(() => {});
     }
   }
 
@@ -382,19 +477,41 @@ export class BackgroundExecutor {
       maxRedecompositions: this.goalExecutorConfig?.maxRedecompositions ?? this.goalConfig?.maxRedecompositions ?? 2,
     };
     const executor = new GoalExecutor(config);
+    const childWorkerResults = new Map<string, WorkerRunResult>();
 
     // Node executor: delegates to orchestrator.runBackgroundTask
     const nodeExecutor = async (node: GoalNode, nodeSignal: AbortSignal): Promise<string> => {
-      return taskOrchestrator.runBackgroundTask(node.task, {
-        signal: nodeSignal,
-        onProgress: (msg: string) => onProgress(`[${node.task}] ${msg}`),
-        chatId: task.chatId,
-        taskRunId: `${task.id}:${node.id}`,
-        channelType: task.channelType,
-        conversationId: task.conversationId,
-        userId: task.userId,
-        onUsage: this.buildUsageRecorder(task),
-      });
+      const workspaceLease = this.workspaceLeaseManager
+        ? await this.workspaceLeaseManager.acquireLease({
+          label: `goal-node-${node.id}`,
+          workerId: `${task.id}:${node.id}`,
+        })
+        : undefined;
+      try {
+        const result = await this.executeWorkerRun(taskOrchestrator, {
+          prompt: node.task,
+          signal: nodeSignal,
+          onProgress: (msg: string) => onProgress(`[${node.task}] ${msg}`),
+          chatId: task.chatId,
+          taskRunId: `${task.id}:${node.id}`,
+          channelType: task.channelType,
+          conversationId: task.conversationId,
+          userId: task.userId,
+          onUsage: this.buildUsageRecorder(task),
+          workspaceLease,
+        });
+        if (result.workerResult) {
+          childWorkerResults.set(node.id, result.workerResult);
+          if (result.workerResult.status !== "completed") {
+            throw new Error(
+              result.workerResult.reason ?? (result.output || "Worker did not complete"),
+            );
+          }
+        }
+        return result.output;
+      } finally {
+        await workspaceLease?.release().catch(() => {});
+      }
     };
 
     // Status change callback: persist node status + send throttled progress update
@@ -655,7 +772,14 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
     });
 
     // Persist final tree state
-    const hasFailed = result.aborted || result.failureCount > 0;
+    const allChildWorkerResults = [...childWorkerResults.values()];
+    const childWorkerIssues = allChildWorkerResults.some(
+      (workerResult) =>
+        workerResult.status !== "completed" ||
+        workerResult.reviewFindings.some((finding) => finding.severity === "error") ||
+        workerResult.verificationResults.some((entry) => entry.status === "issues"),
+    );
+    const hasFailed = result.aborted || result.failureCount > 0 || childWorkerIssues;
     if (this.goalStorage) {
       try {
         this.goalStorage.upsertTree(result.tree, hasFailed ? "failed" : "completed");
@@ -710,6 +834,7 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
           conversationId: task.conversationId,
           userId: task.userId,
           onUsage: this.buildUsageRecorder(task),
+          childWorkerResults: allChildWorkerResults,
         });
         if (synthesized.trim()) {
           output = synthesized;
@@ -725,7 +850,13 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
       output,
       success: !hasFailed,
       error: hasFailed
-        ? (result.aborted ? "Goal aborted" : `${result.failureCount} sub-goal(s) failed`)
+        ? (
+          result.aborted
+            ? "Goal aborted"
+            : childWorkerIssues && result.failureCount === 0
+              ? "Child worker verification/review did not finish cleanly"
+              : `${result.failureCount} sub-goal(s) failed`
+        )
         : undefined,
       aborted: result.aborted,
     };

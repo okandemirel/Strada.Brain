@@ -40,6 +40,34 @@ function createMockManager(
       ...provider,
       capabilities: provider.capabilities ?? null,
     })),
+    getCatalogSnapshot: (identityKey?: string) => ({
+      generatedAt: 123,
+      assignmentVersion: identityKey === "user-1" ? 7 : 3,
+      stale: false,
+      degraded: false,
+      health: {
+        stale: false,
+        degraded: false,
+        freshnessScore: 0.91,
+        alignmentScore: 0.88,
+        updatedAt: 123,
+      },
+      activeProvider: identityKey === "user-1" ? "beta" : "alpha",
+      activeModel: identityKey === "user-1" ? "beta-model" : "alpha-model",
+      providers: providers.map((provider) => ({
+        name: provider.name,
+        label: provider.label,
+        defaultModel: provider.defaultModel,
+        model: provider.defaultModel,
+        active: identityKey ? provider.name === (identityKey === "user-1" ? "beta" : "alpha") : false,
+        catalogUpdatedAt: provider.catalogUpdatedAt,
+        catalogFreshnessScore: provider.catalogFreshnessScore,
+        catalogAgeMs: provider.catalogAgeMs,
+        catalogStale: provider.catalogStale,
+        officialAlignmentScore: provider.officialAlignmentScore,
+        capabilityDriftReasons: provider.capabilityDriftReasons ?? [],
+      })),
+    }),
     isAvailable: (name: string) => providers.some((p) => p.name === name),
   };
 }
@@ -271,6 +299,28 @@ describe("ProviderRouter", () => {
         freshnessScore: 0.98,
         alignmentScore: 0.95,
         stale: false,
+      }));
+    });
+
+    it("exposes catalog assignment metadata through resolveWithCatalog", () => {
+      const manager = createMockManager(SINGLE_PROVIDER);
+      const router = new ProviderRouter(manager, "balanced");
+
+      const decision = router.resolveWithCatalog(planningTask, "planning", {
+        identityKey: "user-1",
+      });
+
+      expect(decision).toEqual(expect.objectContaining({
+        provider: "ollama",
+        model: "llama3.3",
+        assignmentVersion: 7,
+        reason: expect.any(String),
+      }));
+      expect(decision.catalog).toEqual(expect.objectContaining({
+        stale: false,
+        degraded: false,
+        freshnessScore: expect.any(Number),
+        alignmentScore: expect.any(Number),
       }));
     });
   });

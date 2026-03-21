@@ -29,6 +29,18 @@ export interface CompletionReviewDecision {
   readonly logStatus?: string;
 }
 
+export type CompletionReviewStageName = "code" | "simplify" | "security";
+export type CompletionReviewStageStatus = "clean" | "issues" | "not_applicable";
+
+export interface CompletionReviewStageResult {
+  readonly stage: CompletionReviewStageName;
+  readonly status: CompletionReviewStageStatus;
+  readonly summary?: string;
+  readonly findings?: readonly string[];
+  readonly requiredActions?: readonly string[];
+  readonly openInvestigations?: readonly string[];
+}
+
 export interface AutonomyBoundaryContext {
   readonly toolNames?: Iterable<string>;
 }
@@ -50,6 +62,40 @@ Approve only when:
 3. The implementation is coherent, safe enough for the task, and not obviously overcomplicated.
 4. The draft does not leave open runtime hypotheses, likely causes, or "remaining potential issues" that Strada should continue investigating internally.
 5. The draft does not ask the user to pick a technical path, approve continuation, or choose the next engineering step unless a real hard blocker exists.
+
+Return JSON only:
+{"decision":"approve"|"continue"|"replan"|"fail","summary":"short summary","findings":["..."],"requiredActions":["..."],"closureStatus":"verified"|"partial"|"unverified","openInvestigations":["..."],"reviews":{"security":"clean|issues|not_applicable","code":"clean|issues|not_applicable","simplify":"clean|issues|not_applicable"},"logStatus":"clean|issues|not_applicable"}`;
+
+const COMPLETION_REVIEW_STAGE_SYSTEM_PROMPTS: Record<CompletionReviewStageName, string> = {
+  code: `You are Strada Brain's code review stage.
+Review the worker draft and evidence only for correctness, regressions, coherence, and missing verification.
+Call out concrete bugs, risky assumptions, or places where the draft claims completion without enough evidence.
+
+Return JSON only:
+{"status":"clean"|"issues"|"not_applicable","summary":"short summary","findings":["..."],"requiredActions":["..."],"openInvestigations":["..."]}`,
+  simplify: `You are Strada Brain's simplify review stage.
+Review the worker draft and evidence only for unnecessary complexity, duplication, weak abstractions, and avoidable overengineering.
+Prefer concrete maintainability findings over vague style comments.
+
+Return JSON only:
+{"status":"clean"|"issues"|"not_applicable","summary":"short summary","findings":["..."],"requiredActions":["..."],"openInvestigations":["..."]}`,
+  security: `You are Strada Brain's security review stage.
+Review the worker draft and evidence only for security and safety risks relevant to the task: unsafe shell usage, trust-boundary mistakes, prompt injection exposure, path/workspace boundary violations, secret leakage, or unsafe file/network handling.
+Do not invent generic concerns; report only concrete or strongly supported risks from the evidence.
+
+Return JSON only:
+{"status":"clean"|"issues"|"not_applicable","summary":"short summary","findings":["..."],"requiredActions":["..."],"openInvestigations":["..."]}`,
+};
+
+export const COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT = `You are Strada Brain's completion review synthesizer.
+Static verifier checks have already run. Three separate review stages (code review, simplify, security review) have also produced structured findings.
+Aggregate that evidence into a final completion decision.
+
+Rules:
+- Never approve if any review stage is marked issues unless the decision is to continue or replan.
+- Respect unresolved log/build/conformance/repro issues from the verifier pipeline.
+- Use closureStatus=verified only when the task is genuinely closed.
+- If the current implementation direction is fundamentally wrong, prefer replan.
 
 Return JSON only:
 {"decision":"approve"|"continue"|"replan"|"fail","summary":"short summary","findings":["..."],"requiredActions":["..."],"closureStatus":"verified"|"partial"|"unverified","openInvestigations":["..."],"reviews":{"security":"clean|issues|not_applicable","code":"clean|issues|not_applicable","simplify":"clean|issues|not_applicable"},"logStatus":"clean|issues|not_applicable"}`;
@@ -252,6 +298,74 @@ export function buildCompletionReviewRequest(params: {
   ].join("\n");
 }
 
+export function buildCompletionReviewStageSystemPrompt(stage: CompletionReviewStageName): string {
+  return COMPLETION_REVIEW_STAGE_SYSTEM_PROMPTS[stage];
+}
+
+export function buildCompletionReviewStageRequest(params: {
+  stage: CompletionReviewStageName;
+  prompt: string;
+  draft: string;
+  state: AgentState;
+  evidence: CompletionReviewEvidence;
+  verifierChecks?: readonly string[];
+}): string {
+  const stageTitle = params.stage === "code"
+    ? "Code Review"
+    : params.stage === "simplify"
+      ? "Simplify Review"
+      : "Security Review";
+  const verifierChecks = params.verifierChecks?.length
+    ? params.verifierChecks.join("\n")
+    : "(none)";
+
+  return [
+    buildCompletionReviewRequest(params),
+    "",
+    `Current stage: ${stageTitle}`,
+    "",
+    `Verifier checks already completed:\n${verifierChecks}`,
+    "",
+    "Review only this stage. Be concrete, terse, and evidence-based.",
+  ].join("\n");
+}
+
+export function buildCompletionReviewSynthesisRequest(params: {
+  prompt: string;
+  draft: string;
+  state: AgentState;
+  evidence: CompletionReviewEvidence;
+  verifierChecks?: readonly string[];
+  stageResults: readonly CompletionReviewStageResult[];
+}): string {
+  const verifierChecks = params.verifierChecks?.length
+    ? params.verifierChecks.join("\n")
+    : "(none)";
+  const stageSummary = params.stageResults.length > 0
+    ? params.stageResults.map((stage) => {
+      const findings = stage.findings?.filter(Boolean) ?? [];
+      const actions = stage.requiredActions?.filter(Boolean) ?? [];
+      const investigations = stage.openInvestigations?.filter(Boolean) ?? [];
+      return [
+        `- ${stage.stage}: ${stage.status} — ${stage.summary?.trim() || "(no summary)"}`,
+        findings.length > 0 ? `  findings: ${findings.join(" | ")}` : null,
+        actions.length > 0 ? `  requiredActions: ${actions.join(" | ")}` : null,
+        investigations.length > 0 ? `  openInvestigations: ${investigations.join(" | ")}` : null,
+      ].filter(Boolean).join("\n");
+    }).join("\n")
+    : "(none)";
+
+  return [
+    buildCompletionReviewRequest(params),
+    "",
+    `Verifier checks already completed:\n${verifierChecks}`,
+    "",
+    `Stage review outputs:\n${stageSummary}`,
+    "",
+    "Aggregate the verifier and stage evidence into the final completion decision.",
+  ].join("\n");
+}
+
 export function parseCompletionReviewDecision(text: string): CompletionReviewDecision | null {
   const trimmed = text.trim();
   const candidates = [
@@ -280,6 +394,114 @@ export function parseCompletionReviewDecision(text: string): CompletionReviewDec
   }
 
   return null;
+}
+
+export function parseCompletionReviewStageResult(
+  text: string,
+  stage: CompletionReviewStageName,
+): CompletionReviewStageResult | null {
+  const trimmed = text.trim();
+  const candidates = [
+    trimmed,
+    trimmed.replace(/^```json\s*/i, "").replace(/```$/i, "").trim(),
+  ];
+  const braceStart = trimmed.indexOf("{");
+  const braceEnd = trimmed.lastIndexOf("}");
+  if (braceStart >= 0 && braceEnd > braceStart) {
+    candidates.push(trimmed.slice(braceStart, braceEnd + 1));
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(candidate) as Omit<CompletionReviewStageResult, "stage">;
+      if (parsed && typeof parsed === "object") {
+        const status = parsed.status === "issues" || parsed.status === "not_applicable"
+          ? parsed.status
+          : "clean";
+        return {
+          stage,
+          status,
+          summary: typeof parsed.summary === "string" ? parsed.summary : undefined,
+          findings: Array.isArray(parsed.findings) ? parsed.findings.filter(Boolean) : undefined,
+          requiredActions: Array.isArray(parsed.requiredActions) ? parsed.requiredActions.filter(Boolean) : undefined,
+          openInvestigations: Array.isArray(parsed.openInvestigations) ? parsed.openInvestigations.filter(Boolean) : undefined,
+        };
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return null;
+}
+
+export function mergeCompletionReviewDecisionWithStages(
+  decision: CompletionReviewDecision | null,
+  stageResults: readonly CompletionReviewStageResult[],
+): CompletionReviewDecision | null {
+  if (!decision && stageResults.length === 0) {
+    return null;
+  }
+
+  const reviews: {
+    code?: string;
+    simplify?: string;
+    security?: string;
+  } = {
+    code: decision?.reviews?.code,
+    simplify: decision?.reviews?.simplify,
+    security: decision?.reviews?.security,
+  };
+  const findings = [...(decision?.findings ?? [])];
+  const requiredActions = [...(decision?.requiredActions ?? [])];
+  const openInvestigations = [...(decision?.openInvestigations ?? [])];
+  let hasStageIssues = false;
+
+  for (const stage of stageResults) {
+    if (stage.stage === "code") {
+      reviews.code = stage.status;
+    } else if (stage.stage === "simplify") {
+      reviews.simplify = stage.status;
+    } else {
+      reviews.security = stage.status;
+    }
+    if (stage.status === "issues") {
+      hasStageIssues = true;
+    }
+    findings.push(...(stage.findings ?? []));
+    requiredActions.push(...(stage.requiredActions ?? []));
+    openInvestigations.push(...(stage.openInvestigations ?? []));
+  }
+
+  let mergedDecision = decision?.decision;
+  if (!mergedDecision) {
+    mergedDecision = hasStageIssues || openInvestigations.length > 0 ? "continue" : "approve";
+  } else if (mergedDecision === "approve" && (hasStageIssues || openInvestigations.length > 0)) {
+    mergedDecision = "continue";
+  }
+
+  let closureStatus = decision?.closureStatus;
+  if (hasStageIssues || openInvestigations.length > 0) {
+    if (!closureStatus || closureStatus === "verified") {
+      closureStatus = openInvestigations.length > 0 ? "partial" : "unverified";
+    }
+  } else if (!closureStatus && mergedDecision === "approve") {
+    closureStatus = "verified";
+  }
+
+  return {
+    ...decision,
+    decision: mergedDecision,
+    closureStatus,
+    findings: [...new Set(findings.filter(Boolean))],
+    requiredActions: [...new Set(requiredActions.filter(Boolean))],
+    openInvestigations: [...new Set(openInvestigations.filter(Boolean))],
+    reviews,
+  };
 }
 
 export function buildCompletionReviewGate(

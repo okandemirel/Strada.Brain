@@ -35,6 +35,7 @@ import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-regis
 import { ProviderManager } from "../../providers/provider-manager.js";
 import { Orchestrator } from "../../orchestrator.js";
 import { getProviderIntelligenceSnapshot, type ProviderWorkload } from "../../providers/provider-knowledge.js";
+import { WorkspaceLeaseManager } from "../workspace-lease-manager.js";
 
 // =============================================================================
 // OPTIONS
@@ -59,6 +60,8 @@ export interface DelegationManagerOptions {
   readonly providerCredentials?: ProviderCredentialMap;
   readonly preferencesDbPath?: string;
   readonly verifiedLocalProviders?: readonly string[];
+  readonly workspaceLeaseManager?: WorkspaceLeaseManager;
+  readonly providerRouter?: ConstructorParameters<typeof Orchestrator>[0]["providerRouter"];
 }
 
 // =============================================================================
@@ -336,13 +339,20 @@ export class DelegationManager {
     });
 
     const captureChannel = new CaptureChannel();
+    let workspaceLease: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>> | undefined;
 
     try {
+      workspaceLease = this.opts.workspaceLeaseManager
+        ? await this.opts.workspaceLeaseManager.acquireLease({
+          label: `delegation-${request.type}`,
+          workerId: subAgentId,
+        })
+        : undefined;
       const orchestrator = new Orchestrator({
         providerManager,
         tools: subAgentTools,
         channel: captureChannel,
-        projectPath: this.opts.projectPath,
+        projectPath: workspaceLease?.path ?? this.opts.projectPath,
         readOnly: this.opts.readOnly,
         requireConfirmation: false,
         streamingEnabled: false,
@@ -351,6 +361,7 @@ export class DelegationManager {
         streamStallTimeoutMs: this.opts.streamStallTimeoutMs,
         stradaDeps: this.opts.stradaDeps,
         stradaConfig: this.opts.stradaConfig,
+        providerRouter: this.opts.providerRouter,
       });
 
       const message: IncomingMessage = {
@@ -363,11 +374,43 @@ export class DelegationManager {
         timestamp: new Date(),
       };
 
-      // Execute with abort awareness
-      await Promise.race([
-        orchestrator.handleMessage(message),
-        this.waitForAbort(abortController.signal),
-      ]);
+      let workerResult: import("../../supervisor/supervisor-types.js").WorkerRunResult | undefined;
+      if (typeof (orchestrator as Orchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
+        workerResult = await Promise.race([
+          (
+            orchestrator as Orchestrator & {
+              runWorkerTask: (request: {
+                prompt: string;
+                mode: "delegated";
+                signal: AbortSignal;
+                onProgress: (message: string) => void;
+                chatId: string;
+                taskRunId: string;
+                channelType: string;
+                userId: string;
+                workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
+              }) => Promise<import("../../supervisor/supervisor-types.js").WorkerRunResult>;
+            }
+          ).runWorkerTask({
+            prompt: message.text,
+            mode: "delegated",
+            signal: abortController.signal,
+            onProgress: () => {},
+            chatId: message.chatId,
+            taskRunId: subAgentId,
+            channelType: message.channelType,
+            userId: message.userId ?? "sub-agent",
+            workspaceLease,
+          }),
+          this.waitForAbort(abortController.signal),
+        ]);
+      } else {
+        // Execute with abort awareness
+        await Promise.race([
+          orchestrator.handleMessage(message),
+          this.waitForAbort(abortController.signal),
+        ]);
+      }
 
       // Check if aborted (timeout fired)
       if (abortController.signal.aborted) {
@@ -380,6 +423,12 @@ export class DelegationManager {
           timestamp: Date.now(),
         });
         throw new Error(`Delegation ${request.type} timed out after ${typeConfig.timeoutMs}ms`);
+      }
+
+      if (workerResult && workerResult.status !== "completed") {
+        throw new Error(
+          workerResult.reason ?? (workerResult.finalSummary || "Delegated worker did not complete"),
+        );
       }
 
       const durationMs = Date.now() - startTime;
@@ -414,7 +463,8 @@ export class DelegationManager {
       });
 
       return {
-        content: captureChannel.getLastResponse(),
+        content: workerResult?.visibleResponse ?? captureChannel.getLastResponse(),
+        workerResult,
         metadata: {
           model: providerConfig.model,
           tier,
@@ -444,6 +494,7 @@ export class DelegationManager {
       throw error;
     } finally {
       clearTimeout(timeoutId);
+      await workspaceLease?.release().catch(() => {});
       this.cleanup(subAgentId, request.parentAgentId);
     }
   }

@@ -1,12 +1,17 @@
 import type { AgentState } from "../agent-state.js";
 import type { TaskClassification } from "../../agent-core/routing/routing-types.js";
 import type { LogEntry } from "../../utils/logger.js";
-import type { CompletionReviewDecision, CompletionReviewEvidence } from "./completion-review.js";
+import type {
+  CompletionReviewDecision,
+  CompletionReviewEvidence,
+  CompletionReviewStageResult,
+} from "./completion-review.js";
 import {
   buildCompletionReviewGate,
   buildCompletionReviewRequest,
   collectCompletionReviewEvidence,
   hasOpenReviewFindingsForDraft,
+  mergeCompletionReviewDecisionWithStages,
   shouldRunCompletionReview,
 } from "./completion-review.js";
 import type { VerificationState } from "./self-verification.js";
@@ -50,6 +55,7 @@ export interface VerifierPipelineResult {
   readonly checks: readonly VerifierCheck[];
   readonly evidence: VerifierPipelineEvidence;
   readonly reviewDecision?: CompletionReviewDecision | null;
+  readonly stageResults?: readonly CompletionReviewStageResult[];
 }
 
 export function planVerifierPipeline(params: {
@@ -164,38 +170,43 @@ export function finalizeVerifierPipelineReview(
   plan: VerifierPipelinePlan,
   decision: CompletionReviewDecision | null,
   draft: string | null | undefined = "",
+  stageResults: readonly CompletionReviewStageResult[] = [],
 ): VerifierPipelineResult {
-  const reviewCheck: VerifierCheck = buildCompletionReviewCheck(decision, draft);
+  const mergedDecision = mergeCompletionReviewDecisionWithStages(decision, stageResults);
+  const reviewCheck: VerifierCheck = buildCompletionReviewCheck(mergedDecision, draft);
   const checks = [...plan.checks, reviewCheck];
 
-  if (!hasOpenReviewFindingsForDraft(decision, draft)) {
+  if (!hasOpenReviewFindingsForDraft(mergedDecision, draft)) {
     return {
       decision: "approve",
-      summary: decision?.summary?.trim() || "Verifier review approved completion.",
+      summary: mergedDecision?.summary?.trim() || "Verifier review approved completion.",
       checks,
       evidence: plan.evidence,
-      reviewDecision: decision,
+      reviewDecision: mergedDecision,
+      stageResults,
     };
   }
 
-  if (decision?.decision === "replan") {
+  if (mergedDecision?.decision === "replan") {
     return {
       decision: "replan",
-      gate: buildVerifierPipelineGate("replan", [reviewCheck], plan.evidence, decision),
-      summary: decision.summary?.trim() || "Verifier review requested a replan.",
+      gate: buildVerifierPipelineGate("replan", [reviewCheck], plan.evidence, mergedDecision),
+      summary: mergedDecision.summary?.trim() || "Verifier review requested a replan.",
       checks,
       evidence: plan.evidence,
-      reviewDecision: decision,
+      reviewDecision: mergedDecision,
+      stageResults,
     };
   }
 
   return {
     decision: "continue",
-    gate: buildCompletionReviewGate(decision, plan.evidence),
-    summary: decision?.summary?.trim() || "Verifier review requires more execution before completion.",
+    gate: buildCompletionReviewGate(mergedDecision, plan.evidence),
+    summary: mergedDecision?.summary?.trim() || "Verifier review requires more execution before completion.",
     checks,
     evidence: plan.evidence,
-    reviewDecision: decision,
+    reviewDecision: mergedDecision,
+    stageResults,
   };
 }
 

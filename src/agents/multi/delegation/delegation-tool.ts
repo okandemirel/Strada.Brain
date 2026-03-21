@@ -99,6 +99,7 @@ export class DelegationTool implements ITool {
         content: result.content,
         metadata: {
           ...result.metadata,
+          workerResult: result.workerResult,
           delegationType: this.typeConfig.name,
           delegationMode: "sync",
         },
