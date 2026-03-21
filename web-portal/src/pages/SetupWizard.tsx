@@ -76,6 +76,7 @@ export default function SetupWizard() {
             mcpInstallStatus={wiz.mcpInstallStatus}
             mcpInstallError={wiz.mcpInstallError}
             mcpInstallMessage={wiz.mcpInstallMessage}
+            mcpInstallPlan={wiz.mcpInstallPlan}
             validatePath={wiz.validatePath}
             installMcp={wiz.installMcp}
             openBrowser={browser.open}
@@ -155,6 +156,7 @@ export default function SetupWizard() {
           mcpInstallStatus={wiz.mcpInstallStatus}
           mcpInstallError={wiz.mcpInstallError}
           mcpInstallMessage={wiz.mcpInstallMessage}
+          mcpInstallPlan={wiz.mcpInstallPlan}
           loading={browser.loading}
           error={browser.error}
           browseTo={browser.browseTo}

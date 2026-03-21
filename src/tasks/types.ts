@@ -31,6 +31,7 @@ export enum TaskStatus {
   executing = "executing",
   completed = "completed",
   failed = "failed",
+  blocked = "blocked",
   cancelled = "cancelled",
   paused = "paused",
   waiting_for_input = "waiting_for_input",
@@ -49,10 +50,37 @@ export const ACTIVE_STATUSES = new Set([
 export const TERMINAL_STATUSES = new Set([
   TaskStatus.completed,
   TaskStatus.failed,
+  TaskStatus.blocked,
   TaskStatus.cancelled,
 ]);
 
 // ─── Progress ────────────────────────────────────────────────────────────────────
+
+export type TaskProgressKind =
+  | "other"
+  | "status"
+  | "editing"
+  | "verification"
+  | "analysis"
+  | "inspection"
+  | "clarification"
+  | "visibility"
+  | "replanning"
+  | "delegation"
+  | "loop_recovery"
+  | "goal";
+
+export interface TaskProgressSignal {
+  kind: TaskProgressKind;
+  message: string;
+  userSummary?: string;
+  reason?: string;
+  files?: readonly string[];
+  toolNames?: readonly string[];
+  delegationType?: string;
+}
+
+export type TaskProgressUpdate = string | TaskProgressSignal;
 
 export interface ProgressEntry {
   timestamp: number;
@@ -110,7 +138,7 @@ export type ClassificationResult = ParsedCommand | TaskRequest;
 
 export interface BackgroundTaskOptions {
   signal: AbortSignal;
-  onProgress: (message: string) => void;
+  onProgress: (message: TaskProgressUpdate) => void;
   chatId: string;
   channelType: string;
   taskRunId?: string;

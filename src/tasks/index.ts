@@ -17,9 +17,18 @@ export { ProgressReporter } from "./progress-reporter.js";
 export { TaskDecomposer } from "./task-decomposer.js";
 export { detectCommand } from "./command-detector.js";
 export {
+  buildTaskProgressSummary,
+  getTaskProgressMessage,
+  toTaskProgressSignal,
+  type ProgressLanguage,
+} from "./progress-signals.js";
+export {
   type Task,
   type TaskId,
   type ProgressEntry,
+  type TaskProgressKind,
+  type TaskProgressSignal,
+  type TaskProgressUpdate,
   type TaskCommand,
   type ParsedCommand,
   type TaskRequest,

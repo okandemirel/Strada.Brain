@@ -2,13 +2,16 @@ import { AgentPhase, type AgentState, type StepResult } from "../agent-state.js"
 import type { PhaseOutcomeStatus } from "../../agent-core/routing/routing-types.js";
 import type { ToolCall, ToolResult } from "../providers/provider.interface.js";
 import type { VerifierPipelineResult } from "./verifier-pipeline.js";
+import type { LoopRecoveryBrief, LoopRecoveryDecisionKind } from "./loop-recovery-review.js";
 
 type JournalEntryKind =
   | "plan"
   | "tool-batch"
   | "reflection"
   | "verifier"
-  | "rollback";
+  | "rollback"
+  | "loop-recovery"
+  | "delegated-diagnosis";
 
 interface JournalEntry {
   readonly kind: JournalEntryKind;
@@ -56,6 +59,8 @@ export class ExecutionJournal {
   private projectWorldSummary: string | null = null;
   private projectWorldFingerprint: string | null = null;
   private readonly learnedInsights = new Set<string>();
+  private readonly recentUserFacingProgress: string[] = [];
+  private readonly recentRecoveryNotes: string[] = [];
 
   constructor(taskDescription: string) {
     this.branches.set("root", {
@@ -252,6 +257,77 @@ export class ExecutionJournal {
     return [...this.learnedInsights].slice(-8);
   }
 
+  recordUserFacingProgress(summary: string): void {
+    const normalized = summarizeText(summary, 180);
+    if (!normalized) {
+      return;
+    }
+    this.recentUserFacingProgress.push(normalized);
+    if (this.recentUserFacingProgress.length > 6) {
+      this.recentUserFacingProgress.splice(0, this.recentUserFacingProgress.length - 6);
+    }
+  }
+
+  recordLoopRecoveryEpisode(params: {
+    fingerprint: string;
+    decision: LoopRecoveryDecisionKind;
+    summary: string;
+  }): void {
+    const line = `[${params.decision}] ${summarizeText(params.summary, 200) || params.fingerprint}`;
+    this.recentRecoveryNotes.push(line);
+    if (this.recentRecoveryNotes.length > 4) {
+      this.recentRecoveryNotes.splice(0, this.recentRecoveryNotes.length - 4);
+    }
+    this.learnedInsights.add(`Avoid repeating loop fingerprint: ${params.fingerprint}`);
+    this.learnedInsights.add(`Recovery decision: ${line}`);
+    this.pushEntry({
+      kind: "loop-recovery",
+      branchId: this.currentBranchId,
+      summary: `${params.fingerprint} -> ${line}`,
+      phase: AgentPhase.REFLECTING,
+      timestamp: Date.now(),
+    });
+  }
+
+  recordDelegatedDiagnosis(type: string, summary: string): void {
+    const normalized = summarizeText(summary, 220);
+    if (!normalized) {
+      return;
+    }
+    this.learnedInsights.add(`Delegated ${type} diagnosis: ${normalized}`);
+    this.pushEntry({
+      kind: "delegated-diagnosis",
+      branchId: this.currentBranchId,
+      summary: `${type}: ${normalized}`,
+      phase: AgentPhase.REPLANNING,
+      timestamp: Date.now(),
+    });
+  }
+
+  buildRecoveryBrief(params: {
+    fingerprint: string;
+    latestReason?: string;
+    touchedFiles?: readonly string[];
+    recoveryEpisode: number;
+    availableDelegations: readonly string[];
+  }): LoopRecoveryBrief {
+    const recentToolSummaries = this.entries
+      .filter((entry) => entry.kind === "tool-batch")
+      .slice(-3)
+      .map((entry) => entry.summary);
+    return {
+      fingerprint: params.fingerprint,
+      latestReason: params.latestReason,
+      verifierSummary: this.lastVerifierSummary ?? undefined,
+      requiredActions: [...this.lastRequiredActions].slice(0, 4),
+      recentToolSummaries,
+      touchedFiles: [...(params.touchedFiles ?? [])].slice(0, 5),
+      recentUserFacingProgress: [...this.recentUserFacingProgress].slice(-3),
+      recoveryEpisode: params.recoveryEpisode,
+      availableDelegations: [...params.availableDelegations],
+    };
+  }
+
   snapshot(): ExecutionJournalSnapshot {
     const branch = this.branches.get(this.currentBranchId);
     const branchSummary = branch
@@ -304,6 +380,12 @@ export class ExecutionJournal {
           lines.push(`- ${action}`);
         }
       }
+      if (this.recentRecoveryNotes.length > 0) {
+        lines.push("Recent loop recovery notes:");
+        for (const note of this.recentRecoveryNotes.slice(-3)) {
+          lines.push(`- ${note}`);
+        }
+      }
     } else if (phase === AgentPhase.EXECUTING || phase === AgentPhase.REFLECTING) {
       if (this.lastVerifierSummary) {
         lines.push(`Verifier memory: ${this.lastVerifierSummary}`);
@@ -312,6 +394,12 @@ export class ExecutionJournal {
       if (recent.length > 0) {
         lines.push("Recent execution memory:");
         lines.push(...recent);
+      }
+      if (this.recentRecoveryNotes.length > 0) {
+        lines.push("Loop recovery memory:");
+        for (const note of this.recentRecoveryNotes.slice(-2)) {
+          lines.push(`- ${note}`);
+        }
       }
     }
 

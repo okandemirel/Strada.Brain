@@ -383,7 +383,7 @@ export class DelegationManager {
                 prompt: string;
                 mode: "delegated";
                 signal: AbortSignal;
-                onProgress: (message: string) => void;
+                onProgress: (message: import("../../../tasks/types.js").TaskProgressUpdate) => void;
                 chatId: string;
                 taskRunId: string;
                 channelType: string;
@@ -425,7 +425,7 @@ export class DelegationManager {
         throw new Error(`Delegation ${request.type} timed out after ${typeConfig.timeoutMs}ms`);
       }
 
-      if (workerResult && workerResult.status !== "completed") {
+      if (workerResult?.status === "failed") {
         throw new Error(
           workerResult.reason ?? (workerResult.finalSummary || "Delegated worker did not complete"),
         );
@@ -463,7 +463,10 @@ export class DelegationManager {
       });
 
       return {
-        content: workerResult?.visibleResponse ?? captureChannel.getLastResponse(),
+        content:
+          workerResult?.visibleResponse
+          ?? workerResult?.finalSummary
+          ?? captureChannel.getLastResponse(),
         workerResult,
         metadata: {
           model: providerConfig.model,

@@ -1,19 +1,30 @@
+import { Suspense, lazy } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import ErrorBoundary from './components/ErrorBoundary'
 import AppLayout from './components/layout/AppLayout'
-import ChatView from './components/ChatView'
-import DashboardView from './components/DashboardView'
-import ConfigPage from './pages/ConfigPage'
-import ToolsPage from './pages/ToolsPage'
-import ChannelsPage from './pages/ChannelsPage'
-import SessionsPage from './pages/SessionsPage'
-import LogsPage from './pages/LogsPage'
-import IdentityPage from './pages/IdentityPage'
-import PersonalityPage from './pages/PersonalityPage'
-import MemoryPage from './pages/MemoryPage'
-import SettingsPage from './pages/SettingsPage'
-import SetupWizard from './pages/SetupWizard'
 import { detectSetupMode } from './utils/setup-mode'
+
+const ChatView = lazy(() => import('./components/ChatView'))
+const DashboardView = lazy(() => import('./components/DashboardView'))
+const ConfigPage = lazy(() => import('./pages/ConfigPage'))
+const ToolsPage = lazy(() => import('./pages/ToolsPage'))
+const ChannelsPage = lazy(() => import('./pages/ChannelsPage'))
+const SessionsPage = lazy(() => import('./pages/SessionsPage'))
+const LogsPage = lazy(() => import('./pages/LogsPage'))
+const IdentityPage = lazy(() => import('./pages/IdentityPage'))
+const PersonalityPage = lazy(() => import('./pages/PersonalityPage'))
+const MemoryPage = lazy(() => import('./pages/MemoryPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const SetupWizard = lazy(() => import('./pages/SetupWizard'))
+
+function RouteLoadingFallback() {
+  return (
+    <div className="placeholder-page">
+      <h2>Loading Strada portal</h2>
+      <p>Preparing the next screen.</p>
+    </div>
+  )
+}
 
 export default function App() {
   const rootDatasetSetupMode = typeof document !== 'undefined'
@@ -27,32 +38,36 @@ export default function App() {
   if (setupMode) {
     return (
       <ErrorBoundary>
-        <Routes>
-          <Route path="*" element={<SetupWizard />} />
-        </Routes>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <Routes>
+            <Route path="*" element={<SetupWizard />} />
+          </Routes>
+        </Suspense>
       </ErrorBoundary>
     )
   }
 
   return (
     <ErrorBoundary>
-      <Routes>
-        <Route path="/setup" element={<SetupWizard />} />
-        <Route element={<AppLayout />}>
-          <Route index element={<ChatView />} />
-          <Route path="dashboard" element={<DashboardView />} />
-          <Route path="config" element={<ConfigPage />} />
-          <Route path="tools" element={<ToolsPage />} />
-          <Route path="channels" element={<ChannelsPage />} />
-          <Route path="sessions" element={<SessionsPage />} />
-          <Route path="logs" element={<LogsPage />} />
-          <Route path="identity" element={<IdentityPage />} />
-          <Route path="personality" element={<PersonalityPage />} />
-          <Route path="memory" element={<MemoryPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="*" element={<ChatView />} />
-        </Route>
-      </Routes>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <Routes>
+          <Route path="/setup" element={<SetupWizard />} />
+          <Route element={<AppLayout />}>
+            <Route index element={<ChatView />} />
+            <Route path="dashboard" element={<DashboardView />} />
+            <Route path="config" element={<ConfigPage />} />
+            <Route path="tools" element={<ToolsPage />} />
+            <Route path="channels" element={<ChannelsPage />} />
+            <Route path="sessions" element={<SessionsPage />} />
+            <Route path="logs" element={<LogsPage />} />
+            <Route path="identity" element={<IdentityPage />} />
+            <Route path="personality" element={<PersonalityPage />} />
+            <Route path="memory" element={<MemoryPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="*" element={<ChatView />} />
+          </Route>
+        </Routes>
+      </Suspense>
     </ErrorBoundary>
   )
 }

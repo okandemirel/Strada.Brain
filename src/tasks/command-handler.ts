@@ -1047,6 +1047,7 @@ export class CommandHandler {
       case TaskStatus.executing: return "⚙️";
       case TaskStatus.completed: return "✅";
       case TaskStatus.failed: return "❌";
+      case TaskStatus.blocked: return "🛑";
       case TaskStatus.cancelled: return "🚫";
       case TaskStatus.paused: return "⏸️";
       case TaskStatus.waiting_for_input: return "❓";

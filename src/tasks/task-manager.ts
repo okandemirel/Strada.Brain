@@ -7,8 +7,9 @@
  */
 
 import { EventEmitter } from "node:events";
-import type { Task, TaskId } from "./types.js";
+import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
 import { TaskStatus, ACTIVE_STATUSES, generateTaskId } from "./types.js";
+import { getTaskProgressMessage } from "./progress-signals.js";
 import type { TaskStorage } from "./task-storage.js";
 import type { BackgroundExecutor } from "./background-executor.js";
 import { getLogger } from "../utils/logger.js";
@@ -76,7 +77,7 @@ export class TaskManager extends EventEmitter {
     const ac = new AbortController();
     this.abortControllers.set(task.id, ac);
 
-    this.executor.enqueue(task, ac.signal, (message: string) => {
+    this.executor.enqueue(task, ac.signal, (message: TaskProgressUpdate) => {
       this.addProgress(task.id, message);
     });
 
@@ -128,8 +129,8 @@ export class TaskManager extends EventEmitter {
   /**
    * Add a progress entry to a task.
    */
-  addProgress(taskId: TaskId, message: string): void {
-    this.storage.addProgress(taskId, message);
+  addProgress(taskId: TaskId, message: TaskProgressUpdate): void {
+    this.storage.addProgress(taskId, getTaskProgressMessage(message));
     this.emit("task:progress", taskId, message);
   }
 
@@ -151,6 +152,16 @@ export class TaskManager extends EventEmitter {
     this.abortControllers.delete(taskId);
     this.emit("task:failed", taskId, error);
     getLogger().error("Task failed", { taskId, error });
+  }
+
+  /**
+   * Mark a task as blocked with a checkpoint summary.
+   */
+  block(taskId: TaskId, result: string): void {
+    this.storage.updateBlocked(taskId, result);
+    this.abortControllers.delete(taskId);
+    this.emit("task:blocked", taskId, result);
+    getLogger().warn("Task blocked", { taskId, resultLength: result.length });
   }
 
   /**

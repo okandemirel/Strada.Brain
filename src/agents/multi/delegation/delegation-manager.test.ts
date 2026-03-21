@@ -28,6 +28,7 @@ import type { IEventBus } from "../../../core/event-bus.js";
 
 // Store the mock constructor so tests can override handleMessage per-test
 let orchestratorHandleMessage: ReturnType<typeof vi.fn>;
+let orchestratorRunWorkerTask: ReturnType<typeof vi.fn> | undefined;
 let orchestratorOpts: Record<string, unknown>;
 
 vi.mock("../../orchestrator.js", () => {
@@ -36,6 +37,7 @@ vi.mock("../../orchestrator.js", () => {
       orchestratorOpts = opts;
       this._opts = opts;
       this.handleMessage = orchestratorHandleMessage;
+      this.runWorkerTask = orchestratorRunWorkerTask;
       this.addTool = vi.fn();
       this.removeTool = vi.fn();
     }),
@@ -215,6 +217,7 @@ describe("DelegationManager", () => {
         "Sub-agent completed the task successfully.",
       );
     });
+    orchestratorRunWorkerTask = undefined;
 
     db = new Database(":memory:");
     delegationLog = new DelegationLog(db);
@@ -243,6 +246,37 @@ describe("DelegationManager", () => {
       expect(result.metadata).toBeDefined();
       expect(result.metadata.tier).toBe("cheap");
       expect(result.metadata.escalated).toBe(false);
+    });
+
+    it("returns blocked delegated worker results without throwing", async () => {
+      orchestratorRunWorkerTask = vi.fn().mockResolvedValueOnce({
+        status: "blocked",
+        finalSummary: "Need a different diagnosis path",
+        visibleResponse: "Checkpoint from delegated worker",
+        provider: "mock-provider",
+        catalogVersion: "mock-provider:mock-model",
+        assignmentVersion: 0,
+        touchedFiles: ["src/runtime/reviewer.ts"],
+        toolTrace: [],
+        verificationResults: [],
+        reviewFindings: [],
+        artifacts: [],
+        reason: "Need a different diagnosis path",
+      });
+
+      const request: DelegationRequest = {
+        type: "analysis",
+        task: "Analyze the repeated verifier loop",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await manager.delegate(request);
+
+      expect(result.workerResult?.status).toBe("blocked");
+      expect(result.content).toBe("Checkpoint from delegated worker");
     });
 
     it("logs start/complete in DelegationLog", async () => {

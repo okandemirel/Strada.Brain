@@ -137,6 +137,7 @@ export interface WizardState {
   mcpInstallStatus: 'idle' | 'installing' | 'success' | 'error'
   mcpInstallError: string | null
   mcpInstallMessage: string | null
+  mcpInstallPlan: McpInstallPlan | null
   channel: string
   channelConfig: Record<string, string>
   language: string

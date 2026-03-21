@@ -4739,7 +4739,7 @@ DONE`,
           getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
           shutdown: vi.fn(),
         } as any,
-        tools: [readTool],
+        tools: [writeTool],
         channel: mockChannel,
         projectPath: "/tmp/test-project",
         readOnly: false,
@@ -6609,6 +6609,229 @@ DONE`,
           terminatedByIterationBudget: true,
         }),
       );
+    });
+
+    it("triggers loop recovery replanning after repeated verifier continue gates", async () => {
+      const backgroundOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        taskConfig: {
+          ...DEFAULT_TASK_CONFIG,
+          backgroundEpochMaxIterations: 7,
+          backgroundAutoContinue: false,
+        },
+      });
+
+      mockProvider.chat
+        .mockResolvedValueOnce({
+          text: "Apply the first fix.",
+          toolCalls: [{ id: "tc-loop-1", name: "file_write", input: { path: "Assets/Level.cs" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Looks fixed now.\nDONE",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Apply the same fix again.",
+          toolCalls: [{ id: "tc-loop-2", name: "file_write", input: { path: "Assets/Level.cs" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Looks fixed now.\nDONE",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Apply the same fix one more time.",
+          toolCalls: [{ id: "tc-loop-3", name: "file_write", input: { path: "Assets/Level.cs" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Looks fixed now.\nDONE",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            decision: "replan_local",
+            reason: "The verifier continue gate is repeating without new evidence.",
+            recommendedNextAction: "Create a new plan around the concrete failing path.",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "1. Reproduce the live failing path.\n2. Verify the targeted runtime behavior.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
+
+      const progress = vi.fn();
+      const result = await backgroundOrch.runBackgroundTask("Fix the repeating verifier loop", {
+        chatId: "bg-loop-replan",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress: progress,
+      });
+
+      const flattenedMessages = mockProvider.chat.mock.calls.flatMap((call) => {
+        const messages = call[1] as Array<{ role: string; content: unknown }> | undefined;
+        return messages ?? [];
+      });
+      expect(flattenedMessages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining("[LOOP RECOVERY REQUIRED]"),
+          }),
+        ]),
+      );
+      expect(progress).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "loop_recovery",
+        }),
+      );
+      expect(result).toContain("configured iteration budget");
+    });
+
+    it("delegates analysis after repeated clarification-internal loops", async () => {
+      const delegateAnalysisTool = createMockTool("delegate_analysis");
+      vi.mocked(delegateAnalysisTool.execute).mockResolvedValue({
+        content: "Delegated analysis: runtime log sampling is still missing.",
+        metadata: {
+          workerResult: {
+            status: "completed",
+            finalSummary: "Delegated analysis: runtime log sampling is still missing.",
+            visibleResponse: "Delegated analysis: runtime log sampling is still missing.",
+            provider: "mock",
+            catalogVersion: "mock:default",
+            assignmentVersion: 0,
+            touchedFiles: ["Assets/Level.asset"],
+            toolTrace: [],
+            verificationResults: [],
+            reviewFindings: [],
+            artifacts: [],
+          },
+        },
+      } as any);
+
+      const backgroundOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool, delegateAnalysisTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        taskConfig: {
+          ...DEFAULT_TASK_CONFIG,
+          backgroundEpochMaxIterations: 7,
+          backgroundAutoContinue: false,
+        },
+      });
+
+      mockProvider.chat
+        .mockResolvedValueOnce({
+          text: "Should I ask which console error matters most?",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            decision: "internal_continue",
+            reason: "Strada can still inspect local runtime evidence first.",
+            recommendedNextAction: "Inspect the project and logs before asking the user.",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Should I ask which console error matters most?",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            decision: "internal_continue",
+            reason: "Strada can still inspect local runtime evidence first.",
+            recommendedNextAction: "Inspect the project and logs before asking the user.",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "Should I ask which console error matters most?",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            decision: "internal_continue",
+            reason: "Strada can still inspect local runtime evidence first.",
+            recommendedNextAction: "Inspect the project and logs before asking the user.",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            decision: "delegate_analysis",
+            reason: "The loop needs an external root-cause diagnosis path.",
+            delegationTask: "Analyze the repeated clarification loop and identify missing evidence.",
+          }),
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: "1. Inspect the specific runtime log source.\n2. Avoid asking the user yet.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 10, outputTokens: 20 },
+        });
+
+      const progress = vi.fn();
+      const result = await backgroundOrch.runBackgroundTask("console üzerinden errorlere bak ve çöz", {
+        chatId: "bg-loop-delegate",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress: progress,
+      });
+
+      expect(delegateAnalysisTool.execute).toHaveBeenCalled();
+      expect(progress).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "delegation",
+        }),
+      );
+      expect(result).toContain("configured iteration budget");
     });
 
     it("streaming error handling: chatStream throws gracefully handled", async () => {

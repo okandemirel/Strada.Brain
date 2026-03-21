@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type {
+  McpInstallPlan,
   McpInstallResponse,
   McpInstallTarget,
   McpRecommendation,
@@ -288,6 +289,7 @@ export function useSetupWizard() {
   const [mcpInstallStatus, setMcpInstallStatus] = useState<'idle' | 'installing' | 'success' | 'error'>('idle')
   const [mcpInstallError, setMcpInstallError] = useState<string | null>(null)
   const [mcpInstallMessage, setMcpInstallMessage] = useState<string | null>(null)
+  const [mcpInstallPlan, setMcpInstallPlan] = useState<McpInstallPlan | null>(null)
   const [channel, setChannelState] = useState('web')
   const [channelConfig, setChannelConfig] = useState<Record<string, string>>({})
   const [language, setLanguageState] = useState('en')
@@ -474,6 +476,7 @@ export function useSetupWizard() {
     setMcpInstallStatus('idle')
     setMcpInstallError(null)
     setMcpInstallMessage(null)
+    setMcpInstallPlan(null)
   }, [])
 
   const applyPathAnalysis = useCallback((data: {
@@ -523,6 +526,7 @@ export function useSetupWizard() {
     setMcpInstallStatus('installing')
     setMcpInstallError(null)
     setMcpInstallMessage(null)
+    setMcpInstallPlan(null)
 
     try {
       const res = await fetch('/api/setup/install-mcp', {
@@ -546,9 +550,10 @@ export function useSetupWizard() {
       setPathError(null)
       applyPathAnalysis(data)
       setMcpInstallStatus('success')
+      setMcpInstallPlan(data.install ?? null)
       setMcpInstallMessage(
         data.install
-          ? `Strada.MCP installed into ${data.install.submodulePath}. Unity manifest updated and npm install completed.`
+          ? `Installed into ${data.install.submodulePath}. Unity manifest now points to ${data.install.manifestDependency}.`
           : 'Strada.MCP installed successfully.',
       )
       return true
@@ -556,6 +561,7 @@ export function useSetupWizard() {
       setMcpInstallStatus('error')
       setMcpInstallError(err instanceof Error ? err.message : 'Strada.MCP install failed')
       setMcpInstallMessage(null)
+      setMcpInstallPlan(null)
       return false
     }
   }, [applyPathAnalysis, projectPath])
@@ -870,6 +876,7 @@ export function useSetupWizard() {
     mcpInstallStatus,
     mcpInstallError,
     mcpInstallMessage,
+    mcpInstallPlan,
     channel,
     channelConfig,
     language,

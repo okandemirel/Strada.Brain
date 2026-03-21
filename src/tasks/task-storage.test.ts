@@ -53,4 +53,27 @@ describe("TaskStorage", () => {
 
     expect(incomplete.map((task) => task.id)).toContain(waitingTask.id);
   });
+
+  it("treats blocked tasks as terminal for active queries", () => {
+    const blockedTask = makeTask(TaskStatus.blocked);
+    storage.save(blockedTask);
+
+    const active = storage.listActiveByChatId(blockedTask.chatId);
+    const incomplete = storage.loadIncomplete();
+
+    expect(active.map((task) => task.id)).not.toContain(blockedTask.id);
+    expect(incomplete.map((task) => task.id)).not.toContain(blockedTask.id);
+  });
+
+  it("bumps updatedAt when progress is added", async () => {
+    const task = makeTask(TaskStatus.executing, { updatedAt: Date.now() - 10_000 });
+    storage.save(task);
+
+    const before = storage.load(task.id)!;
+    storage.addProgress(task.id, "Running tools: file_read");
+    const after = storage.load(task.id)!;
+
+    expect(after.updatedAt).toBeGreaterThan(before.updatedAt);
+    expect(after.progress.at(-1)?.message).toBe("Running tools: file_read");
+  });
 });

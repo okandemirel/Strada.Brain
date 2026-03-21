@@ -446,6 +446,90 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
   });
 });
 
+describe("BackgroundExecutor - Blocked worker results", () => {
+  it("marks the root task blocked when a worker returns blocked", async () => {
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "blocked",
+          finalSummary: "Need a fresh diagnosis",
+          visibleResponse: "Checkpoint",
+          provider: "mock",
+          catalogVersion: "mock:default",
+          assignmentVersion: 0,
+          touchedFiles: [],
+          toolTrace: [],
+          verificationResults: [],
+          reviewFindings: [],
+          artifacts: [],
+          reason: "Need a fresh diagnosis",
+        }),
+      } as any,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const ac = new AbortController();
+    executor.enqueue(createTestTask(), ac.signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.block).toHaveBeenCalledWith(
+        "task_test123",
+        "Need a fresh diagnosis",
+      );
+    });
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
+  });
+
+  it("marks decomposed tasks blocked when a child worker returns blocked", async () => {
+    const goalTree = buildTestGoalTree();
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "blocked",
+          finalSummary: "Verifier loop needs external diagnosis",
+          visibleResponse: "Verifier loop needs external diagnosis",
+          provider: "mock",
+          catalogVersion: "mock:default",
+          assignmentVersion: 0,
+          touchedFiles: ["Assets/Game/GameController.cs"],
+          toolTrace: [],
+          verificationResults: [],
+          reviewFindings: [],
+          artifacts: [],
+          reason: "Verifier loop needs external diagnosis",
+        }),
+      } as any,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const ac = new AbortController();
+    executor.enqueue(createTestTask(goalTree), ac.signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.block).toHaveBeenCalledWith(
+        "task_test123",
+        "Verifier loop needs external diagnosis",
+      );
+    });
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
+  });
+});
+
 describe("BackgroundExecutor - daemon budget tracking", () => {
   it("records cost for daemon-origin tasks from background usage callbacks", async () => {
     const mockOrch = createMockOrchestrator();

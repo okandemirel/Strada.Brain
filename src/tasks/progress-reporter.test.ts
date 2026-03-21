@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProgressReporter } from "./progress-reporter.js";
-import { TaskStatus, type Task } from "./types.js";
+import { TaskStatus, type Task, type TaskProgressUpdate } from "./types.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
@@ -22,7 +22,7 @@ class MockTaskManager extends EventEmitter {
     this.emit("task:created", task);
   }
 
-  emitProgress(taskId: string, message: string): void {
+  emitProgress(taskId: string, message: TaskProgressUpdate): void {
     this.emit("task:progress", taskId, message);
   }
 
@@ -51,6 +51,15 @@ class MockTaskManager extends EventEmitter {
     }
     this.emit("task:cancelled", taskId);
   }
+
+  emitBlocked(taskId: string, result: string): void {
+    const task = this.tasks.get(taskId);
+    if (task) {
+      task.result = result;
+      task.status = TaskStatus.blocked;
+    }
+    this.emit("task:blocked", taskId, result);
+  }
 }
 
 function createTask(overrides: Partial<Task> = {}): Task {
@@ -77,7 +86,7 @@ describe("ProgressReporter", () => {
     vi.useRealTimers();
   });
 
-  it("waits for the configured delay before sending a heartbeat, then repeats on the interval", async () => {
+  it("waits for the configured delay before opening a live status message", async () => {
     const channel = {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendMarkdown: vi.fn().mockResolvedValue(undefined),
@@ -97,11 +106,11 @@ describe("ProgressReporter", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(channel.sendText).toHaveBeenCalledWith(
       "chat-1",
-      "Still working on: Investigate the failing build and fix it",
+      "Strada agent: working on Investigate the failing build and fix it.",
     );
 
     await vi.advanceTimersByTimeAsync(300_000);
-    expect(channel.sendText).toHaveBeenCalledTimes(2);
+    expect(channel.sendText).toHaveBeenCalledTimes(1);
   });
 
   it("clears heartbeat timers once the task completes", async () => {
@@ -122,6 +131,49 @@ describe("ProgressReporter", () => {
 
     await vi.advanceTimersByTimeAsync(300_000);
     expect(channel.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates a streaming status message in place and finalizes it on blocked", async () => {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      startStreamingMessage: vi.fn().mockResolvedValue("stream-1"),
+      updateStreamingMessage: vi.fn().mockResolvedValue(undefined),
+      finalizeStreamingMessage: vi.fn().mockResolvedValue(undefined),
+    };
+    const taskManager = new MockTaskManager();
+    new ProgressReporter(channel as any, taskManager as any, undefined, "tr");
+
+    taskManager.emitCreated(createTask({
+      title: "console üzerinden errorlere bak ve çöz",
+      prompt: "console üzerinden errorlere bak ve çöz",
+    }));
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(channel.startStreamingMessage).toHaveBeenCalledWith("chat-1");
+    expect(channel.updateStreamingMessage).toHaveBeenCalledWith(
+      "chat-1",
+      "stream-1",
+      "Strada agent: console üzerinden errorlere bak ve çöz üzerinde çalışıyorum.",
+    );
+
+    taskManager.emitProgress("task_heartbeat", {
+      kind: "editing",
+      message: "Running tools: file_edit",
+      files: ["Assets/Game/UnityAdsService.cs", "Assets/Game/GameController.cs"],
+    });
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    expect(channel.updateStreamingMessage).toHaveBeenCalledWith(
+      "chat-1",
+      "stream-1",
+      "Strada agent: UnityAdsService.cs ve GameController.cs üzerinde hata düzeltmeleri uyguluyorum.",
+    );
+
+    taskManager.emitBlocked("task_heartbeat", "Blocked checkpoint");
+    expect(channel.finalizeStreamingMessage).toHaveBeenCalledWith("chat-1", "stream-1", "");
+    expect(channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "Blocked checkpoint");
   });
 
   it("disables heartbeats when interaction mode is standard", async () => {

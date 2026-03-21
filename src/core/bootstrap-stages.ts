@@ -364,6 +364,7 @@ interface TaskRuntimeStageDeps {
     channel: IChannelAdapter,
     taskManager: TaskManager,
     interaction: Config["interaction"],
+    defaultLanguage: Config["language"],
   ) => ProgressReporter;
 }
 
@@ -1161,9 +1162,14 @@ export async function initializeTaskRuntimeStage(
   });
 
   if (deps.createProgressReporter) {
-    deps.createProgressReporter(params.channel, taskManager, params.config.interaction);
+    deps.createProgressReporter(
+      params.channel,
+      taskManager,
+      params.config.interaction,
+      params.config.language,
+    );
   } else {
-    new ProgressReporter(params.channel, taskManager, params.config.interaction);
+    new ProgressReporter(params.channel, taskManager, params.config.interaction, params.config.language);
   }
 
   return {

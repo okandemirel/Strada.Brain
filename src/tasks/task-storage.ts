@@ -140,9 +140,16 @@ export class TaskStorage {
     this.getStmt("updateError").run(error, TaskStatus.failed, Date.now(), Date.now(), id);
   }
 
+  updateBlocked(id: TaskId, result: string): void {
+    this.ensureConnection();
+    this.getStmt("updateBlocked").run(result, TaskStatus.blocked, Date.now(), Date.now(), id);
+  }
+
   addProgress(id: TaskId, message: string): void {
     this.ensureConnection();
-    this.getStmt("insertProgress").run(id, Date.now(), message);
+    const now = Date.now();
+    this.getStmt("insertProgress").run(id, now, message);
+    this.getStmt("touchTask").run(now, id);
   }
 
   // ─── Queries ────────────────────────────────────────────────────────────────
@@ -214,10 +221,12 @@ export class TaskStorage {
       updateStatus: `UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
       updateResult: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       updateError: `UPDATE tasks SET error = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
+      updateBlocked: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       listByChatId: `SELECT * FROM tasks WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?`,
       listActiveByChatId: `SELECT * FROM tasks WHERE chat_id = ? AND status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input') ORDER BY created_at DESC`,
       loadIncomplete: `SELECT * FROM tasks WHERE status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input')`,
       insertProgress: `INSERT INTO task_progress (task_id, timestamp, message) VALUES (?, ?, ?)`,
+      touchTask: `UPDATE tasks SET updated_at = ? WHERE id = ?`,
       getProgress: `SELECT * FROM task_progress WHERE task_id = ? ORDER BY timestamp ASC`,
     };
 

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import type { McpInstallTarget, McpRecommendation, StradaDepsStatus } from '../../types/setup'
+import type { McpInstallPlan, McpInstallTarget, McpRecommendation, StradaDepsStatus } from '../../types/setup'
+import McpInstallPanel from './McpInstallPanel'
 
 interface ProjectPathStepProps {
   projectPath: string
@@ -13,6 +13,7 @@ interface ProjectPathStepProps {
   mcpInstallStatus: 'idle' | 'installing' | 'success' | 'error'
   mcpInstallError: string | null
   mcpInstallMessage: string | null
+  mcpInstallPlan: McpInstallPlan | null
   validatePath: () => Promise<void>
   installMcp: (target: McpInstallTarget) => Promise<boolean>
   openBrowser: () => void
@@ -32,14 +33,13 @@ export default function ProjectPathStep({
   mcpInstallStatus,
   mcpInstallError,
   mcpInstallMessage,
+  mcpInstallPlan,
   validatePath,
   installMcp,
   openBrowser,
   onNext,
   onBack,
 }: ProjectPathStepProps) {
-  const [installTarget, setInstallTarget] = useState<McpInstallTarget>('packages')
-
   return (
     <div className="step">
       <h2>Unity Project</h2>
@@ -71,58 +71,19 @@ export default function ProjectPathStep({
         )}
 
         {pathValid && pathIsUnityProject && pathStradaDeps && (
-          <div className="path-status valid" style={{ marginTop: 12, display: 'block' }}>
-            <div><strong>Unity project detected</strong></div>
-            <div>Core: {pathStradaDeps.coreInstalled ? 'installed' : 'missing'}</div>
-            <div>Modules: {pathStradaDeps.modulesInstalled ? 'installed' : 'missing'}</div>
-            <div>MCP: {pathStradaDeps.mcpInstalled ? 'installed' : 'missing'}</div>
-            {pathDependencyWarnings.map((warning) => (
-              <div key={warning} style={{ marginTop: 6 }}>{warning}</div>
-            ))}
-            {mcpInstallMessage && (
-              <div style={{ marginTop: 8 }}>{mcpInstallMessage}</div>
-            )}
-            {mcpInstallError && (
-              <div style={{ marginTop: 8 }}>{mcpInstallError}</div>
-            )}
-            {!pathStradaDeps.mcpInstalled && pathMcpRecommendation && (
-              <>
-                <div style={{ marginTop: 8 }}><strong>MCP recommendation</strong></div>
-                <div>{pathMcpRecommendation.reason}</div>
-                <div>{pathMcpRecommendation.featureList.join(' • ')}</div>
-                {pathMcpRecommendation.discoveryHint && (
-                  <div>{pathMcpRecommendation.discoveryHint}</div>
-                )}
-                {pathMcpRecommendation.installHint && (
-                  <div style={{ marginTop: 6 }}>{pathMcpRecommendation.installHint}</div>
-                )}
-                <div style={{ marginTop: 12 }}><strong>Install Strada.MCP now</strong></div>
-                <div style={{ marginTop: 6 }}>
-                  Brain will add Strada.MCP as a git submodule, point Unity at `com.strada.mcp`, and run `npm install` in the checkout so the MCP runtime is ready.
-                </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <label htmlFor="mcp-install-target"><strong>Location</strong></label>
-                  <select
-                    id="mcp-install-target"
-                    value={installTarget}
-                    onChange={(e) => setInstallTarget(e.target.value as McpInstallTarget)}
-                  >
-                    <option value="packages">Packages/Submodules/Strada.MCP</option>
-                    <option value="assets">Assets/Strada.MCP</option>
-                  </select>
-                  <button
-                    className="btn btn-secondary"
-                    disabled={mcpInstallStatus === 'installing'}
-                    onClick={() => {
-                      void installMcp(installTarget)
-                    }}
-                  >
-                    {mcpInstallStatus === 'installing' ? 'Installing...' : 'Install MCP'}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
+          <McpInstallPanel
+            projectPath={projectPath}
+            stradaDeps={pathStradaDeps}
+            dependencyWarnings={pathDependencyWarnings}
+            mcpRecommendation={pathMcpRecommendation}
+            mcpInstallStatus={mcpInstallStatus}
+            mcpInstallError={mcpInstallError}
+            mcpInstallMessage={mcpInstallMessage}
+            mcpInstallPlan={mcpInstallPlan}
+            onInstall={(target) => {
+              void installMcp(target)
+            }}
+          />
         )}
       </div>
 

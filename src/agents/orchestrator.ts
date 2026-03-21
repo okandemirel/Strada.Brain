@@ -78,13 +78,16 @@ import {
   buildClarificationReviewRequest,
   CLARIFICATION_REVIEW_SYSTEM_PROMPT,
   COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
+  ControlLoopTracker,
   collectCompletionReviewEvidence,
   decideInteractionBoundary,
   draftLooksLikeInternalPlanArtifact,
   ErrorRecoveryEngine,
   ExecutionJournal,
+  LOOP_RECOVERY_REVIEW_SYSTEM_PROMPT,
   TaskPlanner,
   SelfVerification,
+  buildLoopRecoveryReviewRequest,
   collectClarificationReviewEvidence,
   buildCompletionReviewStageRequest,
   buildCompletionReviewStageSystemPrompt,
@@ -95,27 +98,33 @@ import {
   parseCompletionReviewDecision,
   parseCompletionReviewStageResult,
   parseClarificationReviewDecision,
+  parseLoopRecoveryReviewDecision,
   planVerifierPipeline,
   sanitizeClarificationReviewDecision,
+  sanitizeLoopRecoveryReviewDecision,
   shouldRunClarificationReview,
   InteractionPolicyStateMachine,
   userExplicitlyAskedForPlan,
   type CompletionReviewStageName,
   type CompletionReviewStageResult,
   type ClarificationBlockingType,
+  type ControlLoopGateKind,
   type ClarificationReviewDecision,
   type InteractionBoundaryDecision,
+  type LoopRecoveryBrief,
+  type LoopRecoveryReviewDecision,
   type VerifierPipelineResult,
 } from "./autonomy/index.js";
 import { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
-import { WRITE_OPERATIONS } from "./autonomy/constants.js";
+import { MUTATION_TOOLS, WRITE_OPERATIONS, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
 import {
   checkReadOnlyBlock,
   createReadOnlyToolStub,
   getReadOnlySystemPrompt,
 } from "../security/read-only-guard.js";
-import type { BackgroundTaskOptions, TaskUsageEvent } from "../tasks/types.js";
+import type { BackgroundTaskOptions, TaskProgressSignal, TaskProgressUpdate, TaskUsageEvent } from "../tasks/types.js";
+import { buildTaskProgressSummary, type ProgressLanguage } from "../tasks/progress-signals.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
@@ -303,6 +312,13 @@ interface VerifierIntervention {
   kind: "approve" | "continue" | "replan";
   gate?: string;
   result: VerifierPipelineResult;
+}
+
+interface LoopRecoveryIntervention {
+  action: "none" | "continue" | "replan" | "blocked";
+  gate?: string;
+  message?: string;
+  summary?: string;
 }
 
 type SupervisorRole = "planner" | "executor" | "reviewer" | "synthesizer";
@@ -2705,7 +2721,7 @@ export class Orchestrator {
    */
   async runWorkerTask(request: WorkerRunRequest & {
     signal: AbortSignal;
-    onProgress: (message: string) => void;
+    onProgress: (message: TaskProgressUpdate) => void;
     attachments?: Attachment[];
     onUsage?: (usage: TaskUsageEvent) => void;
     parentMetricId?: string;
@@ -2950,6 +2966,9 @@ export class Orchestrator {
         });
         const selfVerification = new SelfVerification();
         const executionJournal = new ExecutionJournal(prompt);
+        const controlLoopTracker = new ControlLoopTracker();
+        const progressTitle = prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task";
+        const progressLanguage = (profile?.language ?? this.defaultLanguage) as ProgressLanguage;
         if (bgProjectWorldSummary && bgProjectWorldFingerprint) {
           executionJournal.attachProjectWorldContext({
             summary: bgProjectWorldSummary,
@@ -2979,6 +2998,12 @@ export class Orchestrator {
         let finalVisibleResponse = "";
         let finalStatus: WorkerRunResult["status"] | undefined;
         let finalReason: string | undefined;
+        const emitProgress = (update: TaskProgressUpdate): void => {
+          if (typeof update !== "string" && update.userSummary) {
+            executionJournal.recordUserFacingProgress(update.userSummary);
+          }
+          onProgress(update);
+        };
         const finish = (
           response: string,
           status: WorkerRunResult["status"] = "completed",
@@ -3150,6 +3175,66 @@ export class Orchestrator {
                     clarificationIntervention.kind === "continue" &&
                     clarificationIntervention.gate
                   ) {
+                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                      chatId,
+                      identityKey,
+                      prompt,
+                      title: progressTitle,
+                      language: progressLanguage,
+                      state: bgAgentState,
+                      strategy: executionStrategy,
+                      tracker: controlLoopTracker,
+                      executionJournal,
+                      kind: "clarification_internal_continue",
+                      reason: "Clarification review kept the task internal.",
+                      gate: clarificationIntervention.gate,
+                      iteration: bgIteration,
+                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                      selfVerification,
+                      usageHandler: options.onUsage ?? this.onUsage,
+                      onProgress: emitProgress,
+                      session,
+                      workerCollector,
+                      workspaceLease: options.workspaceLease,
+                    });
+                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
+                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
+                      this.recordMetricEnd(metricId, {
+                        agentPhase: AgentPhase.COMPLETE,
+                        iterations: bgAgentState.iteration,
+                        toolCallCount: bgToolCallCount,
+                        hitMaxIterations: false,
+                      });
+                      await this.persistSessionToMemory(
+                        chatId,
+                        this.getVisibleTranscript(session),
+                        /* force */ true,
+                      );
+                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                    }
+                    if (loopRecovery.action === "replan" && loopRecovery.gate) {
+                      executionJournal.beginReplan({
+                        state: bgAgentState,
+                        reason: loopRecovery.summary ?? "Loop recovery requested a different approach.",
+                        providerName: executionStrategy.reviewer.providerName,
+                        modelId: executionStrategy.reviewer.modelId,
+                      });
+                      bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                      if (response.text) {
+                        session.messages.push({ role: "assistant", content: response.text });
+                      }
+                      session.messages.push({ role: "user", content: loopRecovery.gate });
+                      emitProgress(this.buildStructuredProgressSignal(
+                        prompt,
+                        progressTitle,
+                        {
+                          kind: "loop_recovery",
+                          message: "Loop recovery requested a replan after clarification review.",
+                        },
+                        progressLanguage,
+                      ));
+                      continue;
+                    }
                     bgAgentState = {
                       ...bgAgentState,
                       lastReflection: response.text ?? bgAgentState.lastReflection,
@@ -3162,9 +3247,17 @@ export class Orchestrator {
                     }
                     session.messages.push({
                       role: "user",
-                      content: clarificationIntervention.gate,
+                      content: loopRecovery.gate ?? clarificationIntervention.gate,
                     });
-                    onProgress("Clarification review kept the task internal");
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt,
+                      progressTitle,
+                      {
+                        kind: "clarification",
+                        message: "Clarification review kept the task internal",
+                      },
+                      progressLanguage,
+                    ));
                     continue;
                   }
                   if (
@@ -3203,6 +3296,66 @@ export class Orchestrator {
                     terminalFailureReported: isTerminalFailureReport(response.text),
                   });
                   if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
+                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                      chatId,
+                      identityKey,
+                      prompt,
+                      title: progressTitle,
+                      language: progressLanguage,
+                      state: bgAgentState,
+                      strategy: executionStrategy,
+                      tracker: controlLoopTracker,
+                      executionJournal,
+                      kind: "visibility_internal_continue",
+                      reason: "Visibility boundary kept the task internal.",
+                      gate: rawBoundary.gate,
+                      iteration: bgIteration,
+                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                      selfVerification,
+                      usageHandler: options.onUsage ?? this.onUsage,
+                      onProgress: emitProgress,
+                      session,
+                      workerCollector,
+                      workspaceLease: options.workspaceLease,
+                    });
+                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
+                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
+                      this.recordMetricEnd(metricId, {
+                        agentPhase: AgentPhase.COMPLETE,
+                        iterations: bgAgentState.iteration,
+                        toolCallCount: bgToolCallCount,
+                        hitMaxIterations: false,
+                      });
+                      await this.persistSessionToMemory(
+                        chatId,
+                        this.getVisibleTranscript(session),
+                        /* force */ true,
+                      );
+                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                    }
+                    if (loopRecovery.action === "replan" && loopRecovery.gate) {
+                      executionJournal.beginReplan({
+                        state: bgAgentState,
+                        reason: loopRecovery.summary ?? "Loop recovery requested a different plan.",
+                        providerName: executionStrategy.reviewer.providerName,
+                        modelId: executionStrategy.reviewer.modelId,
+                      });
+                      bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                      if (response.text) {
+                        session.messages.push({ role: "assistant", content: response.text });
+                      }
+                      session.messages.push({ role: "user", content: loopRecovery.gate });
+                      emitProgress(this.buildStructuredProgressSignal(
+                        prompt,
+                        progressTitle,
+                        {
+                          kind: "loop_recovery",
+                          message: "Loop recovery requested a replan after visibility review.",
+                        },
+                        progressLanguage,
+                      ));
+                      continue;
+                    }
                     bgAgentState = {
                       ...bgAgentState,
                       lastReflection: response.text ?? bgAgentState.lastReflection,
@@ -3213,8 +3366,16 @@ export class Orchestrator {
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
-                    session.messages.push({ role: "user", content: rawBoundary.gate });
-                    onProgress("Visibility boundary kept the task internal");
+                    session.messages.push({ role: "user", content: loopRecovery.gate ?? rawBoundary.gate });
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt,
+                      progressTitle,
+                      {
+                        kind: "visibility",
+                        message: "Visibility boundary kept the task internal",
+                      },
+                      progressLanguage,
+                    ));
                     continue;
                   }
                   if (
@@ -3279,6 +3440,66 @@ export class Orchestrator {
                         failureReason: verifierIntervention.result.summary,
                       }),
                     });
+                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                      chatId,
+                      identityKey,
+                      prompt,
+                      title: progressTitle,
+                      language: progressLanguage,
+                      state: bgAgentState,
+                      strategy: executionStrategy,
+                      tracker: controlLoopTracker,
+                      executionJournal,
+                      kind: "verifier_continue",
+                      reason: verifierIntervention.result.summary,
+                      gate: verifierIntervention.gate,
+                      iteration: bgIteration,
+                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                      selfVerification,
+                      usageHandler: options.onUsage ?? this.onUsage,
+                      onProgress: emitProgress,
+                      session,
+                      workerCollector,
+                      workspaceLease: options.workspaceLease,
+                    });
+                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
+                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
+                      this.recordMetricEnd(metricId, {
+                        agentPhase: AgentPhase.COMPLETE,
+                        iterations: bgAgentState.iteration,
+                        toolCallCount: bgToolCallCount,
+                        hitMaxIterations: false,
+                      });
+                      await this.persistSessionToMemory(
+                        chatId,
+                        this.getVisibleTranscript(session),
+                        /* force */ true,
+                      );
+                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                    }
+                    if (loopRecovery.action === "replan" && loopRecovery.gate) {
+                      executionJournal.beginReplan({
+                        state: bgAgentState,
+                        reason: loopRecovery.summary ?? verifierIntervention.result.summary,
+                        providerName: executionStrategy.reviewer.providerName,
+                        modelId: executionStrategy.reviewer.modelId,
+                      });
+                      bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                      if (response.text) {
+                        session.messages.push({ role: "assistant", content: response.text });
+                      }
+                      session.messages.push({ role: "user", content: loopRecovery.gate });
+                      emitProgress(this.buildStructuredProgressSignal(
+                        prompt,
+                        progressTitle,
+                        {
+                          kind: "loop_recovery",
+                          message: "Loop recovery requested a replan after repeated verifier feedback.",
+                        },
+                        progressLanguage,
+                      ));
+                      continue;
+                    }
                     bgAgentState = {
                       ...bgAgentState,
                       lastReflection: response.text ?? bgAgentState.lastReflection,
@@ -3289,14 +3510,62 @@ export class Orchestrator {
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
-                    session.messages.push({ role: "user", content: verifierIntervention.gate });
-                    onProgress("Verification required before completion");
+                    session.messages.push({
+                      role: "user",
+                      content: loopRecovery.gate ?? verifierIntervention.gate,
+                    });
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt,
+                      progressTitle,
+                      {
+                        kind: "verification",
+                        message: "Verification required before completion",
+                      },
+                      progressLanguage,
+                    ));
                     continue;
                   }
                   if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                      chatId,
+                      identityKey,
+                      prompt,
+                      title: progressTitle,
+                      language: progressLanguage,
+                      state: bgAgentState,
+                      strategy: executionStrategy,
+                      tracker: controlLoopTracker,
+                      executionJournal,
+                      kind: "verifier_replan",
+                      reason: verifierIntervention.result.summary,
+                      gate: verifierIntervention.gate,
+                      iteration: bgIteration,
+                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                      selfVerification,
+                      usageHandler: options.onUsage ?? this.onUsage,
+                      onProgress: emitProgress,
+                      session,
+                      workerCollector,
+                      workspaceLease: options.workspaceLease,
+                    });
+                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
+                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
+                      this.recordMetricEnd(metricId, {
+                        agentPhase: AgentPhase.COMPLETE,
+                        iterations: bgAgentState.iteration,
+                        toolCallCount: bgToolCallCount,
+                        hitMaxIterations: false,
+                      });
+                      await this.persistSessionToMemory(
+                        chatId,
+                        this.getVisibleTranscript(session),
+                        /* force */ true,
+                      );
+                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                    }
                     executionJournal.beginReplan({
                       state: bgAgentState,
-                      reason: verifierIntervention.result.summary,
+                      reason: loopRecovery.summary ?? verifierIntervention.result.summary,
                       providerName: executionStrategy.reviewer.providerName,
                       modelId: executionStrategy.reviewer.modelId,
                     });
@@ -3319,8 +3588,22 @@ export class Orchestrator {
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
-                    session.messages.push({ role: "user", content: verifierIntervention.gate });
-                    onProgress("Verifier pipeline requested a replan");
+                    session.messages.push({
+                      role: "user",
+                      content: loopRecovery.gate ?? verifierIntervention.gate,
+                    });
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt,
+                      progressTitle,
+                      {
+                        kind: loopRecovery.action === "replan" ? "loop_recovery" : "replanning",
+                        message:
+                          loopRecovery.action === "replan"
+                            ? "Loop recovery requested a replan after repeated verifier feedback."
+                            : "Verifier pipeline requested a replan",
+                      },
+                      progressLanguage,
+                    ));
                     continue;
                   }
 
@@ -3350,6 +3633,66 @@ export class Orchestrator {
                     terminalFailureReported: isTerminalFailureReport(response.text),
                   });
                   if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
+                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                      chatId,
+                      identityKey,
+                      prompt,
+                      title: progressTitle,
+                      language: progressLanguage,
+                      state: bgAgentState,
+                      strategy: executionStrategy,
+                      tracker: controlLoopTracker,
+                      executionJournal,
+                      kind: "visibility_internal_continue",
+                      reason: "Visibility boundary rejected the draft.",
+                      gate: finalBoundary.gate,
+                      iteration: bgIteration,
+                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                      selfVerification,
+                      usageHandler: options.onUsage ?? this.onUsage,
+                      onProgress: emitProgress,
+                      session,
+                      workerCollector,
+                      workspaceLease: options.workspaceLease,
+                    });
+                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
+                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
+                      this.recordMetricEnd(metricId, {
+                        agentPhase: AgentPhase.COMPLETE,
+                        iterations: bgAgentState.iteration,
+                        toolCallCount: bgToolCallCount,
+                        hitMaxIterations: false,
+                      });
+                      await this.persistSessionToMemory(
+                        chatId,
+                        this.getVisibleTranscript(session),
+                        /* force */ true,
+                      );
+                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                    }
+                    if (loopRecovery.action === "replan" && loopRecovery.gate) {
+                      executionJournal.beginReplan({
+                        state: bgAgentState,
+                        reason: loopRecovery.summary ?? "Loop recovery requested a different plan.",
+                        providerName: executionStrategy.reviewer.providerName,
+                        modelId: executionStrategy.reviewer.modelId,
+                      });
+                      bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                      if (response.text) {
+                        session.messages.push({ role: "assistant", content: response.text });
+                      }
+                      session.messages.push({ role: "user", content: loopRecovery.gate });
+                      emitProgress(this.buildStructuredProgressSignal(
+                        prompt,
+                        progressTitle,
+                        {
+                          kind: "loop_recovery",
+                          message: "Loop recovery requested a replan after the draft was rejected.",
+                        },
+                        progressLanguage,
+                      ));
+                      continue;
+                    }
                     bgAgentState = {
                       ...bgAgentState,
                       lastReflection: response.text ?? bgAgentState.lastReflection,
@@ -3360,8 +3703,19 @@ export class Orchestrator {
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
-                    session.messages.push({ role: "user", content: finalBoundary.gate });
-                    onProgress("Visibility boundary rejected the draft");
+                    session.messages.push({
+                      role: "user",
+                      content: loopRecovery.gate ?? finalBoundary.gate,
+                    });
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt,
+                      progressTitle,
+                      {
+                        kind: "visibility",
+                        message: "Visibility boundary rejected the draft",
+                      },
+                      progressLanguage,
+                    ));
                     continue;
                   }
                   const surfacedFinalText = finalBoundary.visibleText ?? finalText;
@@ -3432,7 +3786,15 @@ export class Orchestrator {
                     }),
                   });
                   session.messages.push({ role: "user", content: "Please create a new plan." });
-                  onProgress("Replanning: current approach needs adjustment");
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt,
+                    progressTitle,
+                    {
+                      kind: "replanning",
+                      message: "Replanning: current approach needs adjustment",
+                    },
+                    progressLanguage,
+                  ));
                   continue;
                 }
 
@@ -3558,10 +3920,82 @@ export class Orchestrator {
                   clarificationIntervention.kind === "continue" &&
                   clarificationIntervention.gate
                 ) {
+                  const loopRecovery = await this.handleBackgroundLoopRecovery({
+                    chatId,
+                    identityKey,
+                    prompt,
+                    title: progressTitle,
+                    language: progressLanguage,
+                    state: bgAgentState,
+                    strategy: executionStrategy,
+                    tracker: controlLoopTracker,
+                    executionJournal,
+                    kind: "clarification_internal_continue",
+                    reason: "Clarification review kept the task internal.",
+                    gate: clarificationIntervention.gate,
+                    iteration: bgIteration,
+                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    selfVerification,
+                    usageHandler: options.onUsage ?? this.onUsage,
+                    onProgress: emitProgress,
+                    session,
+                    workerCollector,
+                    workspaceLease: options.workspaceLease,
+                  });
+                  if (loopRecovery.action === "blocked" && loopRecovery.message) {
+                    this.appendVisibleAssistantMessage(session, loopRecovery.message);
+                    this.recordMetricEnd(metricId, {
+                      agentPhase: AgentPhase.COMPLETE,
+                      iterations: bgAgentState.iteration,
+                      toolCallCount: bgToolCallCount,
+                      hitMaxIterations: false,
+                    });
+                    await this.persistSessionToMemory(
+                      chatId,
+                      this.getVisibleTranscript(session),
+                      /* force */ true,
+                    );
+                    return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                  }
+                  if (loopRecovery.action === "replan" && loopRecovery.gate) {
+                    executionJournal.beginReplan({
+                      state: bgAgentState,
+                      reason: loopRecovery.summary ?? "Loop recovery requested a different approach.",
+                      providerName: executionStrategy.reviewer.providerName,
+                      modelId: executionStrategy.reviewer.modelId,
+                    });
+                    bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                    if (response.text) {
+                      session.messages.push({ role: "assistant", content: response.text });
+                    }
+                    session.messages.push({ role: "user", content: loopRecovery.gate });
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt,
+                      progressTitle,
+                      {
+                        kind: "loop_recovery",
+                        message: "Loop recovery requested a replan after clarification review.",
+                      },
+                      progressLanguage,
+                    ));
+                    continue;
+                  }
                   if (response.text) {
                     session.messages.push({ role: "assistant", content: response.text });
                   }
-                  session.messages.push({ role: "user", content: clarificationIntervention.gate });
+                  session.messages.push({
+                    role: "user",
+                    content: loopRecovery.gate ?? clarificationIntervention.gate,
+                  });
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt,
+                    progressTitle,
+                    {
+                      kind: "clarification",
+                      message: "Clarification review kept the task internal",
+                    },
+                    progressLanguage,
+                  ));
                   continue;
                 }
                 if (
@@ -3600,10 +4034,82 @@ export class Orchestrator {
                   terminalFailureReported: isTerminalFailureReport(response.text),
                 });
                 if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
+                  const loopRecovery = await this.handleBackgroundLoopRecovery({
+                    chatId,
+                    identityKey,
+                    prompt,
+                    title: progressTitle,
+                    language: progressLanguage,
+                    state: bgAgentState,
+                    strategy: executionStrategy,
+                    tracker: controlLoopTracker,
+                    executionJournal,
+                    kind: "visibility_internal_continue",
+                    reason: "Visibility boundary kept the task internal.",
+                    gate: rawBoundary.gate,
+                    iteration: bgIteration,
+                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    selfVerification,
+                    usageHandler: options.onUsage ?? this.onUsage,
+                    onProgress: emitProgress,
+                    session,
+                    workerCollector,
+                    workspaceLease: options.workspaceLease,
+                  });
+                  if (loopRecovery.action === "blocked" && loopRecovery.message) {
+                    this.appendVisibleAssistantMessage(session, loopRecovery.message);
+                    this.recordMetricEnd(metricId, {
+                      agentPhase: AgentPhase.COMPLETE,
+                      iterations: bgAgentState.iteration,
+                      toolCallCount: bgToolCallCount,
+                      hitMaxIterations: false,
+                    });
+                    await this.persistSessionToMemory(
+                      chatId,
+                      this.getVisibleTranscript(session),
+                      /* force */ true,
+                    );
+                    return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                  }
+                  if (loopRecovery.action === "replan" && loopRecovery.gate) {
+                    executionJournal.beginReplan({
+                      state: bgAgentState,
+                      reason: loopRecovery.summary ?? "Loop recovery requested a different plan.",
+                      providerName: executionStrategy.reviewer.providerName,
+                      modelId: executionStrategy.reviewer.modelId,
+                    });
+                    bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                    if (response.text) {
+                      session.messages.push({ role: "assistant", content: response.text });
+                    }
+                    session.messages.push({ role: "user", content: loopRecovery.gate });
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt,
+                      progressTitle,
+                      {
+                        kind: "loop_recovery",
+                        message: "Loop recovery requested a replan after visibility review.",
+                      },
+                      progressLanguage,
+                    ));
+                    continue;
+                  }
                   if (response.text) {
                     session.messages.push({ role: "assistant", content: response.text });
                   }
-                  session.messages.push({ role: "user", content: rawBoundary.gate });
+                  session.messages.push({
+                    role: "user",
+                    content: loopRecovery.gate ?? rawBoundary.gate,
+                  });
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt,
+                    progressTitle,
+                    {
+                      kind: "visibility",
+                      message: "Visibility boundary kept the task internal",
+                    },
+                    progressLanguage,
+                  ));
                   continue;
                 }
                 if (
@@ -3646,6 +4152,11 @@ export class Orchestrator {
                 if (workerCollector) {
                   workerCollector.verifierResult = verifierIntervention.result;
                 }
+                executionJournal.recordVerifierResult(
+                  verifierIntervention.result,
+                  executionStrategy.reviewer.providerName,
+                  executionStrategy.reviewer.modelId,
+                );
                 if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
                   this.recordPhaseOutcome({
                     chatId,
@@ -3662,13 +4173,122 @@ export class Orchestrator {
                       failureReason: verifierIntervention.result.summary,
                     }),
                   });
+                  const loopRecovery = await this.handleBackgroundLoopRecovery({
+                    chatId,
+                    identityKey,
+                    prompt,
+                    title: progressTitle,
+                    language: progressLanguage,
+                    state: bgAgentState,
+                    strategy: executionStrategy,
+                    tracker: controlLoopTracker,
+                    executionJournal,
+                    kind: "verifier_continue",
+                    reason: verifierIntervention.result.summary,
+                    gate: verifierIntervention.gate,
+                    iteration: bgIteration,
+                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    selfVerification,
+                    usageHandler: options.onUsage ?? this.onUsage,
+                    onProgress: emitProgress,
+                    session,
+                    workerCollector,
+                    workspaceLease: options.workspaceLease,
+                  });
+                  if (loopRecovery.action === "blocked" && loopRecovery.message) {
+                    this.appendVisibleAssistantMessage(session, loopRecovery.message);
+                    this.recordMetricEnd(metricId, {
+                      agentPhase: AgentPhase.COMPLETE,
+                      iterations: bgAgentState.iteration,
+                      toolCallCount: bgToolCallCount,
+                      hitMaxIterations: false,
+                    });
+                    await this.persistSessionToMemory(
+                      chatId,
+                      this.getVisibleTranscript(session),
+                      /* force */ true,
+                    );
+                    return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                  }
+                  if (loopRecovery.action === "replan" && loopRecovery.gate) {
+                    executionJournal.beginReplan({
+                      state: bgAgentState,
+                      reason: loopRecovery.summary ?? verifierIntervention.result.summary,
+                      providerName: executionStrategy.reviewer.providerName,
+                      modelId: executionStrategy.reviewer.modelId,
+                    });
+                    bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                    if (response.text) {
+                      session.messages.push({ role: "assistant", content: response.text });
+                    }
+                    session.messages.push({ role: "user", content: loopRecovery.gate });
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt,
+                      progressTitle,
+                      {
+                        kind: "loop_recovery",
+                        message: "Loop recovery requested a replan after repeated verifier feedback.",
+                      },
+                      progressLanguage,
+                    ));
+                    continue;
+                  }
                   if (response.text) {
                     session.messages.push({ role: "assistant", content: response.text });
                   }
-                  session.messages.push({ role: "user", content: verifierIntervention.gate });
+                  session.messages.push({
+                    role: "user",
+                    content: loopRecovery.gate ?? verifierIntervention.gate,
+                  });
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt,
+                    progressTitle,
+                    {
+                      kind: "verification",
+                      message: "Verification required before completion",
+                    },
+                    progressLanguage,
+                  ));
                   continue;
                 }
                 if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+                  const loopRecovery = await this.handleBackgroundLoopRecovery({
+                    chatId,
+                    identityKey,
+                    prompt,
+                    title: progressTitle,
+                    language: progressLanguage,
+                    state: bgAgentState,
+                    strategy: executionStrategy,
+                    tracker: controlLoopTracker,
+                    executionJournal,
+                    kind: "verifier_replan",
+                    reason: verifierIntervention.result.summary,
+                    gate: verifierIntervention.gate,
+                    iteration: bgIteration,
+                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    selfVerification,
+                    usageHandler: options.onUsage ?? this.onUsage,
+                    onProgress: emitProgress,
+                    session,
+                    workerCollector,
+                    workspaceLease: options.workspaceLease,
+                  });
+                  if (loopRecovery.action === "blocked" && loopRecovery.message) {
+                    this.appendVisibleAssistantMessage(session, loopRecovery.message);
+                    this.recordMetricEnd(metricId, {
+                      agentPhase: AgentPhase.COMPLETE,
+                      iterations: bgAgentState.iteration,
+                      toolCallCount: bgToolCallCount,
+                      hitMaxIterations: false,
+                    });
+                    await this.persistSessionToMemory(
+                      chatId,
+                      this.getVisibleTranscript(session),
+                      /* force */ true,
+                    );
+                    return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                  }
                   this.recordPhaseOutcome({
                     chatId,
                     identityKey,
@@ -3688,7 +4308,22 @@ export class Orchestrator {
                   if (response.text) {
                     session.messages.push({ role: "assistant", content: response.text });
                   }
-                  session.messages.push({ role: "user", content: verifierIntervention.gate });
+                  session.messages.push({
+                    role: "user",
+                    content: loopRecovery.gate ?? verifierIntervention.gate,
+                  });
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt,
+                    progressTitle,
+                    {
+                      kind: loopRecovery.action === "replan" ? "loop_recovery" : "replanning",
+                      message:
+                        loopRecovery.action === "replan"
+                          ? "Loop recovery requested a replan after repeated verifier feedback."
+                          : "Verifier pipeline requested a replan",
+                    },
+                    progressLanguage,
+                  ));
                   continue;
                 }
 
@@ -3805,6 +4440,8 @@ export class Orchestrator {
                 workspaceLease: options.workspaceLease,
               });
               bgToolCallCount += response.toolCalls.length;
+              const verificationStateBefore = selfVerification.getState();
+              const touchedFilesBefore = new Set(verificationStateBefore.touchedFiles);
 
               // Autonomy tracking
               for (let i = 0; i < response.toolCalls.length; i++) {
@@ -3846,10 +4483,26 @@ export class Orchestrator {
                 providerName: currentAssignment.providerName,
                 modelId: currentAssignment.modelId,
               });
+              const verificationStateAfter = selfVerification.getState();
+              const newTouchedFiles = [...verificationStateAfter.touchedFiles]
+                .filter((file) => !touchedFilesBefore.has(file));
+              if (
+                verificationStateAfter.lastBuildOk === true &&
+                verificationStateAfter.lastVerificationAt !== verificationStateBefore.lastVerificationAt
+              ) {
+                controlLoopTracker.markVerificationClean(bgIteration);
+              }
+              if (newTouchedFiles.length > 0) {
+                controlLoopTracker.markMeaningfulFileEvidence(newTouchedFiles, bgIteration);
+              }
 
               // Progress report: summarize tool calls
-              const toolNames = response.toolCalls.map((tc) => tc.name).join(", ");
-              onProgress(`Running tools: ${toolNames}`);
+              emitProgress(this.buildToolBatchProgressSignal({
+                prompt,
+                title: progressTitle,
+                toolCalls: response.toolCalls,
+                language: progressLanguage,
+              }));
 
               // ─── Consensus: verify output with second provider if confidence is low ───
               if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
@@ -3960,7 +4613,15 @@ export class Orchestrator {
 
               if (shouldReflect && bgAgentState.phase === AgentPhase.EXECUTING) {
                 bgAgentState = transitionPhase(bgAgentState, AgentPhase.REFLECTING);
-                onProgress("Reflecting on progress...");
+                emitProgress(this.buildStructuredProgressSignal(
+                  prompt,
+                  progressTitle,
+                  {
+                    kind: "analysis",
+                    message: "Reflecting on progress...",
+                  },
+                  progressLanguage,
+                ));
               }
               // ────────────────────────────────────────────────────────────────
 
@@ -6390,6 +7051,401 @@ export class Orchestrator {
             : "approve",
       gate: fallbackResult.gate,
       result: fallbackResult,
+    };
+  }
+
+  private buildStructuredProgressSignal(
+    prompt: string,
+    title: string,
+    signal: Omit<TaskProgressSignal, "userSummary"> & { userSummary?: string },
+    language?: ProgressLanguage,
+  ): TaskProgressSignal {
+    const withSummary: TaskProgressSignal = {
+      ...signal,
+      userSummary:
+        signal.userSummary ??
+        buildTaskProgressSummary(
+          { title, prompt },
+          signal,
+          language ?? this.defaultLanguage,
+        ),
+    };
+    return withSummary;
+  }
+
+  private buildToolBatchProgressSignal(params: {
+    prompt: string;
+    title: string;
+    toolCalls: readonly ToolCall[];
+    language?: ProgressLanguage;
+  }): TaskProgressSignal {
+    const toolNames = params.toolCalls.map((toolCall) => toolCall.name);
+    const files = [...new Set(
+      params.toolCalls
+        .map((toolCall) => extractFilePath(toolCall.input as Record<string, unknown>))
+        .filter((file) => file.trim().length > 0),
+    )];
+    const delegationType = toolNames.find((name) => name.startsWith("delegate_"));
+    const hasVerification = params.toolCalls.some((toolCall) => this.isVerificationProgressTool(toolCall));
+    const hasMutation = params.toolCalls.some((toolCall) => MUTATION_TOOLS.has(toolCall.name));
+    const hasInspection = params.toolCalls.some((toolCall) =>
+      toolCall.name === "file_read"
+      || toolCall.name === "list_directory"
+      || toolCall.name.includes("search")
+      || toolCall.name.includes("analyze"),
+    );
+
+    const kind = delegationType
+      ? "delegation"
+      : hasVerification
+        ? "verification"
+        : hasMutation
+          ? "editing"
+          : hasInspection
+            ? "inspection"
+            : "analysis";
+
+    return this.buildStructuredProgressSignal(
+      params.prompt,
+      params.title,
+      {
+        kind,
+        message: `Running tools: ${toolNames.join(", ")}`,
+        toolNames,
+        files,
+        delegationType: delegationType?.replace(/^delegate_/, ""),
+      },
+      params.language,
+    );
+  }
+
+  private isVerificationProgressTool(toolCall: ToolCall): boolean {
+    if (isVerificationToolName(toolCall.name)) {
+      return true;
+    }
+    if (toolCall.name !== "shell_exec") {
+      return false;
+    }
+    const command =
+      typeof toolCall.input["command"] === "string" ? toolCall.input["command"].trim() : "";
+    return /\b(?:test|build|check|lint|typecheck|verify|compile|playmode|editmode|smoke)\b/iu.test(command);
+  }
+
+  private selectLoopRecoveryDelegationTool(
+    availableToolNames: readonly string[] | undefined,
+    touchedFiles: readonly string[],
+  ): "delegate_analysis" | "delegate_code_review" | null {
+    if (!availableToolNames || availableToolNames.length === 0) {
+      return null;
+    }
+    if (touchedFiles.length > 0 && availableToolNames.includes("delegate_code_review")) {
+      return "delegate_code_review";
+    }
+    if (availableToolNames.includes("delegate_analysis")) {
+      return "delegate_analysis";
+    }
+    if (availableToolNames.includes("delegate_code_review")) {
+      return "delegate_code_review";
+    }
+    return null;
+  }
+
+  private async resolveLoopRecoveryReview(params: {
+    chatId: string;
+    identityKey: string;
+    brief: LoopRecoveryBrief;
+    strategy: SupervisorExecutionStrategy;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }): Promise<LoopRecoveryReviewDecision> {
+    const reviewer = params.strategy.reviewer;
+    try {
+      const response = await reviewer.provider.chat(
+        LOOP_RECOVERY_REVIEW_SYSTEM_PROMPT,
+        [
+          {
+            role: "user",
+            content: buildLoopRecoveryReviewRequest(params.brief),
+          },
+        ],
+        [],
+      );
+      this.recordAuxiliaryUsage(reviewer.providerName, response.usage, params.usageHandler);
+      return sanitizeLoopRecoveryReviewDecision(
+        parseLoopRecoveryReviewDecision(response.text),
+      ) ?? { decision: "replan_local", reason: "Loop recovery review returned no usable decision." };
+    } catch (error) {
+      getLogger().warn("Loop recovery review provider failed", {
+        chatId: params.chatId,
+        provider: reviewer.providerName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { decision: "replan_local", reason: "Loop recovery review failed; falling back to local replanning." };
+    }
+  }
+
+  private isNovelLoopRecoveryAction(
+    decision: LoopRecoveryReviewDecision,
+    brief: LoopRecoveryBrief,
+  ): boolean {
+    const action = decision.recommendedNextAction?.trim().toLowerCase();
+    if (!action) {
+      return false;
+    }
+    if (brief.requiredActions.some((item) => item.toLowerCase() === action)) {
+      return false;
+    }
+    if (brief.recentToolSummaries.some((item) => item.toLowerCase().includes(action))) {
+      return false;
+    }
+    return true;
+  }
+
+  private buildLoopRecoveryGate(params: {
+    brief: LoopRecoveryBrief;
+    decision: LoopRecoveryReviewDecision;
+    delegatedSummary?: string;
+  }): string {
+    const lines = [
+      "[LOOP RECOVERY REQUIRED]",
+      "",
+      `Loop fingerprint: ${params.brief.fingerprint}`,
+      `Reason: ${params.decision.reason ?? params.brief.latestReason ?? "Repeated internal review loop detected."}`,
+    ];
+    if (params.delegatedSummary) {
+      lines.push(`Delegated diagnosis: ${params.delegatedSummary}`);
+    }
+    if (params.brief.requiredActions.length > 0) {
+      lines.push("Required verifier actions:");
+      for (const action of params.brief.requiredActions.slice(0, 4)) {
+        lines.push(`- ${action}`);
+      }
+    }
+    if (params.decision.recommendedNextAction) {
+      lines.push(`Next action: ${params.decision.recommendedNextAction}`);
+    }
+    lines.push("Do not repeat the same fingerprint without materially new evidence.");
+    return lines.join("\n");
+  }
+
+  private buildLoopRecoveryCheckpointMessage(params: {
+    prompt: string;
+    brief: LoopRecoveryBrief;
+    decision: LoopRecoveryReviewDecision;
+    touchedFiles: readonly string[];
+  }): string {
+    const title = params.prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task checkpoint";
+    const touched = params.touchedFiles.slice(0, 5).map((file) => `- ${file}`);
+    const progress = params.brief.recentUserFacingProgress.slice(-3).map((line) => `- ${line}`);
+    return [
+      `Blocked checkpoint: ${title}`,
+      "",
+      `Reason: ${params.decision.reason ?? params.brief.latestReason ?? "Repeated internal review loop detected."}`,
+      params.brief.verifierSummary ? `Verifier: ${params.brief.verifierSummary}` : "",
+      progress.length > 0 ? `Recent progress:\n${progress.join("\n")}` : "",
+      touched.length > 0 ? `Touched files:\n${touched.join("\n")}` : "",
+      "Stopped here to avoid growing the same control loop again.",
+    ].filter(Boolean).join("\n\n");
+  }
+
+  private async handleBackgroundLoopRecovery(params: {
+    chatId: string;
+    identityKey: string;
+    prompt: string;
+    title: string;
+    language?: ProgressLanguage;
+    state: AgentState;
+    strategy: SupervisorExecutionStrategy;
+    tracker: ControlLoopTracker;
+    executionJournal: ExecutionJournal;
+    kind: ControlLoopGateKind;
+    reason?: string;
+    gate?: string;
+    iteration: number;
+    availableToolNames?: readonly string[];
+    selfVerification: SelfVerification;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+    onProgress: (message: TaskProgressUpdate) => void;
+    session: Session;
+    workerCollector?: WorkerRunCollector;
+    workspaceLease?: WorkspaceLease;
+  }): Promise<LoopRecoveryIntervention> {
+    const touchedFiles = [...params.selfVerification.getState().touchedFiles];
+    const trigger = params.tracker.recordGate({
+      kind: params.kind,
+      reason: params.reason,
+      gate: params.gate,
+      iteration: params.iteration,
+    });
+    if (!trigger) {
+      return { action: "none" };
+    }
+
+    const delegationTool = this.selectLoopRecoveryDelegationTool(
+      params.availableToolNames,
+      touchedFiles,
+    );
+    const brief = params.executionJournal.buildRecoveryBrief({
+      fingerprint: trigger.fingerprint,
+      latestReason: trigger.latestReason,
+      touchedFiles,
+      recoveryEpisode: trigger.recoveryEpisode + 1,
+      availableDelegations: delegationTool ? [delegationTool] : [],
+    });
+    const reviewDecision = await this.resolveLoopRecoveryReview({
+      chatId: params.chatId,
+      identityKey: params.identityKey,
+      brief,
+      strategy: params.strategy,
+      usageHandler: params.usageHandler,
+    });
+    const recoveryAttempt = params.tracker.markRecoveryAttempt(trigger.fingerprint);
+
+    let finalDecision = reviewDecision;
+    if (recoveryAttempt >= 2) {
+      finalDecision = {
+        decision: "blocked",
+        reason: reviewDecision.reason ?? "Repeated control-loop recovery attempts did not produce a clean path.",
+        summary: reviewDecision.summary,
+      };
+    } else if (recoveryAttempt >= 1 && delegationTool) {
+      finalDecision = {
+        ...reviewDecision,
+        decision:
+          delegationTool === "delegate_code_review"
+            ? "delegate_code_review"
+            : "delegate_analysis",
+      };
+    } else if (reviewDecision.decision === "continue_local" && !this.isNovelLoopRecoveryAction(reviewDecision, brief)) {
+      finalDecision = {
+        ...reviewDecision,
+        decision: "replan_local",
+        reason: reviewDecision.reason ?? "Suggested next action was not materially different from the repeated loop.",
+      };
+    }
+
+    if (finalDecision.decision === "delegate_analysis" || finalDecision.decision === "delegate_code_review") {
+      const toolName = finalDecision.decision === "delegate_code_review"
+        ? "delegate_code_review"
+        : "delegate_analysis";
+      if (params.availableToolNames?.includes(toolName)) {
+        params.onProgress(
+          this.buildStructuredProgressSignal(
+            params.prompt,
+            params.title,
+            {
+              kind: "delegation",
+              message: `Loop recovery delegation: ${toolName}`,
+              delegationType: toolName.replace(/^delegate_/, ""),
+              files: touchedFiles,
+            },
+            params.language,
+          ),
+        );
+        const delegatedTask =
+          finalDecision.delegationTask
+          ?? (
+            toolName === "delegate_code_review"
+              ? `Review the touched files and identify why the current verification loop is not closing cleanly.\nTouched files:\n${touchedFiles.join("\n") || "(none)"}`
+              : `Analyze the repeated control loop and identify the missing evidence or verification path.\nFingerprint: ${brief.fingerprint}\nVerifier memory: ${brief.verifierSummary ?? "(none)"}`
+          );
+        const toolCall: ToolCall = {
+          id: `loop-recovery-${randomUUID()}`,
+          name: toolName,
+          input: {
+            task: delegatedTask,
+            context: buildLoopRecoveryReviewRequest(brief),
+            mode: "sync",
+          },
+        };
+        const toolResults = await this.executeToolCalls(params.chatId, [toolCall], {
+          mode: "background",
+          taskPrompt: params.prompt,
+          sessionMessages: params.session.messages,
+          onUsage: params.usageHandler,
+          identityKey: params.identityKey,
+          strategy: params.strategy,
+          agentState: params.state,
+          touchedFiles,
+          workspaceLease: params.workspaceLease,
+        });
+        const toolResult = toolResults[0];
+        const delegatedWorkerResult = toolResult?.metadata?.["workerResult"] as WorkerRunResult | undefined;
+        if (toolResult) {
+          params.workerCollector?.toolTrace.push({
+            toolName: toolCall.name,
+            success: !(toolResult.isError ?? false),
+            summary: toolResult.content.slice(0, 200),
+            timestamp: Date.now(),
+            workspaceId: params.workspaceLease?.id,
+          });
+        }
+        if (delegatedWorkerResult) {
+          params.selfVerification.ingestWorkerResult(delegatedWorkerResult);
+          params.workerCollector?.childWorkerResults.push(delegatedWorkerResult);
+        }
+        params.executionJournal.recordDelegatedDiagnosis(
+          toolName.replace(/^delegate_/, ""),
+          toolResult?.content ?? delegatedWorkerResult?.finalSummary ?? "",
+        );
+        params.executionJournal.recordLoopRecoveryEpisode({
+          fingerprint: brief.fingerprint,
+          decision: finalDecision.decision,
+          summary: finalDecision.reason ?? "Delegated diagnosis requested.",
+        });
+        return {
+          action: "replan",
+          gate: this.buildLoopRecoveryGate({
+            brief,
+            decision: finalDecision,
+            delegatedSummary:
+              delegatedWorkerResult?.finalSummary
+              ?? toolResult?.content
+              ?? finalDecision.summary,
+          }),
+          summary: delegatedWorkerResult?.finalSummary ?? toolResult?.content ?? finalDecision.summary,
+        };
+      }
+      finalDecision = {
+        ...finalDecision,
+        decision: "replan_local",
+        reason: finalDecision.reason ?? "Delegation was requested but not available; falling back to local replanning.",
+      };
+    }
+
+    params.executionJournal.recordLoopRecoveryEpisode({
+      fingerprint: brief.fingerprint,
+      decision: finalDecision.decision ?? "replan_local",
+      summary: finalDecision.reason ?? "Loop recovery requested a different path.",
+    });
+
+    if (finalDecision.decision === "blocked") {
+      return {
+        action: "blocked",
+        message: this.buildLoopRecoveryCheckpointMessage({
+          prompt: params.prompt,
+          brief,
+          decision: finalDecision,
+          touchedFiles,
+        }),
+      };
+    }
+
+    if (finalDecision.decision === "continue_local") {
+      return {
+        action: "continue",
+        gate: this.buildLoopRecoveryGate({
+          brief,
+          decision: finalDecision,
+        }),
+      };
+    }
+
+    return {
+      action: "replan",
+      gate: this.buildLoopRecoveryGate({
+        brief,
+        decision: finalDecision,
+      }),
     };
   }
 

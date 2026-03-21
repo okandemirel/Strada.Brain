@@ -5,6 +5,38 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: 'dist',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            return undefined
+          }
+
+          if (
+            id.includes('react-markdown')
+            || id.includes('remark-gfm')
+            || id.includes('rehype-highlight')
+            || id.includes('highlight.js')
+            || id.includes('mdast')
+            || id.includes('micromark')
+            || id.includes('unist')
+            || id.includes('hast')
+          ) {
+            return 'markdown-vendor'
+          }
+
+          if (id.includes('react-router')) {
+            return 'router-vendor'
+          }
+
+          if (id.includes('/react/') || id.includes('react-dom')) {
+            return 'react-vendor'
+          }
+
+          return 'vendor'
+        },
+      },
+    },
   },
   server: {
     proxy: {

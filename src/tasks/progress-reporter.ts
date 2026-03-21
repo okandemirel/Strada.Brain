@@ -1,39 +1,51 @@
 /**
  * Progress Reporter
  *
- * Sends task completion and failure updates to the channel.
- * Created/progress/cancelled events are suppressed — the typing indicator
- * signals processing, and the user sees only the final result plus sparse
- * long-running heartbeats when silent-first execution is enabled.
+ * Sends task completion/failure/block updates to the channel.
+ * In silent-first mode it opens a single transient status message for
+ * long-running tasks and updates it in place when the summarized task state changes.
  */
 
 import type { IChannelAdapter, IChannelRichMessaging } from "../channels/channel.interface.js";
-import { supportsRichMessaging } from "../channels/channel-core.interface.js";
+import { supportsRichMessaging, supportsStreaming } from "../channels/channel-core.interface.js";
 import { DEFAULT_INTERACTION_CONFIG, type InteractionConfig } from "../config/config.js";
 import type { TaskManager } from "./task-manager.js";
-import type { Task, TaskId } from "./types.js";
+import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
+import { buildTaskProgressSummary, type ProgressLanguage } from "./progress-signals.js";
 import { getLogger } from "../utils/logger.js";
 import { classifyTaskErrorMessage } from "../utils/error-messages.js";
 
 interface HeartbeatState {
+  chatId?: string;
   timeoutId?: ReturnType<typeof setTimeout>;
-  intervalId?: ReturnType<typeof setInterval>;
+  scheduledUpdateId?: ReturnType<typeof setTimeout>;
+  live?: boolean;
+  streamId?: string;
+  lastProgress?: TaskProgressUpdate;
+  lastSummary?: string;
+  lastSentAt?: number;
 }
 
 function unrefTimer(timer: { unref?: () => void }): void {
   timer.unref?.();
 }
 
+const STREAMING_UPDATE_THROTTLE_MS = 8_000;
+const FALLBACK_UPDATE_THROTTLE_MS = 60_000;
+
 export class ProgressReporter {
   private readonly interaction: InteractionConfig;
   private readonly heartbeats = new Map<TaskId, HeartbeatState>();
+  private readonly defaultLanguage: ProgressLanguage;
 
   constructor(
     private readonly channel: IChannelAdapter,
     taskManager: TaskManager,
     interaction: InteractionConfig = DEFAULT_INTERACTION_CONFIG,
+    defaultLanguage: ProgressLanguage = "en",
   ) {
     this.interaction = interaction;
+    this.defaultLanguage = defaultLanguage;
     this.setupListeners(taskManager);
   }
 
@@ -42,7 +54,7 @@ export class ProgressReporter {
       this.reportCreated(task);
     });
 
-    taskManager.on("task:progress", (taskId: TaskId, message: string) => {
+    taskManager.on("task:progress", (taskId: TaskId, message: TaskProgressUpdate) => {
       const task = taskManager.getStatus(taskId);
       if (task) {
         this.reportProgress(task, message);
@@ -63,6 +75,13 @@ export class ProgressReporter {
       }
     });
 
+    taskManager.on("task:blocked", (taskId: TaskId, result: string) => {
+      const task = taskManager.getStatus(taskId);
+      if (task) {
+        this.reportBlocked(task, result);
+      }
+    });
+
     taskManager.on("task:cancelled", (taskId: TaskId) => {
       const task = taskManager.getStatus(taskId);
       if (task) {
@@ -77,9 +96,14 @@ export class ProgressReporter {
     this.scheduleHeartbeat(task);
   }
 
-  private reportProgress(task: Task, _message: string): void {
+  private reportProgress(task: Task, message: TaskProgressUpdate): void {
     // Keep typing indicator alive during long tasks
     this.sendTyping(task.chatId);
+    const state = this.getHeartbeatState(task.id);
+    state.lastProgress = message;
+    if (state.live) {
+      void this.maybeSendLiveStatus(task, state);
+    }
   }
 
   private sendTyping(chatId: string): void {
@@ -89,18 +113,23 @@ export class ProgressReporter {
   }
 
   private reportCompleted(task: Task, result: string): void {
-    this.clearHeartbeat(task.id);
+    this.clearHeartbeat(task.id, true);
     this.sendToChannel(task.chatId, result);
   }
 
   private reportFailed(task: Task, error: string): void {
-    this.clearHeartbeat(task.id);
+    this.clearHeartbeat(task.id, true);
     this.sendToChannel(task.chatId, classifyTaskErrorMessage(error));
     getLogger().error("Task failed", { taskId: task.id, error });
   }
 
+  private reportBlocked(task: Task, result: string): void {
+    this.clearHeartbeat(task.id, true);
+    this.sendToChannel(task.chatId, result);
+  }
+
   private reportCancelled(task: Task): void {
-    this.clearHeartbeat(task.id);
+    this.clearHeartbeat(task.id, true);
     // Suppressed — cancellation is internal state
   }
 
@@ -111,28 +140,22 @@ export class ProgressReporter {
       return;
     }
 
-    const state: HeartbeatState = {};
+    const state = this.getHeartbeatState(task.id);
+    state.chatId = task.chatId;
     const timeoutId = setTimeout(() => {
-      this.sendHeartbeat(task);
-
-      if (this.interaction.heartbeatIntervalMs > 0) {
-        const intervalId = setInterval(() => {
-          this.sendHeartbeat(task);
-        }, this.interaction.heartbeatIntervalMs);
-        unrefTimer(intervalId);
-        const current = this.heartbeats.get(task.id);
-        if (current) {
-          current.intervalId = intervalId;
-        }
+      const current = this.heartbeats.get(task.id);
+      if (!current) {
+        return;
       }
+      current.live = true;
+      void this.maybeSendLiveStatus(task, current, true);
     }, this.interaction.heartbeatAfterMs);
 
     state.timeoutId = timeoutId;
-    this.heartbeats.set(task.id, state);
     unrefTimer(timeoutId);
   }
 
-  private clearHeartbeat(taskId: TaskId): void {
+  private clearHeartbeat(taskId: TaskId, finalizeStream = false): void {
     const state = this.heartbeats.get(taskId);
     if (!state) {
       return;
@@ -140,21 +163,112 @@ export class ProgressReporter {
     if (state.timeoutId) {
       clearTimeout(state.timeoutId);
     }
-    if (state.intervalId) {
-      clearInterval(state.intervalId);
+    if (state.scheduledUpdateId) {
+      clearTimeout(state.scheduledUpdateId);
+    }
+    if (finalizeStream && state.streamId && state.chatId && supportsStreaming(this.channel)) {
+      const streamId = state.streamId;
+      this.channel.finalizeStreamingMessage(state.chatId, streamId, "").catch((err) => {
+        getLogger().debug("Failed to finalize transient progress stream", {
+          taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
     this.heartbeats.delete(taskId);
   }
 
-  private sendHeartbeat(task: Task): void {
-    const title = task.title.replace(/\s+/g, " ").trim().slice(0, 80);
-    const message = title ? `Still working on: ${title}` : "Still working.";
-    this.channel.sendText(task.chatId, message).catch((err) => {
-      getLogger().debug("Failed to send progress heartbeat", {
+  private getHeartbeatState(taskId: TaskId): HeartbeatState {
+    const current = this.heartbeats.get(taskId);
+    if (current) {
+      return current;
+    }
+    const state: HeartbeatState = {};
+    this.heartbeats.set(taskId, state);
+    return state;
+  }
+
+  private async maybeSendLiveStatus(
+    task: Task,
+    state: HeartbeatState,
+    force = false,
+  ): Promise<void> {
+    const summary = buildTaskProgressSummary(task, state.lastProgress, this.defaultLanguage);
+    if (!summary) {
+      return;
+    }
+
+    const now = Date.now();
+    const throttleMs = supportsStreaming(this.channel)
+      ? STREAMING_UPDATE_THROTTLE_MS
+      : FALLBACK_UPDATE_THROTTLE_MS;
+    if (!force && state.lastSummary === summary) {
+      return;
+    }
+    if (!force && state.lastSentAt && now - state.lastSentAt < throttleMs) {
+      const remainingMs = throttleMs - (now - state.lastSentAt);
+      if (state.scheduledUpdateId) {
+        clearTimeout(state.scheduledUpdateId);
+      }
+      state.scheduledUpdateId = setTimeout(() => {
+        const current = this.heartbeats.get(task.id);
+        if (!current) {
+          return;
+        }
+        current.scheduledUpdateId = undefined;
+        void this.maybeSendLiveStatus(task, current, true);
+      }, remainingMs);
+      unrefTimer(state.scheduledUpdateId);
+      return;
+    }
+
+    if (state.scheduledUpdateId) {
+      clearTimeout(state.scheduledUpdateId);
+      state.scheduledUpdateId = undefined;
+    }
+    state.lastSummary = summary;
+    state.lastSentAt = now;
+
+    if (supportsStreaming(this.channel)) {
+      await this.sendStreamingStatus(task.chatId, state, summary);
+      return;
+    }
+
+    await this.channel.sendText(task.chatId, summary).catch((err) => {
+      getLogger().debug("Failed to send progress status update", {
         chatId: task.chatId,
         error: err instanceof Error ? err.message : String(err),
       });
     });
+  }
+
+  private async sendStreamingStatus(
+    chatId: string,
+    state: HeartbeatState,
+    summary: string,
+  ): Promise<void> {
+    if (!supportsStreaming(this.channel)) {
+      await this.channel.sendText(chatId, summary);
+      return;
+    }
+
+    try {
+      const channel = this.channel;
+      if (!state.streamId) {
+        state.streamId = await channel.startStreamingMessage(chatId);
+      }
+      if (!state.streamId) {
+        await channel.sendText(chatId, summary);
+        return;
+      }
+      await channel.updateStreamingMessage(chatId, state.streamId, summary);
+    } catch (err) {
+      getLogger().debug("Failed to stream progress status update", {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      await this.channel.sendText(chatId, summary).catch(() => {});
+    }
   }
 
   private sendToChannel(chatId: string, message: string): void {

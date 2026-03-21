@@ -1,5 +1,11 @@
-import { useState } from 'react'
-import type { BrowseEntry, McpInstallTarget, McpRecommendation, StradaDepsStatus } from '../../types/setup'
+import type {
+  BrowseEntry,
+  McpInstallPlan,
+  McpInstallTarget,
+  McpRecommendation,
+  StradaDepsStatus,
+} from '../../types/setup'
+import McpInstallPanel from './McpInstallPanel'
 
 interface DirectoryBrowserProps {
   isOpen: boolean
@@ -12,6 +18,7 @@ interface DirectoryBrowserProps {
   mcpInstallStatus: 'idle' | 'installing' | 'success' | 'error'
   mcpInstallError: string | null
   mcpInstallMessage: string | null
+  mcpInstallPlan: McpInstallPlan | null
   loading: boolean
   error: string | null
   browseTo: (path: string) => void
@@ -69,6 +76,7 @@ export default function DirectoryBrowser({
   mcpInstallStatus,
   mcpInstallError,
   mcpInstallMessage,
+  mcpInstallPlan,
   loading,
   error,
   browseTo,
@@ -76,8 +84,6 @@ export default function DirectoryBrowser({
   onSelect,
   onClose,
 }: DirectoryBrowserProps) {
-  const [installTarget, setInstallTarget] = useState<McpInstallTarget>('packages')
-
   if (!isOpen) return null
 
   const separator = currentPath.includes('\\') ? '\\' : '/'
@@ -110,63 +116,30 @@ export default function DirectoryBrowser({
 
         <Breadcrumbs path={currentPath} onNavigate={browseTo} />
 
+        {!loading && !error && isUnityProject && stradaDeps && (
+          <div className="browser-context-panel">
+            <McpInstallPanel
+              projectPath={currentPath}
+              stradaDeps={stradaDeps}
+              dependencyWarnings={dependencyWarnings}
+              mcpRecommendation={mcpRecommendation}
+              mcpInstallStatus={mcpInstallStatus}
+              mcpInstallError={mcpInstallError}
+              mcpInstallMessage={mcpInstallMessage}
+              mcpInstallPlan={mcpInstallPlan}
+              installButtonLabel="Install into this project"
+              onInstall={(target) => {
+                void installMcp(target, currentPath).then((installed) => {
+                  if (installed) {
+                    browseTo(currentPath)
+                  }
+                })
+              }}
+            />
+          </div>
+        )}
+
         <div className="browser-entries">
-          {!loading && !error && isUnityProject && stradaDeps && (
-            <div className="browser-empty" style={{ textAlign: 'left' }}>
-              <strong>Dependencies</strong>
-              <div>Core: {stradaDeps.coreInstalled ? 'installed' : 'missing'}</div>
-              <div>Modules: {stradaDeps.modulesInstalled ? 'installed' : 'missing'}</div>
-              <div>MCP: {stradaDeps.mcpInstalled ? 'installed' : 'missing'}</div>
-              {dependencyWarnings.slice(0, 2).map((warning) => (
-                <div key={warning} className="browser-error" style={{ marginTop: 8 }}>
-                  {warning}
-                </div>
-              ))}
-              {mcpInstallMessage && (
-                <div style={{ marginTop: 8 }}>{mcpInstallMessage}</div>
-              )}
-              {mcpInstallError && (
-                <div className="browser-error" style={{ marginTop: 8 }}>
-                  {mcpInstallError}
-                </div>
-              )}
-              {!stradaDeps.mcpInstalled && mcpRecommendation && (
-                <div style={{ marginTop: 8 }}>
-                  <strong>MCP recommendation</strong>
-                  <div>{mcpRecommendation.reason}</div>
-                  <div>{mcpRecommendation.featureList.join(' • ')}</div>
-                  {mcpRecommendation.discoveryHint && (
-                    <div>{mcpRecommendation.discoveryHint}</div>
-                  )}
-                  {mcpRecommendation.installHint && (
-                    <div style={{ marginTop: 6 }}>{mcpRecommendation.installHint}</div>
-                  )}
-                  <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <select
-                      value={installTarget}
-                      onChange={(e) => setInstallTarget(e.target.value as McpInstallTarget)}
-                    >
-                      <option value="packages">Packages/Submodules/Strada.MCP</option>
-                      <option value="assets">Assets/Strada.MCP</option>
-                    </select>
-                    <button
-                      className="btn btn-secondary"
-                      disabled={mcpInstallStatus === 'installing'}
-                      onClick={() => {
-                        void installMcp(installTarget, currentPath).then((installed) => {
-                          if (installed) {
-                            browseTo(currentPath)
-                          }
-                        })
-                      }}
-                    >
-                      {mcpInstallStatus === 'installing' ? 'Installing...' : 'Install MCP'}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
           {loading && <div className="browser-loading">Loading...</div>}
 
           {error && <div className="browser-error">{error}</div>}

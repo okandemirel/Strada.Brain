@@ -64,6 +64,15 @@ export type {
   VerifierPipelineResult,
 } from "./verifier-pipeline.js";
 export { ExecutionJournal } from "./execution-journal.js";
+export { ControlLoopTracker } from "./control-loop-tracker.js";
+export type { ControlLoopGateKind, ControlLoopGateEvent, ControlLoopTrigger } from "./control-loop-tracker.js";
+export {
+  LOOP_RECOVERY_REVIEW_SYSTEM_PROMPT,
+  buildLoopRecoveryReviewRequest,
+  parseLoopRecoveryReviewDecision,
+  sanitizeLoopRecoveryReviewDecision,
+} from "./loop-recovery-review.js";
+export type { LoopRecoveryBrief, LoopRecoveryDecisionKind, LoopRecoveryReviewDecision } from "./loop-recovery-review.js";
 export { InteractionPolicyStateMachine } from "./interaction-policy.js";
 export type { InteractionGateKind, InteractionGateState, InteractionWriteBlock } from "./interaction-policy.js";
 export { decideInteractionBoundary } from "./visibility-boundary.js";

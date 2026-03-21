@@ -15,7 +15,7 @@
  * DaemonEventBus for WebSocket dashboard broadcasting.
  */
 
-import type { Task } from "./types.js";
+import type { Task, TaskProgressUpdate } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
@@ -65,13 +65,14 @@ function sanitizeError(error: string, maxLen = 200): string {
 interface QueueEntry {
   task: Task;
   signal: AbortSignal;
-  onProgress: (message: string) => void;
+  onProgress: (message: TaskProgressUpdate) => void;
 }
 
 interface DecomposedExecutionResult {
   output: string;
   success: boolean;
   error?: string;
+  blocked?: boolean;
   aborted: boolean;
 }
 
@@ -157,7 +158,7 @@ export class BackgroundExecutor {
   /**
    * Add a task to the execution queue.
    */
-  enqueue(task: Task, signal: AbortSignal, onProgress: (message: string) => void): void {
+  enqueue(task: Task, signal: AbortSignal, onProgress: (message: TaskProgressUpdate) => void): void {
     if (this.queue.length >= BackgroundExecutor.MAX_QUEUE_SIZE) {
       // Mark the rejected task as failed so it doesn't become orphaned
       const logger = getLogger();
@@ -257,7 +258,7 @@ export class BackgroundExecutor {
     params: {
       prompt: string;
       signal: AbortSignal;
-      onProgress: (message: string) => void;
+      onProgress: (message: TaskProgressUpdate) => void;
       chatId: string;
       taskRunId: string;
       channelType: string;
@@ -275,7 +276,7 @@ export class BackgroundExecutor {
             prompt: string;
             mode: "background";
             signal: AbortSignal;
-            onProgress: (message: string) => void;
+            onProgress: (message: TaskProgressUpdate) => void;
             chatId: string;
             taskRunId: string;
             channelType: string;
@@ -347,6 +348,10 @@ export class BackgroundExecutor {
         const result = await this.executeDecomposed(task, signal, onProgress, task.goalTree);
         if (signal.aborted) return;
         if (!result.success) {
+          if (result.blocked) {
+            this.taskManager.block(task.id, result.error ?? "Goal execution blocked");
+            return;
+          }
           this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
           return;
         }
@@ -359,6 +364,10 @@ export class BackgroundExecutor {
         const result = await this.executeDecomposed(task, signal, onProgress);
         if (signal.aborted) return;
         if (!result.success) {
+          if (result.blocked) {
+            this.taskManager.block(task.id, result.error ?? "Goal execution blocked");
+            return;
+          }
           this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
           return;
         }
@@ -399,6 +408,14 @@ export class BackgroundExecutor {
         return;
       }
 
+      if (result.workerResult && result.workerResult.status === "blocked") {
+        this.taskManager.block(
+          task.id,
+          result.workerResult.reason ?? (result.output || "Task blocked"),
+        );
+        return;
+      }
+
       this.taskManager.complete(task.id, result.output);
     } catch (error) {
       if (signal.aborted) {
@@ -434,7 +451,7 @@ export class BackgroundExecutor {
   private async executeDecomposed(
     task: Task,
     signal: AbortSignal,
-    onProgress: (message: string) => void,
+    onProgress: (message: TaskProgressUpdate) => void,
     preBuiltTree?: GoalTree,
   ): Promise<DecomposedExecutionResult> {
     const logger = getLogger();
@@ -478,6 +495,7 @@ export class BackgroundExecutor {
     };
     const executor = new GoalExecutor(config);
     const childWorkerResults = new Map<string, WorkerRunResult>();
+    let blockedWorkerReason: string | undefined;
 
     // Node executor: delegates to orchestrator.runBackgroundTask
     const nodeExecutor = async (node: GoalNode, nodeSignal: AbortSignal): Promise<string> => {
@@ -491,7 +509,8 @@ export class BackgroundExecutor {
         const result = await this.executeWorkerRun(taskOrchestrator, {
           prompt: node.task,
           signal: nodeSignal,
-          onProgress: (msg: string) => onProgress(`[${node.task}] ${msg}`),
+          onProgress: (msg: TaskProgressUpdate) =>
+            onProgress(typeof msg === "string" ? `[${node.task}] ${msg}` : msg),
           chatId: task.chatId,
           taskRunId: `${task.id}:${node.id}`,
           channelType: task.channelType,
@@ -503,6 +522,10 @@ export class BackgroundExecutor {
         if (result.workerResult) {
           childWorkerResults.set(node.id, result.workerResult);
           if (result.workerResult.status !== "completed") {
+            if (result.workerResult.status === "blocked" && !blockedWorkerReason) {
+              blockedWorkerReason =
+                result.workerResult.reason ?? (result.output || "Worker blocked");
+            }
             throw new Error(
               result.workerResult.reason ?? (result.output || "Worker did not complete"),
             );
@@ -773,6 +796,7 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
 
     // Persist final tree state
     const allChildWorkerResults = [...childWorkerResults.values()];
+    const blockedWorker = allChildWorkerResults.find((workerResult) => workerResult.status === "blocked");
     const childWorkerIssues = allChildWorkerResults.some(
       (workerResult) =>
         workerResult.status !== "completed" ||
@@ -848,16 +872,22 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
 
     return {
       output,
-      success: !hasFailed,
-      error: hasFailed
-        ? (
-          result.aborted
-            ? "Goal aborted"
-            : childWorkerIssues && result.failureCount === 0
-              ? "Child worker verification/review did not finish cleanly"
-              : `${result.failureCount} sub-goal(s) failed`
-        )
-        : undefined,
+      success: !hasFailed && !blockedWorker,
+      error:
+        blockedWorkerReason
+        ?? blockedWorker?.reason
+        ?? (
+          hasFailed
+            ? (
+              result.aborted
+                ? "Goal aborted"
+                : childWorkerIssues && result.failureCount === 0
+                  ? "Child worker verification/review did not finish cleanly"
+                  : `${result.failureCount} sub-goal(s) failed`
+            )
+            : undefined
+        ),
+      blocked: Boolean(blockedWorker),
       aborted: result.aborted,
     };
   }
