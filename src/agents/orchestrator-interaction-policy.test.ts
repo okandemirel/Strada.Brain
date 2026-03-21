@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveExecutionPolicy,
   SHELL_REVIEW_SYSTEM_PROMPT,
   formatRequestedPlan,
   isSafeShellFallback,
@@ -99,5 +100,63 @@ describe("orchestrator-interaction-policy", () => {
 
   it("keeps the shell review prompt explicit", () => {
     expect(SHELL_REVIEW_SYSTEM_PROMPT).toContain("Return JSON only");
+  });
+
+  it("resolves background writes to self-managed execution", () => {
+    expect(resolveExecutionPolicy({
+      executionMode: "background",
+      autonomousActive: false,
+      isWriteOperation: true,
+      requireConfirmation: true,
+      readOnly: false,
+      hasPlanReviewGate: false,
+    })).toEqual({
+      mode: "self_managed",
+      reason: "autonomous or non-interactive execution owns write approval locally",
+      hardBlockers: [],
+    });
+  });
+
+  it("blocks writes when read-only mode or plan review is active", () => {
+    expect(resolveExecutionPolicy({
+      executionMode: "interactive",
+      autonomousActive: true,
+      isWriteOperation: true,
+      requireConfirmation: true,
+      readOnly: true,
+      hasPlanReviewGate: false,
+    })).toEqual({
+      mode: "blocked",
+      reason: "write operations are blocked because read-only mode is active",
+      hardBlockers: ["read_only_mode"],
+    });
+
+    expect(resolveExecutionPolicy({
+      executionMode: "interactive",
+      autonomousActive: false,
+      isWriteOperation: true,
+      requireConfirmation: true,
+      readOnly: false,
+      hasPlanReviewGate: true,
+    })).toEqual({
+      mode: "blocked",
+      reason: "write operations are blocked until the requested plan review is cleared",
+      hardBlockers: ["plan_review_required"],
+    });
+  });
+
+  it("keeps interactive writes in user-confirm mode when autonomy is off", () => {
+    expect(resolveExecutionPolicy({
+      executionMode: "interactive",
+      autonomousActive: false,
+      isWriteOperation: true,
+      requireConfirmation: true,
+      readOnly: false,
+      hasPlanReviewGate: false,
+    })).toEqual({
+      mode: "user_confirm",
+      reason: "interactive write confirmation is required for this run",
+      hardBlockers: [],
+    });
   });
 });

@@ -166,6 +166,7 @@ import {
   isSafeShellFallback,
   normalizeInteractiveText as normalizePolicyText,
   parseShellReviewDecision,
+  resolveExecutionPolicy,
   reviewAutonomousPlan,
   reviewAutonomousQuestion,
 } from "./orchestrator-interaction-policy.js";
@@ -6660,7 +6661,23 @@ export class Orchestrator {
     mode: ToolExecutionMode,
     userId?: string,
   ): boolean {
-    return mode === "background" || this.dmPolicy.isAutonomousActive(chatId, userId);
+    return mode !== "interactive" || this.dmPolicy.isAutonomousActive(chatId, userId);
+  }
+
+  private resolveToolExecutionPolicy(
+    chatId: string,
+    toolName: string,
+    mode: ToolExecutionMode,
+    userId?: string,
+  ) {
+    return resolveExecutionPolicy({
+      executionMode: mode,
+      autonomousActive: this.dmPolicy.isAutonomousActive(chatId, userId),
+      isWriteOperation: this.isWriteOperation(toolName),
+      requireConfirmation: this.requireConfirmation,
+      readOnly: this.readOnly,
+      hasPlanReviewGate: this.interactionPolicy.getWriteBlock(chatId, toolName) !== null,
+    });
   }
 
   private normalizeInteractiveText(value: unknown): string {
@@ -7920,13 +7937,40 @@ export class Orchestrator {
         continue;
       }
 
-      const pendingWriteBlock = this.interactionPolicy.getWriteBlock(chatId, activeToolCall.name);
-      if (pendingWriteBlock) {
+      const executionPolicy = this.resolveToolExecutionPolicy(
+        chatId,
+        activeToolCall.name,
+        mode,
+        options.userId,
+      );
+      logger.debug("Resolved tool execution policy", {
+        chatId,
+        tool: activeToolCall.name,
+        mode: executionPolicy.mode,
+        reason: executionPolicy.reason,
+        hardBlockers: [...executionPolicy.hardBlockers],
+      });
+      if (executionPolicy.mode === "blocked") {
+        if (executionPolicy.hardBlockers.includes("read_only_mode")) {
+          results.push(createReadOnlyToolStub(activeToolCall.name, activeToolCall.id));
+          continue;
+        }
+
+        const pendingWriteBlock = this.interactionPolicy.getWriteBlock(chatId, activeToolCall.name);
+        if (pendingWriteBlock) {
+          results.push({
+            toolCallId: activeToolCall.id,
+            content:
+              `Plan approval is still required before '${activeToolCall.name}' can run. ` +
+              `Reason: ${pendingWriteBlock.reason}. Revise or reshow the plan, or wait for the user to approve it first.`,
+            isError: true,
+          });
+          continue;
+        }
+
         results.push({
           toolCallId: activeToolCall.id,
-          content:
-            `Plan approval is still required before '${activeToolCall.name}' can run. ` +
-            `Reason: ${pendingWriteBlock.reason}. Revise or reshow the plan, or wait for the user to approve it first.`,
+          content: executionPolicy.reason,
           isError: true,
         });
         continue;
@@ -7938,9 +7982,8 @@ export class Orchestrator {
         input: activeToolCall.input,
       });
 
-      // Confirmation flow via DMPolicy for write operations
-      if (this.requireConfirmation && this.isWriteOperation(activeToolCall.name)) {
-        if (this.isSelfManagedInteractiveMode(chatId, mode, options.userId)) {
+      if (this.isWriteOperation(activeToolCall.name)) {
+        if (executionPolicy.mode === "self_managed") {
           const review = await this.reviewSelfManagedWriteOperation(
             chatId,
             activeToolCall.name,
@@ -7959,7 +8002,7 @@ export class Orchestrator {
             );
             continue;
           }
-        } else {
+        } else if (executionPolicy.mode === "user_confirm") {
           const destructive = isDestructiveOperation(activeToolCall.name, activeToolCall.input);
           const sessionUserId = options.userId ?? chatId;
           const prefs = this.dmPolicy.getSessionPrefs(sessionUserId, chatId);

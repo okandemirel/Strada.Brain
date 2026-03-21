@@ -31,6 +31,8 @@ interface StradaMcpToolMetadata {
     | "analysis"
     | "advanced";
   readonly requiresBridge: boolean;
+  readonly requiredBridgeMethods?: readonly string[];
+  readonly requiredBridgeCapabilities?: readonly string[];
   readonly dangerous: boolean;
   readonly readOnly: boolean;
 }
@@ -145,7 +147,23 @@ interface StradaMcpUnityEditorRouteStatus {
 interface StradaMcpUnityEditorRouterLike {
   initialize(): Promise<StradaMcpUnityEditorRouteStatus | void>;
   getStatus(options?: { includeDiscovered?: boolean }): StradaMcpUnityEditorRouteStatus;
+  getBridgeClient?(): unknown;
   destroy(): void;
+}
+
+interface StradaMcpBridgeCapabilities {
+  readonly manifestVersion?: number;
+  readonly bridgeVersion?: string;
+  readonly protocolVersion?: string;
+  readonly source?: string;
+  readonly supportedMethods?: readonly string[];
+  readonly supportedFeatures?: readonly string[];
+}
+
+interface StradaMcpCapabilityAwareBridgeClientLike {
+  request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+  getCapabilities?(): Promise<StradaMcpBridgeCapabilities>;
+  ensureCapabilities?(forceRefresh?: boolean): Promise<StradaMcpBridgeCapabilities>;
 }
 
 interface StradaMcpUnityEditorRouterModule {
@@ -202,6 +220,8 @@ export interface StradaMcpRuntimeStatus {
   readonly editorDiscoveryCount?: number;
   readonly bridgeUnavailableReason?: string;
   readonly lastError?: string;
+  readonly bridgeProtocolVersion?: string;
+  readonly bridgeCapabilityMethodCount?: number;
 }
 
 interface ToolRegistryLike {
@@ -346,6 +366,10 @@ export class StradaMcpRuntime {
   private readonly bridgeConfigured: boolean;
   private readonly registeredBridgeTools = new Set<string>();
   private readonly registeredTools = new Set<string>();
+  private readonly registeredToolRequirements = new Map<string, {
+    readonly requiredBridgeMethods: readonly string[];
+    readonly requiredBridgeCapabilities: readonly string[];
+  }>();
   private metadataMap?: Map<string, BrainToolMetadata>;
   private bridgeManager: StradaMcpBridgeManagerLike | null = null;
   private unityEditorRouter: StradaMcpUnityEditorRouterLike | null = null;
@@ -357,6 +381,7 @@ export class StradaMcpRuntime {
   private activeEditorProjectName: string | null = null;
   private editorSelectionSource: string | null = null;
   private editorDiscoveryCount = 0;
+  private bridgeCapabilities: StradaMcpBridgeCapabilities | null = null;
   private lastError?: string;
 
   constructor(
@@ -394,6 +419,7 @@ export class StradaMcpRuntime {
         });
       }
       this.refreshIntegrationState();
+      await this.refreshBridgeCapabilities();
       return;
     }
 
@@ -423,6 +449,7 @@ export class StradaMcpRuntime {
     this.syncBridgeState(false, "connecting", "Connecting to the Unity bridge.");
     try {
       await this.bridgeManager.connect();
+      await this.refreshBridgeCapabilities();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
@@ -465,13 +492,26 @@ export class StradaMcpRuntime {
         : (status.warnings?.[0]
           ?? DEFAULT_BRIDGE_UNAVAILABLE_REASON),
     );
+    if (connected) {
+      void this.refreshBridgeCapabilities();
+    }
   }
 
-  registerTool(name: string, requiresBridge: boolean): void {
+  registerTool(
+    name: string,
+    metadata: Pick<
+      StradaMcpToolMetadata,
+      "requiresBridge" | "requiredBridgeMethods" | "requiredBridgeCapabilities"
+    >,
+  ): void {
     this.registeredTools.add(name);
-    if (requiresBridge) {
+    if (metadata.requiresBridge) {
       this.registeredBridgeTools.add(name);
     }
+    this.registeredToolRequirements.set(name, {
+      requiredBridgeMethods: [...(metadata.requiredBridgeMethods ?? [])],
+      requiredBridgeCapabilities: [...(metadata.requiredBridgeCapabilities ?? [])],
+    });
     this.syncToolMetadata(name);
   }
 
@@ -497,20 +537,26 @@ export class StradaMcpRuntime {
   }
 
   getToolAvailability(
-    metadata: Pick<StradaMcpToolMetadata, "requiresBridge">,
+    metadata: Pick<
+      StradaMcpToolMetadata,
+      "requiresBridge" | "requiredBridgeMethods" | "requiredBridgeCapabilities"
+    >,
   ): Pick<BrainToolMetadata, "available" | "availabilityReason"> {
     if (!metadata.requiresBridge) {
       return { available: true };
     }
 
-    return {
-      available: this.bridgeConnected,
-      availabilityReason: this.bridgeConnected ? undefined : this.bridgeUnavailableReason,
-    };
+    return this.resolveBridgeAvailability(
+      metadata.requiredBridgeMethods,
+      metadata.requiredBridgeCapabilities,
+    );
   }
 
   getStatus(): StradaMcpRuntimeStatus {
-    const unavailableToolCount = this.tools.filter((tool) => tool.metadata.requiresBridge && !this.bridgeConnected).length;
+    const unavailableToolCount = this.tools.filter((tool) => {
+      const availability = this.getToolAvailability(tool.metadata);
+      return availability.available === false;
+    }).length;
     return {
       installed: true,
       sourcePath: this.source.path,
@@ -530,6 +576,8 @@ export class StradaMcpRuntime {
       editorDiscoveryCount: this.editorDiscoveryCount,
       bridgeUnavailableReason: unavailableToolCount > 0 ? this.bridgeUnavailableReason : undefined,
       lastError: this.lastError,
+      bridgeProtocolVersion: this.bridgeCapabilities?.protocolVersion,
+      bridgeCapabilityMethodCount: this.bridgeCapabilities?.supportedMethods?.length ?? 0,
     };
   }
 
@@ -566,6 +614,9 @@ export class StradaMcpRuntime {
     this.bridgeConnected = connected;
     this.bridgeState = state;
     this.bridgeUnavailableReason = connected ? "" : (reason ?? DEFAULT_BRIDGE_UNAVAILABLE_REASON);
+    if (!connected) {
+      this.bridgeCapabilities = null;
+    }
     this.toolContext.unityBridgeConnected = connected;
     if (!this.unityEditorRouter) {
       const client = connected ? (this.bridgeManager?.client ?? null) : null;
@@ -589,13 +640,100 @@ export class StradaMcpRuntime {
 
     const requiresBridge = this.registeredBridgeTools.has(name) || metadata.requiresBridge === true;
     const availability = requiresBridge
-      ? { available: this.bridgeConnected, availabilityReason: this.bridgeConnected ? undefined : this.bridgeUnavailableReason }
+      ? this.resolveBridgeAvailability(
+        this.registeredToolRequirements.get(name)?.requiredBridgeMethods,
+        this.registeredToolRequirements.get(name)?.requiredBridgeCapabilities,
+      )
       : { available: true, availabilityReason: undefined };
 
     this.metadataMap?.set(name, {
       ...metadata,
       ...availability,
     });
+  }
+
+  private resolveBridgeAvailability(
+    bridgeMethods: readonly string[] | undefined,
+    bridgeCapabilities: readonly string[] | undefined,
+  ): Pick<BrainToolMetadata, "available" | "availabilityReason"> {
+    if (!this.bridgeConnected) {
+      return {
+        available: false,
+        availabilityReason: this.bridgeUnavailableReason,
+      };
+    }
+
+    const supportedMethods = new Set(this.bridgeCapabilities?.supportedMethods ?? []);
+    const supportedCapabilities = new Set(this.bridgeCapabilities?.supportedFeatures ?? []);
+    if (bridgeMethods && bridgeMethods.length > 0 && supportedMethods.size > 0) {
+      const missing = bridgeMethods.filter((method) => !supportedMethods.has(method));
+      if (missing.length > 0) {
+        return {
+          available: false,
+          availabilityReason:
+            `Unity bridge is connected, but the active editor does not expose: ${missing.join(", ")}`,
+        };
+      }
+    }
+
+    if (bridgeCapabilities && bridgeCapabilities.length > 0 && supportedCapabilities.size > 0) {
+      const missing = bridgeCapabilities.filter((feature) => !supportedCapabilities.has(feature));
+      if (missing.length > 0) {
+        return {
+          available: false,
+          availabilityReason:
+            `Unity bridge is connected, but the active editor does not advertise: ${missing.join(", ")}`,
+        };
+      }
+    }
+
+    return {
+      available: true,
+      availabilityReason: undefined,
+    };
+  }
+
+  private getActiveBridgeClient(): StradaMcpCapabilityAwareBridgeClientLike | null {
+    const routerClient = this.unityEditorRouter?.getBridgeClient?.();
+    if (routerClient && typeof (routerClient as StradaMcpCapabilityAwareBridgeClientLike).request === "function") {
+      return routerClient as StradaMcpCapabilityAwareBridgeClientLike;
+    }
+
+    const managerClient = this.bridgeManager?.client;
+    if (managerClient && typeof (managerClient as StradaMcpCapabilityAwareBridgeClientLike).request === "function") {
+      return managerClient as StradaMcpCapabilityAwareBridgeClientLike;
+    }
+
+    return null;
+  }
+
+  private async refreshBridgeCapabilities(): Promise<void> {
+    if (!this.bridgeConnected) {
+      this.bridgeCapabilities = null;
+      this.syncAllToolMetadata();
+      return;
+    }
+
+    const client = this.getActiveBridgeClient();
+    if (!client) {
+      return;
+    }
+
+    try {
+      const capabilities = typeof client.getCapabilities === "function"
+        ? await client.getCapabilities()
+        : typeof client.ensureCapabilities === "function"
+          ? await client.ensureCapabilities()
+        : await client.request<StradaMcpBridgeCapabilities>("bridge.getCapabilities", {});
+      this.bridgeCapabilities = capabilities ?? null;
+      this.syncAllToolMetadata();
+    } catch (error) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      getLogger().debug("Failed to refresh Strada.MCP bridge capabilities", {
+        error: this.lastError,
+        sourcePath: this.source.path,
+      });
+    }
   }
 }
 
@@ -757,7 +895,7 @@ export function registerStradaMcpTools(
       requiresBridge: tool.metadata.requiresBridge,
       ...runtime?.getToolAvailability(tool.metadata),
     });
-    runtime?.registerTool(tool.name, tool.metadata.requiresBridge);
+    runtime?.registerTool(tool.name, tool.metadata);
     registered++;
   }
 

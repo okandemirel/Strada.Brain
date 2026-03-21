@@ -1,6 +1,24 @@
 import type { ToolExecutionResult } from "./tools/tool.interface.js";
 
 export type InteractionReviewMode = "interactive" | "background";
+export type ExecutionReviewMode = InteractionReviewMode | "delegated";
+export type ExecutionPolicyMode = "user_confirm" | "self_managed" | "blocked";
+export type ExecutionHardBlocker = "read_only_mode" | "plan_review_required";
+
+export interface ResolvedExecutionPolicy {
+  readonly mode: ExecutionPolicyMode;
+  readonly reason: string;
+  readonly hardBlockers: readonly ExecutionHardBlocker[];
+}
+
+export interface ResolveExecutionPolicyInput {
+  readonly executionMode: ExecutionReviewMode;
+  readonly autonomousActive: boolean;
+  readonly isWriteOperation: boolean;
+  readonly requireConfirmation: boolean;
+  readonly readOnly: boolean;
+  readonly hasPlanReviewGate: boolean;
+}
 
 export interface ShellCommandReviewDecision {
   decision?: "approve" | "reject";
@@ -38,6 +56,58 @@ function looksLikeLocalTechnicalChoice(text: string): boolean {
 
 export function normalizeInteractiveText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+export function resolveExecutionPolicy(
+  input: ResolveExecutionPolicyInput,
+): ResolvedExecutionPolicy {
+  const hardBlockers: ExecutionHardBlocker[] = [];
+  if (input.readOnly && input.isWriteOperation) {
+    hardBlockers.push("read_only_mode");
+  }
+  if (input.hasPlanReviewGate && input.isWriteOperation) {
+    hardBlockers.push("plan_review_required");
+  }
+
+  if (hardBlockers.length > 0) {
+    return {
+      mode: "blocked",
+      reason: hardBlockers.includes("read_only_mode")
+        ? "write operations are blocked because read-only mode is active"
+        : "write operations are blocked until the requested plan review is cleared",
+      hardBlockers,
+    };
+  }
+
+  if (!input.isWriteOperation) {
+    return {
+      mode: "self_managed",
+      reason: "non-write operations execute without interactive confirmation",
+      hardBlockers,
+    };
+  }
+
+  if (!input.requireConfirmation) {
+    return {
+      mode: "self_managed",
+      reason: "write confirmation is disabled for this run",
+      hardBlockers,
+    };
+  }
+
+  if (input.executionMode !== "interactive" || input.autonomousActive) {
+    return {
+      mode: "self_managed",
+      reason: "autonomous or non-interactive execution owns write approval locally",
+      hardBlockers,
+    };
+  }
+
+  return {
+    mode: "user_confirm",
+    reason: "interactive write confirmation is required for this run",
+    hardBlockers,
+  };
 }
 
 export function pickAutonomousChoice(options: string[], recommended?: string): string {
