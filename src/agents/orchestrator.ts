@@ -163,6 +163,7 @@ const MAX_TOOL_ITERATIONS = 50;
 const TYPING_INTERVAL_MS = 4000;
 const MAX_SESSIONS = 100;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
+const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
 const AUTONOMOUS_MODE_DIRECTIVE = `\n\n## AUTONOMOUS MODE ACTIVE
 You are operating in AUTONOMOUS MODE. The user has explicitly granted you full autonomy.
 - Execute ALL operations directly without asking for confirmation
@@ -5752,6 +5753,10 @@ export class Orchestrator {
     const updates = extractNaturalLanguageDirectiveUpdates({
       latestProfile,
       prompt,
+      availablePersonas: [
+        ...NATURAL_LANGUAGE_BUILTIN_PERSONAS,
+        ...(this.soulLoader?.getProfiles() ?? []),
+      ],
     });
     const profileUpdates: Record<string, unknown> = {};
 
@@ -5760,6 +5765,9 @@ export class Orchestrator {
     }
     if (updates.displayName) {
       profileUpdates["displayName"] = updates.displayName;
+    }
+    if (updates.activePersona) {
+      profileUpdates["activePersona"] = updates.activePersona;
     }
     if (updates.preferences) {
       profileUpdates["preferences"] = updates.preferences;

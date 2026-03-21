@@ -157,84 +157,132 @@ export function buildSetupRetryHref(): string {
 const POST_SETUP_WELCOME_MESSAGES: Record<PostSetupBootstrapLanguage, string> = {
   en: `## Welcome to Strada
 
-I'm ready to help with your project right away.
+Good to meet you. I can start helping right away and adapt quickly to how you like to work.
 
-Tell me in one message:
+You can reply with any mix of these:
 - what I should call you
-- whether you want replies brief, detailed, formal, or casual
+- what you want to call me
+- the persona or personality you want from me, for example: pragmatic teammate, strict reviewer, friendly mentor, formal, casual, brief, or detailed
 - and, if you already have a task, send it directly so I can start immediately
 
-You can always change these later in Settings.`,
+You can also change this anytime in chat, for example:
+- "Call yourself Nova"
+- "Use the formal persona"
+- "Be more like a mentor and keep replies brief"
+
+You can still manage these later in Settings too.`,
   tr: `## Strada'ya Hoş Geldin
 
-Projende hemen yardımcı olmaya hazırım.
+Tanıştığımıza memnun oldum. Hemen yardımcı olmaya başlayabilirim ve çalışma tarzımı sana göre ayarlayabilirim.
 
-İstersen tek mesajda şunları yaz:
+İstersen tek mesajda şunlardan istediğini yaz:
 - sana nasıl hitap etmemi istediğini
-- yanıtlarımın kısa mı detaylı mı, daha resmi mi daha rahat mı olmasını istediğini
+- bana hangi isimle hitap etmek istediğini
+- bende nasıl bir persona veya personality istediğini; örneğin teknik partner, mentor, daha resmi, daha samimi, daha kısa ya da daha detaylı
 - ve elinde bir görev varsa doğrudan onu; ben hemen başlayayım
 
-Bunları daha sonra Settings üzerinden de değiştirebilirsin.`,
+Bunları konuşmanın herhangi bir anında mesajla da değiştirebilirsin. Örneğin:
+- "Kendine Nova de"
+- "Formal persona kullan"
+- "Bir mentor gibi davran ve kısa cevap ver"
+
+İstersen daha sonra Settings üzerinden de değiştirebilirsin.`,
   ja: `## Stradaへようこそ
 
-すぐにプロジェクトを手伝えます。
+はじめまして。すぐに手伝い始められますし、話し方や雰囲気もあなたに合わせられます。
 
-よければ1つのメッセージで教えてください:
+必要なら、1つのメッセージで次の好きなものを教えてください:
 - 何とお呼びすればよいか
-- 返答は簡潔・詳しめ・フォーマル・カジュアルのどれがよいか
+- 私を何と呼びたいか
+- 私にどんなペルソナや雰囲気を持たせたいか。たとえば、実務的な相棒、厳しめのレビュー役、やさしいメンター、フォーマル、カジュアル、簡潔、詳細など
 - すでに頼みたい作業があれば、そのまま送ってください。すぐに着手します
 
-これらは後で Settings からいつでも変更できます。`,
+途中でいつでもチャットで変更できます。たとえば:
+- "Nova と名乗って"
+- "formal persona を使って"
+- "メンターのように、短めに答えて"
+
+あとで Settings から変更しても大丈夫です。`,
   ko: `## Strada에 오신 것을 환영합니다
 
-지금 바로 프로젝트 작업을 도와드릴 수 있습니다.
+반갑습니다. 지금 바로 도와드릴 수 있고, 말투와 분위기도 원하는 방식에 맞출 수 있습니다.
 
-원하면 한 메시지로 알려주세요:
+원하면 한 메시지로 아래 중 원하는 것을 알려주세요:
 - 어떻게 불러드리면 될지
-- 답변을 간결하게, 자세하게, 더 공식적으로, 혹은 편하게 드릴지
+- 저를 어떤 이름으로 부르고 싶은지
+- 제가 어떤 페르소나나 성격으로 응답하면 좋을지. 예: 실용적인 동료, 엄격한 리뷰어, 친근한 멘토, 더 공식적으로, 더 편하게, 더 짧게, 더 자세하게
 - 그리고 이미 할 일이 있다면 그대로 보내 주세요. 바로 시작하겠습니다
 
-이 설정들은 나중에 Settings에서 언제든 바꿀 수 있습니다.`,
+대화 중에도 언제든 메시지로 바꿀 수 있습니다. 예:
+- "이제부터 이름은 Nova로 해"
+- "formal persona를 써줘"
+- "멘토처럼 말하고 답변은 짧게 해줘"
+
+원하면 나중에 Settings에서도 바꿀 수 있습니다.`,
   zh: `## 欢迎来到 Strada
 
-我已经可以立即开始帮你处理项目。
+很高兴见到你。我现在就可以开始帮你处理项目，也可以快速适应你喜欢的交流方式。
 
-如果方便，可以在一条消息里告诉我:
+你可以在一条消息里告诉我以下任意内容:
 - 我该怎么称呼你
-- 你更喜欢简短、详细、正式还是轻松一点的回复
+- 你想怎么称呼我
+- 你希望我采用什么样的人设或性格，比如务实搭档、严格评审、友好导师、更正式、更轻松、更简短或更详细
 - 如果你已经有具体任务，也可以直接发给我，我会马上开始
 
-这些偏好之后也可以在 Settings 里随时修改。`,
+这些在对话过程中也可以随时直接改，比如:
+- “以后你叫自己 Nova”
+- “使用 formal persona”
+- “像导师一样回答，并且简短一点”
+
+之后你也可以在 Settings 里修改。`,
   de: `## Willkommen bei Strada
 
-Ich kann dir sofort mit deinem Projekt helfen.
+Schön, dich kennenzulernen. Ich kann sofort loslegen und mich schnell an deinen bevorzugten Stil anpassen.
 
-Wenn du magst, sag mir in einer Nachricht:
+Wenn du möchtest, schreib mir in einer Nachricht irgendetwas davon:
 - wie ich dich nennen soll
-- ob du eher kurze, detaillierte, formelle oder lockere Antworten willst
+- wie du mich nennen möchtest
+- welche Persona oder welchen Stil du von mir willst, zum Beispiel pragmatischer Teamkollege, strenger Reviewer, freundlicher Mentor, formell, locker, kurz oder detailliert
 - und falls du schon eine konkrete Aufgabe hast, schick sie direkt mit, damit ich sofort loslegen kann
 
-Das kannst du später jederzeit in den Settings ändern.`,
+Du kannst das auch jederzeit direkt im Chat ändern, zum Beispiel:
+- "Nenn dich Nova"
+- "Nutze die formale Persona"
+- "Antworte wie ein Mentor und eher kurz"
+
+Später geht das auch weiterhin in den Settings.`,
   es: `## Bienvenido a Strada
 
-Puedo ayudarte con tu proyecto de inmediato.
+Encantado de conocerte. Puedo empezar de inmediato y adaptarme rápido a la forma en que prefieres trabajar.
 
-Si quieres, dime en un solo mensaje:
+Si quieres, en un solo mensaje puedes decirme cualquiera de estas cosas:
 - cómo quieres que te llame
-- si prefieres respuestas breves, detalladas, formales o más relajadas
+- cómo quieres llamarme a mí
+- qué persona o personalidad quieres que tenga: por ejemplo compañero pragmático, revisor estricto, mentor cercano, más formal, más casual, más breve o más detallado
 - y, si ya tienes una tarea concreta, envíamela directamente para que empiece enseguida
 
-Siempre podrás cambiar esto después en Settings.`,
+También puedes cambiarlo en cualquier momento por chat, por ejemplo:
+- "Llámate Nova"
+- "Usa la persona formal"
+- "Compórtate más como un mentor y responde breve"
+
+Si prefieres, después también puedes ajustarlo en Settings.`,
   fr: `## Bienvenue sur Strada
 
-Je peux t'aider sur ton projet tout de suite.
+Ravi de te rencontrer. Je peux commencer tout de suite et m'adapter rapidement à la façon dont tu aimes travailler.
 
-Si tu veux, dis-moi dans un seul message :
+Si tu veux, tu peux me dire en un seul message n'importe lequel de ces points :
 - comment tu veux que je t'appelle
-- si tu préfères des réponses brèves, détaillées, formelles ou plus décontractées
+- comment tu veux m'appeler
+- quelle persona ou quelle personnalité tu veux pour moi : partenaire pragmatique, relecteur exigeant, mentor chaleureux, plus formel, plus détendu, plus bref ou plus détaillé
 - et, si tu as déjà une tâche précise, envoie-la directement pour que je commence tout de suite
 
-Tu pourras toujours changer cela plus tard dans Settings.`,
+Tu peux aussi changer cela à tout moment dans le chat, par exemple :
+- "Appelle-toi Nova"
+- "Utilise la persona formelle"
+- "Réponds comme un mentor et plus brièvement"
+
+Tu pourras toujours le modifier plus tard dans Settings.`,
 };
 
 export function buildPostSetupWelcomeMessage(language: string): string {

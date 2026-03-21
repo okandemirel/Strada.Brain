@@ -5,6 +5,16 @@ const NAME_INTRO_RE = /(?:ben\s+|i(?:'|’)m\s+|my name is\s+|ad[ıi]m\s+)([\p{L
 const EXPLICIT_USER_NAME_RE = /(?:benim\s+ad[ıi]m|ad[ıi]m|my\s+name\s+is|i(?:'|’)m|call\s+me)\s+(?:şu|su|as)?\s*["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})/iu;
 const USER_ADDRESS_NAME_RE = /(?:bana|beni)\s+["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})["”]?\s+(?:de|diye\s+(?:çağır|cagir|hitap\s+et)|call\s+me)/iu;
 const ASSISTANT_NAME_RE = /(?:bundan\s+sonra\s+)?(?:senin\s+)?(?:ad[ıi]n|ismin|your\s+name\s+(?:should\s+be|is)|call\s+yourself)\s*(?:şu|su|as)?\s*(?:olsun|olacak|be|is|:|-)?\s*["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})/iu;
+const ASSISTANT_CALL_NAME_RE = /(?:bundan\s+sonra\s+)?kendine\s+(?:şu|su)?\s*["“]?([\p{L}\p{N}][\p{L}\p{N}\s._-]{0,39})["”]?\s+de/iu;
+const ASSISTANT_PERSONA_PATTERNS = [
+  /(?:sen(?:in)?|assistant|strada(?:['’]n[ıiuü]n)?|your)\s+(?:persona(?:['’][a-zçğıöşü]+)?\b|role\b|rol(?:['’][a-zçğıöşü]+)?\b|kimli(?:ğ|g)(?:in|i)?)\s*(?:should\s+be|be|olsun|ol(?:acak|sun)?|:|-)?\s*(.+)$/iu,
+  /(?:persona(?:['’][a-zçğıöşü]+)?\b|role\b|rol(?:['’][a-zçğıöşü]+)?\b|kimli(?:ğ|g)(?:in|i)?)\s*(?:should\s+be|be|olsun|ol(?:acak|sun)?|:|-)?\s*(.+)$/iu,
+  /(?:bundan\s+sonra|from\s+now\s+on)\s+(?:bir\s+|a\s+|an\s+)?(.+?)\s+(?:gibi\s+(?:davran|ol)|act\s+like)\b/iu,
+] as const;
+const ASSISTANT_PERSONALITY_PATTERNS = [
+  /(?:sen(?:in)?|assistant|strada(?:['’]n[ıiuü]n)?|your)\s+(?:personality(?:['’][a-zçğıöşü]+)?\b|kişili(?:ğ|g)(?:in|i)?|character(?:['’][a-zçğıöşü]+)?\b|vibe\b|tone\b|üslup\b|uslup\b)\s*(?:should\s+be|be|olsun|ol(?:acak|sun)?|:|-)?\s*(.+)$/iu,
+  /(?:personality(?:['’][a-zçğıöşü]+)?\b|kişili(?:ğ|g)(?:in|i)?|character(?:['’][a-zçğıöşü]+)?\b|vibe\b|tone\b|üslup\b|uslup\b)\s*(?:should\s+be|be|olsun|ol(?:acak|sun)?|:|-)?\s*(.+)$/iu,
+] as const;
 const RESPONSE_FORMAT_CUSTOM_RE =
   /(?:(?:şu|su|this|following)\s+format(?:ta)?(?:\s+(?:cevap\s+ver|reply|respond))?|(?:cevap|yanıt|reply|respond)(?:ların|ler?n)?\s*(?:şöyle|like\s+this|in\s+this\s+format))(?:\s+ol(?:sun|malı|acak))?\s*[:\-]?\s*(.+)$/iu;
 const AUTONOMY_ENABLE_RE =
@@ -35,6 +45,7 @@ export const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
 export interface NaturalLanguageDirectiveUpdates {
   language?: string;
   displayName?: string;
+  activePersona?: string;
   preferences?: Record<string, unknown>;
   autonomousMode?: {
     enabled: boolean;
@@ -65,6 +76,10 @@ export function sanitizePreferenceText(raw: string, maxLength = 160): string {
     .slice(0, maxLength);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function trimDirectiveTail(raw: string): string {
   const firstLine = raw.split(/[\r\n]/u, 1)[0] ?? "";
   const firstSentence = firstLine.split(/[.!?]/u, 1)[0] ?? firstLine;
@@ -72,8 +87,39 @@ export function trimDirectiveTail(raw: string): string {
   return firstClause
     .replace(/["“”'`]+/g, "")
     .replace(/[.,!?;:]+$/g, "")
-    .replace(/\b(?:olsun|olacak|be|is)$/iu, "")
+    .replace(/\b(?:olsun|olacak|be|is)\s*$/iu, "")
+    .replace(/\b(?:gibi|like)\s*$/iu, "")
     .trim();
+}
+
+function extractDirectivePreference(
+  text: string,
+  patterns: readonly RegExp[],
+  maxLength = 160,
+): string | undefined {
+  for (const segment of buildDirectiveSegments(text)) {
+    for (const pattern of patterns) {
+      const captured = segment.match(pattern)?.[1];
+      if (!captured) {
+        continue;
+      }
+      const trimmed = sanitizePreferenceText(trimDirectiveTail(captured), maxLength);
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function buildDirectiveSegments(text: string): string[] {
+  return [
+    text,
+    ...text
+      .split(/[\r\n.!?]+/u)
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0),
+  ];
 }
 
 export function extractExactResponseLiteral(prompt: string): string | undefined {
@@ -194,6 +240,63 @@ export function detectResponseFormatPreference(text: string): { format?: string;
   return {};
 }
 
+export function detectAssistantPersonaPreference(text: string): string | undefined {
+  for (const segment of buildDirectiveSegments(text)) {
+    const candidate = extractDirectivePreference(segment, ASSISTANT_PERSONA_PATTERNS, 120);
+    if (!candidate) {
+      continue;
+    }
+    if (/^(?:formal|casual|minimal|default|brief|detailed|moderate|use|kullan|switch|activate|set|geç|gec|dön|don)$/iu.test(candidate)) {
+      continue;
+    }
+    return candidate;
+  }
+  return undefined;
+}
+
+export function detectAssistantPersonalityPreference(text: string): string | undefined {
+  for (const segment of buildDirectiveSegments(text)) {
+    const candidate = extractDirectivePreference(segment, ASSISTANT_PERSONALITY_PATTERNS, 180);
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+export function detectActivePersonaPreference(
+  text: string,
+  availablePersonas: string[] = [],
+): string | undefined {
+  const uniquePersonas = Array.from(new Set(
+    availablePersonas
+      .map((persona) => persona.trim())
+      .filter((persona) => /^[a-z0-9_-]{1,40}$/i.test(persona)),
+  ));
+  if (uniquePersonas.length === 0) {
+    return undefined;
+  }
+
+  const lowered = text.toLowerCase();
+  const ordered = [...uniquePersonas].sort((left, right) => right.length - left.length);
+  for (const persona of ordered) {
+    if (!lowered.includes(persona.toLowerCase())) {
+      continue;
+    }
+    const escapedPersona = escapeRegExp(persona);
+    const patterns = [
+      new RegExp(`\\b(?:persona|profile|profil|mode|mod)\\b[^.!?\\n]{0,40}${escapedPersona}`, "iu"),
+      new RegExp(`${escapedPersona}[^.!?\\n]{0,40}\\b(?:persona|profile|profil|mode|mod)\\b`, "iu"),
+      new RegExp(`\\b(?:switch|use|kullan|activate|set|geç|gec|dön|don|go\\s+back(?:\\s+to)?|geri\\s+dön)\\b[^.!?\\n]{0,40}${escapedPersona}`, "iu"),
+    ];
+    if (patterns.some((pattern) => pattern.test(text))) {
+      return persona;
+    }
+  }
+
+  return undefined;
+}
+
 /** Build a list of profile attribute lines for system prompt injection. */
 export function buildProfileParts(profile: {
   displayName?: string;
@@ -205,9 +308,13 @@ export function buildProfileParts(profile: {
   const preferences = profile.preferences as Record<string, unknown>;
   if (profile.displayName) parts.push(`Name: ${profile.displayName}`);
   parts.push(`Language: ${profile.language}`);
-  if (profile.activePersona !== "default") parts.push(`Communication Style: ${profile.activePersona}`);
+  if (profile.activePersona !== "default") parts.push(`Active Persona Profile: ${profile.activePersona}`);
   const assistantName = getStringPreference(preferences, "assistantName", 80);
   if (assistantName) parts.push(`Assistant Identity: When referring to yourself, use the name "${assistantName}".`);
+  const assistantPersona = getStringPreference(preferences, "assistantPersona", 120);
+  if (assistantPersona) parts.push(`Assistant Persona Preference: ${assistantPersona}`);
+  const assistantPersonality = getStringPreference(preferences, "assistantPersonality", 180);
+  if (assistantPersonality) parts.push(`Assistant Personality Preference: ${assistantPersonality}`);
   const communicationStyle = getStringPreference(preferences, "communicationStyle", 60);
   if (communicationStyle) parts.push(`Reply Style: ${communicationStyle}`);
   const verbosity = getStringPreference(preferences, "verbosity", 40);
@@ -245,6 +352,7 @@ export function detectLanguageFromText(text: string): string | null {
 export function extractNaturalLanguageDirectiveUpdates(params: {
   latestProfile: NaturalLanguageDirectiveProfile | null;
   prompt: string;
+  availablePersonas?: string[];
   nowMs?: number;
   autonomousHours?: number;
 }): NaturalLanguageDirectiveUpdates {
@@ -269,12 +377,23 @@ export function extractNaturalLanguageDirectiveUpdates(params: {
 
   const preferenceUpdates: Record<string, unknown> = {};
 
-  const assistantNameMatch = trimmed.match(ASSISTANT_NAME_RE);
+  const assistantNameMatch = trimmed.match(ASSISTANT_NAME_RE)
+    ?? trimmed.match(ASSISTANT_CALL_NAME_RE);
   const assistantName = assistantNameMatch?.[1]
     ? sanitizeDisplayName(trimDirectiveTail(assistantNameMatch[1])).slice(0, 40)
     : "";
   if (assistantName) {
     preferenceUpdates.assistantName = assistantName;
+  }
+
+  const assistantPersona = detectAssistantPersonaPreference(trimmed);
+  if (assistantPersona) {
+    preferenceUpdates.assistantPersona = assistantPersona;
+  }
+
+  const assistantPersonality = detectAssistantPersonalityPreference(trimmed);
+  if (assistantPersonality) {
+    preferenceUpdates.assistantPersonality = assistantPersonality;
   }
 
   const verbosity = detectVerbosityPreference(trimmed);
@@ -316,6 +435,11 @@ export function extractNaturalLanguageDirectiveUpdates(params: {
       enabled: true,
       expiresAt: (params.nowMs ?? Date.now()) + autonomyWindowMs,
     };
+  }
+
+  const activePersona = detectActivePersonaPreference(trimmed, params.availablePersonas);
+  if (activePersona) {
+    updates.activePersona = activePersona;
   }
 
   if (Object.keys(preferenceUpdates).length > 0) {

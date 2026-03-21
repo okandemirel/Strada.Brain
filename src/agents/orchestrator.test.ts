@@ -911,6 +911,55 @@ describe("Orchestrator", () => {
     db.close();
   });
 
+  it("lets the user change assistant persona and personality mid-conversation via natural language", async () => {
+    const db = new Database(":memory:");
+    const userProfileStore = new UserProfileStore(db);
+    const profileOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool, writeTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: true,
+      userProfileStore,
+    });
+
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Switch applied.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+
+    const promise = profileOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-persona-switch",
+      userId: "user1",
+      text: "Kendine Nova de. Formal persona kullan. Personality'in sakin ve net olsun. Persona'n teknik mentor olsun. Bundan sonra kısa cevap ver.",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    const profile = userProfileStore.getProfile("user1");
+    expect(profile?.activePersona).toBe("formal");
+    expect(profile?.preferences.assistantName).toBe("Nova");
+    expect(profile?.preferences.assistantPersona).toBe("teknik mentor");
+    expect(profile?.preferences.assistantPersonality).toBe("sakin");
+    expect(profile?.preferences.verbosity).toBe("brief");
+
+    const firstPrompt = mockProvider.chat.mock.calls[0]?.[0] as string;
+    expect(firstPrompt).toContain('Assistant Identity: When referring to yourself, use the name "Nova".');
+    expect(firstPrompt).toContain("Active Persona Profile: formal");
+    expect(firstPrompt).toContain("Assistant Persona Preference: teknik mentor");
+    expect(firstPrompt).toContain("Assistant Personality Preference: sakin");
+    db.close();
+  });
+
   it("reuses a stable user identity for background tasks even when the chat session changes", async () => {
     const db = new Database(":memory:");
     const userProfileStore = new UserProfileStore(db);
