@@ -134,6 +134,10 @@ describe("loadConfig", () => {
     delete process.env["TASK_MAX_CONCURRENT"];
     delete process.env["TASK_MESSAGE_BURST_WINDOW_MS"];
     delete process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"];
+    delete process.env["INTERACTION_MODE"];
+    delete process.env["INTERACTION_HEARTBEAT_AFTER_MS"];
+    delete process.env["INTERACTION_HEARTBEAT_INTERVAL_MS"];
+    delete process.env["INTERACTION_ESCALATION_POLICY"];
     delete process.env["MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH"];
   });
 
@@ -151,6 +155,13 @@ describe("loadConfig", () => {
     });
     expect(config.llmStreamInitialTimeoutMs).toBe(600000);
     expect(config.llmStreamStallTimeoutMs).toBe(120000);
+    expect(config.interaction).toEqual({
+      mode: "silent-first",
+      heartbeatAfterMs: 120000,
+      heartbeatIntervalMs: 300000,
+      escalationPolicy: "hard-blockers-only",
+    });
+    expect(config.notification.routing.medium).toEqual(["dashboard"]);
   });
 
   it("throws when ANTHROPIC_API_KEY is missing", () => {
@@ -246,6 +257,24 @@ describe("loadConfig", () => {
     const config = loadConfig();
 
     expect(config.modelIntelligence.providerSourcesPath).toBe("/opt/strada/provider-sources.json");
+  });
+
+  it("loads interaction policy env vars into runtime config", () => {
+    setEnv({
+      INTERACTION_MODE: "standard",
+      INTERACTION_HEARTBEAT_AFTER_MS: "15000",
+      INTERACTION_HEARTBEAT_INTERVAL_MS: "45000",
+      INTERACTION_ESCALATION_POLICY: "standard",
+    });
+
+    const config = loadConfig();
+
+    expect(config.interaction).toEqual({
+      mode: "standard",
+      heartbeatAfterMs: 15000,
+      heartbeatIntervalMs: 45000,
+      escalationPolicy: "standard",
+    });
   });
 
   it("accepts OpenAI ChatGPT/Codex subscription auth without an OpenAI API key", () => {

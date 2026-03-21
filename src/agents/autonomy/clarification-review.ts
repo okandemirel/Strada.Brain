@@ -52,6 +52,7 @@ Your job:
 - Prefer internal continuation whenever Strada still has a local inspection path: files, repo search, logs, build/test tools, runtime traces, or prior evidence can move the task forward.
 - Only approve user clarification when it is truly required to continue.
 - Do not allow broad intake behavior, discovery checklists, or "tell me what you want me to act on" behavior to reach the user.
+- Local technical decisions stay inside Strada: package selection, refactor path, implementation sequencing, and similar engineering choices are not user escalations by default.
 
 Allowed decisions:
 - "none": this draft is not asking for clarification and can continue through normal orchestration.
@@ -68,9 +69,9 @@ Return JSON only:
 {"decision":"none"|"internal_continue"|"ask_user"|"blocked","reason":"short reason","blockingType":"missing_external_info"|"product_direction"|"credential_or_access"|"risky_irreversible_action"|"other","recommendedNextAction":"short action","question":"single concise user-facing question when needed","options":["optional","decision-ready","choices"],"recommendedOption":"optional recommended choice"}`;
 
 const QUESTION_MARK_RE = /\?/u;
-const QUESTION_STEM_RE = /\b(?:what|which|who|where|when|why|how|can you|could you|would you|do you|are you|should we|shall we)\b/iu;
+const QUESTION_STEM_RE = /\b(?:what|which|who|where|when|why|how|can you|could you|would you|do you|are you|should we|should i|shall we|want me to)\b/iu;
 const USER_ADDRESS_RE = /\b(?:you|your|yours|user|sen|seni|senin|siz|size|sizin)\b/iu;
-const USER_INPUT_REQUEST_RE = /\b(?:clarif(?:y|ication)|confirm|choose|pick|select|decide|prefer|share|provide|tell|specify|describe|send|paste|attach|upload|rephrase|explain|mean|want|need from you)\b/iu;
+const USER_INPUT_REQUEST_RE = /\b(?:clarif(?:y|ication)|confirm|choose|pick|select|decide|prefer|share|provide|tell|specify|describe|send|paste|attach|upload|rephrase|explain|mean|want|continue|approve|allow|install|need from you)\b/iu;
 const EXTERNAL_BLOCKER_RE = /\b(?:missing|blocked|blocker|requires?|need|without|cannot|can't|unable|access|credential|permission|token|api[_ -]?key|login|account|subscription|approval|irreversible|external)\b/iu;
 const REQUIREMENT_GATHERING_RE = /\b(?:objective|scope|requirements?|inputs?|constraints?|repro(?:duction)?|expected|actual|symptom|target behavior|project health check)\b/iu;
 const CHOICE_LIST_RE = /(?:^|\n)\s*(?:[A-D]\)|[1-9]\)|[-*])\s+\S/m;

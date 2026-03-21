@@ -56,6 +56,8 @@ const MANUAL_INTERVENTION_RE =
   /\bmanual(?:ly)?\s+intervention\b|\brestore(?:d)?\b.{0,40}\bversion control\b|\brecreate(?:d)?\b.{0,20}\bproject\b/iu;
 const LOCAL_PROGRESS_MEMO_RE =
   /\b(?:need(?:s)? to|must|should|have to|will|going to)\b.{0,50}\b(?:inspect|read|open|check|search|review|analy[sz]e|investigat(?:e|ing)|trace|run|rerun|test|build|compile|profile|instrument|compare|verify)\b/iu;
+const INTERNAL_MILESTONE_HANDOFF_RE =
+  /\b(?:next steps? available|ready for whichever direction|ready for whatever direction|want me to start on|which direction(?: do)? you prefer|which path(?: do)? you prefer|should i continue|start on the .* implementation|implementation or the .* integration)\b/iu;
 const PLAN_SECTION_RE =
   /(?:^|\n)\s*(?:plan|steps?|next steps?|follow-?up|checklist|implementation plan|execution plan)\s*:|\n\s*(?:\d+\.\s+|[A-D]\)\s+|[-*]\s+)/iu;
 const PROJECT_ARTIFACT_SIGNAL_RE =
@@ -152,6 +154,10 @@ function looksLikeInternalProgressMemo(text: string): boolean {
     && (PROJECT_ARTIFACT_SIGNAL_RE.test(text) || RUNTIME_DIAGNOSTIC_SIGNAL_RE.test(text));
 }
 
+function looksLikeInternalMilestoneHandoff(text: string): boolean {
+  return INTERNAL_MILESTONE_HANDOFF_RE.test(text);
+}
+
 export function decideInteractionBoundary(
   input: InteractionBoundaryInput,
 ): InteractionBoundaryDecision {
@@ -219,6 +225,18 @@ export function decideInteractionBoundary(
       gate: buildVisibilityContinueGate(
         "The current draft is still an internal progress memo about inspection or verification work.",
         "Continue internally until the work is finished or surface one concise external blocker only if user action is truly required.",
+        input.evidence,
+      ),
+    };
+  }
+
+  if (looksLikeInternalMilestoneHandoff(visibleOrRawDraft)) {
+    return {
+      kind: "internal_continue",
+      reason: "The current draft is a milestone update that hands the next engineering decision back to the user.",
+      gate: buildVisibilityContinueGate(
+        "The current draft is a milestone or handoff memo, not the final user-facing outcome.",
+        "Continue internally until the task is actually complete, or surface one concise hard blocker only if external action is truly required.",
         input.evidence,
       ),
     };

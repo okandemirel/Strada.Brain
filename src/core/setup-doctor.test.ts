@@ -99,6 +99,12 @@ describe("setup doctor", () => {
       teams: {} as Config["teams"],
       security: {} as Config["security"],
       tasks: {} as Config["tasks"],
+      interaction: {
+        mode: "silent-first",
+        heartbeatAfterMs: 120000,
+        heartbeatIntervalMs: 300000,
+        escalationPolicy: "hard-blockers-only",
+      },
       unityProjectPath: "/Users/test/Game",
       strada: {} as Config["strada"],
       dashboard: { enabled: true, port: 3100 },

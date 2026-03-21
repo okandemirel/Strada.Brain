@@ -53,6 +53,18 @@ describe("orchestrator-interaction-policy", () => {
     expect(result.content).toContain('Selected "Approve"');
   });
 
+  it("auto-resolves local technical choice questions without surfacing them", () => {
+    const result = reviewAutonomousQuestion({
+      question: "Which refactor path should I take for the routing layer?",
+      context: "This is a local implementation decision.",
+      options: ["Keep the current service", "Split into two modules"],
+      recommended: "Split into two modules",
+    }, "background");
+
+    expect(result.content).toContain("local technical decision");
+    expect(result.content).toContain('Selected "Split into two modules"');
+  });
+
   it("formats requested plans into a user-facing review block", () => {
     expect(formatRequestedPlan({
       summary: "Stabilize setup handoff",

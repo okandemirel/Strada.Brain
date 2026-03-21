@@ -23,6 +23,12 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     discord: {},
     slack: { socketMode: true },
     security: { requireEditConfirmation: true, readOnlyMode: false },
+    interaction: {
+      mode: "silent-first",
+      heartbeatAfterMs: 120000,
+      heartbeatIntervalMs: 300000,
+      escalationPolicy: "hard-blockers-only",
+    },
     unityProjectPath: "/tmp/test",
     dashboard: { enabled: false, port: 3100 },
     websocketDashboard: { enabled: false, port: 3101 },

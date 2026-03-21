@@ -387,6 +387,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     userProfileStore,
     autonomousDefaultEnabled: config.autonomousDefaultEnabled,
     autonomousDefaultHours: config.autonomousDefaultHours,
+    interactionConfig: config.interaction,
     taskExecutionStore,
     runtimeArtifactManager,
     toolMetadataByName: toolRegistry.getMetadataMap(),

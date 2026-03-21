@@ -37,6 +37,12 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       messageBurstWindowMs: 5000,
       messageBurstMaxMessages: 4,
     },
+    interaction: {
+      mode: "silent-first",
+      heartbeatAfterMs: 120000,
+      heartbeatIntervalMs: 300000,
+      escalationPolicy: "hard-blockers-only",
+    },
     unityProjectPath: "/Users/test/Game",
     strada: {
       coreRepoUrl: "https://example.invalid/core.git",

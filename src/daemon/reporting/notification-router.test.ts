@@ -20,7 +20,7 @@ describe("NotificationRouter", () => {
     routing: {
       silent: ["dashboard"],
       low: ["dashboard"],
-      medium: ["chat", "dashboard"],
+      medium: ["dashboard"],
       high: ["chat", "dashboard"],
       critical: ["chat", "dashboard"],
     },
@@ -80,6 +80,20 @@ describe("NotificationRouter", () => {
       expect(history).toHaveLength(1);
       expect(history[0].title).toBe("Task complete");
       expect(history[0].deliveredTo).toContain("dashboard");
+    });
+
+    it("keeps medium urgency out of chat by default", async () => {
+      const router = createRouter();
+      await router.notify({
+        level: "medium",
+        title: "Budget warning",
+        message: "80%",
+        timestamp: Date.now(),
+      });
+
+      expect(mockSender.sendMarkdown).not.toHaveBeenCalled();
+      const history = storage.getNotificationHistory(10);
+      expect(history[0].deliveredTo).toEqual(["dashboard"]);
     });
 
     it("with urgency below minLevel is suppressed (not delivered)", async () => {

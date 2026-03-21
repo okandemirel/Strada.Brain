@@ -2924,6 +2924,114 @@ DONE`,
     }
   });
 
+  it("keeps local technical-choice ask_user tool calls internal under hard-blockers-only escalation", async () => {
+    const listTool = createMockTool("list_directory");
+    const askUserTool = createMockTool("ask_user");
+    const clarificationOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [askUserTool, listTool, readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    mockProvider.chat
+      .mockResolvedValueOnce({
+        text: "Need a technical choice before continuing.",
+        toolCalls: [{
+          id: "tc-clarify-technical",
+          name: "ask_user",
+          input: {
+            question: "Which refactor path should I take for the routing layer?",
+            options: ["Keep the current service", "Split the routing module"],
+            recommended: "Split the routing module",
+            context: "This is the next implementation choice.",
+          },
+        }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "ask_user",
+          reason: "A product direction choice is still required.",
+          blockingType: "product_direction",
+          question: "Which refactor path should Strada use?",
+          options: ["Keep the current service", "Split the routing module"],
+          recommendedOption: "Split the routing module",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Continuing with the split refactor internally.",
+        toolCalls: [{ id: "tc-routing-read", name: "list_directory", input: { path: "src/agent-core/routing" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: "Routing layer analyzed and the split path is now underway.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "The local technical choice was handled internally.",
+          closureStatus: "verified",
+          openInvestigations: [],
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "not_applicable",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+
+    const promise = clarificationOrch.handleMessage({
+      channelType: "cli",
+      chatId: "chat-clarification-technical",
+      userId: "user1",
+      text: "Refactor the routing layer and keep going until it's done.",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(askUserTool.execute).not.toHaveBeenCalled();
+    const continuationMessages = mockProvider.chat.mock.calls[2]?.[1] as Array<{ role: string; content: unknown }>;
+    expect(continuationMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_result",
+              content: expect.stringContaining("[CLARIFICATION REVIEW REQUIRED]"),
+            }),
+          ]),
+        }),
+      ]),
+    );
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-clarification-technical",
+      expect.stringContaining("Routing layer analyzed"),
+    );
+  });
+
   it("keeps plain-text internal execution plans off the user surface and continues internally", async () => {
     const listTool = createMockTool("list_directory");
     const planningOrch = new Orchestrator({

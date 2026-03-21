@@ -15,6 +15,8 @@ const PLAN_EXECUTABLE_PATTERN = /\b(analy(?:se|ze)|inspect|read|search|trace|rep
 const PERMISSION_QUESTION_PATTERN = /\b(approve|approval|permission|okay|ok(?:ay)? to|should i|may i|can i|do you want me to|confirm|proceed|continue|go ahead|allowed)\b/i;
 const AUTO_APPROVE_OPTION_PATTERN = /\b(approve|approved|continue|proceed|yes|ok|okay|go ahead|accept)\b/i;
 const AUTO_REJECT_OPTION_PATTERN = /\b(reject|deny|cancel|stop|no)\b/i;
+const LOCAL_TECHNICAL_DECISION_PATTERN =
+  /\b(?:refactor|architecture|implementation|approach|path|package|dependency|library|tool|provider|framework|pattern|module|service|install|upgrade|downgrade|rename|split|merge|migration|ui|ux)\b/i;
 const SAFE_SHELL_SEGMENT_PATTERN =
   /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck)\b)|npx\s+(?:vitest|eslint|tsc)\b|git\s+(?:status|diff|log|show|branch|rev-parse)\b|(?:rg|ls|pwd|cat|head|tail|find|sed|wc|stat|grep|test)\b|(?:vitest|eslint|tsc)\b)/i;
 
@@ -29,6 +31,10 @@ Reject when the command is unrelated, broad, destructive, secret-seeking, privil
 
 Return JSON only:
 {"decision":"approve"|"reject","reason":"short reason","taskAligned":true|false,"bounded":true|false}`;
+
+function looksLikeLocalTechnicalChoice(text: string): boolean {
+  return LOCAL_TECHNICAL_DECISION_PATTERN.test(text);
+}
 
 export function normalizeInteractiveText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -123,6 +129,7 @@ export function reviewAutonomousQuestion(
     PERMISSION_QUESTION_PATTERN.test(combinedText) ||
     (options.some((option) => AUTO_APPROVE_OPTION_PATTERN.test(option))
       && options.some((option) => AUTO_REJECT_OPTION_PATTERN.test(option)));
+  const looksLikeTechnicalChoice = looksLikeLocalTechnicalChoice(combinedText);
 
   if (!question) {
     return {
@@ -135,9 +142,11 @@ export function reviewAutonomousQuestion(
 
   if (options.length > 0) {
     const choice = pickAutonomousChoice(options, recommended);
-    const rationale = looksLikePermissionGate
-      ? "this is a permission/confirmation gate, not a true blocker"
-      : "no interactive user is available in this execution mode";
+    const rationale = looksLikeTechnicalChoice
+        ? "this is a local technical decision, so Strada should choose and continue"
+        : looksLikePermissionGate
+          ? "this is a permission/confirmation gate, not a true blocker"
+        : "no interactive user is available in this execution mode";
     return {
       content:
         `Autonomous question review (${mode} mode): ${rationale}. ` +

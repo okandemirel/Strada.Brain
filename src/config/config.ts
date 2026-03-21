@@ -222,6 +222,10 @@ export type EnvVarName =
   | "DELEGATION_VERBOSITY"
   | "DELEGATION_TYPES"
   | "DELEGATION_MAX_ITERATIONS_PER_TYPE"
+  | "INTERACTION_MODE"
+  | "INTERACTION_HEARTBEAT_AFTER_MS"
+  | "INTERACTION_HEARTBEAT_INTERVAL_MS"
+  | "INTERACTION_ESCALATION_POLICY"
 
   // Memory Consolidation (Phase 25)
   | "MEMORY_CONSOLIDATION_ENABLED"
@@ -505,6 +509,13 @@ export interface TaskConfig {
   readonly messageBurstMaxMessages: number;
 }
 
+export interface InteractionConfig {
+  readonly mode: "silent-first" | "standard";
+  readonly heartbeatAfterMs: number;
+  readonly heartbeatIntervalMs: number;
+  readonly escalationPolicy: "hard-blockers-only" | "standard";
+}
+
 /** Strada dependency configuration */
 export interface StradaDependencyConfig {
   readonly coreRepoUrl: string;
@@ -517,6 +528,12 @@ export const DEFAULT_STRADA_MODULES_REPO_URL =
   "https://github.com/okandemirel/Strada.Modules.git";
 export const DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS = 10 * 60 * 1000;
 export const DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS = 2 * 60 * 1000;
+export const DEFAULT_INTERACTION_CONFIG: InteractionConfig = {
+  mode: "silent-first",
+  heartbeatAfterMs: 120_000,
+  heartbeatIntervalMs: 300_000,
+  escalationPolicy: "hard-blockers-only",
+};
 
 // =============================================================================
 // MAIN CONFIG TYPE
@@ -559,6 +576,9 @@ export interface Config {
 
   // Tasks
   readonly tasks: TaskConfig;
+
+  // Interaction Policy
+  readonly interaction: InteractionConfig;
 
   // Project
   readonly unityProjectPath: string;
@@ -1039,7 +1059,7 @@ export const configSchema = z
     stradaNotifyMinLevel: z.enum(["silent", "low", "medium", "high", "critical"]).default("low"),
     stradaNotifySilent: z.string().default("dashboard"),
     stradaNotifyLow: z.string().default("dashboard"),
-    stradaNotifyMedium: z.string().default("chat,dashboard"),
+    stradaNotifyMedium: z.string().default("dashboard"),
     stradaNotifyHigh: z.string().default("chat,dashboard"),
     stradaNotifyCritical: z.string().default("chat,dashboard"),
     stradaQuietStart: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(23)).optional(),
@@ -1091,6 +1111,12 @@ export const configSchema = z
     // Autonomous Mode
     autonomousDefaultEnabled: boolFromString(false),
     autonomousDefaultHours: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(168)).default("24"),
+
+    // Interaction Policy
+    interactionMode: z.enum(["silent-first", "standard"]).default("silent-first"),
+    interactionHeartbeatAfterMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(0).max(86_400_000)).default("120000"),
+    interactionHeartbeatIntervalMs: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1000).max(86_400_000)).default("300000"),
+    interactionEscalationPolicy: z.enum(["hard-blockers-only", "standard"]).default("hard-blockers-only"),
 
     // Tasks
     taskMaxConcurrent: z.string().transform((s) => parseInt(s, 10)).pipe(z.number().int().min(1).max(10)).default("3"),
@@ -1289,6 +1315,13 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       concurrencyLimit: rawConfig.taskMaxConcurrent,
       messageBurstWindowMs: rawConfig.taskMessageBurstWindowMs,
       messageBurstMaxMessages: rawConfig.taskMessageBurstMaxMessages,
+    },
+
+    interaction: {
+      mode: rawConfig.interactionMode,
+      heartbeatAfterMs: rawConfig.interactionHeartbeatAfterMs,
+      heartbeatIntervalMs: rawConfig.interactionHeartbeatIntervalMs,
+      escalationPolicy: rawConfig.interactionEscalationPolicy,
     },
 
     unityProjectPath: rawConfig.unityProjectPath,
@@ -1985,6 +2018,11 @@ interface EnvVars {
   taskMaxConcurrent: string | undefined;
   taskMessageBurstWindowMs: string | undefined;
   taskMessageBurstMaxMessages: string | undefined;
+  // Interaction Policy
+  interactionMode: string | undefined;
+  interactionHeartbeatAfterMs: string | undefined;
+  interactionHeartbeatIntervalMs: string | undefined;
+  interactionEscalationPolicy: string | undefined;
   // Autonomous Mode
   autonomousDefaultEnabled: string | undefined;
   autonomousDefaultHours: string | undefined;
@@ -2225,6 +2263,10 @@ function loadFromEnv(): EnvVars {
     taskMaxConcurrent: process.env["TASK_MAX_CONCURRENT"],
     taskMessageBurstWindowMs: process.env["TASK_MESSAGE_BURST_WINDOW_MS"],
     taskMessageBurstMaxMessages: process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"],
+    interactionMode: process.env["INTERACTION_MODE"],
+    interactionHeartbeatAfterMs: process.env["INTERACTION_HEARTBEAT_AFTER_MS"],
+    interactionHeartbeatIntervalMs: process.env["INTERACTION_HEARTBEAT_INTERVAL_MS"],
+    interactionEscalationPolicy: process.env["INTERACTION_ESCALATION_POLICY"],
     // Autonomous Mode
     autonomousDefaultEnabled: process.env["AUTONOMOUS_DEFAULT_ENABLED"],
     autonomousDefaultHours: process.env["AUTONOMOUS_DEFAULT_HOURS"],
@@ -2554,6 +2596,7 @@ export function mergeConfigs(base: Config, partial: PartialConfig): Config {
     goalParallelExecution: (partial as Partial<Config>).goalParallelExecution ?? base.goalParallelExecution,
     goalMaxParallel: (partial as Partial<Config>).goalMaxParallel ?? base.goalMaxParallel,
     goal: { ...base.goal, ...((partial as Partial<Config>).goal ?? {}) },
+    interaction: { ...base.interaction, ...((partial as Partial<Config>).interaction ?? {}) },
     toolChain: { ...base.toolChain, ...(partial as Partial<Config>).toolChain },
     crossSession: { ...base.crossSession, ...(partial as Partial<Config>).crossSession },
     reRetrieval: { ...base.reRetrieval, ...((partial as Partial<Config>).reRetrieval ?? {}) },

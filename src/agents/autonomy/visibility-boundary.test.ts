@@ -121,6 +121,21 @@ describe("decideInteractionBoundary", () => {
     expect(decision.gate).toContain("internal progress memo");
   });
 
+  it("keeps milestone handoff memos internal instead of surfacing them as progress narration", () => {
+    const decision = decideInteractionBoundary({
+      prompt: "Analyze the project fully and implement the improvement plan",
+      workerDraft: "The MainCollection fix is complete and verified. Next steps available: start on the Level Selector implementation or the Asset Inventory integration.",
+      visibleDraft: "",
+      task: task("code-generation"),
+      evidence: baseEvidence,
+      canInspectLocally: true,
+      availableToolNames: ["file_read", "file_edit"],
+    });
+
+    expect(decision.kind).toBe("internal_continue");
+    expect(decision.gate).toContain("hands the next step back to the user");
+  });
+
   it("surfaces concise user-actionable terminal blockers", () => {
     const decision = decideInteractionBoundary({
       prompt: "Open the configured dashboard",

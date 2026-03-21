@@ -362,6 +362,7 @@ interface TaskRuntimeStageDeps {
   createProgressReporter?: (
     channel: IChannelAdapter,
     taskManager: TaskManager,
+    interaction: Config["interaction"],
   ) => ProgressReporter;
 }
 
@@ -1147,9 +1148,9 @@ export async function initializeTaskRuntimeStage(
   });
 
   if (deps.createProgressReporter) {
-    deps.createProgressReporter(params.channel, taskManager);
+    deps.createProgressReporter(params.channel, taskManager, params.config.interaction);
   } else {
-    new ProgressReporter(params.channel, taskManager);
+    new ProgressReporter(params.channel, taskManager, params.config.interaction);
   }
 
   return {

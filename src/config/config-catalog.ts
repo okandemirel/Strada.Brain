@@ -219,6 +219,14 @@ const PREFIX_RULES: Array<{ prefix: string; descriptor: ConfigDescriptor }> = [
     },
   },
   {
+    prefix: "interaction.",
+    descriptor: {
+      category: "Execution",
+      tier: "advanced",
+      description: "Silent-first execution visibility, heartbeat timing, and escalation policy.",
+    },
+  },
+  {
     prefix: "daemon.",
     descriptor: {
       category: "Operations",

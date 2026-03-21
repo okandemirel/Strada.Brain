@@ -12,7 +12,7 @@ export class AskUserTool implements ITool {
   readonly name = "ask_user";
   readonly description =
     "Ask exactly one concise, decision-ready question only when a real external blocker remains and Strada cannot continue internally. " +
-    "Use decision-ready options when possible. Do not use this for broad intake, plan approval, or requirement-gathering checklists.";
+    "Use decision-ready options when possible. Do not use this for broad intake, plan approval, requirement-gathering checklists, or local technical choices such as package selection or refactor path.";
 
   readonly inputSchema = {
     type: "object" as const,

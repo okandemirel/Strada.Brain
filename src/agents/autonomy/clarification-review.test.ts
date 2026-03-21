@@ -87,6 +87,8 @@ describe("clarification-review", () => {
     expect(shouldRunClarificationReview("Execution verified.")).toBe(false);
     expect(shouldRunClarificationReview("Clarify the objective you want me to act on.")).toBe(true);
     expect(shouldRunClarificationReview("Please share the crash log so I can continue.")).toBe(true);
+    expect(shouldRunClarificationReview("Should I continue with the refactor?")).toBe(true);
+    expect(shouldRunClarificationReview("Want me to install the package now?")).toBe(true);
 
     const signals = analyzeClarificationDraft("A) Fix the bug\nB) Add a feature");
     expect(signals.enumeratesChoices).toBe(true);

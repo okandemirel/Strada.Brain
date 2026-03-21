@@ -42,12 +42,14 @@ Your review must explicitly cover:
 - code review
 - simplify review
 - recent console/log errors or warnings
+- whether the draft is a milestone/status memo that hands the next decision back to the user instead of finishing autonomously
 
 Approve only when:
 1. Remaining failures are either resolved or honestly surfaced as blockers.
 2. Recent console/log issues do not indicate unresolved errors.
 3. The implementation is coherent, safe enough for the task, and not obviously overcomplicated.
 4. The draft does not leave open runtime hypotheses, likely causes, or "remaining potential issues" that Strada should continue investigating internally.
+5. The draft does not ask the user to pick a technical path, approve continuation, or choose the next engineering step unless a real hard blocker exists.
 
 Return JSON only:
 {"decision":"approve"|"continue"|"replan"|"fail","summary":"short summary","findings":["..."],"requiredActions":["..."],"closureStatus":"verified"|"partial"|"unverified","openInvestigations":["..."],"reviews":{"security":"clean|issues|not_applicable","code":"clean|issues|not_applicable","simplify":"clean|issues|not_applicable"},"logStatus":"clean|issues|not_applicable"}`;
@@ -73,7 +75,8 @@ const MUTATION_TOOL_NAMES = new Set([
   "strada_create_module",
 ]);
 
-const USER_DEFLECTION_RE = /\b(?:what should i do|what do you want me to do|do you want me to|would you like me to|should i\b|ne yapmalıyım|ne yapayım|ister misin|ekran görüntüsü|screenshot)\b/iu;
+const USER_DEFLECTION_RE =
+  /\b(?:what should i do|what do you want me to do|do you want me to|would you like me to|should i\b|which direction|which path|want me to start on|next steps? available|ready for whichever direction|ready for whatever direction|ister misin|ne yapmalıyım|ne yapayım|ekran görüntüsü|screenshot)\b/iu;
 const SCOPE_QUALIFIER_RE = /\b(?:all|every|entire|whole|full|tüm|hepsi|bütün)\b/iu;
 const SCOPE_COMPLETION_VERB_RE = /\b(?:verified|reviewed|analy[sz]ed|complete(?:d)?|tamamlandı|doğrulandı|analiz(?:i)? tamamlandı)\b/iu;
 const COMPLETION_CLAIM_RE = /\b(?:done|fixed|resolved|successful(?:ly)?|succeeded|complete(?:d)?|verified|root cause|tamamlandı|doğrulandı)\b/iu;

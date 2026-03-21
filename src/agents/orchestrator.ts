@@ -42,8 +42,10 @@ import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import { MemoryRefresher } from "./memory-refresher.js";
 import {
+  DEFAULT_INTERACTION_CONFIG,
   DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
   DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS,
+  type InteractionConfig,
   type ReRetrievalConfig,
   type StradaDependencyConfig,
 } from "../config/config.js";
@@ -78,6 +80,8 @@ import {
   shouldRunClarificationReview,
   InteractionPolicyStateMachine,
   userExplicitlyAskedForPlan,
+  type ClarificationBlockingType,
+  type ClarificationReviewDecision,
   type InteractionBoundaryDecision,
   type VerifierPipelineResult,
 } from "./autonomy/index.js";
@@ -173,9 +177,20 @@ You are operating in AUTONOMOUS MODE. The user has explicitly granted you full a
 - Only use ask_user when you genuinely cannot determine user intent (missing critical info)
 - If you use ask_user anyway, prefer decision-ready options because the system may resolve the choice autonomously
 - Proceed confidently with your best judgment on all write operations
+- Keep package choices, refactor paths, implementation sequencing, and other local engineering decisions internal
+- Do not narrate routine milestone updates or "next I will..." progress memos to the user; continue until you have the final result, a sparse heartbeat, or a real hard blocker
 - Do NOT return internal tool-run checklists or "first run X / then run Y" operational memos in plain text; use the tools directly when you can
 - Budget and safety limits are still enforced automatically\n`;
 const INTERNAL_DECISION_LINE_RE = /^\s*\*{0,2}(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\*{0,2}\s*$/gim;
+const INTERNAL_TECHNICAL_CHOICE_RE =
+  /\b(?:package|dependency|library|provider|refactor|architecture|implementation|approach|path|module|service|screen|tool|install|upgrade|downgrade|split|merge|integration)\b/iu;
+const HARD_BLOCKER_TEXT_RE =
+  /\b(?:credential|token|api[_ -]?key|login|account|subscription|permission|access|billing|quota|approval|approve|destructive|irreversible|delete|drop|wipe|deploy|upload|attach|artifact|external)\b/iu;
+const HARD_BLOCKER_CLARIFICATION_TYPES = new Set<ClarificationBlockingType>([
+  "missing_external_info",
+  "credential_or_access",
+  "risky_irreversible_action",
+]);
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
 The orchestrator remains the primary intelligence and the user-facing agent.
 You are not the overall assistant for the session.
@@ -429,6 +444,7 @@ export class Orchestrator {
   private readonly userProfileStore?: UserProfileStore;
   private readonly autonomousDefaultEnabled: boolean;
   private readonly autonomousDefaultHours: number;
+  private readonly interactionConfig: InteractionConfig;
   private readonly taskExecutionStore?: TaskExecutionStore;
   private readonly runtimeArtifactManager?: RuntimeArtifactManager;
   /** Multi-provider routing: selects best provider per task/phase. */
@@ -481,6 +497,7 @@ export class Orchestrator {
     userProfileStore?: UserProfileStore;
     autonomousDefaultEnabled?: boolean;
     autonomousDefaultHours?: number;
+    interactionConfig?: InteractionConfig;
     taskExecutionStore?: TaskExecutionStore;
     runtimeArtifactManager?: RuntimeArtifactManager;
     toolMetadataByName?: ReadonlyMap<string, WorkerToolMetadata> | Record<string, WorkerToolMetadata>;
@@ -524,6 +541,7 @@ export class Orchestrator {
     this.userProfileStore = opts.userProfileStore;
     this.autonomousDefaultEnabled = opts.autonomousDefaultEnabled ?? false;
     this.autonomousDefaultHours = opts.autonomousDefaultHours ?? 24;
+    this.interactionConfig = opts.interactionConfig ?? DEFAULT_INTERACTION_CONFIG;
     this.taskExecutionStore = opts.taskExecutionStore;
     this.runtimeArtifactManager = opts.runtimeArtifactManager;
     if (opts.toolMetadataByName) {
@@ -1736,12 +1754,20 @@ export class Orchestrator {
       draft: cleanedDraft,
     });
 
+    if (
+      decision?.decision === "internal_continue"
+      || this.shouldKeepClarificationInternal(decision, cleanedDraft)
+    ) {
+      return {
+        kind: "continue",
+        gate: buildClarificationContinuationGate(
+          evidence,
+          this.toInternalClarificationDecision(decision),
+        ),
+      };
+    }
+
     switch (decision?.decision) {
-      case "internal_continue":
-        return {
-          kind: "continue",
-          gate: buildClarificationContinuationGate(evidence, decision),
-        };
       case "ask_user":
       case "blocked":
         return {
@@ -1781,10 +1807,16 @@ export class Orchestrator {
       draft,
     });
 
-    if (decision?.decision === "internal_continue") {
+    if (
+      decision?.decision === "internal_continue"
+      || this.shouldKeepClarificationInternal(decision, draft)
+    ) {
       return {
         kind: "continue",
-        gate: buildClarificationContinuationGate(evidence, decision),
+        gate: buildClarificationContinuationGate(
+          evidence,
+          this.toInternalClarificationDecision(decision),
+        ),
       };
     }
 
@@ -1805,6 +1837,41 @@ export class Orchestrator {
     }
 
     return { kind: "none" };
+  }
+
+  private shouldKeepClarificationInternal(
+    decision: ClarificationReviewDecision | null | undefined,
+    text: string,
+  ): boolean {
+    if (!decision || (decision.decision !== "ask_user" && decision.decision !== "blocked")) {
+      return false;
+    }
+    if (this.interactionConfig.escalationPolicy !== "hard-blockers-only") {
+      return false;
+    }
+    if (this.looksLikeInternalTechnicalChoice(text)) {
+      return true;
+    }
+    if (decision.blockingType) {
+      return !HARD_BLOCKER_CLARIFICATION_TYPES.has(decision.blockingType);
+    }
+    return !HARD_BLOCKER_TEXT_RE.test(text);
+  }
+
+  private toInternalClarificationDecision(
+    decision: ClarificationReviewDecision | null | undefined,
+  ): ClarificationReviewDecision {
+    return {
+      decision: "internal_continue",
+      reason: decision?.reason?.trim()
+        || "Silent-first autonomy keeps local engineering decisions inside Strada until a real hard blocker exists.",
+      recommendedNextAction: decision?.recommendedNextAction?.trim()
+        || "Resolve the local technical decision internally and continue execution without user escalation.",
+    };
+  }
+
+  private looksLikeInternalTechnicalChoice(text: string): boolean {
+    return INTERNAL_TECHNICAL_CHOICE_RE.test(text);
   }
 
   /**
