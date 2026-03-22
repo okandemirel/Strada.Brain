@@ -71,6 +71,11 @@ import { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
 import { NotificationRouter } from "../daemon/reporting/notification-router.js";
 import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 
+// Workspace / monitor bridge imports
+import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bus.js";
+import { createLearningWorkspaceBridge } from "../dashboard/learning-workspace-bridge.js";
+import { createMonitorBridge } from "../dashboard/monitor-bridge.js";
+
 // Auto-update imports
 import { ChannelActivityRegistry } from "./channel-activity-registry.js";
 import { AutoUpdater } from "./auto-updater.js";
@@ -138,6 +143,7 @@ export interface BootstrapResult {
   activityRegistry?: ChannelActivityRegistry;
   autoUpdater?: AutoUpdater;
   bootReport?: import("../common/capability-contract.js").BootReport;
+  workspaceBus?: WorkspaceBus;
 }
 
 const POST_SETUP_BOOTSTRAP_DELAY_MS = 1200;
@@ -791,6 +797,35 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     providerRouter,
   });
 
+  // Workspace bus: bridge learning/daemon events into the monitor UI
+  const workspaceBus = createWorkspaceBus();
+
+  // Wire learning + daemon events into workspace bus (both buses are optional)
+  if (learningResult.eventBus && daemonEventBus) {
+    const lwBridge = createLearningWorkspaceBridge(
+      learningResult.eventBus,
+      daemonEventBus,
+      workspaceBus,
+    );
+    lwBridge.start();
+  }
+
+  // Monitor bridge: fan-out workspace events to all connected WS clients
+  if ("broadcastRaw" in channel && typeof (channel as any).broadcastRaw === "function") {
+    const monitorBridge = createMonitorBridge(
+      workspaceBus,
+      (msg: string) => (channel as any).broadcastRaw(msg),
+    );
+    monitorBridge.start();
+  }
+
+  // Wire incoming workspace commands from the frontend into the workspace bus
+  if ("setWorkspaceBusEmitter" in channel && typeof (channel as any).setWorkspaceBusEmitter === "function") {
+    (channel as any).setWorkspaceBusEmitter((event: string, payload: unknown) => {
+      workspaceBus.emit(event, payload as any);
+    });
+  }
+
   // Return result with shutdown function
   return {
     orchestrator,
@@ -803,6 +838,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     activityRegistry,
     autoUpdater,
     bootReport,
+    workspaceBus,
     shutdown: createShutdownHandler({
       dashboard,
       ragPipeline,

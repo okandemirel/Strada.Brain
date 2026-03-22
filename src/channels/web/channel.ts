@@ -135,6 +135,8 @@ export class WebChannel
   private readonly appliedInstinctIds = new Map<string, string[]>();
   private readonly staticDir = resolveStaticDir();
   private readonly identityStore: WebIdentityStore;
+  /** Optional emitter for workspace bus events from frontend monitor commands. */
+  private workspaceBusEmitter: ((event: string, payload: unknown) => void) | null = null;
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
@@ -154,6 +156,11 @@ export class WebChannel
   /** Register a callback for feedback reactions (thumbs up/down). */
   setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
     this.feedbackReactionCallback = callback;
+  }
+
+  /** Register an emitter for workspace bus events from frontend monitor commands. */
+  setWorkspaceBusEmitter(emitter: ((event: string, payload: unknown) => void) | null): void {
+    this.workspaceBusEmitter = emitter;
   }
 
   /** Set the applied instinct IDs for a chat so outgoing messages include them for feedback. */
@@ -251,6 +258,22 @@ export class WebChannel
 
   isHealthy(): boolean {
     return this.healthy;
+  }
+
+  /**
+   * Broadcast a pre-serialised message string to every connected WS client.
+   * Used by the monitor bridge to fan-out workspace events.
+   */
+  broadcastRaw(message: string): void {
+    for (const [, client] of this.clients) {
+      if (client.ws.readyState === 1) {
+        try {
+          client.ws.send(message);
+        } catch {
+          // Connection may have closed between readyState check and send
+        }
+      }
+    }
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
@@ -746,6 +769,19 @@ export class WebChannel
             messageId: randomUUID(),
           });
         });
+        break;
+      }
+
+      // Workspace monitor commands from frontend
+      case "monitor:pause":
+      case "monitor:resume":
+      case "monitor:skip_task":
+      case "monitor:cancel_task":
+      case "monitor:approve_gate":
+      case "monitor:reject_gate": {
+        if (this.workspaceBusEmitter) {
+          this.workspaceBusEmitter(data.type as string, data);
+        }
         break;
       }
     }
