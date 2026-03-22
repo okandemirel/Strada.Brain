@@ -3,7 +3,7 @@ import type {
   ToolCall,
   ProviderCapabilities,
 } from "./provider.interface.js";
-import type { AssistantMessage } from "./provider-core.interface.js";
+import type { AssistantMessage, ConversationMessage } from "./provider-core.interface.js";
 import { OpenAIProvider, OPENAI_STOP_REASON_MAP } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
 
@@ -83,7 +83,11 @@ export class KimiProvider extends OpenAIProvider {
 
     const message = choice.message;
     const reasoning = message.reasoning_content;
-    const content = message.content ?? "";
+    const rawContent = message.content ?? "";
+    // Embed reasoning in text for round-trip survival (buildMessages strips it)
+    const content = reasoning
+      ? `<reasoning>\n${reasoning}\n</reasoning>\n\n${rawContent}`
+      : rawContent;
 
     // reasoning_content is a turn-level concept — attach only to the first tool call
     const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tc, idx) => {
@@ -116,10 +120,6 @@ export class KimiProvider extends OpenAIProvider {
   }
 
   /**
-   * Override to attach reasoning_content on assistant tool call messages.
-   * Kimi K2.5 requires this when thinking mode is active. Omit if empty (Kimi rejects empty string).
-   */
-  /**
    * Kimi K2.5: only stream content to user, NOT reasoning_content (internal thinking).
    */
   protected override extractStreamText(delta: Record<string, unknown> | undefined): string | undefined {
@@ -131,6 +131,25 @@ export class KimiProvider extends OpenAIProvider {
    */
   protected override extractStreamReasoning(delta: Record<string, unknown> | undefined): string | undefined {
     return (delta?.reasoning_content as string) || undefined;
+  }
+
+  protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
+    const result = super.buildMessages(systemPrompt, messages);
+
+    // Kimi K2.5: extract <reasoning> blocks from assistant text and
+    // set as reasoning_content field (required when thinking is enabled)
+    for (const msg of result) {
+      if (msg.role === "assistant" && typeof msg.content === "string") {
+        const match = msg.content.match(/<reasoning>\s*\n([\s\S]*?)\n\s*<\/reasoning>\s*\n*/);
+        if (match) {
+          (msg as Record<string, unknown>)["reasoning_content"] = match[1];
+          msg.content = msg.content.replace(/<reasoning>\s*\n[\s\S]*?\n\s*<\/reasoning>\s*\n*/g, "");
+          if (!msg.content.trim()) msg.content = null;
+        }
+      }
+    }
+
+    return result;
   }
 
   protected override buildAssistantToolCallMessage(msg: AssistantMessage): OpenAIMessage {

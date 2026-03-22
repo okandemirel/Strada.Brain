@@ -255,8 +255,15 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     const stopReason = OPENAI_STOP_REASON_MAP[finishReason] ?? "end_turn";
 
+    // If reasoning was accumulated but no tool calls stored it, embed in text
+    // so it survives the conversation round-trip (providers like Kimi K2.5
+    // require reasoning_content echoed back on assistant messages).
+    const finalText = (reasoning && toolCalls.length === 0)
+      ? `<reasoning>\n${reasoning}\n</reasoning>\n\n${text}`
+      : text;
+
     return {
-      text,
+      text: finalText,
       toolCalls,
       stopReason,
       usage: {
