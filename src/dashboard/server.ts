@@ -1076,8 +1076,9 @@ export class DashboardServer {
       // GET /api/learning/decisions -- Learning intervention decision log (Pipeline v2)
       if (req.method === "GET" && (url === "/api/learning/decisions" || url.startsWith("/api/learning/decisions?"))) {
         try {
-          // Wire to actual storage when LearningStorage is available via DI
-          const decisions: unknown[] = [];
+          const params = new URL(url, "http://localhost").searchParams;
+          const limit = Math.min(parseInt(params.get("limit") ?? "100", 10) || 100, 500);
+          const decisions = this.learningStorage?.getInterventionLogs?.(undefined, limit) ?? [];
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ decisions }));
         } catch (err) {

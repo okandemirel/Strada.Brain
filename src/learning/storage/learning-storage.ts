@@ -1959,9 +1959,10 @@ export class LearningStorage {
     createdAt: number;
   }> {
     this.ensureConnection();
+    const escaped = instinctId.replace(/%/g, '\\%').replace(/_/g, '\\_');
     const rows = this.db!.prepare(
-      "SELECT * FROM feedback WHERE instinct_ids LIKE ? ORDER BY created_at DESC"
-    ).all(`%${instinctId}%`) as Array<{
+      "SELECT * FROM feedback WHERE instinct_ids LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT 100"
+    ).all(`%${escaped}%`) as Array<{
       id: string;
       type: string;
       user_id: string | null;
@@ -2109,7 +2110,7 @@ export class LearningStorage {
       params.push(projectPath);
     }
 
-    sql += " ORDER BY i.confidence DESC";
+    sql += " ORDER BY i.confidence DESC LIMIT 500";
 
     const rows = this.db!.prepare(sql).all(...params) as InstinctRow[];
     return rows.map(r => this.rowToInstinct(r));
@@ -2124,6 +2125,9 @@ export class LearningStorage {
 
   /** Delete the lowest-confidence instincts with a given status */
   deleteLowestConfidenceInstincts(status: string, count: number): void {
+    const VALID_STATUSES = ['proposed', 'active', 'permanent', 'deprecated', 'evolved'];
+    if (!VALID_STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`);
+    if (count <= 0) return;
     this.ensureConnection();
     this.db!.prepare(`
       DELETE FROM instincts WHERE id IN (

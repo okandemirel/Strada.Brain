@@ -135,8 +135,8 @@ export class LearningPipeline {
     // Detection timer removed -- event-driven processing via handleToolResult() replaces it
     this.evolutionTimer = setInterval(() => this.runEvolution(), this.config.evolutionIntervalMs);
 
-    // Periodic trajectory extraction every 5 minutes
-    const periodicMs = 5 * 60 * 1000;
+    // Periodic trajectory extraction — use detection interval from config
+    const periodicMs = this.config.detectionIntervalMs;
     this.periodicTimer = setInterval(() => this.runPeriodicExtraction(), periodicMs);
   }
 
@@ -393,13 +393,14 @@ export class LearningPipeline {
     toolName?: string;
     contextConditions?: ContextCondition[];
     scopeType?: ScopeType;
+    confidence?: number;
   }): Promise<Instinct | null> {
     // Check for similar existing instincts (use similarity threshold, not confidence)
     const similar = await this.patternMatcher.findSimilarInstincts(params.triggerPattern);
     // Check raw similarity (relevance), not confidence-weighted score
     if (similar.some(m => m.relevance > CONFIDENCE_THRESHOLDS.SIMILAR)) return null;
 
-    const initialConfidence = this.calculateInitialConfidence(params);
+    const initialConfidence = params.confidence ?? this.calculateInitialConfidence(params);
     if (initialConfidence < this.config.minConfidenceForCreation) return null;
 
     const scopeType: ScopeType = params.scopeType ?? 'project';
@@ -697,7 +698,7 @@ export class LearningPipeline {
     toolName: string; success: boolean;
     errorDetails?: { message?: string };
   }): void {
-    const windowSize = 20;
+    const windowSize = this.config?.batchSize ? this.config.batchSize * 2 : 20;
 
     this.recentObservations.push({
       toolName: obs.toolName,
@@ -925,7 +926,7 @@ export class LearningPipeline {
     const instinct = this.createInstinct({
       name: `teaching:explicit:${Date.now()}`,
       type: 'user_teaching',
-      status: 'proposed',
+      status: 'active',
       confidence: 0.7,
       triggerPattern: this.sanitizePattern(content),
       action: content,
@@ -939,12 +940,25 @@ export class LearningPipeline {
    * Record a user correction and consider creating an instinct from it.
    */
   async recordCorrection(params: CorrectionRecord): Promise<void> {
-    const confidence = params.source === 'natural_language' ? 0.5 : 0.3;
+    // Source-specific confidence: direct user feedback scores higher
+    const sourceBoost: Record<string, number> = {
+      button: 0.15,
+      reaction: 0.1,
+      natural_language: 0.05,
+      file_heuristic: 0.0,
+    };
+    const confidence = this.calculateInitialConfidence({
+      type: 'correction',
+      triggerPattern: this.sanitizePattern(params.corrected),
+      action: params.corrected,
+    }) + (sourceBoost[params.source] ?? 0);
+
     await this.considerInstinctCreation({
       type: 'correction',
       triggerPattern: this.sanitizePattern(params.corrected),
       action: params.corrected,
       scopeType: 'user',
+      confidence: Math.min(confidence, CONFIDENCE_THRESHOLDS.MAX_INITIAL),
     });
   }
 
