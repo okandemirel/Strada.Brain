@@ -105,7 +105,10 @@ describe("runtime paths", () => {
     expect(runtimePaths.configRoot).toBe(path.resolve("/Users/tester/original-launch-dir", "portable-strada-home"));
   });
 
-  it("resolves relative STRADA_HOME against the launch cwd even when cwd fallback is needed elsewhere", () => {
+  it("resolves relative STRADA_HOME against the launch cwd even when cwd fallback is needed elsewhere", ({ skip }) => {
+    // On Windows, path.resolve internally calls process.cwd() for drive letter
+    // resolution, so mocking cwd to throw also breaks path.resolve itself.
+    if (process.platform === "win32") skip();
     vi.spyOn(process, "cwd").mockImplementation(() => {
       throw new Error("cwd unavailable");
     });
