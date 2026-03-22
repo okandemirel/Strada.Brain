@@ -14,7 +14,7 @@
  * handles failures gracefully.
  */
 
-import type { GoalTree, GoalNode, GoalNodeId } from "./types.js";
+import type { GoalTree, GoalNode, GoalNodeId, ReviewStatus } from "./types.js";
 
 // =============================================================================
 // TYPES
@@ -53,6 +53,8 @@ export interface GoalExecutorConfig {
   parallelExecution: boolean;
   maxParallel: number;
   maxRedecompositions?: number;
+  /** Maximum review iterations before marking a node as review_stuck (default: 3) */
+  maxReviewIterations?: number;
 }
 
 /** Executes a single node's task. Injected by BackgroundExecutor. */
@@ -269,12 +271,14 @@ export class GoalExecutor {
         try {
           const result = await executor(mutableNodes.get(nodeId)!, signal);
 
-          // Success
+          // Success — mark completed and initiate review pipeline
           updateNode(nodeId, {
             status: "completed" as const,
             result,
             completedAt: Date.now(),
             retryCount,
+            reviewStatus: "spec_review" as ReviewStatus,
+            reviewIterations: 0,
           });
           completedIds.add(nodeId);
           results.push({ nodeId, task: node.task, result });

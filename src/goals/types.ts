@@ -28,6 +28,9 @@ export function generateGoalNodeId(): GoalNodeId {
 /** Lifecycle status of a goal node */
 export type GoalStatus = "pending" | "executing" | "completed" | "failed" | "skipped";
 
+/** Review pipeline status (additive; does not replace GoalStatus) */
+export type ReviewStatus = "none" | "spec_review" | "quality_review" | "review_passed" | "review_stuck";
+
 // =============================================================================
 // GOAL NODE & TREE
 // =============================================================================
@@ -48,6 +51,8 @@ export interface GoalNode {
   readonly completedAt?: number;
   readonly retryCount?: number;
   readonly redecompositionCount?: number;
+  readonly reviewStatus?: ReviewStatus;
+  readonly reviewIterations?: number;
 }
 
 /** A goal tree rooted at a single node */
@@ -212,5 +217,51 @@ export function parseLLMOutput(text: string): LLMDecompositionOutput | null {
     return result.data;
   } catch {
     return null;
+  }
+}
+
+// =============================================================================
+// REVIEW PIPELINE HELPERS
+// =============================================================================
+
+/**
+ * Check whether a goal node is truly done (terminal state).
+ * A completed node is only truly done if it has passed review.
+ * Failed and skipped nodes are terminal without review.
+ * Pending and executing nodes are never done.
+ */
+export function isNodeTrulyDone(node: GoalNode): boolean {
+  if (node.status === "completed") {
+    return (node.reviewStatus ?? "none") === "review_passed";
+  }
+  return node.status === "failed" || node.status === "skipped";
+}
+
+/**
+ * Compute the next review status given the current status, whether the
+ * review step passed, the current iteration count, and the maximum allowed.
+ *
+ * Transitions:
+ *   none          -> spec_review
+ *   spec_review   -> quality_review (passed) | spec_review (retry) | review_stuck (max)
+ *   quality_review -> review_passed (passed) | quality_review (retry) | review_stuck (max)
+ *   review_passed / review_stuck -> unchanged (terminal)
+ */
+export function getNextReviewStatus(
+  current: ReviewStatus,
+  passed: boolean,
+  iteration: number,
+  maxIterations: number,
+): ReviewStatus {
+  if (!passed && iteration >= maxIterations) return "review_stuck";
+  switch (current) {
+    case "none":
+      return "spec_review";
+    case "spec_review":
+      return passed ? "quality_review" : "spec_review";
+    case "quality_review":
+      return passed ? "review_passed" : "quality_review";
+    default:
+      return current;
   }
 }
