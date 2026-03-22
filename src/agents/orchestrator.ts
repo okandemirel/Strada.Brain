@@ -66,41 +66,21 @@ import {
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
 import {
-  buildClarificationReviewRequest,
-  CLARIFICATION_REVIEW_SYSTEM_PROMPT,
   COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
-  ControlLoopTracker,
-  decideInteractionBoundary,
   draftLooksLikeInternalPlanArtifact,
-  ExecutionJournal,
-  LOOP_RECOVERY_REVIEW_SYSTEM_PROMPT,
-  SelfVerification,
-  buildLoopRecoveryReviewRequest,
-  collectClarificationReviewEvidence,
   buildCompletionReviewStageRequest,
   buildCompletionReviewStageSystemPrompt,
   buildCompletionReviewSynthesisRequest,
-  finalizeVerifierPipelineReview,
   isTerminalFailureReport,
   parseCompletionReviewDecision,
   parseCompletionReviewStageResult,
-  parseClarificationReviewDecision,
-  parseLoopRecoveryReviewDecision,
   planVerifierPipeline,
-  sanitizeClarificationReviewDecision,
-  sanitizeLoopRecoveryReviewDecision,
-  shouldRunClarificationReview,
   InteractionPolicyStateMachine,
   userExplicitlyAskedForPlan,
   type CompletionReviewStageName,
   type CompletionReviewStageResult,
-  type ControlLoopGateKind,
-  type InteractionBoundaryDecision,
-  type LoopRecoveryBrief,
-  type LoopRecoveryReviewDecision,
   type VerifierPipelineResult,
 } from "./autonomy/index.js";
-import { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
 import { MUTATION_TOOLS, WRITE_OPERATIONS, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
 import {
@@ -188,7 +168,6 @@ import {
   buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
   resolveExecutionTraceSource as resolveExecutionTraceSourceModel,
   toExecutionPhase as toExecutionPhaseModel,
-  toPhaseOutcomeStatus as toPhaseOutcomeStatusModel,
   transitionToVerifierReplan as transitionToVerifierReplanModel,
 } from "./orchestrator-phase-telemetry.js";
 import {
@@ -197,7 +176,6 @@ import {
   type WorkerReviewFinding,
   type WorkerRunRequest,
   type WorkerRunResult,
-  type WorkerToolTrace,
   type WorkerVerificationResult,
   type WorkspaceLease,
 } from "./supervisor/supervisor-types.js";
@@ -219,14 +197,21 @@ import {
 } from "./orchestrator-supervisor-routing.js";
 import { SessionManager, type Session } from "./orchestrator-session-manager.js";
 import {
-  canInspectLocally as canInspectLocallyHelper,
   decideUserVisibleBoundary as decideUserVisibleBoundaryHelper,
   buildSafeVisibleFallbackFromDraft as buildSafeVisibleFallbackFromDraftHelper,
-  resolveDraftClarificationIntervention as resolveDraftClarificationInterventionHelper,
   resolveAskUserClarificationIntervention as resolveAskUserClarificationInterventionHelper,
   type ClarificationIntervention,
   type ClarificationContext,
 } from "./orchestrator-clarification.js";
+import {
+  handleBackgroundLoopRecovery as handleBackgroundLoopRecoveryPipeline,
+  resolveVerifierIntervention as resolveVerifierInterventionPipeline,
+  resolveDraftClarificationIntervention as resolveDraftClarificationInterventionPipeline,
+  resolveVisibleDraftDecision as resolveVisibleDraftDecisionPipeline,
+  reviewClarification as reviewClarificationPipeline,
+  type InterventionDeps,
+  type WorkerRunCollector,
+} from "./orchestrator-intervention-pipeline.js";
 import {
   buildSystemPromptWithContext as buildSystemPromptWithContextHelper,
   type ContextBuilderDeps,
@@ -282,31 +267,6 @@ interface ToolExecutionOptions {
 
 interface SelfManagedWriteReview {
   approved: boolean;
-  reason?: string;
-}
-
-interface VerifierIntervention {
-  kind: "approve" | "continue" | "replan";
-  gate?: string;
-  result: VerifierPipelineResult;
-}
-
-interface LoopRecoveryIntervention {
-  action: "none" | "continue" | "replan" | "blocked";
-  gate?: string;
-  message?: string;
-  summary?: string;
-}
-
-interface WorkerRunCollector {
-  toolTrace: WorkerToolTrace[];
-  childWorkerResults: WorkerRunResult[];
-  verifierResult?: VerifierPipelineResult;
-  touchedFiles?: readonly string[];
-  finalVisibleResponse?: string;
-  finalSummary?: string;
-  lastAssignment?: SupervisorAssignment;
-  status?: WorkerRunResult["status"];
   reason?: string;
 }
 
@@ -794,10 +754,6 @@ export class Orchestrator {
     return toExecutionPhaseModel(phase);
   }
 
-  private toPhaseOutcomeStatus(decision: "approve" | "continue" | "replan"): PhaseOutcomeStatus {
-    return toPhaseOutcomeStatusModel(decision);
-  }
-
   private transitionToVerifierReplan(
     state: AgentState,
     reflectionText?: string | null,
@@ -962,7 +918,7 @@ export class Orchestrator {
       const synthesizedText = this.stripInternalDecisionMarkers(synthesisResponse.text).trim();
       const visibleText = synthesizedText
         ? applyVisibleResponseContract(params.prompt, synthesizedText)
-        : this.buildSafeVisibleFallbackFromDraft(
+        : buildSafeVisibleFallbackFromDraftHelper(
             params.prompt,
             cleanedDraft,
             params.strategy.task,
@@ -999,7 +955,7 @@ export class Orchestrator {
           failureReason: cleanedDraft,
         }),
       });
-      return this.buildSafeVisibleFallbackFromDraft(
+      return buildSafeVisibleFallbackFromDraftHelper(
         params.prompt,
         cleanedDraft,
         params.strategy.task,
@@ -1112,7 +1068,7 @@ export class Orchestrator {
           usage: synthesisResponse.usage,
         }),
       });
-      return this.buildSafeVisibleFallbackFromDraft(
+      return buildSafeVisibleFallbackFromDraftHelper(
         params.prompt,
         this.stripInternalDecisionMarkers(synthesisResponse.text) || rawDraft,
         strategy.task,
@@ -1131,7 +1087,7 @@ export class Orchestrator {
           failureReason: rawDraft,
         }),
       });
-      return this.buildSafeVisibleFallbackFromDraft(params.prompt, rawDraft, strategy.task);
+      return buildSafeVisibleFallbackFromDraftHelper(params.prompt, rawDraft, strategy.task);
     }
   }
 
@@ -1316,112 +1272,29 @@ export class Orchestrator {
     };
   }
 
-  private canInspectLocally(
-    prompt: string,
-    task: TaskClassification,
-    availableToolNames: readonly string[],
-  ): boolean {
-    return canInspectLocallyHelper(this.getClarificationContext(), prompt, task, availableToolNames);
-  }
-
-  private decideUserVisibleBoundary(params: {
-    chatId: string;
-    prompt: string;
-    workerDraft: string;
-    visibleDraft?: string;
-    task: TaskClassification;
-    state: AgentState;
-    selfVerification: SelfVerification;
-    taskStartedAtMs: number;
-    availableToolNames: readonly string[];
-    terminalFailureReported?: boolean;
-  }): InteractionBoundaryDecision {
-    return decideUserVisibleBoundaryHelper(this.getClarificationContext(), params);
-  }
-
-  private buildSafeVisibleFallbackFromDraft(
-    prompt: string,
-    draft: string,
-    task: TaskClassification,
-    allowDirectFinalAnswer = true,
-  ): string {
-    return buildSafeVisibleFallbackFromDraftHelper(prompt, draft, task, allowDirectFinalAnswer);
-  }
-
-  private async resolveVisibleDraftDecision(params: {
-    chatId: string;
-    identityKey: string;
-    prompt: string;
-    draft: string;
-    agentState: AgentState;
-    strategy: SupervisorExecutionStrategy;
-    systemPrompt: string;
-    selfVerification: SelfVerification;
-    taskStartedAtMs: number;
-    availableToolNames: readonly string[];
-    terminalFailureReported?: boolean;
-    usageHandler?: (usage: TaskUsageEvent) => void;
-  }): Promise<InteractionBoundaryDecision> {
-    const cleanedDraft = this.stripInternalDecisionMarkers(params.draft).trim();
-    const explicitPlanReview = userExplicitlyAskedForPlan(params.prompt);
-
-    if (
-      explicitPlanReview &&
-      draftLooksLikeInternalPlanArtifact(cleanedDraft, {
-        toolNames: params.availableToolNames,
-      })
-    ) {
-      this.interactionPolicy.requirePlanReview(
-        params.chatId,
-        "user explicitly asked to review a plan first",
-        cleanedDraft,
-      );
-      return {
-        kind: "plan_review",
-        reason: "The user explicitly asked to review the plan before execution.",
-        visibleText: this.sessionManager.formatPlanReviewMessage(cleanedDraft),
-      };
-    }
-
-    const rawBoundary = this.decideUserVisibleBoundary({
-      chatId: params.chatId,
-      prompt: params.prompt,
-      workerDraft: cleanedDraft,
-      task: params.strategy.task,
-      state: params.agentState,
-      selfVerification: params.selfVerification,
-      taskStartedAtMs: params.taskStartedAtMs,
-      availableToolNames: params.availableToolNames,
-      terminalFailureReported: params.terminalFailureReported,
-    });
-    if (rawBoundary.kind !== "final_answer") {
-      return rawBoundary;
-    }
-
-    const visibleDraft = cleanedDraft
-      ? await this.synthesizeUserFacingResponse({
-          chatId: params.chatId,
-          identityKey: params.identityKey,
-          prompt: params.prompt,
-          draft: cleanedDraft,
-          agentState: params.agentState,
-          strategy: params.strategy,
-          systemPrompt: params.systemPrompt,
-          usageHandler: params.usageHandler,
-        })
-      : "";
-    return this.decideUserVisibleBoundary({
-      chatId: params.chatId,
-      prompt: params.prompt,
-      workerDraft: cleanedDraft,
-      visibleDraft,
-      task: params.strategy.task,
-      state: params.agentState,
-      selfVerification: params.selfVerification,
-      taskStartedAtMs: params.taskStartedAtMs,
-      availableToolNames: params.availableToolNames,
-      terminalFailureReported: params.terminalFailureReported,
-    });
+  private buildInterventionDeps(): InterventionDeps {
+    return {
+      getReviewerAssignment: (id, s) => this.getClarificationReviewAssignment(id, s),
+      classifyTask: (p) => this.taskClassifier.classify(p),
+      buildSupervisorRolePrompt: (s, a) => this.buildSupervisorRolePrompt(s, a),
+      systemPrompt: this.systemPrompt,
+      projectPath: this.projectPath,
+      clarificationContext: this.getClarificationContext(),
+      stripInternalDecisionMarkers: (t) => stripInternalDecisionMarkersHelper(t),
+      interactionPolicy: this.interactionPolicy,
+      formatPlanReviewMessage: (d) => this.sessionManager.formatPlanReviewMessage(d),
+      recordExecutionTrace: (p) => this.recordExecutionTrace(p as Parameters<typeof this.recordExecutionTrace>[0]),
+      recordAuxiliaryUsage: (n, u, h) => this.recordAuxiliaryUsage(n, u, h),
+      recordPhaseOutcome: (p) => this.recordPhaseOutcome(p as Parameters<typeof this.recordPhaseOutcome>[0]),
+      buildPhaseOutcomeTelemetry: (p) => this.buildPhaseOutcomeTelemetry(p),
+      recordRuntimeArtifactEvaluation: (p) => this.recordRuntimeArtifactEvaluation(p as Parameters<typeof this.recordRuntimeArtifactEvaluation>[0]),
+      getTaskRunId: () => this.getTaskExecutionContext()?.taskRunId,
+      synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
+      runCompletionReviewStages: (p) => this.runCompletionReviewStages(p),
+      executeToolCalls: (chatId, toolCalls, opts) => this.executeToolCalls(chatId, toolCalls, opts),
+      getLogRingBuffer: () => typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [],
+      buildStructuredProgressSignal: (prompt, title, signal, lang) => this.buildStructuredProgressSignal(prompt, title, signal, lang),
+    };
   }
 
   private getClarificationReviewAssignment(
@@ -1459,151 +1332,6 @@ export class Orchestrator {
     );
   }
 
-  private async reviewClarification(params: {
-    chatId: string;
-    identityKey: string;
-    prompt: string;
-    draft: string;
-    state: AgentState;
-    touchedFiles?: readonly string[];
-    strategy?: SupervisorExecutionStrategy;
-    usageHandler?: (usage: TaskUsageEvent) => void;
-  }): Promise<{
-    decision: ReturnType<typeof sanitizeClarificationReviewDecision>;
-    evidence: ReturnType<typeof collectClarificationReviewEvidence>;
-  }> {
-    const evidence = collectClarificationReviewEvidence({
-      prompt: params.prompt,
-      draft: params.draft,
-      state: params.state,
-      projectPath: this.projectPath,
-      touchedFiles: params.touchedFiles,
-    });
-    const reviewer = this.getClarificationReviewAssignment(params.identityKey, params.strategy);
-    const reviewTask = params.strategy?.task ?? this.taskClassifier.classify(params.prompt);
-    const reviewStrategy = params.strategy ?? {
-      task: reviewTask,
-      planner: reviewer,
-      executor: reviewer,
-      reviewer,
-      synthesizer: reviewer,
-      usesMultipleProviders: false,
-    };
-
-    try {
-      const reviewResponse = await reviewer.provider.chat(
-        `${this.systemPrompt}\n\n${CLARIFICATION_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(reviewStrategy, reviewer)}`,
-        [
-          {
-            role: "user",
-            content: buildClarificationReviewRequest(evidence),
-          },
-        ],
-        [],
-      );
-      this.recordExecutionTrace({
-        chatId: params.chatId,
-        identityKey: params.identityKey,
-        assignment: reviewer,
-        phase: "clarification-review",
-        source: "clarification-review",
-        task: reviewTask,
-      });
-      this.recordAuxiliaryUsage(reviewer.providerName, reviewResponse.usage, params.usageHandler);
-      const decision = sanitizeClarificationReviewDecision(
-        parseClarificationReviewDecision(reviewResponse.text),
-      );
-      this.recordPhaseOutcome({
-        chatId: params.chatId,
-        identityKey: params.identityKey,
-        assignment: reviewer,
-        phase: "clarification-review",
-        source: "clarification-review",
-        status:
-          decision?.decision === "ask_user"
-            ? "blocked"
-            : decision?.decision === "blocked"
-              ? "blocked"
-              : decision?.decision === "internal_continue"
-                ? "continued"
-                : "approved",
-        task: reviewTask,
-        reason: decision?.reason ?? "Clarification review completed.",
-        telemetry: this.buildPhaseOutcomeTelemetry({
-          usage: reviewResponse.usage,
-        }),
-      });
-      return { decision, evidence };
-    } catch (error) {
-      getLogger().warn("Clarification review provider failed", {
-        chatId: params.chatId,
-        provider: reviewer.providerName,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.recordPhaseOutcome({
-        chatId: params.chatId,
-        identityKey: params.identityKey,
-        assignment: reviewer,
-        phase: "clarification-review",
-        source: "clarification-review",
-        status: "failed",
-        task: reviewTask,
-        reason: "Clarification review provider failed; falling back to Strada-side decision.",
-        telemetry: this.buildPhaseOutcomeTelemetry({
-          failureReason: params.draft,
-        }),
-      });
-    }
-
-    return {
-      decision: evidence.canInspectLocally
-        ? {
-            decision: "internal_continue",
-            reason: "Strada still has a local inspection path and should continue internally.",
-            recommendedNextAction:
-              "Inspect local files, logs, tests, or runtime state before asking the user anything else.",
-          }
-        : {
-            decision: "blocked",
-            reason:
-              "External clarification is still required because no local inspection path remains.",
-            blockingType: "missing_external_info",
-            question: "Please share the missing external detail needed to continue.",
-          },
-      evidence,
-    };
-  }
-
-  private async resolveDraftClarificationIntervention(params: {
-    chatId: string;
-    identityKey: string;
-    prompt: string;
-    draft: string;
-    state: AgentState;
-    strategy?: SupervisorExecutionStrategy;
-    touchedFiles?: readonly string[];
-    usageHandler?: (usage: TaskUsageEvent) => void;
-  }): Promise<ClarificationIntervention> {
-    const cleanedDraft = this.stripInternalDecisionMarkers(params.draft);
-    if (!cleanedDraft) {
-      return { kind: "none" };
-    }
-    if (!shouldRunClarificationReview(cleanedDraft)) {
-      return { kind: "none" };
-    }
-
-    const reviewResult = await this.reviewClarification({
-      ...params,
-      draft: cleanedDraft,
-    });
-
-    return resolveDraftClarificationInterventionHelper(
-      this.getClarificationContext(),
-      params.draft,
-      reviewResult,
-    );
-  }
-
   private async resolveAskUserClarificationIntervention(params: {
     chatId: string;
     identityKey: string;
@@ -1631,10 +1359,10 @@ export class Orchestrator {
       .filter(Boolean)
       .join("\n");
 
-    const reviewResult = await this.reviewClarification({
+    const reviewResult = await reviewClarificationPipeline({
       ...params,
       draft,
-    });
+    }, this.buildInterventionDeps());
 
     return resolveAskUserClarificationInterventionHelper(
       this.getClarificationContext(),
@@ -2066,6 +1794,7 @@ export class Orchestrator {
           includeControlLoopTracker: true,
         });
         const controlLoopTracker = controlLoopTrackerOrNull!;
+        const interventionDeps = this.buildInterventionDeps();
         const progressTitle = prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task";
         const progressLanguage = (profile?.language ?? this.defaultLanguage) as ProgressLanguage;
         const taskStartedAtMs = Date.now();
@@ -2224,7 +1953,7 @@ export class Orchestrator {
 
                 if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
                   const clarificationIntervention =
-                    await this.resolveDraftClarificationIntervention({
+                    await resolveDraftClarificationInterventionPipeline({
                       chatId,
                       identityKey,
                       prompt,
@@ -2233,12 +1962,12 @@ export class Orchestrator {
                       strategy: executionStrategy,
                       touchedFiles: [...selfVerification.getState().touchedFiles],
                       usageHandler: options.onUsage ?? this.onUsage,
-                    });
+                    }, interventionDeps);
                   if (
                     clarificationIntervention.kind === "continue" &&
                     clarificationIntervention.gate
                   ) {
-                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
                       chatId,
                       identityKey,
                       prompt,
@@ -2259,7 +1988,7 @@ export class Orchestrator {
                       session,
                       workerCollector,
                       workspaceLease: options.workspaceLease,
-                    });
+                    }, interventionDeps);
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
                       return bgFinishBlocked(loopRecovery.message);
                     }
@@ -2314,7 +2043,7 @@ export class Orchestrator {
                     return bgFinishBlocked(clarificationIntervention.message);
                   }
 
-                  const rawBoundary = this.decideUserVisibleBoundary({
+                  const rawBoundary = decideUserVisibleBoundaryHelper(this.getClarificationContext(), {
                     chatId,
                     prompt,
                     workerDraft: response.text ?? "",
@@ -2326,7 +2055,7 @@ export class Orchestrator {
                     terminalFailureReported: isTerminalFailureReport(response.text),
                   });
                   if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
-                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
                       chatId,
                       identityKey,
                       prompt,
@@ -2347,7 +2076,7 @@ export class Orchestrator {
                       session,
                       workerCollector,
                       workspaceLease: options.workspaceLease,
-                    });
+                    }, interventionDeps);
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
                       return bgFinishBlocked(loopRecovery.message);
                     }
@@ -2416,7 +2145,7 @@ export class Orchestrator {
                     );
                   }
 
-                  const verifierIntervention = await this.resolveVerifierIntervention({
+                  const verifierIntervention = await resolveVerifierInterventionPipeline({
                     chatId,
                     identityKey,
                     prompt,
@@ -2428,7 +2157,7 @@ export class Orchestrator {
                     taskStartedAtMs,
                     availableToolNames: currentToolDefinitions.map((definition) => definition.name),
                     usageHandler: options.onUsage ?? this.onUsage,
-                  });
+                  }, interventionDeps);
                   if (workerCollector) {
                     workerCollector.verifierResult = verifierIntervention.result;
                   }
@@ -2453,7 +2182,7 @@ export class Orchestrator {
                         failureReason: verifierIntervention.result.summary,
                       }),
                     });
-                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
                       chatId,
                       identityKey,
                       prompt,
@@ -2474,7 +2203,7 @@ export class Orchestrator {
                       session,
                       workerCollector,
                       workspaceLease: options.workspaceLease,
-                    });
+                    }, interventionDeps);
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
                       return bgFinishBlocked(loopRecovery.message);
                     }
@@ -2522,7 +2251,7 @@ export class Orchestrator {
                     continue;
                   }
                   if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
                       chatId,
                       identityKey,
                       prompt,
@@ -2543,7 +2272,7 @@ export class Orchestrator {
                       session,
                       workerCollector,
                       workspaceLease: options.workspaceLease,
-                    });
+                    }, interventionDeps);
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
                       return bgFinishBlocked(loopRecovery.message);
                     }
@@ -2605,7 +2334,7 @@ export class Orchestrator {
                   if (workerCollector) {
                     workerCollector.lastAssignment = executionStrategy.synthesizer;
                   }
-                  const finalBoundary = this.decideUserVisibleBoundary({
+                  const finalBoundary = decideUserVisibleBoundaryHelper(this.getClarificationContext(), {
                     chatId,
                     prompt,
                     workerDraft: response.text ?? "",
@@ -2618,7 +2347,7 @@ export class Orchestrator {
                     terminalFailureReported: isTerminalFailureReport(response.text),
                   });
                   if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
-                    const loopRecovery = await this.handleBackgroundLoopRecovery({
+                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
                       chatId,
                       identityKey,
                       prompt,
@@ -2639,7 +2368,7 @@ export class Orchestrator {
                       session,
                       workerCollector,
                       workspaceLease: options.workspaceLease,
-                    });
+                    }, interventionDeps);
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
                       return bgFinishBlocked(loopRecovery.message);
                     }
@@ -2837,7 +2566,7 @@ export class Orchestrator {
                   return bgFinishBlocked(pendingWriteRejectionText);
                 }
 
-                const clarificationIntervention = await this.resolveDraftClarificationIntervention({
+                const clarificationIntervention = await resolveDraftClarificationInterventionPipeline({
                   chatId,
                   identityKey,
                   prompt,
@@ -2846,12 +2575,12 @@ export class Orchestrator {
                   strategy: executionStrategy,
                   touchedFiles: [...selfVerification.getState().touchedFiles],
                   usageHandler: options.onUsage ?? this.onUsage,
-                });
+                }, interventionDeps);
                 if (
                   clarificationIntervention.kind === "continue" &&
                   clarificationIntervention.gate
                 ) {
-                  const loopRecovery = await this.handleBackgroundLoopRecovery({
+                  const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
                     chatId,
                     identityKey,
                     prompt,
@@ -2872,7 +2601,7 @@ export class Orchestrator {
                     session,
                     workerCollector,
                     workspaceLease: options.workspaceLease,
-                  });
+                  }, interventionDeps);
                   if (loopRecovery.action === "blocked" && loopRecovery.message) {
                     return bgFinishBlocked(loopRecovery.message);
                   }
@@ -2942,7 +2671,7 @@ export class Orchestrator {
                   );
                 }
 
-                const rawBoundary = this.decideUserVisibleBoundary({
+                const rawBoundary = decideUserVisibleBoundaryHelper(this.getClarificationContext(), {
                   chatId,
                   prompt,
                   workerDraft: response.text ?? "",
@@ -2954,7 +2683,7 @@ export class Orchestrator {
                   terminalFailureReported: isTerminalFailureReport(response.text),
                 });
                 if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
-                  const loopRecovery = await this.handleBackgroundLoopRecovery({
+                  const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
                     chatId,
                     identityKey,
                     prompt,
@@ -2975,7 +2704,7 @@ export class Orchestrator {
                     session,
                     workerCollector,
                     workspaceLease: options.workspaceLease,
-                  });
+                  }, interventionDeps);
                   if (loopRecovery.action === "blocked" && loopRecovery.message) {
                     return bgFinishBlocked(loopRecovery.message);
                   }
@@ -3045,7 +2774,7 @@ export class Orchestrator {
                   );
                 }
 
-                const verifierIntervention = await this.resolveVerifierIntervention({
+                const verifierIntervention = await resolveVerifierInterventionPipeline({
                   chatId,
                   identityKey,
                   prompt,
@@ -3057,7 +2786,7 @@ export class Orchestrator {
                   taskStartedAtMs,
                   availableToolNames: currentToolDefinitions.map((definition) => definition.name),
                   usageHandler: options.onUsage ?? this.onUsage,
-                });
+                }, interventionDeps);
                 if (workerCollector) {
                   workerCollector.verifierResult = verifierIntervention.result;
                 }
@@ -3082,7 +2811,7 @@ export class Orchestrator {
                       failureReason: verifierIntervention.result.summary,
                     }),
                   });
-                  const loopRecovery = await this.handleBackgroundLoopRecovery({
+                  const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
                     chatId,
                     identityKey,
                     prompt,
@@ -3103,7 +2832,7 @@ export class Orchestrator {
                     session,
                     workerCollector,
                     workspaceLease: options.workspaceLease,
-                  });
+                  }, interventionDeps);
                   if (loopRecovery.action === "blocked" && loopRecovery.message) {
                     return bgFinishBlocked(loopRecovery.message);
                   }
@@ -3150,7 +2879,7 @@ export class Orchestrator {
                   continue;
                 }
                 if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-                  const loopRecovery = await this.handleBackgroundLoopRecovery({
+                  const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
                     chatId,
                     identityKey,
                     prompt,
@@ -3171,7 +2900,7 @@ export class Orchestrator {
                     session,
                     workerCollector,
                     workspaceLease: options.workspaceLease,
-                  });
+                  }, interventionDeps);
                   if (loopRecovery.action === "blocked" && loopRecovery.message) {
                     return bgFinishBlocked(loopRecovery.message);
                   }
@@ -3226,7 +2955,7 @@ export class Orchestrator {
                 if (workerCollector) {
                   workerCollector.lastAssignment = executionStrategy.synthesizer;
                 }
-                const finalBoundary = this.decideUserVisibleBoundary({
+                const finalBoundary = decideUserVisibleBoundaryHelper(this.getClarificationContext(), {
                   chatId,
                   prompt,
                   workerDraft: response.text ?? "",
@@ -3908,6 +3637,7 @@ export class Orchestrator {
       projectWorldSummary,
       projectWorldFingerprint,
     });
+    const interventionDeps = this.buildInterventionDeps();
     const taskStartedAtMs = Date.now();
     const buildInteractivePhaseOutcomeTelemetry = (params: {
       state?: AgentState;
@@ -4101,7 +3831,7 @@ export class Orchestrator {
           }
 
           if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-            const clarificationIntervention = await this.resolveDraftClarificationIntervention({
+            const clarificationIntervention = await resolveDraftClarificationInterventionPipeline({
               chatId,
               identityKey,
               prompt: lastUserMessage,
@@ -4110,7 +3840,7 @@ export class Orchestrator {
               strategy: executionStrategy,
               touchedFiles: [...selfVerification.getState().touchedFiles],
               usageHandler: this.onUsage,
-            });
+            }, interventionDeps);
             if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
               agentState = applyReflectionContinuation(agentState, response.text);
               if (response.text) {
@@ -4138,7 +3868,7 @@ export class Orchestrator {
               return;
             }
 
-            const verifierIntervention = await this.resolveVerifierIntervention({
+            const verifierIntervention = await resolveVerifierInterventionPipeline({
               chatId,
               identityKey,
               prompt: lastUserMessage,
@@ -4150,7 +3880,7 @@ export class Orchestrator {
               taskStartedAtMs,
               availableToolNames: currentToolDefinitions.map((definition) => definition.name),
               usageHandler: this.onUsage,
-            });
+            }, interventionDeps);
             executionJournal.recordVerifierResult(
               verifierIntervention.result,
               executionStrategy.reviewer.providerName,
@@ -4210,7 +3940,7 @@ export class Orchestrator {
               continue;
             }
 
-            const visibilityDecision = await this.resolveVisibleDraftDecision({
+            const visibilityDecision = await resolveVisibleDraftDecisionPipeline({
               chatId,
               identityKey,
               prompt: lastUserMessage,
@@ -4222,7 +3952,7 @@ export class Orchestrator {
               taskStartedAtMs,
               availableToolNames: currentToolDefinitions.map((definition) => definition.name),
               usageHandler: this.onUsage,
-            });
+            }, interventionDeps);
             if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
               if (response.text) {
                 session.messages.push({ role: "assistant", content: response.text });
@@ -4379,7 +4109,7 @@ export class Orchestrator {
 
           if (response.toolCalls.length === 0) {
             if (shouldSurfaceTerminalFailureFromReflection(response)) {
-              const visibilityDecision = await this.resolveVisibleDraftDecision({
+              const visibilityDecision = await resolveVisibleDraftDecisionPipeline({
                 chatId,
                 identityKey,
                 prompt: lastUserMessage,
@@ -4392,7 +4122,7 @@ export class Orchestrator {
                 availableToolNames: currentToolDefinitions.map((definition) => definition.name),
                 terminalFailureReported: true,
                 usageHandler: this.onUsage,
-              });
+              }, interventionDeps);
               if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
                 if (response.text) {
                   session.messages.push({ role: "assistant", content: response.text });
@@ -4565,7 +4295,7 @@ export class Orchestrator {
             return;
           }
 
-          const clarificationIntervention = await this.resolveDraftClarificationIntervention({
+          const clarificationIntervention = await resolveDraftClarificationInterventionPipeline({
             chatId,
             identityKey,
             prompt: lastUserMessage,
@@ -4574,7 +4304,7 @@ export class Orchestrator {
             strategy: executionStrategy,
             touchedFiles: [...selfVerification.getState().touchedFiles],
             usageHandler: this.onUsage,
-          });
+          }, interventionDeps);
           if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
@@ -4605,7 +4335,7 @@ export class Orchestrator {
           }
 
           // ─── Verification gate: catch unverified exits ──────────────────
-          const verifierIntervention = await this.resolveVerifierIntervention({
+          const verifierIntervention = await resolveVerifierInterventionPipeline({
             chatId,
             identityKey,
             prompt: lastUserMessage,
@@ -4617,7 +4347,7 @@ export class Orchestrator {
             taskStartedAtMs,
             availableToolNames: currentToolDefinitions.map((definition) => definition.name),
             usageHandler: this.onUsage,
-          });
+          }, interventionDeps);
           if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
             this.recordPhaseOutcome({
               chatId,
@@ -4708,7 +4438,7 @@ export class Orchestrator {
           // ────────────────────────────────────────────────────────────────
 
           if (response.text) {
-            const visibilityDecision = await this.resolveVisibleDraftDecision({
+            const visibilityDecision = await resolveVisibleDraftDecisionPipeline({
               chatId,
               identityKey,
               prompt: lastUserMessage,
@@ -4720,7 +4450,7 @@ export class Orchestrator {
               taskStartedAtMs,
               availableToolNames: currentToolDefinitions.map((definition) => definition.name),
               usageHandler: this.onUsage,
-            });
+            }, interventionDeps);
             if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
               session.messages.push({ role: "assistant", content: response.text });
               session.messages.push({ role: "user", content: visibilityDecision.gate });
@@ -5478,190 +5208,6 @@ export class Orchestrator {
     });
   }
 
-  private async resolveVerifierIntervention(params: {
-    chatId: string;
-    identityKey: string;
-    prompt: string;
-    state: AgentState;
-    draft: string | null | undefined;
-    selfVerification: SelfVerification;
-    stradaConformance: StradaConformanceGuard;
-    strategy: SupervisorExecutionStrategy;
-    taskStartedAtMs: number;
-    availableToolNames?: readonly string[];
-    usageHandler?: (usage: TaskUsageEvent) => void;
-  }): Promise<VerifierIntervention> {
-    const verificationState = params.selfVerification.getState();
-    const logEntries = typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [];
-    const buildVerificationGate = params.selfVerification.needsVerification()
-      ? params.selfVerification.getPrompt()
-      : null;
-    const conformanceGate = params.stradaConformance.getPrompt();
-    const plan = planVerifierPipeline({
-      prompt: params.prompt,
-      draft: params.draft ?? "",
-      state: params.state,
-      task: params.strategy.task,
-      verificationState,
-      buildVerificationGate,
-      conformanceGate,
-      logEntries,
-      chatId: params.chatId,
-      taskStartedAtMs: params.taskStartedAtMs,
-    });
-    const boundaryDecision = decideInteractionBoundary({
-      prompt: params.prompt,
-      workerDraft: params.draft ?? "",
-      visibleDraft: "",
-      task: params.strategy.task,
-      evidence: plan.evidence,
-      canInspectLocally: this.canInspectLocally(
-        params.prompt,
-        params.strategy.task,
-        params.availableToolNames ?? [],
-      ),
-      terminalFailureReported: isTerminalFailureReport(params.draft ?? ""),
-      availableToolNames: params.availableToolNames,
-    });
-    if (boundaryDecision.kind === "internal_continue" && boundaryDecision.gate) {
-      this.recordRuntimeArtifactEvaluation({
-        chatId: params.chatId,
-        taskRunId: this.getTaskExecutionContext()?.taskRunId,
-        decision: "continue",
-        summary: "The current draft still deflects execution back to the user.",
-        failureReason: params.draft,
-      });
-      return {
-        kind: "continue",
-        gate: boundaryDecision.gate,
-        result: {
-          decision: "continue",
-          gate: boundaryDecision.gate,
-          summary: "The current draft still deflects execution back to the user.",
-          checks: plan.checks,
-          evidence: plan.evidence,
-        },
-      };
-    }
-
-    if (!plan.reviewRequired) {
-      this.recordRuntimeArtifactEvaluation({
-        chatId: params.chatId,
-        taskRunId: this.getTaskExecutionContext()?.taskRunId,
-        decision: plan.initialDecision,
-        summary: plan.summary,
-        failureReason: params.draft,
-      });
-      return {
-        kind:
-          plan.initialDecision === "replan"
-            ? "replan"
-            : plan.initialDecision === "continue"
-              ? "continue"
-              : "approve",
-        gate: plan.gate,
-        result: {
-          decision: plan.initialDecision,
-          gate: plan.gate,
-          summary: plan.summary,
-          checks: plan.checks,
-          evidence: plan.evidence,
-        },
-      };
-    }
-
-    try {
-      const stagedReview = await this.runCompletionReviewStages({
-        chatId: params.chatId,
-        identityKey: params.identityKey,
-        prompt: params.prompt,
-        state: params.state,
-        draft: params.draft ?? "",
-        plan,
-        strategy: params.strategy,
-        usageHandler: params.usageHandler,
-      });
-      const result = finalizeVerifierPipelineReview(
-        plan,
-        stagedReview.decision,
-        params.draft,
-        stagedReview.stageResults,
-      );
-      this.recordPhaseOutcome({
-        chatId: params.chatId,
-        identityKey: params.identityKey,
-        assignment: params.strategy.reviewer,
-        phase: "completion-review",
-        source: "completion-review",
-        status: this.toPhaseOutcomeStatus(result.decision),
-        task: params.strategy.task,
-        reason: result.summary,
-        telemetry: this.buildPhaseOutcomeTelemetry({
-          usage: stagedReview.usage,
-          verifierDecision: result.decision,
-          state: params.state,
-          failureReason: params.draft,
-        }),
-      });
-      this.recordRuntimeArtifactEvaluation({
-        chatId: params.chatId,
-        taskRunId: this.getTaskExecutionContext()?.taskRunId,
-        decision: result.decision,
-        summary: result.summary,
-        failureReason: params.draft,
-      });
-      return {
-        kind:
-          result.decision === "replan"
-            ? "replan"
-            : result.decision === "continue"
-              ? "continue"
-              : "approve",
-        gate: result.gate,
-        result,
-      };
-    } catch (error) {
-      getLogger().warn("Completion review provider failed", {
-        chatId: params.chatId,
-        provider: params.strategy.reviewer.providerName,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.recordPhaseOutcome({
-        chatId: params.chatId,
-        identityKey: params.identityKey,
-        assignment: params.strategy.reviewer,
-        phase: "completion-review",
-        source: "completion-review",
-        status: "failed",
-        task: params.strategy.task,
-        reason: "Completion review provider failed; falling back to conservative verifier gate.",
-        telemetry: this.buildPhaseOutcomeTelemetry({
-          state: params.state,
-          failureReason: params.draft,
-        }),
-      });
-    }
-
-    const fallbackResult = finalizeVerifierPipelineReview(plan, null, params.draft);
-    this.recordRuntimeArtifactEvaluation({
-      chatId: params.chatId,
-      taskRunId: this.getTaskExecutionContext()?.taskRunId,
-      decision: fallbackResult.decision,
-      summary: fallbackResult.summary,
-      failureReason: params.draft,
-    });
-    return {
-      kind:
-        fallbackResult.decision === "replan"
-          ? "replan"
-          : fallbackResult.decision === "continue"
-            ? "continue"
-            : "approve",
-      gate: fallbackResult.gate,
-      result: fallbackResult,
-    };
-  }
-
   private buildStructuredProgressSignal(
     prompt: string,
     title: string,
@@ -5737,324 +5283,6 @@ export class Orchestrator {
     const command =
       typeof toolCall.input["command"] === "string" ? toolCall.input["command"].trim() : "";
     return /\b(?:test|build|check|lint|typecheck|verify|compile|playmode|editmode|smoke)\b/iu.test(command);
-  }
-
-  private selectLoopRecoveryDelegationTool(
-    availableToolNames: readonly string[] | undefined,
-    touchedFiles: readonly string[],
-  ): "delegate_analysis" | "delegate_code_review" | null {
-    if (!availableToolNames || availableToolNames.length === 0) {
-      return null;
-    }
-    if (touchedFiles.length > 0 && availableToolNames.includes("delegate_code_review")) {
-      return "delegate_code_review";
-    }
-    if (availableToolNames.includes("delegate_analysis")) {
-      return "delegate_analysis";
-    }
-    if (availableToolNames.includes("delegate_code_review")) {
-      return "delegate_code_review";
-    }
-    return null;
-  }
-
-  private async resolveLoopRecoveryReview(params: {
-    chatId: string;
-    identityKey: string;
-    brief: LoopRecoveryBrief;
-    strategy: SupervisorExecutionStrategy;
-    usageHandler?: (usage: TaskUsageEvent) => void;
-  }): Promise<LoopRecoveryReviewDecision> {
-    const reviewer = params.strategy.reviewer;
-    try {
-      const response = await reviewer.provider.chat(
-        LOOP_RECOVERY_REVIEW_SYSTEM_PROMPT,
-        [
-          {
-            role: "user",
-            content: buildLoopRecoveryReviewRequest(params.brief),
-          },
-        ],
-        [],
-      );
-      this.recordAuxiliaryUsage(reviewer.providerName, response.usage, params.usageHandler);
-      return sanitizeLoopRecoveryReviewDecision(
-        parseLoopRecoveryReviewDecision(response.text),
-      ) ?? { decision: "replan_local", reason: "Loop recovery review returned no usable decision." };
-    } catch (error) {
-      getLogger().warn("Loop recovery review provider failed", {
-        chatId: params.chatId,
-        provider: reviewer.providerName,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return { decision: "replan_local", reason: "Loop recovery review failed; falling back to local replanning." };
-    }
-  }
-
-  private isNovelLoopRecoveryAction(
-    decision: LoopRecoveryReviewDecision,
-    brief: LoopRecoveryBrief,
-  ): boolean {
-    const action = decision.recommendedNextAction?.trim().toLowerCase();
-    if (!action) {
-      return false;
-    }
-    if (brief.requiredActions.some((item) => item.toLowerCase() === action)) {
-      return false;
-    }
-    if (brief.recentToolSummaries.some((item) => item.toLowerCase().includes(action))) {
-      return false;
-    }
-    return true;
-  }
-
-  private buildLoopRecoveryGate(params: {
-    brief: LoopRecoveryBrief;
-    decision: LoopRecoveryReviewDecision;
-    delegatedSummary?: string;
-  }): string {
-    const lines = [
-      "[LOOP RECOVERY REQUIRED]",
-      "",
-      `Loop fingerprint: ${params.brief.fingerprint}`,
-      `Reason: ${params.decision.reason ?? params.brief.latestReason ?? "Repeated internal review loop detected."}`,
-    ];
-    if (params.delegatedSummary) {
-      lines.push(`Delegated diagnosis: ${params.delegatedSummary}`);
-    }
-    if (params.brief.requiredActions.length > 0) {
-      lines.push("Required verifier actions:");
-      for (const action of params.brief.requiredActions.slice(0, 4)) {
-        lines.push(`- ${action}`);
-      }
-    }
-    if (params.decision.recommendedNextAction) {
-      lines.push(`Next action: ${params.decision.recommendedNextAction}`);
-    }
-    lines.push("Do not repeat the same fingerprint without materially new evidence.");
-    return lines.join("\n");
-  }
-
-  private buildLoopRecoveryCheckpointMessage(params: {
-    prompt: string;
-    brief: LoopRecoveryBrief;
-    decision: LoopRecoveryReviewDecision;
-    touchedFiles: readonly string[];
-  }): string {
-    const title = params.prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task checkpoint";
-    const touched = params.touchedFiles.slice(0, 5).map((file) => `- ${file}`);
-    const progress = params.brief.recentUserFacingProgress.slice(-3).map((line) => `- ${line}`);
-    return [
-      `Blocked checkpoint: ${title}`,
-      "",
-      `Reason: ${params.decision.reason ?? params.brief.latestReason ?? "Repeated internal review loop detected."}`,
-      params.brief.verifierSummary ? `Verifier: ${params.brief.verifierSummary}` : "",
-      progress.length > 0 ? `Recent progress:\n${progress.join("\n")}` : "",
-      touched.length > 0 ? `Touched files:\n${touched.join("\n")}` : "",
-      "Stopped here to avoid growing the same control loop again.",
-    ].filter(Boolean).join("\n\n");
-  }
-
-  private async handleBackgroundLoopRecovery(params: {
-    chatId: string;
-    identityKey: string;
-    prompt: string;
-    title: string;
-    language?: ProgressLanguage;
-    state: AgentState;
-    strategy: SupervisorExecutionStrategy;
-    tracker: ControlLoopTracker;
-    executionJournal: ExecutionJournal;
-    kind: ControlLoopGateKind;
-    reason?: string;
-    gate?: string;
-    iteration: number;
-    availableToolNames?: readonly string[];
-    selfVerification: SelfVerification;
-    usageHandler?: (usage: TaskUsageEvent) => void;
-    onProgress: (message: TaskProgressUpdate) => void;
-    session: Session;
-    workerCollector?: WorkerRunCollector;
-    workspaceLease?: WorkspaceLease;
-  }): Promise<LoopRecoveryIntervention> {
-    const touchedFiles = [...params.selfVerification.getState().touchedFiles];
-    const trigger = params.tracker.recordGate({
-      kind: params.kind,
-      reason: params.reason,
-      gate: params.gate,
-      iteration: params.iteration,
-    });
-    if (!trigger) {
-      return { action: "none" };
-    }
-
-    const delegationTool = this.selectLoopRecoveryDelegationTool(
-      params.availableToolNames,
-      touchedFiles,
-    );
-    const brief = params.executionJournal.buildRecoveryBrief({
-      fingerprint: trigger.fingerprint,
-      latestReason: trigger.latestReason,
-      touchedFiles,
-      recoveryEpisode: trigger.recoveryEpisode + 1,
-      availableDelegations: delegationTool ? [delegationTool] : [],
-    });
-    const reviewDecision = await this.resolveLoopRecoveryReview({
-      chatId: params.chatId,
-      identityKey: params.identityKey,
-      brief,
-      strategy: params.strategy,
-      usageHandler: params.usageHandler,
-    });
-    const recoveryAttempt = params.tracker.markRecoveryAttempt(trigger.fingerprint);
-
-    let finalDecision = reviewDecision;
-    if (recoveryAttempt >= 2) {
-      finalDecision = {
-        decision: "blocked",
-        reason: reviewDecision.reason ?? "Repeated control-loop recovery attempts did not produce a clean path.",
-        summary: reviewDecision.summary,
-      };
-    } else if (recoveryAttempt >= 1 && delegationTool) {
-      finalDecision = {
-        ...reviewDecision,
-        decision:
-          delegationTool === "delegate_code_review"
-            ? "delegate_code_review"
-            : "delegate_analysis",
-      };
-    } else if (reviewDecision.decision === "continue_local" && !this.isNovelLoopRecoveryAction(reviewDecision, brief)) {
-      finalDecision = {
-        ...reviewDecision,
-        decision: "replan_local",
-        reason: reviewDecision.reason ?? "Suggested next action was not materially different from the repeated loop.",
-      };
-    }
-
-    if (finalDecision.decision === "delegate_analysis" || finalDecision.decision === "delegate_code_review") {
-      const toolName = finalDecision.decision === "delegate_code_review"
-        ? "delegate_code_review"
-        : "delegate_analysis";
-      if (params.availableToolNames?.includes(toolName)) {
-        params.onProgress(
-          this.buildStructuredProgressSignal(
-            params.prompt,
-            params.title,
-            {
-              kind: "delegation",
-              message: `Loop recovery delegation: ${toolName}`,
-              delegationType: toolName.replace(/^delegate_/, ""),
-              files: touchedFiles,
-            },
-            params.language,
-          ),
-        );
-        const delegatedTask =
-          finalDecision.delegationTask
-          ?? (
-            toolName === "delegate_code_review"
-              ? `Review the touched files and identify why the current verification loop is not closing cleanly.\nTouched files:\n${touchedFiles.join("\n") || "(none)"}`
-              : `Analyze the repeated control loop and identify the missing evidence or verification path.\nFingerprint: ${brief.fingerprint}\nVerifier memory: ${brief.verifierSummary ?? "(none)"}`
-          );
-        const toolCall: ToolCall = {
-          id: `loop-recovery-${randomUUID()}`,
-          name: toolName,
-          input: {
-            task: delegatedTask,
-            context: buildLoopRecoveryReviewRequest(brief),
-            mode: "sync",
-          },
-        };
-        const toolResults = await this.executeToolCalls(params.chatId, [toolCall], {
-          mode: "background",
-          taskPrompt: params.prompt,
-          sessionMessages: params.session.messages,
-          onUsage: params.usageHandler,
-          identityKey: params.identityKey,
-          strategy: params.strategy,
-          agentState: params.state,
-          touchedFiles,
-          workspaceLease: params.workspaceLease,
-        });
-        const toolResult = toolResults[0];
-        const delegatedWorkerResult = toolResult?.metadata?.["workerResult"] as WorkerRunResult | undefined;
-        if (toolResult) {
-          params.workerCollector?.toolTrace.push({
-            toolName: toolCall.name,
-            success: !(toolResult.isError ?? false),
-            summary: toolResult.content.slice(0, 200),
-            timestamp: Date.now(),
-            workspaceId: params.workspaceLease?.id,
-          });
-        }
-        if (delegatedWorkerResult) {
-          params.selfVerification.ingestWorkerResult(delegatedWorkerResult);
-          params.workerCollector?.childWorkerResults.push(delegatedWorkerResult);
-        }
-        params.executionJournal.recordDelegatedDiagnosis(
-          toolName.replace(/^delegate_/, ""),
-          toolResult?.content ?? delegatedWorkerResult?.finalSummary ?? "",
-        );
-        params.executionJournal.recordLoopRecoveryEpisode({
-          fingerprint: brief.fingerprint,
-          decision: finalDecision.decision,
-          summary: finalDecision.reason ?? "Delegated diagnosis requested.",
-        });
-        return {
-          action: "replan",
-          gate: this.buildLoopRecoveryGate({
-            brief,
-            decision: finalDecision,
-            delegatedSummary:
-              delegatedWorkerResult?.finalSummary
-              ?? toolResult?.content
-              ?? finalDecision.summary,
-          }),
-          summary: delegatedWorkerResult?.finalSummary ?? toolResult?.content ?? finalDecision.summary,
-        };
-      }
-      finalDecision = {
-        ...finalDecision,
-        decision: "replan_local",
-        reason: finalDecision.reason ?? "Delegation was requested but not available; falling back to local replanning.",
-      };
-    }
-
-    params.executionJournal.recordLoopRecoveryEpisode({
-      fingerprint: brief.fingerprint,
-      decision: finalDecision.decision ?? "replan_local",
-      summary: finalDecision.reason ?? "Loop recovery requested a different path.",
-    });
-
-    if (finalDecision.decision === "blocked") {
-      return {
-        action: "blocked",
-        message: this.buildLoopRecoveryCheckpointMessage({
-          prompt: params.prompt,
-          brief,
-          decision: finalDecision,
-          touchedFiles,
-        }),
-      };
-    }
-
-    if (finalDecision.decision === "continue_local") {
-      return {
-        action: "continue",
-        gate: this.buildLoopRecoveryGate({
-          brief,
-          decision: finalDecision,
-        }),
-      };
-    }
-
-    return {
-      action: "replan",
-      gate: this.buildLoopRecoveryGate({
-        brief,
-        decision: finalDecision,
-      }),
-    };
   }
 
   private resolveCompletionReviewStageAssignment(
