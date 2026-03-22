@@ -84,6 +84,7 @@ interface GoalResultSynthesizer {
     chatId: string;
     conversationId?: string;
     userId?: string;
+    channelType?: string;
     onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
     childWorkerResults?: readonly WorkerRunResult[];
   }) => Promise<string>;
@@ -857,6 +858,7 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
           chatId: task.chatId,
           conversationId: task.conversationId,
           userId: task.userId,
+          channelType: task.channelType,
           onUsage: this.buildUsageRecorder(task),
           childWorkerResults: allChildWorkerResults,
         });

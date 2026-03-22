@@ -1015,10 +1015,11 @@ export class Orchestrator {
     chatId: string;
     conversationId?: string;
     userId?: string;
+    channelType?: string;
     onUsage?: (usage: TaskUsageEvent) => void;
     childWorkerResults?: readonly WorkerRunResult[];
   }): Promise<string> {
-    const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId);
+    const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId, this.userProfileStore, params.channelType);
     const fallbackProvider = this.providerManager.getProvider(identityKey);
     const strategy = this.buildSupervisorExecutionStrategy(
       params.prompt,
@@ -1855,7 +1856,7 @@ export class Orchestrator {
    */
   async handleMessage(msg: IncomingMessage): Promise<void> {
     const { chatId } = msg;
-    const identityKey = resolveIdentityKey(chatId, msg.userId, msg.conversationId);
+    const identityKey = resolveIdentityKey(chatId, msg.userId, msg.conversationId, this.userProfileStore, msg.channelType);
     const existingTaskContext = this.getTaskExecutionContext();
     const taskRunId = existingTaskContext?.taskRunId ?? `taskrun_${randomUUID()}`;
     const taskContext: TaskExecutionContext = {
@@ -2001,7 +2002,7 @@ export class Orchestrator {
       options as BackgroundTaskOptions & { __workerMode?: ToolExecutionMode }
     ).__workerMode ?? "background";
     const conversationScope = resolveConversationScope(chatId, options.conversationId);
-    const identityKey = resolveIdentityKey(chatId, options.userId, options.conversationId);
+    const identityKey = resolveIdentityKey(chatId, options.userId, options.conversationId, this.userProfileStore, options.channelType);
     const taskRunId =
       options.taskRunId?.trim() ||
       this.getTaskExecutionContext()?.taskRunId ||
@@ -4107,7 +4108,7 @@ export class Orchestrator {
 
     this.metrics?.recordMessage();
     this.metrics?.setActiveSessions(this.sessions.size);
-    const identityKey = resolveIdentityKey(chatId, userId, conversationId);
+    const identityKey = resolveIdentityKey(chatId, userId, conversationId, this.userProfileStore, msg.channelType);
     const clearedPlanReview = this.interactionPolicy.noteUserMessage(chatId, text);
     if (clearedPlanReview) {
       logger.info("Cleared pending plan review after explicit user approval", {
@@ -4257,7 +4258,7 @@ export class Orchestrator {
   ): Promise<void> {
     const logger = getLogger();
     const conversationScope = resolveConversationScope(chatId, conversationId);
-    const identityKey = resolveIdentityKey(chatId, userId, conversationId);
+    const identityKey = resolveIdentityKey(chatId, userId, conversationId, this.userProfileStore, channelType);
     const fallbackProvider = this.providerManager.getProvider(identityKey);
 
     // Load user profile once for the entire agent loop
@@ -6923,7 +6924,7 @@ export class Orchestrator {
     options: ToolExecutionOptions,
     input: Record<string, unknown>,
   ): Promise<SelfManagedWriteReview> {
-    const identityKey = resolveIdentityKey(chatId, options.userId);
+    const identityKey = resolveIdentityKey(chatId, options.userId, undefined, this.userProfileStore);
     const provider = this.providerManager.getProvider(identityKey);
     const taskPrompt = this.normalizeInteractiveText(options.taskPrompt);
     const recentContext = this.summarizeMessagesForShellReview(options.sessionMessages);
@@ -7749,10 +7750,11 @@ export class Orchestrator {
     chatId: string;
     userId?: string;
     conversationId?: string;
+    channelType?: string;
     sinceTimestamp?: number;
     taskRunId?: string;
   }): Promise<TrajectoryReplayContext | null> {
-    const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId);
+    const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId, this.userProfileStore, params.channelType);
     const taskExecutionMemory = this.taskExecutionStore?.getMemory(identityKey) ?? null;
     const exactReplayMatch = params.taskRunId
       ? (this.trajectoryReplayRetriever?.getReplayContextForTaskRun({

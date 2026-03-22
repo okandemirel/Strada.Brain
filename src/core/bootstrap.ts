@@ -668,6 +668,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
                   chatId: msg.chatId,
                   userId: msg.userId,
                   conversationId: msg.conversationId,
+                  channelType: msg.channelType,
                   sinceTimestamp: learningResult.taskPlanner.getTaskStartedAt() ?? undefined,
                   taskRunId,
                 }),

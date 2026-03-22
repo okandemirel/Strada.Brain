@@ -90,6 +90,7 @@ export function wireMessageHandler(
                 chatId: msg.chatId,
                 userId: msg.userId,
                 conversationId: msg.conversationId,
+                channelType: msg.channelType,
                 sinceTimestamp: taskPlanner.getTaskStartedAt() ?? undefined,
                 taskRunId,
               }),
