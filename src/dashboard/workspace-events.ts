@@ -57,12 +57,27 @@ export interface WorkspaceEventMap {
     timestamp: number
   }
 
-  // === Canvas events (Phase 4 — stub payloads) ===
-  'canvas:shapes_add': unknown
-  'canvas:shapes_update': unknown
-  'canvas:shapes_remove': unknown
-  'canvas:viewport': unknown
-  'canvas:arrange': unknown
+  // === Canvas events (Phase 4 — typed payloads) ===
+  'canvas:shapes_add': {
+    shapes: Array<{ type: string; id: string; props: Record<string, unknown> }>
+    layout?: 'auto' | 'grid' | 'tree' | 'flow'
+  }
+  'canvas:shapes_update': {
+    shapes: Array<{ id: string; props: Record<string, unknown> }>
+  }
+  'canvas:shapes_remove': {
+    shapeIds: string[]
+  }
+  'canvas:viewport': {
+    x: number; y: number; zoom: number
+  }
+  'canvas:arrange': {
+    layout: 'auto' | 'grid' | 'tree' | 'flow'
+  }
+
+  // === Canvas client-to-server events (Phase 4) ===
+  'canvas:user_shapes': { snapshot: string }
+  'canvas:save': { sessionId: string }
 
   // === Code events (Phase 5 — stub payloads) ===
   'code:file_open': unknown

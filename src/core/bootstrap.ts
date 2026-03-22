@@ -75,6 +75,8 @@ import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bus.js";
 import { createLearningWorkspaceBridge } from "../dashboard/learning-workspace-bridge.js";
 import { createMonitorBridge } from "../dashboard/monitor-bridge.js";
+import { CanvasStorage } from "../dashboard/canvas-storage.js";
+import Database from "better-sqlite3";
 
 // Auto-update imports
 import { ChannelActivityRegistry } from "./channel-activity-registry.js";
@@ -828,6 +830,21 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Wire workspace bus into dashboard for monitor REST endpoints (Phase 3)
   if (dashboard) {
     dashboard.setWorkspaceBus(workspaceBus);
+  }
+
+  // Wire canvas storage into dashboard for canvas REST endpoints (Phase 4)
+  if (dashboard) {
+    try {
+      const canvasDbPath = join(config.memory.dbPath, "canvas.db");
+      const canvasDb = new Database(canvasDbPath);
+      const canvasStorage = new CanvasStorage(canvasDb);
+      dashboard.setCanvasStorage(canvasStorage);
+      logger.info("Canvas storage initialized", { path: canvasDbPath });
+    } catch (error) {
+      logger.warn("Canvas storage initialization failed, canvas endpoints degraded", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   // Wire incoming workspace commands from the frontend into the workspace bus

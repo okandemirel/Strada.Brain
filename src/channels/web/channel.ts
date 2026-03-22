@@ -778,7 +778,10 @@ export class WebChannel
       case "monitor:skip_task":
       case "monitor:cancel_task":
       case "monitor:approve_gate":
-      case "monitor:reject_gate": {
+      case "monitor:reject_gate":
+      // Canvas commands from frontend (Phase 4)
+      case "canvas:user_shapes":
+      case "canvas:save": {
         if (this.workspaceBusEmitter) {
           this.workspaceBusEmitter(data.type as string, data);
         }
@@ -936,6 +939,7 @@ export class WebChannel
       pathOnly.startsWith("/api/agent-metrics") ||
       pathOnly.startsWith("/api/triggers") ||
       pathOnly.startsWith("/api/personality/profiles/") ||
+      pathOnly.startsWith("/api/canvas") ||
       pathOnly === "/api/providers/available" ||
       pathOnly === "/api/providers/active" ||
       pathOnly === "/api/user/autonomous" ||
@@ -947,12 +951,13 @@ export class WebChannel
       return;
     }
 
-    // Method check: GET always allowed, POST/DELETE only for mutable paths
+    // Method check: GET always allowed, POST/DELETE/PUT only for mutable paths
     const isMutable =
       WebChannel.MUTABLE_PROXY_PATHS.has(pathOnly) ||
       pathOnly.startsWith("/api/personality/profiles/") ||
+      pathOnly.startsWith("/api/canvas") ||
       pathOnly === "/api/models/refresh";
-    if (method !== "GET" && !(isMutable && (method === "POST" || method === "DELETE"))) {
+    if (method !== "GET" && !(isMutable && (method === "POST" || method === "DELETE" || method === "PUT"))) {
       res.writeHead(405, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Method Not Allowed" }));
       return;
@@ -1004,7 +1009,7 @@ export class WebChannel
         headers: proxyHeaders,
         cache: "no-store",
       };
-      if (method === "POST" || method === "DELETE") {
+      if (method === "POST" || method === "DELETE" || method === "PUT") {
         fetchOpts.headers = { ...proxyHeaders, "Content-Type": "application/json" };
         const bodyChunks: Buffer[] = [];
         let bodySize = 0;

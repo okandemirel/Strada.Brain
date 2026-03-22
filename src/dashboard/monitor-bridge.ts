@@ -21,6 +21,11 @@ export function createMonitorBridge(
         'monitor:agent_activity',
         'monitor:gate_request',
         'monitor:dag_restructure',
+        'canvas:shapes_add',
+        'canvas:shapes_update',
+        'canvas:shapes_remove',
+        'canvas:viewport',
+        'canvas:arrange',
         'workspace:mode_suggest',
         'workspace:notification',
       ] as const

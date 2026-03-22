@@ -41,6 +41,8 @@ import type { AutoUpdater } from "../core/auto-updater.js";
 import { buildConfigCatalogEntries, summarizeConfigCatalog } from "../config/config-catalog.js";
 import { resolveAutonomousModeWithDefault } from "../memory/unified/user-profile-store.js";
 import { handleMonitorRoute, MonitorActivityLog } from "./monitor-routes.js";
+import { handleCanvasRoute } from "./canvas-routes.js";
+import type { CanvasStorage } from "./canvas-storage.js";
 import type { WorkspaceBus } from "./workspace-bus.js";
 
 /**
@@ -467,6 +469,9 @@ export class DashboardServer {
   private workspaceBus?: WorkspaceBus;
   private monitorActivityLog: MonitorActivityLog = new MonitorActivityLog();
 
+  // Canvas storage context (Phase 4)
+  private canvasStorage?: CanvasStorage;
+
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
 
@@ -650,6 +655,13 @@ export class DashboardServer {
         taskId?: string; action: string; tool?: string; detail: string; timestamp: number;
       });
     });
+  }
+
+  /**
+   * Register canvas storage for canvas REST endpoints (Phase 4).
+   */
+  setCanvasStorage(storage: CanvasStorage): void {
+    this.canvasStorage = storage;
   }
 
   private getAutonomousDefaults(): { enabled: boolean; hours: number } {
@@ -1864,6 +1876,15 @@ export class DashboardServer {
         const handled = handleMonitorRoute(
           url, req.method ?? "GET", req, res,
           this.goalStorage, this.workspaceBus, this.monitorActivityLog,
+        );
+        if (handled) return;
+      }
+
+      // Canvas endpoints (Phase 4 — workspace canvas panel)
+      if (url.startsWith("/api/canvas")) {
+        const handled = handleCanvasRoute(
+          url, req.method ?? "GET", req, res,
+          this.canvasStorage,
         );
         if (handled) return;
       }
