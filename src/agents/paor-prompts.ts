@@ -14,12 +14,15 @@ export function buildPlanningPrompt(
   const lines: string[] = [
     "## PLAN Phase",
     "",
+    "**Task type (identify before planning):** implementation | debugging | refactoring | explanation | Unity/ECS. Shape your approach accordingly.",
+    "",
     "Create a detailed numbered plan to accomplish the following task:",
     "",
     taskDescription,
     "",
     "Provide a clear, step-by-step PLAN with numbered steps.",
     "Each step should be a concrete, actionable item.",
+    "Start with one sentence stating your approach before listing steps.",
     "",
     "### Verification Protocol",
     "- After editing code or config, run the most relevant verification available (for example dotnet_build, dotnet_test, shell-based build/test/lint/typecheck, or a runtime smoke).",
@@ -85,6 +88,10 @@ export function buildReflectionPrompt(state: AgentState): string {
   const failCount = state.stepResults.filter((s) => !s.success).length;
   lines.push(`Results: ${successCount} success, ${failCount} failures.`, "");
 
+  if (failCount > 0) {
+    lines.push("**Root cause:** For each FAIL above, state the root cause in one sentence.", "");
+  }
+
   // Consecutive error warning
   if (state.consecutiveErrors >= 3) {
     lines.push(
@@ -104,6 +111,8 @@ export function buildReflectionPrompt(state: AgentState): string {
   }
 
   lines.push(
+    "**Key insight from this iteration (one sentence):** What is the most important thing you learned?",
+    "",
     "Based on the results above, state your reasoning then end with EXACTLY one of these on its own line:",
     "- **CONTINUE** - proceed with the current plan",
     "- **REPLAN** - the current approach needs a new plan",
@@ -143,7 +152,8 @@ export function buildReplanningPrompt(state: AgentState): string {
   }
 
   lines.push(
-    "The previous approach did not work. Create a fundamentally different plan.",
+    "The previous approach did not work. In one sentence, state WHY it failed and what root cause must change.",
+    "Then create a fundamentally different plan that addresses that root cause.",
     "Avoid repeating any of the failed approaches listed above.",
     "Provide a new numbered plan with a different strategy.",
   );
@@ -167,6 +177,13 @@ export function buildExecutionContext(state: AgentState): string {
     "",
     `Current iteration: ${state.iteration}`,
   ];
+
+  if (state.lastReflection) {
+    const reflection = state.lastReflection.length > 800
+      ? state.lastReflection.slice(0, 800) + "..."
+      : state.lastReflection;
+    lines.push("", "### Last Reflection", "", reflection);
+  }
 
   return lines.join("\n");
 }

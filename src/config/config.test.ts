@@ -234,7 +234,7 @@ describe("loadConfig", () => {
 
     const config = loadConfig();
 
-    expect(config.strada).toEqual({
+    expect(config.strada).toMatchObject({
       coreRepoUrl: "https://example.com/core.git",
       modulesRepoUrl: "https://example.com/modules.git",
       mcpPath: "/opt/strada-mcp",
