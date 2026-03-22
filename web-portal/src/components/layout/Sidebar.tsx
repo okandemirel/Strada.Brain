@@ -9,6 +9,7 @@ import { useSidebarStore } from '../../stores/sidebar-store'
 import { useWorkspaceStore, type WorkspaceMode } from '../../stores/workspace-store'
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import AdminDropdown from './AdminDropdown'
+import MiniChat from '../workspace/MiniChat'
 
 interface ModeButton {
   mode: WorkspaceMode
@@ -98,6 +99,9 @@ export default function Sidebar() {
       <div className="px-2">
         <AdminDropdown collapsed={collapsed} />
       </div>
+
+      {/* Mini chat — only when expanded */}
+      {!collapsed && <MiniChat />}
 
       {/* Spacer */}
       <div className="flex-1" />
