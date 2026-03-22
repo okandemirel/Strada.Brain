@@ -72,10 +72,8 @@ import {
   ControlLoopTracker,
   decideInteractionBoundary,
   draftLooksLikeInternalPlanArtifact,
-  ErrorRecoveryEngine,
   ExecutionJournal,
   LOOP_RECOVERY_REVIEW_SYSTEM_PROMPT,
-  TaskPlanner,
   SelfVerification,
   buildLoopRecoveryReviewRequest,
   collectClarificationReviewEvidence,
@@ -183,6 +181,7 @@ import {
 } from "./orchestrator-loop-utils.js";
 import { runConsensusVerification } from "./orchestrator-consensus.js";
 import { trackAndRecordToolResults } from "./orchestrator-tool-execution.js";
+import { createAutonomyBundle } from "./orchestrator-autonomy-tracker.js";
 import {
   buildExecutionTraceRecord,
   buildPhaseOutcomeRecord,
@@ -2051,22 +2050,24 @@ export class Orchestrator {
         // ────────────────────────────────────────────────────────────────
 
         // Autonomy layer
-        const errorRecovery = new ErrorRecoveryEngine();
-        const taskPlanner = new TaskPlanner({
+        const {
+          errorRecovery,
+          taskPlanner,
+          selfVerification,
+          executionJournal,
+          controlLoopTracker: controlLoopTrackerOrNull,
+          stradaConformance,
+        } = createAutonomyBundle({
+          prompt,
           iterationBudget: this.getBackgroundEpochIterationLimit(),
+          stradaDeps: this.stradaDeps,
+          projectWorldSummary: bgProjectWorldSummary,
+          projectWorldFingerprint: bgProjectWorldFingerprint,
+          includeControlLoopTracker: true,
         });
-        const selfVerification = new SelfVerification();
-        const executionJournal = new ExecutionJournal(prompt);
-        const controlLoopTracker = new ControlLoopTracker();
+        const controlLoopTracker = controlLoopTrackerOrNull!;
         const progressTitle = prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task";
         const progressLanguage = (profile?.language ?? this.defaultLanguage) as ProgressLanguage;
-        if (bgProjectWorldSummary && bgProjectWorldFingerprint) {
-          executionJournal.attachProjectWorldContext({
-            summary: bgProjectWorldSummary,
-            fingerprint: bgProjectWorldFingerprint,
-          });
-        }
-        const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
         const taskStartedAtMs = Date.now();
         const buildBgPhaseOutcomeTelemetry = (params: {
           state?: AgentState;
@@ -2078,7 +2079,6 @@ export class Orchestrator {
             ...params,
             projectWorldFingerprint: bgProjectWorldFingerprint,
           });
-        stradaConformance.trackPrompt(prompt);
         let toolTurnAffinity: SupervisorAssignment | null = null;
 
         const bgEpochIterationLimit = this.getBackgroundEpochIterationLimit();
@@ -3895,19 +3895,19 @@ export class Orchestrator {
 
     // ─── Autonomy layer ──────────────────────────────────────────────────
     const lastUserMessage = this.sessionManager.extractLastUserMessage(session);
-    const errorRecovery = new ErrorRecoveryEngine();
-    const taskPlanner = new TaskPlanner({
+    const {
+      errorRecovery,
+      taskPlanner,
+      selfVerification,
+      executionJournal,
+      stradaConformance,
+    } = createAutonomyBundle({
+      prompt: lastUserMessage,
       iterationBudget: this.getInteractiveIterationLimit(),
+      stradaDeps: this.stradaDeps,
+      projectWorldSummary,
+      projectWorldFingerprint,
     });
-    const selfVerification = new SelfVerification();
-    const executionJournal = new ExecutionJournal(lastUserMessage);
-    if (projectWorldSummary && projectWorldFingerprint) {
-      executionJournal.attachProjectWorldContext({
-        summary: projectWorldSummary,
-        fingerprint: projectWorldFingerprint,
-      });
-    }
-    const stradaConformance = new StradaConformanceGuard(this.stradaDeps);
     const taskStartedAtMs = Date.now();
     const buildInteractivePhaseOutcomeTelemetry = (params: {
       state?: AgentState;
@@ -3922,7 +3922,6 @@ export class Orchestrator {
     // ────────────────────────────────────────────────────────────────────
 
     // ─── PAOR State Machine ──────────────────────────────────────────────
-    stradaConformance.trackPrompt(lastUserMessage);
     let agentState = createInitialState(lastUserMessage);
     let executionStrategy = this.buildSupervisorExecutionStrategy(
       lastUserMessage,
