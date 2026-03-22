@@ -44,14 +44,7 @@ import {
   createInitialState,
   transitionPhase,
   type AgentState,
-  type StepResult,
 } from "./agent-state.js";
-import {
-  buildPlanningPrompt,
-  buildReflectionPrompt,
-  buildReplanningPrompt,
-  buildExecutionContext,
-} from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import { TeachingParser } from "../learning/feedback/teaching-parser.js";
@@ -69,7 +62,6 @@ import {
   type TaskConfig,
 } from "../config/config.js";
 import type { IEmbeddingProvider } from "../rag/rag.interface.js";
-import { shouldForceReplan } from "./failure-classifier.js";
 import {
   getRecommendedMaxMessages,
   type ModelIntelligenceLookup,
@@ -173,7 +165,6 @@ import {
   resolveIdentityKey,
 } from "./orchestrator-text-utils.js";
 import {
-  mergeLearnedInsights,
   normalizeFailureFingerprint,
   replaceSection,
   sanitizeEventInput,
@@ -181,6 +172,9 @@ import {
   shouldSurfaceTerminalFailureFromReflection,
 } from "./orchestrator-runtime-utils.js";
 import {
+  buildPhasePromptSection,
+  recordStepResultsAndCheckReflection,
+  buildToolResultContentBlocks,
   handlePlanPhaseTransition,
   processReflectionPreamble,
   applyReflectionContinuation,
@@ -2230,28 +2224,11 @@ export class Orchestrator {
               }
 
               // ─── PAOR: Build phase-aware system prompt ──────────────────────
-              let activePrompt = systemPrompt;
-              switch (bgAgentState.phase) {
-                case AgentPhase.PLANNING:
-                  activePrompt +=
-                    "\n\n" +
-                    buildPlanningPrompt(
-                      bgAgentState.taskDescription,
-                      mergeLearnedInsights(
-                        bgAgentState.learnedInsights,
-                        executionJournal.getLearnedInsights(),
-                      ),
-                      { enableGoalDetection: false }, // Background tasks don't spawn sub-goals
-                    );
-                  break;
-                case AgentPhase.EXECUTING:
-                  activePrompt += buildExecutionContext(bgAgentState);
-                  break;
-                case AgentPhase.REPLANNING:
-                  activePrompt += "\n\n" + buildReplanningPrompt(bgAgentState);
-                  break;
-              }
-              activePrompt += executionJournal.buildPromptSection(bgAgentState.phase);
+              let activePrompt = systemPrompt + buildPhasePromptSection(
+                bgAgentState,
+                executionJournal,
+                { enableGoalDetection: false },
+              );
               // ────────────────────────────────────────────────────────────────
 
               const currentAssignment = this.getPinnedToolTurnAssignment(
@@ -3741,72 +3718,34 @@ export class Orchestrator {
               // ────────────────────────────────────────────────────────────────────
 
               // ─── PAOR: Record step results ──────────────────────────────────
-              for (let i = 0; i < response.toolCalls.length; i++) {
-                const tc = response.toolCalls[i]!;
-                const tr = toolResults[i]!;
-                const stepResult: StepResult = {
-                  toolName: tc.name,
-                  success: !(tr.isError ?? false),
-                  summary: tr.content.slice(0, 200),
-                  timestamp: Date.now(),
-                };
-                bgAgentState = {
-                  ...bgAgentState,
-                  stepResults: [...bgAgentState.stepResults, stepResult],
-                  iteration: bgAgentState.iteration + 1,
-                  consecutiveErrors: tr.isError ? bgAgentState.consecutiveErrors + 1 : 0,
-                };
-              }
-
-              const hasErrors = toolResults.some((tr) => tr.isError);
-              const failedSteps = bgAgentState.stepResults.filter((s) => !s.success);
-              const shouldReflect =
-                hasErrors ||
-                (bgAgentState.stepResults.length > 0 &&
-                  bgAgentState.stepResults.length % BG_REFLECT_INTERVAL === 0) ||
-                shouldForceReplan(failedSteps);
-
-              if (shouldReflect && bgAgentState.phase === AgentPhase.EXECUTING) {
-                bgAgentState = transitionPhase(bgAgentState, AgentPhase.REFLECTING);
-                emitProgress(this.buildStructuredProgressSignal(
-                  prompt,
-                  progressTitle,
-                  {
-                    kind: "analysis",
-                    message: "Reflecting on progress...",
-                  },
-                  progressLanguage,
-                ));
+              {
+                const stepRecord = recordStepResultsAndCheckReflection({
+                  agentState: bgAgentState,
+                  toolCalls: response.toolCalls,
+                  toolResults,
+                  reflectInterval: BG_REFLECT_INTERVAL,
+                });
+                bgAgentState = stepRecord.agentState;
+                if (stepRecord.shouldReflect && bgAgentState.phase === AgentPhase.REFLECTING) {
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt,
+                    progressTitle,
+                    { kind: "analysis", message: "Reflecting on progress..." },
+                    progressLanguage,
+                  ));
+                }
               }
               // ────────────────────────────────────────────────────────────────
 
               // Add tool results
-              const stateCtx = taskPlanner.getStateInjection();
-              const contentBlocks: Array<
-                | { type: "text"; text: string }
-                | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
-              > = [];
-              if (stateCtx) {
-                contentBlocks.push({ type: "text" as const, text: stateCtx });
-              }
-              if (bgAgentState.phase === AgentPhase.REFLECTING) {
-                contentBlocks.push({
-                  type: "text" as const,
-                  text: buildReflectionPrompt(bgAgentState),
+              {
+                const stateCtx = taskPlanner.getStateInjection();
+                const contentBlocks = buildToolResultContentBlocks(stateCtx, bgAgentState, toolResults);
+                session.messages.push({
+                  role: "user",
+                  content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
                 });
               }
-              for (const tr of toolResults) {
-                contentBlocks.push({
-                  type: "tool_result" as const,
-                  tool_use_id: tr.toolCallId,
-                  content: tr.content,
-                  is_error: tr.isError,
-                });
-              }
-              session.messages.push({
-                role: "user",
-                content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
-              });
 
               // ─── Memory Re-retrieval (background path) ───────────────────────
               if (bgMemoryRefresher) {
@@ -4361,28 +4300,11 @@ export class Orchestrator {
         );
 
         // ─── PAOR: Build phase-aware system prompt ──────────────────────
-        let activePrompt = systemPrompt;
-        switch (agentState.phase) {
-          case AgentPhase.PLANNING:
-            activePrompt +=
-              "\n\n" +
-              buildPlanningPrompt(
-                agentState.taskDescription,
-                mergeLearnedInsights(
-                  agentState.learnedInsights,
-                  executionJournal.getLearnedInsights(),
-                ),
-                { enableGoalDetection: !!this.taskManager },
-              );
-            break;
-          case AgentPhase.EXECUTING:
-            activePrompt += buildExecutionContext(agentState);
-            break;
-          case AgentPhase.REPLANNING:
-            activePrompt += "\n\n" + buildReplanningPrompt(agentState);
-            break;
-        }
-        activePrompt += executionJournal.buildPromptSection(agentState.phase);
+        let activePrompt = systemPrompt + buildPhasePromptSection(
+          agentState,
+          executionJournal,
+          { enableGoalDetection: !!this.taskManager },
+        );
         // ────────────────────────────────────────────────────────────────
 
         const currentAssignment = this.getPinnedToolTurnAssignment(
@@ -5461,60 +5383,25 @@ export class Orchestrator {
         // ────────────────────────────────────────────────────────────────────
 
         // ─── PAOR: Record step results ──────────────────────────────────
-        for (let i = 0; i < response.toolCalls.length; i++) {
-          const tc = response.toolCalls[i]!;
-          const tr = toolResults[i]!;
-          const stepResult: StepResult = {
-            toolName: tc.name,
-            success: !(tr.isError ?? false),
-            summary: tr.content.slice(0, 200),
-            timestamp: Date.now(),
-          };
-          agentState = {
-            ...agentState,
-            stepResults: [...agentState.stepResults, stepResult],
-            iteration: agentState.iteration + 1,
-            consecutiveErrors: tr.isError ? agentState.consecutiveErrors + 1 : 0,
-          };
-        }
-
-        const hasErrors = toolResults.some((tr) => tr.isError);
-        const failedSteps = agentState.stepResults.filter((s) => !s.success);
-        const shouldReflect =
-          hasErrors ||
-          (agentState.stepResults.length > 0 &&
-            agentState.stepResults.length % REFLECT_INTERVAL === 0) ||
-          shouldForceReplan(failedSteps);
-
-        if (shouldReflect && agentState.phase === AgentPhase.EXECUTING) {
-          agentState = transitionPhase(agentState, AgentPhase.REFLECTING);
+        {
+          const stepRecord = recordStepResultsAndCheckReflection({
+            agentState,
+            toolCalls: response.toolCalls,
+            toolResults,
+            reflectInterval: REFLECT_INTERVAL,
+          });
+          agentState = stepRecord.agentState;
         }
         // ────────────────────────────────────────────────────────────────
 
         // Add tool results as a user message
-        // Build content blocks for tool results
-        const contentBlocks: Array<
-          | { type: "text"; text: string }
-          | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
-        > = [];
-        if (stateCtx) {
-          contentBlocks.push({ type: "text" as const, text: stateCtx });
-        }
-        if (agentState.phase === AgentPhase.REFLECTING) {
-          contentBlocks.push({ type: "text" as const, text: buildReflectionPrompt(agentState) });
-        }
-        for (const tr of toolResults) {
-          contentBlocks.push({
-            type: "tool_result" as const,
-            tool_use_id: tr.toolCallId,
-            content: tr.content,
-            is_error: tr.isError,
+        {
+          const contentBlocks = buildToolResultContentBlocks(stateCtx, agentState, toolResults);
+          session.messages.push({
+            role: "user",
+            content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
           });
         }
-        session.messages.push({
-          role: "user",
-          content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
-        });
 
         // ─── Memory Re-retrieval ─────────────────────────────────────────
         if (memoryRefresher) {

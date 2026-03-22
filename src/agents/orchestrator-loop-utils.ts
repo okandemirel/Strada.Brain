@@ -1,15 +1,24 @@
-import { AgentPhase, transitionPhase, type AgentState } from "./agent-state.js";
+import { AgentPhase, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
 import type { ExecutionJournal } from "./autonomy/execution-journal.js";
 import {
+  buildPlanningPrompt,
+  buildReflectionPrompt,
+  buildReplanningPrompt,
+  buildExecutionContext,
+} from "./paor-prompts.js";
+import {
   extractApproachSummary,
+  mergeLearnedInsights,
   parseReflectionDecision,
   validateReflectionDecision,
   type ReflectionDecision,
 } from "./orchestrator-runtime-utils.js";
+import { shouldForceReplan } from "./failure-classifier.js";
 import {
   transitionToVerifierReplan,
 } from "./orchestrator-phase-telemetry.js";
 import { getLogger } from "../utils/logger.js";
+import type { ToolCall, ToolResult } from "./providers/provider-core.interface.js";
 
 /** Shared parameter shape for functions that operate on a single PAOR loop step. */
 export interface LoopStepParams {
@@ -179,4 +188,132 @@ export function handleVerifierReplan(params: VerifierReplanParams): AgentState {
   });
 
   return transitionToVerifierReplan(agentState, responseText);
+}
+
+/**
+ * Builds the phase-aware prompt section appended to the system prompt.
+ * Identical logic in both loops; only `enableGoalDetection` differs.
+ */
+export function buildPhasePromptSection(
+  agentState: AgentState,
+  executionJournal: ExecutionJournal,
+  options: { enableGoalDetection: boolean },
+): string {
+  let section = "";
+
+  switch (agentState.phase) {
+    case AgentPhase.PLANNING:
+      section +=
+        "\n\n" +
+        buildPlanningPrompt(
+          agentState.taskDescription,
+          mergeLearnedInsights(
+            agentState.learnedInsights,
+            executionJournal.getLearnedInsights(),
+          ),
+          { enableGoalDetection: options.enableGoalDetection },
+        );
+      break;
+    case AgentPhase.EXECUTING:
+      section += buildExecutionContext(agentState);
+      break;
+    case AgentPhase.REPLANNING:
+      section += "\n\n" + buildReplanningPrompt(agentState);
+      break;
+  }
+
+  section += executionJournal.buildPromptSection(agentState.phase);
+
+  return section;
+}
+
+export interface RecordStepResultsParams {
+  agentState: AgentState;
+  toolCalls: readonly ToolCall[];
+  toolResults: readonly ToolResult[];
+  reflectInterval: number;
+}
+
+export interface RecordStepResultsResult {
+  agentState: AgentState;
+  shouldReflect: boolean;
+}
+
+/**
+ * Records tool execution results into agent state and determines whether
+ * the agent should transition to REFLECTING. If so, the returned state
+ * is already transitioned.
+ */
+export function recordStepResultsAndCheckReflection(
+  params: RecordStepResultsParams,
+): RecordStepResultsResult {
+  const { toolCalls, toolResults, reflectInterval } = params;
+  let { agentState } = params;
+
+  for (let i = 0; i < toolCalls.length; i++) {
+    const tc = toolCalls[i]!;
+    const tr = toolResults[i]!;
+    const stepResult: StepResult = {
+      toolName: tc.name,
+      success: !(tr.isError ?? false),
+      summary: tr.content.slice(0, 200),
+      timestamp: Date.now(),
+    };
+    agentState = {
+      ...agentState,
+      stepResults: [...agentState.stepResults, stepResult],
+      iteration: agentState.iteration + 1,
+      consecutiveErrors: tr.isError ? agentState.consecutiveErrors + 1 : 0,
+    };
+  }
+
+  const hasErrors = toolResults.some((tr) => tr.isError);
+  const failedSteps = agentState.stepResults.filter((s) => !s.success);
+  const shouldReflect =
+    hasErrors ||
+    (agentState.stepResults.length > 0 &&
+      agentState.stepResults.length % reflectInterval === 0) ||
+    shouldForceReplan(failedSteps);
+
+  if (shouldReflect && agentState.phase === AgentPhase.EXECUTING) {
+    agentState = transitionPhase(agentState, AgentPhase.REFLECTING);
+  }
+
+  return { agentState, shouldReflect };
+}
+
+/** Content block type used in session messages. */
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
+
+/**
+ * Assembles the content blocks for the user message after tool execution:
+ * state injection context, reflection prompt (if reflecting), and tool results.
+ */
+export function buildToolResultContentBlocks(
+  stateCtx: string | null,
+  agentState: AgentState,
+  toolResults: readonly ToolResult[],
+): ContentBlock[] {
+  const contentBlocks: ContentBlock[] = [];
+
+  if (stateCtx) {
+    contentBlocks.push({ type: "text" as const, text: stateCtx });
+  }
+
+  if (agentState.phase === AgentPhase.REFLECTING) {
+    contentBlocks.push({ type: "text" as const, text: buildReflectionPrompt(agentState) });
+  }
+
+  for (const tr of toolResults) {
+    contentBlocks.push({
+      type: "tool_result" as const,
+      tool_use_id: tr.toolCallId,
+      content: tr.content,
+      is_error: tr.isError,
+    });
+  }
+
+  return contentBlocks;
 }
