@@ -13,27 +13,19 @@ export function createMonitorBridge(
 
   return {
     start() {
-      // Subscribe to all monitor events and forward to WS clients
-      const monitorEvents = [
+      // All workspace events forwarded to connected WS clients
+      const FORWARDED_EVENTS = [
         'monitor:dag_init',
         'monitor:task_update',
         'monitor:review_result',
         'monitor:agent_activity',
         'monitor:gate_request',
         'monitor:dag_restructure',
+        'workspace:mode_suggest',
+        'workspace:notification',
       ] as const
 
-      for (const event of monitorEvents) {
-        const handler = (payload: unknown) => {
-          broadcast(JSON.stringify({ type: event, payload, timestamp: Date.now() }))
-        }
-        workspaceBus.on(event, handler as any)
-        listeners.push(() => workspaceBus.off(event, handler as any))
-      }
-
-      // Also forward workspace meta events
-      const metaEvents = ['workspace:mode_suggest', 'workspace:notification'] as const
-      for (const event of metaEvents) {
+      for (const event of FORWARDED_EVENTS) {
         const handler = (payload: unknown) => {
           broadcast(JSON.stringify({ type: event, payload, timestamp: Date.now() }))
         }

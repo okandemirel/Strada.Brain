@@ -1,9 +1,18 @@
+export interface DagNodeShape {
+  id: string
+  task: string
+  status: string
+  reviewStatus: string
+  depth: number
+  dependsOn: string[]
+}
+
 export interface WorkspaceEventMap {
   [key: string]: unknown
   // === Monitor events (Phase 3 — full payloads) ===
   'monitor:dag_init': {
     rootId: string
-    nodes: Array<{ id: string; task: string; status: string; reviewStatus: string; depth: number; dependsOn: string[] }>
+    nodes: DagNodeShape[]
     edges: Array<{ source: string; target: string }>
   }
   'monitor:task_update': {
@@ -37,7 +46,7 @@ export interface WorkspaceEventMap {
   }
   'monitor:dag_restructure': {
     rootId: string
-    nodes: Array<{ id: string; task: string; status: string; reviewStatus: string; depth: number; dependsOn: string[] }>
+    nodes: DagNodeShape[]
     edges: Array<{ source: string; target: string }>
   }
   'monitor:gate_response': {

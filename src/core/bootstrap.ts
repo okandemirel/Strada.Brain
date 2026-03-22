@@ -808,6 +808,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       workspaceBus,
     );
     lwBridge.start();
+    stoppableServers.push(lwBridge);
   }
 
   // Monitor bridge: fan-out workspace events to all connected WS clients
@@ -817,6 +818,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       (msg: string) => (channel as any).broadcastRaw(msg),
     );
     monitorBridge.start();
+    stoppableServers.push(monitorBridge);
   }
 
   // Wire workspace bus into orchestrator + background executor for monitor events

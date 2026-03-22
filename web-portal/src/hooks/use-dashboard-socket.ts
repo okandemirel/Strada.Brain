@@ -56,7 +56,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
         monitor.addTask({
           id: node.id,
           nodeId: node.id,
-          title: node.title,
+          title: (node as any).title ?? (node as any).task ?? node.id,
           status: node.status,
           reviewStatus: node.reviewStatus,
           ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
@@ -85,6 +85,45 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     case 'workspace:mode_suggest': {
       const msg = data as unknown as WorkspaceModeSuggestMessage
       useWorkspaceStore.getState().suggestMode(msg.mode)
+      break
+    }
+
+    case 'monitor:gate_request': {
+      const payload = (data as any).payload ?? data
+      if (payload.nodeId) {
+        useMonitorStore.getState().updateTask(payload.nodeId, { reviewStatus: 'review_stuck' })
+      }
+      break
+    }
+
+    case 'monitor:review_result': {
+      const payload = (data as any).payload ?? data
+      if (payload.nodeId) {
+        useMonitorStore.getState().updateTask(payload.nodeId, {
+          reviewStatus: payload.passed ? 'passed' : 'failed',
+          ...(payload.reviewType === 'spec_review' ? { specReviewResult: payload } : {}),
+          ...(payload.reviewType === 'quality_review' ? { qualityReviewResult: payload } : {}),
+        })
+      }
+      break
+    }
+
+    case 'monitor:dag_restructure': {
+      const payload = (data as any).payload ?? data
+      const monitor = useMonitorStore.getState()
+      if (payload.nodes && payload.edges) {
+        monitor.setDAG({ nodes: payload.nodes, edges: payload.edges } as DagState)
+        for (const node of payload.nodes) {
+          monitor.addTask({
+            id: node.id,
+            nodeId: node.id,
+            title: (node as any).title ?? (node as any).task ?? node.id,
+            status: node.status,
+            reviewStatus: node.reviewStatus,
+            ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
+          })
+        }
+      }
       break
     }
 

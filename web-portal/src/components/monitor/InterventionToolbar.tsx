@@ -9,8 +9,9 @@ export default function InterventionToolbar() {
 
   const togglePause = () => {
     const type = paused ? 'monitor:resume' : 'monitor:pause'
-    sendRawJSON({ type })
-    setPaused(!paused)
+    if (sendRawJSON({ type })) {
+      setPaused(!paused)
+    }
   }
 
   return (

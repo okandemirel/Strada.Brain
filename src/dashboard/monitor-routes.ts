@@ -78,6 +78,7 @@ function readJsonBody<T>(
       bodyBytes += chunk.length
       if (bodyBytes > maxBytes) {
         aborted = true
+        req.on('error', () => {})
         req.destroy()
         jsonResponse(res, 413, { error: 'Request body too large' })
         resolve(null)
@@ -257,6 +258,7 @@ export function handleMonitorRoute(
   const taskDetailMatch = url.match(/^\/api\/monitor\/task\/([^/?]+)$/)
   if (method === 'GET' && taskDetailMatch) {
     const taskId = decodeURIComponent(taskDetailMatch[1]!)
+    if (taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
     if (!goalStorage) {
       jsonResponse(res, 404, { error: 'Goal storage not available' })
       return true
@@ -291,13 +293,14 @@ export function handleMonitorRoute(
   const approveMatch = url.match(/^\/api\/monitor\/task\/([^/?]+)\/approve$/)
   if (method === 'POST' && approveMatch) {
     const taskId = decodeURIComponent(approveMatch[1]!)
+    if (taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
     if (!workspaceBus) {
       jsonResponse(res, 503, { error: 'Workspace bus not available' })
       return true
     }
     void readJsonBody<{ rootId?: string }>(req, res).then((parsed) => {
       if (!parsed) return
-      workspaceBus.emit('monitor:gate_response' as any, {
+      workspaceBus.emit('monitor:gate_response', {
         nodeId: taskId,
         rootId: parsed.rootId ?? '',
         action: 'approve',
@@ -313,13 +316,14 @@ export function handleMonitorRoute(
   const skipMatch = url.match(/^\/api\/monitor\/task\/([^/?]+)\/skip$/)
   if (method === 'POST' && skipMatch) {
     const taskId = decodeURIComponent(skipMatch[1]!)
+    if (taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
     if (!workspaceBus) {
       jsonResponse(res, 503, { error: 'Workspace bus not available' })
       return true
     }
     void readJsonBody<{ rootId?: string }>(req, res).then((parsed) => {
       if (!parsed) return
-      workspaceBus.emit('monitor:gate_response' as any, {
+      workspaceBus.emit('monitor:gate_response', {
         nodeId: taskId,
         rootId: parsed.rootId ?? '',
         action: 'skip',
