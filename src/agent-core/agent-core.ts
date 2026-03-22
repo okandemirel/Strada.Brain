@@ -88,15 +88,21 @@ export class AgentCore {
       // 3. DECIDE — LLM reasoning
       this.lastReasoningMs = Date.now();
 
-      // Gather context
+      // Gather context — instinct insights are confidence-ranked by the retriever
       let learnedInsights: string[] = [];
       if (this.instinctRetriever) {
         try {
           const topSummary = ranked.slice(0, 3).map(o => o.summary).join("; ");
           const result = await this.instinctRetriever.getInsightsForTask(topSummary);
           learnedInsights = result.insights;
+          if (learnedInsights.length > 0) {
+            this.logger.debug("AgentCore: instinct insights retrieved", {
+              count: learnedInsights.length,
+              matchedIds: result.matchedInstinctIds.length,
+            });
+          }
         } catch {
-          // Non-fatal
+          // Non-fatal — continue without insights
         }
       }
 

@@ -1073,6 +1073,20 @@ export class DashboardServer {
         return;
       }
 
+      // GET /api/learning/decisions -- Learning intervention decision log (Pipeline v2)
+      if (req.method === "GET" && (url === "/api/learning/decisions" || url.startsWith("/api/learning/decisions?"))) {
+        try {
+          // Wire to actual storage when LearningStorage is available via DI
+          const decisions: unknown[] = [];
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ decisions }));
+        } catch (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Failed to fetch learning decisions" }));
+        }
+        return;
+      }
+
       // POST /api/deployment/check -- Trigger readiness check (Plan 25-03)
       if (url === "/api/deployment/check" && req.method === "POST") {
         if (!this.readinessChecker) {

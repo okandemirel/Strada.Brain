@@ -54,6 +54,9 @@ import {
 } from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
+import { TeachingParser } from "../learning/feedback/teaching-parser.js";
+import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
+import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
 import { MemoryRefresher } from "./memory-refresher.js";
 import {
   DEFAULT_INTERACTION_CONFIG,
@@ -472,6 +475,8 @@ export class Orchestrator {
   private readonly trajectoryReplayRetriever: TrajectoryReplayRetriever | null;
   private readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
   private readonly metricsRecorder: MetricsRecorder | null;
+  private readonly learningPipeline: LearningPipeline | null;
+  private readonly interventionEngine: InterventionEngine | null;
   /** Per-session matched instinct IDs for appliedInstinctIds attribution in tool:result events */
   private readonly currentSessionInstinctIds = new Map<string, string[]>();
   private readonly goalDecomposer: GoalDecomposer | null;
@@ -534,6 +539,8 @@ export class Orchestrator {
     trajectoryReplayRetriever?: TrajectoryReplayRetriever;
     eventEmitter?: IEventEmitter<LearningEventMap>;
     metricsRecorder?: MetricsRecorder;
+    learningPipeline?: LearningPipeline;
+    interventionEngine?: InterventionEngine;
     goalDecomposer?: GoalDecomposer;
     interruptedGoalTrees?: GoalTree[];
     getIdentityState?: () => IdentityState;
@@ -579,6 +586,8 @@ export class Orchestrator {
     this.trajectoryReplayRetriever = opts.trajectoryReplayRetriever ?? null;
     this.eventEmitter = opts.eventEmitter ?? null;
     this.metricsRecorder = opts.metricsRecorder ?? null;
+    this.learningPipeline = opts.learningPipeline ?? null;
+    this.interventionEngine = opts.interventionEngine ?? null;
     this.goalDecomposer = opts.goalDecomposer ?? null;
     for (const tree of opts.interruptedGoalTrees ?? []) {
       const existing = this.pendingResumeTrees.get(tree.sessionId) ?? [];
@@ -4158,6 +4167,20 @@ export class Orchestrator {
 
     await this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, text, userId);
 
+    // Teaching intent detection: explicit teaching from user (Learning Pipeline v2)
+    if (this.learningPipeline && TeachingParser.isTeachingIntent(text)) {
+      try {
+        const parsed = TeachingParser.parse(text);
+        const scope = parsed.scope ?? "user";
+        await this.learningPipeline.teachExplicit(parsed.content, scope, userId);
+        logger.debug("Teaching intent processed", { userId, scope, contentLength: parsed.content.length });
+      } catch (err) {
+        logger.warn("Teaching intent processing failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     // Add user message (with vision blocks if applicable)
     const provider = this.providerManager.getProvider(identityKey);
     const supportsVision = provider.capabilities.vision;
@@ -7153,6 +7176,31 @@ export class Orchestrator {
           isError: true,
         });
         continue;
+      }
+
+      // Intervention Engine: evaluate instincts before tool execution (Learning Pipeline v2)
+      if (this.interventionEngine) {
+        try {
+          // Retrieve relevant instincts from session context for this tool call
+          const sessionInstinctIds = this.currentSessionInstinctIds.get(chatId) ?? [];
+          if (sessionInstinctIds.length > 0 && this.instinctRetriever) {
+            const insightResult = await this.instinctRetriever.getInsightsForTask(
+              `tool:${activeToolCall.name}`,
+            );
+            // Instincts matched by the retriever are the best proxy for relevant instincts.
+            // Full instinct objects are not directly available here — log the evaluation attempt.
+            if (insightResult.matchedInstinctIds.length > 0) {
+              logger.debug("Intervention engine: instincts available for tool", {
+                tool: activeToolCall.name,
+                instinctCount: insightResult.matchedInstinctIds.length,
+              });
+            }
+          }
+        } catch (err) {
+          logger.debug("Intervention evaluation skipped", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
       logger.debug("Executing tool", {

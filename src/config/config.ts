@@ -312,7 +312,13 @@ export type EnvVarName =
   | "AUTO_UPDATE_AUTO_RESTART"
   | "TASK_MAX_CONCURRENT"
   | "TASK_MESSAGE_BURST_WINDOW_MS"
-  | "TASK_MESSAGE_BURST_MAX_MESSAGES";
+  | "TASK_MESSAGE_BURST_MAX_MESSAGES"
+
+  // Learning Pipeline v2
+  | "STRADA_CONFIDENCE_WEIGHTS"
+  | "STRADA_MAX_INSTINCTS"
+  | "STRADA_DETECTION_WINDOW_SIZE"
+  | "STRADA_PERIODIC_EXTRACTION_INTERVAL";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -668,6 +674,14 @@ export interface Config {
 
   // Bayesian Confidence System
   readonly bayesian: BayesianConfig;
+
+  // Learning Pipeline v2
+  readonly learningPipelineV2: {
+    readonly confidenceWeights: number[];
+    readonly maxInstincts: number;
+    readonly detectionWindowSize: number;
+    readonly periodicExtractionInterval: number;
+  };
 
   // Goal Decomposition
   readonly goalMaxDepth: number;
@@ -1159,6 +1173,31 @@ export const configSchema = z
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.0).max(0.5))
       .default("0.2"),
+
+    // Learning Pipeline v2
+    stradaConfidenceWeights: z
+      .string()
+      .transform((s) => {
+        try { return JSON.parse(s) as number[]; }
+        catch { return [0.15, 0.25, 0.15, 0.30, 0.15]; }
+      })
+      .pipe(z.array(z.number()).length(5))
+      .default("[0.15, 0.25, 0.15, 0.30, 0.15]"),
+    stradaMaxInstincts: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10).max(100000))
+      .default("1000"),
+    stradaDetectionWindowSize: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(5).max(200))
+      .default("20"),
+    stradaPeriodicExtractionInterval: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10000).max(3600000))
+      .default("300000"),
 
     // Goal Decomposition
     goalMaxDepth: z
@@ -1910,6 +1949,13 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       verdictFailure: rawConfig.bayesianVerdictFailure,
     },
 
+    learningPipelineV2: {
+      confidenceWeights: rawConfig.stradaConfidenceWeights,
+      maxInstincts: rawConfig.stradaMaxInstincts,
+      detectionWindowSize: rawConfig.stradaDetectionWindowSize,
+      periodicExtractionInterval: rawConfig.stradaPeriodicExtractionInterval,
+    },
+
     goalMaxDepth: rawConfig.goalMaxDepth,
     goalMaxRetries: rawConfig.goalMaxRetries,
     goalMaxFailures: rawConfig.goalMaxFailures,
@@ -2527,6 +2573,11 @@ interface EnvVars {
   autoUpdateChannel: string | undefined;
   autoUpdateNotify: string | undefined;
   autoUpdateAutoRestart: string | undefined;
+  // Learning Pipeline v2
+  stradaConfidenceWeights: string | undefined;
+  stradaMaxInstincts: string | undefined;
+  stradaDetectionWindowSize: string | undefined;
+  stradaPeriodicExtractionInterval: string | undefined;
 }
 
 /**
@@ -2782,6 +2833,11 @@ function loadFromEnv(): EnvVars {
     autoUpdateChannel: process.env["AUTO_UPDATE_CHANNEL"],
     autoUpdateNotify: process.env["AUTO_UPDATE_NOTIFY"],
     autoUpdateAutoRestart: process.env["AUTO_UPDATE_AUTO_RESTART"],
+    // Learning Pipeline v2
+    stradaConfidenceWeights: process.env["STRADA_CONFIDENCE_WEIGHTS"],
+    stradaMaxInstincts: process.env["STRADA_MAX_INSTINCTS"],
+    stradaDetectionWindowSize: process.env["STRADA_DETECTION_WINDOW_SIZE"],
+    stradaPeriodicExtractionInterval: process.env["STRADA_PERIODIC_EXTRACTION_INTERVAL"],
   };
 }
 
