@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import {
   MessageSquare, Activity, Paintbrush, Code,
   Sun, Moon, ChevronLeft, ChevronRight, Bell,
@@ -34,9 +35,19 @@ export default function Sidebar() {
 
   const isConnected = status === 'connected'
 
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1439px)')
+    if (mq.matches && !collapsed) toggle()
+    const handler = (e: MediaQueryListEvent) => {
+      if (e.matches && !collapsed) toggle()
+    }
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, []) // Run once on mount
+
   return (
     <aside
-      className={`flex flex-col h-screen bg-bg-secondary border-r border-border transition-all duration-300 ${collapsed ? 'w-14' : 'w-60'} max-md:fixed max-md:z-[1000]`}
+      className={`hidden md:flex flex-col h-screen bg-bg-secondary border-r border-border transition-all duration-300 ${collapsed ? 'w-14' : 'w-60'} max-md:fixed max-md:z-[1000]`}
     >
       {/* Logo / Brand */}
       <div className={`flex flex-row items-center gap-3 p-4 border-b border-border shrink-0 ${collapsed ? 'justify-center px-2' : ''}`}>
