@@ -2,6 +2,8 @@
 
 The autonomous reasoning engine for Strada.Brain. Provides environment observation, task-aware multi-provider routing, confidence-based consensus, and proactive agent behavior.
 
+> **Note:** This is the **OODA loop** (proactive, daemon-triggered). The reactive user-facing loop (PAOR) lives in `src/agents/orchestrator.ts`. See CONTRIBUTING.md for how they relate.
+
 ## Architecture
 
 ```
@@ -52,7 +54,7 @@ When ConfidenceEstimator scores output below threshold, ConsensusManager verifie
 | Env Var | Default | Description |
 |---------|---------|-------------|
 | `ROUTING_PRESET` | `balanced` | budget / balanced / performance |
-| `ROUTING_PHASE_SWITCHING` | `true` | Different providers per PAOR phase |
+| `ROUTING_PHASE_SWITCHING` | `true` | Different providers per PAOR phase (orchestrator phases, not OODA) |
 | `CONSENSUS_MODE` | `auto` | auto / critical-only / always / disabled |
 | `CONSENSUS_THRESHOLD` | `0.5` | Confidence below this triggers consensus |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | Max providers consulted per decision |

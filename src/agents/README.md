@@ -2,6 +2,8 @@
 
 The agents subsystem contains the orchestrator (agent loop), AI providers, tools, the autonomy layer, and the plugin system.
 
+> **Note:** This is the **PAOR loop** (reactive, user-triggered). The proactive autonomous loop (OODA) lives in `src/agent-core/`. See CONTRIBUTING.md for how they relate.
+
 ## Orchestrator (`orchestrator.ts` + helpers)
 
 The `Orchestrator` class implements a single-agent, multi-tool loop. There is one orchestrator instance — the tool set defines what it can do.

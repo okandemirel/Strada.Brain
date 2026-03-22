@@ -3,7 +3,7 @@
  *
  * Heuristic scoring of agent output confidence.
  * Used by ConsensusManager to decide when to seek a second opinion.
- * No LLM calls — pure computation from PAOR state.
+ * No LLM calls — pure computation from orchestrator PAOR state.
  */
 
 import type { TaskClassification } from "./routing-types.js";

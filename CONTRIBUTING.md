@@ -59,7 +59,10 @@ Strada.Brain is organized into these key modules:
 
 ### Key Design Patterns
 
-- **PAOR State Machine**: All task execution (interactive AND background) uses Plan → Act → Observe → Reflect cycle
+- **Dual Loop Architecture**:
+  - **PAOR** (`src/agents/orchestrator.ts`): Reactive loop — user sends message → Plan → Act → Observe → Reflect. Handles all interactive and background task execution.
+  - **OODA** (`src/agent-core/agent-core.ts`): Proactive loop — HeartbeatLoop tick → Observe → Orient → Decide → Act. Monitors environment autonomously without user prompting.
+  - Shared infrastructure: Both use `ProviderRouter` from `src/agent-core/routing/` for provider selection.
 - **Structural Interfaces**: Components use duck-typed interfaces (not concrete imports) to avoid circular dependencies
 - **Graceful Degradation**: All optional features (routing, consensus, MCP, embeddings) work with zero config and fail silently
 - **Event-Driven Learning**: `TypedEventBus` connects tool execution → learning pipeline → instinct formation
