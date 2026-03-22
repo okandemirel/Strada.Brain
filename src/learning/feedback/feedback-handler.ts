@@ -29,53 +29,39 @@ export class FeedbackHandler {
     this.storage = storage;
   }
 
-  /**
-   * Handle thumbs-up feedback: boost factorUserValidation by +0.1 (cap 1.0).
-   */
   handleThumbsUp(params: {
     instinctIds: string[];
     userId?: string;
     source: FeedbackSource;
   }): void {
-    for (const instinctId of params.instinctIds) {
-      const instinct = this.storage.getInstinct(instinctId);
-      if (!instinct) continue;
-
-      const current = instinct.factorUserValidation ?? DEFAULT_FACTOR;
-      const updated = Math.min(current + THUMBS_UP_DELTA, 1.0);
-      this.storage.updateInstinctFactor(instinctId, 'factor_user_validation', updated);
-    }
-
-    this.storage.storeFeedback({
-      id: generateFeedbackId(),
-      type: 'thumbs_up' as FeedbackType,
-      userId: params.userId,
-      instinctIds: JSON.stringify(params.instinctIds),
-      source: params.source,
-      createdAt: Date.now(),
-    });
+    this.applyValidationDelta(params, THUMBS_UP_DELTA, 'thumbs_up');
   }
 
-  /**
-   * Handle thumbs-down feedback: reduce factorUserValidation by -0.2 (floor 0.0).
-   */
   handleThumbsDown(params: {
     instinctIds: string[];
     userId?: string;
     source: FeedbackSource;
   }): void {
+    this.applyValidationDelta(params, -THUMBS_DOWN_DELTA, 'thumbs_down');
+  }
+
+  private applyValidationDelta(
+    params: { instinctIds: string[]; userId?: string; source: FeedbackSource },
+    delta: number,
+    feedbackType: FeedbackType,
+  ): void {
     for (const instinctId of params.instinctIds) {
       const instinct = this.storage.getInstinct(instinctId);
       if (!instinct) continue;
 
       const current = instinct.factorUserValidation ?? DEFAULT_FACTOR;
-      const updated = Math.max(current - THUMBS_DOWN_DELTA, 0.0);
+      const updated = Math.max(0.0, Math.min(current + delta, 1.0));
       this.storage.updateInstinctFactor(instinctId, 'factor_user_validation', updated);
     }
 
     this.storage.storeFeedback({
       id: generateFeedbackId(),
-      type: 'thumbs_down' as FeedbackType,
+      type: feedbackType,
       userId: params.userId,
       instinctIds: JSON.stringify(params.instinctIds),
       source: params.source,
@@ -93,7 +79,7 @@ export class FeedbackHandler {
   }): void {
     this.storage.storeFeedback({
       id: generateFeedbackId(),
-      type: 'teaching' as FeedbackType,
+      type: 'teaching',
       userId: params.userId,
       content: params.content,
       scopeType: params.scopeType,
@@ -108,7 +94,7 @@ export class FeedbackHandler {
   handleCorrection(params: CorrectionRecord): void {
     this.storage.storeFeedback({
       id: generateFeedbackId(),
-      type: 'correction' as FeedbackType,
+      type: 'correction',
       userId: params.userId,
       instinctIds: params.instinctIds ? JSON.stringify(params.instinctIds) : undefined,
       content: `original: ${params.original} | corrected: ${params.corrected}`,

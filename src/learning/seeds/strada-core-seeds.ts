@@ -13,6 +13,7 @@ import type {
   TrustLevel,
   InstinctStats,
 } from "../types.js";
+import type { NormalizedScore } from "../../types/index.js";
 
 // =============================================================================
 // SEED INSTINCT TYPE
@@ -90,7 +91,7 @@ const EMPTY_STATS: InstinctStats = {
   timesSuggested: 0,
   timesApplied: 0,
   timesFailed: 0,
-  successRate: 0 as any,
+  successRate: 0 as NormalizedScore,
   averageExecutionMs: 0,
 };
 

@@ -2306,7 +2306,7 @@ export class Orchestrator {
               // ─── PAOR: Handle REFLECTING phase response ─────────────────────
               if (bgAgentState.phase === AgentPhase.REFLECTING) {
                 const { decision, overrideReason } = validateReflectionDecision(parseReflectionDecision(response.text), bgAgentState);
-                if (overrideReason) this.logger?.warn("PAOR reflection override (bg)", { overrideReason });
+                if (overrideReason) getLogger().warn("PAOR reflection override (bg)", { overrideReason });
                 executionJournal.recordReflection(
                   decision,
                   response.text,
@@ -2431,7 +2431,7 @@ export class Orchestrator {
                       ...bgAgentState,
                       lastReflection: response.text ?? bgAgentState.lastReflection,
                       reflectionCount: bgAgentState.reflectionCount + 1,
-                      consecutiveErrors: 0,
+                      consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
                     };
                     bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
                     if (response.text) {
@@ -2552,7 +2552,7 @@ export class Orchestrator {
                       ...bgAgentState,
                       lastReflection: response.text ?? bgAgentState.lastReflection,
                       reflectionCount: bgAgentState.reflectionCount + 1,
-                      consecutiveErrors: 0,
+                      consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
                     };
                     bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
                     if (response.text) {
@@ -2696,7 +2696,7 @@ export class Orchestrator {
                       ...bgAgentState,
                       lastReflection: response.text ?? bgAgentState.lastReflection,
                       reflectionCount: bgAgentState.reflectionCount + 1,
-                      consecutiveErrors: 0,
+                      consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
                     };
                     bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
                     if (response.text) {
@@ -2889,7 +2889,7 @@ export class Orchestrator {
                       ...bgAgentState,
                       lastReflection: response.text ?? bgAgentState.lastReflection,
                       reflectionCount: bgAgentState.reflectionCount + 1,
-                      consecutiveErrors: 0,
+                      consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
                     };
                     bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
                     if (response.text) {
@@ -2994,7 +2994,7 @@ export class Orchestrator {
                 bgAgentState = {
                   ...bgAgentState,
                   reflectionCount: bgAgentState.reflectionCount + 1,
-                  consecutiveErrors: 0,
+                  consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
                 };
                 bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
 
@@ -4502,7 +4502,7 @@ export class Orchestrator {
         // ─── PAOR: Handle REFLECTING phase response ─────────────────────
         if (agentState.phase === AgentPhase.REFLECTING) {
           const { decision, overrideReason } = validateReflectionDecision(parseReflectionDecision(response.text), agentState);
-          if (overrideReason) this.logger?.warn("PAOR reflection override", { overrideReason });
+          if (overrideReason) getLogger().warn("PAOR reflection override", { overrideReason });
           executionJournal.recordReflection(
             decision,
             response.text,
@@ -4559,7 +4559,7 @@ export class Orchestrator {
                 ...agentState,
                 lastReflection: response.text ?? agentState.lastReflection,
                 reflectionCount: agentState.reflectionCount + 1,
-                consecutiveErrors: 0,
+                consecutiveErrors: agentState.stepResults.at(-1)?.success ? 0 : agentState.consecutiveErrors,
               };
               agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
               if (response.text) {
@@ -4625,7 +4625,7 @@ export class Orchestrator {
                 ...agentState,
                 lastReflection: response.text ?? agentState.lastReflection,
                 reflectionCount: agentState.reflectionCount + 1,
-                consecutiveErrors: 0,
+                consecutiveErrors: agentState.stepResults.at(-1)?.success ? 0 : agentState.consecutiveErrors,
               };
               agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
               if (response.text) {
@@ -4686,7 +4686,7 @@ export class Orchestrator {
                 ...agentState,
                 lastReflection: response.text ?? agentState.lastReflection,
                 reflectionCount: agentState.reflectionCount + 1,
-                consecutiveErrors: 0,
+                consecutiveErrors: agentState.stepResults.at(-1)?.success ? 0 : agentState.consecutiveErrors,
               };
               agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
               continue;
@@ -4845,7 +4845,7 @@ export class Orchestrator {
           agentState = {
             ...agentState,
             reflectionCount: agentState.reflectionCount + 1,
-            consecutiveErrors: 0,
+            consecutiveErrors: agentState.stepResults.at(-1)?.success ? 0 : agentState.consecutiveErrors,
           };
           agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
 
