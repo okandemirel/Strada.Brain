@@ -9,6 +9,7 @@
  */
 
 import { CONFIDENCE_THRESHOLDS, type Instinct, type InstinctStatus, type InstinctStats, type InterventionTier } from "../types.js";
+import { getInterventionTier as getInterventionTierFromTypes } from "../intervention/intervention-types.js";
 
 // ─── Confidence Factors ─────────────────────────────────────────────────────────
 
@@ -76,8 +77,8 @@ export class ConfidenceScorer {
    * @returns Overall confidence score (0.0 - 1.0)
    */
   calculate(instinct: Instinct, _contextFactors?: Record<string, number>): number {
-    const alpha = instinct.bayesianAlpha ?? this.config.priorAlpha ?? this.priorAlpha;
-    const beta = instinct.bayesianBeta ?? this.config.priorBeta ?? this.priorBeta;
+    const alpha = instinct.bayesianAlpha ?? this.priorAlpha;
+    const beta = instinct.bayesianBeta ?? this.priorBeta;
     const rawBayesian = alpha / (alpha + beta);
 
     const factors = [
@@ -90,7 +91,7 @@ export class ConfidenceScorer {
 
     const weights = this.config.confidenceWeights ?? [0.15, 0.25, 0.15, 0.30, 0.15];
     const weightSum = weights.reduce((s, w) => s + w, 0);
-    const weightedAvg = factors.reduce((s, f, i) => s + f * weights[i]!, 0) / weightSum;
+    const weightedAvg = factors.reduce((s, f, i) => s + f * (weights[i] ?? 0), 0) / weightSum;
     const factorMultiplier = Math.max(0.5, Math.min(1.5, weightedAvg + 0.5));
 
     return Math.min(1.0, Math.max(0.0, rawBayesian * factorMultiplier));
@@ -232,18 +233,8 @@ export class ConfidenceScorer {
     return b.confidence - a.confidence;
   }
 
-  /**
-   * Map a confidence score to an intervention tier.
-   * > 0.8  → 'auto'    (act autonomously)
-   * >= 0.6 → 'warn'    (act but notify)
-   * >= 0.3 → 'suggest' (propose to user)
-   * < 0.3  → 'passive' (observe only)
-   */
   getInterventionTier(confidence: number): InterventionTier {
-    if (confidence > 0.8) return 'auto';
-    if (confidence >= 0.6) return 'warn';
-    if (confidence >= 0.3) return 'suggest';
-    return 'passive';
+    return getInterventionTierFromTypes(confidence);
   }
 
   /**
