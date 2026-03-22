@@ -56,7 +56,7 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto p-2 scrollbar-thin" style={{ scrollbarColor: 'var(--color-scrollbar-thumb) transparent' }}>
+      <nav className="flex-1 overflow-y-auto p-2 scrollbar-thin [scrollbar-color:var(--color-scrollbar-thumb)_transparent]">
         {SECTIONS.map((section) => (
           <div key={section.title} className="mb-2">
             {!collapsed && (

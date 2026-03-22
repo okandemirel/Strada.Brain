@@ -10,6 +10,7 @@ import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from 
 
 const MAX_RECONNECT_DELAY = 30000
 const MAX_RECONNECT_ATTEMPTS = 8
+const MAX_IN_MEMORY_MESSAGES = 200
 const CHAT_ID_STORAGE_KEY = 'strada-chatId'
 const PROFILE_ID_STORAGE_KEY = 'strada-profileId'
 const PROFILE_TOKEN_STORAGE_KEY = 'strada-profileToken'
@@ -86,6 +87,7 @@ export function useWebSocket(): UseWebSocketReturn {
   // Use a ref for the streaming map so updates to it don't trigger re-renders
   // on their own -- we update `messages` state explicitly when streams change.
   const streamsRef = useRef<Map<string, string>>(new Map())
+  const streamRafRef = useRef<number | null>(null)
 
   const acceptConnectedSession = useCallback((
     chatId: string,
@@ -225,16 +227,16 @@ export function useWebSocket(): UseWebSocketReturn {
         case 'text':
         case 'markdown':
           setIsTyping(false)
-          setMessages((prev) => [
+          setMessages((prev) => ([
             ...prev,
             {
               id: data.messageId || generateId(),
-              sender: 'assistant',
+              sender: 'assistant' as const,
               text: data.text,
               isMarkdown: data.type === 'markdown',
               timestamp: Date.now(),
             },
-          ])
+          ] satisfies ChatMessage[]).slice(-MAX_IN_MEMORY_MESSAGES))
           break
 
         case 'typing':
@@ -244,29 +246,35 @@ export function useWebSocket(): UseWebSocketReturn {
         case 'stream_start':
           setIsTyping(false)
           streamsRef.current.set(data.streamId, data.text || '')
-          setMessages((prev) => [
+          setMessages((prev) => ([
             ...prev,
             {
               id: generateId(),
-              sender: 'assistant',
+              sender: 'assistant' as const,
               text: data.text || '',
               isMarkdown: true,
               isStreaming: true,
               streamId: data.streamId,
               timestamp: Date.now(),
             },
-          ])
+          ] satisfies ChatMessage[]).slice(-MAX_IN_MEMORY_MESSAGES))
           break
 
         case 'stream_update':
           streamsRef.current.set(data.streamId, data.text)
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.streamId === data.streamId
-                ? { ...msg, text: data.text }
-                : msg,
-            ),
-          )
+          if (!streamRafRef.current) {
+            streamRafRef.current = requestAnimationFrame(() => {
+              streamRafRef.current = null
+              const pending = streamsRef.current
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.isStreaming && msg.streamId && pending.has(msg.streamId)
+                    ? { ...msg, text: pending.get(msg.streamId)! }
+                    : msg,
+                ),
+              )
+            })
+          }
           break
 
         case 'stream_end':
