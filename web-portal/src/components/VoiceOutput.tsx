@@ -40,7 +40,7 @@ export default function VoiceOutput({ text }: VoiceOutputProps) {
 
     utterance.onerror = (event) => {
       if (event.error !== 'canceled') {
-        console.warn('[VoiceOutput] Speech synthesis error:', event.error)
+        if (import.meta.env.DEV) console.warn('[VoiceOutput] Speech synthesis error:', event.error)
       }
       setIsSpeaking(false)
       utteranceRef.current = null

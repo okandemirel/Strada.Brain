@@ -9,7 +9,16 @@ type StorageWriter = Pick<Storage, 'setItem'>
 
 function getSessionStorage(): Storage | null {
   if (typeof window === 'undefined') return null
-  return window.sessionStorage
+  return window.localStorage
+}
+
+export function clearSessionMessages(chatId: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(getStorageKey(chatId))
+  } catch {
+    // Ignore privacy-mode or quota failures.
+  }
 }
 
 function getStorageKey(chatId: string): string {

@@ -122,7 +122,7 @@ export default function LogsPage() {
       ) : (
         <div className="bg-bg-secondary border border-border rounded-[14px] overflow-hidden max-h-[calc(100vh-260px)] overflow-y-auto" ref={containerRef}>
           {filtered.map((entry, i) => (
-            <div key={i} className="flex items-start gap-3 px-4 py-2 border-b border-border text-[13px] transition-colors hover:bg-bg-tertiary last:border-b-0 max-md:flex-col max-md:gap-1">
+            <div key={`${entry.timestamp}-${entry.level}-${i}`} className="flex items-start gap-3 px-4 py-2 border-b border-border text-[13px] transition-colors hover:bg-bg-tertiary last:border-b-0 max-md:flex-col max-md:gap-1">
               <span className="font-mono text-[11px] text-text-tertiary whitespace-nowrap shrink-0 min-w-[80px]">{formatTimestamp(entry.timestamp)}</span>
               <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-[0.04em] min-w-[50px] text-center ${getLevelBadgeClass(getLevelClass(entry.level))}`}>{entry.level}</span>
               <span className="text-text font-mono text-xs leading-relaxed break-words flex-1">

@@ -17,6 +17,18 @@ const MemoryPage = lazy(() => import('./pages/MemoryPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const SetupWizard = lazy(() => import('./pages/SetupWizard'))
 
+function NotFoundPage() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-text-tertiary">
+      <h1 className="text-6xl font-bold text-text mb-4">404</h1>
+      <p className="text-lg mb-6">Page not found</p>
+      <a href="/" className="text-accent hover:text-accent-hover transition-colors">
+        Back to Chat
+      </a>
+    </div>
+  )
+}
+
 function RouteLoadingFallback() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center text-text-secondary gap-3">
@@ -64,7 +76,7 @@ export default function App() {
             <Route path="personality" element={<PersonalityPage />} />
             <Route path="memory" element={<MemoryPage />} />
             <Route path="settings" element={<SettingsPage />} />
-            <Route path="*" element={<ChatView />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
       </Suspense>

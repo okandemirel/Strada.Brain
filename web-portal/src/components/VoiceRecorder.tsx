@@ -74,7 +74,7 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
 
     recognition.onerror = (event) => {
       if (event.error !== 'aborted' && event.error !== 'no-speech') {
-        console.warn('[VoiceRecorder] Speech recognition error:', event.error)
+        if (import.meta.env.DEV) console.warn('[VoiceRecorder] Speech recognition error:', event.error)
       }
       setIsRecording(false)
     }
@@ -90,7 +90,7 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
       recognition.start()
       setIsRecording(true)
     } catch (err) {
-      console.warn('[VoiceRecorder] Failed to start speech recognition:', err)
+      if (import.meta.env.DEV) console.warn('[VoiceRecorder] Failed to start speech recognition:', err)
       setIsRecording(false)
     }
   }, [isRecording, onTranscript])
