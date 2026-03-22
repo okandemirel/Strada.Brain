@@ -33,6 +33,8 @@ export default function MiniChat() {
           onKeyDown={handleKeyDown}
           placeholder="Quick message..."
           disabled={disabled}
+          maxLength={4000}
+          aria-label="Quick message"
           className="flex-1 bg-transparent text-xs text-text placeholder:text-text-tertiary outline-none min-w-0"
         />
         <button

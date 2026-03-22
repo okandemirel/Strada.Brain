@@ -17,23 +17,28 @@ interface ShortcutHandlers {
 export function useKeyboardShortcuts({ setMode, toggleSidebar, toggleSecondary }: ShortcutHandlers) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!e.metaKey && !e.ctrlKey) return
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      const target = e.target as HTMLElement
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable) return
 
-      const mode = MODE_KEYS[e.key]
-      if (mode) {
-        e.preventDefault()
-        setMode(mode)
-        return
+      // Alt+1-4 for mode switching (avoid Cmd/Ctrl+1-4 browser tab conflict)
+      if (e.altKey) {
+        const mode = MODE_KEYS[e.key]
+        if (mode) {
+          e.preventDefault()
+          setMode(mode)
+          return
+        }
       }
 
-      if (e.key === 'b') {
+      // Cmd/Ctrl+B for sidebar toggle
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
         e.preventDefault()
         toggleSidebar()
         return
       }
 
-      if (e.key === '\\') {
+      // Cmd/Ctrl+\ for secondary panel toggle
+      if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
         e.preventDefault()
         toggleSecondary()
       }

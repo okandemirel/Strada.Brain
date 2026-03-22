@@ -47,7 +47,7 @@ describe('StatusBar', () => {
   it('renders "Reconnecting" label when reconnecting', () => {
     mockUseWS.mockReturnValue({ status: 'reconnecting' })
     render(<StatusBar />)
-    expect(screen.getByText('Reconnecting')).toBeInTheDocument()
+    expect(screen.getByText('Reconnecting...')).toBeInTheDocument()
   })
 
   it('renders yellow dot when reconnecting', () => {

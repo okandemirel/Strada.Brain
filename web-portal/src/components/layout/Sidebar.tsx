@@ -1,30 +1,14 @@
 import { useEffect } from 'react'
-import {
-  MessageSquare, Activity, Paintbrush, Code,
-  Sun, Moon, ChevronLeft, ChevronRight, Bell,
-  type LucideIcon,
-} from 'lucide-react'
+import { Sun, Moon, ChevronLeft, ChevronRight, Bell } from 'lucide-react'
 import { useWS } from '../../hooks/useWS'
 import { useTheme } from '../../hooks/useTheme'
 import { useSidebarStore } from '../../stores/sidebar-store'
-import { useWorkspaceStore, type WorkspaceMode } from '../../stores/workspace-store'
+import { useWorkspaceStore } from '../../stores/workspace-store'
+import { WORKSPACE_MODES } from '../../config/workspace-modes'
+import { CONNECTION_STATUS } from '../../config/connection-status'
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import AdminDropdown from './AdminDropdown'
 import MiniChat from '../workspace/MiniChat'
-
-interface ModeButton {
-  mode: WorkspaceMode
-  icon: LucideIcon
-  label: string
-  enabled: boolean
-}
-
-const MODE_BUTTONS: ModeButton[] = [
-  { mode: 'chat', icon: MessageSquare, label: 'Chat', enabled: true },
-  { mode: 'monitor', icon: Activity, label: 'Monitor', enabled: false },
-  { mode: 'canvas', icon: Paintbrush, label: 'Canvas', enabled: false },
-  { mode: 'code', icon: Code, label: 'Code', enabled: false },
-]
 
 export default function Sidebar() {
   const { status } = useWS()
@@ -33,17 +17,16 @@ export default function Sidebar() {
   const currentMode = useWorkspaceStore((s) => s.mode)
   const setMode = useWorkspaceStore((s) => s.setMode)
 
-  const isConnected = status === 'connected'
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1439px)')
-    if (mq.matches && !collapsed) toggle()
+    if (mq.matches && !useSidebarStore.getState().collapsed) toggle()
     const handler = (e: MediaQueryListEvent) => {
-      if (e.matches && !collapsed) toggle()
+      if (e.matches && !useSidebarStore.getState().collapsed) toggle()
     }
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
-  }, []) // Run once on mount
+  }, [toggle])
 
   return (
     <aside
@@ -58,7 +41,7 @@ export default function Sidebar() {
       {/* Mode buttons */}
       <TooltipProvider delayDuration={300}>
         <div className="p-2 flex flex-col gap-0.5">
-          {MODE_BUTTONS.map((btn) => {
+          {WORKSPACE_MODES.map((btn) => {
             const isActive = currentMode === btn.mode
             const Icon = btn.icon
 
@@ -120,16 +103,17 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="p-2 border-t border-border flex flex-col gap-0.5 shrink-0">
         {/* Notifications placeholder */}
-        <div
-          className={`relative flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium whitespace-nowrap overflow-hidden select-none ${collapsed ? 'justify-center px-2' : ''}`}
-          title="Notifications"
+        <button
+          disabled
+          aria-label="Notifications"
+          className={`relative flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium whitespace-nowrap overflow-hidden select-none opacity-60 cursor-not-allowed bg-transparent border-none font-[inherit] text-left w-full ${collapsed ? 'justify-center px-2' : ''}`}
         >
           <span className="w-[22px] text-center text-base shrink-0 leading-none relative">
             <Bell size={16} />
             <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-accent" />
           </span>
           {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">Notifications</span>}
-        </div>
+        </button>
 
         {/* Theme toggle */}
         <button
@@ -152,11 +136,11 @@ export default function Sidebar() {
         </button>
 
         {/* Connection health */}
-        <div className={`flex flex-row items-center gap-2 px-3 py-2.5 text-xs text-text-tertiary whitespace-nowrap overflow-hidden ${collapsed ? 'justify-center px-2' : ''}`} title={isConnected ? 'Connected' : status}>
-          <span className={`w-2 h-2 rounded-full shrink-0 transition-all duration-300 ${isConnected ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-error shadow-[0_0_6px_var(--color-error)]'}`} />
+        <div className={`flex flex-row items-center gap-2 px-3 py-2.5 text-xs text-text-tertiary whitespace-nowrap overflow-hidden ${collapsed ? 'justify-center px-2' : ''}`} title={CONNECTION_STATUS[status].label}>
+          <span className={`w-2 h-2 rounded-full shrink-0 transition-all duration-300 ${CONNECTION_STATUS[status].color}`} />
           {!collapsed && (
             <span className="overflow-hidden text-ellipsis">
-              {isConnected ? 'Health OK' : status}
+              {CONNECTION_STATUS[status].label}
             </span>
           )}
         </div>

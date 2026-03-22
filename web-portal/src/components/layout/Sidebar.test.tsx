@@ -190,7 +190,7 @@ describe('Sidebar', () => {
 
   it('shows connected status when WS is connected', () => {
     renderSidebar()
-    expect(screen.getByText('Health OK')).toBeInTheDocument()
+    expect(screen.getByText('Connected')).toBeInTheDocument()
   })
 
   it('shows Strada.Brain branding in header', () => {
@@ -201,11 +201,11 @@ describe('Sidebar', () => {
   it('shows disconnected status when WS is disconnected', () => {
     mockUseWS.mockReturnValue({ status: 'disconnected' })
     renderSidebar()
-    expect(screen.getByText('disconnected')).toBeInTheDocument()
+    expect(screen.getByText('Disconnected')).toBeInTheDocument()
   })
 
   it('renders notification bell', () => {
     renderSidebar()
-    expect(screen.getByTitle('Notifications')).toBeInTheDocument()
+    expect(screen.getByLabelText('Notifications')).toBeInTheDocument()
   })
 })

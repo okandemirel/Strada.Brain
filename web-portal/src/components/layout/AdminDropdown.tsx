@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import {
-  BarChart3, Settings, Wrench, Radio, Users,
+  BarChart3, Settings, SlidersHorizontal, Wrench, Radio, Users,
   ScrollText, Brain, Theater, Database, Shield,
   type LucideIcon,
 } from 'lucide-react'
@@ -21,7 +21,7 @@ interface AdminPage {
 
 const ADMIN_PAGES: AdminPage[] = [
   { to: '/admin/dashboard', icon: BarChart3, label: 'Dashboard' },
-  { to: '/admin/config', icon: Settings, label: 'Config' },
+  { to: '/admin/config', icon: SlidersHorizontal, label: 'Config' },
   { to: '/admin/tools', icon: Wrench, label: 'Tools' },
   { to: '/admin/channels', icon: Radio, label: 'Channels' },
   { to: '/admin/sessions', icon: Users, label: 'Sessions' },
