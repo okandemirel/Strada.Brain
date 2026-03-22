@@ -37,20 +37,22 @@ export default function ChatView() {
   const isDisconnected = status !== 'connected'
 
   return (
-    <div className="flex flex-col flex-1 overflow-hidden min-w-0">
+    <div className="flex flex-col h-full overflow-hidden min-w-0">
       <div className="flex items-center justify-end px-6 py-2 border-b border-border shrink-0">
         <PrimaryWorkerSelector />
       </div>
       <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-3 scroll-smooth" ref={messagesContainerRef}>
         {messages.length === 0 && !isTyping ? (
-          <EmptyState />
+          <div className="flex-1 flex items-center justify-center">
+            <EmptyState />
+          </div>
         ) : (
-          <>
+          <div className="w-full max-w-prose mx-auto flex flex-col gap-3">
             {messages.map((msg) => (
               <ChatMessage key={msg.id} message={msg} />
             ))}
             {isTyping && <TypingIndicator />}
-          </>
+          </div>
         )}
         <div ref={messagesEndRef} />
       </div>

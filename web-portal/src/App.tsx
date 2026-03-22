@@ -66,16 +66,18 @@ export default function App() {
           <Route path="/setup" element={<SetupWizard />} />
           <Route element={<AppLayout />}>
             <Route index element={<ChatView />} />
-            <Route path="dashboard" element={<DashboardView />} />
-            <Route path="config" element={<ConfigPage />} />
-            <Route path="tools" element={<ToolsPage />} />
-            <Route path="channels" element={<ChannelsPage />} />
-            <Route path="sessions" element={<SessionsPage />} />
-            <Route path="logs" element={<LogsPage />} />
-            <Route path="identity" element={<IdentityPage />} />
-            <Route path="personality" element={<PersonalityPage />} />
-            <Route path="memory" element={<MemoryPage />} />
-            <Route path="settings" element={<SettingsPage />} />
+            <Route path="admin">
+              <Route path="dashboard" element={<DashboardView />} />
+              <Route path="config" element={<ConfigPage />} />
+              <Route path="tools" element={<ToolsPage />} />
+              <Route path="channels" element={<ChannelsPage />} />
+              <Route path="sessions" element={<SessionsPage />} />
+              <Route path="logs" element={<LogsPage />} />
+              <Route path="identity" element={<IdentityPage />} />
+              <Route path="personality" element={<PersonalityPage />} />
+              <Route path="memory" element={<MemoryPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+            </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
