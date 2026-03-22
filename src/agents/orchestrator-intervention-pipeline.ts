@@ -26,14 +26,12 @@ import type {
   SupervisorAssignment,
   SupervisorExecutionStrategy,
 } from "./orchestrator-supervisor-routing.js";
-import type {
-  ClarificationContext,
-  ClarificationIntervention,
-} from "./orchestrator-clarification.js";
 import {
   canInspectLocally as canInspectLocallyHelper,
   decideUserVisibleBoundary as decideUserVisibleBoundaryHelper,
   resolveDraftClarificationIntervention as resolveDraftClarificationInterventionHelper,
+  type ClarificationContext,
+  type ClarificationIntervention,
 } from "./orchestrator-clarification.js";
 import type {
   CompletionReviewStageResult,
@@ -47,8 +45,7 @@ import type {
   TaskClassification,
   VerifierDecision,
 } from "../agent-core/routing/routing-types.js";
-import type { TaskProgressSignal, TaskUsageEvent } from "../tasks/types.js";
-import type { TaskProgressUpdate } from "../tasks/types.js";
+import type { TaskProgressSignal, TaskProgressUpdate, TaskUsageEvent } from "../tasks/types.js";
 import type { ProgressLanguage } from "../tasks/progress-signals.js";
 import type {
   WorkspaceLease,
@@ -231,6 +228,22 @@ export interface InterventionDeps {
 }
 
 // ─── Pure Helper Functions ────────────────────────────────────────────────────
+
+function toVerifierInterventionKind(
+  decision: string,
+): VerifierIntervention["kind"] {
+  if (decision === "replan") return "replan";
+  if (decision === "continue") return "continue";
+  return "approve";
+}
+
+function toClarificationReviewStatus(
+  decision: string | undefined,
+): string {
+  if (decision === "ask_user" || decision === "blocked") return "blocked";
+  if (decision === "internal_continue") return "continued";
+  return "approved";
+}
 
 export function selectLoopRecoveryDelegationTool(
   availableToolNames: readonly string[] | undefined,
@@ -665,12 +678,7 @@ export async function resolveVerifierIntervention(
       failureReason: params.draft,
     });
     return {
-      kind:
-        plan.initialDecision === "replan"
-          ? "replan"
-          : plan.initialDecision === "continue"
-            ? "continue"
-            : "approve",
+      kind: toVerifierInterventionKind(plan.initialDecision),
       gate: plan.gate,
       result: {
         decision: plan.initialDecision,
@@ -723,12 +731,7 @@ export async function resolveVerifierIntervention(
       failureReason: params.draft,
     });
     return {
-      kind:
-        result.decision === "replan"
-          ? "replan"
-          : result.decision === "continue"
-            ? "continue"
-            : "approve",
+      kind: toVerifierInterventionKind(result.decision),
       gate: result.gate,
       result,
     };
@@ -763,12 +766,7 @@ export async function resolveVerifierIntervention(
     failureReason: params.draft,
   });
   return {
-    kind:
-      fallbackResult.decision === "replan"
-        ? "replan"
-        : fallbackResult.decision === "continue"
-          ? "continue"
-          : "approve",
+    kind: toVerifierInterventionKind(fallbackResult.decision),
     gate: fallbackResult.gate,
     result: fallbackResult,
   };
@@ -842,14 +840,7 @@ export async function reviewClarification(
       assignment: reviewer,
       phase: "clarification-review",
       source: "clarification-review",
-      status:
-        decision?.decision === "ask_user"
-          ? "blocked"
-          : decision?.decision === "blocked"
-            ? "blocked"
-            : decision?.decision === "internal_continue"
-              ? "continued"
-              : "approved",
+      status: toClarificationReviewStatus(decision?.decision),
       task: reviewTask,
       reason: decision?.reason ?? "Clarification review completed.",
       telemetry: deps.buildPhaseOutcomeTelemetry({
