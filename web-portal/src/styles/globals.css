@@ -1,0 +1,54 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-bg: #0a0a0f;
+  --color-bg-secondary: #12121a;
+  --color-bg-tertiary: #1a1a25;
+  --color-text: #e8e8ed;
+  --color-text-secondary: #a0a0b0;
+  --color-text-tertiary: #6a6a7a;
+  --color-accent: #00e5ff;
+  --color-accent-hover: #33ecff;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-error: #f87171;
+  --color-border: #2a2a3a;
+  --color-border-subtle: #1f1f2f;
+  --color-surface: #16161f;
+  --color-surface-hover: #1e1e2a;
+
+  --color-user-msg: #1a1a2e;
+  --color-ai-msg: #0f0f1a;
+}
+
+@variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+@variant light (&:where([data-theme="light"], [data-theme="light"] *));
+
+@layer base {
+  :root[data-theme="light"] {
+    --color-bg: #fafafa;
+    --color-bg-secondary: #f0f0f5;
+    --color-bg-tertiary: #e8e8ed;
+    --color-text: #1a1a2e;
+    --color-text-secondary: #4a4a5a;
+    --color-text-tertiary: #8a8a9a;
+    --color-accent: #0091a3;
+    --color-accent-hover: #007a8a;
+    --color-success: #059669;
+    --color-warning: #d97706;
+    --color-error: #dc2626;
+    --color-border: #d0d0dd;
+    --color-border-subtle: #e0e0ea;
+    --color-surface: #ffffff;
+    --color-surface-hover: #f5f5fa;
+
+    --color-user-msg: #e8f0fe;
+    --color-ai-msg: #f0f0f5;
+  }
+
+  body {
+    @apply bg-bg text-text font-sans antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  }
+}
