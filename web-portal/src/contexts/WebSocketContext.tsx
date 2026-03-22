@@ -19,8 +19,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       sendConfirmation: ws.sendConfirmation,
       switchProvider: ws.switchProvider,
       toggleAutonomous: ws.toggleAutonomous,
+      sendRawJSON: ws.sendRawJSON,
     }),
-    [ws.messages, ws.status, ws.confirmation, ws.isTyping, ws.sessionId, ws.profileId, ws.sendMessage, ws.sendConfirmation, ws.switchProvider, ws.toggleAutonomous]
+    [ws.messages, ws.status, ws.confirmation, ws.isTyping, ws.sessionId, ws.profileId, ws.sendMessage, ws.sendConfirmation, ws.switchProvider, ws.toggleAutonomous, ws.sendRawJSON]
   )
   return <WebSocketContext.Provider value={value}>{children}</WebSocketContext.Provider>
 }

@@ -1,6 +1,8 @@
 import { Suspense, lazy, useState } from 'react'
 import ActivityFeed from './ActivityFeed'
 import TaskDetailPanel from './TaskDetailPanel'
+import InterventionToolbar from './InterventionToolbar'
+import GateDialog from './GateDialog'
 
 const DAGView = lazy(() => import('./DAGView'))
 const KanbanBoard = lazy(() => import('./KanbanBoard'))
@@ -35,6 +37,9 @@ export default function MonitorPanel() {
           >
             Kanban
           </button>
+          <div className="ml-auto">
+            <InterventionToolbar />
+          </div>
         </div>
         <div className="flex-1 min-h-0">
           {viewMode === 'dag' ? (
@@ -80,6 +85,7 @@ export default function MonitorPanel() {
           </div>
         </div>
       </div>
+      <GateDialog />
     </div>
   )
 }

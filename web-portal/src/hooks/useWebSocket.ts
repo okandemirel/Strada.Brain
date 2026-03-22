@@ -57,6 +57,7 @@ export interface UseWebSocketReturn {
   sendConfirmation: (confirmId: string, option: string) => void
   switchProvider: (provider: string, model?: string) => boolean
   toggleAutonomous: (enabled: boolean, hours?: number) => boolean
+  sendRawJSON: (payload: Record<string, unknown>) => boolean
 }
 
 export function buildModelSwitchCommand(provider: string, model?: string): string {
@@ -392,6 +393,13 @@ export function useWebSocket(): UseWebSocketReturn {
     return sendMessage(text)
   }, [sendMessage])
 
+  const sendRawJSON = useCallback((payload: Record<string, unknown>): boolean => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false
+    ws.send(JSON.stringify(payload))
+    return true
+  }, [])
+
   return {
     messages,
     status,
@@ -403,5 +411,6 @@ export function useWebSocket(): UseWebSocketReturn {
     sendConfirmation,
     switchProvider,
     toggleAutonomous,
+    sendRawJSON,
   }
 }
