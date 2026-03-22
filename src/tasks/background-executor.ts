@@ -43,6 +43,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import { getLogger } from "../utils/logger.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
+import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
 
 const LLM_TIMEOUT_MS = 10_000;
 
@@ -102,6 +103,7 @@ export interface BackgroundExecutorOptions {
   goalConfig?: GoalConfig;
   learningEventBus?: IEventEmitter<LearningEventMap>;
   workspaceLeaseManager?: WorkspaceLeaseManager;
+  workspaceBus?: WorkspaceBus;
 }
 
 export class BackgroundExecutor {
@@ -120,6 +122,7 @@ export class BackgroundExecutor {
   private readonly goalConfig?: GoalConfig;
   private readonly learningEventBus?: IEventEmitter<LearningEventMap>;
   private readonly workspaceLeaseManager?: WorkspaceLeaseManager;
+  private workspaceBus?: WorkspaceBus;
   private daemonBudgetTracker?: BudgetTracker;
 
   constructor(opts: BackgroundExecutorOptions) {
@@ -134,6 +137,7 @@ export class BackgroundExecutor {
     this.goalConfig = opts.goalConfig;
     this.learningEventBus = opts.learningEventBus;
     this.workspaceLeaseManager = opts.workspaceLeaseManager;
+    this.workspaceBus = opts.workspaceBus;
   }
 
   /**
@@ -145,6 +149,10 @@ export class BackgroundExecutor {
 
   setDaemonBudgetTracker(tracker: BudgetTracker): void {
     this.daemonBudgetTracker = tracker;
+  }
+
+  setWorkspaceBus(bus: WorkspaceBus): void {
+    this.workspaceBus = bus;
   }
 
   /**
@@ -556,6 +564,16 @@ export class BackgroundExecutor {
         }
       }
 
+      // Workspace monitor: task update event for dashboard UI
+      if (this.workspaceBus) {
+        this.workspaceBus.emit("monitor:task_update", {
+          rootId: String(updatedTree.rootId),
+          nodeId: String(updatedNode.id),
+          status: String(updatedNode.status),
+          reviewStatus: updatedNode.reviewStatus,
+        });
+      }
+
       // Throttled progress rendering to avoid message flood
       const now = Date.now();
       const isTerminal = updatedNode.status === "completed" || updatedNode.status === "failed" || updatedNode.status === "skipped";
@@ -785,6 +803,31 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
         return { continue: false, alwaysContinue: false };
       }
     };
+
+    // Workspace monitor: emit DAG initialisation for dashboard UI
+    if (this.workspaceBus) {
+      const dagNodes: Array<{ id: string; task: string; status: string; reviewStatus: string; depth: number; dependsOn: string[] }> = [];
+      const dagEdges: Array<{ source: string; target: string }> = [];
+      for (const [id, node] of goalTree.nodes) {
+        if (String(id) === String(goalTree.rootId)) continue;
+        dagNodes.push({
+          id: String(id),
+          task: node.task,
+          status: String(node.status),
+          reviewStatus: String(node.reviewStatus ?? "none"),
+          depth: node.depth,
+          dependsOn: node.dependsOn.map(String),
+        });
+        for (const dep of node.dependsOn) {
+          dagEdges.push({ source: String(dep), target: String(id) });
+        }
+      }
+      this.workspaceBus.emit("monitor:dag_init", {
+        rootId: String(goalTree.rootId),
+        nodes: dagNodes,
+        edges: dagEdges,
+      });
+    }
 
     // Execute the tree with all callbacks
     const result = await executor.executeTree(goalTree, nodeExecutor, signal, {
