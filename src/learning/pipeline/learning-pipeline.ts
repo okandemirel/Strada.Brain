@@ -37,6 +37,7 @@ import {
   type BayesianConfig,
   type InstinctLifecycleEvent,
   type ScopeType,
+  type CorrectionRecord,
   CONFIDENCE_THRESHOLDS,
   createInstinctId,
 } from "../types.js";
@@ -905,6 +906,38 @@ export class LearningPipeline {
       score,
       dimensions,
       feedback: "Auto-generated verdict for clean successful trajectory",
+    });
+  }
+
+  // ─── Feedback Methods ────────────────────────────────────────────────────────
+
+  /**
+   * Store an explicit user teaching as a new instinct.
+   */
+  async teachExplicit(content: string, scopeType: ScopeType, userId?: string): Promise<string> {
+    const instinct = this.createInstinct({
+      name: `teaching:explicit:${Date.now()}`,
+      type: 'user_teaching',
+      status: 'proposed',
+      confidence: 0.7,
+      triggerPattern: this.sanitizePattern(content),
+      action: content,
+      contextConditions: [],
+      scopeType,
+    });
+    return instinct.id;
+  }
+
+  /**
+   * Record a user correction and consider creating an instinct from it.
+   */
+  async recordCorrection(params: CorrectionRecord): Promise<void> {
+    const confidence = params.source === 'natural_language' ? 0.5 : 0.3;
+    await this.considerInstinctCreation({
+      type: 'correction',
+      triggerPattern: this.sanitizePattern(params.corrected),
+      action: params.corrected,
+      scopeType: 'user',
     });
   }
 

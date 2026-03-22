@@ -69,7 +69,9 @@ export type InstinctType =
   | "verification"      // Verification sequence patterns
   | "optimization"      // Performance optimization patterns
   | "tool_chain"        // Composite tool chain pattern
-  | "workflow_pattern"; // Recurring tool sequence detected inline
+  | "workflow_pattern"  // Recurring tool sequence detected inline
+  | "user_teaching"     // Explicit user teaching
+  | "seed";             // Seeded at startup
 
 /** Lifecycle status of an instinct */
 export type InstinctStatus =
@@ -226,6 +228,14 @@ export interface FeedbackRecord {
   readonly scopeType?: ScopeType;
   readonly source: FeedbackSource;
   readonly createdAt: number;
+}
+
+export interface CorrectionRecord {
+  readonly original: string;
+  readonly corrected: string;
+  readonly source: FeedbackSource;
+  readonly userId?: string;
+  readonly instinctIds?: readonly string[];
 }
 
 export interface InterventionLogEntry {
