@@ -17,10 +17,9 @@ import type {
 } from "../channels/channel.interface.js";
 import { supportsInteractivity, supportsRichMessaging } from "../channels/channel.interface.js";
 import { isVisionCompatible, toBase64ImageSource } from "../utils/media-processor.js";
-import type { MessageContent, AssistantMessage } from "./providers/provider-core.interface.js";
+import type { MessageContent } from "./providers/provider-core.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import { isOk, isSome } from "../types/index.js";
-import type { ChatId } from "../types/index.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
 import {
   STRADA_SYSTEM_PROMPT,
@@ -69,17 +68,14 @@ import {
 import type { IEmbeddingProvider } from "../rag/rag.interface.js";
 import { shouldForceReplan } from "./failure-classifier.js";
 import {
-  buildProviderIntelligence,
   getRecommendedMaxMessages,
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
 import {
-  buildClarificationContinuationGate,
   buildClarificationReviewRequest,
   CLARIFICATION_REVIEW_SYSTEM_PROMPT,
   COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
   ControlLoopTracker,
-  collectCompletionReviewEvidence,
   decideInteractionBoundary,
   draftLooksLikeInternalPlanArtifact,
   ErrorRecoveryEngine,
@@ -92,7 +88,6 @@ import {
   buildCompletionReviewStageRequest,
   buildCompletionReviewStageSystemPrompt,
   buildCompletionReviewSynthesisRequest,
-  formatClarificationPrompt,
   finalizeVerifierPipelineReview,
   isTerminalFailureReport,
   parseCompletionReviewDecision,
@@ -107,9 +102,7 @@ import {
   userExplicitlyAskedForPlan,
   type CompletionReviewStageName,
   type CompletionReviewStageResult,
-  type ClarificationBlockingType,
   type ControlLoopGateKind,
-  type ClarificationReviewDecision,
   type InteractionBoundaryDecision,
   type LoopRecoveryBrief,
   type LoopRecoveryReviewDecision,
@@ -140,7 +133,6 @@ import {
   type UserProfileStore,
 } from "../memory/unified/user-profile-store.js";
 import type {
-  TaskExecutionMemory,
   TaskExecutionStore,
 } from "../memory/unified/task-execution-store.js";
 import type {
@@ -171,16 +163,11 @@ import {
   reviewAutonomousQuestion,
 } from "./orchestrator-interaction-policy.js";
 import {
-  LANGUAGE_DISPLAY_NAMES,
   applyVisibleResponseContract,
-  buildExactResponseDirective,
-  buildProfileParts,
   extractExactResponseLiteral,
   extractNaturalLanguageDirectiveUpdates,
-  redactSensitiveText,
   resolveConversationScope,
   resolveIdentityKey,
-  sanitizePromptInjection,
 } from "./orchestrator-text-utils.js";
 import {
   extractApproachSummary,
@@ -211,37 +198,55 @@ import {
   type WorkerVerificationResult,
   type WorkspaceLease,
 } from "./supervisor/supervisor-types.js";
+import {
+  buildStaticSupervisorAssignment as buildStaticSupervisorAssignmentHelper,
+  buildCatalogAssignmentMetadata as buildCatalogAssignmentMetadataHelper,
+  resolveProviderModelId as resolveProviderModelIdHelper,
+  resolveSupervisorAssignment as resolveSupervisorAssignmentHelper,
+  buildSupervisorExecutionStrategy as buildSupervisorExecutionStrategyHelper,
+  getPinnedToolTurnAssignment as getPinnedToolTurnAssignmentHelper,
+  buildSupervisorRolePrompt as buildSupervisorRolePromptHelper,
+  resolveConsensusReviewAssignment as resolveConsensusReviewAssignmentHelper,
+  recordProviderUsage as recordProviderUsageHelper,
+  stripInternalDecisionMarkers as stripInternalDecisionMarkersHelper,
+  type SupervisorRoutingContext,
+  type SupervisorAssignment,
+  type SupervisorExecutionStrategy,
+  type SupervisorRole,
+} from "./orchestrator-supervisor-routing.js";
+import {
+  getOrCreateSession as getOrCreateSessionHelper,
+  trimSession as trimSessionHelper,
+  persistSessionToMemory as persistSessionToMemoryHelper,
+  persistExecutionMemory as persistExecutionMemoryHelper,
+  createMemoryRefresher as createMemoryRefresherHelper,
+  takePendingResumeTrees as takePendingResumeTreesHelper,
+  extractLastUserMessage as extractLastUserMessageHelper,
+  getVisibleTranscript as getVisibleTranscriptHelper,
+  appendVisibleUserMessage as appendVisibleUserMessageHelper,
+  appendVisibleAssistantMessage as appendVisibleAssistantMessageHelper,
+  type Session,
+  type SessionPersistenceContext,
+} from "./orchestrator-session-persistence.js";
+import {
+  canInspectLocally as canInspectLocallyHelper,
+  decideUserVisibleBoundary as decideUserVisibleBoundaryHelper,
+  buildSafeVisibleFallbackFromDraft as buildSafeVisibleFallbackFromDraftHelper,
+  resolveDraftClarificationIntervention as resolveDraftClarificationInterventionHelper,
+  resolveAskUserClarificationIntervention as resolveAskUserClarificationInterventionHelper,
+  type ClarificationIntervention,
+  type ClarificationContext,
+} from "./orchestrator-clarification.js";
+import {
+  buildSystemPromptWithContext as buildSystemPromptWithContextHelper,
+  type ContextBuilderDeps,
+} from "./orchestrator-context-builder.js";
 
 const TYPING_INTERVAL_MS = 4000;
-const MAX_SESSIONS = 100;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
-const AUTONOMOUS_MODE_DIRECTIVE = `\n\n## AUTONOMOUS MODE ACTIVE
-You are operating in AUTONOMOUS MODE. The user has explicitly granted you full autonomy.
-- Execute ALL operations directly without asking for confirmation
-- Do NOT use ask_user tool for permission/confirmation questions
-- Do NOT use show_plan tool to wait for approval unless the user explicitly asked to review a plan first
-- If you use show_plan internally, make it concrete and execution-ready; strong plans are self-reviewed and auto-approved
-- Only use ask_user when you genuinely cannot determine user intent (missing critical info)
-- If you use ask_user anyway, prefer decision-ready options because the system may resolve the choice autonomously
-- Proceed confidently with your best judgment on all write operations
-- Keep package choices, refactor paths, implementation sequencing, and other local engineering decisions internal
-- Do not narrate routine milestone updates or "next I will..." progress memos to the user; continue until you have the final result, a sparse heartbeat, or a real hard blocker
-- Do NOT return internal tool-run checklists or "first run X / then run Y" operational memos in plain text; use the tools directly when you can
-- Budget and safety limits are still enforced automatically\n`;
-const INTERNAL_DECISION_LINE_RE =
-  /^\s*\*{0,2}(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\*{0,2}\s*$/gim;
-const INTERNAL_TECHNICAL_CHOICE_RE =
-  /\b(?:package|dependency|library|provider|refactor|architecture|implementation|approach|path|module|service|screen|tool|install|upgrade|downgrade|split|merge|integration)\b/iu;
 const LOW_SIGNAL_EXECUTION_ACK_RE =
   /^(?:adjusted|done|ok(?:ay)?|noted|ack(?:nowledged)?|revised|updated|handled|understood|fixed)\.?$/iu;
-const HARD_BLOCKER_TEXT_RE =
-  /\b(?:credential|token|api[_ -]?key|login|account|subscription|permission|access|billing|quota|approval|approve|destructive|irreversible|delete|drop|wipe|deploy|upload|attach|artifact|external)\b/iu;
-const HARD_BLOCKER_CLARIFICATION_TYPES = new Set<ClarificationBlockingType>([
-  "missing_external_info",
-  "credential_or_access",
-  "risky_irreversible_action",
-]);
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
 The orchestrator remains the primary intelligence and the user-facing agent.
 You are not the overall assistant for the session.
@@ -253,16 +258,6 @@ Your job:
 - Do not invent tool results, code changes, or success claims.
 - If the task is incomplete or blocked, say that clearly.
 - Do not ask for permission unless the evidence truly shows missing user intent.`;
-
-interface Session {
-  messages: ConversationMessage[];
-  visibleMessages?: ConversationMessage[];
-  lastActivity: Date;
-  conversationScope?: string;
-  profileKey?: string;
-  mixedParticipants?: boolean;
-  postSetupBootstrapDelivered?: boolean;
-}
 
 interface WorkerToolMetadata {
   readonly readOnly?: boolean;
@@ -302,13 +297,6 @@ interface SelfManagedWriteReview {
   reason?: string;
 }
 
-interface ClarificationIntervention {
-  kind: "none" | "continue" | "ask_user" | "blocked";
-  gate?: string;
-  message?: string;
-  input?: Record<string, unknown>;
-}
-
 interface VerifierIntervention {
   kind: "approve" | "continue" | "replan";
   gate?: string;
@@ -320,28 +308,6 @@ interface LoopRecoveryIntervention {
   gate?: string;
   message?: string;
   summary?: string;
-}
-
-type SupervisorRole = "planner" | "executor" | "reviewer" | "synthesizer";
-
-interface SupervisorAssignment {
-  role: SupervisorRole;
-  providerName: string;
-  modelId?: string;
-  provider: IAIProvider;
-  reason: string;
-  traceSource?: ExecutionTraceSource;
-  assignmentVersion?: number;
-  catalogVersion?: string;
-}
-
-interface SupervisorExecutionStrategy {
-  task: TaskClassification;
-  planner: SupervisorAssignment;
-  executor: SupervisorAssignment;
-  reviewer: SupervisorAssignment;
-  synthesizer: SupervisorAssignment;
-  usesMultipleProviders: boolean;
 }
 
 interface WorkerRunCollector {
@@ -724,6 +690,17 @@ export class Orchestrator {
       (this.crashRecoveryContext ? buildCrashNotificationSection(this.crashRecoveryContext) : "");
   }
 
+  private getSupervisorRoutingContext(): SupervisorRoutingContext {
+    return {
+      providerManager: this.providerManager,
+      providerRouter: this.providerRouter as SupervisorRoutingContext["providerRouter"],
+      modelIntelligence: this.modelIntelligence,
+      metrics: this.metrics,
+      rateLimiter: this.rateLimiter,
+      taskClassifier: this.taskClassifier,
+    };
+  }
+
   private buildStaticSupervisorAssignment(
     role: SupervisorRole,
     providerName: string,
@@ -736,16 +713,7 @@ export class Orchestrator {
       catalogVersion?: string;
     },
   ): SupervisorAssignment {
-    return {
-      role,
-      providerName,
-      modelId,
-      provider,
-      reason,
-      traceSource,
-      assignmentVersion: metadata?.assignmentVersion,
-      catalogVersion: metadata?.catalogVersion,
-    };
+    return buildStaticSupervisorAssignmentHelper(role, providerName, modelId, provider, reason, traceSource, metadata);
   }
 
   private buildCatalogAssignmentMetadata(
@@ -757,69 +725,11 @@ export class Orchestrator {
     assignmentVersion?: number;
     catalogVersion?: string;
   } {
-    const routingMetadata = this.providerManager.getRoutingMetadata?.(
-      providerName,
-      modelId,
-      identityKey,
-    );
-
-    if (!routingMetadata) {
-      return {
-        assignmentVersion,
-        catalogVersion: createCatalogVersion({
-          provider: providerName,
-          model: modelId,
-          updatedAt: undefined,
-          stale: false,
-          degraded: false,
-        }),
-      };
-    }
-
-    return {
-      assignmentVersion: assignmentVersion ?? routingMetadata.assignmentVersion,
-      catalogVersion: createCatalogVersion({
-        provider: routingMetadata.provider,
-        model: routingMetadata.model,
-        updatedAt: routingMetadata.catalog.updatedAt,
-        stale: routingMetadata.catalog.stale,
-        degraded: routingMetadata.catalog.degraded,
-      }),
-    };
-  }
-
-  private getProviderByNameOrFallback(
-    providerName: string | undefined,
-    fallbackProvider: IAIProvider,
-  ): { providerName: string; provider: IAIProvider } {
-    const normalizedName = providerName?.trim();
-    const resolved =
-      (normalizedName ? this.providerManager.getProviderByName?.(normalizedName) : null) ??
-      fallbackProvider;
-    return {
-      providerName: normalizedName || fallbackProvider.name,
-      provider: resolved,
-    };
+    return buildCatalogAssignmentMetadataHelper(this.getSupervisorRoutingContext(), providerName, modelId, identityKey, assignmentVersion);
   }
 
   private resolveProviderModelId(providerName: string, identityKey: string): string | undefined {
-    const normalizedProvider = providerName.trim().toLowerCase();
-    const activeInfo = this.providerManager.getActiveInfo?.(identityKey);
-    if (activeInfo?.providerName === normalizedProvider && activeInfo.model) {
-      return activeInfo.model;
-    }
-
-    const executionCandidate = this.providerManager
-      .listExecutionCandidates?.(identityKey)
-      .find((candidate) => candidate.name === normalizedProvider);
-    if (executionCandidate?.defaultModel) {
-      return executionCandidate.defaultModel;
-    }
-
-    const availableCandidate = this.providerManager
-      .listAvailable?.()
-      .find((candidate) => candidate.name === normalizedProvider);
-    return availableCandidate?.defaultModel;
+    return resolveProviderModelIdHelper(this.getSupervisorRoutingContext(), providerName, identityKey);
   }
 
   private resolveSupervisorAssignment(
@@ -832,84 +742,7 @@ export class Orchestrator {
     taskDescription?: string,
     projectWorldFingerprint?: string,
   ): SupervisorAssignment {
-    const activeInfo = this.providerManager.getActiveInfo?.(identityKey);
-    if (activeInfo?.selectionMode === "strada-hard-pin") {
-      return this.buildStaticSupervisorAssignment(
-        role,
-        activeInfo.providerName,
-        activeInfo.model,
-        this.providerManager.getProvider(identityKey),
-        `honored the explicit user hard pin for ${role}`,
-        "supervisor-strategy",
-        this.buildCatalogAssignmentMetadata(
-          activeInfo.providerName,
-          activeInfo.model,
-          identityKey,
-        ),
-      );
-    }
-
-    if (!this.providerRouter) {
-      const modelId = this.resolveProviderModelId(fallbackName, identityKey);
-      return this.buildStaticSupervisorAssignment(
-        role,
-        fallbackName,
-        modelId,
-        fallbackProvider,
-        "routing unavailable, reusing the current worker",
-        undefined,
-        this.buildCatalogAssignmentMetadata(fallbackName, modelId, identityKey),
-      );
-    }
-
-    try {
-      const routed =
-        "resolveWithCatalog" in this.providerRouter &&
-        typeof this.providerRouter.resolveWithCatalog === "function"
-          ? this.providerRouter.resolveWithCatalog(task, phase, {
-            identityKey,
-            taskDescription,
-            projectWorldFingerprint,
-          })
-          : this.providerRouter.resolve(task, phase, {
-            identityKey,
-            taskDescription,
-            projectWorldFingerprint,
-          });
-      const resolved = this.getProviderByNameOrFallback(routed.provider, fallbackProvider);
-      const modelId = "model" in routed && typeof routed.model === "string"
-        ? routed.model
-        : this.resolveProviderModelId(resolved.providerName, identityKey);
-      return this.buildStaticSupervisorAssignment(
-        role,
-        resolved.providerName,
-        modelId,
-        resolved.provider,
-        routed.reason,
-        undefined,
-        this.buildCatalogAssignmentMetadata(
-          resolved.providerName,
-          modelId,
-          identityKey,
-          "assignmentVersion" in routed && typeof routed.assignmentVersion === "number"
-            ? routed.assignmentVersion
-            : undefined,
-        ),
-      );
-    } catch {
-      // Routing failure is non-fatal — use fallback provider
-    }
-
-    const modelId = this.resolveProviderModelId(fallbackName, identityKey);
-    return this.buildStaticSupervisorAssignment(
-      role,
-      fallbackName,
-      modelId,
-      fallbackProvider,
-      "routing fallback, reusing the current worker",
-      undefined,
-      this.buildCatalogAssignmentMetadata(fallbackName, modelId, identityKey),
-    );
+    return resolveSupervisorAssignmentHelper(this.getSupervisorRoutingContext(), role, task, phase, identityKey, fallbackName, fallbackProvider, taskDescription, projectWorldFingerprint);
   }
 
   private buildSupervisorExecutionStrategy(
@@ -918,176 +751,7 @@ export class Orchestrator {
     fallbackProvider: IAIProvider,
     projectWorldFingerprint?: string,
   ): SupervisorExecutionStrategy {
-    const task = this.taskClassifier.classify(prompt);
-    const activeInfo = this.providerManager.getActiveInfo?.(identityKey);
-    if (activeInfo?.selectionMode === "strada-hard-pin") {
-      const metadata = this.buildCatalogAssignmentMetadata(
-        activeInfo.providerName,
-        activeInfo.model,
-        identityKey,
-      );
-      const buildPinnedAssignment = (
-        role: SupervisorRole,
-        reason: string,
-      ): SupervisorAssignment =>
-        this.buildStaticSupervisorAssignment(
-          role,
-          activeInfo.providerName,
-          activeInfo.model,
-          fallbackProvider,
-          reason,
-          "supervisor-strategy",
-          metadata,
-        );
-
-      return {
-        task,
-        planner: buildPinnedAssignment(
-          "planner",
-          "honored the explicit user hard pin for planning",
-        ),
-        executor: buildPinnedAssignment(
-          "executor",
-          "honored the explicit user hard pin for execution",
-        ),
-        reviewer: buildPinnedAssignment(
-          "reviewer",
-          "honored the explicit user hard pin for review",
-        ),
-        synthesizer: buildPinnedAssignment(
-          "synthesizer",
-          "honored the explicit user hard pin for synthesis",
-        ),
-        usesMultipleProviders: false,
-      };
-    }
-    const selected = this.getProviderByNameOrFallback(activeInfo?.providerName, fallbackProvider);
-    const selectedProviderName = selected.providerName;
-    const selectedProvider = selected.provider;
-
-    const planner = this.resolveSupervisorAssignment(
-      "planner",
-      { ...task, type: "planning" },
-      "planning",
-      identityKey,
-      selectedProviderName,
-      selectedProvider,
-      prompt,
-      projectWorldFingerprint,
-    );
-
-    const executor = this.resolveSupervisorAssignment(
-      "executor",
-      task,
-      "executing",
-      identityKey,
-      selectedProviderName,
-      selectedProvider,
-      prompt,
-      projectWorldFingerprint,
-    );
-
-    let reviewer = this.resolveSupervisorAssignment(
-      "reviewer",
-      { ...task, type: "code-review" },
-      "reflecting",
-      identityKey,
-      planner.providerName,
-      planner.provider,
-      prompt,
-      projectWorldFingerprint,
-    );
-    if (
-      reviewer.providerName === executor.providerName &&
-      planner.providerName !== executor.providerName
-    ) {
-      reviewer = this.buildStaticSupervisorAssignment(
-        "reviewer",
-        planner.providerName,
-        planner.modelId,
-        planner.provider,
-        "reused the planning worker as reviewer to keep execution and review separated",
-        undefined,
-        {
-          assignmentVersion: planner.assignmentVersion,
-          catalogVersion: planner.catalogVersion,
-        },
-      );
-    }
-
-    let synthesizer = this.resolveSupervisorAssignment(
-      "synthesizer",
-      { ...task, type: "simple-question" },
-      undefined,
-      identityKey,
-      reviewer.providerName,
-      reviewer.provider,
-      prompt,
-      projectWorldFingerprint,
-    );
-    if (synthesizer.providerName === executor.providerName) {
-      if (reviewer.providerName !== executor.providerName) {
-        synthesizer = this.buildStaticSupervisorAssignment(
-          "synthesizer",
-          reviewer.providerName,
-          reviewer.modelId,
-          reviewer.provider,
-          "reused the reviewer as the user-facing synthesis worker to keep execution separate",
-          undefined,
-          {
-            assignmentVersion: reviewer.assignmentVersion,
-            catalogVersion: reviewer.catalogVersion,
-          },
-        );
-      } else if (planner.providerName !== executor.providerName) {
-        synthesizer = this.buildStaticSupervisorAssignment(
-          "synthesizer",
-          planner.providerName,
-          planner.modelId,
-          planner.provider,
-          "reused the planner as the user-facing synthesis worker to keep execution separate",
-          undefined,
-          {
-            assignmentVersion: planner.assignmentVersion,
-            catalogVersion: planner.catalogVersion,
-          },
-        );
-      }
-    }
-
-    const uniqueProviders = new Set([
-      planner.providerName,
-      executor.providerName,
-      reviewer.providerName,
-      synthesizer.providerName,
-    ]);
-
-    return {
-      task,
-      planner,
-      executor,
-      reviewer,
-      synthesizer,
-      usesMultipleProviders: uniqueProviders.size > 1,
-    };
-  }
-
-  private getSupervisorAssignmentForPhase(
-    strategy: SupervisorExecutionStrategy,
-    phase: AgentPhase,
-  ): SupervisorAssignment {
-    switch (phase) {
-      case AgentPhase.PLANNING:
-      case AgentPhase.REPLANNING:
-        return strategy.planner;
-      case AgentPhase.REFLECTING:
-        return strategy.reviewer;
-      case AgentPhase.EXECUTING:
-      case AgentPhase.COMPLETE:
-      case AgentPhase.FAILED:
-      default:
-        return strategy.executor;
-    }
+    return buildSupervisorExecutionStrategyHelper(this.getSupervisorRoutingContext(), prompt, identityKey, fallbackProvider, projectWorldFingerprint);
   }
 
   private getPinnedToolTurnAssignment(
@@ -1095,97 +759,18 @@ export class Orchestrator {
     phase: AgentPhase,
     pinnedProvider: SupervisorAssignment | null,
   ): SupervisorAssignment {
-    if (!pinnedProvider || phase === AgentPhase.COMPLETE || phase === AgentPhase.FAILED) {
-      return this.getSupervisorAssignmentForPhase(strategy, phase);
-    }
-
-    const role = this.getSupervisorAssignmentForPhase(strategy, phase).role;
-    return this.buildStaticSupervisorAssignment(
-      role,
-      pinnedProvider.providerName,
-      pinnedProvider.modelId,
-      pinnedProvider.provider,
-      "kept the active tool-turn provider pinned to preserve provider-specific tool context",
-      "tool-turn-affinity",
-      {
-        assignmentVersion: pinnedProvider.assignmentVersion,
-        catalogVersion: pinnedProvider.catalogVersion,
-      },
-    );
+    return getPinnedToolTurnAssignmentHelper(strategy, phase, pinnedProvider);
   }
 
   private buildSupervisorRolePrompt(
     strategy: SupervisorExecutionStrategy,
     assignment: SupervisorAssignment,
   ): string {
-    const providerCapabilities = this.providerManager.getProviderCapabilities?.(
-      assignment.providerName,
-      assignment.modelId,
-    );
-    const lines = [
-      "## Orchestrator Assignment",
-      "Strada Brain has already analyzed the user request and owns the overall decision-making.",
-      "You are serving as a worker inside that orchestrated execution plan.",
-      `Current worker role: ${assignment.role}`,
-      "",
-      "Execution strategy:",
-      `- Planner: ${strategy.planner.providerName} (${strategy.planner.reason})`,
-      `- Executor: ${strategy.executor.providerName} (${strategy.executor.reason})`,
-      `- Reviewer: ${strategy.reviewer.providerName} (${strategy.reviewer.reason})`,
-      `- Synthesizer: ${strategy.synthesizer.providerName} (${strategy.synthesizer.reason})`,
-      "",
-      "Role contract:",
-      "- Do not emit internal tool-run checklists or instructions telling Strada which tools to invoke next. Use tools directly or return only phase-appropriate analysis.",
-    ];
-
-    switch (assignment.role) {
-      case "planner":
-        lines.push(
-          "- Produce or revise the plan only.",
-          "- Do not take over the full user conversation.",
-          "- Give the executor concrete, verifiable steps.",
-        );
-        break;
-      case "executor":
-        lines.push(
-          "- Execute the current plan and use tools when needed.",
-          "- Do not treat your draft as the final user-facing answer.",
-          "- Leave final presentation to the synthesizer unless the orchestrator explicitly surfaces a blocker.",
-          "- If the task is still locally inspectable, do not hand it back to the user as a clarification request.",
-        );
-        break;
-      case "reviewer":
-        lines.push(
-          "- Evaluate progress, verification, and failure signals.",
-          "- Decide whether execution should continue, replan, or complete.",
-          "- Do not rewrite the whole conversation as the final user answer.",
-          "- Decide whether ambiguity is internally resolvable or truly requires user clarification.",
-        );
-        break;
-      case "synthesizer":
-        lines.push(
-          "- Produce the final user-facing response for the orchestrator.",
-          "- Preserve verified facts and blockers only.",
-          "- Never mention internal control markers or provider identities.",
-          "- Only ask the user a clarifying question when clarification review explicitly approved it.",
-        );
-        break;
-    }
-
-    return `\n\n${lines.join("\n")}\n${buildProviderIntelligence(
-      assignment.providerName,
-      assignment.modelId,
-      this.modelIntelligence,
-      providerCapabilities,
-      assignment.providerName,
-    )}\n`;
+    return buildSupervisorRolePromptHelper(this.getSupervisorRoutingContext(), strategy, assignment);
   }
 
   private stripInternalDecisionMarkers(text: string | null | undefined): string {
-    if (!text) {
-      return "";
-    }
-    return text.replace(INTERNAL_DECISION_LINE_RE, "").trim();
+    return stripInternalDecisionMarkersHelper(text);
   }
 
   private recordProviderUsage(
@@ -1193,15 +778,7 @@ export class Orchestrator {
     usage: ProviderResponse["usage"] | undefined,
     onUsage?: (usage: TaskUsageEvent) => void,
   ): void {
-    const inputTokens = usage?.inputTokens ?? 0;
-    const outputTokens = usage?.outputTokens ?? 0;
-    this.metrics?.recordTokenUsage(inputTokens, outputTokens, providerName);
-    this.rateLimiter?.recordTokenUsage(inputTokens, outputTokens, providerName);
-    onUsage?.({
-      provider: providerName,
-      inputTokens,
-      outputTokens,
-    });
+    recordProviderUsageHelper(this.getSupervisorRoutingContext(), providerName, usage, onUsage);
   }
 
   private toExecutionPhase(phase: AgentPhase): ExecutionPhase {
@@ -1295,34 +872,7 @@ export class Orchestrator {
     currentAssignment: SupervisorAssignment,
     identityKey: string,
   ): SupervisorAssignment | null {
-    if (preferredReviewer.providerName !== currentAssignment.providerName) {
-      return preferredReviewer;
-    }
-
-    const fallbackReviewName = this.providerManager
-      .listAvailable()
-      .find((provider) => provider.name !== currentAssignment.providerName)?.name;
-    if (!fallbackReviewName) {
-      return null;
-    }
-
-    const fallbackReviewProvider = this.getProviderByNameOrFallback(
-      fallbackReviewName,
-      currentAssignment.provider,
-    );
-    return this.buildStaticSupervisorAssignment(
-      "reviewer",
-      fallbackReviewProvider.providerName,
-      this.resolveProviderModelId(fallbackReviewProvider.providerName, identityKey),
-      fallbackReviewProvider.provider,
-      "selected an alternate reviewer to keep consensus verification cross-provider",
-      undefined,
-      this.buildCatalogAssignmentMetadata(
-        fallbackReviewProvider.providerName,
-        this.resolveProviderModelId(fallbackReviewProvider.providerName, identityKey),
-        identityKey,
-      ),
-    );
+    return resolveConsensusReviewAssignmentHelper(this.getSupervisorRoutingContext(), preferredReviewer, currentAssignment, identityKey);
   }
 
   private shouldUseSupervisorSynthesis(strategy: SupervisorExecutionStrategy): boolean {
@@ -1709,27 +1259,16 @@ export class Orchestrator {
     this.taskManager = tm;
   }
 
-  private ensureVisibleMessages(session: Session): ConversationMessage[] {
-    if (!session.visibleMessages) {
-      session.visibleMessages = [];
-    }
-    return session.visibleMessages;
-  }
-
   private getVisibleTranscript(session: Session): ConversationMessage[] {
-    return this.ensureVisibleMessages(session);
+    return getVisibleTranscriptHelper(session);
   }
 
   private appendVisibleUserMessage(session: Session, content: string | MessageContent[]): void {
-    const message: ConversationMessage = { role: "user", content };
-    session.messages.push(message);
-    this.ensureVisibleMessages(session).push(message);
+    appendVisibleUserMessageHelper(session, content);
   }
 
   private appendVisibleAssistantMessage(session: Session, content: string): void {
-    const message: ConversationMessage = { role: "assistant", content };
-    session.messages.push(message);
-    this.ensureVisibleMessages(session).push(message);
+    appendVisibleAssistantMessageHelper(session, content);
   }
 
   private async sendVisibleAssistantText(
@@ -1782,21 +1321,11 @@ export class Orchestrator {
     });
   }
 
-  private hasLocalInspectionScope(prompt: string, task: TaskClassification): boolean {
-    const trimmed = prompt.trim();
-    if (!trimmed) {
-      return false;
-    }
-    if (extractExactResponseLiteral(trimmed)) {
-      return false;
-    }
-    if (task.type === "simple-question") {
-      return false;
-    }
-    if (LOCAL_INSPECTION_SCOPE_RE.test(trimmed)) {
-      return true;
-    }
-    return false;
+  private getClarificationContext(): ClarificationContext {
+    return {
+      interactionConfig: this.interactionConfig,
+      toolMetadataByName: this.toolMetadataByName,
+    };
   }
 
   private canInspectLocally(
@@ -1804,26 +1333,7 @@ export class Orchestrator {
     task: TaskClassification,
     availableToolNames: readonly string[],
   ): boolean {
-    const hasReadableTool = availableToolNames.some(
-      (name) => this.toolMetadataByName.get(name)?.readOnly !== false,
-    );
-    return hasReadableTool && this.hasLocalInspectionScope(prompt, task);
-  }
-
-  private collectInteractionBoundaryEvidence(
-    chatId: string,
-    state: AgentState,
-    selfVerification: SelfVerification,
-    taskStartedAtMs: number,
-  ) {
-    const logEntries = typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [];
-    return collectCompletionReviewEvidence({
-      state,
-      verificationState: selfVerification.getState(),
-      logEntries,
-      chatId,
-      taskStartedAtMs,
-    });
+    return canInspectLocallyHelper(this.getClarificationContext(), prompt, task, availableToolNames);
   }
 
   private decideUserVisibleBoundary(params: {
@@ -1838,25 +1348,7 @@ export class Orchestrator {
     availableToolNames: readonly string[];
     terminalFailureReported?: boolean;
   }): InteractionBoundaryDecision {
-    return decideInteractionBoundary({
-      prompt: params.prompt,
-      workerDraft: params.workerDraft,
-      visibleDraft: params.visibleDraft ?? "",
-      task: params.task,
-      evidence: this.collectInteractionBoundaryEvidence(
-        params.chatId,
-        params.state,
-        params.selfVerification,
-        params.taskStartedAtMs,
-      ),
-      canInspectLocally: this.canInspectLocally(
-        params.prompt,
-        params.task,
-        params.availableToolNames,
-      ),
-      terminalFailureReported: params.terminalFailureReported,
-      availableToolNames: params.availableToolNames,
-    });
+    return decideUserVisibleBoundaryHelper(this.getClarificationContext(), params);
   }
 
   private buildSafeVisibleFallbackFromDraft(
@@ -1865,53 +1357,7 @@ export class Orchestrator {
     task: TaskClassification,
     allowDirectFinalAnswer = true,
   ): string {
-    const cleanedDraft = this.stripInternalDecisionMarkers(draft).trim();
-    if (!cleanedDraft) {
-      return "";
-    }
-
-    const fallbackDecision = decideInteractionBoundary({
-      prompt,
-      workerDraft: cleanedDraft,
-      visibleDraft: "",
-      task,
-      canInspectLocally: false,
-      availableToolNames: [],
-      evidence: {
-        touchedFiles: [],
-        recentFailures: [],
-        recentLogIssues: [],
-        recentSteps: [],
-        totalStepCount: 0,
-        inspectionStepCount: 0,
-        verificationStepCount: 0,
-        mutationStepCount: 0,
-        verificationState: {
-          pendingFiles: new Set(),
-          touchedFiles: new Set(),
-          hasCompilableChanges: false,
-          lastBuildOk: null,
-          lastVerificationAt: null,
-        },
-      },
-    });
-
-    if (fallbackDecision.kind === "terminal_failure" && fallbackDecision.visibleText) {
-      return applyVisibleResponseContract(prompt, fallbackDecision.visibleText);
-    }
-
-    if (
-      allowDirectFinalAnswer &&
-      fallbackDecision.kind === "final_answer" &&
-      fallbackDecision.visibleText
-    ) {
-      return applyVisibleResponseContract(prompt, fallbackDecision.visibleText);
-    }
-
-    return applyVisibleResponseContract(
-      prompt,
-      "Task execution completed, but Strada could not safely synthesize a user-facing summary from the internal worker output. Review the task trace or rerun the task for a clean final summary.",
-    );
+    return buildSafeVisibleFallbackFromDraftHelper(prompt, draft, task, allowDirectFinalAnswer);
   }
 
   private formatPlanReviewMessage(draft: string): string {
@@ -2066,21 +1512,6 @@ export class Orchestrator {
       availableToolNames: params.availableToolNames,
       terminalFailureReported: params.terminalFailureReported,
     });
-  }
-
-  /** Append soul personality section to a system prompt if available. */
-  private injectSoulPersonality(
-    systemPrompt: string,
-    channelType?: string,
-    personaOverride?: string,
-  ): string {
-    if (personaOverride) {
-      return systemPrompt + `\n\n## Agent Personality\n\n${personaOverride}\n`;
-    }
-    if (!this.soulLoader) return systemPrompt;
-    const soulContent = this.soulLoader.getContent(channelType);
-    if (!soulContent) return systemPrompt;
-    return systemPrompt + `\n\n## Agent Personality\n\n${soulContent}\n`;
   }
 
   private getClarificationReviewAssignment(
@@ -2251,34 +1682,16 @@ export class Orchestrator {
       return { kind: "none" };
     }
 
-    const { decision, evidence } = await this.reviewClarification({
+    const reviewResult = await this.reviewClarification({
       ...params,
       draft: cleanedDraft,
     });
 
-    if (
-      decision?.decision === "internal_continue" ||
-      this.shouldKeepClarificationInternal(decision, cleanedDraft)
-    ) {
-      return {
-        kind: "continue",
-        gate: buildClarificationContinuationGate(
-          evidence,
-          this.toInternalClarificationDecision(decision),
-        ),
-      };
-    }
-
-    switch (decision?.decision) {
-      case "ask_user":
-      case "blocked":
-        return {
-          kind: decision.decision,
-          message: formatClarificationPrompt(decision) ?? undefined,
-        };
-      default:
-        return { kind: "none" };
-    }
+    return resolveDraftClarificationInterventionHelper(
+      this.getClarificationContext(),
+      params.draft,
+      reviewResult,
+    );
   }
 
   private async resolveAskUserClarificationIntervention(params: {
@@ -2308,215 +1721,41 @@ export class Orchestrator {
       .filter(Boolean)
       .join("\n");
 
-    const { decision, evidence } = await this.reviewClarification({
+    const reviewResult = await this.reviewClarification({
       ...params,
       draft,
     });
 
-    if (
-      decision?.decision === "internal_continue" ||
-      this.shouldKeepClarificationInternal(decision, draft)
-    ) {
-      return {
-        kind: "continue",
-        gate: buildClarificationContinuationGate(
-          evidence,
-          this.toInternalClarificationDecision(decision),
-        ),
-      };
-    }
-
-    if (decision?.decision === "ask_user" || decision?.decision === "blocked") {
-      const approvedQuestion = decision.question?.trim() || question;
-      const approvedOptions =
-        decision.options?.filter((option) => option.trim().length > 0) ?? options;
-      const approvedRecommended = decision.recommendedOption?.trim() || recommended || undefined;
-
-      return {
-        kind: decision.decision,
-        input: {
-          question: approvedQuestion,
-          ...(approvedOptions.length > 0 ? { options: approvedOptions } : {}),
-          ...(approvedRecommended ? { recommended: approvedRecommended } : {}),
-          ...(decision.reason?.trim()
-            ? { context: decision.reason.trim() }
-            : context
-              ? { context }
-              : {}),
-        },
-      };
-    }
-
-    return { kind: "none" };
+    return resolveAskUserClarificationInterventionHelper(
+      this.getClarificationContext(),
+      params.toolCall.input,
+      reviewResult,
+      (value) => this.normalizeInteractiveText(value),
+    );
   }
 
-  private shouldKeepClarificationInternal(
-    decision: ClarificationReviewDecision | null | undefined,
-    text: string,
-  ): boolean {
-    if (!decision || (decision.decision !== "ask_user" && decision.decision !== "blocked")) {
-      return false;
-    }
-    if (this.interactionConfig.escalationPolicy !== "hard-blockers-only") {
-      return false;
-    }
-    if (this.looksLikeInternalTechnicalChoice(text)) {
-      return true;
-    }
-    if (decision.blockingType) {
-      return !HARD_BLOCKER_CLARIFICATION_TYPES.has(decision.blockingType);
-    }
-    return !HARD_BLOCKER_TEXT_RE.test(text);
-  }
-
-  private toInternalClarificationDecision(
-    decision: ClarificationReviewDecision | null | undefined,
-  ): ClarificationReviewDecision {
+  private getContextBuilderDeps(): ContextBuilderDeps {
     return {
-      decision: "internal_continue",
-      reason:
-        decision?.reason?.trim() ||
-        "Silent-first autonomy keeps local engineering decisions inside Strada until a real hard blocker exists.",
-      recommendedNextAction:
-        decision?.recommendedNextAction?.trim() ||
-        "Resolve the local technical decision internally and continue execution without user escalation.",
+      memoryManager: this.memoryManager,
+      ragPipeline: this.ragPipeline,
+      embeddingProvider: this.embeddingProvider,
+      taskExecutionStore: this.taskExecutionStore,
+      soulLoader: this.soulLoader,
+      dmPolicy: this.dmPolicy,
+      activeGoalTrees: this.activeGoalTrees,
+      projectPath: this.projectPath,
+      defaultLanguage: this.defaultLanguage,
+      systemPrompt: this.systemPrompt,
+      taskClassifier: this.taskClassifier,
+      toolMetadataByName: this.toolMetadataByName,
+      toolDefinitions: this.toolDefinitions,
+      runtimeArtifactManager: this.runtimeArtifactManager as ContextBuilderDeps["runtimeArtifactManager"],
+      trajectoryReplayRetriever: this.trajectoryReplayRetriever as ContextBuilderDeps["trajectoryReplayRetriever"],
+      getTaskExecutionContext: () => this.getTaskExecutionContext(),
+      runtimeArtifactMatches: this.runtimeArtifactMatches,
+      buildWorkerToolDefinitions: (task, phase, role) =>
+        this.buildWorkerToolDefinitions(task, phase, role as SupervisorAssignment["role"]),
     };
-  }
-
-  private looksLikeInternalTechnicalChoice(text: string): boolean {
-    return INTERNAL_TECHNICAL_CHOICE_RE.test(text);
-  }
-
-  /**
-   * Build context injection for system prompt enrichment.
-   * Layers: User Profile, Task Execution Memory, Project/World Memory, Open Tasks/Goals, Semantic Memory.
-   */
-  private async buildContextLayers(
-    goalScope: string,
-    executionScope: string,
-    userMessage: string,
-    profile: import("../memory/unified/user-profile-store.js").UserProfile | null,
-    preComputedEmbedding?: number[],
-  ): Promise<{
-    context: string;
-    contentHashes: string[];
-    projectWorldSummary?: string;
-    projectWorldFingerprint?: string;
-  }> {
-    const layers: string[] = [];
-    const contentHashes: string[] = [];
-    let projectWorldSummary: string | undefined;
-    let projectWorldFingerprint: string | undefined;
-    const classifiedTask = this.taskClassifier.classify(userMessage);
-    const taskContext = this.getTaskExecutionContext();
-    const runtimeArtifactToolNames = this.buildWorkerToolDefinitions(
-      classifiedTask,
-      AgentPhase.EXECUTING,
-      "executor",
-    ).map((definition) => definition.name);
-
-    // Layer 1: User Profile
-    if (profile) {
-      const parts = buildProfileParts(profile);
-      if (parts.length > 0)
-        layers.push(
-          `## User Context\nUse this information naturally in your responses. Address the user by name and respect their preferences.\n${parts.join("\n")}`,
-        );
-    }
-
-    // Layer 2: Task Execution Memory
-    const taskExecutionMemory = this.taskExecutionStore?.getMemory(executionScope) ?? null;
-    const taskExecutionLayer = this.buildTaskExecutionMemoryLayer(
-      taskExecutionMemory,
-      profile?.contextSummary,
-    );
-    if (taskExecutionLayer) {
-      layers.push(taskExecutionLayer.content);
-      contentHashes.push(...taskExecutionLayer.contentHashes);
-    }
-
-    // Layer 3: Project / World Memory
-    const projectWorldLayer = await this.buildProjectWorldMemoryLayer();
-    if (projectWorldLayer) {
-      layers.push(projectWorldLayer.content);
-      contentHashes.push(...projectWorldLayer.contentHashes);
-      projectWorldSummary = projectWorldLayer.summary;
-      projectWorldFingerprint = projectWorldLayer.fingerprint;
-    }
-
-    // Layer 4: Runtime self-improvement artifacts
-    const runtimeArtifactLayer = this.buildRuntimeArtifactMemoryLayer(
-      userMessage,
-      classifiedTask,
-      projectWorldFingerprint,
-      runtimeArtifactToolNames,
-      taskContext?.chatId,
-      taskContext?.taskRunId,
-    );
-    if (runtimeArtifactLayer) {
-      layers.push(runtimeArtifactLayer.content);
-      contentHashes.push(...runtimeArtifactLayer.contentHashes);
-    }
-
-    // Layer 5: Cross-session execution replay
-    const trajectoryReplayLayer = this.buildTrajectoryReplayMemoryLayer(
-      userMessage,
-      projectWorldFingerprint,
-    );
-    if (trajectoryReplayLayer) {
-      layers.push(trajectoryReplayLayer.content);
-      contentHashes.push(...trajectoryReplayLayer.contentHashes);
-    }
-
-    // Layer 6: Open Tasks/Goals
-    const activeGoalTree = this.activeGoalTrees?.get(goalScope);
-    if (activeGoalTree) {
-      const pendingGoals: Array<{ task: string; status: string }> = [];
-      for (const node of activeGoalTree.nodes.values()) {
-        if (node.status === "pending" || node.status === "executing") {
-          pendingGoals.push({ task: node.task, status: node.status });
-        }
-      }
-      if (pendingGoals.length > 0) {
-        const taskLines = pendingGoals
-          .slice(0, 5)
-          .map((g) => `- ${g.task} — ${g.status}`)
-          .join("\n");
-        layers.push(`## Open Tasks\n${taskLines}`);
-      }
-    }
-
-    // Layer 7: Semantic Memory (real embedding search)
-    if (this.memoryManager && userMessage) {
-      try {
-        const memoriesResult = await this.memoryManager.retrieve({
-          mode: "semantic",
-          query: userMessage,
-          limit: 5,
-          minScore: 0.15,
-          embedding: preComputedEmbedding,
-        } as import("../memory/memory.interface.js").SemanticRetrievalOptions);
-        if (isOk(memoriesResult)) {
-          const memories = memoriesResult.value;
-          if (memories.length > 0) {
-            const memoryContext = memories.map((m) => m.entry.content).join("\n---\n");
-            layers.push(`## Relevant Memory\n${memoryContext}`);
-            for (const m of memories) {
-              contentHashes.push(m.entry.content);
-            }
-          }
-        }
-      } catch {
-        // Memory retrieval failure is non-fatal
-      }
-    }
-
-    const context =
-      layers.length > 0
-        ? `\n\n<!-- context-layers:start -->\n${layers.join("\n\n")}\n<!-- context-layers:end -->\n`
-        : "";
-
-    return { context, contentHashes, projectWorldSummary, projectWorldFingerprint };
   }
 
   /**
@@ -2545,67 +1784,7 @@ export class Orchestrator {
     projectWorldSummary?: string;
     projectWorldFingerprint?: string;
   }> {
-    const logger = getLogger();
-
-    // 1. Language directive — FIRST, highest priority, before personality
-    // Always inject: profile language > LANGUAGE_PREFERENCE env > "en"
-    const effectiveLang = params.profile?.language ?? this.defaultLanguage;
-    const langName = LANGUAGE_DISPLAY_NAMES[effectiveLang] ?? "English";
-    const langDirective = `\n## LANGUAGE RULE\nYour current language is ${langName}. Respond in ${langName} unless the user clearly switches to a different language — in that case, follow their lead.\n`;
-
-    // 2. Soul personality injection (with optional persona override)
-    let systemPrompt =
-      langDirective +
-      this.injectSoulPersonality(this.systemPrompt, params.channelType, params.personaContent);
-
-    // 2.5. Exact literal-output requests need a hard response contract.
-    systemPrompt += buildExactResponseDirective(params.prompt);
-
-    // 3. Autonomous mode directive
-    if (this.dmPolicy?.isAutonomousActive(params.chatId, params.userId)) {
-      systemPrompt += AUTONOMOUS_MODE_DIRECTIVE;
-    }
-
-    // 4. Context layers (user profile, session summary, open tasks, semantic memory)
-    const {
-      context: contextLayers,
-      contentHashes,
-      projectWorldSummary,
-      projectWorldFingerprint,
-    } = await this.buildContextLayers(
-      params.conversationScope,
-      params.identityKey,
-      params.prompt,
-      params.profile as import("../memory/unified/user-profile-store.js").UserProfile | null,
-      params.preComputedEmbedding,
-    );
-    systemPrompt += contextLayers;
-    const initialContentHashes: string[] = [...contentHashes];
-
-    // 5. RAG injection
-    if (this.ragPipeline && params.prompt) {
-      try {
-        const ragResults = await this.ragPipeline.search(params.prompt, {
-          topK: 6,
-          minScore: 0.2,
-          queryEmbedding: params.preComputedEmbedding,
-        });
-        if (ragResults.length > 0) {
-          const ragFormatted = this.ragPipeline.formatContext(ragResults);
-          systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${ragFormatted}\n<!-- re-retrieval:rag:end -->\n`;
-          for (const r of ragResults) initialContentHashes.push(r.chunk.content);
-          logger.debug("Injected RAG context", {
-            chatId: params.chatId,
-            resultCount: ragResults.length,
-            topScore: ragResults[0]!.finalScore.toFixed(3),
-          });
-        }
-      } catch {
-        // RAG failure is non-fatal
-      }
-    }
-
-    return { systemPrompt, initialContentHashes, projectWorldSummary, projectWorldFingerprint };
+    return buildSystemPromptWithContextHelper(this.getContextBuilderDeps(), params);
   }
 
   /**
@@ -8173,47 +7352,30 @@ export class Orchestrator {
     return response === "Yes";
   }
 
+  private getSessionPersistenceContext(): SessionPersistenceContext {
+    return {
+      sessions: this.sessions,
+      sessionLocks: this.sessionLocks,
+      activeGoalTrees: this.activeGoalTrees,
+      pendingResumeTrees: this.pendingResumeTrees,
+      memoryManager: this.memoryManager,
+      reRetrievalConfig: this.reRetrievalConfig,
+      embeddingProvider: this.embeddingProvider,
+      ragPipeline: this.ragPipeline,
+      instinctRetriever: this.instinctRetriever,
+      eventEmitter: this.eventEmitter,
+      taskExecutionStore: this.taskExecutionStore,
+      lastPersistTime: this.lastPersistTime,
+      persistDebounceMs: Orchestrator.PERSIST_DEBOUNCE_MS,
+    };
+  }
+
   private extractLastUserMessage(session: Session): string {
-    for (let i = session.messages.length - 1; i >= 0; i--) {
-      const msg = session.messages[i]!;
-      if (msg.role !== "user") continue;
-      if (typeof msg.content === "string") return msg.content;
-      if (Array.isArray(msg.content)) {
-        const textParts = (msg.content as MessageContent[])
-          .filter((b): b is { type: "text"; text: string } => b.type === "text")
-          .map((b) => b.text);
-        if (textParts.length > 0) return textParts.join(" ");
-      }
-    }
-    return "";
+    return extractLastUserMessageHelper(session);
   }
 
   private getOrCreateSession(chatId: string): Session {
-    let session = this.sessions.get(chatId);
-    if (session) {
-      // Move to end for LRU ordering (Map preserves insertion order)
-      this.sessions.delete(chatId);
-      this.sessions.set(chatId, session);
-      return session;
-    }
-
-    // Evict oldest session if at capacity
-    if (this.sessions.size >= MAX_SESSIONS) {
-      const oldestKey = this.sessions.keys().next().value as string;
-      const oldestSession = this.sessions.get(oldestKey);
-      this.sessions.delete(oldestKey);
-      this.sessionLocks.delete(oldestKey);
-      this.activeGoalTrees.delete(oldestSession?.conversationScope ?? oldestKey);
-    }
-
-    session = {
-      messages: [],
-      visibleMessages: [],
-      lastActivity: new Date(),
-      mixedParticipants: false,
-    };
-    this.sessions.set(chatId, session);
-    return session;
+    return getOrCreateSessionHelper(this.getSessionPersistenceContext(), chatId);
   }
 
   /**
@@ -8222,75 +7384,7 @@ export class Orchestrator {
    * Returns the trimmed (removed) messages for persistence.
    */
   private trimSession(session: Session, maxMessages: number): ConversationMessage[] {
-    if (session.messages.length <= maxMessages) return [];
-
-    const overflow = session.messages.length - maxMessages;
-    const trimMessages = (count: number): ConversationMessage[] => {
-      const removed = session.messages.splice(0, count);
-      if (removed.length === 0) {
-        return removed;
-      }
-      if (!session.visibleMessages?.length) {
-        return [];
-      }
-      const removedSet = new Set(removed);
-      const removedVisible = session.visibleMessages.filter((message) => removedSet.has(message));
-      session.visibleMessages = session.visibleMessages.filter(
-        (message) => !removedSet.has(message),
-      );
-      return removedVisible;
-    };
-
-    // Find a safe trim boundary that does NOT orphan tool_call/tool_result pairs.
-    // A safe boundary is a user message with plain string content (not a tool_result array)
-    // that is NOT immediately preceded by an assistant message with tool_calls.
-    let trimTo = 0;
-    for (let i = overflow; i < session.messages.length; i++) {
-      const msg = session.messages[i]!;
-
-      // Must be a plain user message (string content, not tool_result array)
-      if (msg.role !== "user") continue;
-      if (typeof msg.content !== "string") continue;
-
-      // Check the previous message — if it's an assistant with tool_calls,
-      // this user message might be a tool_result response (content mismatch
-      // but we need to be safe). Only trim if the previous is NOT a tool_call.
-      if (i > 0) {
-        const prev = session.messages[i - 1]!;
-        if (prev.role === "assistant" && (prev as AssistantMessage).tool_calls?.length) {
-          continue; // Skip — trimming here would orphan the tool_calls
-        }
-      }
-
-      trimTo = i;
-      break;
-    }
-
-    if (trimTo > 0) {
-      return trimMessages(trimTo);
-    }
-
-    // Fallback: if no safe boundary found and session exceeds hard cap (2x max),
-    // force trim at the oldest complete tool pair boundary to prevent unbounded growth
-    const hardCap = maxMessages * 2;
-    if (session.messages.length > hardCap) {
-      getLogger().warn("Session exceeds hard cap, force-trimming", {
-        size: session.messages.length,
-        hardCap,
-      });
-      // Find the first complete pair boundary (user message after a tool_result)
-      for (let i = 1; i < overflow; i++) {
-        const msg = session.messages[i]!;
-        const prev = session.messages[i - 1]!;
-        if (msg.role === "user" && prev.role === "user") {
-          return trimMessages(i);
-        }
-      }
-      // Last resort: trim at overflow, accepting potential orphaning
-      return trimMessages(overflow);
-    }
-
-    return [];
+    return trimSessionHelper(session, maxMessages);
   }
 
   getProviderManager(): ProviderManager {
@@ -8337,73 +7431,7 @@ export class Orchestrator {
     messages: ConversationMessage[],
     force = false,
   ): Promise<void> {
-    if (!this.memoryManager) return;
-    if (messages.length < 2) return;
-
-    if (!force) {
-      const now = Date.now();
-      const lastTime = this.lastPersistTime.get(chatId) ?? 0;
-      if (now - lastTime < Orchestrator.PERSIST_DEBOUNCE_MS) return;
-      this.lastPersistTime.set(chatId, now);
-    }
-
-    try {
-      const summary = messages
-        .map((m) => {
-          if (typeof m.content === "string") return `[${m.role}] ${m.content}`;
-          if (Array.isArray(m.content)) {
-            const texts = (m.content as MessageContent[])
-              .filter((b): b is { type: "text"; text: string } => b.type === "text")
-              .map((b) => b.text);
-            return texts.length > 0
-              ? `[${m.role}] ${texts.join(" ")}`
-              : `[${m.role}] [media message]`;
-          }
-          return `[${m.role}] [complex content]`;
-        })
-        .join("\n");
-
-      if (summary) {
-        // Sanitize before persisting — strip any leaked API keys/secrets
-        const sanitized = redactSensitiveText(summary);
-        // Extract first user message and last assistant message for structured storage
-        const userMsg = messages.find((m) => m.role === "user");
-        let assistantMsg: ConversationMessage | undefined;
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i]!.role === "assistant") {
-            assistantMsg = messages[i];
-            break;
-          }
-        }
-        const extractText = (msg: ConversationMessage | undefined): string | undefined => {
-          if (!msg) return undefined;
-          if (typeof msg.content === "string") return msg.content.slice(0, 500);
-          if (Array.isArray(msg.content)) {
-            const texts = (msg.content as Array<{ type: string; text?: string }>)
-              .filter((b) => b.type === "text" && b.text)
-              .map((b) => b.text)
-              .join(" ");
-            return texts.slice(0, 500) || undefined;
-          }
-          return undefined;
-        };
-        const result = await this.memoryManager.storeConversation(chatId as ChatId, sanitized, {
-          userMessage: extractText(userMsg),
-          assistantMessage: extractText(assistantMsg),
-        });
-        if (result && typeof result === "object" && "kind" in result && result.kind === "err") {
-          getLogger().warn("Memory storeConversation failed", {
-            chatId,
-            error: String((result as { error: unknown }).error),
-          });
-        }
-      }
-    } catch (error) {
-      getLogger().warn("Memory persistence failed", {
-        chatId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    return persistSessionToMemoryHelper(this.getSessionPersistenceContext(), chatId, messages, force);
   }
 
   private async maybeUpdateUserProfileFromPrompt(
@@ -8462,69 +7490,7 @@ export class Orchestrator {
   }
 
   private persistExecutionMemory(scopeKey: string, executionJournal: ExecutionJournal): void {
-    if (!this.taskExecutionStore) {
-      return;
-    }
-    try {
-      this.taskExecutionStore.updateExecutionSnapshot(scopeKey, executionJournal.snapshot());
-    } catch (error) {
-      getLogger().warn("Execution memory persistence failed", {
-        scopeKey,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  private buildTaskExecutionMemoryLayer(
-    taskExecutionMemory: TaskExecutionMemory | null,
-    legacyContextSummary?: string,
-  ): { content: string; contentHashes: string[] } | null {
-    if (
-      !taskExecutionMemory?.sessionSummary &&
-      !taskExecutionMemory?.branchSummary &&
-      !taskExecutionMemory?.verifierSummary &&
-      !taskExecutionMemory?.learnedInsights.length &&
-      !legacyContextSummary
-    ) {
-      return null;
-    }
-
-    const lines: string[] = [];
-    const contentHashes: string[] = [];
-
-    if (taskExecutionMemory?.sessionSummary) {
-      lines.push(`Recent session: ${sanitizePromptInjection(taskExecutionMemory.sessionSummary)}`);
-      contentHashes.push(taskExecutionMemory.sessionSummary);
-    } else if (legacyContextSummary) {
-      lines.push(`Recent session: ${sanitizePromptInjection(legacyContextSummary)}`);
-      contentHashes.push(legacyContextSummary);
-    }
-
-    if (taskExecutionMemory && taskExecutionMemory.openItems.length > 0) {
-      lines.push(`Open items: ${taskExecutionMemory.openItems.join("; ")}`);
-    }
-    if (taskExecutionMemory?.branchSummary) {
-      lines.push(`Branch recovery: ${sanitizePromptInjection(taskExecutionMemory.branchSummary)}`);
-      contentHashes.push(taskExecutionMemory.branchSummary);
-    }
-    if (taskExecutionMemory?.verifierSummary) {
-      lines.push(
-        `Verifier memory: ${sanitizePromptInjection(taskExecutionMemory.verifierSummary)}`,
-      );
-      contentHashes.push(taskExecutionMemory.verifierSummary);
-    }
-    if (taskExecutionMemory && taskExecutionMemory.learnedInsights.length > 0) {
-      lines.push("Execution insights:");
-      for (const insight of taskExecutionMemory.learnedInsights.slice(0, 4)) {
-        lines.push(`- ${sanitizePromptInjection(insight)}`);
-        contentHashes.push(insight);
-      }
-    }
-
-    return {
-      content: `## Task Execution Memory\nReference this context when continuing prior work or avoiding failed paths.\n${lines.join("\n")}`,
-      contentHashes,
-    };
+    persistExecutionMemoryHelper(this.getSessionPersistenceContext(), scopeKey, executionJournal);
   }
 
   private getRuntimeArtifactMatchKey(taskRunId?: string, chatId?: string): string | null {
@@ -8534,68 +7500,6 @@ export class Orchestrator {
     }
     const resolvedChatId = chatId?.trim();
     return resolvedChatId && resolvedChatId.length > 0 ? `chat:${resolvedChatId}` : null;
-  }
-
-  private buildRuntimeArtifactMemoryLayer(
-    userMessage: string,
-    task: TaskClassification,
-    projectWorldFingerprint: string | undefined,
-    availableToolNames: readonly string[],
-    chatId?: string,
-    taskRunId?: string,
-  ): { content: string; contentHashes: string[] } | null {
-    if (!this.runtimeArtifactManager || !userMessage.trim()) {
-      return null;
-    }
-
-    try {
-      const matches = this.runtimeArtifactManager.matchForTask({
-        taskDescription: userMessage,
-        taskType: task.type,
-        projectWorldFingerprint,
-        availableToolNames,
-        maxMatches: 6,
-      });
-      const activeGuidance = matches.active
-        .filter((match) => match.usableForExecutionGuidance)
-        .slice(0, 3);
-      const key = this.getRuntimeArtifactMatchKey(taskRunId, chatId);
-      if (key) {
-        const matchedIds = {
-          activeGuidanceIds: activeGuidance.map((match) => match.artifact.id),
-          shadowIds: matches.shadow.map((match) => match.artifact.id),
-        };
-        if (matchedIds.activeGuidanceIds.length > 0 || matchedIds.shadowIds.length > 0) {
-          this.runtimeArtifactMatches.set(key, matchedIds);
-        } else {
-          this.runtimeArtifactMatches.delete(key);
-        }
-      }
-
-      if (activeGuidance.length === 0) {
-        return null;
-      }
-
-      const lines: string[] = [
-        "## Runtime Self-Improvement",
-        "These active runtime artifacts were learned from prior verified work. Treat them as internal guidance, not user-visible output.",
-      ];
-      const contentHashes: string[] = [];
-      for (const match of activeGuidance) {
-        const scope = match.projectWorldMatched ? "same-world" : "general";
-        lines.push(
-          `- [${match.artifact.kind}] ${sanitizePromptInjection(match.artifact.guidance)} (score ${match.matchScore.toFixed(2)}, ${scope})`,
-        );
-        contentHashes.push(match.artifact.guidance);
-      }
-
-      return {
-        content: lines.join("\n"),
-        contentHashes,
-      };
-    } catch {
-      return null;
-    }
   }
 
   private recordRuntimeArtifactEvaluation(params: {
@@ -8644,34 +7548,6 @@ export class Orchestrator {
 
     if (params.decision === "approve") {
       this.runtimeArtifactMatches.delete(key);
-    }
-  }
-
-  private buildTrajectoryReplayMemoryLayer(
-    userMessage: string,
-    projectWorldFingerprint?: string,
-  ): { content: string; contentHashes: string[] } | null {
-    if (!this.trajectoryReplayRetriever || !userMessage.trim()) {
-      return null;
-    }
-
-    try {
-      const replay = this.trajectoryReplayRetriever.getInsightsForTask({
-        taskDescription: userMessage,
-        projectWorldFingerprint,
-        maxInsights: 2,
-      });
-
-      if (replay.insights.length === 0) {
-        return null;
-      }
-
-      return {
-        content: `## Execution Replay\nReference these prior similar trajectories before repeating a failed branch.\n${replay.insights.map((insight) => `- ${sanitizePromptInjection(insight)}`).join("\n")}`,
-        contentHashes: [...replay.insights],
-      };
-    } catch {
-      return null;
     }
   }
 
@@ -8892,38 +7768,10 @@ export class Orchestrator {
    * Returns null when re-retrieval is disabled.
    */
   private createMemoryRefresher(initialContentHashes: string[]): MemoryRefresher | null {
-    if (!this.reRetrievalConfig?.enabled) return null;
-    const refresher = new MemoryRefresher(this.reRetrievalConfig, {
-      memoryManager: this.memoryManager,
-      ragPipeline: this.ragPipeline,
-      instinctRetriever: this.instinctRetriever ?? undefined,
-      embeddingProvider: this.embeddingProvider,
-      eventBus: this.eventEmitter ?? undefined,
-    });
-    if (initialContentHashes.length > 0) {
-      refresher.seedContentHashes(initialContentHashes);
-    }
-    return refresher;
+    return createMemoryRefresherHelper(this.getSessionPersistenceContext(), initialContentHashes);
   }
 
   private takePendingResumeTrees(conversationScope: string, chatId: string): GoalTree[] {
-    const scoped = this.pendingResumeTrees.get(conversationScope);
-    if (scoped && scoped.length > 0) {
-      this.pendingResumeTrees.delete(conversationScope);
-      return scoped;
-    }
-
-    if (conversationScope !== chatId) {
-      const legacyChatScoped = this.pendingResumeTrees.get(chatId);
-      if (legacyChatScoped && legacyChatScoped.length > 0) {
-        this.pendingResumeTrees.delete(chatId);
-        return legacyChatScoped;
-      }
-    }
-
-    return [];
+    return takePendingResumeTreesHelper(this.getSessionPersistenceContext(), conversationScope, chatId);
   }
 }
-
-const LOCAL_INSPECTION_SCOPE_RE =
-  /(?:[A-Za-z0-9_./\\-]+\.(?:cs|ts|tsx|js|jsx|json|ya?ml|md|asset|prefab|unity|scene)|\b(?:file|repo|repository|project|module|component|system|class|function|provider|orchestrator|memory|routing|build|compile|error|warning|bug|crash|freeze|runtime|editor|unity|stack trace|log|test|implement|create|write|add|fix|debug|refactor|review|analy[sz]e)\b)/iu;

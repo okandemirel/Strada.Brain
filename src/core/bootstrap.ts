@@ -7,48 +7,20 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import Database from "better-sqlite3";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
-import { createLogger, getLogger } from "../utils/logger.js";
+import { createLogger } from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
 import { configureAuthManager } from "../security/auth-hardened.js";
-import { ClaudeProvider } from "../agents/providers/claude.js";
-import { buildProviderChain } from "../agents/providers/provider-registry.js";
-import { ProviderManager } from "../agents/providers/provider-manager.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
-import { DashboardServer } from "../dashboard/server.js";
-import { FileMemoryManager } from "../memory/file-memory-manager.js";
-import { AgentDBMemory } from "../memory/unified/agentdb-memory.js";
-import { AgentDBAdapter } from "../memory/unified/agentdb-adapter.js";
-import { runAutomaticMigration } from "../memory/unified/migration.js";
+import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
-import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
-import {
-  resolveEmbeddingProvider,
-  collectApiKeys,
-  describeEmbeddingResolutionFailure,
-} from "../rag/embeddings/embedding-resolver.js";
-import { RateLimiter } from "../security/rate-limiter.js";
 import type { DIContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
-import {
-  collectProviderCredentials,
-  hasConfiguredOpenAISubscription,
-  hasUsableProviderConfig,
-  normalizeProviderNames,
-} from "./provider-config.js";
-import {
-  formatProviderPreflightFailures,
-  preflightResponseProviders,
-} from "./response-provider-preflight.js";
-import { AppError } from "../common/errors.js";
 import { checkStradaDeps } from "../config/strada-deps.js";
 import {
-  SESSION_CLEANUP_INTERVAL_MS,
-  DEFAULT_RATE_LIMITS,
   LEARNING_DEFAULTS,
 } from "../common/constants.js";
 import {
@@ -68,20 +40,10 @@ import {
   initializeToolChainStage,
   initializeToolRegistryStage,
   registerDashboardPostBootStage,
-  type EmbeddingResolutionResult,
   type LearningResult,
-  type ProviderInitResult,
   type RAGResult,
 } from "./bootstrap-stages.js";
 import type * as winston from "winston";
-
-// Channel imports
-import { TelegramChannel } from "../channels/telegram/bot.js";
-import { CLIChannel } from "../channels/cli/repl.js";
-import { DiscordChannel } from "../channels/discord/bot.js";
-import { getDefaultSlashCommands } from "../channels/discord/commands.js";
-import { WhatsAppChannel } from "../channels/whatsapp/client.js";
-import { WebChannel } from "../channels/web/channel.js";
 
 // Learning system imports
 import {
@@ -95,15 +57,9 @@ import { TypedEventBus, type IEventBus, type LearningEventMap } from "./event-bu
 import { LearningQueue } from "../learning/pipeline/learning-queue.js";
 import { ErrorRecoveryEngine } from "../agents/autonomy/error-recovery.js";
 import { TaskPlanner } from "../agents/autonomy/task-planner.js";
-import { MetricsStorage } from "../metrics/metrics-storage.js";
-import type { GoalStorage } from "../goals/index.js";
-import { ChainManager } from "../learning/chains/index.js";
-import type { IdentityStateManager } from "../identity/identity-state.js";
 import { buildCapabilityManifest } from "../agents/context/strada-knowledge.js";
 import { MigrationRunner } from "../learning/storage/migrations/index.js";
 import { migration001CrossSessionProvenance } from "../learning/storage/migrations/001-cross-session-provenance.js";
-import { SoulLoader } from "../agents/soul/index.js";
-
 // Multi-agent type-only imports (Plan 23-03: AGENT-01, AGENT-06, AGENT-07)
 import type { AgentManager as AgentManagerType } from "../agents/multi/agent-manager.js";
 import type { AgentBudgetTracker as AgentBudgetTrackerType } from "../agents/multi/agent-budget-tracker.js";
@@ -121,12 +77,45 @@ import { AutoUpdater } from "./auto-updater.js";
 import type { PostSetupBootstrap } from "../common/setup-contract.js";
 
 // Task system imports
-import { TaskStorage, MessageRouter } from "../tasks/index.js";
+import { MessageRouter } from "../tasks/index.js";
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
-import type { IMemoryManager } from "../memory/memory.interface.js";
-import type { IAIProvider } from "../agents/providers/provider.interface.js";
-import type { IRAGPipeline } from "../rag/rag.interface.js";
+
+// Extracted helpers — imported and re-exported for backward compatibility
+import {
+  initializeAIProvider as _initializeAIProvider,
+  resolveAndCacheEmbeddings as _resolveAndCacheEmbeddings,
+  isTransientEmbeddingVerificationError as _isTransientEmbeddingVerificationError,
+} from "./bootstrap-providers.js";
+import {
+  initializeMemory as _initializeMemory,
+} from "./bootstrap-memory.js";
+import {
+  initializeChannel as _initializeChannel,
+  initializeDashboard as _initializeDashboard,
+  initializeRateLimiter as _initializeRateLimiter,
+} from "./bootstrap-channels.js";
+import {
+  wireMessageHandler as _wireMessageHandler,
+  setupCleanup as _setupCleanup,
+  createShutdownHandler as _createShutdownHandler,
+  generateSessionId as _generateSessionId,
+} from "./bootstrap-wiring.js";
+
+// Re-export for backward compatibility (tests and other modules import these from bootstrap.js)
+export const initializeAIProvider = _initializeAIProvider;
+export const resolveAndCacheEmbeddings = _resolveAndCacheEmbeddings;
+export const isTransientEmbeddingVerificationError = _isTransientEmbeddingVerificationError;
+export const initializeMemory = _initializeMemory;
+
+// Local aliases for internal use
+const initializeChannel = _initializeChannel;
+const initializeDashboard = _initializeDashboard;
+const initializeRateLimiter = _initializeRateLimiter;
+const wireMessageHandler = _wireMessageHandler;
+const setupCleanup = _setupCleanup;
+const createShutdownHandler = _createShutdownHandler;
+const generateSessionId = _generateSessionId;
 
 export interface BootstrapOptions {
   channelType: string;
@@ -234,11 +223,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     },
     {
       initializeAuth,
-      resolveAndCacheEmbeddings,
-      initializeAIProvider,
-      initializeMemory,
+      resolveAndCacheEmbeddings: _resolveAndCacheEmbeddings,
+      initializeAIProvider: _initializeAIProvider,
+      initializeMemory: _initializeMemory,
       initializeChannel,
-      isTransientEmbeddingVerificationError,
+      isTransientEmbeddingVerificationError: _isTransientEmbeddingVerificationError,
     },
   );
   const providerManager = providerInit.manager;
@@ -818,7 +807,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 }
 
 // ============================================================================
-// Private Helpers
+// Private Helpers (kept in bootstrap.ts — used only by bootstrap())
 // ============================================================================
 
 function initializeAuth(config: Config, channelType: string, logger: winston.Logger): AuthManager {
@@ -840,483 +829,6 @@ function initializeAuth(config: Config, channelType: string, logger: winston.Log
     allowedDiscordIds,
     allowedDiscordRoles,
   });
-}
-
-export async function initializeAIProvider(
-  config: Config,
-  logger: winston.Logger,
-): Promise<ProviderInitResult> {
-  const apiKeys = collectApiKeys(config);
-  const providerCredentials = collectProviderCredentials(config);
-  const notices: string[] = [];
-  let healthCheckPassed: boolean | undefined;
-
-  let defaultProvider: IAIProvider;
-  let defaultProviderOrder: string[] = [];
-
-  // 1) Explicit provider chain
-  if (config.providerChain) {
-    const requestedNames = normalizeProviderNames(config.providerChain);
-    const configuredNames = requestedNames.filter((name) =>
-      name === "openai" && hasConfiguredOpenAISubscription(config)
-        ? true
-        : hasUsableProviderConfig(name, apiKeys),
-    );
-    const unavailableNames = requestedNames.filter((name) => !configuredNames.includes(name));
-
-    if (unavailableNames.length > 0) {
-      throw new AppError(
-        `Configured AI providers are missing usable credentials: ${unavailableNames.join(", ")}.`,
-        "NO_AI_PROVIDER",
-      );
-    }
-
-    const preflightResult = await preflightResponseProviders(
-      configuredNames,
-      providerCredentials,
-      config.providerModels,
-    );
-    if (preflightResult.failures.length > 0) {
-      throw new AppError(
-        `Configured AI providers failed preflight. ${formatProviderPreflightFailures(preflightResult.failures)}`,
-        "NO_HEALTHY_AI_PROVIDER",
-      );
-    }
-
-    defaultProviderOrder = preflightResult.passedProviderIds;
-    defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
-      models: config.providerModels,
-    });
-    logger.info("AI provider chain initialized", { chain: preflightResult.passedProviderIds });
-  }
-  // 2) Anthropic key present — use ClaudeProvider directly
-  else if (config.anthropicApiKey) {
-    defaultProviderOrder = ["claude"];
-    defaultProvider = new ClaudeProvider(config.anthropicApiKey);
-    logger.info("AI provider initialized", { name: defaultProvider.name });
-  }
-  // 3) No explicit chain and no Anthropic key — auto-detect from available keys
-  else {
-    const detectedNames = Object.entries(apiKeys)
-      .filter(([name, key]) => name !== "claude" && name !== "anthropic" && key)
-      .map(([name]) => name);
-    if (hasConfiguredOpenAISubscription(config) && !detectedNames.includes("openai")) {
-      detectedNames.unshift("openai");
-    }
-
-    if (detectedNames.length === 0) {
-      throw new AppError(
-        "No AI provider configured. Please set at least one provider API key.",
-        "NO_AI_PROVIDER",
-      );
-    }
-
-    const preflightResult = await preflightResponseProviders(
-      detectedNames,
-      providerCredentials,
-      config.providerModels,
-    );
-    if (preflightResult.failures.length > 0) {
-      const notice = `Configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
-      notices.push(notice);
-      logger.warn("Configured AI providers failed preflight", {
-        failedProviders: preflightResult.failures,
-      });
-    }
-    if (preflightResult.passedProviderIds.length === 0) {
-      throw new AppError(
-        `No AI provider passed preflight. ${formatProviderPreflightFailures(preflightResult.failures)}`,
-        "NO_HEALTHY_AI_PROVIDER",
-      );
-    }
-
-    defaultProviderOrder = preflightResult.passedProviderIds;
-    defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
-      models: config.providerModels,
-    });
-    logger.info("AI provider auto-detected from available keys", {
-      chain: preflightResult.passedProviderIds,
-    });
-  }
-
-  // Run health check (non-blocking — warn only)
-  if (defaultProvider.healthCheck) {
-    healthCheckPassed = await defaultProvider.healthCheck();
-    const logMethod = healthCheckPassed ? "info" : "warn";
-    const message = healthCheckPassed
-      ? "AI provider health check passed"
-      : "AI provider health check failed — API may be unreachable or key invalid";
-    logger[logMethod](message, { name: defaultProvider.name });
-  }
-
-  const providerManager = new ProviderManager(
-    defaultProvider,
-    providerCredentials,
-    config.providerModels,
-    config.memory.dbPath,
-    defaultProviderOrder,
-  );
-
-  // Verify Ollama reachability before marking it available for routing
-  const ollamaBaseUrl = process.env["OLLAMA_BASE_URL"] ?? "http://localhost:11434";
-  try {
-    const ollamaRes = await fetch(`${ollamaBaseUrl}/api/tags`, {
-      signal: AbortSignal.timeout(3_000),
-    });
-    if (ollamaRes.ok) {
-      providerManager.setOllamaVerified(true);
-      logger.info("Ollama verified as reachable");
-    }
-  } catch {
-    logger.debug("Ollama not reachable, excluding from routing");
-  }
-
-  logger.info("ProviderManager initialized with per-chat switching support");
-
-  return {
-    manager: providerManager,
-    notices,
-    healthCheckPassed,
-  };
-}
-
-/**
- * Initialize memory backend with self-healing.
- *
- * Flow:
- *   1. If memory disabled -> undefined
- *   2. If backend == "file" -> FileMemoryManager directly
- *   3. Otherwise (agentdb, default):
- *      try AgentDB -> on fail: repair schema -> retry -> on fail: fallback to FileMemoryManager
- *
- * Exported for testing.
- */
-export async function initializeMemory(
-  config: Config,
-  logger: winston.Logger,
-  embeddingProvider?: CachedEmbeddingProvider,
-): Promise<IMemoryManager | undefined> {
-  if (!config.memory.enabled) {
-    return undefined;
-  }
-
-  // Explicit file backend — skip AgentDB entirely
-  if (config.memory.backend === "file") {
-    return initializeFileMemory(config, logger);
-  }
-
-  // AgentDB backend (default)
-  const agentdbPath = join(config.memory.dbPath, "agentdb");
-  const agentdbConfig = {
-    dbPath: agentdbPath,
-    dimensions: embeddingProvider?.dimensions ?? config.memory.unified.dimensions,
-    maxEntriesPerTier: {
-      working: config.memory.unified.tierLimits.working,
-      ephemeral: config.memory.unified.tierLimits.ephemeral,
-      persistent: config.memory.unified.tierLimits.persistent,
-    },
-    enableAutoTiering: config.memory.unified.autoTiering,
-    ephemeralTtlMs: (config.memory.unified.ephemeralTtlHours * 3600000) as DurationMs,
-    embeddingProvider: embeddingProvider
-      ? async (text: string) => {
-          const batch = await embeddingProvider.embed([text]);
-          return batch.embeddings[0]!;
-        }
-      : undefined,
-  };
-
-  // Post-init steps shared between first attempt and repair path
-  async function finalizeAgentDB(agentdb: AgentDBMemory): Promise<AgentDBAdapter> {
-    if (!embeddingProvider) {
-      logger.warn(
-        "AgentDB running with hash-based fallback embeddings - semantic search quality is degraded. Configure an embedding provider for better results.",
-      );
-    }
-
-    await triggerLegacyMigration(config, agentdb, logger);
-
-    if (config.memory.unified.autoTiering) {
-      agentdb.startAutoTiering(
-        config.memory.unified.autoTieringIntervalMs,
-        config.memory.unified.promotionThreshold,
-        config.memory.unified.demotionTimeoutDays,
-      );
-      logger.info("Auto-tiering enabled", {
-        intervalMs: config.memory.unified.autoTieringIntervalMs,
-        promotionThreshold: config.memory.unified.promotionThreshold,
-        demotionTimeoutDays: config.memory.unified.demotionTimeoutDays,
-      });
-    }
-
-    agentdb.setDecayConfig(config.memory.decay);
-
-    // Fire-and-forget: migrate hash embeddings to real embeddings
-    const agentdbAny = agentdb as unknown as Record<string, unknown>;
-    if (embeddingProvider && typeof agentdbAny.reEmbedHashEntries === "function") {
-      (
-        agentdbAny.reEmbedHashEntries as () => Promise<{
-          migrated: number;
-          total: number;
-          skipped: number;
-        }>
-      )()
-        .then((result) => {
-          if (result.migrated > 0 || result.skipped > 0) {
-            logger.info(
-              `[Bootstrap] Re-embedded ${result.migrated}/${result.total} hash entries${result.skipped > 0 ? ` (${result.skipped} skipped)` : ""}`,
-            );
-          }
-        })
-        .catch((err) => {
-          logger.warn(
-            `[Bootstrap] Re-embed migration failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
-    }
-
-    return new AgentDBAdapter(agentdb);
-  }
-
-  // First attempt
-  try {
-    const agentdb = new AgentDBMemory(agentdbConfig);
-    const initResult = await agentdb.initialize();
-    if (initResult.kind === "ok") {
-      logger.info("AgentDB memory initialized", { dbPath: agentdbPath });
-      return await finalizeAgentDB(agentdb);
-    }
-    // Init returned err — throw to enter recovery
-    throw initResult.error;
-  } catch (firstError) {
-    logger.warn("AgentDB initialization failed, attempting schema repair", {
-      error: firstError instanceof Error ? firstError.message : String(firstError),
-    });
-
-    // Attempt schema repair
-    const repairOk = await attemptSchemaRepair(agentdbPath, logger);
-
-    // Retry AgentDB after repair
-    try {
-      const agentdb2 = new AgentDBMemory(agentdbConfig);
-      const retryResult = await agentdb2.initialize();
-      if (retryResult.kind === "ok") {
-        logger.info("AgentDB recovered after schema repair", { dbPath: agentdbPath });
-        return await finalizeAgentDB(agentdb2);
-      }
-      throw retryResult.error;
-    } catch (retryError) {
-      logger.warn("AgentDB retry failed after repair, falling back to FileMemoryManager", {
-        repairAttempted: repairOk,
-        error: retryError instanceof Error ? retryError.message : String(retryError),
-      });
-      return initializeFileMemory(config, logger);
-    }
-  }
-}
-
-async function attemptSchemaRepair(dbPath: string, logger: winston.Logger): Promise<boolean> {
-  try {
-    const sqlitePath = join(dbPath, "memory.db");
-    if (!existsSync(sqlitePath)) return true; // Fresh DB, no repair needed
-    const db = new Database(sqlitePath);
-    db.pragma("journal_mode = WAL");
-    try {
-      db.prepare("SELECT COUNT(*) FROM memories").get();
-    } catch {
-      logger.info("AgentDB schema repair: memories table will be recreated on next init");
-    }
-    db.close();
-    return true;
-  } catch (e) {
-    logger.error("AgentDB schema repair failed", {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return false;
-  }
-}
-
-/**
- * Trigger legacy FileMemoryManager → AgentDB migration if needed.
- * Non-blocking: migration failure must never prevent agent startup.
- */
-async function triggerLegacyMigration(
-  config: Config,
-  agentdb: AgentDBMemory,
-  logger: winston.Logger,
-): Promise<void> {
-  try {
-    const migrationStatus = await runAutomaticMigration(
-      config.memory.dbPath, // sourcePath where memory.json lives
-      agentdb, // IUnifiedMemory target
-    );
-    if (migrationStatus) {
-      logger.info("Legacy memory migration completed", {
-        migrated: migrationStatus.entriesMigrated,
-        failed: migrationStatus.entriesFailed,
-        errors: migrationStatus.errors.length,
-      });
-    }
-  } catch (migrationError) {
-    // Migration failure must not block agent startup
-    logger.warn("Legacy memory migration failed, continuing with empty AgentDB", {
-      error: migrationError instanceof Error ? migrationError.message : String(migrationError),
-    });
-  }
-}
-
-async function initializeFileMemory(
-  config: Config,
-  logger: winston.Logger,
-): Promise<IMemoryManager | undefined> {
-  try {
-    const mm = new FileMemoryManager(config.memory.dbPath);
-    await mm.initialize();
-    logger.info("FileMemoryManager initialized", { dbPath: config.memory.dbPath });
-    return mm;
-  } catch (error) {
-    logger.warn("FileMemoryManager initialization failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return undefined;
-  }
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function isTransientEmbeddingVerificationError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
-  return [
-    "fetch failed",
-    "network",
-    "timed out",
-    "timeout",
-    "aborted",
-    "econnreset",
-    "econnrefused",
-    "enotfound",
-    "eai_again",
-    "etimedout",
-    "api error 429",
-    "api error 500",
-    "api error 502",
-    "api error 503",
-    "api error 504",
-  ].some((token) => message.includes(token));
-}
-
-function describeEmbeddingConsumers(config: Config): string[] {
-  const consumers: string[] = [];
-  if (config.rag.enabled) {
-    consumers.push("RAG");
-  }
-  if (config.memory.enabled) {
-    consumers.push("memory/learning");
-  }
-  return consumers;
-}
-
-/**
- * Resolve and cache the embedding provider independently from the RAG pipeline.
- * This allows the embedding provider to be shared with AgentDBMemory and learning.
- */
-export async function resolveAndCacheEmbeddings(
-  config: Config,
-  logger: winston.Logger,
-): Promise<EmbeddingResolutionResult> {
-  const embeddingConsumers = describeEmbeddingConsumers(config);
-  if (embeddingConsumers.length === 0) {
-    logger.info(
-      "Embeddings: semantic subsystems disabled by configuration, no embedding provider resolved",
-    );
-    return {
-      status: {
-        state: "disabled",
-        ragEnabled: config.rag.enabled,
-        configuredProvider: config.rag.provider,
-        configuredModel: config.rag.model,
-        configuredDimensions: config.rag.dimensions,
-        verified: false,
-        usingHashFallback: true,
-        notice: "RAG and semantic memory are disabled by configuration",
-      },
-    };
-  }
-
-  if (!config.rag.enabled) {
-    logger.info("Embeddings: RAG disabled, but keeping embeddings active for memory/learning");
-  }
-
-  const consumerLabel = embeddingConsumers.join(" and ");
-
-  try {
-    const resolution = resolveEmbeddingProvider(config);
-    if (!resolution) {
-      const notice = describeEmbeddingResolutionFailure(config, consumerLabel);
-      logger.warn("Embeddings: no compatible embedding provider found", {
-        consumers: embeddingConsumers,
-      });
-      return {
-        notice,
-        status: {
-          state: "degraded",
-          ragEnabled: config.rag.enabled,
-          configuredProvider: config.rag.provider,
-          configuredModel: config.rag.model,
-          configuredDimensions: config.rag.dimensions,
-          verified: false,
-          usingHashFallback: true,
-          notice,
-        },
-      };
-    }
-
-    logger.info(`Embeddings: using ${resolution.provider.name}`, {
-      source: resolution.source,
-      dimensions: resolution.provider.dimensions,
-    });
-
-    const cachedProvider = new CachedEmbeddingProvider(resolution.provider, {
-      persistPath: join(config.memory.dbPath, "cache"),
-    });
-    await cachedProvider.initialize();
-
-    return {
-      cachedProvider,
-      status: {
-        state: "active",
-        ragEnabled: config.rag.enabled,
-        configuredProvider: config.rag.provider,
-        configuredModel: config.rag.model,
-        configuredDimensions: config.rag.dimensions,
-        resolvedProviderName: resolution.provider.name,
-        resolutionSource: resolution.source,
-        activeDimensions: resolution.provider.dimensions,
-        verified: false,
-        usingHashFallback: false,
-      },
-    };
-  } catch (error) {
-    const notice = `Embeddings unavailable: initialization failed for ${consumerLabel}.`;
-    logger.warn("Embedding resolution failed", {
-      error: error instanceof Error ? error.message : String(error),
-      consumers: embeddingConsumers,
-    });
-    return {
-      notice,
-      status: {
-        state: "degraded",
-        ragEnabled: config.rag.enabled,
-        configuredProvider: config.rag.provider,
-        configuredModel: config.rag.model,
-        configuredDimensions: config.rag.dimensions,
-        verified: false,
-        usingHashFallback: true,
-        notice,
-      },
-    };
-  }
 }
 
 async function initializeRAG(
@@ -1521,405 +1033,4 @@ async function initializeLearning(
       notices,
     };
   }
-}
-
-async function initializeChannel(
-  channelType: string,
-  config: Config,
-  auth: AuthManager,
-  logger: winston.Logger,
-): Promise<IChannelAdapter> {
-  switch (channelType) {
-    case "cli":
-      return new CLIChannel();
-
-    case "whatsapp": {
-      const sessionPath = config.whatsapp.sessionPath;
-      const allowedNumbers = config.whatsapp.allowedNumbers;
-      if (allowedNumbers.length === 0) {
-        logger.info("WHATSAPP_ALLOWED_NUMBERS is empty — WhatsApp is open to all senders");
-      }
-      return new WhatsAppChannel(sessionPath, allowedNumbers);
-    }
-
-    case "discord": {
-      if (!config.discord.botToken) {
-        throw new AppError(
-          "DISCORD_BOT_TOKEN is required when using Discord channel",
-          "MISSING_DISCORD_TOKEN",
-        );
-      }
-      return new DiscordChannel(config.discord.botToken, auth, {
-        guildId: config.discord.guildId,
-        slashCommands: getDefaultSlashCommands(),
-      });
-    }
-
-    case "web":
-      return new WebChannel(config.web.port, config.dashboard.port, {
-        dashboardAuthToken: config.websocketDashboard.authToken,
-        identityDbPath: join(config.memory.dbPath, "web-identities.db"),
-      });
-
-    case "matrix": {
-      const { MatrixChannel } = await import("../channels/matrix/channel.js");
-      const homeserver = config.matrix.homeserver;
-      const accessToken = config.matrix.accessToken;
-      const matrixUserId = config.matrix.userId;
-      const allowOpenAccess = config.matrix.allowOpenAccess;
-      const allowedUserIds = config.matrix.allowedUserIds;
-      const allowedRoomIds = config.matrix.allowedRoomIds;
-      if (!homeserver || !accessToken || !matrixUserId) {
-        throw new AppError(
-          "MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID are required for Matrix channel",
-          "MISSING_MATRIX_CONFIG",
-        );
-      }
-      return new MatrixChannel(
-        homeserver,
-        accessToken,
-        matrixUserId,
-        allowedUserIds,
-        allowedRoomIds,
-        allowOpenAccess,
-      );
-    }
-
-    case "irc": {
-      const { IRCChannel } = await import("../channels/irc/channel.js");
-      const ircServer = config.irc.server;
-      const ircNick = config.irc.nick;
-      const allowOpenAccess = config.irc.allowOpenAccess;
-      const ircChannels = config.irc.channels;
-      const allowedUsers = config.irc.allowedUsers;
-      if (!ircServer) {
-        throw new AppError("IRC_SERVER is required for IRC channel", "MISSING_IRC_CONFIG");
-      }
-      return new IRCChannel(ircServer, ircNick, ircChannels, allowedUsers, allowOpenAccess);
-    }
-
-    case "teams": {
-      const { TeamsChannel } = await import("../channels/teams/channel.js");
-      const teamsAppId = config.teams.appId;
-      const teamsAppPassword = config.teams.appPassword;
-      const allowOpenAccess = config.teams.allowOpenAccess;
-      const allowedUserIds = config.teams.allowedUserIds;
-      if (!teamsAppId || !teamsAppPassword) {
-        throw new AppError(
-          "TEAMS_APP_ID and TEAMS_APP_PASSWORD are required for Teams channel",
-          "MISSING_TEAMS_CONFIG",
-        );
-      }
-      return new TeamsChannel(
-        teamsAppId,
-        teamsAppPassword,
-        3978,
-        allowedUserIds,
-        "127.0.0.1",
-        allowOpenAccess,
-      );
-    }
-
-    case "telegram":
-    default: {
-      if (!config.telegram.botToken) {
-        throw new AppError(
-          "TELEGRAM_BOT_TOKEN is required when using Telegram channel",
-          "MISSING_TELEGRAM_TOKEN",
-        );
-      }
-      return new TelegramChannel(config.telegram.botToken, auth);
-    }
-  }
-}
-
-async function initializeDashboard(
-  config: Config,
-  metrics: MetricsCollector,
-  memoryManager: IMemoryManager | undefined,
-  logger: winston.Logger,
-): Promise<DashboardServer | undefined> {
-  if (!config.dashboard.enabled) {
-    return undefined;
-  }
-
-  const dashboard = new DashboardServer(config.dashboard.port, metrics, () =>
-    memoryManager?.getStats(),
-  );
-
-  try {
-    await dashboard.start();
-    return dashboard;
-  } catch (error) {
-    logger.warn("Dashboard failed to start", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return undefined;
-  }
-}
-
-function initializeRateLimiter(config: Config, logger: winston.Logger): RateLimiter | undefined {
-  if (!config.rateLimit.enabled) {
-    return undefined;
-  }
-
-  const rateLimiter = new RateLimiter({
-    messagesPerMinute: config.rateLimit.messagesPerMinute || DEFAULT_RATE_LIMITS.messagesPerMinute,
-    messagesPerHour: config.rateLimit.messagesPerHour || DEFAULT_RATE_LIMITS.messagesPerHour,
-    tokensPerDay: config.rateLimit.tokensPerDay || DEFAULT_RATE_LIMITS.tokensPerDay,
-    dailyBudgetUsd: config.rateLimit.dailyBudgetUsd || DEFAULT_RATE_LIMITS.dailyBudgetUsd,
-    monthlyBudgetUsd: config.rateLimit.monthlyBudgetUsd || DEFAULT_RATE_LIMITS.monthlyBudgetUsd,
-  });
-
-  logger.info("Rate limiter initialized", {
-    messagesPerMinute: config.rateLimit.messagesPerMinute,
-    dailyBudgetUsd: config.rateLimit.dailyBudgetUsd,
-  });
-
-  return rateLimiter;
-}
-
-function wireMessageHandler(
-  channel: IChannelAdapter,
-  messageRouter: MessageRouter,
-  orchestrator: Orchestrator,
-  taskPlanner: TaskPlanner,
-  learningPipeline: LearningPipeline | undefined,
-  identityManager?: IdentityStateManager,
-  heartbeatLoopRef?: HeartbeatLoop,
-  activityRegistryRef?: ChannelActivityRegistry,
-  channelTypeName?: string,
-): void {
-  channel.onMessage(async (msg) => {
-    if (activityRegistryRef && channelTypeName) {
-      activityRegistryRef.recordActivity(channelTypeName, msg.chatId);
-    }
-    // Interrupt consolidation on user activity (MEM-13)
-    heartbeatLoopRef?.onUserActivity();
-    // Track activity and messages for identity persistence
-    if (identityManager) {
-      identityManager.recordActivity();
-      identityManager.incrementMessages();
-    }
-
-    // Start task tracking for learning system
-    let taskRunId: string | undefined;
-    if (taskPlanner) {
-      taskPlanner.startTask({
-        sessionId: msg.chatId ?? generateSessionId(),
-        chatId: msg.chatId,
-        taskDescription: msg.text.slice(0, 200),
-        learningPipeline,
-      });
-      taskRunId = taskPlanner.getTaskRunId() ?? undefined;
-    }
-
-    let routeError: unknown;
-    await orchestrator.withTaskExecutionContext(
-      {
-        chatId: msg.chatId,
-        conversationId: msg.conversationId,
-        userId: msg.userId,
-        taskRunId,
-      },
-      async () => {
-        try {
-          // Route through the message router (handles commands and task submission)
-          await messageRouter.route(msg);
-        } catch (error) {
-          routeError = error;
-          throw error;
-        } finally {
-          // End task tracking
-          if (taskPlanner?.isActive()) {
-            taskPlanner.attachReplayContext(
-              await orchestrator.buildTrajectoryReplayContext({
-                chatId: msg.chatId,
-                userId: msg.userId,
-                conversationId: msg.conversationId,
-                sinceTimestamp: taskPlanner.getTaskStartedAt() ?? undefined,
-                taskRunId,
-              }),
-            );
-            taskPlanner.endTask({
-              success: routeError === undefined,
-              finalOutput: routeError instanceof Error ? routeError.message : undefined,
-              hadErrors: routeError !== undefined,
-              errorCount: routeError === undefined ? 0 : 1,
-            });
-          }
-        }
-      },
-    );
-  });
-}
-
-function setupCleanup(orchestrator: Orchestrator): ReturnType<typeof setInterval> {
-  return setInterval(() => {
-    orchestrator.cleanupSessions();
-  }, SESSION_CLEANUP_INTERVAL_MS);
-}
-
-interface ShutdownOptions {
-  dashboard?: DashboardServer;
-  ragPipeline?: IRAGPipeline;
-  memoryManager?: IMemoryManager;
-  channel: IChannelAdapter;
-  cleanupInterval: ReturnType<typeof setInterval>;
-  learningPipeline?: LearningPipeline;
-  taskStorage?: TaskStorage;
-  providerManager?: ProviderManager;
-  eventBus?: IEventBus<LearningEventMap>;
-  learningQueue?: LearningQueue;
-  metricsStorage?: MetricsStorage;
-  goalStorage?: GoalStorage;
-  chainManager?: ChainManager;
-  toolRegistry?: ToolRegistry;
-  identityManager?: IdentityStateManager;
-  modelIntelligence?: import("../agents/providers/model-intelligence.js").ModelIntelligenceService;
-  uptimeInterval?: ReturnType<typeof setInterval>;
-  heartbeatLoop?: HeartbeatLoop;
-  digestReporter?: DigestReporter;
-  notificationRouter?: NotificationRouter;
-  agentManager?: AgentManagerType;
-  delegationManager?: DelegationManagerType;
-  stoppableServers?: Array<{ stop(): Promise<void> | void }>;
-  soulLoader?: SoulLoader;
-  autoUpdater?: AutoUpdater;
-}
-
-function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
-  const { dashboard, ragPipeline, memoryManager, channel, cleanupInterval, learningPipeline } =
-    options;
-  const logger = getLogger();
-
-  return async (): Promise<void> => {
-    const SHUTDOWN_TIMEOUT_MS = 30_000;
-
-    const gracefulShutdown = async (): Promise<void> => {
-      logger.info("Shutting down Strada Brain...");
-
-      clearInterval(cleanupInterval);
-
-      // Stop auto-updater timers
-      if (options.autoUpdater) {
-        options.autoUpdater.shutdown();
-      }
-
-      // Stop soul file watchers
-      if (options.soulLoader) {
-        options.soulLoader.shutdown();
-      }
-
-      // Stop reporting before heartbeat loop
-      if (options.digestReporter) {
-        options.digestReporter.stop();
-      }
-      if (options.notificationRouter) {
-        options.notificationRouter.stop();
-      }
-
-      // Shut down delegation manager before multi-agent system
-      if (options.delegationManager) {
-        await options.delegationManager.shutdown();
-      }
-
-      // Shut down multi-agent system before heartbeat loop
-      if (options.agentManager) {
-        await options.agentManager.shutdown();
-      }
-
-      // Stop heartbeat loop before draining events
-      if (options.heartbeatLoop) {
-        options.heartbeatLoop.stop();
-      }
-
-      // Stop chain detection timer before draining events
-      if (options.chainManager) {
-        options.chainManager.stop();
-      }
-
-      // Drain event bus and learning queue before stopping pipeline
-      if (options.eventBus) {
-        await options.eventBus.shutdown();
-      }
-      if (options.learningQueue) {
-        await options.learningQueue.shutdown();
-      }
-
-      // Then stop the pipeline (clears evolution timer, shuts down embedding queue)
-      if (learningPipeline) {
-        learningPipeline.stop();
-      }
-
-      if (options.metricsStorage) {
-        options.metricsStorage.close();
-      }
-
-      if (options.goalStorage) {
-        options.goalStorage.close();
-      }
-
-      if (options.taskStorage) {
-        options.taskStorage.close();
-      }
-
-      if (options.providerManager) {
-        options.providerManager.shutdown();
-      }
-
-      options.toolRegistry?.shutdown();
-
-      if (options.modelIntelligence) {
-        options.modelIntelligence.shutdown();
-      }
-
-      if (dashboard) {
-        await dashboard.stop();
-      }
-
-      if (options.stoppableServers) {
-        await Promise.all(options.stoppableServers.map((s) => s.stop()));
-      }
-
-      if (ragPipeline) {
-        await ragPipeline.shutdown();
-      }
-
-      if (memoryManager) {
-        await memoryManager.shutdown();
-      }
-
-      // Identity shutdown: record clean shutdown and flush uptime (before DB closes)
-      if (options.uptimeInterval) {
-        clearInterval(options.uptimeInterval);
-      }
-      if (options.identityManager) {
-        options.identityManager.recordShutdown();
-        options.identityManager.close();
-      }
-
-      await channel.disconnect();
-      logger.info("Strada Brain stopped.");
-    };
-
-    try {
-      await Promise.race([
-        gracefulShutdown(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Shutdown timeout exceeded")), SHUTDOWN_TIMEOUT_MS),
-        ),
-      ]);
-    } catch (err) {
-      if (err instanceof Error && err.message === "Shutdown timeout exceeded") {
-        logger.error("Forced shutdown: graceful shutdown took longer than 30s");
-        process.exit(1);
-      }
-      throw err;
-    }
-  };
-}
-
-function generateSessionId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
