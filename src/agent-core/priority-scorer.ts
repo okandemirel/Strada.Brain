@@ -1,12 +1,20 @@
 /**
  * Priority Scorer
  *
- * Adjusts observation priority based on learned patterns.
- * Connects the learning system to observation ranking.
+ * Multi-factor priority scoring for agent observations.
+ * Factors: instinct match count, source severity, graduated recency penalty, actionability.
  */
 
-import type { AgentObservation } from "./observation-types.js";
+import type { AgentObservation, ObservationSource } from "./observation-types.js";
 import type { InstinctRetrieverRef } from "./agent-core-types.js";
+
+/** Base importance boost by observation source */
+const SOURCE_SEVERITY: Partial<Record<ObservationSource, number>> = {
+  build: 10,
+  test: 8,
+  "task-outcome": 5,
+  user: 5,
+};
 
 export class PriorityScorer {
   private readonly recentActionHashes = new Map<string, number>(); // hash -> timestamp
@@ -16,32 +24,46 @@ export class PriorityScorer {
 
   /**
    * Score and adjust priorities for a batch of observations.
+   * Uses multi-factor model: instinct confidence, source severity,
+   * graduated recency penalty, and actionability boost.
    * Returns sorted (highest priority first) with adjusted scores.
    */
   async scoreAll(observations: AgentObservation[]): Promise<AgentObservation[]> {
     const scored: AgentObservation[] = [];
+    const now = Date.now();
+    this.pruneOldActions(now);
 
     for (const obs of observations) {
       let priority = obs.priority;
 
-      // Boost if we have learned patterns for this type of observation
+      // Factor 1: Instinct match weight (scaled by match count)
       if (this.instinctRetriever) {
         try {
-          const insights = await this.instinctRetriever.getInsightsForTask(obs.summary);
-          if (insights.insights.length > 0) {
-            priority += 15; // We have experience with this
-          }
+          const result = await this.instinctRetriever.getInsightsForTask(obs.summary);
+          const matchCount = result.insights.length;
+          if (matchCount >= 3) priority += 15;
+          else if (matchCount >= 2) priority += 12;
+          else if (matchCount >= 1) priority += 8;
         } catch {
           // Non-fatal
         }
       }
 
-      // Penalty for recently acted-on similar observations (dedup at reasoning level)
+      // Factor 2: Source severity
+      priority += SOURCE_SEVERITY[obs.source] ?? 0;
+
+      // Factor 3: Graduated recency penalty
       const hash = `${obs.source}:${obs.summary.slice(0, 60)}`;
       const lastActed = this.recentActionHashes.get(hash);
-      if (lastActed && Date.now() - lastActed < PriorityScorer.RECENT_ACTION_WINDOW_MS) {
-        priority -= 30; // Already handled recently
+      if (lastActed) {
+        const elapsed = now - lastActed;
+        if (elapsed < 60_000) priority -= 30;
+        else if (elapsed < 180_000) priority -= 20;
+        else if (elapsed < PriorityScorer.RECENT_ACTION_WINDOW_MS) priority -= 10;
       }
+
+      // Factor 4: Actionability boost
+      if (obs.actionable && priority > 50) priority += 5;
 
       scored.push({ ...obs, priority: Math.min(100, Math.max(0, priority)) });
     }
@@ -55,9 +77,11 @@ export class PriorityScorer {
   recordAction(observation: AgentObservation): void {
     const hash = `${observation.source}:${observation.summary.slice(0, 60)}`;
     this.recentActionHashes.set(hash, Date.now());
+    this.pruneOldActions(Date.now());
+  }
 
-    // Prune old entries
-    const now = Date.now();
+  /** Remove entries older than the recency window */
+  private pruneOldActions(now: number): void {
     for (const [h, ts] of this.recentActionHashes) {
       if (now - ts > PriorityScorer.RECENT_ACTION_WINDOW_MS) {
         this.recentActionHashes.delete(h);

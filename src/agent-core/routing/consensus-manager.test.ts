@@ -248,12 +248,302 @@ describe("ConsensusManager", () => {
       originalOutput: { text: "Some output" },
       originalProvider: "claude",
       task: { type: "destructive-operation", complexity: "simple", criticality: "critical" },
-      confidence: 0.3,
+      confidence: 0.5, // >= 0.4 so "always" mode picks "review" (not "re-execute")
       reviewProvider: mockReview as any,
       prompt: "Delete the file",
     });
 
     expect(result.agreed).toBe(false);
     expect(result.strategy).toBe("review");
+  });
+
+  // --- Re-execute strategy tests ---
+
+  it("re-execute: tool disagreement (original has tools, second has none) -> agreed:false", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: "I think we should just explain the concept.",
+        toolCalls: [],
+        stopReason: "end_turn",
+      }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: {
+        text: "Running tool",
+        toolCalls: [{ name: "file_write", input: { path: "/a.ts" } }],
+      },
+      originalProvider: "claude",
+      task: { type: "code-generation", complexity: "complex", criticality: "medium" },
+      confidence: 0.1, // very low -> re-execute
+      reviewProvider: mockReview as any,
+      prompt: "Create a new TypeScript file",
+    });
+
+    expect(result.agreed).toBe(false);
+    expect(result.strategy).toBe("re-execute");
+    expect(result.reasoning).toContain("disagree");
+  });
+
+  it("re-execute: same tools used by both providers -> agreed:true", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: "Writing file",
+        toolCalls: [
+          { name: "file_write", input: { path: "/b.ts" } },
+          { name: "file_read", input: { path: "/c.ts" } },
+        ],
+        stopReason: "end_turn",
+      }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: {
+        text: "Writing file",
+        toolCalls: [
+          { name: "file_write", input: { path: "/a.ts" } },
+          { name: "file_read", input: { path: "/d.ts" } },
+        ],
+      },
+      originalProvider: "claude",
+      task: { type: "code-generation", complexity: "complex", criticality: "medium" },
+      confidence: 0.1,
+      reviewProvider: mockReview as any,
+      prompt: "Write two files",
+    });
+
+    expect(result.agreed).toBe(true);
+    expect(result.strategy).toBe("re-execute");
+    expect(result.reasoning).toContain("Tool agreement: 100%");
+  });
+
+  it("re-execute: completely different tools -> agreed:false (low overlap)", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: "Deleting old files",
+        toolCalls: [
+          { name: "file_delete", input: { path: "/old.ts" } },
+          { name: "shell_exec", input: { cmd: "rm -rf" } },
+        ],
+        stopReason: "end_turn",
+      }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: {
+        text: "Creating new files",
+        toolCalls: [
+          { name: "file_write", input: { path: "/new.ts" } },
+          { name: "file_read", input: { path: "/ref.ts" } },
+          { name: "git_commit", input: {} },
+        ],
+      },
+      originalProvider: "claude",
+      task: { type: "code-generation", complexity: "complex", criticality: "medium" },
+      confidence: 0.1,
+      reviewProvider: mockReview as any,
+      prompt: "Refactor the module",
+    });
+
+    expect(result.agreed).toBe(false);
+    expect(result.strategy).toBe("re-execute");
+    expect(result.reasoning).toContain("0%");
+  });
+
+  it("re-execute: both text responses -> sends comparison prompt", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn()
+        // First call: re-execute (same prompt)
+        .mockResolvedValueOnce({
+          text: "The answer is 42. Here is a detailed explanation...",
+          toolCalls: [],
+          stopReason: "end_turn",
+        })
+        // Second call: comparison prompt
+        .mockResolvedValueOnce({
+          text: '{"agreed": true, "reasoning": "Both responses provide similar answers"}',
+          toolCalls: [],
+          stopReason: "end_turn",
+        }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "The answer is 42 because of the meaning of life." },
+      originalProvider: "claude",
+      task: { type: "simple-question", complexity: "trivial", criticality: "low" },
+      confidence: 0.1,
+      reviewProvider: mockReview as any,
+      prompt: "What is the meaning of life?",
+    });
+
+    expect(result.strategy).toBe("re-execute");
+    expect(result.agreed).toBe(true);
+    // Verify two calls: one for re-execute, one for comparison
+    expect(mockReview.chat).toHaveBeenCalledTimes(2);
+    // Second call should contain comparison prompt
+    const secondCallArgs = mockReview.chat.mock.calls[1]!;
+    const comparisonMsg = secondCallArgs[1][0].content as string;
+    expect(comparisonMsg).toContain("Compare these two responses");
+    expect(comparisonMsg).toContain("Response A:");
+    expect(comparisonMsg).toContain("Response B:");
+  });
+
+  it("re-execute: both text, comparison disagrees -> agreed:false", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn()
+        .mockResolvedValueOnce({
+          text: "Completely different answer",
+          toolCalls: [],
+          stopReason: "end_turn",
+        })
+        .mockResolvedValueOnce({
+          text: '{"agreed": false, "reasoning": "Responses take completely different approaches"}',
+          toolCalls: [],
+          stopReason: "end_turn",
+        }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Original answer with a specific approach" },
+      originalProvider: "claude",
+      task: { type: "analysis", complexity: "moderate", criticality: "medium" },
+      confidence: 0.1,
+      reviewProvider: mockReview as any,
+      prompt: "Analyze this code",
+    });
+
+    expect(result.strategy).toBe("re-execute");
+    expect(result.agreed).toBe(false);
+  });
+
+  // --- parseApproval tests ---
+
+  it("parseApproval: JSON with 'agreed' key -> true", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn()
+        .mockResolvedValueOnce({ text: "Second text response", toolCalls: [], stopReason: "end_turn" })
+        .mockResolvedValueOnce({
+          text: '{"agreed": true, "reasoning": "They match"}',
+          toolCalls: [],
+          stopReason: "end_turn",
+        }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "First text response" },
+      originalProvider: "claude",
+      task: { type: "simple-question", complexity: "trivial", criticality: "low" },
+      confidence: 0.1,
+      reviewProvider: mockReview as any,
+      prompt: "Hi",
+    });
+
+    expect(result.agreed).toBe(true);
+  });
+
+  it("parseApproval: positive keyword 'approved' -> true", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: "The action looks good. Approved.",
+        toolCalls: [],
+        stopReason: "end_turn",
+      }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Some action" },
+      originalProvider: "claude",
+      task: { type: "destructive-operation", complexity: "simple", criticality: "critical" },
+      confidence: 0.5, // review strategy
+      reviewProvider: mockReview as any,
+      prompt: "Delete file",
+    });
+
+    expect(result.agreed).toBe(true);
+    expect(result.strategy).toBe("review");
+  });
+
+  it("parseApproval: positive keyword 'agree' -> true (via review)", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: "I agree with this approach. It should work fine.",
+        toolCalls: [],
+        stopReason: "end_turn",
+      }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Some action" },
+      originalProvider: "claude",
+      task: { type: "code-generation", complexity: "moderate", criticality: "medium" },
+      confidence: 0.5,
+      reviewProvider: mockReview as any,
+      prompt: "Generate code",
+    });
+
+    expect(result.agreed).toBe(true);
+  });
+
+  it("parseApproval: ambiguous text without keywords -> false (fail-closed)", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: "Hmm, this is an interesting situation. Let me think about it. It might work.",
+        toolCalls: [],
+        stopReason: "end_turn",
+      }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Some action" },
+      originalProvider: "claude",
+      task: { type: "code-generation", complexity: "moderate", criticality: "medium" },
+      confidence: 0.5,
+      reviewProvider: mockReview as any,
+      prompt: "Generate code",
+    });
+
+    expect(result.agreed).toBe(false);
+    expect(result.strategy).toBe("review");
+  });
+
+  it("parseApproval: 'not approved' overrides 'approved' keyword -> false", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: "This is not approved because it could cause data loss.",
+        toolCalls: [],
+        stopReason: "end_turn",
+      }),
+    };
+
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Drop database" },
+      originalProvider: "claude",
+      task: { type: "destructive-operation", complexity: "simple", criticality: "critical" },
+      confidence: 0.5,
+      reviewProvider: mockReview as any,
+      prompt: "Drop the database",
+    });
+
+    expect(result.agreed).toBe(false);
   });
 });

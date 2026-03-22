@@ -174,8 +174,8 @@ export class ConsensusManager {
   }
 
   /**
-   * Re-execute strategy: same prompt to different provider, compare.
-   * More expensive but more reliable.
+   * Re-execute strategy: same prompt to different provider, compare structurally.
+   * More expensive but more reliable — actually compares both outputs.
    */
   private async reExecuteStrategy(params: {
     originalOutput: OriginalOutput;
@@ -190,11 +190,10 @@ export class ConsensusManager {
       [],
     );
 
-    // Simple comparison: do both outputs suggest the same action?
     const originalHasTools = (params.originalOutput.toolCalls?.length ?? 0) > 0;
     const secondHasTools = (response.toolCalls?.length ?? 0) > 0;
 
-    // If one has tools and other doesn't — disagreement
+    // Structural check 1: tool usage agreement
     if (originalHasTools !== secondHasTools) {
       return {
         agreed: false,
@@ -205,43 +204,81 @@ export class ConsensusManager {
       };
     }
 
-    // Both text responses — use review strategy as fallback for actual comparison
-    // Re-execute without comparison is unreliable, so ask the second provider
-    // to review the first provider's output instead of blindly agreeing
-    const originalText = params.originalOutput.text ?? "";
-    const secondText = response.text ?? "";
+    // Structural check 2: if both use tools, compare tool names
+    if (originalHasTools && secondHasTools) {
+      const originalTools = new Set(params.originalOutput.toolCalls!.map(tc => tc.name));
+      const secondTools = new Set((response.toolCalls ?? []).map(tc => (tc as { name: string }).name));
+      const overlap = [...originalTools].filter(t => secondTools.has(t)).length;
+      const total = new Set([...originalTools, ...secondTools]).size;
+      const toolAgreement = total > 0 ? overlap / total : 1;
 
-    // If both are very short or empty — no meaningful comparison possible
-    if (originalText.length < 20 && secondText.length < 20) {
       return {
-        agreed: true,
+        agreed: toolAgreement >= 0.5, // At least half the tools overlap
         strategy: "re-execute",
         originalProvider: params.originalProvider,
         reviewProvider: params.reviewProvider.name ?? "unknown",
-        reasoning: "Both responses too short for meaningful comparison",
+        reasoning: `Tool agreement: ${Math.round(toolAgreement * 100)}% (${overlap}/${total} tools overlap)`,
       };
     }
 
-    // Fall back to review strategy for actual verification
-    return this.reviewStrategy(params);
+    // Structural check 3: both text — compare by asking reviewer to compare
+    const comparisonPrompt = [
+      "Compare these two responses to the same task. Do they agree on the approach?",
+      "",
+      `Task: ${params.prompt.slice(0, 300)}`,
+      "",
+      `Response A: ${params.originalOutput.text?.slice(0, 500) ?? "(empty)"}`,
+      `Response B: ${response.text?.slice(0, 500) ?? "(empty)"}`,
+      "",
+      'Respond with exactly: {"agreed": true, "reasoning": "..."} or {"agreed": false, "reasoning": "..."}',
+    ].join("\n");
+
+    const comparison = await params.reviewProvider.chat(
+      "You compare AI responses for agreement.",
+      [{ role: "user" as const, content: comparisonPrompt }],
+      [],
+    );
+
+    const agreed = this.parseApproval(comparison.text);
+    return {
+      agreed,
+      strategy: "re-execute",
+      originalProvider: params.originalProvider,
+      reviewProvider: params.reviewProvider.name ?? "unknown",
+      reasoning: comparison.text?.slice(0, 500) ?? "Comparison complete",
+    };
   }
 
   private parseApproval(text: string | null | undefined): boolean {
-    if (!text) return false; // Empty/null response from reviewer = not approved (fail-safe)
+    if (!text) return false;
+
+    // Try JSON parsing first — "approved" key
     try {
-      const match = text.match(/\{[\s\S]*"approved"[\s\S]*\}/);
+      const match = text.match(/\{[\s\S]*?"approved"[\s\S]*?\}/);
       if (match) {
         const parsed = JSON.parse(match[0]);
         return Boolean(parsed.approved);
       }
-    } catch {
-      // Parse failure
-    }
-    // Fallback: look for keywords
+    } catch { /* parse failure */ }
+
+    // Also try "agreed" key (for re-execute comparison)
+    try {
+      const match = text.match(/\{[\s\S]*?"agreed"[\s\S]*?\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        return Boolean(parsed.agreed);
+      }
+    } catch { /* parse failure */ }
+
+    // Keyword fallback (fail-closed: only approve on clear positive signal)
     const lower = text.toLowerCase();
-    if (lower.includes("not approved") || lower.includes("rejected") || lower.includes('"approved": false') || lower.includes('"approved":false')) {
+    if (lower.includes("not approved") || lower.includes("rejected") || lower.includes("disagree")) {
       return false;
     }
-    return false; // Default to not approved (fail-safe)
+    if (lower.includes("approved") || lower.includes("agree") || lower.includes("correct")) {
+      return true;
+    }
+
+    return false; // Fail-closed default
   }
 }

@@ -178,17 +178,19 @@ describe("buildReasoningPrompt", () => {
 });
 
 describe("PriorityScorer", () => {
-  it("deduplicates recently acted observations", async () => {
+  it("deduplicates recently acted observations (0-60s band)", async () => {
     const scorer = new PriorityScorer();
+    // build source: base 80 + source severity 10 = 90, actionable + >50 → +5 = 95
     const obs = createObservation("build", "Build failed", { priority: 80 });
 
     const before = await scorer.scoreAll([obs]);
-    expect(before[0]!.priority).toBe(80);
+    expect(before[0]!.priority).toBe(95); // 80 + 10 source + 5 actionability
 
     scorer.recordAction(obs);
 
+    // After recordAction (0-60s): 80 + 10 - 30 = 60, actionable + >50 → +5 = 65
     const after = await scorer.scoreAll([obs]);
-    expect(after[0]!.priority).toBe(50); // 80 - 30 penalty
+    expect(after[0]!.priority).toBe(65);
   });
 
   it("sorts by priority descending", async () => {
@@ -198,5 +200,97 @@ describe("PriorityScorer", () => {
 
     const result = await scorer.scoreAll([low, high]);
     expect(result[0]!.priority).toBeGreaterThan(result[1]!.priority);
+  });
+
+  it("source severity: build gets boosted more than file-watch", async () => {
+    const scorer = new PriorityScorer();
+    const buildObs = createObservation("build", "Build failed", { priority: 50 });
+    const fileObs = createObservation("file-watch", "File changed", { priority: 50 });
+
+    const result = await scorer.scoreAll([fileObs, buildObs]);
+    // build: 50 + 10 = 60, actionable >50 → +5 = 65
+    // file-watch: 50 + 0 = 50, actionable but not >50 → 50
+    expect(result[0]!.source).toBe("build");
+    expect(result[0]!.priority).toBe(65);
+    expect(result[1]!.source).toBe("file-watch");
+    expect(result[1]!.priority).toBe(50);
+  });
+
+  it("graduated recency: 0-60s = -30, 60-180s = -20, 180-300s = -10", async () => {
+    vi.useFakeTimers();
+    const scorer = new PriorityScorer();
+    // Use file-watch source (0 severity) and non-actionable to isolate recency factor
+    const obs = createObservation("file-watch", "File changed", { priority: 60, actionable: false });
+
+    scorer.recordAction(obs);
+
+    // 0-60s band: -30 → 60 - 30 = 30
+    const at0s = await scorer.scoreAll([obs]);
+    expect(at0s[0]!.priority).toBe(30);
+
+    // 60-180s band: -20 → 60 - 20 = 40
+    vi.advanceTimersByTime(90_000); // 90s elapsed
+    const at90s = await scorer.scoreAll([obs]);
+    expect(at90s[0]!.priority).toBe(40);
+
+    // 180-300s band: -10 → 60 - 10 = 50
+    vi.advanceTimersByTime(120_000); // 210s total
+    const at210s = await scorer.scoreAll([obs]);
+    expect(at210s[0]!.priority).toBe(50);
+
+    // Beyond 300s: no penalty → 60
+    vi.advanceTimersByTime(120_000); // 330s total
+    const at330s = await scorer.scoreAll([obs]);
+    expect(at330s[0]!.priority).toBe(60);
+
+    vi.useRealTimers();
+  });
+
+  it("instinct match count: 1 = +8, 2 = +12, 3+ = +15", async () => {
+    const makeRetriever = (insightCount: number): any => ({
+      getInsightsForTask: vi.fn().mockResolvedValue({
+        insights: Array.from({ length: insightCount }, (_, i) => `insight-${i}`),
+        matchedInstinctIds: [],
+      }),
+    });
+
+    // Use file-watch source (0 severity), non-actionable to isolate instinct factor
+    const obs = createObservation("file-watch", "File changed", { priority: 40, actionable: false });
+
+    const scorer1 = new PriorityScorer(makeRetriever(1));
+    const result1 = await scorer1.scoreAll([obs]);
+    expect(result1[0]!.priority).toBe(48); // 40 + 8
+
+    const scorer2 = new PriorityScorer(makeRetriever(2));
+    const result2 = await scorer2.scoreAll([obs]);
+    expect(result2[0]!.priority).toBe(52); // 40 + 12
+
+    const scorer3 = new PriorityScorer(makeRetriever(4));
+    const result3 = await scorer3.scoreAll([obs]);
+    expect(result3[0]!.priority).toBe(55); // 40 + 15
+  });
+
+  it("actionability: actionable high-priority gets +5, non-actionable does not", async () => {
+    const scorer = new PriorityScorer();
+    // Use file-watch (0 severity) to isolate actionability
+    const actionable = createObservation("file-watch", "File changed", { priority: 55, actionable: true });
+    const nonActionable = createObservation("file-watch", "File changed too", { priority: 55, actionable: false });
+
+    const result = await scorer.scoreAll([actionable, nonActionable]);
+    // actionable: 55 + 0 source = 55, actionable + >50 → +5 = 60
+    // non-actionable: 55 + 0 source = 55, no boost = 55
+    expect(result[0]!.priority).toBe(60);
+    expect(result[0]!.actionable).toBe(true);
+    expect(result[1]!.priority).toBe(55);
+    expect(result[1]!.actionable).toBe(false);
+  });
+
+  it("actionability: no boost when priority <= 50", async () => {
+    const scorer = new PriorityScorer();
+    const obs = createObservation("file-watch", "File changed", { priority: 45, actionable: true });
+
+    const result = await scorer.scoreAll([obs]);
+    // 45 + 0 source = 45, actionable but not >50 → no boost = 45
+    expect(result[0]!.priority).toBe(45);
   });
 });
