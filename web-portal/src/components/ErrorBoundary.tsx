@@ -30,52 +30,21 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          height: '100vh',
-          background: '#0a0a0f',
-          color: '#e0e0e0',
-          fontFamily: 'system-ui, -apple-system, sans-serif',
-          padding: '2rem',
-          textAlign: 'center',
-        }}>
-          <h1 style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: '#fff' }}>
+        <div className="flex flex-col items-center justify-center h-screen bg-bg text-text font-sans p-8 text-center">
+          <h1 className="text-2xl mb-3 text-text font-bold">
             Something went wrong
           </h1>
-          <p style={{ fontSize: '0.95rem', color: '#999', maxWidth: '420px', marginBottom: '1.5rem' }}>
+          <p className="text-[0.95rem] text-text-tertiary max-w-[420px] mb-6">
             An unexpected error occurred while rendering the interface. You can try reloading the page.
           </p>
           {this.state.error && (
-            <pre style={{
-              fontSize: '0.8rem',
-              color: '#f87171',
-              background: '#1a1a24',
-              padding: '0.75rem 1rem',
-              borderRadius: '6px',
-              maxWidth: '500px',
-              overflow: 'auto',
-              marginBottom: '1.5rem',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}>
+            <pre className="text-sm text-error bg-bg-tertiary px-4 py-3 rounded-md max-w-[500px] overflow-auto mb-6 whitespace-pre-wrap break-words">
               {this.state.error.message}
             </pre>
           )}
           <button
             onClick={this.handleReload}
-            style={{
-              padding: '0.6rem 1.5rem',
-              fontSize: '0.95rem',
-              background: '#00e5ff',
-              color: '#0a0a0f',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 600,
-            }}
+            className="px-6 py-2.5 text-[0.95rem] bg-accent text-bg border-none rounded-md cursor-pointer font-semibold hover:bg-accent-hover transition-colors"
           >
             Reload
           </button>

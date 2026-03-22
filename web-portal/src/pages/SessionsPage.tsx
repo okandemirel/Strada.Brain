@@ -25,10 +25,9 @@ export default function SessionsPage() {
     : null
   const metrics = metricsQuery.data ?? null
 
-  if (error) return <div className="page-error">Error: {error}</div>
-  if (loading) return <div className="page-loading">Loading sessions...</div>
+  if (error) return <div className="flex flex-1 items-center justify-center h-[200px] text-error text-[15px]">Error: {error}</div>
+  if (loading) return <div className="flex flex-1 items-center justify-center h-[200px] text-text-secondary text-[15px]">Loading sessions...</div>
 
-  // Derive session list from endpoint or synthesize from agents
   let sessions: SessionInfo[] = sessionsQuery.data?.sessions ?? []
   if (sessions.length === 0 && agentsQuery.data?.agents) {
     sessions = agentsQuery.data.agents.map(a => ({
@@ -41,53 +40,53 @@ export default function SessionsPage() {
   }
 
   return (
-    <div className="admin-page">
-      <h2>Sessions</h2>
+    <div className="flex-1 overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
+      <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Sessions</h2>
 
       {metrics && (
-        <div className="admin-section">
-          <div className="admin-section-title">Overview</div>
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '20px' }}>
-            <div className="admin-stat-row" style={{ flex: 1, minWidth: '150px' }}>
-              <span className="admin-stat-label">Active Sessions</span>
-              <span className="admin-stat-value">{metrics.activeSessions}</span>
+        <div className="mb-7">
+          <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Overview</div>
+          <div className="flex gap-2.5 flex-wrap mb-5">
+            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+              <span className="text-text-secondary">Active Sessions</span>
+              <span className="text-text font-semibold">{metrics.activeSessions}</span>
             </div>
-            <div className="admin-stat-row" style={{ flex: 1, minWidth: '150px' }}>
-              <span className="admin-stat-label">Total Messages</span>
-              <span className="admin-stat-value">{metrics.totalMessages}</span>
+            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+              <span className="text-text-secondary">Total Messages</span>
+              <span className="text-text font-semibold">{metrics.totalMessages}</span>
             </div>
           </div>
         </div>
       )}
 
-      <div className="admin-section">
-        <div className="admin-section-title">Active Sessions ({sessions.length})</div>
+      <div className="mb-7">
+        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Active Sessions ({sessions.length})</div>
         {sessions.length === 0 ? (
-          <div className="page-empty">
-            <h3>No Active Sessions</h3>
-            <p>
+          <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
+            <h3 className="text-text text-lg font-semibold">No Active Sessions</h3>
+            <p className="text-sm max-w-[400px]">
               {metrics
                 ? 'No session details available. Session tracking data may not be exposed.'
                 : 'Cannot reach the server. Make sure it is running.'}
             </p>
           </div>
         ) : (
-          <div className="session-list">
+          <div className="flex flex-col gap-2">
             {sessions.map(s => (
-              <div key={s.id} className="session-item">
-                <span className="session-id">{s.id.length > 16 ? s.id.slice(0, 16) + '...' : s.id}</span>
-                <span className="session-channel">{s.channel}</span>
+              <div key={s.id} className="flex items-center gap-3 px-4 py-3.5 bg-bg-secondary border border-border rounded-[14px] transition-all duration-200 hover:bg-bg-tertiary hover:border-border-hover">
+                <span className="font-mono text-xs text-accent min-w-[120px]">{s.id.length > 16 ? s.id.slice(0, 16) + '...' : s.id}</span>
+                <span className="text-xs text-text-secondary min-w-[80px]">{s.channel}</span>
                 {s.agentId && (
-                  <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
+                  <span className="text-xs text-text-tertiary">
                     Agent: {s.agentId.slice(0, 8)}
                   </span>
                 )}
                 {s.messageCount !== undefined && (
-                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  <span className="text-xs text-text-secondary">
                     {s.messageCount} msgs
                   </span>
                 )}
-                <span className="session-time">
+                <span className="text-xs text-text-tertiary ml-auto">
                   {s.lastActivity ? formatTimeAgo(s.lastActivity) : formatTime(s.startedAt)}
                 </span>
               </div>

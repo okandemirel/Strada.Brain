@@ -5,7 +5,6 @@ interface VoiceRecorderProps {
   disabled?: boolean
 }
 
-// Web Speech API types — not yet in TypeScript's DOM lib
 interface SpeechRecognitionInstance extends EventTarget {
   continuous: boolean
   interimResults: boolean
@@ -34,7 +33,6 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
   const supported = typeof window !== 'undefined' && getSpeechRecognition() !== null
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (recognitionRef.current) {
@@ -54,7 +52,6 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
       return
     }
 
-    // Guard against rapid double-click while previous recognition is still alive
     if (recognitionRef.current) return
 
     const SpeechRecognitionCtor = getSpeechRecognition()
@@ -102,7 +99,11 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
 
   return (
     <button
-      className={`voice-btn ${isRecording ? 'voice-recording' : ''}`}
+      className={`flex items-center justify-center w-[42px] h-[42px] border rounded-xl cursor-pointer shrink-0 transition-all duration-200 ${
+        isRecording
+          ? 'text-error border-error bg-error/15 animate-[voice-pulse_1.5s_ease-in-out_infinite]'
+          : 'border-border bg-bg-tertiary text-text-secondary hover:text-accent hover:border-accent hover:bg-accent-glow'
+      } disabled:opacity-40 disabled:cursor-not-allowed`}
       onClick={toggleRecording}
       disabled={disabled}
       title={isRecording ? 'Stop recording' : 'Voice input'}

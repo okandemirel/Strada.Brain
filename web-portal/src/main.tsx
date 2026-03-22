@@ -6,8 +6,6 @@ import { queryClient } from './lib/query-client'
 import App from './App'
 import './styles/globals.css'
 import 'highlight.js/styles/github-dark.css'
-import './styles/index.css'
-import './styles/admin.css'
 
 const rootEl = document.getElementById('root')
 if (!rootEl) throw new Error('Root element #root not found')

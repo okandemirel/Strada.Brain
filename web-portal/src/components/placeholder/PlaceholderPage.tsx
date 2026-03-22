@@ -15,10 +15,10 @@ const ICONS: Record<string, string> = {
 
 export default function PlaceholderPage({ title }: Props) {
   return (
-    <div className="placeholder-page">
-      <div className="placeholder-icon">{ICONS[title]}</div>
-      <h2>{title}</h2>
-      <p>Coming in Phase 2</p>
+    <div className="flex flex-1 flex-col items-center justify-center text-text-secondary gap-3">
+      <div className="text-5xl mb-2">{ICONS[title]}</div>
+      <h2 className="text-text text-2xl font-bold tracking-tight">{title}</h2>
+      <p className="text-[15px] text-text-tertiary">Coming in Phase 2</p>
     </div>
   )
 }

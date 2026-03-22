@@ -413,24 +413,24 @@ export default function SettingsPage() {
   // --- Render ---
 
   return (
-    <div className="admin-page">
+    <div className="flex-1 overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
       <h2>Settings</h2>
 
-      <div className="admin-section">
-        <div className="admin-section-title">Recovery Surface</div>
+      <div className="mb-7">
+        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Recovery Surface</div>
         {bootLoading ? (
-          <div className="page-loading" style={{ height: 80 }}>Loading...</div>
+          <div className="flex items-center justify-center text-text-secondary text-[15px]">Loading...</div>
         ) : bootReport ? (
           <>
-            <div className="admin-stat-row">
-              <span className="admin-stat-label">Protected Channels</span>
-              <span className="admin-stat-value">{bootReport.goldenPath.channels.join(', ')}</span>
+            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <span className="text-text-secondary">Protected Channels</span>
+              <span className="text-text font-semibold">{bootReport.goldenPath.channels.join(', ')}</span>
             </div>
-            <div className="admin-stat-row">
-              <span className="admin-stat-label">Recommended Preset</span>
-              <span className="admin-stat-value">{bootReport.goldenPath.recommendedPreset}</span>
+            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <span className="text-text-secondary">Recommended Preset</span>
+              <span className="text-text font-semibold">{bootReport.goldenPath.recommendedPreset}</span>
             </div>
-            <table className="admin-table" style={{ marginTop: 16 }}>
+            <table className="w-full bg-bg-secondary border border-border rounded-[14px] overflow-hidden [border-spacing:0] [border-collapse:separate]">
               <thead>
                 <tr>
                   <th>Stage</th>
@@ -448,7 +448,7 @@ export default function SettingsPage() {
                 ))}
               </tbody>
             </table>
-            <table className="admin-table" style={{ marginTop: 16 }}>
+            <table className="w-full bg-bg-secondary border border-border rounded-[14px] overflow-hidden [border-spacing:0] [border-collapse:separate]">
               <thead>
                 <tr>
                   <th>Capability</th>
@@ -462,7 +462,7 @@ export default function SettingsPage() {
                   <tr key={capability.id}>
                     <td>
                       <div>{capability.name}</div>
-                      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>{capability.detail}</div>
+                      <div className="text-xs opacity-75 mt-1">{capability.detail}</div>
                     </td>
                     <td>{capability.tier}</td>
                     <td>{capability.status}</td>
@@ -473,20 +473,20 @@ export default function SettingsPage() {
             </table>
           </>
         ) : (
-          <div className="page-loading" style={{ height: 80 }}>Boot report unavailable.</div>
+          <div className="flex items-center justify-center text-text-secondary text-[15px]">Boot report unavailable.</div>
         )}
       </div>
 
       {/* ===== Autonomous Mode ===== */}
-      <div className="admin-section">
-        <div className="admin-section-title">Autonomous Mode</div>
+      <div className="mb-7">
+        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Autonomous Mode</div>
 
         {autoLoading ? (
-          <div className="page-loading" style={{ height: 80 }}>Loading...</div>
+          <div className="flex items-center justify-center text-text-secondary text-[15px]">Loading...</div>
         ) : (
           <>
-            <div className="admin-stat-row">
-              <span className="admin-stat-label">Autonomous Mode</span>
+            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <span className="text-text-secondary">Autonomous Mode</span>
               <button
                 className={`settings-toggle ${autoStatus?.enabled ? 'on' : 'off'}`}
                 onClick={handleAutoToggle}
@@ -497,25 +497,25 @@ export default function SettingsPage() {
               </button>
             </div>
 
-            <div className="admin-stat-row">
-              <span className="admin-stat-label">Status</span>
-              <span className="admin-stat-value">
-                <span className={`status-dot-inline ${autoStatus?.enabled ? 'ok' : 'off'}`} />{' '}
+            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <span className="text-text-secondary">Status</span>
+              <span className="text-text font-semibold">
+                <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${autoStatus?.enabled ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-text-tertiary'}`} />{' '}
                 {autoStatus?.enabled ? 'Enabled' : 'Disabled'}
               </span>
             </div>
 
             {autoStatus?.enabled && autoStatus.remainingMs != null && (
-              <div className="admin-stat-row">
-                <span className="admin-stat-label">Time Remaining</span>
-                <span className="admin-stat-value">{formatRemaining(autoStatus.remainingMs)}</span>
+              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <span className="text-text-secondary">Time Remaining</span>
+                <span className="text-text font-semibold">{formatRemaining(autoStatus.remainingMs)}</span>
               </div>
             )}
 
-            <div className="admin-stat-row">
-              <span className="admin-stat-label">Duration (hours)</span>
+            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <span className="text-text-secondary">Duration (hours)</span>
               <input
-                className="settings-number-input"
+                className="w-20 px-2.5 py-1.5 border border-border rounded-lg bg-input-bg text-text font-mono text-[13px] text-center outline-none transition-all duration-150 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] disabled:opacity-50 disabled:cursor-not-allowed"
                 type="number"
                 min={1}
                 max={168}
@@ -525,7 +525,7 @@ export default function SettingsPage() {
               />
             </div>
 
-            <div className="settings-hint">
+            <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
               When enabled, the agent will operate without asking for confirmation. Duration: 1-168 hours.
             </div>
           </>
@@ -533,18 +533,18 @@ export default function SettingsPage() {
       </div>
 
       {/* ===== Daemon Mode ===== */}
-      <div className="admin-section">
-        <div className="admin-section-title">Daemon Mode</div>
+      <div className="mb-7">
+        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Daemon Mode</div>
 
         {daemonLoading ? (
-          <div className="page-loading" style={{ height: 80 }}>Loading...</div>
+          <div className="flex items-center justify-center text-text-secondary text-[15px]">Loading...</div>
         ) : (
           <>
-            <div className="admin-stat-row">
-              <span className="admin-stat-label">Daemon</span>
-              <span className="admin-stat-value" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <span className="text-text-secondary">Daemon</span>
+              <span className="text-text font-semibold flex items-center gap-3">
                 <span>
-                  <span className={`status-dot-inline ${daemonStatus?.running ? 'ok' : 'off'}`} />{' '}
+                  <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${daemonStatus?.running ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-text-tertiary'}`} />{' '}
                   {daemonStatus?.running ? 'Running' : daemonStatus?.configured ? 'Stopped' : 'Not Configured'}
                 </span>
                 <button
@@ -562,14 +562,14 @@ export default function SettingsPage() {
             {daemonStatus?.running ? (
               <>
                 {/* Budget */}
-                <div className="admin-stat-row">
-                  <span className="admin-stat-label">Budget</span>
-                  <span className="admin-stat-value">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Budget</span>
+                  <span className="text-text font-semibold">
                     ${daemonStatus.budget.usedUsd.toFixed(2)} / ${daemonStatus.budget.limitUsd.toFixed(2)} used ({daemonBudgetPercent.toFixed(1)}%)
                   </span>
                 </div>
-                <div className="admin-stat-row">
-                  <span className="admin-stat-label" />
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary" />
                   <div style={{ flex: 1, maxWidth: 260 }}>
                     <div
                       className="settings-budget-bar"
@@ -598,18 +598,18 @@ export default function SettingsPage() {
                 </div>
 
                 {/* Triggers */}
-                <div className="admin-stat-row">
-                  <span className="admin-stat-label">Triggers</span>
-                  <span className="admin-stat-value">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Triggers</span>
+                  <span className="text-text font-semibold">
                     {daemonStatus.triggers.length} active trigger{daemonStatus.triggers.length !== 1 ? 's' : ''}
                   </span>
                 </div>
 
                 {/* Approval Queue */}
                 {daemonStatus.approvalQueue.length > 0 && (
-                  <div className="admin-stat-row">
-                    <span className="admin-stat-label">Approval Queue</span>
-                    <span className="admin-stat-value" style={{ color: 'var(--warning)' }}>
+                  <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                    <span className="text-text-secondary">Approval Queue</span>
+                    <span className="text-text font-semibold text-warning">
                       {daemonStatus.approvalQueue.length} pending approval{daemonStatus.approvalQueue.length !== 1 ? 's' : ''}
                     </span>
                   </div>
@@ -617,9 +617,9 @@ export default function SettingsPage() {
 
                 {/* Interval */}
                 {daemonStatus.intervalMs != null && (
-                  <div className="admin-stat-row">
-                    <span className="admin-stat-label">Heartbeat Interval</span>
-                    <span className="admin-stat-value">
+                  <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                    <span className="text-text-secondary">Heartbeat Interval</span>
+                    <span className="text-text font-semibold">
                       {daemonStatus.intervalMs >= 60000
                         ? `${Math.round(daemonStatus.intervalMs / 60000)}m`
                         : `${Math.round(daemonStatus.intervalMs / 1000)}s`}
@@ -628,18 +628,17 @@ export default function SettingsPage() {
                 )}
 
                 {daemonStatus.startupNotices && daemonStatus.startupNotices.length > 0 && (
-                  <div style={{ marginTop: 16, display: 'grid', gap: 8 }}>
-                    <div className="admin-stat-row" style={{ marginBottom: 0 }}>
-                      <span className="admin-stat-label">Startup Notices</span>
-                      <span className="admin-stat-value">{daemonStatus.startupNotices.length}</span>
+                  <div className="mt-4 grid gap-2">
+                    <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                      <span className="text-text-secondary">Startup Notices</span>
+                      <span className="text-text font-semibold">{daemonStatus.startupNotices.length}</span>
                     </div>
                     {daemonStatus.startupNotices.map((notice, index) => (
                       <div
                         key={`${notice}-${index}`}
-                        className="settings-provider-card"
-                        style={{ textAlign: 'left', padding: '12px 14px', cursor: 'default' }}
+                        className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
                       >
-                        <div className="settings-hint" style={{ margin: 0 }}>
+                        <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                           {notice}
                         </div>
                       </div>
@@ -649,27 +648,26 @@ export default function SettingsPage() {
               </>
             ) : (
               <>
-                <div className="settings-hint" style={{ marginTop: 8 }}>
+                <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                   Daemon mode enables autonomous background execution with scheduled triggers,
                   file watchers, and webhooks.
                 </div>
                 {daemonStatus?.startupNotices && daemonStatus.startupNotices.length > 0 && (
-                  <div style={{ marginTop: 16, display: 'grid', gap: 8 }}>
+                  <div className="mt-4 grid gap-2">
                     {daemonStatus.startupNotices.map((notice, index) => (
                       <div
                         key={`${notice}-${index}`}
-                        className="settings-provider-card"
-                        style={{ textAlign: 'left', padding: '12px 14px', cursor: 'default' }}
+                        className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
                       >
-                        <div className="settings-hint" style={{ margin: 0 }}>
+                        <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                           {notice}
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
-                <div className="settings-hint" style={{ marginTop: 6 }}>
-                  Enable Daemon Mode in the Setup Wizard or start with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>--daemon</code> flag.
+                <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
+                  Enable Daemon Mode in the Setup Wizard or start with <code className="text-[11px] text-text-secondary">--daemon</code> flag.
                 </div>
               </>
             )}
@@ -678,22 +676,21 @@ export default function SettingsPage() {
       </div>
 
       {/* ===== Routing ===== */}
-      <div className="admin-section">
-        <div className="admin-section-title">Strada Execution Policy</div>
+      <div className="mb-7">
+        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Strada Execution Policy</div>
 
         {routingLoading ? (
-          <div className="page-loading" style={{ height: 80 }}>Loading...</div>
+          <div className="flex items-center justify-center text-text-secondary text-[15px]">Loading...</div>
         ) : (
           <>
-            <div className="admin-stat-row">
-              <span className="admin-stat-label">Routing Preset</span>
-              <div style={{ display: 'flex', gap: 8 }}>
+            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <span className="text-text-secondary">Routing Preset</span>
+              <div>
                 {(['budget', 'balanced', 'performance'] as const).map(p => (
                   <button
                     key={p}
                     className={`settings-provider-card ${p === routingPreset ? 'active' : ''}`}
-                    style={{ padding: '6px 14px', fontSize: 13, minWidth: 0 }}
-                    onClick={() => p !== routingPreset && handlePresetChange(p)}
+                                       onClick={() => p !== routingPreset && handlePresetChange(p)}
                     disabled={routingSwitching || p === routingPreset}
                   >
                     {p.charAt(0).toUpperCase() + p.slice(1)}
@@ -701,55 +698,55 @@ export default function SettingsPage() {
                 ))}
               </div>
             </div>
-            <div className="settings-hint">
+            <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
               Strada remains the control plane. This preset biases how Strada assigns planning,
               execution, clarification review, review, and synthesis work across available providers.
-              Configure with <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>ROUTING_PRESET</code> or <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>/routing preset</code> command.
+              Configure with <code className="text-[11px] text-text-secondary">ROUTING_PRESET</code> or <code className="text-[11px] text-text-secondary">/routing preset</code> command.
             </div>
 
             {routingDecisions.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
-                  <span className="admin-stat-label">Recent Worker Decisions</span>
-                  <span className="admin-stat-value">{routingDecisions.length}</span>
+              <div>
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Recent Worker Decisions</span>
+                  <span className="text-text font-semibold">{routingDecisions.length}</span>
                 </div>
-                <div style={{ display: 'grid', gap: 10 }}>
+                <div>
                   {routingDecisions.map((decision, index) => (
                     <div
                       key={`${decision.provider}-${decision.timestamp}-${index}`}
-                      className="settings-provider-card"
+                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-pointer font-[inherit] transition-all duration-150 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] disabled:cursor-default"
                       style={{
                         textAlign: 'left',
                         padding: '12px 14px',
                         cursor: 'default',
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
-                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                      <div className="flex justify-between gap-3 mb-1.5">
+                        <div className="text-sm font-semibold text-text mb-1.5">
                           {decision.task.type}{' -> '}{decision.provider}
                         </div>
-                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                        <div className="flex gap-2 flex-wrap">
                           {formatDecisionTime(decision.timestamp)}
                         </div>
                       </div>
-                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
-                        <span className="settings-provider-id">{decision.task.complexity}</span>
-                        <span className="settings-provider-model">{decision.task.criticality}</span>
+                      <div className="flex gap-2 flex-wrap">
+                        <span className="text-[11px] font-mono text-text-tertiary">{decision.task.complexity}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">{decision.task.criticality}</span>
                       </div>
                       {decision.catalogSignal && (
-                        <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
-                          <span className="settings-provider-id">
+                        <div className="flex gap-2 flex-wrap">
+                          <span className="text-[11px] font-mono text-text-tertiary">
                             freshness {decision.catalogSignal.freshnessScore.toFixed(2)}
                           </span>
-                          <span className="settings-provider-model">
+                          <span className="text-[11px] font-mono text-text-secondary">
                             alignment {decision.catalogSignal.alignmentScore.toFixed(2)}
                           </span>
                           {decision.catalogSignal.stale && (
-                            <span className="settings-provider-model">stale catalog</span>
+                            <span className="text-[11px] font-mono text-text-secondary">stale catalog</span>
                           )}
                         </div>
                       )}
-                      <div className="settings-hint" style={{ margin: 0 }}>
+                      <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                         {decision.reason}
                       </div>
                     </div>
@@ -759,37 +756,37 @@ export default function SettingsPage() {
             )}
 
             {executionTraces.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
-                  <span className="admin-stat-label">Recent Runtime Execution</span>
-                  <span className="admin-stat-value">{executionTraces.length}</span>
+              <div>
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Recent Runtime Execution</span>
+                  <span className="text-text font-semibold">{executionTraces.length}</span>
                 </div>
-                <div style={{ display: 'grid', gap: 10 }}>
+                <div>
                   {executionTraces.map((trace, index) => (
                     <div
                       key={`${trace.provider}-${trace.phase}-${trace.role}-${trace.timestamp}-${index}`}
-                      className="settings-provider-card"
+                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-pointer font-[inherit] transition-all duration-150 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] disabled:cursor-default"
                       style={{
                         textAlign: 'left',
                         padding: '12px 14px',
                         cursor: 'default',
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
-                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                      <div className="flex justify-between gap-3 mb-1.5">
+                        <div className="text-sm font-semibold text-text mb-1.5">
                           {trace.phase}{' / '}{trace.role}{' -> '}{trace.provider}
                         </div>
-                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                        <div className="flex gap-2 flex-wrap">
                           {formatDecisionTime(trace.timestamp)}
                         </div>
                       </div>
-                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
-                        <span className="settings-provider-id">{trace.source}</span>
+                      <div className="flex gap-2 flex-wrap">
+                        <span className="text-[11px] font-mono text-text-tertiary">{trace.source}</span>
                         {trace.model && (
-                          <span className="settings-provider-model">{trace.model}</span>
+                          <span className="text-[11px] font-mono text-text-secondary">{trace.model}</span>
                         )}
                       </div>
-                      <div className="settings-hint" style={{ margin: 0 }}>
+                      <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                         {trace.reason}
                       </div>
                     </div>
@@ -799,38 +796,38 @@ export default function SettingsPage() {
             )}
 
             {phaseOutcomes.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
-                  <span className="admin-stat-label">Recent Phase Outcomes</span>
-                  <span className="admin-stat-value">{phaseOutcomes.length}</span>
+              <div>
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Recent Phase Outcomes</span>
+                  <span className="text-text font-semibold">{phaseOutcomes.length}</span>
                 </div>
-                <div style={{ display: 'grid', gap: 10 }}>
+                <div>
                   {phaseOutcomes.map((outcome, index) => (
                     <div
                       key={`${outcome.provider}-${outcome.phase}-${outcome.role}-${outcome.timestamp}-${index}`}
-                      className="settings-provider-card"
+                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-pointer font-[inherit] transition-all duration-150 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] disabled:cursor-default"
                       style={{
                         textAlign: 'left',
                         padding: '12px 14px',
                         cursor: 'default',
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
-                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                      <div className="flex justify-between gap-3 mb-1.5">
+                        <div className="text-sm font-semibold text-text mb-1.5">
                           {outcome.phase}{' / '}{outcome.role}{' -> '}{outcome.provider}
                         </div>
-                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                        <div className="flex gap-2 flex-wrap">
                           {formatDecisionTime(outcome.timestamp)}
                         </div>
                       </div>
-                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
-                        <span className="settings-provider-id">{outcome.status}</span>
-                        <span className="settings-provider-model">{outcome.source}</span>
+                      <div className="flex gap-2 flex-wrap">
+                        <span className="text-[11px] font-mono text-text-tertiary">{outcome.status}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">{outcome.source}</span>
                         {outcome.model && (
-                          <span className="settings-provider-model">{outcome.model}</span>
+                          <span className="text-[11px] font-mono text-text-secondary">{outcome.model}</span>
                         )}
                       </div>
-                      <div className="settings-hint" style={{ margin: 0 }}>
+                      <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                         {outcome.reason}
                       </div>
                     </div>
@@ -840,41 +837,40 @@ export default function SettingsPage() {
             )}
 
             {phaseScores.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
-                  <span className="admin-stat-label">Adaptive Phase Scores</span>
-                  <span className="admin-stat-value">{phaseScores.length}</span>
+              <div>
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Adaptive Phase Scores</span>
+                  <span className="text-text font-semibold">{phaseScores.length}</span>
                 </div>
-                <div style={{ display: 'grid', gap: 10 }}>
+                <div>
                   {phaseScores.map((score, index) => (
                     <div
                       key={`${score.provider}-${score.phase}-${score.role}-${index}`}
-                      className="settings-provider-card"
-                      style={{ textAlign: 'left', padding: '12px 14px', cursor: 'default' }}
+                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
-                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                      <div className="flex justify-between gap-3 mb-1.5">
+                        <div className="text-sm font-semibold text-text mb-1.5">
                           {score.phase}{' / '}{score.role}{' -> '}{score.provider}
                         </div>
-                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                        <div className="flex gap-2 flex-wrap">
                           {score.score.toFixed(2)} score
                         </div>
                       </div>
-                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
-                        <span className="settings-provider-id">samples {score.sampleSize}</span>
-                        <span className="settings-provider-model">verifier {score.verifierCleanRate.toFixed(2)}</span>
-                        <span className="settings-provider-model">rollback {score.rollbackRate.toFixed(2)}</span>
-                        <span className="settings-provider-model">retry {score.avgRetryCount.toFixed(2)}</span>
-                        <span className="settings-provider-model">cost {Math.round(score.avgTokenCost)}</span>
-                        <span className="settings-provider-model">repeats {score.repeatedFailureCount}</span>
+                      <div className="flex gap-2 flex-wrap">
+                        <span className="text-[11px] font-mono text-text-tertiary">samples {score.sampleSize}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">verifier {score.verifierCleanRate.toFixed(2)}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">rollback {score.rollbackRate.toFixed(2)}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">retry {score.avgRetryCount.toFixed(2)}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">cost {Math.round(score.avgTokenCost)}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">repeats {score.repeatedFailureCount}</span>
                       </div>
-                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
-                        <span className="settings-provider-model">approved {score.approvedCount}</span>
-                        <span className="settings-provider-model">continued {score.continuedCount}</span>
-                        <span className="settings-provider-model">replanned {score.replannedCount}</span>
-                        <span className="settings-provider-model">failed {score.failedCount}</span>
+                      <div className="flex gap-2 flex-wrap">
+                        <span className="text-[11px] font-mono text-text-secondary">approved {score.approvedCount}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">continued {score.continuedCount}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">replanned {score.replannedCount}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">failed {score.failedCount}</span>
                       </div>
-                      <div className="settings-hint" style={{ margin: 0 }}>
+                      <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                         {score.latestReason}
                       </div>
                     </div>
@@ -884,40 +880,39 @@ export default function SettingsPage() {
             )}
 
             {runtimeArtifacts.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div className="admin-stat-row" style={{ marginBottom: 10 }}>
-                  <span className="admin-stat-label">Runtime Self-Improvement</span>
-                  <span className="admin-stat-value">{runtimeArtifacts.length}</span>
+              <div>
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Runtime Self-Improvement</span>
+                  <span className="text-text font-semibold">{runtimeArtifacts.length}</span>
                 </div>
-                <div style={{ display: 'grid', gap: 10 }}>
+                <div>
                   {runtimeArtifacts.map((artifact) => (
                     <div
                       key={artifact.id}
-                      className="settings-provider-card"
-                      style={{ textAlign: 'left', padding: '12px 14px', cursor: 'default' }}
+                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
-                        <div className="settings-provider-name" style={{ fontSize: 14 }}>
+                      <div className="flex justify-between gap-3 mb-1.5">
+                        <div className="text-sm font-semibold text-text mb-1.5">
                           {artifact.kind}{' -> '}{artifact.name}
                         </div>
-                        <div className="settings-provider-meta" style={{ fontSize: 12 }}>
+                        <div className="flex gap-2 flex-wrap">
                           {artifact.state}
                         </div>
                       </div>
-                      <div className="settings-provider-meta" style={{ marginBottom: 4 }}>
-                        <span className="settings-provider-id">samples {artifact.stats.shadowSampleCount}</span>
-                        <span className="settings-provider-model">active uses {artifact.stats.activeUseCount}</span>
-                        <span className="settings-provider-model">clean {artifact.stats.cleanCount}</span>
-                        <span className="settings-provider-model">retry {artifact.stats.retryCount}</span>
-                        <span className="settings-provider-model">failed {artifact.stats.failureCount}</span>
-                        <span className="settings-provider-model">blocker {artifact.stats.blockerCount}</span>
-                        <span className="settings-provider-model">{artifact.projectWorldFingerprint ? 'project-scoped' : 'general'}</span>
+                      <div className="flex gap-2 flex-wrap">
+                        <span className="text-[11px] font-mono text-text-tertiary">samples {artifact.stats.shadowSampleCount}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">active uses {artifact.stats.activeUseCount}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">clean {artifact.stats.cleanCount}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">retry {artifact.stats.retryCount}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">failed {artifact.stats.failureCount}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">blocker {artifact.stats.blockerCount}</span>
+                        <span className="text-[11px] font-mono text-text-secondary">{artifact.projectWorldFingerprint ? 'project-scoped' : 'general'}</span>
                       </div>
-                      <div className="settings-hint" style={{ marginBottom: 4 }}>
+                      <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                         {artifact.description}
                       </div>
                       {artifact.lastStateReason ? (
-                        <div className="settings-hint" style={{ margin: 0 }}>
+                        <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                           {artifact.lastStateReason}
                         </div>
                       ) : null}
@@ -931,38 +926,38 @@ export default function SettingsPage() {
       </div>
 
       {/* ===== Model Selection ===== */}
-      <div className="admin-section">
-        <div className="admin-section-title">Primary Worker</div>
+      <div className="mb-7">
+        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Primary Worker</div>
 
         {modelLoading ? (
-          <div className="page-loading" style={{ height: 80 }}>Loading providers...</div>
+          <div className="flex items-center justify-center text-text-secondary text-[15px]">Loading providers...</div>
         ) : (
           <>
             {activeProvider && (
-              <div className="admin-stat-row" style={{ marginBottom: 16 }}>
-                <span className="admin-stat-label">Primary Execution Worker</span>
-                <span className="admin-stat-value">
+              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <span className="text-text-secondary">Primary Execution Worker</span>
+                <span className="text-text font-semibold">
                   {activeProvider.providerName}
                   {activeProvider.isDefault && (
-                    <span className="settings-badge">Default</span>
+                    <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-md bg-accent-glow text-accent uppercase tracking-[0.03em] ml-2 align-middle">Default</span>
                   )}
                 </span>
               </div>
             )}
 
             {activeProvider?.model && (
-              <div className="admin-stat-row" style={{ marginBottom: 16 }}>
-                <span className="admin-stat-label">Worker Model</span>
-                <span className="admin-stat-value admin-card-value mono">
+              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <span className="text-text-secondary">Worker Model</span>
+                <span className="text-text font-semibold font-mono text-xs">
                   {activeProvider.model}
                 </span>
               </div>
             )}
 
             {activeProvider?.selectionMode && (
-              <div className="admin-stat-row" style={{ marginBottom: 16 }}>
-                <span className="admin-stat-label">Selection Mode</span>
-                <span className="admin-stat-value">
+              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <span className="text-text-secondary">Selection Mode</span>
+                <span className="text-text font-semibold">
                   {activeProvider.selectionMode === 'strada-primary-worker'
                     ? 'Strada primary worker'
                     : activeProvider.selectionMode}
@@ -971,9 +966,9 @@ export default function SettingsPage() {
             )}
 
             {activeProvider?.executionPool && activeProvider.executionPool.length > 0 && (
-              <div className="admin-stat-row" style={{ marginBottom: 16 }}>
-                <span className="admin-stat-label">Execution Pool</span>
-                <span className="admin-stat-value admin-card-value">
+              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <span className="text-text-secondary">Execution Pool</span>
+                <span className="text-text font-semibold">
                   {activeProvider.executionPool.map((provider) => provider.name).join(', ')}
                 </span>
               </div>
@@ -981,28 +976,28 @@ export default function SettingsPage() {
 
             {embeddingStatus && (
               <>
-                <div className="admin-stat-row" style={{ marginBottom: 16 }}>
-                  <span className="admin-stat-label">Embedding Provider</span>
-                  <span className="admin-stat-value admin-card-value mono">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Embedding Provider</span>
+                  <span className="text-text font-semibold font-mono text-xs">
                     {embeddingStatus.resolvedProviderName ?? 'Hash fallback'}
                   </span>
                 </div>
 
-                <div className="admin-stat-row" style={{ marginBottom: 16 }}>
-                  <span className="admin-stat-label">Embedding Resolution</span>
-                  <span className="admin-stat-value">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Embedding Resolution</span>
+                  <span className="text-text font-semibold">
                     {embeddingStatus.resolutionSource ?? embeddingStatus.state}
                   </span>
                 </div>
 
-                <div className="admin-stat-row" style={{ marginBottom: 16 }}>
-                  <span className="admin-stat-label">Embedding Dimensions</span>
-                  <span className="admin-stat-value admin-card-value mono">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <span className="text-text-secondary">Embedding Dimensions</span>
+                  <span className="text-text font-semibold font-mono text-xs">
                     {embeddingStatus.activeDimensions ?? embeddingStatus.configuredDimensions ?? 'n/a'}
                   </span>
                 </div>
 
-                <div className="settings-hint" style={{ marginTop: -4, marginBottom: 16 }}>
+                <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                   {embeddingStatus.ragEnabled
                     ? `RAG is ${embeddingStatus.state === 'active' ? 'active' : 'degraded'}. Configured embedding provider: ${embeddingStatus.configuredProvider}.`
                     : embeddingStatus.state === 'active'
@@ -1014,12 +1009,12 @@ export default function SettingsPage() {
             )}
 
             {activeProvider?.executionPolicyNote && (
-              <div className="settings-hint" style={{ marginBottom: 16 }}>
+              <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                 {activeProvider.executionPolicyNote}
               </div>
             )}
 
-            <div className="settings-hint" style={{ marginBottom: 16 }}>
+            <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
               Changing this does not turn Strada into a direct provider chat. It only changes the
               main worker Strada prefers for implementation-heavy turns.
             </div>
@@ -1030,14 +1025,14 @@ export default function SettingsPage() {
       </div>
 
       {/* ===== Voice Mode ===== */}
-      <div className="admin-section">
-        <div className="admin-section-title">Voice Mode</div>
+      <div className="mb-7">
+        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Voice Mode</div>
 
-        <div className="admin-stat-row">
+        <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
           <div>
-            <span className="admin-stat-label">Voice Input</span>
+            <span className="text-text-secondary">Voice Input</span>
             {!speechInputAvailable && (
-              <div className="settings-hint" style={{ marginTop: 4, marginBottom: 0 }}>
+              <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                 Speech recognition is not supported in this browser.
               </div>
             )}
@@ -1052,11 +1047,11 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        <div className="admin-stat-row">
+        <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
           <div>
-            <span className="admin-stat-label">Voice Output (Auto-read Responses)</span>
+            <span className="text-text-secondary">Voice Output (Auto-read Responses)</span>
             {!speechOutputAvailable && (
-              <div className="settings-hint" style={{ marginTop: 4, marginBottom: 0 }}>
+              <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                 Speech synthesis is not supported in this browser.
               </div>
             )}
@@ -1071,7 +1066,7 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        <div className="settings-hint">
+        <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
           Voice settings are stored locally in your browser and do not affect other sessions.
         </div>
       </div>

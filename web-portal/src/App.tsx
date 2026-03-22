@@ -19,9 +19,9 @@ const SetupWizard = lazy(() => import('./pages/SetupWizard'))
 
 function RouteLoadingFallback() {
   return (
-    <div className="placeholder-page">
-      <h2>Loading Strada portal</h2>
-      <p>Preparing the next screen.</p>
+    <div className="flex flex-1 flex-col items-center justify-center text-text-secondary gap-3">
+      <h2 className="text-text text-2xl font-bold tracking-tight">Loading Strada portal</h2>
+      <p className="text-[15px] text-text-tertiary">Preparing the next screen.</p>
     </div>
   )
 }

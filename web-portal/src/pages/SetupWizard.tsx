@@ -7,7 +7,7 @@ import ProjectPathStep from './setup/ProjectPathStep'
 import ChannelRagStep from './setup/ChannelRagStep'
 import ReviewStep from './setup/ReviewStep'
 import DirectoryBrowser from './setup/DirectoryBrowser'
-import '../styles/setup.css'
+
 
 export default function SetupWizard() {
   const wiz = useSetupWizard()

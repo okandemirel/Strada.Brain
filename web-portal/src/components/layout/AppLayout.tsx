@@ -5,9 +5,9 @@ import Sidebar from './Sidebar'
 export default function AppLayout() {
   return (
     <WebSocketProvider>
-      <div className="app-layout">
+      <div className="flex h-full overflow-hidden">
         <Sidebar />
-        <main className="app-main">
+        <main className="flex flex-1 flex-col overflow-hidden min-w-0">
           <Outlet />
         </main>
       </div>

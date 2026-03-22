@@ -37,11 +37,11 @@ export default function ChatView() {
   const isDisconnected = status !== 'connected'
 
   return (
-    <div className="chat-area">
-      <div className="chat-toolbar">
+    <div className="flex flex-col flex-1 overflow-hidden min-w-0">
+      <div className="flex items-center justify-end px-6 py-2 border-b border-border shrink-0">
         <PrimaryWorkerSelector />
       </div>
-      <div className="messages" ref={messagesContainerRef}>
+      <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-3 scroll-smooth" ref={messagesContainerRef}>
         {messages.length === 0 && !isTyping ? (
           <EmptyState />
         ) : (

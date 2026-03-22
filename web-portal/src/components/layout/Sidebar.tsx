@@ -8,7 +8,6 @@ import {
 import { useWS } from '../../hooks/useWS'
 import { useTheme } from '../../hooks/useTheme'
 import { useSidebar } from '../../hooks/useSidebar'
-import '../../styles/sidebar.css'
 
 const SECTIONS: { title: string; items: { to: string; icon: LucideIcon; label: string; end?: boolean }[] }[] = [
   {
@@ -47,49 +46,72 @@ export default function Sidebar() {
   const isConnected = status === 'connected'
 
   return (
-    <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
-      <div className="sidebar-header">
-        <img src="/strada-brain-icon.png" alt="" width="28" height="28" className="sidebar-logo-icon" />
-        {!collapsed && <span className="sidebar-logo-text">Strada.Brain</span>}
+    <aside
+      className={`${collapsed ? 'w-14' : 'w-60'} h-full flex flex-col bg-bg-secondary backdrop-blur-[40px] backdrop-saturate-[180%] border-r border-border z-[100] transition-[width] duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)] overflow-hidden shrink-0 max-md:fixed max-md:top-0 max-md:left-0 max-md:z-[1000] max-md:shadow-[var(--shadow-lg)] ${collapsed ? 'max-md:-translate-x-full max-md:!w-60' : 'max-md:translate-x-0'}`}
+    >
+      {/* Header */}
+      <div className={`flex flex-row items-center gap-3 p-4 border-b border-border shrink-0 ${collapsed ? 'justify-center px-2' : ''}`}>
+        <img src="/strada-brain-icon.png" alt="" width="28" height="28" className="w-7 h-7 rounded-lg shrink-0 object-contain" />
+        {!collapsed && <span className="text-[17px] font-bold text-text tracking-tight whitespace-nowrap overflow-hidden text-ellipsis">Strada.Brain</span>}
       </div>
 
-      <nav className="sidebar-nav">
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto p-2 scrollbar-thin" style={{ scrollbarColor: 'var(--color-scrollbar-thumb) transparent' }}>
         {SECTIONS.map((section) => (
-          <div key={section.title} className="sidebar-section">
-            {!collapsed && <div className="sidebar-section-title">{section.title}</div>}
+          <div key={section.title} className="mb-2">
+            {!collapsed && (
+              <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-text-tertiary px-3 pt-2 pb-1 whitespace-nowrap overflow-hidden text-ellipsis select-none">
+                {section.title}
+              </div>
+            )}
             {section.items.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.end}
                 className={({ isActive }) =>
-                  `sidebar-item ${isActive ? 'active' : ''}`
+                  `flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm font-medium transition-all duration-150 cursor-pointer relative whitespace-nowrap overflow-hidden select-none no-underline ${
+                    collapsed ? 'justify-center px-2' : ''
+                  } ${
+                    isActive
+                      ? 'bg-accent-glow text-accent font-semibold sidebar-item-active'
+                      : 'text-text-secondary hover:bg-bg-tertiary hover:text-text'
+                  }`
                 }
                 title={collapsed ? item.label : undefined}
               >
-                <span className="sidebar-item-icon"><item.icon size={18} /></span>
-                {!collapsed && <span className="sidebar-item-label">{item.label}</span>}
+                <span className="w-[22px] text-center text-base shrink-0 leading-none"><item.icon size={18} /></span>
+                {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{item.label}</span>}
               </NavLink>
             ))}
           </div>
         ))}
       </nav>
 
-      <div className="sidebar-footer">
-        <button className="sidebar-footer-btn" onClick={toggleTheme} title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}>
-          <span className="sidebar-item-icon">{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</span>
-          {!collapsed && <span className="sidebar-item-label">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>}
+      {/* Footer */}
+      <div className="p-2 border-t border-border flex flex-col gap-0.5 shrink-0">
+        <button
+          className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center' : ''}`}
+          onClick={toggleTheme}
+          title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+        >
+          <span className="w-[22px] text-center text-base shrink-0 leading-none">{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</span>
+          {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>}
         </button>
 
-        <button className="sidebar-footer-btn" onClick={toggle} title={collapsed ? 'Expand' : 'Collapse'}>
-          <span className="sidebar-item-icon">{collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}</span>
-          {!collapsed && <span className="sidebar-item-label">Collapse</span>}
+        <button
+          className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center' : ''}`}
+          onClick={toggle}
+          title={collapsed ? 'Expand' : 'Collapse'}
+        >
+          <span className="w-[22px] text-center text-base shrink-0 leading-none">{collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}</span>
+          {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">Collapse</span>}
         </button>
 
-        <div className="sidebar-health" title={isConnected ? 'Connected' : status}>
-          <span className={`sidebar-health-dot ${isConnected ? 'ok' : 'err'}`} />
+        <div className={`flex flex-row items-center gap-2 px-3 py-2.5 text-xs text-text-tertiary whitespace-nowrap overflow-hidden ${collapsed ? 'justify-center px-2' : ''}`} title={isConnected ? 'Connected' : status}>
+          <span className={`w-2 h-2 rounded-full shrink-0 transition-all duration-300 ${isConnected ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-error shadow-[0_0_6px_var(--color-error)]'}`} />
           {!collapsed && (
-            <span className="sidebar-health-text">
+            <span className="overflow-hidden text-ellipsis">
               {isConnected ? 'Health OK' : status}
             </span>
           )}

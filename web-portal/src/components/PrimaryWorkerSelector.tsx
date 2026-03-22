@@ -64,13 +64,13 @@ export function PrimaryWorkerSelectorSurface({
     <>
       <button
         type="button"
-        className="model-selector-trigger"
+        className="flex items-center gap-1.5 bg-bg-tertiary border border-border rounded-lg px-2.5 py-[5px] cursor-pointer text-text-secondary text-xs font-medium transition-all duration-200 whitespace-nowrap hover:bg-bg-elevated hover:text-text hover:border-border-hover"
         onClick={onToggleOpen}
         title="Set Strada's primary execution worker"
       >
-        <span className="model-selector-label">{displayLabel}</span>
+        <span className="max-w-[180px] overflow-hidden text-ellipsis">{displayLabel}</span>
         <svg
-          className={`model-selector-chevron ${open ? 'open' : ''}`}
+          className={`shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
           width="12"
           height="12"
           viewBox="0 0 12 12"
@@ -85,14 +85,14 @@ export function PrimaryWorkerSelectorSurface({
       </button>
 
       {open && (
-        <div className="model-selector-dropdown">
-          <div className="model-selector-loading" style={{ textAlign: 'left', lineHeight: 1.4 }}>
+        <div className="absolute top-[calc(100%+4px)] right-0 min-w-[200px] max-h-[360px] overflow-y-auto bg-bg-secondary border border-border rounded-[10px] p-1 z-[100] shadow-[0_8px_24px_rgba(0,0,0,0.3)] backdrop-blur-[40px] backdrop-saturate-[180%]">
+          <div className="px-3 py-2 text-[11px] text-text-secondary opacity-70 text-left leading-snug">
             Strada stays in control.
             <br />
             This sets the primary execution worker, not a direct chat target.
           </div>
           {modelsLoading && (
-            <div className="model-selector-loading">Loading models...</div>
+            <div className="px-3 py-2 text-[11px] text-text-secondary opacity-70 text-center">Loading models...</div>
           )}
           {providers.map((p) => {
             const isActive = active?.provider === p.name
@@ -100,48 +100,28 @@ export function PrimaryWorkerSelectorSurface({
             const hasMultipleModels = p.models && p.models.length > 1
 
             return (
-              <div key={p.name} className="model-selector-group">
+              <div key={p.name} className="flex flex-col">
                 <button
                   type="button"
-                  className={`model-selector-option ${isActive ? 'active' : ''}`}
+                  className={`flex items-center justify-between w-full px-3 py-2 bg-transparent border-none rounded-[7px] cursor-pointer text-[13px] font-medium text-left transition-all duration-150 hover:bg-bg-tertiary hover:text-text ${isActive ? 'text-accent' : 'text-text-secondary'}`}
                   onClick={() => onProviderClick(p.name, p.models)}
                 >
-                  <span className="model-selector-option-name">{p.name}</span>
+                  <span>{p.name}</span>
                   {p.contextWindow && (
-                    <span className="model-selector-badges">
-                      <span className="badge badge-context">{(p.contextWindow / 1000).toFixed(0)}K</span>
-                      {p.thinkingSupported && <span className="badge badge-thinking">Think</span>}
-                      {p.catalogUpdatedAt && <span className="badge">Live</span>}
+                    <span className="flex items-center gap-1 shrink-0">
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">{(p.contextWindow / 1000).toFixed(0)}K</span>
+                      {p.thinkingSupported && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">Think</span>}
+                      {p.catalogUpdatedAt && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">Live</span>}
                     </span>
                   )}
-                  <span className="model-selector-option-icons">
+                  <span className="flex items-center gap-1 shrink-0">
                     {isActive && (
-                      <svg
-                        className="model-selector-check"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 14 14"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
+                      <svg className="shrink-0 text-accent" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M3 7.5L5.5 10L11 4" />
                       </svg>
                     )}
                     {hasMultipleModels && (
-                      <svg
-                        className={`model-selector-expand ${isExpanded ? 'open' : ''}`}
-                        width="10"
-                        height="10"
-                        viewBox="0 0 10 10"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
+                      <svg className={`shrink-0 transition-transform duration-200 opacity-50 ${isExpanded ? 'rotate-180 opacity-100' : ''}`} width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M2.5 4L5 6.5L7.5 4" />
                       </svg>
                     )}
@@ -149,40 +129,27 @@ export function PrimaryWorkerSelectorSurface({
                 </button>
 
                 {(p.specialFeatures?.length || p.officialSignals?.length) ? (
-                  <div className="model-selector-meta" style={{ padding: '0 0.8rem 0.45rem', fontSize: '0.78rem', opacity: 0.75 }}>
-                    {p.specialFeatures?.slice(0, 2).join(' • ')}
-                    {p.specialFeatures?.length && p.officialSignals?.length ? ' • ' : ''}
+                  <div className="px-3 pb-[6px] text-[0.78rem] opacity-75 text-text-secondary">
+                    {p.specialFeatures?.slice(0, 2).join(' \u2022 ')}
+                    {p.specialFeatures?.length && p.officialSignals?.length ? ' \u2022 ' : ''}
                     {p.officialSignals?.length ? `${p.officialSignals.length} live signals` : ''}
                   </div>
                 ) : null}
 
                 {isExpanded && hasMultipleModels && (
-                  <div className="model-selector-models">
+                  <div className="pl-3 border-l-2 border-border ml-3 mb-0.5">
                     {p.models!.map((model) => {
-                      const isModelActive =
-                        isActive && active?.model === model
+                      const isModelActive = isActive && active?.model === model
                       return (
                         <button
                           type="button"
                           key={model}
-                          className={`model-selector-model ${isModelActive ? 'active' : ''}`}
+                          className={`flex items-center justify-between w-full px-2.5 py-[5px] bg-transparent border-none rounded-md cursor-pointer text-xs font-normal text-left transition-all duration-150 hover:bg-bg-tertiary hover:text-text ${isModelActive ? 'text-accent' : 'text-text-secondary'}`}
                           onClick={() => onModelSelect(p.name, model)}
                         >
-                          <span className="model-selector-model-name">
-                            {model}
-                          </span>
+                          <span className="overflow-hidden text-ellipsis whitespace-nowrap max-w-[200px]">{model}</span>
                           {isModelActive && (
-                            <svg
-                              className="model-selector-check"
-                              width="12"
-                              height="12"
-                              viewBox="0 0 14 14"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
+                            <svg className="shrink-0 text-accent" width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <path d="M3 7.5L5.5 10L11 4" />
                             </svg>
                           )}
@@ -331,7 +298,7 @@ export default function PrimaryWorkerSelector() {
   }
 
   return (
-    <div className="model-selector" ref={containerRef}>
+    <div className="relative" ref={containerRef}>
       <PrimaryWorkerSelectorSurface
         providers={providers}
         active={active}

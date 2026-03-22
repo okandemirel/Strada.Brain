@@ -9,7 +9,6 @@ export default function VoiceOutput({ text }: VoiceOutputProps) {
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
   const supported = typeof window !== 'undefined' && typeof window.speechSynthesis !== 'undefined'
 
-  // Cancel speech on unmount
   useEffect(() => {
     return () => {
       if (window.speechSynthesis) {
@@ -56,7 +55,11 @@ export default function VoiceOutput({ text }: VoiceOutputProps) {
 
   return (
     <button
-      className={`voice-output-btn ${isSpeaking ? 'voice-speaking' : ''}`}
+      className={`inline-flex items-center justify-center w-7 h-7 border-none rounded-lg bg-transparent cursor-pointer shrink-0 p-0 transition-all duration-200 ${
+        isSpeaking
+          ? 'text-accent animate-[voice-speaking-pulse_1s_ease-in-out_infinite]'
+          : 'text-text-tertiary hover:text-accent hover:bg-accent-glow'
+      }`}
       onClick={toggleSpeech}
       title={isSpeaking ? 'Stop speaking' : 'Read aloud'}
       type="button"
