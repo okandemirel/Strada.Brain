@@ -8,7 +8,7 @@
  * but are NOT used for the primary confidence computation (no Beta posterior).
  */
 
-import { CONFIDENCE_THRESHOLDS, type Instinct, type InstinctStatus, type InstinctStats } from "../types.js";
+import { CONFIDENCE_THRESHOLDS, type Instinct, type InstinctStatus, type InstinctStats, type InterventionTier } from "../types.js";
 
 // ─── Confidence Factors ─────────────────────────────────────────────────────────
 
@@ -33,6 +33,15 @@ interface ConfidenceWeights {
   verificationScore: number;
 }
 
+interface ConfidenceScorerConfig extends Partial<ConfidenceWeights> {
+  /** Factor weights for unified model: [recency, consistency, scopeBreadth, userValidation, crossSession] */
+  confidenceWeights?: number[];
+  /** Prior alpha for Bayesian model (default 1) */
+  priorAlpha?: number;
+  /** Prior beta for Bayesian model (default 1) */
+  priorBeta?: number;
+}
+
 const DEFAULT_WEIGHTS: ConfidenceWeights = {
   patternStrength: 0.2,
   successRate: 0.35,
@@ -45,13 +54,18 @@ const DEFAULT_WEIGHTS: ConfidenceWeights = {
 
 export class ConfidenceScorer {
   private weights: ConfidenceWeights;
+  private readonly config: ConfidenceScorerConfig;
 
-  /** Prior values for alpha/beta evidence tracking (not used for primary confidence computation) */
-  private readonly priorAlpha = 1;
-  private readonly priorBeta = 1;
+  /** Prior values for alpha/beta evidence tracking */
+  private readonly priorAlpha: number;
+  private readonly priorBeta: number;
 
-  constructor(weights: Partial<ConfidenceWeights> = {}) {
-    this.weights = { ...DEFAULT_WEIGHTS, ...weights };
+  constructor(config: ConfidenceScorerConfig = {}) {
+    const { confidenceWeights: _cw, priorAlpha, priorBeta, ...weightOverrides } = config;
+    this.config = config;
+    this.weights = { ...DEFAULT_WEIGHTS, ...weightOverrides };
+    this.priorAlpha = priorAlpha ?? 1;
+    this.priorBeta = priorBeta ?? 1;
   }
 
   /**
@@ -61,28 +75,25 @@ export class ConfidenceScorer {
    * @param contextFactors - Optional context-specific factors
    * @returns Overall confidence score (0.0 - 1.0)
    */
-  calculate(
-    instinct: Instinct,
-    contextFactors?: Partial<ConfidenceFactors>
-  ): number {
-    const factors = this.computeFactors(instinct, contextFactors);
-    
-    // Weighted sum of factors
-    let confidence = 0;
-    confidence += factors.patternStrength * this.weights.patternStrength;
-    confidence += factors.successRate * this.weights.successRate;
-    confidence += factors.recencyScore * this.weights.recencyScore;
-    confidence += factors.contextMatch * this.weights.contextMatch;
-    confidence += factors.verificationScore * this.weights.verificationScore;
+  calculate(instinct: Instinct, contextFactors?: Record<string, number>): number {
+    const alpha = instinct.bayesianAlpha ?? this.config.priorAlpha ?? this.priorAlpha;
+    const beta = instinct.bayesianBeta ?? this.config.priorBeta ?? this.priorBeta;
+    const rawBayesian = alpha / (alpha + beta);
 
-    // Apply diminishing returns for very high counts
-    // (prevents runaway confidence from sheer volume)
-    const totalUses = instinct.stats.timesApplied + instinct.stats.timesFailed;
-    if (totalUses > 100) {
-      confidence = confidence * 0.95 + 0.05;
-    }
+    const factors = [
+      instinct.factorRecency ?? 0.5,
+      instinct.factorConsistency ?? 0.5,
+      instinct.factorScopeBreadth ?? 0.0,
+      instinct.factorUserValidation ?? 0.5,
+      instinct.factorCrossSession ?? 0.0,
+    ];
 
-    return Math.max(0, Math.min(1, confidence));
+    const weights = this.config.confidenceWeights ?? [0.15, 0.25, 0.15, 0.30, 0.15];
+    const weightSum = weights.reduce((s, w) => s + w, 0);
+    const weightedAvg = factors.reduce((s, f, i) => s + f * weights[i], 0) / weightSum;
+    const factorMultiplier = Math.max(0.5, Math.min(1.5, weightedAvg + 0.5));
+
+    return Math.min(1.0, Math.max(0.0, rawBayesian * factorMultiplier));
   }
 
   /**
@@ -219,6 +230,20 @@ export class ConfidenceScorer {
    */
   compareConfidence(a: Instinct, b: Instinct): number {
     return b.confidence - a.confidence;
+  }
+
+  /**
+   * Map a confidence score to an intervention tier.
+   * > 0.8  → 'auto'    (act autonomously)
+   * >= 0.6 → 'warn'    (act but notify)
+   * >= 0.3 → 'suggest' (propose to user)
+   * < 0.3  → 'passive' (observe only)
+   */
+  getInterventionTier(confidence: number): InterventionTier {
+    if (confidence > 0.8) return 'auto';
+    if (confidence >= 0.6) return 'warn';
+    if (confidence >= 0.3) return 'suggest';
+    return 'passive';
   }
 
   /**

@@ -35,46 +35,58 @@ describe("ConfidenceScorer", () => {
       expect(confidence).toBeLessThanOrEqual(1);
     });
 
-    it("should give higher confidence for longer trigger patterns", () => {
-      const longPattern: Instinct = {
+    it("should give higher confidence for instinct with higher bayesian alpha", () => {
+      // Unified model uses bayesianAlpha/Beta as the Bayesian base.
+      // Instinct with high alpha (many successes) scores higher.
+      const highAlpha: Instinct = {
         ...baseInstinct,
-        triggerPattern: "A".repeat(250),
+        bayesianAlpha: 9,
+        bayesianBeta: 1,
       };
-      const shortPattern: Instinct = {
+      const lowAlpha: Instinct = {
         ...baseInstinct,
-        triggerPattern: "short",
-      };
-
-      const longConfidence = scorer.calculate(longPattern);
-      const shortConfidence = scorer.calculate(shortPattern);
-
-      expect(longConfidence).toBeGreaterThan(shortConfidence);
-    });
-
-    it("should factor in success rate", () => {
-      const highSuccess: Instinct = {
-        ...baseInstinct,
-        stats: { timesSuggested: 10, timesApplied: 9, timesFailed: 1, successRate: 0.9 },
-      };
-      const lowSuccess: Instinct = {
-        ...baseInstinct,
-        stats: { timesSuggested: 10, timesApplied: 3, timesFailed: 7, successRate: 0.3 },
+        bayesianAlpha: 2,
+        bayesianBeta: 8,
       };
 
-      const highConfidence = scorer.calculate(highSuccess);
-      const lowConfidence = scorer.calculate(lowSuccess);
+      const highConfidence = scorer.calculate(highAlpha);
+      const lowConfidence = scorer.calculate(lowAlpha);
 
       expect(highConfidence).toBeGreaterThan(lowConfidence);
     });
 
-    it("should apply context factors when provided", () => {
+    it("should give higher confidence for instinct with higher factor scores", () => {
+      // Factor multiplier: clamp(0.5, weightedAvg + 0.5, 1.5)
+      // High validation/recency/consistency → higher multiplier → higher score.
+      const highFactors: Instinct = {
+        ...baseInstinct,
+        factorRecency: 1.0,
+        factorConsistency: 1.0,
+        factorUserValidation: 1.0,
+      };
+      const lowFactors: Instinct = {
+        ...baseInstinct,
+        factorRecency: 0.0,
+        factorConsistency: 0.0,
+        factorUserValidation: 0.0,
+      };
+
+      const highConfidence = scorer.calculate(highFactors);
+      const lowConfidence = scorer.calculate(lowFactors);
+
+      expect(highConfidence).toBeGreaterThan(lowConfidence);
+    });
+
+    it("should accept context factors param (unified model derives factors from instinct fields)", () => {
+      // The unified model reads factor fields from the instinct itself,
+      // so passing legacy contextFactors does not change the result.
       const confidence = scorer.calculate(baseInstinct, {
         contextMatch: 0.9,
         verificationScore: 0.95,
       });
 
       const baseConfidence = scorer.calculate(baseInstinct);
-      expect(confidence).not.toBe(baseConfidence);
+      expect(confidence).toBe(baseConfidence);
     });
   });
 
@@ -282,6 +294,131 @@ describe("ConfidenceScorer", () => {
       // compareConfidence returns negative when a > b (for descending sort)
       expect(scorer.compareConfidence(high, low)).toBeLessThan(0);
       expect(scorer.compareConfidence(low, high)).toBeGreaterThan(0);
+    });
+  });
+
+  describe("unified confidence model", () => {
+    it("should compute unified score = bayesian * factorMultiplier", () => {
+      // alpha=8, beta=2 → posterior = 8/(8+2) = 0.8
+      // factors: recency=1.0, consistency=1.0, scope=0.0, validation=1.0, session=0.0
+      // weights: [0.15, 0.25, 0.15, 0.30, 0.15], sum=1.0
+      // weightedAvg = (1.0*0.15 + 1.0*0.25 + 0.0*0.15 + 1.0*0.30 + 0.0*0.15) / 1.0 = 0.70
+      // multiplier = clamp(0.5, 0.70 + 0.5, 1.5) = clamp(0.5, 1.2, 1.5) = 1.2
+      // final = min(1.0, 0.8 * 1.2) = min(1.0, 0.96) = 0.96
+      const instinct: Instinct = {
+        ...baseInstinct,
+        bayesianAlpha: 8,
+        bayesianBeta: 2,
+        factorRecency: 1.0,
+        factorConsistency: 1.0,
+        factorScopeBreadth: 0.0,
+        factorUserValidation: 1.0,
+        factorCrossSession: 0.0,
+      };
+      const result = scorer.calculate(instinct);
+      expect(result).toBeCloseTo(0.96, 2);
+    });
+
+    it("should clamp factor multiplier to 0.5-1.5 range", () => {
+      // All factors = 0 → weightedAvg=0.0, multiplier = clamp(0.5, 0.5, 1.5) = 0.5
+      const allZeroFactors: Instinct = {
+        ...baseInstinct,
+        bayesianAlpha: 1,
+        bayesianBeta: 1,
+        factorRecency: 0.0,
+        factorConsistency: 0.0,
+        factorScopeBreadth: 0.0,
+        factorUserValidation: 0.0,
+        factorCrossSession: 0.0,
+      };
+      // posterior = 0.5, multiplier = 0.5 → final = 0.25
+      expect(scorer.calculate(allZeroFactors)).toBeCloseTo(0.25, 5);
+
+      // All factors = 1 → weightedAvg=1.0, multiplier = clamp(0.5, 1.5, 1.5) = 1.5
+      const allOneFactors: Instinct = {
+        ...baseInstinct,
+        bayesianAlpha: 1,
+        bayesianBeta: 1,
+        factorRecency: 1.0,
+        factorConsistency: 1.0,
+        factorScopeBreadth: 1.0,
+        factorUserValidation: 1.0,
+        factorCrossSession: 1.0,
+      };
+      // posterior = 0.5, multiplier = 1.5 → final = 0.75
+      expect(scorer.calculate(allOneFactors)).toBeCloseTo(0.75, 5);
+    });
+
+    it("should clamp final result to [0, 1]", () => {
+      // rawBayesian * factorMultiplier can exceed 1 (e.g. 0.9 * 1.5 = 1.35)
+      const instinct: Instinct = {
+        ...baseInstinct,
+        bayesianAlpha: 99,
+        bayesianBeta: 1,  // posterior ≈ 0.99
+        factorRecency: 1.0,
+        factorConsistency: 1.0,
+        factorScopeBreadth: 1.0,
+        factorUserValidation: 1.0,
+        factorCrossSession: 1.0,  // multiplier = 1.5
+      };
+      const result = scorer.calculate(instinct);
+      expect(result).toBeLessThanOrEqual(1.0);
+      expect(result).toBeGreaterThanOrEqual(0.0);
+      expect(result).toBeCloseTo(1.0, 5);
+    });
+
+    it("should handle missing factor fields gracefully (default 0.5)", () => {
+      // No factor fields set → all default: recency=0.5, consistency=0.5, scope=0.0, validation=0.5, session=0.0
+      // weights [0.15, 0.25, 0.15, 0.30, 0.15], sum=1.0
+      // weightedAvg = (0.5*0.15 + 0.5*0.25 + 0.0*0.15 + 0.5*0.30 + 0.0*0.15) / 1.0
+      //             = (0.075 + 0.125 + 0.0 + 0.15 + 0.0) = 0.35
+      // multiplier = clamp(0.5, 0.35 + 0.5, 1.5) = clamp(0.5, 0.85, 1.5) = 0.85
+      // posterior (no alpha/beta → priors 1/1) = 0.5
+      // final = 0.5 * 0.85 = 0.425
+      const instinct: Instinct = { ...baseInstinct };
+      const result = scorer.calculate(instinct);
+      expect(result).toBeCloseTo(0.425, 5);
+    });
+
+    it("should use custom weights from config", () => {
+      // Custom weights that make validation-only dominate
+      const customScorer = new ConfidenceScorer({
+        confidenceWeights: [0.0, 0.0, 0.0, 1.0, 0.0],
+      });
+      const instinct: Instinct = {
+        ...baseInstinct,
+        bayesianAlpha: 1,
+        bayesianBeta: 1,  // posterior = 0.5
+        factorUserValidation: 1.0,
+        // all others default to 0.5 or 0.0 but weights are 0.0 so don't matter
+      };
+      // weightedAvg = (0*recency + 0*consistency + 0*scope + 1.0*validation + 0*session) / 1.0 = 1.0
+      // multiplier = clamp(0.5, 1.5, 1.5) = 1.5
+      // final = 0.5 * 1.5 = 0.75
+      expect(customScorer.calculate(instinct)).toBeCloseTo(0.75, 5);
+    });
+
+    it("should return intervention tier based on confidence", () => {
+      expect(scorer.getInterventionTier(0.9)).toBe('auto');
+      expect(scorer.getInterventionTier(0.81)).toBe('auto');
+      expect(scorer.getInterventionTier(0.8)).toBe('warn');   // exactly 0.8 → NOT auto (requires > 0.8)
+      expect(scorer.getInterventionTier(0.6)).toBe('warn');   // exactly 0.6 → warn (>= 0.6)
+      expect(scorer.getInterventionTier(0.5)).toBe('suggest');
+      expect(scorer.getInterventionTier(0.3)).toBe('suggest'); // exactly 0.3 → suggest (>= 0.3)
+      expect(scorer.getInterventionTier(0.29)).toBe('passive');
+      expect(scorer.getInterventionTier(0.0)).toBe('passive');
+    });
+
+    it("should handle exact boundary values deterministically", () => {
+      // Boundary: > 0.8 required for auto
+      expect(scorer.getInterventionTier(0.800001)).toBe('auto');
+      expect(scorer.getInterventionTier(0.8)).toBe('warn');
+      // Boundary: >= 0.6 for warn
+      expect(scorer.getInterventionTier(0.6)).toBe('warn');
+      expect(scorer.getInterventionTier(0.599)).toBe('suggest');
+      // Boundary: >= 0.3 for suggest
+      expect(scorer.getInterventionTier(0.3)).toBe('suggest');
+      expect(scorer.getInterventionTier(0.299)).toBe('passive');
     });
   });
 });
