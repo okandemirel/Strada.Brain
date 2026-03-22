@@ -56,9 +56,9 @@ function readJsonBody<T>(
   });
 }
 
-/** Validate sessionId from URL: non-empty, max 128 chars, no path traversal. */
+/** Validate sessionId from URL: non-empty, max 128 chars, no path traversal, no null bytes or backslashes. */
 function isValidSessionId(id: string): boolean {
-  return id.length > 0 && id.length <= 128 && !id.includes("..") && !id.includes("/");
+  return id.length > 0 && id.length <= 128 && !/[/\\\x00]/.test(id) && !id.includes("..");
 }
 
 // =============================================================================

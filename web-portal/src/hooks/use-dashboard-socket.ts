@@ -94,11 +94,11 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
 
     case 'canvas:shapes_update':
-      useCanvasStore.getState().addPendingShapes((data as any).shapes || [])
+      useCanvasStore.getState().updatePendingShapes((data as any).shapes || [])
       break
 
     case 'canvas:shapes_remove':
-      // Shape removal is handled by the canvas component itself via the store
+      useCanvasStore.getState().removePendingShapeIds((data as any).shapeIds || [])
       break
 
     case 'monitor:gate_request': {

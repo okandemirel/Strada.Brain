@@ -86,10 +86,18 @@ export default function CanvasPanel() {
 
     editor.run(() => {
       for (const pending of pendingShapes) {
-        editor.createShape({
-          type: pending.type,
-          props: pending.props,
-        })
+        const existing = typeof (editor as any).getShape === 'function'
+          ? (editor as any).getShape(pending.id)
+          : undefined
+        if (existing) {
+          ;(editor as any).updateShape({ id: pending.id, type: pending.type, props: pending.props })
+        } else {
+          editor.createShape({
+            id: pending.id as any,
+            type: pending.type,
+            props: pending.props,
+          })
+        }
       }
     })
 

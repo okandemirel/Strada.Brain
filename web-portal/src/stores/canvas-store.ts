@@ -14,6 +14,8 @@ interface CanvasState {
   setSessionId: (id: string | null) => void
   setDirty: (dirty: boolean) => void
   addPendingShapes: (shapes: CanvasShape[]) => void
+  updatePendingShapes: (shapes: CanvasShape[]) => void
+  removePendingShapeIds: (ids: string[]) => void
   clearPendingShapes: () => void
   reset: () => void
 }
@@ -29,6 +31,15 @@ export const useCanvasStore = create<CanvasState>()((set) => ({
   setSessionId: (sessionId) => set({ sessionId }),
   setDirty: (isDirty) => set({ isDirty }),
   addPendingShapes: (shapes) => set((s) => ({ pendingShapes: [...s.pendingShapes, ...shapes] })),
+  updatePendingShapes: (shapes) => set((s) => ({
+    pendingShapes: s.pendingShapes.map(existing => {
+      const update = shapes.find(u => u.id === existing.id)
+      return update ? { ...existing, ...update } : existing
+    }),
+  })),
+  removePendingShapeIds: (ids) => set((s) => ({
+    pendingShapes: s.pendingShapes.filter(shape => !ids.includes(shape.id)),
+  })),
   clearPendingShapes: () => set({ pendingShapes: [] }),
   reset: () => set(initialState),
 }))

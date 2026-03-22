@@ -6302,7 +6302,7 @@ export class Orchestrator {
 
       if (/```(?:mermaid|plantuml)|@startuml/i.test(output)) {
         shapes.push({
-          type: "DiagramNode",
+          type: "diagram-node",
           id: `diagram-${Date.now()}`,
           props: { content: output, language: output.includes("mermaid") ? "mermaid" : "plantuml" },
         });
@@ -6310,7 +6310,7 @@ export class Orchestrator {
 
       if (/^@@\s+-\d+/m.test(output) && output.split("\n").length > 50) {
         shapes.push({
-          type: "DiffBlock",
+          type: "diff-block",
           id: `diff-${Date.now()}`,
           props: { content: output },
         });

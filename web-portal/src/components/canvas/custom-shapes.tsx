@@ -457,6 +457,7 @@ export class ImageBlockShapeUtil extends BaseBoxShapeUtil<ImageBlockShape> {
   }
 
   component(shape: ImageBlockShape) {
+    const safeSrc = /^(https?:\/\/|data:image\/)/.test(shape.props.src) ? shape.props.src : ''
     return (
       <HTMLContainer>
         <div
@@ -469,9 +470,9 @@ export class ImageBlockShapeUtil extends BaseBoxShapeUtil<ImageBlockShape> {
             justifyContent: 'center',
           }}
         >
-          {shape.props.src ? (
+          {safeSrc ? (
             <img
-              src={shape.props.src}
+              src={safeSrc}
               alt={shape.props.alt}
               style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
             />
