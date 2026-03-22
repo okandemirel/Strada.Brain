@@ -24,6 +24,7 @@ export class ObservationEngine {
   private readonly recentHashes = new Map<string, number>(); // hash -> timestamp
   private readonly history: AgentObservation[] = [];
   private readonly pendingInjections: AgentObservation[] = [];
+  private readonly deferredItems = new Map<string, { observation: AgentObservation; recheckAt: number }>();
 
   private static readonly MAX_PENDING_INJECTIONS = 100;
 
@@ -33,6 +34,17 @@ export class ObservationEngine {
       this.pendingInjections.shift(); // Drop oldest
     }
     this.pendingInjections.push(observation);
+  }
+
+  /** Defer an observation — it will re-appear in collect() after deferMinutes have elapsed */
+  defer(observation: AgentObservation, deferMinutes: number): void {
+    const recheckAt = Date.now() + deferMinutes * 60_000;
+    this.deferredItems.set(observation.id, { observation, recheckAt });
+  }
+
+  /** Get the number of currently deferred observations */
+  getDeferredCount(): number {
+    return this.deferredItems.size;
   }
 
   /** Register an observer */
@@ -59,6 +71,16 @@ export class ObservationEngine {
    * Returns priority-sorted, deduplicated observations.
    */
   collect(): AgentObservation[] {
+    const now = Date.now();
+
+    // Drain deferred items whose time has passed
+    for (const [id, entry] of this.deferredItems) {
+      if (now >= entry.recheckAt) {
+        this.pendingInjections.push(entry.observation);
+        this.deferredItems.delete(id);
+      }
+    }
+
     const all: AgentObservation[] = [...this.pendingInjections];
     this.pendingInjections.length = 0;
 
@@ -72,7 +94,6 @@ export class ObservationEngine {
     }
 
     // Dedup: suppress observations with same source+summary hash within window
-    const now = Date.now();
     this.pruneExpiredHashes(now);
 
     const deduped = all.filter((obs) => {

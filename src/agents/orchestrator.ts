@@ -2307,6 +2307,11 @@ export class Orchestrator {
               if (bgAgentState.phase === AgentPhase.REFLECTING) {
                 const { decision, overrideReason } = validateReflectionDecision(parseReflectionDecision(response.text), bgAgentState);
                 if (overrideReason) getLogger().warn("PAOR reflection override (bg)", { overrideReason });
+                try {
+                  const { LearningMetrics } = await import("../learning/learning-metrics.js");
+                  LearningMetrics.getInstance().recordReflectionDone();
+                  if (overrideReason) LearningMetrics.getInstance().recordReflectionOverride();
+                } catch { /* non-fatal */ }
                 executionJournal.recordReflection(
                   decision,
                   response.text,
@@ -4503,6 +4508,11 @@ export class Orchestrator {
         if (agentState.phase === AgentPhase.REFLECTING) {
           const { decision, overrideReason } = validateReflectionDecision(parseReflectionDecision(response.text), agentState);
           if (overrideReason) getLogger().warn("PAOR reflection override", { overrideReason });
+          try {
+            const { LearningMetrics } = await import("../learning/learning-metrics.js");
+            LearningMetrics.getInstance().recordReflectionDone();
+            if (overrideReason) LearningMetrics.getInstance().recordReflectionOverride();
+          } catch { /* non-fatal */ }
           executionJournal.recordReflection(
             decision,
             response.text,
