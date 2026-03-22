@@ -160,6 +160,7 @@ describe("source launcher install-command", () => {
 
     const { refreshInstalledCommandBindings } = await loadSourceLauncherModule();
     const refreshed = refreshInstalledCommandBindings({
+      platform: "linux",
       env: {
         HOME: tempHome,
         XDG_BIN_HOME: tempBin,

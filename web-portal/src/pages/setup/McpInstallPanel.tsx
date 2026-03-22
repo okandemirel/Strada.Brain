@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type {
   McpInstallPlan,
   McpInstallTarget,
@@ -83,13 +83,9 @@ export default function McpInstallPanel({
   installButtonLabel = 'Install Strada.MCP',
   onInstall,
 }: McpInstallPanelProps) {
-  const [installTarget, setInstallTarget] = useState<McpInstallTarget>(mcpInstallPlan?.target ?? 'packages')
-
-  useEffect(() => {
-    if (mcpInstallPlan?.target) {
-      setInstallTarget(mcpInstallPlan.target)
-    }
-  }, [mcpInstallPlan])
+  const [installTargetOverride, setInstallTargetOverride] = useState<McpInstallTarget | null>(null)
+  const installTarget = installTargetOverride ?? mcpInstallPlan?.target ?? 'packages'
+  const setInstallTarget = setInstallTargetOverride
 
   const activeTarget =
     INSTALL_TARGETS.find((option) => option.id === installTarget)
