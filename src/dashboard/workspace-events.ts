@@ -40,6 +40,13 @@ export interface WorkspaceEventMap {
     nodes: Array<{ id: string; task: string; status: string; reviewStatus: string; depth: number; dependsOn: string[] }>
     edges: Array<{ source: string; target: string }>
   }
+  'monitor:gate_response': {
+    rootId: string
+    nodeId: string
+    action: 'approve' | 'skip'
+    source: string
+    timestamp: number
+  }
 
   // === Canvas events (Phase 4 — stub payloads) ===
   'canvas:shapes_add': unknown

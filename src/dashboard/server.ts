@@ -40,6 +40,8 @@ import type { BootReport } from "../common/capability-contract.js";
 import type { AutoUpdater } from "../core/auto-updater.js";
 import { buildConfigCatalogEntries, summarizeConfigCatalog } from "../config/config-catalog.js";
 import { resolveAutonomousModeWithDefault } from "../memory/unified/user-profile-store.js";
+import { handleMonitorRoute, MonitorActivityLog } from "./monitor-routes.js";
+import type { WorkspaceBus } from "./workspace-bus.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -461,6 +463,10 @@ export class DashboardServer {
   private bootReport?: BootReport;
   private autoUpdater?: AutoUpdater;
 
+  // Workspace monitor context (Phase 3)
+  private workspaceBus?: WorkspaceBus;
+  private monitorActivityLog: MonitorActivityLog = new MonitorActivityLog();
+
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
 
@@ -631,6 +637,19 @@ export class DashboardServer {
     if (ctx.autoUpdater) {
       this.autoUpdater = ctx.autoUpdater;
     }
+  }
+
+  /**
+   * Register workspace bus for monitor endpoints (Phase 3).
+   * Subscribes to agent_activity events to populate the activity log.
+   */
+  setWorkspaceBus(bus: WorkspaceBus): void {
+    this.workspaceBus = bus;
+    bus.on('monitor:agent_activity', (payload) => {
+      this.monitorActivityLog.push(payload as {
+        taskId?: string; action: string; tool?: string; detail: string; timestamp: number;
+      });
+    });
   }
 
   private getAutonomousDefaults(): { enabled: boolean; hours: number } {
@@ -1838,6 +1857,15 @@ export class DashboardServer {
         });
         res.end(JSON.stringify(snapshot));
         return;
+      }
+
+      // Monitor endpoints (Phase 3 — workspace monitor panel)
+      if (url.startsWith("/api/monitor")) {
+        const handled = handleMonitorRoute(
+          url, req.method ?? "GET", req, res,
+          this.goalStorage, this.workspaceBus, this.monitorActivityLog,
+        );
+        if (handled) return;
       }
 
       if (url === "/health") {
