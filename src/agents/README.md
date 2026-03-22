@@ -116,7 +116,7 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 | -------------------------------- | -------------------------------------------------------- |
 | `orchestrator.ts`                | Agent loop, session management, streaming, tool dispatch |
 | `orchestrator-supervisor-routing.ts` | Provider routing, supervisor assignment, multi-provider strategy |
-| `orchestrator-session-persistence.ts` | Session management, memory persistence, visible transcript |
+| `orchestrator-session-manager.ts` | SessionManager class — session state, transcript, persistence, plan review |
 | `orchestrator-clarification.ts`  | User boundary detection, clarification intervention logic |
 | `orchestrator-context-builder.ts` | System prompt construction, context layers, soul personality injection |
 | `orchestrator-interaction-policy.ts` | Execution policy, shell review, autonomous mode |
