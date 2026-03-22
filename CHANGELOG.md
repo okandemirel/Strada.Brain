@@ -40,6 +40,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Visibility Boundary Repair**: user-visible replies now pass through a single fail-closed interaction boundary, worker tool pools exclude control-plane-only tools plus bridge-gated MCP actions, and searchable conversation memory persists only the visible transcript instead of raw worker drafts / verifier gates
 - **Runtime Self-Improvement Artifacts**: high-confidence instincts now materialize runtime-first `skill`, `workflow`, and `knowledge_patch` artifacts in `shadow` state, promote to `active` only after verifier-backed clean evaluations, and expose lifecycle telemetry through `/routing info`, the dashboard, and the settings UI
 - **Windows Install/Setup Parity**: source checkouts now have shared cross-platform launcher logic behind `strada`, `strada.ps1`, and `strada.cmd`; packaged installs default to `%LOCALAPPDATA%\Strada` on Windows; `install-command`, build, setup, and doctor guidance are now platform-aware instead of POSIX-only
+- **Universal Node.js Entry Point**: `strada.js` lets users run `node strada.js setup` on any platform when native launchers (`strada`, `strada.cmd`, `strada.ps1`) aren't available or convenient
+- **Windows Troubleshooting Docs**: All 8 language READMEs now include Windows-specific guidance for ExecutionPolicy workarounds, `strada.cmd` as the simpler alternative, and the `pipefail` SyntaxError when users accidentally run `node strada`
 - **PAOR Unification**: Removed TaskPlanner conflicting PLANNING_PROMPT, background tasks now use full PAOR (reflect/replan), extracted shared buildSystemPromptWithContext()
 - **Strada.MCP Detection**: Automatic detection of sibling Strada.MCP installation with system prompt awareness (76 tools)
 - **TierRouter Facade**: ProviderRouter wraps TierRouter as internal sub-component for delegation compatibility
@@ -93,6 +95,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Discord image attachments now downloaded and magic-bytes validated
 
 ### Fixed
+- **Windows `npm run bootstrap`**: bash-only `;` command separator replaced with cross-platform `&&` — bootstrap was silently broken on Windows cmd.exe
+- **Windows `npm run test`**: NODE_OPTIONS heap config moved into `run-vitest-batches.mjs` programmatically — POSIX `VAR=val cmd` syntax doesn't work on Windows
+- **Kimi K2.5 type assertion**: added missing intermediate `unknown` cast for `OpenAIMessage` → `Record<string, unknown>` conversion (CI typecheck failure)
+- **McpInstallPanel lint**: replaced `useEffect` + `setState` anti-pattern with derived state to satisfy `react-hooks/set-state-in-effect` rule
 - TaskPlanner PLANNING_PROMPT conflict with PAOR state machine resolved
 - Background tasks now use PAOR reflection and replanning (were using flat loop)
 - Daemon toggle UX: shows "Not Configured" vs "Stopped" vs "Running"
