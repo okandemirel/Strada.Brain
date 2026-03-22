@@ -13,7 +13,7 @@ describe("AgentCore", () => {
     const engine = new ObservationEngine();
     const scorer = new PriorityScorer();
     const provider = { chat: vi.fn() };
-    const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
+    const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
     const channel = { sendText: vi.fn() };
     const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) }; // 10% used
 
@@ -27,7 +27,7 @@ describe("AgentCore", () => {
     const engine = new ObservationEngine();
     const scorer = new PriorityScorer();
     const provider = { chat: vi.fn() };
-    const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
+    const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
     const channel = { sendText: vi.fn() };
     const budget = { getUsage: () => ({ usedUsd: 9.5, limitUsd: 10, pct: 0.95 }) }; // 95% used (decimal)
 
@@ -45,7 +45,7 @@ describe("AgentCore", () => {
     const provider = {
       chat: vi.fn().mockResolvedValue({ text: '```json\n{"action":"wait","reasoning":"ok"}\n```', toolCalls: [], stopReason: "end_turn" }),
     };
-    const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
+    const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
     const channel = { sendText: vi.fn() };
     const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) };
 
@@ -71,7 +71,7 @@ describe("AgentCore", () => {
     let resolveChat: (v: any) => void;
     const chatPromise = new Promise(r => { resolveChat = r; });
     const provider = { chat: vi.fn().mockReturnValue(chatPromise) };
-    const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
+    const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
     const channel = { sendText: vi.fn() };
     const budget = { getUsage: () => ({ usedUsd: 0, limitUsd: 10, pct: 0.0 }) }; // 0% used (decimal)
 
@@ -101,7 +101,7 @@ describe("AgentCore", () => {
         stopReason: "end_turn",
       }),
     };
-    const taskManager = { submit: vi.fn(), listTasks: vi.fn().mockReturnValue([]) };
+    const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
     const channel = { sendText: vi.fn() };
     const budget = { getUsage: () => ({ usedUsd: 1, limitUsd: 10, pct: 0.1 }) }; // 10% used (decimal)
 

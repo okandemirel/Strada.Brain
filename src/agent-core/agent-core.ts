@@ -10,8 +10,10 @@
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { TaskManager } from "../tasks/task-manager.js";
+import type { TaskId } from "../tasks/types.js";
 import { getLogger } from "../utils/logger.js";
 import { ObservationEngine } from "./observation-engine.js";
+import { createObservation } from "./observation-types.js";
 import { PriorityScorer } from "./priority-scorer.js";
 import { buildReasoningPrompt, parseReasoningResponse } from "./reasoning-prompt.js";
 import type { AgentCoreConfig, BudgetTrackerRef, InstinctRetrieverRef } from "./agent-core-types.js";
@@ -27,6 +29,8 @@ export class AgentCore {
   private lastReasoningMs = Date.now(); // Init to now to prevent immediate LLM call on restart
   private readonly config: AgentCoreConfig;
   private readonly logger = getLogger();
+  /** Maps submitted task IDs to the instinct IDs that informed the decision */
+  private readonly taskInstinctMap = new Map<TaskId, { instinctIds: string[]; createdAt: number }>();
   /** Multi-provider routing: selects best provider per task. */
   private readonly providerRouter?: ProviderRouter;
   private readonly taskClassifier = new TaskClassifier();
@@ -52,7 +56,7 @@ export class AgentCore {
 
   /**
    * Main agent tick — called from HeartbeatLoop.
-   * Observe -> Orient -> Decide -> Act
+   * Maintenance (outcome check) -> Observe -> Orient -> Decide -> Act
    */
   async tick(): Promise<void> {
     // Guard: prevent concurrent tick overlap
@@ -70,6 +74,9 @@ export class AgentCore {
         this.logger.debug("AgentCore: skipping tick — budget floor reached", { budgetPct: budget.pct });
         return;
       }
+
+      // Check for completed tasks and inject outcome observations
+      this.checkCompletedTasks();
 
       // 1. OBSERVE
       const observations = this.observationEngine.collect();
@@ -90,15 +97,17 @@ export class AgentCore {
 
       // Gather context — instinct insights are confidence-ranked by the retriever
       let learnedInsights: string[] = [];
+      let matchedInstinctIds: string[] = [];
       if (this.instinctRetriever) {
         try {
           const topSummary = ranked.slice(0, 3).map(o => o.summary).join("; ");
           const result = await this.instinctRetriever.getInsightsForTask(topSummary);
           learnedInsights = result.insights;
+          matchedInstinctIds = result.matchedInstinctIds;
           if (learnedInsights.length > 0) {
             this.logger.debug("AgentCore: instinct insights retrieved", {
               count: learnedInsights.length,
-              matchedIds: result.matchedInstinctIds.length,
+              matchedIds: matchedInstinctIds.length,
             });
           }
         } catch {
@@ -157,12 +166,15 @@ export class AgentCore {
       switch (decision.action) {
         case "execute":
           if (decision.goal) {
-            await this.taskManager.submit(
+            const task = this.taskManager.submit(
               AgentCore.AGENT_CHAT_ID,
               AgentCore.AGENT_CHANNEL_TYPE,
               decision.goal,
               { origin: "daemon" as const },
             );
+            if (matchedInstinctIds.length > 0) {
+              this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
+            }
             // Record action for dedup
             if (ranked[0]) this.priorityScorer.recordAction(ranked[0]);
             this.logger.info("AgentCore: submitted goal", { goal: decision.goal.slice(0, 200) });
@@ -206,6 +218,42 @@ export class AgentCore {
   /** Check if a tick is currently in progress */
   isTickInFlight(): boolean {
     return this.tickInFlight;
+  }
+
+  /** Check tracked tasks for completion and inject outcome observations. */
+  private checkCompletedTasks(): void {
+    const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+    const now = Date.now();
+
+    for (const [taskId, entry] of this.taskInstinctMap.entries()) {
+      // TTL cleanup: remove stale entries that never completed
+      if (now - entry.createdAt > TTL_MS) {
+        this.taskInstinctMap.delete(taskId);
+        continue;
+      }
+
+      const task = this.taskManager.getStatus(taskId);
+      if (!task) continue; // Task not found in storage — skip, don't penalize instincts
+
+      if (task.status === "completed" || task.status === "failed" || task.status === "blocked" || task.status === "cancelled") {
+        const success = task.status === "completed";
+
+        this.observationEngine.inject(
+          createObservation("task-outcome", `Agent task ${success ? "succeeded" : "failed"}: ${task.title ?? taskId}`, {
+            priority: success ? 40 : 70,
+            context: { taskId, success },
+          }),
+        );
+
+        if (this.instinctRetriever?.recordOutcome) {
+          for (const id of entry.instinctIds) {
+            this.instinctRetriever.recordOutcome(id, success).catch(() => {});
+          }
+        }
+
+        this.taskInstinctMap.delete(taskId);
+      }
+    }
   }
 
   /** Stop the observation engine and clean up resources */

@@ -24,6 +24,8 @@ export interface AgentCoreConfig {
 /** Structural interface for InstinctRetriever — avoids import coupling */
 export interface InstinctRetrieverRef {
   getInsightsForTask(taskDescription: string): Promise<{ insights: string[]; matchedInstinctIds: string[] }>;
+  /** Record whether an instinct-informed decision succeeded or failed (P2 feedback loop) */
+  recordOutcome?(instinctId: string, success: boolean): Promise<void>;
 }
 
 /** Structural interface for BudgetTracker — avoids import coupling */

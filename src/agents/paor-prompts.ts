@@ -88,6 +88,15 @@ export function buildReflectionPrompt(state: AgentState): string {
   const failCount = state.stepResults.filter((s) => !s.success).length;
   lines.push(`Results: ${successCount} success, ${failCount} failures.`, "");
 
+  // Explicit last-step evidence so LLM has concrete data
+  const lastStep = state.stepResults.at(-1);
+  if (lastStep) {
+    lines.push(
+      `**Last step**: [${lastStep.success ? "OK" : "FAIL"}] ${lastStep.toolName}: ${lastStep.summary}`,
+      "",
+    );
+  }
+
   if (failCount > 0) {
     lines.push("**Root cause:** For each FAIL above, state the root cause in one sentence.", "");
   }

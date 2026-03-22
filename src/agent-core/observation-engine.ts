@@ -23,6 +23,17 @@ export class ObservationEngine {
   private readonly observers: Observer[] = [];
   private readonly recentHashes = new Map<string, number>(); // hash -> timestamp
   private readonly history: AgentObservation[] = [];
+  private readonly pendingInjections: AgentObservation[] = [];
+
+  private static readonly MAX_PENDING_INJECTIONS = 100;
+
+  /** Inject a synthetic observation into the next collect cycle */
+  inject(observation: AgentObservation): void {
+    if (this.pendingInjections.length >= ObservationEngine.MAX_PENDING_INJECTIONS) {
+      this.pendingInjections.shift(); // Drop oldest
+    }
+    this.pendingInjections.push(observation);
+  }
 
   /** Register an observer */
   register(observer: Observer): void {
@@ -48,7 +59,8 @@ export class ObservationEngine {
    * Returns priority-sorted, deduplicated observations.
    */
   collect(): AgentObservation[] {
-    const all: AgentObservation[] = [];
+    const all: AgentObservation[] = [...this.pendingInjections];
+    this.pendingInjections.length = 0;
 
     for (const observer of this.observers) {
       try {

@@ -140,6 +140,37 @@ describe("ObservationEngine", () => {
     engine.register(makeObserver("a", []));
     expect(engine.getObserverCount()).toBe(1);
   });
+
+  it("inject() adds synthetic observation to next collect", () => {
+    const synthetic = createObservation("task-outcome" as any, "Task succeeded", {
+      priority: 40,
+      context: { taskId: "task_1", success: true },
+    });
+    engine.inject(synthetic);
+
+    const result = engine.collect();
+    expect(result).toHaveLength(1);
+    expect(result[0]!.source).toBe("task-outcome");
+    expect(result[0]!.summary).toBe("Task succeeded");
+
+    // Injection buffer is drained after collect
+    const second = engine.collect();
+    expect(second).toHaveLength(0);
+  });
+
+  it("inject() observations merge with observer observations and sort by priority", () => {
+    const observerObs = createObservation("build", "Build failed", { priority: 90 });
+    engine.register(makeObserver("build", [observerObs]));
+
+    const injected = createObservation("task-outcome" as any, "Task done", { priority: 40 });
+    engine.inject(injected);
+
+    const result = engine.collect();
+    expect(result).toHaveLength(2);
+    // Higher priority first
+    expect(result[0]!.source).toBe("build");
+    expect(result[1]!.source).toBe("task-outcome");
+  });
 });
 
 describe("createObservation", () => {

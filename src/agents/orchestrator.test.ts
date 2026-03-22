@@ -6611,7 +6611,11 @@ DONE`,
       );
     });
 
-    it("triggers loop recovery replanning after repeated verifier continue gates", async () => {
+    it("P1 reflection override prevents premature DONE when steps have failures", async () => {
+      // With P1 (validateReflectionDecision), DONE is overridden to CONTINUE
+      // at the PAOR level when recent steps have failures — before reaching
+      // the verifier gate. This is more efficient than the old path where DONE
+      // was rubber-stamped and the verifier had to catch it downstream.
       const backgroundOrch = new Orchestrator({
         providerManager: {
           getProvider: () => mockProvider,
@@ -6625,15 +6629,17 @@ DONE`,
         requireConfirmation: false,
         taskConfig: {
           ...DEFAULT_TASK_CONFIG,
-          backgroundEpochMaxIterations: 7,
+          backgroundEpochMaxIterations: 5,
           backgroundAutoContinue: false,
         },
       });
 
+      // file_write is unregistered → tool execution fails → step result = failure.
+      // LLM says DONE after failure → P1 overrides to CONTINUE.
       mockProvider.chat
         .mockResolvedValueOnce({
-          text: "Apply the first fix.",
-          toolCalls: [{ id: "tc-loop-1", name: "file_write", input: { path: "Assets/Level.cs" } }],
+          text: "Apply the fix.",
+          toolCalls: [{ id: "tc-1", name: "file_write", input: { path: "Assets/Level.cs" } }],
           stopReason: "tool_use",
           usage: { inputTokens: 10, outputTokens: 20 },
         })
@@ -6644,71 +6650,33 @@ DONE`,
           usage: { inputTokens: 10, outputTokens: 20 },
         })
         .mockResolvedValueOnce({
-          text: "Apply the same fix again.",
-          toolCalls: [{ id: "tc-loop-2", name: "file_write", input: { path: "Assets/Level.cs" } }],
+          text: "Try a different approach.",
+          toolCalls: [{ id: "tc-2", name: "file_write", input: { path: "Assets/Level.cs" } }],
           stopReason: "tool_use",
           usage: { inputTokens: 10, outputTokens: 20 },
         })
         .mockResolvedValueOnce({
-          text: "Looks fixed now.\nDONE",
+          text: "Now it works.\nDONE",
           toolCalls: [],
           stopReason: "end_turn",
           usage: { inputTokens: 10, outputTokens: 20 },
         })
-        .mockResolvedValueOnce({
-          text: "Apply the same fix one more time.",
-          toolCalls: [{ id: "tc-loop-3", name: "file_write", input: { path: "Assets/Level.cs" } }],
-          stopReason: "tool_use",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: "Looks fixed now.\nDONE",
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: JSON.stringify({
-            decision: "replan_local",
-            reason: "The verifier continue gate is repeating without new evidence.",
-            recommendedNextAction: "Create a new plan around the concrete failing path.",
-          }),
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: "1. Reproduce the live failing path.\n2. Verify the targeted runtime behavior.",
+        .mockResolvedValue({
+          text: "Wrapping up.",
           toolCalls: [],
           stopReason: "end_turn",
           usage: { inputTokens: 10, outputTokens: 20 },
         });
 
-      const progress = vi.fn();
-      const result = await backgroundOrch.runBackgroundTask("Fix the repeating verifier loop", {
-        chatId: "bg-loop-replan",
+      const result = await backgroundOrch.runBackgroundTask("Fix failing tests", {
+        chatId: "bg-p1-override",
         channelType: "daemon",
         signal: new AbortController().signal,
-        onProgress: progress,
+        onProgress: vi.fn(),
       });
 
-      const flattenedMessages = mockProvider.chat.mock.calls.flatMap((call) => {
-        const messages = call[1] as Array<{ role: string; content: unknown }> | undefined;
-        return messages ?? [];
-      });
-      expect(flattenedMessages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            role: "user",
-            content: expect.stringContaining("[LOOP RECOVERY REQUIRED]"),
-          }),
-        ]),
-      );
-      expect(progress).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "loop_recovery",
-        }),
-      );
+      // The DONE decisions should have been overridden to CONTINUE (P1),
+      // and the task should hit the iteration budget instead of completing early.
       expect(result).toContain("configured iteration budget");
     });
 

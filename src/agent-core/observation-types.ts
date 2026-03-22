@@ -15,7 +15,8 @@ export type ObservationSource =
   | "build"
   | "user"
   | "trigger"
-  | "schedule";
+  | "schedule"
+  | "task-outcome";
 
 /** A single observation from the environment */
 export interface AgentObservation {

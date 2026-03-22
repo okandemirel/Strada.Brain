@@ -38,6 +38,25 @@ export function parseReflectionDecision(text: string | null | undefined): Reflec
   return "CONTINUE";
 }
 
+export function validateReflectionDecision(
+  decision: ReflectionDecision,
+  state: AgentState,
+): { decision: ReflectionDecision; overrideReason?: string } {
+  if (decision !== "DONE" && decision !== "DONE_WITH_SUGGESTIONS") {
+    return { decision };
+  }
+  // Evidence-based override: if last 3 steps have failures, DONE is premature
+  const recentSteps = state.stepResults.slice(-3);
+  const failedRecent = recentSteps.filter(s => !s.success);
+  if (failedRecent.length > 0) {
+    return {
+      decision: "CONTINUE",
+      overrideReason: `DONE overridden: ${failedRecent.length} recent step(s) failed`,
+    };
+  }
+  return { decision };
+}
+
 export function shouldSurfaceTerminalFailureFromReflection(response: ProviderResponse): boolean {
   return (
     response.stopReason === "end_turn" &&

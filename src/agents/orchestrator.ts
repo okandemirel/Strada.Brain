@@ -177,6 +177,7 @@ import {
   mergeLearnedInsights,
   normalizeFailureFingerprint,
   parseReflectionDecision,
+  validateReflectionDecision,
   replaceSection,
   sanitizeEventInput,
   sanitizeToolResult,
@@ -2304,7 +2305,8 @@ export class Orchestrator {
 
               // ─── PAOR: Handle REFLECTING phase response ─────────────────────
               if (bgAgentState.phase === AgentPhase.REFLECTING) {
-                const decision = parseReflectionDecision(response.text);
+                const { decision, overrideReason } = validateReflectionDecision(parseReflectionDecision(response.text), bgAgentState);
+                if (overrideReason) this.logger?.warn("PAOR reflection override (bg)", { overrideReason });
                 executionJournal.recordReflection(
                   decision,
                   response.text,
@@ -4499,7 +4501,8 @@ export class Orchestrator {
 
         // ─── PAOR: Handle REFLECTING phase response ─────────────────────
         if (agentState.phase === AgentPhase.REFLECTING) {
-          const decision = parseReflectionDecision(response.text);
+          const { decision, overrideReason } = validateReflectionDecision(parseReflectionDecision(response.text), agentState);
+          if (overrideReason) this.logger?.warn("PAOR reflection override", { overrideReason });
           executionJournal.recordReflection(
             decision,
             response.text,
