@@ -1,7 +1,5 @@
-import { useState, useCallback } from 'react'
 import { formatTimeAgo } from '../utils/format'
-import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson, firstSettledError, settledValue } from '../utils/api'
+import { useSessions, useMetrics, useAgents } from '../hooks/use-api'
 
 interface SessionInfo {
   id: string
@@ -12,78 +10,35 @@ interface SessionInfo {
   messageCount?: number
 }
 
-interface MetricsData {
-  activeSessions: number
-  totalMessages: number
-  uptime: number
-}
-
-interface AgentsData {
-  enabled: boolean
-  agents?: Array<{
-    id: string
-    key: string
-    channelType: string
-    status: string
-    createdAt: number
-    lastActivity: number
-  }>
-  activeCount?: number
-}
-
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString()
 }
 
 export default function SessionsPage() {
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
-  const [metrics, setMetrics] = useState<MetricsData | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const sessionsQuery = useSessions()
+  const metricsQuery = useMetrics()
+  const agentsQuery = useAgents()
 
-  const fetchData = useCallback(() => {
-    Promise.allSettled([
-      fetchJson<{ sessions: SessionInfo[] }>('/api/sessions'),
-      fetchJson<MetricsData>('/api/metrics'),
-      fetchJson<AgentsData>('/api/agents'),
-    ]).then((results) => {
-      const [sessionsResult, metricsResult, agentsResult] = results
-      const sessionsData = settledValue(sessionsResult)
-      const metricsData = settledValue(metricsResult)
-      const agentsData = settledValue(agentsResult)
-
-      if (metricsData) setMetrics(metricsData)
-      if (sessionsData || metricsData || agentsData) {
-        setError(null)
-      }
-
-      if (sessionsData?.sessions) {
-        setSessions(sessionsData.sessions)
-      } else if (agentsData?.agents) {
-        // Synthesize sessions from agent data
-        const synth: SessionInfo[] = agentsData.agents.map(a => ({
-          id: a.key,
-          channel: a.channelType,
-          agentId: a.id,
-          startedAt: a.createdAt,
-          lastActivity: a.lastActivity,
-        }))
-        setSessions(synth)
-      }
-      if (!sessionsData && !metricsData && !agentsData) {
-        setError(firstSettledError(results) ?? 'Could not reach session endpoints')
-      }
-      setLoading(false)
-    }).catch(e => {
-      setError(e instanceof Error ? e.message : String(e))
-      setLoading(false)
-    })
-  }, [])
-
-  useAutoRefresh(fetchData, { intervalMs: 10000 })
+  const loading = sessionsQuery.isLoading && metricsQuery.isLoading && agentsQuery.isLoading
+  const error = sessionsQuery.error && metricsQuery.error && agentsQuery.error
+    ? sessionsQuery.error.message
+    : null
+  const metrics = metricsQuery.data ?? null
 
   if (error) return <div className="page-error">Error: {error}</div>
   if (loading) return <div className="page-loading">Loading sessions...</div>
+
+  // Derive session list from endpoint or synthesize from agents
+  let sessions: SessionInfo[] = sessionsQuery.data?.sessions ?? []
+  if (sessions.length === 0 && agentsQuery.data?.agents) {
+    sessions = agentsQuery.data.agents.map(a => ({
+      id: a.key,
+      channel: a.channelType,
+      agentId: a.id,
+      startedAt: a.createdAt,
+      lastActivity: a.lastActivity,
+    }))
+  }
 
   return (
     <div className="admin-page">

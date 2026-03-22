@@ -1,11 +1,6 @@
-import { useState, useEffect } from 'react'
-
-interface PersonalityData {
-  content?: string
-  activeProfile?: string
-  profiles?: string[]
-  channelOverrides?: Record<string, string>
-}
+import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { usePersonality } from '../hooks/use-api'
 
 const SYSTEM_PROFILES = new Set(['default', 'casual', 'formal', 'minimal'])
 const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/
@@ -22,46 +17,22 @@ You are ...
 `
 
 export default function PersonalityPage() {
-  const [data, setData] = useState<PersonalityData | null>(null)
+  const queryClient = useQueryClient()
+  const { data: rawData, error: fetchError, isLoading } = usePersonality()
+  const data = rawData?.personality ?? null
+
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
   const [showRaw, setShowRaw] = useState(false)
-
-  // Switch state
-  const [switching, setSwitching] = useState(false)
-
-  // Delete state
-  const [deleting, setDeleting] = useState<string | null>(null)
 
   // Create form state
   const [newName, setNewName] = useState('')
   const [newContent, setNewContent] = useState(PROFILE_TEMPLATE)
-  const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
 
-  const fetchPersonality = () => {
-    fetch('/api/personality')
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then((d: { personality: PersonalityData | null }) => {
-        setData(d.personality)
-        setLoading(false)
-      })
-      .catch(e => {
-        setError(e.message)
-        setLoading(false)
-      })
-  }
+  // --- Mutations ---
 
-  useEffect(() => {
-    fetchPersonality()
-  }, [])
-
-  const handleSwitch = async (profile: string) => {
-    setSwitching(true)
-    try {
+  const switchMutation = useMutation({
+    mutationFn: async (profile: string) => {
       const res = await fetch('/api/personality/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -71,18 +42,17 @@ export default function PersonalityPage() {
         const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
         throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`)
       }
-      fetchPersonality()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setSwitching(false)
-    }
-  }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['personality'] })
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : String(err))
+    },
+  })
 
-  const handleDelete = async (name: string) => {
-    if (!confirm(`Delete custom profile "${name}"?`)) return
-    setDeleting(name)
-    try {
+  const deleteMutation = useMutation({
+    mutationFn: async (name: string) => {
       const res = await fetch(`/api/personality/profiles/${encodeURIComponent(name)}`, {
         method: 'DELETE',
       })
@@ -90,15 +60,47 @@ export default function PersonalityPage() {
         const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
         throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`)
       }
-      fetchPersonality()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setDeleting(null)
-    }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['personality'] })
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : String(err))
+    },
+  })
+
+  const createMutation = useMutation({
+    mutationFn: async ({ name, content }: { name: string; content: string }) => {
+      const res = await fetch('/api/personality/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, content }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+        throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`)
+      }
+    },
+    onSuccess: () => {
+      setNewName('')
+      setNewContent(PROFILE_TEMPLATE)
+      queryClient.invalidateQueries({ queryKey: ['personality'] })
+    },
+    onError: (err) => {
+      setCreateError(err instanceof Error ? err.message : String(err))
+    },
+  })
+
+  const handleSwitch = (profile: string) => {
+    switchMutation.mutate(profile)
   }
 
-  const handleCreate = async () => {
+  const handleDelete = (name: string) => {
+    if (!confirm(`Delete custom profile "${name}"?`)) return
+    deleteMutation.mutate(name)
+  }
+
+  const handleCreate = () => {
     setCreateError(null)
     const trimmedName = newName.trim().toLowerCase()
     if (!trimmedName || !PROFILE_NAME_RE.test(trimmedName)) {
@@ -117,29 +119,10 @@ export default function PersonalityPage() {
       setCreateError('Content exceeds 10KB limit')
       return
     }
-
-    setCreating(true)
-    try {
-      const res = await fetch('/api/personality/profiles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmedName, content: newContent }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
-        throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`)
-      }
-      setNewName('')
-      setNewContent(PROFILE_TEMPLATE)
-      fetchPersonality()
-    } catch (e) {
-      setCreateError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setCreating(false)
-    }
+    createMutation.mutate({ name: trimmedName, content: newContent })
   }
 
-  if (loading) return <div className="page-loading">Loading personality...</div>
+  if (isLoading) return <div className="page-loading">Loading personality...</div>
 
   return (
     <div className="admin-page">
@@ -158,7 +141,7 @@ export default function PersonalityPage() {
         </div>
       )}
 
-      {error && !data ? (
+      {fetchError && !data ? (
         <div className="page-empty">
           <h3>Personality Unavailable</h3>
           <p>The personality endpoint is not available. SOUL.md personality system may not be active or the API is not yet exposed.</p>
@@ -206,7 +189,7 @@ export default function PersonalityPage() {
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                         <button
                           className="admin-filter-btn"
-                          disabled={isActive || switching}
+                          disabled={isActive || switchMutation.isPending}
                           onClick={() => handleSwitch(name)}
                           style={{ fontSize: '11px', opacity: isActive ? 0.5 : 1 }}
                         >
@@ -215,16 +198,16 @@ export default function PersonalityPage() {
                         {!isSystem && (
                           <button
                             className="admin-filter-btn"
-                            disabled={deleting === name}
+                            disabled={deleteMutation.isPending && deleteMutation.variables === name}
                             onClick={() => handleDelete(name)}
                             style={{
                               fontSize: '11px',
                               color: 'var(--danger, #ef4444)',
                               borderColor: 'var(--danger, #ef4444)',
-                              opacity: deleting === name ? 0.5 : 1,
+                              opacity: deleteMutation.isPending && deleteMutation.variables === name ? 0.5 : 1,
                             }}
                           >
-                            {deleting === name ? 'Deleting...' : 'Delete'}
+                            {deleteMutation.isPending && deleteMutation.variables === name ? 'Deleting...' : 'Delete'}
                           </button>
                         )}
                       </div>
@@ -337,16 +320,16 @@ export default function PersonalityPage() {
               )}
               <button
                 className="admin-filter-btn"
-                disabled={creating || !newName.trim()}
+                disabled={createMutation.isPending || !newName.trim()}
                 onClick={handleCreate}
                 style={{
                   alignSelf: 'flex-start',
                   fontSize: '12px',
                   padding: '6px 16px',
-                  opacity: creating || !newName.trim() ? 0.5 : 1,
+                  opacity: createMutation.isPending || !newName.trim() ? 0.5 : 1,
                 }}
               >
-                {creating ? 'Creating...' : 'Create Profile'}
+                {createMutation.isPending ? 'Creating...' : 'Create Profile'}
               </button>
             </div>
           </div>

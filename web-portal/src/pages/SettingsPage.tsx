@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useWS } from '../hooks/useWS'
-import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson, settledValue } from '../utils/api'
+import { useAutonomousStatus, useProviders, useRagStatus, useDaemon, useAgentActivity, useBootReport } from '../hooks/use-api'
 import { resolveSettingsIdentity, shouldRefetchIdentityScopedSettings } from './settings-identity'
 import PrimaryWorkerSelector from '../components/PrimaryWorkerSelector'
 import type { BootReport } from '../../../src/common/capability-contract.ts'
@@ -26,7 +26,7 @@ interface ActiveProvider {
   providerName: string
   model: string
   isDefault: boolean
-  selectionMode?: 'strada-primary-worker'
+  selectionMode?: string
   executionPolicyNote?: string
   executionPool?: ProviderInfo[]
 }
@@ -143,20 +143,16 @@ interface DaemonStatus {
   startupNotices?: string[]
 }
 
-interface BootReportResponse {
-  bootReport: BootReport | null
-}
-
-interface VoiceSettings {
-  inputEnabled: boolean
-  outputEnabled: boolean
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const VOICE_STORAGE_KEY = 'strada-voice-settings'
+
+interface VoiceSettings {
+  inputEnabled: boolean
+  outputEnabled: boolean
+}
 
 function loadVoiceSettings(): VoiceSettings {
   try {
@@ -215,137 +211,89 @@ function formatDecisionTime(timestamp: number): string {
 // ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
+  const queryClient = useQueryClient()
   const { toggleAutonomous, sessionId, profileId } = useWS()
   const settingsIdentity = resolveSettingsIdentity(sessionId, profileId)
   const identityQuery = settingsIdentity?.query ?? null
   const identityQueryRef = useRef<string | null>(identityQuery)
 
-  // --- Autonomous Mode ---
-  const [autoStatus, setAutoStatus] = useState<AutonomousStatus | null>(null)
-  const [autoLoading, setAutoLoading] = useState(true)
+  // --- TanStack Query hooks ---
+  const autonomousQuery = useAutonomousStatus(identityQuery)
+  const providersQuery = useProviders(identityQuery)
+  const ragStatusQuery = useRagStatus()
+  const daemonQuery = useDaemon()
+  const agentActivityQuery = useAgentActivity(identityQuery)
+  const bootReportQuery = useBootReport()
+
+  // --- Derived state from queries ---
+  const autoStatus: AutonomousStatus = autonomousQuery.data ?? { enabled: false }
+  const autoLoading = autonomousQuery.isLoading && Boolean(identityQuery)
+
+  const activeProvider: ActiveProvider | null = providersQuery.data?.active
+    ? {
+        ...providersQuery.data.active,
+        executionPool: (providersQuery.data.executionPool as ProviderInfo[] | undefined) ?? undefined,
+      }
+    : null
+  const embeddingStatus: EmbeddingStatus | null = (ragStatusQuery.data?.status as EmbeddingStatus | undefined) ?? null
+  const modelLoading = providersQuery.isLoading && Boolean(identityQuery)
+
+  const daemonStatus: DaemonStatus | null = daemonQuery.data
+    ? {
+        running: daemonQuery.data.running,
+        configured: daemonQuery.data.configured,
+        intervalMs: daemonQuery.data.intervalMs,
+        triggers: (daemonQuery.data.triggers ?? []) as DaemonStatus['triggers'],
+        budget: daemonQuery.data.budget,
+        approvalQueue: (daemonQuery.data.approvalQueue ?? []) as DaemonStatus['approvalQueue'],
+        startupNotices: daemonQuery.data.startupNotices,
+      }
+    : null
+  const daemonLoading = daemonQuery.isLoading
+
+  const bootReport: BootReport | null = (bootReportQuery.data?.bootReport as BootReport | null) ?? null
+  const bootLoading = bootReportQuery.isLoading
+
+  // --- Routing data from agent-activity ---
+  const routingPresetFromServer = agentActivityQuery.data?.preset
+  const routingDecisions: RoutingDecision[] = Array.isArray(agentActivityQuery.data?.routing)
+    ? (agentActivityQuery.data.routing as RoutingDecision[]).slice(0, 6)
+    : []
+  const executionTraces: ExecutionTrace[] = Array.isArray(agentActivityQuery.data?.execution)
+    ? (agentActivityQuery.data.execution as ExecutionTrace[]).slice(-6).reverse()
+    : []
+  const phaseOutcomes: PhaseOutcome[] = Array.isArray(agentActivityQuery.data?.outcomes)
+    ? (agentActivityQuery.data.outcomes as PhaseOutcome[]).slice(-6).reverse()
+    : []
+  const phaseScores: PhaseScore[] = Array.isArray(agentActivityQuery.data?.phaseScores)
+    ? (agentActivityQuery.data.phaseScores as PhaseScore[]).slice(0, 6)
+    : []
+  const runtimeArtifacts: RuntimeArtifact[] = Array.isArray(agentActivityQuery.data?.artifacts)
+    ? (agentActivityQuery.data.artifacts as RuntimeArtifact[]).slice(0, 6)
+    : []
+  const routingLoading = agentActivityQuery.isLoading && Boolean(identityQuery)
+
+  // --- Local state ---
   const [autoToggling, setAutoToggling] = useState(false)
   const [autoDuration, setAutoDuration] = useState(24)
-
-  // --- Model Selection ---
-  const [activeProvider, setActiveProvider] = useState<ActiveProvider | null>(null)
-  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus | null>(null)
-  const [modelLoading, setModelLoading] = useState(true)
-
-  // --- Daemon Mode ---
-  const [daemonStatus, setDaemonStatus] = useState<DaemonStatus | null>(null)
-  const [daemonLoading, setDaemonLoading] = useState(true)
   const [daemonToggling, setDaemonToggling] = useState(false)
-  const [bootReport, setBootReport] = useState<BootReport | null>(null)
-  const [bootLoading, setBootLoading] = useState(true)
-
-  // --- Routing Preset ---
   const [routingPreset, setRoutingPreset] = useState<string>('balanced')
-  const [routingDecisions, setRoutingDecisions] = useState<RoutingDecision[]>([])
-  const [executionTraces, setExecutionTraces] = useState<ExecutionTrace[]>([])
-  const [phaseOutcomes, setPhaseOutcomes] = useState<PhaseOutcome[]>([])
-  const [phaseScores, setPhaseScores] = useState<PhaseScore[]>([])
-  const [runtimeArtifacts, setRuntimeArtifacts] = useState<RuntimeArtifact[]>([])
-  const [routingLoading, setRoutingLoading] = useState(true)
   const [routingSwitching, setRoutingSwitching] = useState(false)
-
-  // --- Voice Mode ---
   const [voice, setVoice] = useState<VoiceSettings>(loadVoiceSettings)
   const speechInputAvailable = hasSpeechRecognition()
   const speechOutputAvailable = hasSpeechSynthesis()
   const daemonBudgetPercent = daemonStatus ? toPercent(daemonStatus.budget.pct) : 0
 
-  // --- Fetch autonomous status ---
-  const fetchAutonomous = useCallback(() => {
-    if (!identityQuery) return Promise.resolve()
-    fetchJson<AutonomousStatus>(`/api/user/autonomous?${identityQuery}`)
-      .then((data) => {
-        setAutoStatus(data ?? { enabled: false })
-        setAutoLoading(false)
-      })
-      .catch(() => {
-        setAutoStatus({ enabled: false })
-        setAutoLoading(false)
-      })
-  }, [identityQuery])
+  // Sync routing preset from server
+  useEffect(() => {
+    if (routingPresetFromServer) setRoutingPreset(routingPresetFromServer)
+  }, [routingPresetFromServer])
 
-  // --- Fetch providers ---
-  const fetchProviders = useCallback(() => {
-    if (!identityQuery) return Promise.resolve()
-    Promise.allSettled([
-      fetchJson<{ active: ActiveProvider | null; executionPool?: ProviderInfo[] | null }>(`/api/providers/active?${identityQuery}`),
-      fetchJson<{ status: EmbeddingStatus }>('/api/rag/status'),
-    ]).then((results) => {
-      const [activeResult, embeddingResult] = results
-      const activeData = settledValue(activeResult)
-      const embeddingData = settledValue(embeddingResult)
-      if (activeData?.active) {
-        setActiveProvider({
-          ...activeData.active,
-          executionPool: activeData.executionPool ?? undefined,
-        })
-      }
-      if (embeddingData?.status) setEmbeddingStatus(embeddingData.status)
-      setModelLoading(false)
-    }).catch(() => {
-      setModelLoading(false)
-    })
-  }, [identityQuery])
-
-  // --- Fetch routing preset ---
-  const fetchRouting = useCallback(() => {
-    if (!identityQuery) return Promise.resolve()
-    fetchJson<{ routing: RoutingDecision[]; execution?: ExecutionTrace[]; outcomes?: PhaseOutcome[]; phaseScores?: PhaseScore[]; artifacts?: RuntimeArtifact[]; preset?: string }>(`/api/agent-activity?${identityQuery}`)
-      .then((data) => {
-        if (data?.preset) setRoutingPreset(data.preset)
-        setRoutingDecisions(Array.isArray(data?.routing) ? data.routing.slice(0, 6) : [])
-        setExecutionTraces(Array.isArray(data?.execution) ? data.execution.slice(-6).reverse() : [])
-        setPhaseOutcomes(Array.isArray(data?.outcomes) ? data.outcomes.slice(-6).reverse() : [])
-        setPhaseScores(Array.isArray(data?.phaseScores) ? data.phaseScores.slice(0, 6) : [])
-        setRuntimeArtifacts(Array.isArray(data?.artifacts) ? data.artifacts.slice(0, 6) : [])
-        setRoutingLoading(false)
-      })
-      .catch(() => {
-        setRoutingDecisions([])
-        setExecutionTraces([])
-        setPhaseOutcomes([])
-        setPhaseScores([])
-        setRuntimeArtifacts([])
-        setRoutingLoading(false)
-      })
-  }, [identityQuery])
-
-  // --- Fetch daemon status ---
-  const fetchDaemon = useCallback(() => {
-    fetchJson<DaemonStatus>('/api/daemon')
-      .then((data) => {
-        setDaemonStatus(data ?? { running: false, triggers: [], budget: { usedUsd: 0, limitUsd: 0, pct: 0 }, approvalQueue: [] })
-        setDaemonLoading(false)
-      })
-      .catch(() => {
-        setDaemonStatus({ running: false, triggers: [], budget: { usedUsd: 0, limitUsd: 0, pct: 0 }, approvalQueue: [] })
-        setDaemonLoading(false)
-      })
-  }, [])
-
-  const fetchBootReport = useCallback(() => {
-    fetchJson<BootReportResponse>('/api/system/boot')
-      .then((data) => {
-        setBootReport(data?.bootReport ?? null)
-        setBootLoading(false)
-      })
-      .catch(() => {
-        setBootReport(null)
-        setBootLoading(false)
-      })
-  }, [])
-
+  // Handle identity changes — invalidate queries to force refetch
   useEffect(() => {
     const previousQuery = identityQueryRef.current
     if (!identityQuery) {
       identityQueryRef.current = null
-      setAutoLoading(true)
-      setModelLoading(true)
-      setRoutingLoading(true)
       return
     }
 
@@ -355,19 +303,10 @@ export default function SettingsPage() {
     }
 
     identityQueryRef.current = identityQuery
-    setAutoLoading(true)
-    setModelLoading(true)
-    setRoutingLoading(true)
-    void fetchAutonomous()
-    void fetchProviders()
-    void fetchRouting()
-  }, [identityQuery, fetchAutonomous, fetchProviders, fetchRouting])
-
-  useAutoRefresh(fetchAutonomous, { intervalMs: 30000, enabled: Boolean(settingsIdentity) })
-  useAutoRefresh(fetchProviders, { intervalMs: 30000, enabled: Boolean(settingsIdentity) })
-  useAutoRefresh(fetchDaemon, { intervalMs: 10000 })
-  useAutoRefresh(fetchRouting, { intervalMs: 30000, enabled: Boolean(settingsIdentity) })
-  useAutoRefresh(fetchBootReport, { intervalMs: 30000 })
+    queryClient.invalidateQueries({ queryKey: ['autonomous'] })
+    queryClient.invalidateQueries({ queryKey: ['providers'] })
+    queryClient.invalidateQueries({ queryKey: ['agent-activity'] })
+  }, [identityQuery, queryClient])
 
   // --- Handlers ---
 
@@ -398,18 +337,12 @@ export default function SettingsPage() {
       }
     }
 
-    // Optimistically update, then re-fetch after a short delay
-    setAutoStatus({
-      enabled: nextEnabled,
-      expiresAt: nextEnabled ? Date.now() + autoDuration * 3600000 : undefined,
-      remainingMs: nextEnabled ? autoDuration * 3600000 : undefined,
-    })
-
+    // Re-fetch after a short delay
     setTimeout(() => {
-      fetchAutonomous()
+      queryClient.invalidateQueries({ queryKey: ['autonomous'] })
       setAutoToggling(false)
     }, 1500)
-  }, [autoStatus?.enabled, autoDuration, autoToggling, settingsIdentity, toggleAutonomous, fetchAutonomous])
+  }, [autoStatus?.enabled, autoDuration, autoToggling, settingsIdentity, toggleAutonomous, queryClient])
 
   const handleDurationChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value, 10)
@@ -428,18 +361,18 @@ export default function SettingsPage() {
       if (res.ok) {
         // Re-fetch status after a short delay
         setTimeout(() => {
-          fetchDaemon()
+          queryClient.invalidateQueries({ queryKey: ['daemon'] })
           setDaemonToggling(false)
         }, 1000)
       } else {
-        fetchDaemon()
+        queryClient.invalidateQueries({ queryKey: ['daemon'] })
         setDaemonToggling(false)
       }
     } catch {
-      fetchDaemon()
+      queryClient.invalidateQueries({ queryKey: ['daemon'] })
       setDaemonToggling(false)
     }
-  }, [daemonToggling, daemonStatus, fetchDaemon])
+  }, [daemonToggling, daemonStatus, queryClient])
 
   const handleVoiceInputToggle = useCallback(() => {
     setVoice((prev) => {

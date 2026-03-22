@@ -1,4 +1,4 @@
-import { useDashboard } from '../hooks/useDashboard'
+import { useHealth, useMetrics, useTriggers, useAgents, useDelegations, useConsolidation, useDeployment, useMaintenance } from '../hooks/use-api'
 import MetricCard from './MetricCard'
 import { formatUptime } from '../utils/format'
 
@@ -24,7 +24,31 @@ function getStatusClass(status: string): string {
 }
 
 export default function DashboardView() {
-  const { data, loading, error, dashboardEnabled, lastUpdated } = useDashboard()
+  const healthQuery = useHealth()
+  const metricsQuery = useMetrics()
+  const triggersQuery = useTriggers()
+  const agentsQuery = useAgents()
+  const delegationsQuery = useDelegations()
+  const consolidationQuery = useConsolidation()
+  const deploymentQuery = useDeployment()
+  const maintenanceQuery = useMaintenance()
+
+  const loading = healthQuery.isLoading && metricsQuery.isLoading
+  const health = healthQuery.data ?? null
+  const metrics = metricsQuery.data ?? null
+  const triggers = triggersQuery.data ?? []
+  const agents = agentsQuery.data ?? null
+  const delegations = delegationsQuery.data ?? null
+  const consolidation = consolidationQuery.data ?? null
+  const deployment = deploymentQuery.data ?? null
+  const maintenance = maintenanceQuery.data ?? null
+
+  // Dashboard is "enabled" if metrics endpoint responded
+  const dashboardEnabled = metricsQuery.isSuccess
+  const error = !dashboardEnabled && !health
+    ? (metricsQuery.error?.message ?? healthQuery.error?.message ?? 'Dashboard not enabled and web channel unreachable')
+    : null
+  const lastUpdated = metricsQuery.dataUpdatedAt || healthQuery.dataUpdatedAt || null
 
   if (loading) {
     return (
@@ -34,8 +58,6 @@ export default function DashboardView() {
     )
   }
 
-  const health = data.health
-  const metrics = data.metrics
   const hasAnyData = health || metrics
 
   if (!hasAnyData) {
@@ -78,12 +100,7 @@ export default function DashboardView() {
     : '0'
 
   // Triggers info
-  const triggers = data.triggers ?? []
   const activeTriggers = triggers.filter((t) => t.enabled).length
-
-  // Agents info
-  const agents = data.agents
-  const delegations = data.delegations
 
   return (
     <div className="dashboard-view">
@@ -286,22 +303,22 @@ export default function DashboardView() {
       )}
 
       {/* Consolidation */}
-      {data.consolidation?.enabled && (
+      {consolidation?.enabled && (
         <section className="dashboard-section">
           <h3 className="dashboard-section-title">Memory Consolidation</h3>
           <div className="metric-grid">
             <MetricCard
               title="Total Runs"
-              value={data.consolidation.totalRuns ?? 0}
+              value={consolidation.totalRuns ?? 0}
             />
             <MetricCard
               title="Lifetime Savings"
-              value={`${data.consolidation.lifetimeSavings ?? 0} entries`}
+              value={`${consolidation.lifetimeSavings ?? 0} entries`}
             />
-            {data.consolidation.totalCostUsd !== undefined && (
+            {consolidation.totalCostUsd !== undefined && (
               <MetricCard
                 title="Consolidation Cost"
-                value={`$${data.consolidation.totalCostUsd.toFixed(3)}`}
+                value={`$${consolidation.totalCostUsd.toFixed(3)}`}
               />
             )}
           </div>
@@ -309,49 +326,49 @@ export default function DashboardView() {
       )}
 
       {/* Deployment */}
-      {data.deployment?.enabled && data.deployment.stats && (
+      {deployment?.enabled && deployment.stats && (
         <section className="dashboard-section">
           <h3 className="dashboard-section-title">Deployments</h3>
           <div className="metric-grid">
             <MetricCard
               title="Total"
-              value={data.deployment.stats.totalDeployments}
+              value={deployment.stats.totalDeployments}
             />
             <MetricCard
               title="Successful"
-              value={data.deployment.stats.successful}
+              value={deployment.stats.successful}
             />
             <MetricCard
               title="Failed"
-              value={data.deployment.stats.failed}
-              trend={data.deployment.stats.failed > 0 ? 'down' : 'neutral'}
+              value={deployment.stats.failed}
+              trend={deployment.stats.failed > 0 ? 'down' : 'neutral'}
             />
             <MetricCard
               title="Circuit Breaker"
-              value={data.deployment.stats.circuitBreakerState}
+              value={deployment.stats.circuitBreakerState}
             />
           </div>
         </section>
       )}
 
       {/* Maintenance */}
-      {data.maintenance?.decay?.enabled && (
+      {maintenance?.decay?.enabled && (
         <section className="dashboard-section">
           <h3 className="dashboard-section-title">Maintenance</h3>
           <div className="metric-grid">
             <MetricCard
               title="Memory Decay"
-              value={data.maintenance.decay.enabled ? 'Active' : 'Disabled'}
+              value={maintenance.decay.enabled ? 'Active' : 'Disabled'}
             />
             <MetricCard
               title="Exempt Domains"
-              value={data.maintenance.decay.totalExempt ?? 0}
+              value={maintenance.decay.totalExempt ?? 0}
             />
-            {data.maintenance.pruning && (
+            {maintenance.pruning && (
               <MetricCard
                 title="Trigger Pruning"
-                value={`${data.maintenance.pruning.retentionDays}d retention`}
-                subtitle={`${data.maintenance.pruning.lastPrunedCount} last pruned`}
+                value={`${maintenance.pruning.retentionDays}d retention`}
+                subtitle={`${maintenance.pruning.lastPrunedCount} last pruned`}
               />
             )}
           </div>

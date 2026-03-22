@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson } from '../utils/api'
+import { useState, useEffect, useRef } from 'react'
+import { useLogs } from '../hooks/use-api'
 
 interface LogEntry {
   timestamp: string
@@ -30,33 +29,17 @@ function formatTimestamp(ts: string): string {
 }
 
 export default function LogsPage() {
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const logsQuery = useLogs()
   const [levelFilter, setLevelFilter] = useState<LevelFilter>('all')
   const [search, setSearch] = useState('')
   const [autoScroll, setAutoScroll] = useState(true)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const fetchLogs = useCallback(() => {
-    fetchJson<{ logs: LogEntry[] } | LogEntry[]>('/api/logs')
-      .then((data) => {
-        if (!data) {
-          throw new Error('Logs endpoint unavailable')
-        }
-        const entries = Array.isArray(data) ? data : data.logs ?? []
-        setLogs(entries)
-        setError(null)
-        setLoading(false)
-      })
-      .catch(e => {
-        // If /api/logs doesn't exist, show empty state gracefully
-        setError(e.message)
-        setLoading(false)
-      })
-  }, [])
-
-  useAutoRefresh(fetchLogs, { intervalMs: 5000 })
+  // Normalize log data: endpoint may return { logs: [...] } or [...]
+  const rawData = logsQuery.data
+  const logs: LogEntry[] = rawData
+    ? (Array.isArray(rawData) ? rawData : (rawData as { logs?: LogEntry[] }).logs ?? [])
+    : []
 
   useEffect(() => {
     if (autoScroll && containerRef.current) {
@@ -64,7 +47,7 @@ export default function LogsPage() {
     }
   }, [logs, autoScroll])
 
-  if (loading) return <div className="page-loading">Loading logs...</div>
+  if (logsQuery.isLoading) return <div className="page-loading">Loading logs...</div>
 
   const filtered = logs.filter(entry => {
     if (levelFilter !== 'all' && getLevelClass(entry.level) !== levelFilter) return false
@@ -115,7 +98,7 @@ export default function LogsPage() {
         ))}
       </div>
 
-      {error && logs.length === 0 ? (
+      {logsQuery.isError && logs.length === 0 ? (
         <div className="page-empty">
           <h3>Logs Unavailable</h3>
           <p>The log endpoint is not available. Logs may not be exposed via the API yet.</p>

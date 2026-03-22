@@ -1,6 +1,5 @@
-import { useState, useCallback } from 'react'
-import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson, firstSettledError, settledValue } from '../utils/api'
+import { useState } from 'react'
+import { useTools, useMetrics } from '../hooks/use-api'
 
 interface ToolInfo {
   name: string
@@ -14,64 +13,33 @@ interface ToolInfo {
   paramCount?: number
 }
 
-interface ToolsData {
-  tools: ToolInfo[]
-  toolCallCounts?: Record<string, number>
-  toolErrorCounts?: Record<string, number>
-}
-
 export default function ToolsPage() {
-  const [tools, setTools] = useState<ToolInfo[]>([])
-  const [callCounts, setCallCounts] = useState<Record<string, number>>({})
-  const [errorCounts, setErrorCounts] = useState<Record<string, number>>({})
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const toolsQuery = useTools()
+  const metricsQuery = useMetrics()
   const [filter, setFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState<string>('all')
 
-  const fetchData = useCallback(() => {
-    Promise.allSettled([
-      fetchJson<ToolsData>('/api/tools'),
-      fetchJson<Record<string, unknown>>('/api/metrics'),
-    ]).then((results) => {
-      const [toolsResult, metricsResult] = results
-      const toolsData = settledValue(toolsResult)
-      const metricsData = settledValue(metricsResult)
-
-      if (toolsData?.tools) {
-        setTools(toolsData.tools)
-      }
-      if (metricsData) {
-        setCallCounts((metricsData.toolCallCounts as Record<string, number>) ?? {})
-        setErrorCounts((metricsData.toolErrorCounts as Record<string, number>) ?? {})
-
-        // If no tools endpoint, synthesize from metrics
-        if (!toolsData?.tools && metricsData.toolCallCounts) {
-          const synth = Object.keys(metricsData.toolCallCounts as Record<string, number>).map(name => ({
-            name,
-            description: '',
-            type: 'builtin' as const,
-          }))
-          setTools(synth)
-        }
-      }
-      if (toolsData || metricsData) {
-        setError(null)
-      }
-      if (!toolsData && !metricsData) {
-        setError(firstSettledError(results) ?? 'Could not reach tool endpoints')
-      }
-      setLoading(false)
-    }).catch(e => {
-      setError(e instanceof Error ? e.message : String(e))
-      setLoading(false)
-    })
-  }, [])
-
-  useAutoRefresh(fetchData, { intervalMs: 10000 })
+  const error = toolsQuery.error && metricsQuery.error
+    ? toolsQuery.error.message
+    : null
+  const loading = toolsQuery.isLoading && metricsQuery.isLoading
 
   if (error) return <div className="page-error">Error: {error}</div>
   if (loading) return <div className="page-loading">Loading tools...</div>
+
+  // Derive tool list
+  let tools: ToolInfo[] = toolsQuery.data?.tools ?? []
+  const callCounts: Record<string, number> = (metricsQuery.data?.toolCallCounts as Record<string, number>) ?? {}
+  const errorCounts: Record<string, number> = (metricsQuery.data?.toolErrorCounts as Record<string, number>) ?? {}
+
+  // If no tools endpoint, synthesize from metrics
+  if (tools.length === 0 && metricsQuery.data?.toolCallCounts) {
+    tools = Object.keys(metricsQuery.data.toolCallCounts).map(name => ({
+      name,
+      description: '',
+      type: 'builtin' as const,
+    }))
+  }
 
   if (tools.length === 0) {
     return (

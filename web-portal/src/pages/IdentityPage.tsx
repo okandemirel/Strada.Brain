@@ -1,34 +1,5 @@
-import { useState, useCallback } from 'react'
 import { formatUptime } from '../utils/format'
-import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson, firstSettledError, settledValue } from '../utils/api'
-
-interface IdentityState {
-  agentName: string
-  version: string
-  bootCount: number
-  firstBoot: string
-  lastBoot: string
-  continuityHash: string
-  mode: string
-}
-
-interface DaemonData {
-  running: boolean
-  identity: IdentityState | null
-  triggers: Array<{
-    name: string
-    type: string
-    state: string
-    circuitState?: string
-  }>
-  budget: {
-    usedUsd: number
-    limitUsd: number
-    pct: number
-  }
-  capabilityManifest?: Record<string, unknown> | null
-}
+import { useDaemon, useMetrics } from '../hooks/use-api'
 
 function formatDate(ts: string): string {
   try {
@@ -43,40 +14,19 @@ function toPercent(pct: number): number {
 }
 
 export default function IdentityPage() {
-  const [daemon, setDaemon] = useState<DaemonData | null>(null)
-  const [uptime, setUptime] = useState<number>(0)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const daemonQuery = useDaemon()
+  const metricsQuery = useMetrics()
 
-  const fetchData = useCallback(() => {
-    Promise.allSettled([
-      fetchJson<DaemonData>('/api/daemon'),
-      fetchJson<{ uptime: number }>('/api/metrics'),
-    ]).then((results) => {
-      const [daemonResult, metricsResult] = results
-      const daemonData = settledValue(daemonResult)
-      const metricsData = settledValue(metricsResult)
-
-      if (daemonData) setDaemon(daemonData)
-      if (metricsData?.uptime) setUptime(metricsData.uptime / 1000)
-      if (daemonData || metricsData) {
-        setError(null)
-      }
-      if (!daemonData && !metricsData) {
-        setError(firstSettledError(results) ?? 'Could not reach the server')
-      }
-      setLoading(false)
-    }).catch(e => {
-      setError(e instanceof Error ? e.message : String(e))
-      setLoading(false)
-    })
-  }, [])
-
-  useAutoRefresh(fetchData, { intervalMs: 15000 })
+  const loading = daemonQuery.isLoading && metricsQuery.isLoading
+  const error = daemonQuery.error && metricsQuery.error
+    ? daemonQuery.error.message
+    : null
 
   if (loading) return <div className="page-loading">Loading identity...</div>
-  if (error && !daemon) return <div className="page-error">Error: {error}</div>
+  if (error && !daemonQuery.data) return <div className="page-error">Error: {error}</div>
 
+  const daemon = daemonQuery.data ?? null
+  const uptime = metricsQuery.data?.uptime ? metricsQuery.data.uptime / 1000 : 0
   const identity = daemon?.identity
   const daemonBudgetPercent = daemon ? toPercent(daemon.budget.pct) : 0
 

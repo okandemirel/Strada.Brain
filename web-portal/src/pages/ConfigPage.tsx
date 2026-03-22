@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
+import { useConfig } from '../hooks/use-api'
 
 interface ConfigEntry {
   key: string
@@ -8,33 +9,12 @@ interface ConfigEntry {
   description: string
 }
 
-interface ConfigData {
-  config: Record<string, unknown>
-  entries?: ConfigEntry[]
-  summary?: {
-    core: number
-    advanced: number
-    experimental: number
-  }
-}
-
 export default function ConfigPage() {
-  const [data, setData] = useState<ConfigData | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { data, error, isLoading } = useConfig()
   const [filter, setFilter] = useState('')
 
-  useEffect(() => {
-    fetch('/api/config')
-      .then(r => {
-        if (!r.ok) throw new Error(`Config fetch failed (${r.status})`)
-        return r.json()
-      })
-      .then(setData)
-      .catch(e => setError(e.message))
-  }, [])
-
-  if (error) return <div className="page-error">Error: {error}</div>
-  if (!data) return <div className="page-loading">Loading configuration...</div>
+  if (error) return <div className="page-error">Error: {error.message}</div>
+  if (isLoading || !data) return <div className="page-loading">Loading configuration...</div>
 
   const normalizedFilter = filter.toLowerCase()
   const fallbackEntries: ConfigEntry[] = Object.entries(data.config).map(([key, value]) => ({
@@ -44,7 +24,7 @@ export default function ConfigPage() {
     tier: 'advanced',
     description: 'General runtime configuration.',
   }))
-  const rawEntries = data.entries ?? fallbackEntries
+  const rawEntries = (data.entries as ConfigEntry[] | undefined) ?? fallbackEntries
   const filteredEntries = rawEntries.filter((entry) =>
     entry.key.toLowerCase().includes(normalizedFilter) ||
     entry.category.toLowerCase().includes(normalizedFilter) ||

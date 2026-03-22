@@ -1,39 +1,4 @@
-import { useState, useCallback } from 'react'
-import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson, firstSettledError, settledValue } from '../utils/api'
-
-interface MemoryMetrics {
-  totalEntries: number
-  hasAnalysisCache: boolean
-  entriesByTier?: Record<string, number>
-  health?: {
-    healthy?: boolean
-    issues?: string[]
-    indexHealth?: string
-    storageUsagePercent?: number
-  } | null
-}
-
-interface ConsolidationData {
-  enabled: boolean
-  perTier?: Record<string, { clustered: number; pending: number; total: number }>
-  lifetimeSavings?: number
-  totalRuns?: number
-  totalCostUsd?: number
-}
-
-interface MaintenanceData {
-  decay?: {
-    enabled: boolean
-    tiers?: Record<string, unknown>
-    exemptDomains?: string[]
-    totalExempt?: number
-  }
-  pruning?: {
-    retentionDays: number
-    lastPrunedCount: number
-  }
-}
+import { useMemoryStats, useConsolidation, useMaintenance } from '../hooks/use-api'
 
 interface TierInfo {
   name: string
@@ -43,40 +8,18 @@ interface TierInfo {
 }
 
 export default function MemoryPage() {
-  const [memoryStats, setMemoryStats] = useState<MemoryMetrics | null>(null)
-  const [consolidation, setConsolidation] = useState<ConsolidationData | null>(null)
-  const [maintenance, setMaintenance] = useState<MaintenanceData | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const memoryQuery = useMemoryStats()
+  const consolidationQuery = useConsolidation()
+  const maintenanceQuery = useMaintenance()
 
-  const fetchData = useCallback(() => {
-    Promise.allSettled([
-      fetchJson<{ memory: MemoryMetrics | null }>('/api/memory'),
-      fetchJson<ConsolidationData>('/api/consolidation'),
-      fetchJson<MaintenanceData>('/api/maintenance'),
-    ]).then((results) => {
-      const [metricsResult, consResult, maintResult] = results
-      const metricsData = settledValue(metricsResult)
-      const consData = settledValue(consResult)
-      const maintData = settledValue(maintResult)
+  const loading = memoryQuery.isLoading && consolidationQuery.isLoading && maintenanceQuery.isLoading
+  const error = memoryQuery.error && consolidationQuery.error && maintenanceQuery.error
+    ? memoryQuery.error.message
+    : null
 
-      if (metricsData?.memory) setMemoryStats(metricsData.memory)
-      if (consData) setConsolidation(consData)
-      if (maintData) setMaintenance(maintData)
-      if (metricsData || consData || maintData) {
-        setError(null)
-      }
-      if (!metricsData && !consData && !maintData) {
-        setError(firstSettledError(results) ?? 'Could not reach memory endpoints')
-      }
-      setLoading(false)
-    }).catch(e => {
-      setError(e instanceof Error ? e.message : String(e))
-      setLoading(false)
-    })
-  }, [])
-
-  useAutoRefresh(fetchData, { intervalMs: 15000 })
+  const memoryStats = memoryQuery.data?.memory ?? null
+  const consolidation = consolidationQuery.data ?? null
+  const maintenance = maintenanceQuery.data ?? null
 
   if (loading) return <div className="page-loading">Loading memory data...</div>
   if (error && !memoryStats && !consolidation) return <div className="page-error">Error: {error}</div>

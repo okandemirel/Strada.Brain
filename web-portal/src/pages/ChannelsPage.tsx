@@ -1,14 +1,5 @@
-import { useState, useCallback } from 'react'
 import { formatUptime } from '../utils/format'
-import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { fetchJson, firstSettledError, settledValue } from '../utils/api'
-
-interface HealthData {
-  status: string
-  channel?: string
-  uptime?: number
-  clients?: number
-}
+import { useChannels, useHealth } from '../hooks/use-api'
 
 interface ChannelInfo {
   name: string
@@ -38,52 +29,30 @@ function statusLabel(ch: ChannelInfo): string {
 }
 
 export default function ChannelsPage() {
-  const [channels, setChannels] = useState<ChannelInfo[]>([])
-  const [health, setHealth] = useState<HealthData | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const channelsQuery = useChannels()
+  const healthQuery = useHealth()
 
-  const fetchData = useCallback(() => {
-    Promise.allSettled([
-      fetchJson<{ channels: ChannelInfo[] }>('/api/channels'),
-      fetchJson<HealthData>('/health'),
-    ]).then((results) => {
-      const [channelsResult, healthResult] = results
-      const channelsData = settledValue(channelsResult)
-      const healthData = settledValue(healthResult)
-
-      if (healthData) setHealth(healthData)
-      if (channelsData || healthData) {
-        setError(null)
-      }
-
-      if (channelsData?.channels) {
-        setChannels(channelsData.channels)
-      } else if (healthData) {
-        // Synthesize from health endpoint
-        const clientCount = healthData.clients ?? 0
-        setChannels([{
-          name: healthData.channel || 'web',
-          type: healthData.channel || 'web',
-          enabled: true,
-          healthy: healthData.status === 'ok',
-          detail: `${clientCount} client${clientCount !== 1 ? 's' : ''} connected`,
-        }])
-      }
-      setLoading(false)
-      if (!channelsData && !healthData) {
-        setError(firstSettledError(results) ?? 'Could not reach channel endpoints')
-      }
-    }).catch(e => {
-      setError(e instanceof Error ? e.message : String(e))
-      setLoading(false)
-    })
-  }, [])
-
-  useAutoRefresh(fetchData, { intervalMs: 10000 })
+  const loading = channelsQuery.isLoading && healthQuery.isLoading
+  const error = channelsQuery.error && healthQuery.error
+    ? channelsQuery.error.message
+    : null
+  const health = healthQuery.data ?? null
 
   if (error) return <div className="page-error">Error: {error}</div>
   if (loading) return <div className="page-loading">Loading channels...</div>
+
+  // Derive channels from endpoint or synthesize from health
+  let channels: ChannelInfo[] = channelsQuery.data?.channels ?? []
+  if (channels.length === 0 && health) {
+    const clientCount = health.clients ?? 0
+    channels = [{
+      name: health.channel || 'web',
+      type: health.channel || 'web',
+      enabled: true,
+      healthy: health.status === 'ok',
+      detail: `${clientCount} client${clientCount !== 1 ? 's' : ''} connected`,
+    }]
+  }
 
   return (
     <div className="admin-page">
