@@ -46,10 +46,13 @@ web-portal/
     components/
       layout/AppLayout.tsx                  # Rewrite with PanelLayout
       layout/Sidebar.tsx                    # Mode buttons + admin dropdown + mini chat
-      ChatView.tsx                          # Remove outer chrome (now in PanelLayout)
-    stores/
-      sidebar-store.ts                      # Add adminDropdownOpen state
+      ChatView.tsx                          # Enhanced message layout, code block styling (2f)
 ```
+
+### Notes
+- `sidebar-store.ts` already exists as a Zustand store from Phase 1. AdminDropdown uses local Radix state (no store needed).
+- Spec 2b "notification badge, user profile" are deferred to Phase 3 (requires backend notification events). Sidebar bottom shows placeholder badge icon.
+- Route migration and sidebar link update are done atomically in Task 4 to avoid broken link window.
 
 ---
 
@@ -452,7 +455,9 @@ git commit -m "feat(web-portal): redesign sidebar with mode buttons and admin dr
 
 ---
 
-## Task 4: AppLayout Rewrite + Route Restructuring (2e + routes)
+## Task 4: AppLayout Rewrite + Route Restructuring + Chat Enhancement (2e + 2f + routes)
+
+**NOTE:** This task combines AppLayout rewrite, route restructuring, AND sidebar link update atomically. Task 3's AdminDropdown already uses `/admin/*` paths but they won't work until this task moves the routes. Both changes are committed together to avoid a broken portal window.
 
 **Files:**
 - Modify: `web-portal/src/components/layout/AppLayout.tsx`
@@ -525,7 +530,15 @@ cd web-portal && npm run build && npm test
 
 Some existing tests may need route path updates if they reference old routes.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Enhance ChatView for panel context (2f)**
+
+Read `web-portal/src/components/ChatView.tsx`. Now that ChatView renders inside PanelLayout's Primary Panel:
+- Remove any redundant outer chrome (page title, container padding already provided by PanelLayout)
+- Enhance code block styling: add `prose-ai` class or improve Tailwind classes on the message container for better typography
+- Ensure message bubbles have proper max-width that adapts to panel width (use `max-w-prose` or percentage-based)
+- Improve empty state to fill the panel appropriately
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add web-portal/
@@ -622,40 +635,27 @@ git commit -m "feat(web-portal): add mini chat input in sidebar"
 - Modify: `web-portal/src/components/layout/AppLayout.tsx`
 - Modify: `web-portal/src/components/layout/Sidebar.tsx`
 
-- [ ] **Step 1: Add responsive behavior to AppLayout**
+Breakpoints: `>=1440px` full, `1024-1439px` auto-collapsed sidebar, `768-1023px` bottom tab bar, `<768px` full-screen panels.
 
-Use Tailwind responsive classes and a `useMediaQuery` pattern (or just CSS) for breakpoints:
+- [ ] **Step 1: Add auto-collapse to Sidebar**
 
-- `>=1440px`: Full layout — sidebar + primary + secondary
-- `1024-1439px`: Collapsed sidebar (auto-collapse), primary + secondary as tabs
-- `768-1023px`: Bottom tab bar instead of sidebar, single primary panel
-- `<768px`: Bottom tab bar, full-screen panel, sheet overlays for secondary
+Add `useEffect` in Sidebar that listens to `matchMedia('(max-width: 1439px)')` and auto-collapses when viewport shrinks. Sidebar already has `max-md:fixed max-md:z-[1000]` from Phase 1.
 
-Implementation approach: Use CSS media queries via Tailwind breakpoints (`lg:`, `md:`, `sm:`) for layout changes. The sidebar already has `max-md:fixed max-md:z-[1000]` from Phase 1.
+- [ ] **Step 2: Create BottomTabBar component**
 
-Add to Sidebar: Auto-collapse on screens < 1440px:
+Create `web-portal/src/components/layout/BottomTabBar.tsx`: Horizontal bar with 4 mode icons + Admin icon. Uses same `useWorkspaceStore` for mode switching. Fixed to bottom, shows on `md:hidden`.
 
-```typescript
-// In Sidebar, add effect:
-useEffect(() => {
-  const mq = window.matchMedia('(max-width: 1439px)')
-  const handler = (e: MediaQueryListEvent) => {
-    if (e.matches && !collapsed) toggle()
-  }
-  mq.addEventListener('change', handler)
-  return () => mq.removeEventListener('change', handler)
-}, [])
-```
+- [ ] **Step 3: Wire conditional rendering in AppLayout**
 
-Add bottom tab bar for mobile (< 768px): Create a `BottomTabBar` that shows mode buttons horizontally. Conditionally render sidebar (desktop) vs bottom bar (mobile) in AppLayout using Tailwind `hidden md:flex` / `flex md:hidden`.
+In AppLayout, render Sidebar with `hidden md:flex` and BottomTabBar with `flex md:hidden`. This switches between sidebar (desktop) and bottom bar (mobile).
 
-- [ ] **Step 2: Verify build at different viewport sizes**
+- [ ] **Step 4: Verify build**
 
 ```bash
-cd web-portal && npm run build
+cd /Users/okanunico/Documents/Strada/Strada.Brain && npm run --prefix web-portal build
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add web-portal/
