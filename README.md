@@ -1030,11 +1030,34 @@ Notes:
 src/
   index.ts              # CLI entry point (Commander.js)
   core/
-    bootstrap.ts        # Full initialization sequence -- all wiring happens here
-    event-bus.ts        # TypedEventBus for decoupled event-driven communication
-    tool-registry.ts    # Tool instantiation and registration
+    bootstrap.ts              # Full initialization sequence -- delegates to helper modules
+    bootstrap-channels.ts     # Channel initialization logic
+    bootstrap-memory.ts       # Memory subsystem initialization
+    bootstrap-providers.ts    # LLM provider initialization
+    bootstrap-wiring.ts       # Service wiring and dependency injection
+    bootstrap-stages.ts       # Re-exports from bootstrap-stages/ directory
+    bootstrap-stages/
+      bootstrap-stages-types.ts # Shared types for bootstrap stages
+      stage-agents.ts           # Agent subsystem initialization stage
+      stage-daemon.ts           # Daemon subsystem initialization stage
+      stage-finalization.ts     # Final startup checks and readiness
+      stage-goals.ts            # Goal subsystem initialization stage
+      stage-knowledge.ts        # Knowledge/RAG initialization stage
+      stage-providers.ts        # Provider initialization stage
+      stage-runtime.ts          # Runtime services initialization stage
+      index.ts                  # Barrel re-export
+    event-bus.ts              # TypedEventBus for decoupled event-driven communication
+    tool-registry.ts          # Tool instantiation and registration
   agents/
-    orchestrator.ts     # PAOR agent loop, session management, streaming
+    orchestrator.ts                    # PAOR agent loop, session management, streaming
+    orchestrator-clarification.ts      # Clarification flow handling
+    orchestrator-context-builder.ts    # Conversation context assembly
+    orchestrator-interaction-policy.ts # Interaction policy enforcement
+    orchestrator-phase-telemetry.ts    # Phase-level telemetry and metrics
+    orchestrator-runtime-utils.ts      # Runtime helper utilities
+    orchestrator-session-persistence.ts # Session save/restore logic
+    orchestrator-supervisor-routing.ts  # Supervisor delegation routing
+    orchestrator-text-utils.ts          # Text processing helpers
     agent-state.ts      # Phase state machine (Plan/Act/Observe/Reflect)
     paor-prompts.ts     # Phase-aware prompt builders
     instinct-retriever.ts # Proactive learned-pattern retrieval
@@ -1045,6 +1068,14 @@ src/
     tools/              # 30+ tool implementations plus control-plane interaction turns (ask_user, show_plan, switch_personality, ...)
     soul/               # SOUL.md personality loader with hot-reload and per-channel overrides
     plugins/            # External plugin loader
+    multi/
+      agent-manager.ts         # Multi-agent lifecycle and session isolation
+      agent-budget-tracker.ts  # Per-agent budget tracking
+      agent-registry.ts        # Central registry of active agents
+      delegation/
+        delegation-manager.ts  # Delegation lifecycle management
+        delegation-tool.ts     # Agent-facing delegation tool
+        tier-router.ts         # 4-tier task routing
   profiles/             # Personality profile files: casual.md, formal.md, minimal.md
   channels/
     telegram/           # Grammy-based bot
@@ -1057,11 +1088,21 @@ src/
   memory/
     file-memory-manager.ts   # Legacy backend: JSON + TF-IDF (fallback)
     unified/
-      agentdb-memory.ts      # Active backend: SQLite + HNSW, 3-tier auto-tiering
-      agentdb-adapter.ts     # IMemoryManager adapter for AgentDBMemory
-      migration.ts           # Legacy FileMemoryManager -> AgentDB migration
-      consolidation-engine.ts # Idle memory consolidation with HNSW clustering
-      consolidation-types.ts  # Consolidation type definitions and interfaces
+      agentdb-memory.ts        # Active backend: SQLite + HNSW, 3-tier auto-tiering
+      agentdb-sqlite.ts        # SQLite operations and query helpers
+      agentdb-vector.ts        # HNSW vector index operations
+      agentdb-tiering.ts       # 3-tier auto-tiering logic
+      agentdb-retrieval.ts     # Memory retrieval and search
+      agentdb-time.ts          # Time-based decay and scoring
+      agentdb-adapter.ts       # IMemoryManager adapter for AgentDBMemory
+      user-profile-store.ts    # User profile persistence
+      session-summarizer.ts    # Session summary generation
+      task-execution-store.ts  # Task execution history storage
+      hnsw-write-mutex.ts      # HNSW concurrent write protection
+      sqlite-pragmas.ts        # SQLite PRAGMA configuration
+      migration.ts             # Legacy FileMemoryManager -> AgentDB migration
+      consolidation-engine.ts  # Idle memory consolidation with HNSW clustering
+      consolidation-types.ts   # Consolidation type definitions and interfaces
     decay/                    # Exponential memory decay system
   rag/
     rag-pipeline.ts     # Index + search + format orchestration
@@ -1089,14 +1130,6 @@ src/
       composite-tool.ts    # Executable composite tool
       chain-validator.ts   # Post-synthesis validation, runtime feedback
       chain-manager.ts     # Full lifecycle orchestrator
-  multi-agent/
-    agent-manager.ts    # Multi-agent lifecycle and session isolation
-    agent-budget-tracker.ts  # Per-agent budget tracking
-    agent-registry.ts   # Central registry of active agents
-  delegation/
-    delegation-manager.ts    # Delegation lifecycle management
-    delegation-tool.ts       # Agent-facing delegation tool
-    tier-router.ts           # 4-tier task routing
   goals/
     goal-decomposer.ts  # DAG-based goal decomposition (proactive + reactive)
     goal-executor.ts    # Wave-based parallel execution with failure budgets

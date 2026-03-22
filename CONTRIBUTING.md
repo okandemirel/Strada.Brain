@@ -98,13 +98,13 @@ Strada.Brain is organized into these key modules:
 
 1. Create `src/agent-core/observers/my-observer.ts` implementing `Observer` interface
 2. Export from `src/agent-core/observers/index.ts`
-3. Register in `src/core/bootstrap.ts` (inside daemon mode block)
+3. Register in `src/core/bootstrap-stages/stage-daemon.ts` (inside daemon mode block)
 4. Add tests to `src/agent-core/observers/observers.test.ts`
 
 ## Running Tests
 
 ```bash
-# Full suite (3450+ tests)
+# Full suite (3919+ tests)
 npm test
 
 # Specific module
@@ -133,14 +133,14 @@ npm run build   # Production build → src/channels/web/static/
 - Test edge cases: empty inputs, large inputs, error conditions.
 - Integration tests go in `src/` (co-located as `integration.test.ts`).
 - For Unity/Strada codegen changes, prefer `npm run test:unity-fixture` when a licensed local Unity editor is available.
-- Current test suite: 3120+ tests across 180+ test files.
+- Current test suite: 3919+ tests across 180+ test files.
 
 ## Adding a New Tool
 
 1. Create a file in `src/agents/tools/` implementing `ITool` from `tool.interface.ts`.
 2. Define `name`, `description`, and `inputSchema` (Zod-compatible JSON Schema).
 3. Implement the `execute(input, context)` method.
-4. Register the tool in the bootstrap process (`src/core/bootstrap.ts`).
+4. Register the tool in `src/core/bootstrap-wiring.ts`.
 5. Write tests covering success and error paths.
 
 ## Adding a New Channel
@@ -150,7 +150,7 @@ Strada.Brain supports 6 channels: Web (default), Telegram, Discord, Slack, Whats
 1. Create a directory under `src/channels/` (e.g., `src/channels/mychannel/`).
 2. Implement the `IChannelAdapter` interface from `channel.interface.ts`.
 3. Optionally implement `IChannelStreaming`, `IChannelRichMessaging`, or `IChannelInteractive`.
-4. Register the channel in `src/core/bootstrap.ts`.
+4. Register the channel in `src/core/bootstrap-channels.ts`.
 5. Add the channel type to `SupportedChannelType` in `src/common/constants.ts`.
 
 ## Security Guidelines

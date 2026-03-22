@@ -2,7 +2,7 @@
 
 The agents subsystem contains the orchestrator (agent loop), AI providers, tools, the autonomy layer, and the plugin system.
 
-## Orchestrator (`orchestrator.ts`)
+## Orchestrator (`orchestrator.ts` + helpers)
 
 The `Orchestrator` class implements a single-agent, multi-tool loop. There is one orchestrator instance — the tool set defines what it can do.
 
@@ -113,6 +113,14 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 | File                             | Purpose                                                  |
 | -------------------------------- | -------------------------------------------------------- |
 | `orchestrator.ts`                | Agent loop, session management, streaming, tool dispatch |
+| `orchestrator-supervisor-routing.ts` | Provider routing, supervisor assignment, multi-provider strategy |
+| `orchestrator-session-persistence.ts` | Session management, memory persistence, visible transcript |
+| `orchestrator-clarification.ts`  | User boundary detection, clarification intervention logic |
+| `orchestrator-context-builder.ts` | System prompt construction, context layers, soul personality injection |
+| `orchestrator-interaction-policy.ts` | Execution policy, shell review, autonomous mode |
+| `orchestrator-phase-telemetry.ts` | PAOR phase transition telemetry |
+| `orchestrator-runtime-utils.ts`  | Phase transitions, step result mapping |
+| `orchestrator-text-utils.ts`     | Response formatting, identity resolution, prompt sanitization |
 | `autonomy/error-recovery.ts`     | C# error categorization and recovery injection           |
 | `autonomy/task-planner.ts`       | Stall detection, budget warnings, learning trajectory    |
 | `autonomy/self-verification.ts`  | Build verification gate                                  |

@@ -105,6 +105,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Task failure shows generic error message (no internal API error leakage)
 
 ### Changed
+- Split 4 large monolithic files into focused modules (-5,179 lines, 22 new files):
+  - `orchestrator.ts` (8,929→7,777 lines): extracted supervisor-routing, session-persistence, clarification, context-builder helpers
+  - `bootstrap-stages.ts` (2,190 lines→directory): split into typed stage modules with barrel re-export
+  - `agentdb-memory.ts` (2,398→1,444 lines): extracted sqlite, vector, tiering, retrieval helpers using delegation pattern
+  - `bootstrap.ts` (1,925→1,040 lines): extracted providers, memory, channels, wiring helpers
 - README tool descriptions now reflect `BurstSystem` scaffolding instead of the old `SystemGroup` wording
 - Intelligence documentation now describes the deep-parser-based analyzer and the Strada API drift pipeline
 

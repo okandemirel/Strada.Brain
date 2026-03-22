@@ -11,7 +11,7 @@ Runtime self-improvement artifacts also follow that boundary. Their guidance and
 
 ## Active Backend: AgentDBMemory
 
-`AgentDBMemory` (`unified/agentdb-memory.ts`) is the production backend since v2.0, wired in `src/core/bootstrap.ts`. It uses SQLite + HNSW vector indexing for 150x-12,500x performance over the legacy file backend.
+`AgentDBMemory` (`unified/agentdb-memory.ts`) is the production backend since v2.0, wired in `src/core/bootstrap-memory.ts`. It uses SQLite + HNSW vector indexing for 150x-12,500x performance over the legacy file backend.
 
 ### Three-Tier Memory
 
@@ -70,6 +70,11 @@ When no embedding provider is configured, `generateEmbedding()` uses a character
 |------|---------|
 | `memory.interface.ts` | `IMemoryManager`, entry types, retrieval options |
 | `unified/agentdb-memory.ts` | Active production backend (SQLite + HNSW) |
+| `unified/agentdb-sqlite.ts` | SQLite schema, persistence, bulk load/save |
+| `unified/agentdb-vector.ts` | HNSW indexing, embedding generation, dimension handling |
+| `unified/agentdb-tiering.ts` | Auto-tiering sweep, decay, importance scoring |
+| `unified/agentdb-retrieval.ts` | Semantic search, hybrid retrieval, MMR re-ranking |
+| `unified/agentdb-time.ts` | Testable clock utility for decay calculations |
 | `unified/task-execution-store.ts` | Task execution memory: latest snapshot of session summaries, open items, verifier memory, rollback context |
 | `../agents/context/strada-knowledge.ts` | Project/world memory section builder (project root + cached analysis summary) |
 | `unified/unified-memory.interface.ts` | `IUnifiedMemory`, tier enum, HNSW types |

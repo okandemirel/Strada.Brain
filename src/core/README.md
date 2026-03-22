@@ -4,9 +4,9 @@ Application bootstrap, dependency injection, and tool registration. These files 
 
 The source-checkout launcher is now cross-platform. `strada` remains the thin POSIX wrapper, while `strada.ps1` and `strada.cmd` delegate into the same no-dependency Node launcher core in `scripts/source-launcher.mjs`. That shared core owns source-checkout preparation, `install-command`, `uninstall`, wrapper generation, and the source-vs-dist launch decision so setup/doctor behavior stays aligned across macOS/Linux and Windows.
 
-## Bootstrap (`bootstrap.ts`)
+## Bootstrap (`bootstrap.ts` + helpers)
 
-The main entry point that replaces a monolithic `startBrain()`. The exported `bootstrap()` function accepts `BootstrapOptions` (channel type, config, optional DI container) and returns a `BootstrapResult` with the orchestrator, channel, container, and a `shutdown()` handler.
+The main entry point that replaces a monolithic `startBrain()`. The exported `bootstrap()` function accepts `BootstrapOptions` (channel type, config, optional DI container) and returns a `BootstrapResult` with the orchestrator, channel, container, and a `shutdown()` handler. Heavy initialization is delegated to focused helper modules (`bootstrap-providers.ts`, `bootstrap-memory.ts`, `bootstrap-channels.ts`, `bootstrap-wiring.ts`) and typed stage modules under `bootstrap-stages/`.
 
 Initialization sequence (order matters):
 
@@ -120,6 +120,11 @@ A minimal HTTP server that runs during first-time configuration when no valid `.
 | File | Purpose |
 |------|---------|
 | `bootstrap.ts` | Application startup sequence, service wiring, shutdown handler |
+| `bootstrap-providers.ts` | AI provider initialization, embedding resolution |
+| `bootstrap-memory.ts` | Memory system initialization, schema repair, migration |
+| `bootstrap-channels.ts` | Channel adapter setup, dashboard, rate limiter |
+| `bootstrap-wiring.ts` | Message handler wiring, shutdown handler, session ID |
+| `bootstrap-stages/` | Directory with typed stage modules (types, providers, knowledge, runtime, goals, agents, daemon, finalization) |
 | `di-container.ts` | String-keyed DI container with singleton/transient/scoped lifecycles and circular dependency detection |
 | `setup-wizard.ts` | Minimal HTTP server for first-time `.env` configuration with security hardening |
 | `terminal-wizard.ts` | Terminal/web setup flow, platform-aware Node upgrade guidance, and post-save launch handoff |

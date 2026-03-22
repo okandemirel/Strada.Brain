@@ -405,6 +405,4 @@ rm -rf logs/ backups/ .strada-memory/
 
 ## Support
 
-- Issues: https://github.com/strata/brain/issues
-- Documentation: https://docs.strata.dev/brain
-- Discord: https://discord.gg/strata
+- Issues: https://github.com/okandemirel/Strada.Brain/issues
