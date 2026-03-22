@@ -20,6 +20,7 @@ describe("source launcher install-command", () => {
   });
 
   it("installs user-local wrappers and updates the detected zsh profile idempotently", () => {
+    if (process.platform === "win32") return;
     const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada launcher home "));
     const tempBin = path.join(tempHome, ".local", "bin");
     const outsideCwd = path.join(tempHome, "outside");
@@ -114,8 +115,8 @@ describe("source launcher install-command", () => {
 
     expect(existsSync(path.join(installDir, "strada.cmd"))).toBe(true);
     expect(existsSync(path.join(installDir, "strada.ps1"))).toBe(true);
-    expect(readFileSync(path.join(installDir, "strada.cmd"), "utf8")).toContain("scripts/source-launcher.mjs");
-    expect(readFileSync(path.join(installDir, "strada.ps1"), "utf8")).toContain("scripts/source-launcher.mjs");
+    expect(readFileSync(path.join(installDir, "strada.cmd"), "utf8")).toContain(path.join("scripts", "source-launcher.mjs"));
+    expect(readFileSync(path.join(installDir, "strada.ps1"), "utf8")).toContain(path.join("scripts", "source-launcher.mjs"));
     expect(pathSync).toHaveBeenCalledTimes(2);
     expect(mergeWindowsUserPath("", installDir)).toEqual({
       updated: true,
@@ -167,7 +168,6 @@ describe("source launcher install-command", () => {
     const { refreshInstalledCommandBindings } = await loadSourceLauncherModule();
     const refreshed = refreshInstalledCommandBindings({
       env: {
-        ...process.env,
         HOME: tempHome,
         XDG_BIN_HOME: tempBin,
       },
@@ -176,8 +176,8 @@ describe("source launcher install-command", () => {
     });
 
     expect(refreshed).toBe(true);
-    expect(readFileSync(path.join(tempBin, "strada"), "utf8")).toContain("scripts/source-launcher.mjs");
-    expect(readFileSync(path.join(tempBin, "strada-brain"), "utf8")).toContain("scripts/source-launcher.mjs");
+    expect(readFileSync(path.join(tempBin, "strada"), "utf8")).toContain(path.join("scripts", "source-launcher.mjs"));
+    expect(readFileSync(path.join(tempBin, "strada-brain"), "utf8")).toContain(path.join("scripts", "source-launcher.mjs"));
     expect(existsSync(path.join(tempHome, ".zshrc"))).toBe(false);
   });
 
@@ -224,8 +224,8 @@ describe("source launcher install-command", () => {
     });
 
     expect(refreshed).toBe(true);
-    expect(readFileSync(path.join(installDir, "strada.cmd"), "utf8")).toContain("scripts/source-launcher.mjs");
-    expect(readFileSync(path.join(installDir, "strada.ps1"), "utf8")).toContain("scripts/source-launcher.mjs");
+    expect(readFileSync(path.join(installDir, "strada.cmd"), "utf8")).toContain(path.join("scripts", "source-launcher.mjs"));
+    expect(readFileSync(path.join(installDir, "strada.ps1"), "utf8")).toContain(path.join("scripts", "source-launcher.mjs"));
   });
 
   it("marks web setup and default web launches as requiring a prepared source checkout", async () => {

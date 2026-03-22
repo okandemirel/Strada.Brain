@@ -88,7 +88,7 @@ describe("runtime paths", () => {
       env: { STRADA_HOME: "portable-strada-home" },
     });
 
-    expect(runtimePaths.configRoot).toBe("/Users/tester/projects/portable-strada-home");
+    expect(runtimePaths.configRoot).toBe(path.resolve("/Users/tester/projects", "portable-strada-home"));
   });
 
   it("prefers the launcher-provided launch cwd for relative STRADA_HOME overrides", () => {
@@ -102,7 +102,7 @@ describe("runtime paths", () => {
       },
     });
 
-    expect(runtimePaths.configRoot).toBe("/Users/tester/original-launch-dir/portable-strada-home");
+    expect(runtimePaths.configRoot).toBe(path.resolve("/Users/tester/original-launch-dir", "portable-strada-home"));
   });
 
   it("resolves relative STRADA_HOME against the launch cwd even when cwd fallback is needed elsewhere", () => {
@@ -117,7 +117,7 @@ describe("runtime paths", () => {
       env: { STRADA_HOME: "portable-strada-home" },
     });
 
-    expect(runtimePaths.configRoot).toBe("/Users/tester/portable-strada-home");
+    expect(runtimePaths.configRoot).toBe(path.resolve("/Users/tester", "portable-strada-home"));
   });
 
   it("normalizes source checkout cwd back to the install root", () => {
