@@ -66,11 +66,16 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
   }
 
   /** Wait for a specific message type from a WebSocket. */
-  function waitForMessage<T = unknown>(ws: WebSocket, type: string): Promise<T> {
-    return new Promise((resolve) => {
+  function waitForMessage<T = unknown>(ws: WebSocket, type: string, timeoutMs = 10000): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ws.removeListener("message", handler);
+        reject(new Error(`waitForMessage("${type}") timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
       const handler = (data: Buffer) => {
         const msg = JSON.parse(data.toString());
         if (msg.type === type) {
+          clearTimeout(timer);
           ws.removeListener("message", handler);
           resolve(msg as T);
         }
@@ -202,12 +207,13 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
     expect(bootstrapToken).not.toBeNull();
 
     const ws = new WebSocket(`ws://localhost:${port}/ws`);
+    const authChallenge = waitForMessage(ws, "auth");
 
     await new Promise<void>((resolve) => {
       ws.on("open", resolve);
     });
 
-    await waitForMessage(ws, "auth");
+    await authChallenge;
     ws.send(JSON.stringify({
       type: "auth",
       payload: { token: bootstrapToken! },
@@ -399,12 +405,13 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
     expect(bootstrapToken).not.toBeNull();
 
     const ws = new WebSocket(`ws://localhost:${port}/ws`);
+    const authChallenge = waitForMessage(ws, "auth");
 
     await new Promise<void>((resolve) => {
       ws.on("open", resolve);
     });
 
-    await waitForMessage(ws, "auth");
+    await authChallenge;
     expect(authServer.getAuthenticatedClientCount()).toBe(0);
 
     ws.send(JSON.stringify({

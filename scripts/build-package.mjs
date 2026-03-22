@@ -17,6 +17,7 @@ function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: ROOT_DIR,
     stdio: "inherit",
+    shell: isWindows,
   });
   if (result.error) {
     throw result.error;
@@ -31,6 +32,7 @@ run(resolveCommandBinary("tsc"), []);
 const portalBuild = spawnSync(resolveCommandBinary("npm"), ["run", "build:portal"], {
   cwd: ROOT_DIR,
   stdio: "inherit",
+  shell: isWindows,
 });
 
 if (portalBuild.status === 0) {
