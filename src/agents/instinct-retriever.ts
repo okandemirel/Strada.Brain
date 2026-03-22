@@ -11,7 +11,7 @@
 import type { PatternMatcher, ScopeContext } from "../learning/matching/pattern-matcher.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
-import { MS_PER_DAY, type PatternMatch } from "../learning/types.js";
+import { MS_PER_DAY, type Instinct, type PatternMatch } from "../learning/types.js";
 
 /** Options for InstinctRetriever constructor */
 export interface InstinctRetrieverOptions {
@@ -150,6 +150,67 @@ export class InstinctRetriever {
     }
 
     return { insights, matchedInstinctIds };
+  }
+
+  /**
+   * Retrieve raw Instinct objects matching a task description.
+   *
+   * Uses the same matching pipeline as getInsightsForTask (deprecated filter,
+   * scope dedup, permanent boost) but returns the raw Instinct objects instead
+   * of formatted strings. Designed for InterventionEngine.evaluate().
+   *
+   * @param taskDescription - Natural-language description or tool name prefix
+   * @param maxInstincts - Maximum number of instincts to return (default 5)
+   * @returns Array of matched Instinct objects, sorted by boosted confidence
+   */
+  async getMatchedInstincts(taskDescription: string, maxInstincts: number = 5): Promise<Instinct[]> {
+    const findOptions: {
+      minSimilarity: number;
+      maxResults: number;
+      scope?: ScopeContext;
+    } = {
+      minSimilarity: 0.4,
+      maxResults: maxInstincts + 10,
+    };
+
+    if (this.scopeContext) {
+      findOptions.scope = this.scopeContext;
+    }
+
+    const matches = await this.matcher.findSimilarInstincts(taskDescription, findOptions);
+
+    // Filter out deprecated instincts
+    const filtered = matches.filter(m => !m.instinct || m.instinct.status !== "deprecated");
+
+    // Scope deduplication: most specific scope wins per pattern
+    const scopePriority: Record<string, number> = { user: 3, project: 2, global: 1 };
+    const byPattern = new Map<string, PatternMatch>();
+    for (const match of filtered) {
+      const pattern = match.instinct?.triggerPattern ?? '';
+      const existing = byPattern.get(pattern);
+      const matchScope = match.instinct?.scopeType ?? 'project';
+      const existingScope = existing?.instinct?.scopeType ?? 'project';
+      if (!existing || (scopePriority[matchScope] ?? 0) > (scopePriority[existingScope] ?? 0)) {
+        byPattern.set(pattern, match);
+      }
+    }
+    const scopeDeduped = Array.from(byPattern.values());
+
+    // Apply 1.2x ranking boost for permanent instincts
+    const boosted = scopeDeduped.map(m =>
+      m.instinct?.status === "permanent"
+        ? { ...m, confidence: m.confidence * 1.2 }
+        : m
+    );
+
+    // Re-sort by boosted confidence descending
+    boosted.sort((a, b) => b.confidence - a.confidence);
+
+    // Limit to maxInstincts and extract raw instinct objects
+    return boosted
+      .slice(0, maxInstincts)
+      .map(m => m.instinct)
+      .filter((inst): inst is Instinct => inst !== undefined);
   }
 
   /**

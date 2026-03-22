@@ -7179,21 +7179,31 @@ export class Orchestrator {
       }
 
       // Intervention Engine: evaluate instincts before tool execution (Learning Pipeline v2)
-      if (this.interventionEngine) {
+      if (this.interventionEngine && this.instinctRetriever) {
         try {
-          // Retrieve relevant instincts from session context for this tool call
-          const sessionInstinctIds = this.currentSessionInstinctIds.get(chatId) ?? [];
-          if (sessionInstinctIds.length > 0 && this.instinctRetriever) {
-            const insightResult = await this.instinctRetriever.getInsightsForTask(
-              `tool:${activeToolCall.name}`,
+          const relevantInstincts = await this.instinctRetriever.getMatchedInstincts(
+            activeToolCall.name,
+          );
+          if (relevantInstincts.length > 0) {
+            const intervention = this.interventionEngine.evaluate(
+              activeToolCall.name,
+              activeToolCall.input as Record<string, unknown>,
+              relevantInstincts,
             );
-            // Instincts matched by the retriever are the best proxy for relevant instincts.
-            // Full instinct objects are not directly available here — log the evaluation attempt.
-            if (insightResult.matchedInstinctIds.length > 0) {
-              logger.debug("Intervention engine: instincts available for tool", {
+
+            if (intervention.action === 'warn') {
+              logger.debug("Intervention engine: warn for tool", {
                 tool: activeToolCall.name,
-                instinctCount: insightResult.matchedInstinctIds.length,
+                matches: intervention.matches.length,
               });
+            }
+
+            if (intervention.action === 'auto_apply') {
+              for (const match of intervention.matches.filter(i => i.tier === 'auto')) {
+                await this.interventionEngine.logIntervention(
+                  match.instinctId, activeToolCall.name, 'auto', 'applied',
+                );
+              }
             }
           }
         } catch (err) {

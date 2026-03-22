@@ -573,4 +573,148 @@ describe("InstinctRetriever", () => {
     // Both instinct IDs are collected even if formatting fails
     expect(result.matchedInstinctIds).toEqual(["instinct_good", "instinct_bad"]);
   });
+
+  describe("getMatchedInstincts", () => {
+    it("returns empty array when no matches found", async () => {
+      const { retriever } = setup([], []);
+
+      const result = await retriever.getMatchedInstincts("fix null pointer");
+
+      expect(result).toEqual([]);
+    });
+
+    it("returns raw Instinct objects instead of formatted strings", async () => {
+      const instinct = createMockInstinct({
+        id: "instinct_raw_001" as Instinct["id"],
+        action: JSON.stringify({ description: "Add null check" }),
+        confidence: 0.85,
+      });
+
+      const match = createMockMatch(instinct, 0.9);
+      const { retriever } = setup([instinct], [match]);
+
+      const result = await retriever.getMatchedInstincts("handle null values");
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toBe(instinct);
+      expect(result[0].id).toBe("instinct_raw_001");
+      expect(result[0].action).toBe(JSON.stringify({ description: "Add null check" }));
+    });
+
+    it("excludes deprecated instincts", async () => {
+      const active = createMockInstinct({
+        id: "instinct_active_raw" as Instinct["id"],
+        status: "active",
+        triggerPattern: "active pattern raw",
+      });
+      const deprecated = createMockInstinct({
+        id: "instinct_deprecated_raw" as Instinct["id"],
+        status: "deprecated",
+        triggerPattern: "deprecated pattern raw",
+      });
+
+      const matches = [
+        createMockMatch(active, 0.9),
+        createMockMatch(deprecated, 0.85),
+      ];
+
+      const { retriever } = setup([active, deprecated], matches);
+      const result = await retriever.getMatchedInstincts("some task");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("instinct_active_raw");
+    });
+
+    it("applies permanent boost and re-sorts", async () => {
+      const active = createMockInstinct({
+        id: "instinct_active_boost" as Instinct["id"],
+        status: "active",
+        triggerPattern: "active for boost test",
+      });
+      const permanent = createMockInstinct({
+        id: "instinct_perm_boost" as Instinct["id"],
+        status: "permanent",
+        triggerPattern: "permanent for boost test",
+      });
+
+      // Active: 0.85, Permanent: 0.75 -> boosted to 0.90
+      const matches = [
+        createMockMatch(active, 0.85),
+        createMockMatch(permanent, 0.75),
+      ];
+
+      const { retriever } = setup([active, permanent], matches);
+      const result = await retriever.getMatchedInstincts("some task");
+
+      expect(result).toHaveLength(2);
+      // Permanent should be first after 1.2x boost
+      expect(result[0].id).toBe("instinct_perm_boost");
+      expect(result[1].id).toBe("instinct_active_boost");
+    });
+
+    it("respects maxInstincts limit", async () => {
+      const instincts = Array.from({ length: 10 }, (_, i) =>
+        createMockInstinct({
+          id: `instinct_limit_${i}` as Instinct["id"],
+          triggerPattern: `unique limit pattern ${i}`,
+        }),
+      );
+
+      const allMatches = instincts.map((inst, i) => createMockMatch(inst, 0.9 - i * 0.05));
+      const { retriever } = setup(instincts, allMatches);
+
+      const result = await retriever.getMatchedInstincts("some task", 3);
+
+      expect(result).toHaveLength(3);
+    });
+
+    it("deduplicates by scope (most specific wins)", async () => {
+      const globalInst = createMockInstinct({
+        id: "instinct_global_dedup" as Instinct["id"],
+        triggerPattern: "shared pattern",
+        scopeType: "global",
+      });
+      const userInst = createMockInstinct({
+        id: "instinct_user_dedup" as Instinct["id"],
+        triggerPattern: "shared pattern",
+        scopeType: "user",
+      });
+
+      const matches = [
+        createMockMatch(globalInst, 0.9),
+        createMockMatch(userInst, 0.7),
+      ];
+
+      const { retriever } = setup([globalInst, userInst], matches);
+      const result = await retriever.getMatchedInstincts("some task");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("instinct_user_dedup");
+    });
+
+    it("skips matches without instinct objects", async () => {
+      const instinct = createMockInstinct({
+        id: "instinct_with_obj" as Instinct["id"],
+        triggerPattern: "has instinct object",
+      });
+
+      const matchWithInstinct = createMockMatch(instinct, 0.9);
+      const matchWithout: PatternMatch = {
+        id: "instinct_no_obj" as PatternMatch["id"],
+        type: "fuzzy",
+        confidence: 0.85,
+        relevance: 0.85,
+        instinct: undefined,
+        matchReason: "Similarity: 85%",
+        matchedFields: ["triggerPattern"],
+        priority: 85,
+      } as PatternMatch;
+
+      const { retriever } = setup([instinct], [matchWithInstinct, matchWithout]);
+      const result = await retriever.getMatchedInstincts("some task");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("instinct_with_obj");
+    });
+  });
 });
