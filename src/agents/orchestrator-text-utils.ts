@@ -182,11 +182,24 @@ export function resolveConversationScope(chatId: string, conversationId?: string
   return normalizedConversationId ? normalizedConversationId : chatId;
 }
 
-export function resolveIdentityKey(chatId: string, userId?: string, conversationId?: string): string {
-  const normalizedUserId = userId?.trim();
-  if (normalizedUserId) {
-    return normalizedUserId;
+interface IdentityLinkResolver {
+  resolveLinkedIdentity: (channelType: string, channelUserId: string) => string | null;
+}
+
+export function resolveIdentityKey(
+  chatId: string,
+  userId?: string,
+  conversationId?: string,
+  profileStore?: IdentityLinkResolver,
+  channelType?: string,
+): string {
+  // Try cross-channel identity resolution first
+  if (profileStore && channelType && userId) {
+    const unified = profileStore.resolveLinkedIdentity(channelType, userId);
+    if (unified) return unified;
   }
+  const normalizedUserId = userId?.trim();
+  if (normalizedUserId) return normalizedUserId;
   return resolveConversationScope(chatId, conversationId);
 }
 

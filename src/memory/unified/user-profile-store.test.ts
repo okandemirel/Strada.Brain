@@ -240,6 +240,53 @@ describe("UserProfileStore", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Identity links
+  // -------------------------------------------------------------------------
+
+  describe("identity links", () => {
+    it("should link and resolve identity across channels", () => {
+      store.linkIdentity("unified-user-1", "telegram", "tg_123", "Alice");
+      const resolved = store.resolveLinkedIdentity("telegram", "tg_123");
+      expect(resolved).toBe("unified-user-1");
+    });
+
+    it("should return null for unknown channel identity", () => {
+      const resolved = store.resolveLinkedIdentity("telegram", "nonexistent_456");
+      expect(resolved).toBeNull();
+    });
+
+    it("should return all linked identities for a unified user", () => {
+      store.linkIdentity("unified-user-2", "telegram", "tg_200", "Bob");
+      store.linkIdentity("unified-user-2", "discord", "dc_200", "Bob#1234");
+      const links = store.getLinkedIdentities("unified-user-2");
+      expect(links).toHaveLength(2);
+      expect(links.map((l) => l.channelType)).toEqual(["telegram", "discord"]);
+      expect(links[0].displayName).toBe("Bob");
+      expect(links[1].displayName).toBe("Bob#1234");
+      expect(links[0].confirmed).toBe(0);
+    });
+
+    it("should confirm an identity link", () => {
+      store.linkIdentity("unified-user-3", "slack", "sl_300");
+      const [link] = store.getLinkedIdentities("unified-user-3");
+      expect(link).toBeDefined();
+      expect(link.confirmed).toBe(0);
+
+      store.confirmIdentityLink(link.id);
+
+      const [confirmed] = store.getLinkedIdentities("unified-user-3");
+      expect(confirmed.confirmed).toBe(1);
+    });
+
+    it("should enforce unique channel+user constraint", () => {
+      store.linkIdentity("unified-user-4", "web", "web_400");
+      expect(() => {
+        store.linkIdentity("unified-user-5", "web", "web_400");
+      }).toThrow();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // JSON round-trips
   // -------------------------------------------------------------------------
 

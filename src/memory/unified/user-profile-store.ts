@@ -5,6 +5,7 @@
  * Uses better-sqlite3 prepared statements for synchronous, low-latency access.
  */
 
+import { randomBytes } from "node:crypto";
 import type Database from "better-sqlite3";
 
 // ---------------------------------------------------------------------------
@@ -107,6 +108,20 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 );
 `;
 
+const IDENTITY_LINKS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS identity_links (
+  id TEXT PRIMARY KEY,
+  unified_user_id TEXT NOT NULL,
+  channel_type TEXT NOT NULL,
+  channel_user_id TEXT NOT NULL,
+  display_name TEXT,
+  confirmed INTEGER DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  UNIQUE(channel_type, channel_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_identity_links_unified ON identity_links(unified_user_id);
+`;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -140,6 +155,7 @@ function rowToProfile(row: UserProfileRow): UserProfile {
 // ---------------------------------------------------------------------------
 
 export class UserProfileStore {
+  private readonly db: Database.Database;
   private readonly stmtGet: Database.Statement;
   private readonly stmtUpsert: Database.Statement;
   private readonly stmtSetPersona: Database.Statement;
@@ -147,8 +163,10 @@ export class UserProfileStore {
   private readonly stmtTouchLastSeen: Database.Statement;
 
   constructor(db: Database.Database) {
-    // Create table (static SQL, no user input)
+    // Apply schemas (static SQL, no user input)
     db.exec(USER_PROFILES_SCHEMA);
+    db.exec(IDENTITY_LINKS_SCHEMA);
+    this.db = db;
 
     // Prepare statements
     this.stmtGet = db.prepare(
@@ -369,5 +387,61 @@ export class UserProfileStore {
 
     // Enabled with no expiration
     return { enabled: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Cross-channel identity links
+  // -------------------------------------------------------------------------
+
+  /**
+   * Link a channel-specific user identity to a unified user ID.
+   * The link is unconfirmed by default; call confirmIdentityLink() to confirm.
+   * Silently ignores duplicate (channel_type, channel_user_id) pairs (UNIQUE constraint).
+   */
+  linkIdentity(
+    unifiedUserId: string,
+    channelType: string,
+    channelUserId: string,
+    displayName?: string,
+  ): void {
+    const id = `idlink_${Date.now()}_${randomBytes(4).toString("hex")}`;
+    this.db.prepare(`
+      INSERT INTO identity_links (id, unified_user_id, channel_type, channel_user_id, display_name, confirmed, created_at)
+      VALUES (?, ?, ?, ?, ?, 0, ?)
+    `).run(id, unifiedUserId, channelType, channelUserId, displayName ?? null, Date.now());
+  }
+
+  /**
+   * Resolve a channel-specific user to its unified user ID.
+   * Returns null if no link exists for the given channel+user pair.
+   */
+  resolveLinkedIdentity(channelType: string, channelUserId: string): string | null {
+    const row = this.db.prepare(
+      "SELECT unified_user_id FROM identity_links WHERE channel_type = ? AND channel_user_id = ?",
+    ).get(channelType, channelUserId) as { unified_user_id: string } | undefined;
+    return row?.unified_user_id ?? null;
+  }
+
+  /**
+   * Return all channel identities linked to a unified user ID, ordered by creation time.
+   */
+  getLinkedIdentities(unifiedUserId: string): Array<{
+    id: string;
+    channelType: string;
+    channelUserId: string;
+    displayName?: string;
+    confirmed: number;
+    createdAt: number;
+  }> {
+    return this.db.prepare(
+      "SELECT id, channel_type as channelType, channel_user_id as channelUserId, display_name as displayName, confirmed, created_at as createdAt FROM identity_links WHERE unified_user_id = ? ORDER BY created_at",
+    ).all(unifiedUserId) as any[];
+  }
+
+  /**
+   * Mark an identity link as confirmed (confirmed = 1).
+   */
+  confirmIdentityLink(id: string): void {
+    this.db.prepare("UPDATE identity_links SET confirmed = 1 WHERE id = ?").run(id);
   }
 }
