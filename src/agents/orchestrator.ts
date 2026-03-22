@@ -182,6 +182,7 @@ import {
   handleVerifierReplan,
 } from "./orchestrator-loop-utils.js";
 import { runConsensusVerification } from "./orchestrator-consensus.js";
+import { trackAndRecordToolResults } from "./orchestrator-tool-execution.js";
 import {
   buildExecutionTraceRecord,
   buildPhaseOutcomeRecord,
@@ -3577,44 +3578,21 @@ export class Orchestrator {
               const touchedFilesBefore = new Set(verificationStateBefore.touchedFiles);
 
               // Autonomy tracking
-              for (let i = 0; i < response.toolCalls.length; i++) {
-                const tc = response.toolCalls[i]!;
-                const tr = toolResults[i]!;
-                const delegatedWorkerResult = tr.metadata?.["workerResult"] as WorkerRunResult | undefined;
-                taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
-                selfVerification.track(tc.name, tc.input, tr);
-                if (delegatedWorkerResult) {
-                  selfVerification.ingestWorkerResult(delegatedWorkerResult);
-                  workerCollector?.childWorkerResults.push(delegatedWorkerResult);
-                }
-                stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
-                workerCollector?.toolTrace.push({
-                  toolName: tc.name,
-                  success: !(tr.isError ?? false),
-                  summary: tr.content.slice(0, 200),
-                  timestamp: Date.now(),
-                  workspaceId: options.workspaceLease?.id,
-                });
-
-                const analysis = errorRecovery.analyze(tc.name, tr);
-                if (analysis) {
-                  taskPlanner.recordError(analysis.summary);
-                  toolResults[i] = {
-                    toolCallId: tr.toolCallId,
-                    content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
-                    isError: tr.isError,
-                    metadata: tr.metadata,
-                  };
-                }
-
-                this.emitToolResult(chatId, tc, toolResults[i]!);
-              }
-              executionJournal.recordToolBatch({
-                phase: bgAgentState.phase,
+              trackAndRecordToolResults({
+                chatId,
                 toolCalls: response.toolCalls,
                 toolResults,
+                taskPlanner,
+                selfVerification,
+                stradaConformance,
+                errorRecovery,
+                executionJournal,
+                agentPhase: bgAgentState.phase,
                 providerName: currentAssignment.providerName,
                 modelId: currentAssignment.modelId,
+                emitToolResult: (c, tc, tr) => this.emitToolResult(c, tc, tr),
+                workerCollector: workerCollector ?? undefined,
+                workspaceId: options.workspaceLease?.id,
               });
               const verificationStateAfter = selfVerification.getState();
               const newTouchedFiles = [...verificationStateAfter.touchedFiles]
@@ -5175,41 +5153,19 @@ export class Orchestrator {
         });
 
         // ─── Autonomy: track + analyze results ─────────────────────────────
-        for (let i = 0; i < response.toolCalls.length; i++) {
-          const tc = response.toolCalls[i]!;
-          const tr = toolResults[i]!;
-          const delegatedWorkerResult = tr.metadata?.["workerResult"] as WorkerRunResult | undefined;
-
-          // O(1) tracking in planner & verifier
-          taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
-          selfVerification.track(tc.name, tc.input, tr);
-          if (delegatedWorkerResult) {
-            selfVerification.ingestWorkerResult(delegatedWorkerResult);
-          }
-          stradaConformance.trackToolCall(tc.name, tc.input, tr.isError ?? false, tr.content);
-
-          // Error recovery: analyze and enrich the tool result
-          const analysis = errorRecovery.analyze(tc.name, tr);
-          if (analysis) {
-            taskPlanner.recordError(analysis.summary);
-            // Re-sanitize after appending (prevents API key leakage + enforces length cap)
-            // Create new result with sanitized content (ToolResult is immutable)
-            toolResults[i] = {
-              toolCallId: tr.toolCallId,
-              content: sanitizeToolResult(tr.content + analysis.recoveryInjection),
-              isError: tr.isError,
-              metadata: tr.metadata,
-            };
-          }
-
-          this.emitToolResult(chatId, tc, toolResults[i]!);
-        }
-        executionJournal.recordToolBatch({
-          phase: agentState.phase,
+        trackAndRecordToolResults({
+          chatId,
           toolCalls: response.toolCalls,
           toolResults,
+          taskPlanner,
+          selfVerification,
+          stradaConformance,
+          errorRecovery,
+          executionJournal,
+          agentPhase: agentState.phase,
           providerName: currentAssignment.providerName,
           modelId: currentAssignment.modelId,
+          emitToolResult: (c, tc, tr) => this.emitToolResult(c, tc, tr),
         });
 
         // Inject state-aware context (stall detection, budget warnings)
