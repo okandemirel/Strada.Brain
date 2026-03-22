@@ -18,6 +18,23 @@ vi.mock("./response-provider-preflight.js", () => ({
   preflightResponseProviders: preflightResponseProvidersMock,
 }));
 
+vi.mock("../config/strada-deps.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/strada-deps.js")>();
+  return {
+    ...actual,
+    checkStradaDeps: () => ({
+      coreInstalled: false,
+      corePath: null,
+      modulesInstalled: false,
+      modulesPath: null,
+      mcpInstalled: false,
+      mcpPath: null,
+      mcpVersion: null,
+      warnings: [],
+    }),
+  };
+});
+
 describe("setup doctor", () => {
   const tmpDirs: string[] = [];
 

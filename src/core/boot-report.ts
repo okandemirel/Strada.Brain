@@ -549,7 +549,7 @@ export function summarizeCapabilityHealth(capabilities: CapabilityDescriptor[]):
 
   const warnings = capabilities.filter((capability) =>
     capability.status === "degraded"
-      || (capability.tier === "beta" && capability.truth === "declared-only"),
+      || (capability.status !== "inactive" && capability.tier === "beta" && capability.truth === "declared-only"),
   );
   if (warnings.length > 0) {
     return {
