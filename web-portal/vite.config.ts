@@ -26,6 +26,10 @@ export default defineConfig({
             return 'markdown-vendor'
           }
 
+          if (id.includes('tldraw') || id.includes('@tldraw')) {
+            return 'tldraw-vendor'
+          }
+
           if (id.includes('react-router')) {
             return 'router-vendor'
           }
