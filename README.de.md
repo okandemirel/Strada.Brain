@@ -220,7 +220,7 @@ Sobald der Agent laeuft, senden Sie eine Nachricht ueber Ihren konfigurierten Ka
 
 ### 6. Automatische Updates
 
-Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn der Agent untaeutig ist. Source-Checkouts und `./strada install-command`-Installationen aktualisieren sich ueber git. Nach einer erfolgreichen git-Aktualisierung schreibt Strada auch die installierten bare-command-Wrapper neu, damit `strada` weiterhin auf das aktuelle Checkout zeigt. npm-basierte Update-Befehle gelten erst, sobald eine öffentliche npm-Veroeffentlichung existiert.
+Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn der Agent untaetig ist. Source-Checkouts und `./strada install-command`-Installationen aktualisieren sich ueber git — einschliesslich automatischer `npm install` fuer neue Abhaengigkeiten und einem Gesundheitscheck nach dem Update mit automatischem Rollback bei Fehlschlag. Nach einer erfolgreichen git-Aktualisierung schreibt Strada auch die installierten bare-command-Wrapper neu. npm-basierte Update-Befehle gelten erst, sobald eine oeffentliche npm-Veroeffentlichung existiert. Automatischer Neustart erfolgt nur unter `strada daemon`; bei direktem `strada start` erhaelt der Benutzer eine manuelle Neustart-Benachrichtigung. Sofortige Update-Pruefungen koennen ueber `POST /api/update` ausgeloest werden.
 
 | Variable | Standard | Beschreibung |
 |----------|----------|-------------|
@@ -228,7 +228,7 @@ Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn d
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Prueffrequenz (Stunden) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minuten Untaetigkeit vor Update-Anwendung |
 | `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` oder `latest` |
-| `AUTO_UPDATE_AUTO_RESTART` | `true` | Automatischer Neustart nach Update bei Untaetigkeit |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | Automatischer Neustart nach Update (`strada daemon` erforderlich) |
 
 ---
 

@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **CLI Setup Wizard**: `strada setup` command with interactive terminal-based quick setup or web browser full setup. Asks for Unity project path, API key, channel, and language. Writes `.env` with owner-only permissions (0o600)
-- **Auto-Update System**: Automatic version detection and self-updating for npm (global/local) and git installations. Checks daily, applies updates during idle periods. Configurable via `AUTO_UPDATE_*` env vars
+- **Auto-Update System**: Automatic version detection and self-updating for npm (global/local) and git installations. Checks daily, applies updates during idle periods. Configurable via `AUTO_UPDATE_*` env vars. Includes dependency installation before build, post-update health check with rollback, daemon-aware restart (safe for direct `strada start`), webhook-triggered immediate checks via `POST /api/update`, and atomic lock file acquisition
 - **Source Launcher Uninstall + Binding Refresh**: source installs now support `strada uninstall` / `./strada uninstall` with optional `--purge-config`, and git auto-update now rewrites installed bare-command wrappers so they keep following the active checkout
 - **CLI Commands**: `strada update` (manual update), `strada update --check` (check only), `strada version-info` (version + install method + update status), `strada setup` (setup wizard)
 - **Global CLI Install**: `npm install -g strada-brain` registers `strada` and `strada-brain` commands via bin field

@@ -19,7 +19,7 @@ export interface AutoUpdateConfig {
   autoRestart: boolean;
 }
 
-interface UpdateCheckResult {
+export interface UpdateCheckResult {
   available: boolean;
   currentVersion: string;
   latestVersion: string | null;
@@ -44,6 +44,8 @@ interface AutoUpdaterOptions {
     cwd?: string,
   ) => Promise<string>;
   sourceLauncherRefresher?: () => Promise<void>;
+  isDaemonProcess?: () => boolean;
+  healthChecker?: () => Promise<void>;
 }
 
 export class AutoUpdater {
@@ -59,6 +61,8 @@ export class AutoUpdater {
     cwd?: string,
   ) => Promise<string>;
   private readonly sourceLauncherRefresher?: () => Promise<void>;
+  private readonly isDaemonProcess: () => boolean;
+  private readonly healthChecker?: () => Promise<void>;
   private installMethod: InstallMethod | null = null;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private pendingVersion: string | null = null;
@@ -78,6 +82,8 @@ export class AutoUpdater {
     this.globalNpmRootResolver = options.globalNpmRootResolver;
     this.commandRunner = options.commandRunner;
     this.sourceLauncherRefresher = options.sourceLauncherRefresher;
+    this.isDaemonProcess = options.isDaemonProcess ?? (() => process.env["STRADA_DAEMON"] === "1");
+    this.healthChecker = options.healthChecker;
   }
 
   static resolveInstallRoot(moduleUrl: string = import.meta.url): string {
@@ -211,6 +217,23 @@ export class AutoUpdater {
     return this.spawnWithTimeout(cmd, args, timeoutMs, cwd);
   }
 
+  private async runPostUpdateHealthCheck(): Promise<void> {
+    if (this.healthChecker) {
+      await this.healthChecker();
+      return;
+    }
+    const distIndex = path.join(this.installRoot, "dist", "index.js");
+    if (!fs.existsSync(distIndex)) {
+      return;
+    }
+    await this.runCommand(
+      process.execPath,
+      [distIndex, "--version"],
+      30_000,
+      this.installRoot,
+    );
+  }
+
   private async refreshSourceLauncherBindings(): Promise<void> {
     if (this.sourceLauncherRefresher) {
       await this.sourceLauncherRefresher();
@@ -314,6 +337,16 @@ export class AutoUpdater {
             UPDATE_TIMEOUT,
             this.installRoot,
           );
+          await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
+          const portalPkgPath = path.join(this.installRoot, "web-portal", "package.json");
+          if (fs.existsSync(portalPkgPath)) {
+            await this.runCommand(
+              "npm",
+              ["install"],
+              UPDATE_TIMEOUT,
+              path.join(this.installRoot, "web-portal"),
+            );
+          }
           await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
         } catch (buildErr) {
           try {
@@ -339,6 +372,29 @@ export class AutoUpdater {
               `Update succeeded, but launcher bindings were not refreshed. Run \`./strada install-command\`. Reason: ${(refreshErr as Error).message}`,
             );
           }
+        }
+
+        try {
+          await this.runPostUpdateHealthCheck();
+        } catch (healthErr) {
+          if (this.notifyFn) {
+            this.notifyFn(
+              `Update build succeeded but health check failed: ${(healthErr as Error).message}. Rolling back...`,
+            );
+          }
+          try {
+            await this.runCommand(
+              "git",
+              ["reset", "--hard", prePullSha],
+              VERSION_CHECK_TIMEOUT,
+              this.installRoot,
+            );
+            await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
+            await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
+          } catch {
+            // Rollback failed
+          }
+          throw healthErr;
         }
       } else {
         const args = method === "npm-global"
@@ -385,12 +441,19 @@ export class AutoUpdater {
       }
     }
 
-    fs.writeFileSync(
-      lockPath,
-      JSON.stringify({ pid: process.pid, timestamp: Date.now() }),
-      "utf-8",
-    );
-    return true;
+    try {
+      fs.writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: process.pid, timestamp: Date.now() }),
+        { encoding: "utf-8", flag: "wx" },
+      );
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        return false;
+      }
+      return false;
+    }
   }
 
   releaseLock(): void {
@@ -415,6 +478,20 @@ export class AutoUpdater {
       this.runUpdateCheck().catch(() => {});
     }, intervalMs);
     if (this.intervalHandle.unref) this.intervalHandle.unref();
+  }
+
+  async requestImmediateCheck(): Promise<UpdateCheckResult> {
+    const result = await this.checkForUpdate();
+    if (result.available && result.latestVersion) {
+      this.pendingVersion = result.latestVersion;
+      if (this.config.notify && this.notifyFn) {
+        this.notifyFn(
+          `Update available: Strada Brain ${result.latestVersion} (triggered by webhook). Will update when idle.`,
+        );
+      }
+      this.startIdleMonitoring();
+    }
+    return result;
   }
 
   private async runUpdateCheck(): Promise<void> {
@@ -449,14 +526,14 @@ export class AutoUpdater {
       try {
         const success = await this.performUpdate();
         if (success && this.config.notify && this.notifyFn) {
-          if (this.config.autoRestart) {
+          if (this.config.autoRestart && this.isDaemonProcess()) {
             this.notifyFn(
               `Updated to ${this.pendingVersion}. Restarting...`,
             );
             setTimeout(() => process.exit(0), 2000);
           } else {
             this.notifyFn(
-              `Updated to ${this.pendingVersion}. Please restart with \`strada start\`.`,
+              `Updated to ${this.pendingVersion}. Please restart with \`strada start\`${!this.isDaemonProcess() ? " (auto-restart requires `strada daemon`)" : ""}.`,
             );
           }
         }

@@ -224,7 +224,7 @@ Once running, send a message through your configured channel:
 
 ### 5. Auto-Update
 
-Strada.Brain automatically checks for updates daily and applies them when idle. Source checkouts and `./strada install-command` installs update through git. After a successful git auto-update, Strada also refreshes the installed bare-command wrappers so `strada` keeps following the current checkout. npm-based update commands only apply after a public npm release exists.
+Strada.Brain automatically checks for updates daily and applies them when idle. Source checkouts and `./strada install-command` installs update through git — including automatic `npm install` for new dependencies and a post-update health check that rolls back on failure. After a successful git auto-update, Strada also refreshes the installed bare-command wrappers so `strada` keeps following the current checkout. npm-based update commands only apply after a public npm release exists. Auto-restart only triggers when running under `strada daemon`; direct `strada start` users receive a notification to restart manually. Immediate update checks can be triggered via `POST /api/update` (requires dashboard auth).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -233,7 +233,7 @@ Strada.Brain automatically checks for updates daily and applies them when idle. 
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutes idle before applying update |
 | `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` or `latest` |
 | `AUTO_UPDATE_NOTIFY` | `true` | Send update notifications when checks or installs occur |
-| `AUTO_UPDATE_AUTO_RESTART` | `true` | Auto-restart after update when idle |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | Auto-restart after update when idle (requires `strada daemon`) |
 
 ---
 

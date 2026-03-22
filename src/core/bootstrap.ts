@@ -615,6 +615,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           daemonStorage,
           historyDepth: 10,
           triggerFireRetentionDays: daemonConfig.triggerFireRetentionDays,
+          autoUpdater,
         });
       }
     }
@@ -744,6 +745,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       identityManager,
       dashboardToken: config.websocketDashboard.authToken,
       startupNotices: [...new Set(startupNotices)],
+      autoUpdater,
     });
   }
 

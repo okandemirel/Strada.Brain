@@ -224,7 +224,7 @@ Calistiktan sonra, yapilandirilmis kanaliniz uzerinden bir mesaj gonderin:
 
 ### 6. Oto-Guncelleme
 
-Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugunda uygular. Kaynak checkout ve `./strada install-command` kurulumlari guncellemeleri git uzerinden alir. Basarili bir git oto-guncellemesinden sonra Strada, bare `strada` wrapper'larini da yeniden yazar; boylece komut guncel checkout'u izlemeye devam eder. npm tabanli guncelleme komutlari ise ancak public npm yayini oldugunda kullanilabilir.
+Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugunda uygular. Kaynak checkout ve `./strada install-command` kurulumlari guncellemeleri git uzerinden alir — yeni bagimliliklar icin otomatik `npm install` ve basarisizlikta geri alan guncelleme sonrasi saglik kontrolu dahil. Basarili bir git oto-guncellemesinden sonra Strada, bare `strada` wrapper'larini da yeniden yazar. npm tabanli guncelleme komutlari ise ancak public npm yayini oldugunda kullanilabilir. Otomatik yeniden baslatma yalnizca `strada daemon` altinda calisir; dogrudan `strada start` kullanicilari manuel yeniden baslatma bildirimi alir. Anlik guncelleme kontrolleri `POST /api/update` ile tetiklenebilir.
 
 | Degisken | Varsayilan | Aciklama |
 |----------|---------|-------------|
@@ -232,7 +232,7 @@ Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugu
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Kontrol sikliği (saatler) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Guncellemeleri uygulamadan onceki bekleme suresi (dakikalar) |
 | `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` veya `latest` |
-| `AUTO_UPDATE_AUTO_RESTART` | `true` | Guncelleme sonrasi acil oldugunda otomatik yeniden baslat |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | Guncelleme sonrasi otomatik yeniden baslat (`strada daemon` gerektirir) |
 
 ---
 

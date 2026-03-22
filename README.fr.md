@@ -228,7 +228,7 @@ Strada.Brain v&eacute;rifie automatiquement les mises &agrave; jour quotidiennem
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Fr&eacute;quence de v&eacute;rification (heures) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutes d'inactivit&eacute; avant d'appliquer la mise &agrave; jour |
 | `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag : `stable` ou `latest` |
-| `AUTO_UPDATE_AUTO_RESTART` | `true` | Red&eacute;marrage automatique apr&egrave;s mise &agrave; jour en cas d'inactivit&eacute; |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | Red&eacute;marrage automatique apr&egrave;s mise &agrave; jour (`strada daemon` requis) |
 
 ---
 

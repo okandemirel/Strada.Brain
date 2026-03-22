@@ -228,7 +228,7 @@ Strada.Brain 每天自动检查更新，在空闲时应用更新。源码 checko
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | 检查频率（小时） |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | 应用更新前的空闲分钟数 |
 | `AUTO_UPDATE_CHANNEL` | `stable` | npm 分发标签：`stable` 或 `latest` |
-| `AUTO_UPDATE_AUTO_RESTART` | `true` | 空闲时更新后自动重启 |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | 更新后自动重启（需要 `strada daemon`） |
 
 ---
 

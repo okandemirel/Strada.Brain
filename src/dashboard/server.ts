@@ -37,6 +37,7 @@ import type { ChainResilienceConfig } from "../learning/chains/chain-types.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
 import type { ProviderOfficialSnapshot } from "../agents/providers/provider-source-registry.js";
 import type { BootReport } from "../common/capability-contract.js";
+import type { AutoUpdater } from "../core/auto-updater.js";
 import { buildConfigCatalogEntries, summarizeConfigCatalog } from "../config/config-catalog.js";
 import { resolveAutonomousModeWithDefault } from "../memory/unified/user-profile-store.js";
 
@@ -458,6 +459,7 @@ export class DashboardServer {
   private providerRouter?: DashboardProviderRouter;
   private startupNotices: string[] = [];
   private bootReport?: BootReport;
+  private autoUpdater?: AutoUpdater;
 
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
@@ -586,6 +588,7 @@ export class DashboardServer {
     historyDepth?: number;
     triggerFireRetentionDays?: number;
     bootReport?: BootReport;
+    autoUpdater?: AutoUpdater;
   }): void {
     this.daemonHeartbeatLoop = ctx.heartbeatLoop;
     this.daemonRegistry = ctx.registry;
@@ -624,6 +627,9 @@ export class DashboardServer {
     }
     if (ctx.bootReport) {
       this.bootReport = ctx.bootReport;
+    }
+    if (ctx.autoUpdater) {
+      this.autoUpdater = ctx.autoUpdater;
     }
   }
 
@@ -909,6 +915,27 @@ export class DashboardServer {
           triggerHistory,
           startupNotices: this.startupNotices,
         }));
+        return;
+      }
+
+      // POST /api/update -- Trigger immediate update check (requires dashboard auth)
+      if (req.method === "POST" && url === "/api/update") {
+        if (!this.autoUpdater) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Auto-updater not available" }));
+          return;
+        }
+        void this.autoUpdater.requestImmediateCheck().then((result) => {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            status: result.available ? "update_pending" : "up_to_date",
+            currentVersion: result.currentVersion,
+            latestVersion: result.latestVersion,
+          }));
+        }).catch((err) => {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: (err as Error).message }));
+        });
         return;
       }
 
