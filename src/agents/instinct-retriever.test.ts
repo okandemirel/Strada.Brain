@@ -88,7 +88,7 @@ describe("InstinctRetriever", () => {
     const result = await retriever.getInsightsForTask("handle null values");
 
     expect(result.insights).toHaveLength(1);
-    expect(result.insights[0]).toBe("Add null check before accessing property (85% confidence, 80% success, applied 8x)");
+    expect(result.insights[0]).toBe("Add null check before accessing property (90% confidence, 80% success, applied 8x)");
     expect(result.matchedInstinctIds).toEqual(["instinct_test_001"]);
   });
 
@@ -313,6 +313,110 @@ describe("InstinctRetriever", () => {
     expect(result.matchedInstinctIds).toContain("instinct_proposed");
     expect(result.matchedInstinctIds).toContain("instinct_active2");
     expect(result.matchedInstinctIds).toContain("instinct_evolved");
+  });
+
+  it("formatInsight falls back to tool+output when no description", async () => {
+    const instinct = createMockInstinct({
+      id: "instinct_tool_only" as Instinct["id"],
+      action: JSON.stringify({ tool: "dotnet_build", output: "Build succeeded with 0 warnings" }),
+      confidence: 0.75,
+      stats: {
+        timesSuggested: 5,
+        timesApplied: 4,
+        timesFailed: 1,
+        successRate: 0.8,
+        averageExecutionMs: 100,
+      },
+    });
+
+    const match = createMockMatch(instinct, 0.8);
+    const { retriever } = setup([instinct], [match]);
+
+    const result = await retriever.getInsightsForTask("build project");
+
+    expect(result.insights).toHaveLength(1);
+    expect(result.insights[0]).toContain("When using dotnet_build:");
+    expect(result.insights[0]).toContain("Build succeeded with 0 warnings");
+    expect(result.insights[0]).toContain("80% confidence");
+  });
+
+  it("formatInsight truncates long output via summarize", async () => {
+    const longOutput = "A".repeat(300);
+    const instinct = createMockInstinct({
+      id: "instinct_long" as Instinct["id"],
+      action: JSON.stringify({ tool: "file_read", output: longOutput }),
+      confidence: 0.7,
+      stats: {
+        timesSuggested: 3,
+        timesApplied: 2,
+        timesFailed: 1,
+        successRate: 0.67,
+        averageExecutionMs: 50,
+      },
+    });
+
+    const match = createMockMatch(instinct, 0.7);
+    const { retriever } = setup([instinct], [match]);
+
+    const result = await retriever.getInsightsForTask("read file");
+
+    expect(result.insights).toHaveLength(1);
+    // Should be truncated to 200 chars + "..."
+    expect(result.insights[0]).toContain("...");
+    expect(result.insights[0]).toContain("When using file_read:");
+  });
+
+  it("formatInsight includes provenance metadata when originBootCount is present", async () => {
+    const createdAt = Date.now() - 2 * 86_400_000; // 2 days ago
+    const instinct = createMockInstinct({
+      id: "instinct_provenance" as Instinct["id"],
+      action: JSON.stringify({ description: "Add error handling" }),
+      confidence: 0.9,
+      originBootCount: 5,
+      crossSessionHitCount: 3,
+      createdAt: createdAt as Instinct["createdAt"],
+      stats: {
+        timesSuggested: 10,
+        timesApplied: 8,
+        timesFailed: 2,
+        successRate: 0.8,
+        averageExecutionMs: 100,
+      },
+    });
+
+    const match = createMockMatch(instinct, 0.85);
+    const { retriever } = setup([instinct], [match]);
+
+    const result = await retriever.getInsightsForTask("handle errors");
+
+    expect(result.insights).toHaveLength(1);
+    expect(result.insights[0]).toContain("[boot #5");
+    expect(result.insights[0]).toContain("2d ago");
+    expect(result.insights[0]).toContain("used by 3 sessions]");
+  });
+
+  it("formatInsight uses match.confidence not instinct.confidence", async () => {
+    const instinct = createMockInstinct({
+      id: "instinct_conf_check" as Instinct["id"],
+      action: JSON.stringify({ description: "Use match confidence" }),
+      confidence: 0.5, // instinct confidence is 50%
+      stats: {
+        timesSuggested: 5,
+        timesApplied: 4,
+        timesFailed: 1,
+        successRate: 0.8,
+        averageExecutionMs: 100,
+      },
+    });
+
+    const match = createMockMatch(instinct, 0.95); // match confidence is 95%
+    const { retriever } = setup([instinct], [match]);
+
+    const result = await retriever.getInsightsForTask("check confidence");
+
+    expect(result.insights).toHaveLength(1);
+    // Should show match.confidence (95%), not instinct.confidence (50%)
+    expect(result.insights[0]).toContain("95% confidence");
   });
 
   it("handles JSON parse errors gracefully (still collects IDs)", async () => {

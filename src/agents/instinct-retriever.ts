@@ -146,33 +146,43 @@ export class InstinctRetriever {
    * @returns Formatted string or null if the action JSON cannot be parsed
    */
   private formatInsight(match: PatternMatch): string | null {
-    if (!match.instinct) {
-      return null;
-    }
+    if (!match.instinct?.action) return null;
 
+    let action: { description?: string; tool?: string; output?: string };
     try {
-      const action = JSON.parse(match.instinct.action) as { description?: string };
-
-      if (!action.description) {
-        return null;
-      }
-
-      const confidence = Math.round(match.instinct.confidence * 100);
-      const successRate = Math.round(match.instinct.stats.successRate * 100);
-      const applied = match.instinct.stats.timesApplied;
-
-      let result = `${action.description} (${confidence}% confidence, ${successRate}% success, applied ${applied}x)`;
-
-      // Append provenance bracket when originBootCount exists
-      if (match.instinct.originBootCount !== undefined) {
-        const ageDays = Math.floor((Date.now() - match.instinct.createdAt) / MS_PER_DAY);
-        const hitCount = match.instinct.crossSessionHitCount ?? 0;
-        result += ` [boot #${match.instinct.originBootCount}, ${ageDays}d ago, used by ${hitCount} sessions]`;
-      }
-
-      return result;
+      action = typeof match.instinct.action === 'string'
+        ? JSON.parse(match.instinct.action)
+        : match.instinct.action;
     } catch {
       return null;
     }
+
+    const text = action.description
+      ?? ('When using ' + (action.tool ?? 'unknown') + ': '
+          + this.summarize(action.output ?? ''));
+
+    const confidence = Math.round((match.confidence ?? 0) * 100);
+    const stats = match.instinct?.stats;
+    const applied = stats?.timesApplied ?? 1;
+    const successRate = Math.round((stats?.timesApplied ? stats.successRate * 100 : 0));
+
+    let insight = text + ' (' + confidence + '% confidence, '
+      + successRate + '% success, applied ' + applied + 'x)';
+
+    if (match.instinct?.originBootCount != null) {
+      const ageDays = Math.floor(
+        (Date.now() - (match.instinct.createdAt ?? Date.now())) / MS_PER_DAY
+      );
+      const hitCount = match.instinct.crossSessionHitCount ?? 0;
+      insight += ' [boot #' + match.instinct.originBootCount
+        + ', ' + ageDays + 'd ago, used by ' + hitCount + ' sessions]';
+    }
+
+    return insight;
+  }
+
+  private summarize(text: string, maxLen = 200): string {
+    if (text.length <= maxLen) return text;
+    return text.slice(0, maxLen) + '...';
   }
 }

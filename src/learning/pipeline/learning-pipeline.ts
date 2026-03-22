@@ -75,7 +75,12 @@ export class LearningPipeline {
   private eventBus: IEventBus<LearningEventMap> | null = null;
   private embeddingQueue: EmbeddingQueue | null = null;
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
+  private periodicTimer?: ReturnType<typeof setInterval>;
   private isRunning = false;
+
+  private recentObservations: Array<{
+    toolName: string; errorPattern?: string; timestamp: number;
+  }> = [];
 
   /** Project path for scope-aware instinct creation (Phase 13) */
   private projectPath?: string;
@@ -120,6 +125,10 @@ export class LearningPipeline {
     this.isRunning = true;
     // Detection timer removed -- event-driven processing via handleToolResult() replaces it
     this.evolutionTimer = setInterval(() => this.runEvolution(), this.config.evolutionIntervalMs);
+
+    // Periodic trajectory extraction every 5 minutes
+    const periodicMs = 5 * 60 * 1000;
+    this.periodicTimer = setInterval(() => this.runPeriodicExtraction(), periodicMs);
   }
 
   stop(): void {
@@ -130,6 +139,10 @@ export class LearningPipeline {
     if (this.evolutionTimer) {
       clearInterval(this.evolutionTimer);
       this.evolutionTimer = null;
+    }
+    if (this.periodicTimer) {
+      clearInterval(this.periodicTimer);
+      this.periodicTimer = undefined;
     }
   }
 
@@ -259,6 +272,13 @@ export class LearningPipeline {
         this.updateInstinctStatus(updated);
       }
     }
+
+    // 4. Inline pattern detection
+    this.detectPatternInline({
+      toolName: event.toolName,
+      success: event.success,
+      errorDetails: event.errorDetails as ErrorDetails | undefined,
+    });
   }
 
   // ─── Trajectory Methods ──────────────────────────────────────────────────────
@@ -393,6 +413,7 @@ export class LearningPipeline {
     if (this.embeddingQueue) {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
     }
+    this.enforceMaxInstincts();
     return instinct;
   }
 
@@ -412,6 +433,7 @@ export class LearningPipeline {
     if (this.embeddingQueue) {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
     }
+    this.enforceMaxInstincts();
     return instinct;
   }
 
@@ -644,6 +666,88 @@ export class LearningPipeline {
     } catch {
       // Non-blocking: promotion failure should not affect instinct creation
     }
+  }
+
+  // ─── Inline Detection ────────────────────────────────────────────────────────
+
+  private detectPatternInline(obs: {
+    toolName: string; success: boolean;
+    errorDetails?: { message?: string };
+  }): void {
+    const windowSize = 20;
+
+    this.recentObservations.push({
+      toolName: obs.toolName,
+      errorPattern: obs.errorDetails?.message
+        ? this.sanitizePattern(obs.errorDetails.message) : undefined,
+      timestamp: Date.now(),
+    });
+
+    if (this.recentObservations.length > windowSize) {
+      this.recentObservations.splice(0, this.recentObservations.length - windowSize);
+    }
+
+    const minObs = this.config?.minObservationsBeforeLearning ?? 5;
+    if (this.recentObservations.length < minObs) return;
+
+    // Same error pattern 3+ times
+    if (obs.errorDetails?.message) {
+      const pattern = this.sanitizePattern(obs.errorDetails.message);
+      const count = this.recentObservations.filter(o => o.errorPattern === pattern).length;
+      if (count >= 3) {
+        this.considerInstinctCreation({
+          type: "error_pattern",
+          triggerPattern: pattern,
+          action: JSON.stringify({ description: 'Recurring error: ' + pattern }),
+          toolName: obs.toolName,
+        });
+      }
+    }
+
+    // Same tool sequence 3+ times
+    if (this.recentObservations.length >= 9) {
+      const seqLen = 3;
+      const recent = this.recentObservations.slice(-seqLen).map(o => o.toolName).join('->');
+      let seqCount = 0;
+      for (let i = 0; i <= this.recentObservations.length - seqLen; i++) {
+        const seq = this.recentObservations.slice(i, i + seqLen).map(o => o.toolName).join('->');
+        if (seq === recent) seqCount++;
+      }
+      if (seqCount >= 3) {
+        this.considerInstinctCreation({
+          type: "workflow_pattern",
+          triggerPattern: recent,
+          action: JSON.stringify({ description: 'Common workflow: ' + recent }),
+        });
+      }
+    }
+  }
+
+  // ─── Periodic Trajectory Extraction ─────────────────────────────────────────
+
+  private async runPeriodicExtraction(): Promise<void> {
+    const unprocessed = this.storage.getUnprocessedTrajectories();
+    for (const trajectory of unprocessed) {
+      // extractInstinctFromTrajectory -> considerInstinctCreation already persists
+      await this.extractInstinctFromTrajectory(trajectory);
+    }
+    this.storage.markTrajectoriesProcessed(unprocessed.map(t => t.id));
+  }
+
+  // ─── Max Instincts Enforcement ──────────────────────────────────────────────
+
+  async enforceMaxInstincts(): Promise<void> {
+    const maxInstincts = this.config?.maxInstincts ?? 1000;
+    const count = this.storage.countInstincts();
+    if (count <= maxInstincts) return;
+    const overflow = count - maxInstincts;
+    // Delete deprecated first, then active if still over limit
+    const deprecatedBefore = this.storage.countInstincts();
+    this.storage.deleteLowestConfidenceInstincts("deprecated", overflow);
+    const deprecatedAfter = this.storage.countInstincts();
+    const deleted = deprecatedBefore - deprecatedAfter;
+    if (deleted >= overflow) return;
+    this.storage.deleteLowestConfidenceInstincts("active", overflow - deleted);
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────────

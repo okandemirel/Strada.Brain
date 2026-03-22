@@ -61,13 +61,15 @@ export type ContextConditionId = `ctx_${string}`;
 // =============================================================================
 
 /** Types of instincts that can be learned */
-export type InstinctType = 
-  | "error_fix"      // Fix for specific error patterns
-  | "tool_usage"     // Optimized tool usage patterns
-  | "correction"     // User correction patterns
-  | "verification"   // Verification sequence patterns
-  | "optimization"   // Performance optimization patterns
-  | "tool_chain";    // Composite tool chain pattern
+export type InstinctType =
+  | "error_fix"         // Fix for specific error patterns
+  | "error_pattern"     // Recurring error pattern detected inline
+  | "tool_usage"        // Optimized tool usage patterns
+  | "correction"        // User correction patterns
+  | "verification"      // Verification sequence patterns
+  | "optimization"      // Performance optimization patterns
+  | "tool_chain"        // Composite tool chain pattern
+  | "workflow_pattern"; // Recurring tool sequence detected inline
 
 /** Lifecycle status of an instinct */
 export type InstinctStatus =
