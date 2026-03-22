@@ -75,7 +75,7 @@ export class ConfidenceScorer {
    * @param contextFactors - Optional context-specific factors
    * @returns Overall confidence score (0.0 - 1.0)
    */
-  calculate(instinct: Instinct, contextFactors?: Record<string, number>): number {
+  calculate(instinct: Instinct, _contextFactors?: Record<string, number>): number {
     const alpha = instinct.bayesianAlpha ?? this.config.priorAlpha ?? this.priorAlpha;
     const beta = instinct.bayesianBeta ?? this.config.priorBeta ?? this.priorBeta;
     const rawBayesian = alpha / (alpha + beta);
@@ -90,7 +90,7 @@ export class ConfidenceScorer {
 
     const weights = this.config.confidenceWeights ?? [0.15, 0.25, 0.15, 0.30, 0.15];
     const weightSum = weights.reduce((s, w) => s + w, 0);
-    const weightedAvg = factors.reduce((s, f, i) => s + f * weights[i], 0) / weightSum;
+    const weightedAvg = factors.reduce((s, f, i) => s + f * weights[i]!, 0) / weightSum;
     const factorMultiplier = Math.max(0.5, Math.min(1.5, weightedAvg + 0.5));
 
     return Math.min(1.0, Math.max(0.0, rawBayesian * factorMultiplier));
