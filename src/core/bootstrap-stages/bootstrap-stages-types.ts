@@ -16,6 +16,7 @@ import { TypedEventBus, type IEventBus, type LearningEventMap } from "../event-b
 import type { LearningQueue } from "../../learning/pipeline/learning-queue.js";
 import type { TaskPlanner } from "../../agents/autonomy/task-planner.js";
 import type { ErrorRecoveryEngine } from "../../agents/autonomy/error-recovery.js";
+import type { InterventionEngine } from "../../learning/intervention/intervention-engine.js";
 import { IdentityStateManager } from "../../identity/identity-state.js";
 import { InstinctRetriever } from "../../agents/instinct-retriever.js";
 import { TrajectoryReplayRetriever } from "../../agents/trajectory-replay-retriever.js";
@@ -102,6 +103,7 @@ export interface LearningResult {
   errorRecovery: ErrorRecoveryEngine;
   eventBus?: IEventBus<LearningEventMap>;
   learningQueue?: LearningQueue;
+  interventionEngine?: InterventionEngine;
   notices: string[];
 }
 

@@ -370,6 +370,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     modelIntelligence,
     consensusManager,
     confidenceEstimator,
+    interventionEngine: learningResult.interventionEngine,
   });
 
   const { chainManager } = await initializeToolChainStage({
@@ -1006,6 +1007,9 @@ async function initializeLearning(
 
     pipeline.start();
 
+    const { InterventionEngine } = await import("../learning/intervention/intervention-engine.js");
+    const interventionEngine = new InterventionEngine(learningStorage);
+
     const patternMatcher = new PatternMatcher(learningStorage, { eventBus });
     const confidenceScorer = new ConfidenceScorer();
     const errorLearningHooks = new ErrorLearningHooks(
@@ -1044,6 +1048,7 @@ async function initializeLearning(
       errorRecovery,
       eventBus,
       learningQueue,
+      interventionEngine,
       notices,
     };
   } catch (error) {
