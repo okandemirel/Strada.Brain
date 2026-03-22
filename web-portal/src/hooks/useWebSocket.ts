@@ -8,6 +8,7 @@ import type {
 } from '../types/messages'
 import { useSessionStore } from '../stores/session-store'
 import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from './websocket-storage'
+import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-socket'
 
 const MAX_RECONNECT_DELAY = 30000
 const MAX_RECONNECT_ATTEMPTS = 8
@@ -209,12 +210,20 @@ export function useWebSocket(): UseWebSocketReturn {
     ws.addEventListener('message', (event) => {
       if (!mountedRef.current) return
 
-      let data: IncomingMessage
+      let parsed: { type: string; [key: string]: unknown }
       try {
-        data = JSON.parse(event.data)
+        parsed = JSON.parse(event.data)
       } catch {
         return
       }
+
+      // Route workspace/monitor messages to their dedicated stores
+      if (isWorkspaceMessage(parsed.type)) {
+        dispatchWorkspaceMessage(parsed)
+        return
+      }
+
+      const data = parsed as unknown as IncomingMessage
 
       switch (data.type) {
         case 'connected': {
