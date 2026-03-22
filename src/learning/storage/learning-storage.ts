@@ -2330,6 +2330,101 @@ export class LearningStorage {
       updatedAt: row.updated_at as TimestampMs,
     };
   }
+
+  /** Aggregate health data from SQLite for the /api/learning/health endpoint */
+  getHealthAggregates(): {
+    instinctSummary: { total: number; active: number; deprecated: number; permanent: number; proposed: number; avgConfidence: number };
+    topPerformers: Array<{ id: string; name: string; confidence: number; status: string }>;
+    lowPerformers: Array<{ id: string; name: string; confidence: number; status: string }>;
+    feedbackCounts: { thumbs_up: number; thumbs_down: number; teaching: number; correction: number } | null;
+    recentFeedback: Array<{ id: string; type: string; content: string | null; createdAt: number }>;
+  } {
+    this.ensureConnection();
+
+    // Instinct summary: COUNT + conditional COUNT + AVG(confidence)
+    const summaryRow = this.db!.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+        SUM(CASE WHEN status = 'deprecated' THEN 1 ELSE 0 END) as deprecated,
+        SUM(CASE WHEN status = 'permanent' THEN 1 ELSE 0 END) as permanent,
+        SUM(CASE WHEN status = 'proposed' THEN 1 ELSE 0 END) as proposed,
+        AVG(confidence) as avg_confidence
+      FROM instincts
+    `).get() as { total: number; active: number; deprecated: number; permanent: number; proposed: number; avg_confidence: number | null };
+
+    const instinctSummary = {
+      total: summaryRow.total,
+      active: summaryRow.active,
+      deprecated: summaryRow.deprecated,
+      permanent: summaryRow.permanent,
+      proposed: summaryRow.proposed,
+      avgConfidence: summaryRow.avg_confidence ?? 0,
+    };
+
+    // Top 5 performers: highest confidence among active/permanent
+    const topRows = this.db!.prepare(`
+      SELECT id, name, confidence, status FROM instincts
+      WHERE status IN ('active', 'permanent')
+      ORDER BY confidence DESC LIMIT 5
+    `).all() as Array<{ id: string; name: string; confidence: number; status: string }>;
+
+    // Low 5 performers: lowest confidence among proposed/active
+    const lowRows = this.db!.prepare(`
+      SELECT id, name, confidence, status FROM instincts
+      WHERE status IN ('proposed', 'active')
+      ORDER BY confidence ASC LIMIT 5
+    `).all() as Array<{ id: string; name: string; confidence: number; status: string }>;
+
+    // Feedback counts — graceful degradation if table does not exist
+    let feedbackCounts: { thumbs_up: number; thumbs_down: number; teaching: number; correction: number } | null = null;
+    let recentFeedback: Array<{ id: string; type: string; content: string | null; createdAt: number }> = [];
+
+    try {
+      const tableCheck = this.db!.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='feedback'"
+      ).get() as { name: string } | undefined;
+
+      if (tableCheck) {
+        const fbRow = this.db!.prepare(`
+          SELECT
+            SUM(CASE WHEN type = 'thumbs_up' THEN 1 ELSE 0 END) as thumbs_up,
+            SUM(CASE WHEN type = 'thumbs_down' THEN 1 ELSE 0 END) as thumbs_down,
+            SUM(CASE WHEN type = 'teaching' THEN 1 ELSE 0 END) as teaching,
+            SUM(CASE WHEN type = 'correction' THEN 1 ELSE 0 END) as correction
+          FROM feedback
+        `).get() as { thumbs_up: number; thumbs_down: number; teaching: number; correction: number };
+
+        feedbackCounts = {
+          thumbs_up: fbRow.thumbs_up ?? 0,
+          thumbs_down: fbRow.thumbs_down ?? 0,
+          teaching: fbRow.teaching ?? 0,
+          correction: fbRow.correction ?? 0,
+        };
+
+        const recentRows = this.db!.prepare(
+          "SELECT id, type, content, created_at FROM feedback ORDER BY created_at DESC LIMIT 10"
+        ).all() as Array<{ id: string; type: string; content: string | null; created_at: number }>;
+
+        recentFeedback = recentRows.map(r => ({
+          id: r.id,
+          type: r.type,
+          content: r.content,
+          createdAt: r.created_at,
+        }));
+      }
+    } catch {
+      // Feedback table unavailable — graceful degradation
+    }
+
+    return {
+      instinctSummary,
+      topPerformers: topRows,
+      lowPerformers: lowRows,
+      feedbackCounts,
+      recentFeedback,
+    };
+  }
 }
 
 // ─── Row Types ──────────────────────────────────────────────────────────────────

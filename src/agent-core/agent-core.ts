@@ -36,6 +36,8 @@ export class AgentCore {
   private readonly taskClassifier = new TaskClassifier();
   /** ProviderManager reference — needed to materialize routing decisions. */
   private readonly providerManagerRef?: { getProviderByName(name: string): IAIProvider | null };
+  /** Runtime overrides set by the 'adjust' action */
+  private runtimeOverrides: { priorityThreshold?: number; sourceBoosts: Map<string, number>; reasoningIntervalMs?: number } = { sourceBoosts: new Map() };
 
   constructor(
     private readonly observationEngine: ObservationEngine,
@@ -64,8 +66,9 @@ export class AgentCore {
     this.tickInFlight = true;
 
     try {
-      // Rate limit
-      if (Date.now() - this.lastReasoningMs < this.config.minReasoningIntervalMs) return;
+      // Rate limit (respect runtime override if set)
+      const effectiveIntervalMs = this.runtimeOverrides.reasoningIntervalMs ?? this.config.minReasoningIntervalMs;
+      if (Date.now() - this.lastReasoningMs < effectiveIntervalMs) return;
 
       // Budget guard
       const budget = this.budgetTracker.getUsage();
@@ -84,7 +87,21 @@ export class AgentCore {
 
       // 2. ORIENT — score and rank
       const ranked = await this.priorityScorer.scoreAll(observations);
-      if (ranked.length === 0 || ranked[0]!.priority < this.config.minObservationPriority) {
+
+      // Apply runtime source boosts in-place
+      for (const obs of ranked) {
+        const boost = this.runtimeOverrides.sourceBoosts.get(obs.source);
+        if (boost) {
+          (obs as { priority: number }).priority = Math.min(100, Math.max(0, obs.priority + boost));
+        }
+      }
+      // Re-sort after boosts
+      if (this.runtimeOverrides.sourceBoosts.size > 0) {
+        ranked.sort((a, b) => b.priority - a.priority);
+      }
+
+      const effectivePriorityThreshold = this.runtimeOverrides.priorityThreshold ?? this.config.minObservationPriority;
+      if (ranked.length === 0 || ranked[0]!.priority < effectivePriorityThreshold) {
         this.logger.debug("AgentCore: skipping tick — no high-priority observations", {
           count: ranked.length,
           topPriority: ranked[0]?.priority ?? 0,
@@ -202,6 +219,51 @@ export class AgentCore {
           }
           break;
 
+        case "batch":
+          if (decision.batchObservationIds && decision.batchObservationIds.length > 0 && decision.goal) {
+            const idSet = new Set(decision.batchObservationIds);
+            const matched = ranked.filter(o => idSet.has(o.id));
+            const batchContext = matched.map(o => `[${o.source}] ${o.summary}`).join("; ");
+            const compoundGoal = `${decision.goal} (context: ${batchContext})`;
+            const task = this.taskManager.submit(
+              AgentCore.AGENT_CHAT_ID,
+              AgentCore.AGENT_CHANNEL_TYPE,
+              compoundGoal,
+              { origin: "daemon" as const },
+            );
+            if (matchedInstinctIds.length > 0) {
+              this.taskInstinctMap.set(task.id, { instinctIds: matchedInstinctIds, createdAt: Date.now() });
+            }
+            for (const obs of matched) this.priorityScorer.recordAction(obs);
+            this.logger.info("AgentCore: submitted batch goal", { goal: compoundGoal.slice(0, 200), batchSize: matched.length });
+          }
+          break;
+
+        case "defer":
+          if (ranked[0] && decision.deferMinutes) {
+            this.observationEngine.defer(ranked[0], decision.deferMinutes);
+            this.logger.info("AgentCore: deferred observation", { id: ranked[0].id, minutes: decision.deferMinutes });
+          }
+          break;
+
+        case "adjust":
+          if (decision.adjustments) {
+            if (decision.adjustments.priorityThreshold !== undefined) {
+              this.runtimeOverrides.priorityThreshold = decision.adjustments.priorityThreshold;
+            }
+            if (decision.adjustments.sourceBoost) {
+              this.runtimeOverrides.sourceBoosts.set(
+                decision.adjustments.sourceBoost.source,
+                decision.adjustments.sourceBoost.delta,
+              );
+            }
+            if (decision.adjustments.reasoningIntervalMs !== undefined) {
+              this.runtimeOverrides.reasoningIntervalMs = decision.adjustments.reasoningIntervalMs;
+            }
+            this.logger.info("AgentCore: adjusted runtime overrides", { adjustments: decision.adjustments });
+          }
+          break;
+
         case "wait":
           // Intentionally idle
           break;
@@ -245,6 +307,10 @@ export class AgentCore {
           }),
         );
 
+        import("../learning/learning-metrics.js").then(({ LearningMetrics }) => {
+          LearningMetrics.getInstance().recordOutcome({ success, instinctCount: entry.instinctIds.length });
+        }).catch(() => { /* non-fatal */ });
+
         if (this.instinctRetriever?.recordOutcome) {
           for (const id of entry.instinctIds) {
             this.instinctRetriever.recordOutcome(id, success).catch(() => {});
@@ -254,6 +320,11 @@ export class AgentCore {
         this.taskInstinctMap.delete(taskId);
       }
     }
+  }
+
+  /** Get current runtime overrides (for testing/diagnostics) */
+  getRuntimeOverrides(): { priorityThreshold?: number; sourceBoosts: Map<string, number>; reasoningIntervalMs?: number } {
+    return this.runtimeOverrides;
   }
 
   /** Stop the observation engine and clean up resources */

@@ -291,6 +291,99 @@ describe("AgentCore OODA Integration", () => {
     expect(instinctRetriever.recordOutcome).toHaveBeenCalledWith("inst-c", false);
   });
 
+  /* 14. batch action: submits compound goal with matched observation context */
+  it("action batch -> submits compound goal with matched observation context", async () => {
+    const obs1 = createObservation("build", "Build failed in module A", { priority: 80 });
+    const obs2 = createObservation("test", "Tests failing in module A", { priority: 75 });
+    const m = createMocks({
+      observations: [obs1, obs2],
+      chatResponse: {
+        action: "batch",
+        batchObservationIds: [obs1.id, obs2.id],
+        goal: "Fix module A build and tests",
+        reasoning: "related issues",
+      },
+    });
+    const core = buildCore(m);
+    await core.tick();
+
+    expect(m.taskManager.submit).toHaveBeenCalledTimes(1);
+    const submittedGoal = m.taskManager.submit.mock.calls[0]![2] as string;
+    expect(submittedGoal).toContain("Fix module A build and tests");
+    expect(submittedGoal).toContain("Build failed in module A");
+    expect(submittedGoal).toContain("Tests failing in module A");
+  });
+
+  /* 15. defer action: observation deferred and re-appears after timeout */
+  it("action defer -> observation deferred and re-appears after timeout", async () => {
+    vi.useFakeTimers();
+
+    const obs = createObservation("build", "Non-urgent build warning", { priority: 60 });
+    const engine = new ObservationEngine();
+    let collectCount = 0;
+    engine.register({
+      name: "test",
+      collect: () => {
+        collectCount++;
+        // Only return the observation on the first collect
+        return collectCount === 1 ? [obs] : [];
+      },
+    });
+
+    const scorer = new PriorityScorer();
+    const provider = {
+      chat: vi.fn().mockResolvedValue(
+        makeLLMResponse({ action: "defer", deferMinutes: 10, reasoning: "not urgent now" }),
+      ),
+    };
+    const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
+    const channel = { sendText: vi.fn().mockResolvedValue(undefined) };
+    const budget = { getUsage: vi.fn().mockReturnValue({ usedUsd: 5, limitUsd: 10, pct: 0.5 }) };
+
+    const core = new AgentCore(
+      engine, scorer, provider as any, taskManager as any, channel as any, budget,
+      undefined,
+      { minReasoningIntervalMs: 0, minObservationPriority: 30, budgetFloorPct: 10 },
+    );
+
+    // First tick: should defer the observation
+    await core.tick();
+    expect(engine.getDeferredCount()).toBe(1);
+
+    // Second tick before timeout: deferred item should NOT re-appear (no observations)
+    provider.chat.mockClear();
+    await core.tick();
+    expect(provider.chat).not.toHaveBeenCalled(); // No observations available
+
+    // Advance past defer timeout (10 minutes)
+    vi.advanceTimersByTime(10 * 60_000);
+
+    // Third tick: deferred item should re-appear
+    provider.chat.mockResolvedValue(makeLLMResponse({ action: "wait", reasoning: "ok now" }));
+    await core.tick();
+    expect(provider.chat).toHaveBeenCalledTimes(1); // LLM was called with re-injected observation
+    expect(engine.getDeferredCount()).toBe(0);
+
+    vi.useRealTimers();
+  });
+
+  /* 16. adjust action: changes runtime priority threshold and reasoning interval */
+  it("action adjust -> changes runtime priority threshold and reasoning interval", async () => {
+    const m = createMocks({
+      chatResponse: {
+        action: "adjust",
+        adjustments: { priorityThreshold: 50, reasoningIntervalMs: 15000 },
+        reasoning: "tuning parameters",
+      },
+    });
+    const core = buildCore(m);
+    await core.tick();
+
+    const overrides = core.getRuntimeOverrides();
+    expect(overrides.priorityThreshold).toBe(50);
+    expect(overrides.reasoningIntervalMs).toBe(15000);
+  });
+
   /* 13. P2: no instincts => no recordOutcome calls */
   it("does not call recordOutcome when no instincts were matched", async () => {
     const m = createMocks({ chatResponse: { action: "execute", goal: "Cleanup", reasoning: "housekeeping" } });

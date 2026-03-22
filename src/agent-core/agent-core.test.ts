@@ -143,11 +143,63 @@ describe("parseReasoningResponse", () => {
     expect(result.action).toBe("wait");
   });
 
-  it("handles all 4 action types", () => {
+  it("handles all 7 action types", () => {
     expect(parseReasoningResponse('{"action":"execute","goal":"x","reasoning":"y"}').action).toBe("execute");
     expect(parseReasoningResponse('{"action":"wait","reasoning":"y"}').action).toBe("wait");
     expect(parseReasoningResponse('{"action":"notify","message":"x","reasoning":"y"}').action).toBe("notify");
     expect(parseReasoningResponse('{"action":"escalate","question":"x","reasoning":"y"}').action).toBe("escalate");
+    expect(parseReasoningResponse('{"action":"batch","batchObservationIds":["id1"],"goal":"x","reasoning":"y"}').action).toBe("batch");
+    expect(parseReasoningResponse('{"action":"defer","deferMinutes":10,"reasoning":"y"}').action).toBe("defer");
+    expect(parseReasoningResponse('{"action":"adjust","adjustments":{"priorityThreshold":50},"reasoning":"y"}').action).toBe("adjust");
+  });
+
+  it("parses batch action with batchObservationIds", () => {
+    const result = parseReasoningResponse('{"action":"batch","batchObservationIds":["a","b","c"],"goal":"fix all","reasoning":"related"}');
+    expect(result.action).toBe("batch");
+    expect(result.batchObservationIds).toEqual(["a", "b", "c"]);
+    expect(result.goal).toBe("fix all");
+  });
+
+  it("clamps batchObservationIds to max 20", () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `id-${i}`);
+    const result = parseReasoningResponse(JSON.stringify({ action: "batch", batchObservationIds: ids, goal: "big batch", reasoning: "many" }));
+    expect(result.batchObservationIds).toHaveLength(20);
+  });
+
+  it("parses defer action with deferMinutes", () => {
+    const result = parseReasoningResponse('{"action":"defer","deferMinutes":15,"reasoning":"not urgent"}');
+    expect(result.action).toBe("defer");
+    expect(result.deferMinutes).toBe(15);
+  });
+
+  it("clamps deferMinutes 0 -> 1", () => {
+    const result = parseReasoningResponse('{"action":"defer","deferMinutes":0,"reasoning":"min"}');
+    expect(result.deferMinutes).toBe(1);
+  });
+
+  it("clamps deferMinutes 999 -> 120", () => {
+    const result = parseReasoningResponse('{"action":"defer","deferMinutes":999,"reasoning":"max"}');
+    expect(result.deferMinutes).toBe(120);
+  });
+
+  it("parses adjust action with adjustments", () => {
+    const result = parseReasoningResponse('{"action":"adjust","adjustments":{"priorityThreshold":50,"sourceBoost":{"source":"build","delta":10},"reasoningIntervalMs":15000},"reasoning":"tune"}');
+    expect(result.action).toBe("adjust");
+    expect(result.adjustments).toEqual({
+      priorityThreshold: 50,
+      sourceBoost: { source: "build", delta: 10 },
+      reasoningIntervalMs: 15000,
+    });
+  });
+
+  it("clamps priorityThreshold 200 -> 100", () => {
+    const result = parseReasoningResponse('{"action":"adjust","adjustments":{"priorityThreshold":200},"reasoning":"high"}');
+    expect(result.adjustments!.priorityThreshold).toBe(100);
+  });
+
+  it("clamps reasoningIntervalMs 100 -> 5000", () => {
+    const result = parseReasoningResponse('{"action":"adjust","adjustments":{"reasoningIntervalMs":100},"reasoning":"fast"}');
+    expect(result.adjustments!.reasoningIntervalMs).toBe(5000);
   });
 });
 

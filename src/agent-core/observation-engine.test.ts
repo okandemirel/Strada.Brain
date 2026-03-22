@@ -173,6 +173,57 @@ describe("ObservationEngine", () => {
   });
 });
 
+describe("ObservationEngine defer", () => {
+  it("defer() suppresses observation and re-injects after timeout", () => {
+    vi.useFakeTimers();
+    const engine = new ObservationEngine();
+    engine.register(makeObserver("empty", []));
+
+    const obs = createObservation("build", "Deferred build warning", { priority: 50 });
+    engine.defer(obs, 5); // defer for 5 minutes
+
+    // Immediately: deferred item should not appear in collect
+    const before = engine.collect();
+    expect(before).toHaveLength(0);
+    expect(engine.getDeferredCount()).toBe(1);
+
+    // Advance 3 minutes: still deferred
+    vi.advanceTimersByTime(3 * 60_000);
+    const mid = engine.collect();
+    expect(mid).toHaveLength(0);
+    expect(engine.getDeferredCount()).toBe(1);
+
+    // Advance past 5 minutes total
+    vi.advanceTimersByTime(3 * 60_000); // 6 minutes total
+    const after = engine.collect();
+    expect(after).toHaveLength(1);
+    expect(after[0]!.summary).toBe("Deferred build warning");
+    expect(engine.getDeferredCount()).toBe(0);
+
+    vi.useRealTimers();
+  });
+
+  it("getDeferredCount() returns accurate count", () => {
+    const engine = new ObservationEngine();
+    expect(engine.getDeferredCount()).toBe(0);
+
+    const obs1 = createObservation("build", "Warning 1", { priority: 40 });
+    const obs2 = createObservation("test", "Warning 2", { priority: 30 });
+    engine.defer(obs1, 10);
+    engine.defer(obs2, 20);
+    expect(engine.getDeferredCount()).toBe(2);
+
+    // Drain one by advancing time
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(11 * 60_000);
+    engine.register(makeObserver("empty", []));
+    engine.collect(); // triggers drain
+    expect(engine.getDeferredCount()).toBe(1);
+
+    vi.useRealTimers();
+  });
+});
+
 describe("createObservation", () => {
   it("creates observation with defaults", () => {
     const obs = createObservation("git", "test summary");

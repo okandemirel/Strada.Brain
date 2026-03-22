@@ -2,7 +2,13 @@
  * Agent Core Types
  */
 
-export type ActionType = "execute" | "wait" | "notify" | "escalate";
+export type ActionType = "execute" | "wait" | "notify" | "escalate" | "batch" | "defer" | "adjust";
+
+export interface AdjustmentSpec {
+  priorityThreshold?: number;
+  sourceBoost?: { source: string; delta: number };
+  reasoningIntervalMs?: number;
+}
 
 export interface ActionDecision {
   readonly action: ActionType;
@@ -10,6 +16,9 @@ export interface ActionDecision {
   readonly message?: string;    // For "notify"
   readonly question?: string;   // For "escalate"
   readonly reasoning: string;   // LLM's reasoning (for logging)
+  readonly batchObservationIds?: string[];  // For "batch"
+  readonly deferMinutes?: number;           // For "defer"
+  readonly adjustments?: AdjustmentSpec;    // For "adjust"
 }
 
 export interface AgentCoreConfig {

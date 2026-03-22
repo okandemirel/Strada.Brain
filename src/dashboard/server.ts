@@ -1088,6 +1088,38 @@ export class DashboardServer {
         return;
       }
 
+      // GET /api/learning/health -- Learning system observability (instincts + runtime counters)
+      if (req.method === "GET" && url === "/api/learning/health") {
+        void import("../learning/learning-metrics.js").then(({ LearningMetrics }) => {
+          try {
+            const aggregates = this.learningStorage?.getHealthAggregates?.() ?? null;
+            const m = LearningMetrics.getInstance();
+            const runtime = { reflection: m.getReflectionStats(), consensus: m.getConsensusStats(), outcome: m.getOutcomeStats() };
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ aggregates, runtime }));
+          } catch (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Failed to fetch learning health" }));
+          }
+        }).catch(() => {
+          // LearningMetrics module unavailable — return aggregates only
+          try {
+            const aggregates = this.learningStorage?.getHealthAggregates?.() ?? null;
+            const runtime = {
+              reflection: { totalDone: 0, totalOverrides: 0, overrideRate: 0 },
+              consensus: { totalVerifications: 0, agreementRate: 0, disagreements: [] },
+              outcome: { totalTracked: 0, successRate: 0, instinctsUpdated: 0 },
+            };
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ aggregates, runtime }));
+          } catch {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Failed to fetch learning health" }));
+          }
+        });
+        return;
+      }
+
       // POST /api/deployment/check -- Trigger readiness check (Plan 25-03)
       if (url === "/api/deployment/check" && req.method === "POST") {
         if (!this.readinessChecker) {

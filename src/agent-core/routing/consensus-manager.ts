@@ -100,11 +100,21 @@ export class ConsensusManager {
     }
 
     try {
+      let result: ConsensusResult;
       if (strategy === "review") {
-        return await this.reviewStrategy(params);
+        result = await this.reviewStrategy(params);
       } else {
-        return await this.reExecuteStrategy(params);
+        result = await this.reExecuteStrategy(params);
       }
+      try {
+        const { LearningMetrics } = await import("../../learning/learning-metrics.js");
+        LearningMetrics.getInstance().recordConsensusResult({
+          agreed: result.agreed,
+          strategy: result.strategy,
+          reasoning: result.reasoning ?? "",
+        });
+      } catch { /* non-fatal */ }
+      return result;
     } catch (error) {
       this.logger.error("Consensus verification failed", {
         error: error instanceof Error ? error.message : String(error),
