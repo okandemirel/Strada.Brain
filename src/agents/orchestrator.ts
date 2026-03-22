@@ -2205,6 +2205,17 @@ export class Orchestrator {
           finalReason = reason;
           return response;
         };
+        const bgFinishBlocked = async (text: string): Promise<string> => {
+          this.appendVisibleAssistantMessage(session, text);
+          this.recordMetricEnd(metricId, {
+            agentPhase: AgentPhase.COMPLETE,
+            iterations: bgAgentState.iteration,
+            toolCallCount: bgToolCallCount,
+            hitMaxIterations: false,
+          });
+          await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), true);
+          return finish(text, "blocked", text);
+        };
 
         try {
           while (true) {
@@ -2300,37 +2311,13 @@ export class Orchestrator {
                 if (response.toolCalls.length === 0) {
                   const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
                   if (pendingPlanReviewText) {
-                    this.appendVisibleAssistantMessage(session, pendingPlanReviewText);
-                    this.recordMetricEnd(metricId, {
-                      agentPhase: AgentPhase.COMPLETE,
-                      iterations: bgAgentState.iteration,
-                      toolCallCount: bgToolCallCount,
-                      hitMaxIterations: false,
-                    });
-                    await this.persistSessionToMemory(
-                      chatId,
-                      this.getVisibleTranscript(session),
-                      /* force */ true,
-                    );
-                    return finish(pendingPlanReviewText, "blocked", pendingPlanReviewText);
+                    return bgFinishBlocked(pendingPlanReviewText);
                   }
 
                   const pendingWriteRejectionText =
                     this.getPendingSelfManagedWriteRejectionVisibleText(session, response.text);
                   if (pendingWriteRejectionText) {
-                    this.appendVisibleAssistantMessage(session, pendingWriteRejectionText);
-                    this.recordMetricEnd(metricId, {
-                      agentPhase: AgentPhase.COMPLETE,
-                      iterations: bgAgentState.iteration,
-                      toolCallCount: bgToolCallCount,
-                      hitMaxIterations: false,
-                    });
-                    await this.persistSessionToMemory(
-                      chatId,
-                      this.getVisibleTranscript(session),
-                      /* force */ true,
-                    );
-                    return finish(pendingWriteRejectionText, "blocked", pendingWriteRejectionText);
+                    return bgFinishBlocked(pendingWriteRejectionText);
                   }
                 }
 
@@ -2373,19 +2360,7 @@ export class Orchestrator {
                       workspaceLease: options.workspaceLease,
                     });
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
-                      this.recordMetricEnd(metricId, {
-                        agentPhase: AgentPhase.COMPLETE,
-                        iterations: bgAgentState.iteration,
-                        toolCallCount: bgToolCallCount,
-                        hitMaxIterations: false,
-                      });
-                      await this.persistSessionToMemory(
-                        chatId,
-                        this.getVisibleTranscript(session),
-                        /* force */ true,
-                      );
-                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                      return bgFinishBlocked(loopRecovery.message);
                     }
                     if (loopRecovery.action === "replan" && loopRecovery.gate) {
                       bgAgentState = handleVerifierReplan({
@@ -2435,23 +2410,7 @@ export class Orchestrator {
                       clarificationIntervention.kind === "blocked") &&
                     clarificationIntervention.message
                   ) {
-                    this.appendVisibleAssistantMessage(session, clarificationIntervention.message);
-                    this.recordMetricEnd(metricId, {
-                      agentPhase: AgentPhase.COMPLETE,
-                      iterations: bgAgentState.iteration,
-                      toolCallCount: bgToolCallCount,
-                      hitMaxIterations: false,
-                    });
-                    await this.persistSessionToMemory(
-                      chatId,
-                      this.getVisibleTranscript(session),
-                      /* force */ true,
-                    );
-                    return finish(
-                      clarificationIntervention.message,
-                      "blocked",
-                      clarificationIntervention.message,
-                    );
+                    return bgFinishBlocked(clarificationIntervention.message);
                   }
 
                   const rawBoundary = this.decideUserVisibleBoundary({
@@ -2489,19 +2448,7 @@ export class Orchestrator {
                       workspaceLease: options.workspaceLease,
                     });
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
-                      this.recordMetricEnd(metricId, {
-                        agentPhase: AgentPhase.COMPLETE,
-                        iterations: bgAgentState.iteration,
-                        toolCallCount: bgToolCallCount,
-                        hitMaxIterations: false,
-                      });
-                      await this.persistSessionToMemory(
-                        chatId,
-                        this.getVisibleTranscript(session),
-                        /* force */ true,
-                      );
-                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                      return bgFinishBlocked(loopRecovery.message);
                     }
                     if (loopRecovery.action === "replan" && loopRecovery.gate) {
                       bgAgentState = handleVerifierReplan({
@@ -2628,19 +2575,7 @@ export class Orchestrator {
                       workspaceLease: options.workspaceLease,
                     });
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
-                      this.recordMetricEnd(metricId, {
-                        agentPhase: AgentPhase.COMPLETE,
-                        iterations: bgAgentState.iteration,
-                        toolCallCount: bgToolCallCount,
-                        hitMaxIterations: false,
-                      });
-                      await this.persistSessionToMemory(
-                        chatId,
-                        this.getVisibleTranscript(session),
-                        /* force */ true,
-                      );
-                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                      return bgFinishBlocked(loopRecovery.message);
                     }
                     if (loopRecovery.action === "replan" && loopRecovery.gate) {
                       bgAgentState = handleVerifierReplan({
@@ -2709,19 +2644,7 @@ export class Orchestrator {
                       workspaceLease: options.workspaceLease,
                     });
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
-                      this.recordMetricEnd(metricId, {
-                        agentPhase: AgentPhase.COMPLETE,
-                        iterations: bgAgentState.iteration,
-                        toolCallCount: bgToolCallCount,
-                        hitMaxIterations: false,
-                      });
-                      await this.persistSessionToMemory(
-                        chatId,
-                        this.getVisibleTranscript(session),
-                        /* force */ true,
-                      );
-                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                      return bgFinishBlocked(loopRecovery.message);
                     }
                     executionJournal.beginReplan({
                       state: bgAgentState,
@@ -2816,19 +2739,7 @@ export class Orchestrator {
                       workspaceLease: options.workspaceLease,
                     });
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      this.appendVisibleAssistantMessage(session, loopRecovery.message);
-                      this.recordMetricEnd(metricId, {
-                        agentPhase: AgentPhase.COMPLETE,
-                        iterations: bgAgentState.iteration,
-                        toolCallCount: bgToolCallCount,
-                        hitMaxIterations: false,
-                      });
-                      await this.persistSessionToMemory(
-                        chatId,
-                        this.getVisibleTranscript(session),
-                        /* force */ true,
-                      );
-                      return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                      return bgFinishBlocked(loopRecovery.message);
                     }
                     if (loopRecovery.action === "replan" && loopRecovery.gate) {
                       bgAgentState = handleVerifierReplan({
@@ -3013,19 +2924,7 @@ export class Orchestrator {
               if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
                 const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
                 if (pendingPlanReviewText) {
-                  this.appendVisibleAssistantMessage(session, pendingPlanReviewText);
-                  this.recordMetricEnd(metricId, {
-                    agentPhase: AgentPhase.COMPLETE,
-                    iterations: bgAgentState.iteration,
-                    toolCallCount: bgToolCallCount,
-                    hitMaxIterations: false,
-                  });
-                  await this.persistSessionToMemory(
-                    chatId,
-                    this.getVisibleTranscript(session),
-                    /* force */ true,
-                  );
-                  return finish(pendingPlanReviewText, "blocked", pendingPlanReviewText);
+                  return bgFinishBlocked(pendingPlanReviewText);
                 }
 
                 const pendingWriteRejectionText = this.getPendingSelfManagedWriteRejectionVisibleText(
@@ -3033,19 +2932,7 @@ export class Orchestrator {
                   response.text,
                 );
                 if (pendingWriteRejectionText) {
-                  this.appendVisibleAssistantMessage(session, pendingWriteRejectionText);
-                  this.recordMetricEnd(metricId, {
-                    agentPhase: AgentPhase.COMPLETE,
-                    iterations: bgAgentState.iteration,
-                    toolCallCount: bgToolCallCount,
-                    hitMaxIterations: false,
-                  });
-                  await this.persistSessionToMemory(
-                    chatId,
-                    this.getVisibleTranscript(session),
-                    /* force */ true,
-                  );
-                  return finish(pendingWriteRejectionText, "blocked", pendingWriteRejectionText);
+                  return bgFinishBlocked(pendingWriteRejectionText);
                 }
 
                 const clarificationIntervention = await this.resolveDraftClarificationIntervention({
@@ -3085,19 +2972,7 @@ export class Orchestrator {
                     workspaceLease: options.workspaceLease,
                   });
                   if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                    this.appendVisibleAssistantMessage(session, loopRecovery.message);
-                    this.recordMetricEnd(metricId, {
-                      agentPhase: AgentPhase.COMPLETE,
-                      iterations: bgAgentState.iteration,
-                      toolCallCount: bgToolCallCount,
-                      hitMaxIterations: false,
-                    });
-                    await this.persistSessionToMemory(
-                      chatId,
-                      this.getVisibleTranscript(session),
-                      /* force */ true,
-                    );
-                    return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                    return bgFinishBlocked(loopRecovery.message);
                   }
                   if (loopRecovery.action === "replan" && loopRecovery.gate) {
                     bgAgentState = handleVerifierReplan({
@@ -3200,19 +3075,7 @@ export class Orchestrator {
                     workspaceLease: options.workspaceLease,
                   });
                   if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                    this.appendVisibleAssistantMessage(session, loopRecovery.message);
-                    this.recordMetricEnd(metricId, {
-                      agentPhase: AgentPhase.COMPLETE,
-                      iterations: bgAgentState.iteration,
-                      toolCallCount: bgToolCallCount,
-                      hitMaxIterations: false,
-                    });
-                    await this.persistSessionToMemory(
-                      chatId,
-                      this.getVisibleTranscript(session),
-                      /* force */ true,
-                    );
-                    return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                    return bgFinishBlocked(loopRecovery.message);
                   }
                   if (loopRecovery.action === "replan" && loopRecovery.gate) {
                     bgAgentState = handleVerifierReplan({
@@ -3340,19 +3203,7 @@ export class Orchestrator {
                     workspaceLease: options.workspaceLease,
                   });
                   if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                    this.appendVisibleAssistantMessage(session, loopRecovery.message);
-                    this.recordMetricEnd(metricId, {
-                      agentPhase: AgentPhase.COMPLETE,
-                      iterations: bgAgentState.iteration,
-                      toolCallCount: bgToolCallCount,
-                      hitMaxIterations: false,
-                    });
-                    await this.persistSessionToMemory(
-                      chatId,
-                      this.getVisibleTranscript(session),
-                      /* force */ true,
-                    );
-                    return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                    return bgFinishBlocked(loopRecovery.message);
                   }
                   if (loopRecovery.action === "replan" && loopRecovery.gate) {
                     bgAgentState = handleVerifierReplan({
@@ -3420,19 +3271,7 @@ export class Orchestrator {
                     workspaceLease: options.workspaceLease,
                   });
                   if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                    this.appendVisibleAssistantMessage(session, loopRecovery.message);
-                    this.recordMetricEnd(metricId, {
-                      agentPhase: AgentPhase.COMPLETE,
-                      iterations: bgAgentState.iteration,
-                      toolCallCount: bgToolCallCount,
-                      hitMaxIterations: false,
-                    });
-                    await this.persistSessionToMemory(
-                      chatId,
-                      this.getVisibleTranscript(session),
-                      /* force */ true,
-                    );
-                    return finish(loopRecovery.message, "blocked", loopRecovery.message);
+                    return bgFinishBlocked(loopRecovery.message);
                   }
                   this.recordPhaseOutcome({
                     chatId,
