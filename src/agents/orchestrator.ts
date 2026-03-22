@@ -50,7 +50,6 @@ import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js
 import { TeachingParser } from "../learning/feedback/teaching-parser.js";
 import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
 import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
-import { MemoryRefresher } from "./memory-refresher.js";
 import {
   DEFAULT_INTERACTION_CONFIG,
   DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
@@ -119,6 +118,7 @@ import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import { renderGoalTree, summarizeTree } from "../goals/goal-renderer.js";
 import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.js";
 import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
+import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
 import { parseGoalBlock, buildGoalTreeFromBlock } from "../goals/types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { SoulLoader } from "./soul/index.js";
@@ -218,20 +218,7 @@ import {
   type SupervisorExecutionStrategy,
   type SupervisorRole,
 } from "./orchestrator-supervisor-routing.js";
-import {
-  getOrCreateSession as getOrCreateSessionHelper,
-  trimSession as trimSessionHelper,
-  persistSessionToMemory as persistSessionToMemoryHelper,
-  persistExecutionMemory as persistExecutionMemoryHelper,
-  createMemoryRefresher as createMemoryRefresherHelper,
-  takePendingResumeTrees as takePendingResumeTreesHelper,
-  extractLastUserMessage as extractLastUserMessageHelper,
-  getVisibleTranscript as getVisibleTranscriptHelper,
-  appendVisibleUserMessage as appendVisibleUserMessageHelper,
-  appendVisibleAssistantMessage as appendVisibleAssistantMessageHelper,
-  type Session,
-  type SessionPersistenceContext,
-} from "./orchestrator-session-persistence.js";
+import { SessionManager, type Session } from "./orchestrator-session-manager.js";
 import {
   canInspectLocally as canInspectLocallyHelper,
   decideUserVisibleBoundary as decideUserVisibleBoundaryHelper,
@@ -249,8 +236,6 @@ import {
 const TYPING_INTERVAL_MS = 4000;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
-const LOW_SIGNAL_EXECUTION_ACK_RE =
-  /^(?:adjusted|done|ok(?:ay)?|noted|ack(?:nowledged)?|revised|updated|handled|understood|fixed)\.?$/iu;
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
 The orchestrator remains the primary intelligence and the user-facing agent.
 You are not the overall assistant for the session.
@@ -461,8 +446,7 @@ export class Orchestrator {
   private readonly defaultLanguage: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
   private readonly streamInitialTimeoutMs: number;
   private readonly streamStallTimeoutMs: number;
-  private readonly sessions = new Map<string, Session>();
-  private readonly sessionLocks = new Map<string, Promise<void>>();
+  private readonly sessionManager: SessionManager;
   private systemPrompt: string;
   private readonly getIdentityState?: () => IdentityState;
   private readonly crashRecoveryContext?: CrashRecoveryContext;
@@ -489,9 +473,10 @@ export class Orchestrator {
   private readonly pendingResumeTrees = new Map<string, GoalTree[]>();
   /** TaskManager reference for inline goal detection submission (lazy setter) */
   private taskManager: TaskManager | null = null;
+  /** Workspace bus for monitor UI events (lazy setter — bus created after orchestrator) */
+  private workspaceBus: WorkspaceBus | null = null;
   private readonly soulLoader: SoulLoader | null;
   private readonly dmPolicy: DMPolicy;
-  private readonly lastPersistTime = new Map<string, number>();
   private readonly sessionSummarizer?: SessionSummarizer;
   private readonly userProfileStore?: UserProfileStore;
   private readonly autonomousDefaultEnabled: boolean;
@@ -637,6 +622,21 @@ export class Orchestrator {
     this.depsSetupComplete = !opts.stradaDeps || opts.stradaDeps.coreInstalled;
     this.systemPrompt = "";
     this.rebuildBaseSystemPrompt();
+
+    this.sessionManager = new SessionManager({
+      channel: this.channel,
+      interactionPolicy: this.interactionPolicy,
+      activeGoalTrees: this.activeGoalTrees,
+      pendingResumeTrees: this.pendingResumeTrees,
+      memoryManager: this.memoryManager,
+      sessionSummarizer: this.sessionSummarizer,
+      reRetrievalConfig: this.reRetrievalConfig,
+      embeddingProvider: this.embeddingProvider,
+      ragPipeline: this.ragPipeline,
+      instinctRetriever: this.instinctRetriever,
+      eventEmitter: this.eventEmitter,
+      taskExecutionStore: this.taskExecutionStore,
+    });
   }
 
   async withTaskExecutionContext<T>(
@@ -1270,34 +1270,12 @@ export class Orchestrator {
     this.taskManager = tm;
   }
 
-  private getVisibleTranscript(session: Session): ConversationMessage[] {
-    return getVisibleTranscriptHelper(session);
-  }
-
-  private appendVisibleUserMessage(session: Session, content: string | MessageContent[]): void {
-    appendVisibleUserMessageHelper(session, content);
-  }
-
-  private appendVisibleAssistantMessage(session: Session, content: string): void {
-    appendVisibleAssistantMessageHelper(session, content);
-  }
-
-  private async sendVisibleAssistantText(
-    chatId: string,
-    session: Session,
-    content: string,
-  ): Promise<void> {
-    this.appendVisibleAssistantMessage(session, content);
-    await this.channel.sendText(chatId, content);
-  }
-
-  private async sendVisibleAssistantMarkdown(
-    chatId: string,
-    session: Session,
-    content: string,
-  ): Promise<void> {
-    this.appendVisibleAssistantMessage(session, content);
-    await this.channel.sendMarkdown(chatId, content);
+  /**
+   * Set the workspace bus for emitting monitor events to the dashboard UI.
+   * Uses lazy setter because the workspace bus is created after the orchestrator.
+   */
+  setWorkspaceBus(bus: WorkspaceBus): void {
+    this.workspaceBus = bus;
   }
 
   private buildWorkerToolDefinitions(
@@ -1371,84 +1349,6 @@ export class Orchestrator {
     return buildSafeVisibleFallbackFromDraftHelper(prompt, draft, task, allowDirectFinalAnswer);
   }
 
-  private formatPlanReviewMessage(draft: string): string {
-    return [
-      "Plan review requested before execution.",
-      "",
-      draft.trim(),
-      "",
-      "Reply with your approval or requested changes before write-capable execution continues.",
-    ].join("\n");
-  }
-
-  private getPendingPlanReviewVisibleText(chatId: string): string | null {
-    const gate = this.interactionPolicy.get(chatId);
-    if (gate?.kind !== "plan-review-required") {
-      return null;
-    }
-    if (gate.planText?.trim()) {
-      return this.formatPlanReviewMessage(gate.planText);
-    }
-    return [
-      "Plan review requested before execution.",
-      "",
-      "A concrete plan still needs to be shown before write-capable execution continues.",
-      "",
-      "Reply with your approval or requested changes before write-capable execution continues.",
-    ].join("\n");
-  }
-
-  private getPendingSelfManagedWriteRejectionVisibleText(
-    session: Session,
-    draft: string | null | undefined,
-  ): string | null {
-    const normalizedDraft = this.stripInternalDecisionMarkers(draft ?? "").trim();
-    if (normalizedDraft && !LOW_SIGNAL_EXECUTION_ACK_RE.test(normalizedDraft)) {
-      return null;
-    }
-
-    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
-      const message = session.messages[index];
-      if (!message || message.role !== "user" || !Array.isArray(message.content)) {
-        continue;
-      }
-
-      for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
-        const block = message.content[blockIndex];
-        if (!block || block.type !== "tool_result" || typeof block.content !== "string") {
-          continue;
-        }
-        if (!block.content.startsWith("Self-managed write review rejected")) {
-          continue;
-        }
-
-        const match = block.content.match(
-          /for '([^']+)':\s*(.+?)\.\s*Choose a safer bounded operation/iu,
-        );
-        const toolName = match?.[1] ?? "write-capable action";
-        const reason = match?.[2]?.trim() ?? block.content.trim();
-        return [
-          `Execution stopped because the proposed '${toolName}' operation was rejected by autonomous safety review.`,
-          "",
-          `Reason: ${reason}.`,
-          "",
-          "No safer bounded replacement was produced in the same turn.",
-        ].join("\n");
-      }
-    }
-
-    return null;
-  }
-
-  private formatBoundaryVisibleText(decision: InteractionBoundaryDecision): string | undefined {
-    if (!decision.visibleText) {
-      return undefined;
-    }
-    return decision.kind === "plan_review"
-      ? this.formatPlanReviewMessage(decision.visibleText)
-      : decision.visibleText;
-  }
-
   private async resolveVisibleDraftDecision(params: {
     chatId: string;
     identityKey: string;
@@ -1480,7 +1380,7 @@ export class Orchestrator {
       return {
         kind: "plan_review",
         reason: "The user explicitly asked to review the plan before execution.",
-        visibleText: this.formatPlanReviewMessage(cleanedDraft),
+        visibleText: this.sessionManager.formatPlanReviewMessage(cleanedDraft),
       };
     }
 
@@ -1803,7 +1703,7 @@ export class Orchestrator {
    */
   getSessions(): Map<string, { lastActivity: Date; messageCount: number }> {
     const result = new Map<string, { lastActivity: Date; messageCount: number }>();
-    for (const [chatId, session] of this.sessions) {
+    for (const [chatId, session] of this.sessionManager.sessions) {
       result.set(chatId, {
         lastActivity: session.lastActivity,
         messageCount: session.messages.length,
@@ -1816,7 +1716,7 @@ export class Orchestrator {
     context: PostSetupBootstrapContext,
     bootstrap: PostSetupBootstrap,
   ): Promise<void> {
-    const session = this.getOrCreateSession(context.chatId);
+    const session = this.sessionManager.getOrCreateSession(context.chatId);
     if (session.postSetupBootstrapDelivered) {
       return;
     }
@@ -1827,7 +1727,7 @@ export class Orchestrator {
     session.conversationScope ??= context.profileId;
     session.mixedParticipants = false;
 
-    await this.sendVisibleAssistantMarkdown(
+    await this.sessionManager.sendVisibleAssistantMarkdown(
       context.chatId,
       session,
       buildPostSetupWelcomeMessage(bootstrap.language),
@@ -1885,7 +1785,7 @@ export class Orchestrator {
     }
 
     // Per-session concurrency lock: queue messages for the same chat
-    const prev = this.sessionLocks.get(chatId) ?? Promise.resolve();
+    const prev = this.sessionManager.sessionLocks.get(chatId) ?? Promise.resolve();
     const current = prev.then(() =>
       this.withTaskExecutionContext(taskContext, async () => this.processMessage(msg)),
     );
@@ -1895,13 +1795,13 @@ export class Orchestrator {
         error: err instanceof Error ? err.message : String(err),
       });
     });
-    this.sessionLocks.set(chatId, tracked);
+    this.sessionManager.sessionLocks.set(chatId, tracked);
     try {
       await current;
     } finally {
       // Clean up resolved lock to prevent unbounded map growth
-      if (this.sessionLocks.get(chatId) === tracked) {
-        this.sessionLocks.delete(chatId);
+      if (this.sessionManager.sessionLocks.get(chatId) === tracked) {
+        this.sessionManager.sessionLocks.delete(chatId);
       }
     }
   }
@@ -2054,10 +1954,10 @@ export class Orchestrator {
 
         // Touch user profile (debounced)
         if (this.userProfileStore && profile) {
-          const lastTouch = this.lastPersistTime.get(`touch:${identityKey}`) ?? 0;
+          const lastTouch = this.sessionManager.persistTimeMap.get(`touch:${identityKey}`) ?? 0;
           if (Date.now() - lastTouch > 60_000) {
             this.userProfileStore.touchLastSeen(identityKey);
-            this.lastPersistTime.set(`touch:${identityKey}`, Date.now());
+            this.sessionManager.persistTimeMap.set(`touch:${identityKey}`, Date.now());
           }
         }
 
@@ -2147,7 +2047,7 @@ export class Orchestrator {
         // ────────────────────────────────────────────────────────────────────
 
         // ─── Memory Re-retrieval: create refresher for background path ───
-        const bgMemoryRefresher = this.createMemoryRefresher(bgInitialContentHashes);
+        const bgMemoryRefresher = this.sessionManager.createMemoryRefresher(bgInitialContentHashes);
         // ────────────────────────────────────────────────────────────────
 
         // Autonomy layer
@@ -2207,14 +2107,14 @@ export class Orchestrator {
         };
         /** Terminal exit helper — always used with `return` to exit the loop. */
         const bgFinishBlocked = async (text: string): Promise<string> => {
-          this.appendVisibleAssistantMessage(session, text);
+          this.sessionManager.appendVisibleAssistantMessage(session, text);
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
             iterations: bgAgentState.iteration,
             toolCallCount: bgToolCallCount,
             hitMaxIterations: false,
           });
-          await this.persistSessionToMemory(chatId, this.getVisibleTranscript(session), true);
+          await this.sessionManager.persistSessionToMemory(chatId, this.sessionManager.getVisibleTranscript(session), true);
           return finish(text, "blocked", text);
         };
 
@@ -2310,13 +2210,13 @@ export class Orchestrator {
                 });
 
                 if (response.toolCalls.length === 0) {
-                  const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
+                  const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
                   if (pendingPlanReviewText) {
                     return bgFinishBlocked(pendingPlanReviewText);
                   }
 
                   const pendingWriteRejectionText =
-                    this.getPendingSelfManagedWriteRejectionVisibleText(session, response.text);
+                    this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(session, response.text);
                   if (pendingWriteRejectionText) {
                     return bgFinishBlocked(pendingWriteRejectionText);
                   }
@@ -2496,17 +2396,17 @@ export class Orchestrator {
                       rawBoundary.kind === "terminal_failure") &&
                     rawBoundary.visibleText
                   ) {
-                    const surfacedText = this.formatBoundaryVisibleText(rawBoundary)!;
-                    this.appendVisibleAssistantMessage(session, surfacedText);
+                    const surfacedText = this.sessionManager.formatBoundaryVisibleText(rawBoundary)!;
+                    this.sessionManager.appendVisibleAssistantMessage(session, surfacedText);
                     this.recordMetricEnd(metricId, {
                       agentPhase: AgentPhase.COMPLETE,
                       iterations: bgAgentState.iteration,
                       toolCallCount: bgToolCallCount,
                       hitMaxIterations: false,
                     });
-                    await this.persistSessionToMemory(
+                    await this.sessionManager.persistSessionToMemory(
                       chatId,
-                      this.getVisibleTranscript(session),
+                      this.sessionManager.getVisibleTranscript(session),
                       /* force */ true,
                     );
                     return finish(
@@ -2788,7 +2688,7 @@ export class Orchestrator {
                   }
                   const surfacedFinalText = finalBoundary.visibleText ?? finalText;
                   if (surfacedFinalText) {
-                    this.appendVisibleAssistantMessage(session, surfacedFinalText);
+                    this.sessionManager.appendVisibleAssistantMessage(session, surfacedFinalText);
                   }
                   this.recordPhaseOutcome({
                     chatId,
@@ -2811,9 +2711,9 @@ export class Orchestrator {
                     toolCallCount: bgToolCallCount,
                     hitMaxIterations: false,
                   });
-                  await this.persistSessionToMemory(
+                  await this.sessionManager.persistSessionToMemory(
                     chatId,
-                    this.getVisibleTranscript(session),
+                    this.sessionManager.getVisibleTranscript(session),
                     /* force */ true,
                   );
                   return finish(surfacedFinalText || "Task completed without output.");
@@ -2897,9 +2797,9 @@ export class Orchestrator {
                     "user explicitly asked to review a plan first",
                     planText,
                   );
-                  this.appendVisibleAssistantMessage(
+                  this.sessionManager.appendVisibleAssistantMessage(
                     session,
-                    this.formatPlanReviewMessage(planText),
+                    this.sessionManager.formatPlanReviewMessage(planText),
                   );
                 }
                 this.recordMetricEnd(metricId, {
@@ -2908,14 +2808,14 @@ export class Orchestrator {
                   toolCallCount: bgToolCallCount,
                   hitMaxIterations: false,
                 });
-                await this.persistSessionToMemory(
+                await this.sessionManager.persistSessionToMemory(
                   chatId,
-                  this.getVisibleTranscript(session),
+                  this.sessionManager.getVisibleTranscript(session),
                   /* force */ true,
                 );
                 return finish(
                   planText
-                    ? this.formatPlanReviewMessage(planText)
+                    ? this.sessionManager.formatPlanReviewMessage(planText)
                     : "Plan prepared for review.",
                   "blocked",
                   planText ?? "Plan prepared for review.",
@@ -2924,12 +2824,12 @@ export class Orchestrator {
 
               // Final response — return text
               if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-                const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
+                const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
                 if (pendingPlanReviewText) {
                   return bgFinishBlocked(pendingPlanReviewText);
                 }
 
-                const pendingWriteRejectionText = this.getPendingSelfManagedWriteRejectionVisibleText(
+                const pendingWriteRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
                   session,
                   response.text,
                 );
@@ -3023,16 +2923,16 @@ export class Orchestrator {
                     clarificationIntervention.kind === "blocked") &&
                   clarificationIntervention.message
                 ) {
-                  this.appendVisibleAssistantMessage(session, clarificationIntervention.message);
+                  this.sessionManager.appendVisibleAssistantMessage(session, clarificationIntervention.message);
                   this.recordMetricEnd(metricId, {
                     agentPhase: AgentPhase.COMPLETE,
                     iterations: bgAgentState.iteration,
                     toolCallCount: bgToolCallCount,
                     hitMaxIterations: false,
                   });
-                  await this.persistSessionToMemory(
+                  await this.sessionManager.persistSessionToMemory(
                     chatId,
-                    this.getVisibleTranscript(session),
+                    this.sessionManager.getVisibleTranscript(session),
                     /* force */ true,
                   );
                   return finish(
@@ -3125,17 +3025,17 @@ export class Orchestrator {
                   (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure") &&
                   rawBoundary.visibleText
                 ) {
-                  const surfacedText = this.formatBoundaryVisibleText(rawBoundary)!;
-                  this.appendVisibleAssistantMessage(session, surfacedText);
+                  const surfacedText = this.sessionManager.formatBoundaryVisibleText(rawBoundary)!;
+                  this.sessionManager.appendVisibleAssistantMessage(session, surfacedText);
                   this.recordMetricEnd(metricId, {
                     agentPhase: AgentPhase.COMPLETE,
                     iterations: bgAgentState.iteration,
                     toolCallCount: bgToolCallCount,
                     hitMaxIterations: false,
                   });
-                  await this.persistSessionToMemory(
+                  await this.sessionManager.persistSessionToMemory(
                     chatId,
-                    this.getVisibleTranscript(session),
+                    this.sessionManager.getVisibleTranscript(session),
                     /* force */ true,
                   );
                   return finish(
@@ -3347,7 +3247,7 @@ export class Orchestrator {
                 }
                 const surfacedFinalText = finalBoundary.visibleText ?? finalText;
                 if (surfacedFinalText) {
-                  this.appendVisibleAssistantMessage(session, surfacedFinalText);
+                  this.sessionManager.appendVisibleAssistantMessage(session, surfacedFinalText);
                 }
                 this.recordPhaseOutcome({
                   chatId,
@@ -3375,9 +3275,9 @@ export class Orchestrator {
                 // ────────────────────────────────────────────────────────────
 
                 // Persist background task conversation to memory
-                await this.persistSessionToMemory(
+                await this.sessionManager.persistSessionToMemory(
                   chatId,
-                  this.getVisibleTranscript(session),
+                  this.sessionManager.getVisibleTranscript(session),
                   /* force */ true,
                 );
 
@@ -3576,7 +3476,7 @@ export class Orchestrator {
                 state: bgAgentState,
               }),
             });
-            this.persistExecutionMemory(identityKey, executionJournal);
+            this.sessionManager.persistExecutionMemory(identityKey, executionJournal);
 
             if (continuedAfterBudget) {
               taskPlanner.resetBudgetWindow();
@@ -3606,7 +3506,7 @@ export class Orchestrator {
           finalReason = error instanceof Error ? error.message : String(error);
           throw error;
         } finally {
-          this.persistExecutionMemory(identityKey, executionJournal);
+          this.sessionManager.persistExecutionMemory(identityKey, executionJournal);
           // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
           this.recordMetricEnd(metricId, {
             agentPhase: bgAgentState.phase,
@@ -3634,19 +3534,19 @@ export class Orchestrator {
   private async handleDepsSetup(msg: IncomingMessage): Promise<void> {
     const { chatId } = msg;
     const text = msg.text?.toLowerCase() ?? "";
-    const session = this.getOrCreateSession(chatId);
-    this.appendVisibleUserMessage(session, msg.text ?? "");
+    const session = this.sessionManager.getOrCreateSession(chatId);
+    this.sessionManager.appendVisibleUserMessage(session, msg.text ?? "");
 
     if (this.pendingDepsPrompt.get(chatId)) {
       // User is responding to our install prompt
       if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
-        await this.sendVisibleAssistantText(chatId, session, "Strada.Core kuruluyor...");
+        await this.sessionManager.sendVisibleAssistantText(chatId, session, "Strada.Core kuruluyor...");
         const result = await installStradaDep(this.projectPath, "core", this.stradaConfig);
         if (result.kind === "ok") {
           this.stradaDeps = checkStradaDeps(this.projectPath, this.stradaConfig);
           this.rebuildBaseSystemPrompt();
           this.depsSetupComplete = true;
-          await this.sendVisibleAssistantText(
+          await this.sessionManager.sendVisibleAssistantText(
             chatId,
             session,
             "Strada.Core kuruldu! Artık kullanabilirsiniz.",
@@ -3654,7 +3554,7 @@ export class Orchestrator {
 
           if (!this.stradaDeps.modulesInstalled) {
             this.pendingModulesPrompt.set(chatId, true);
-            await this.sendVisibleAssistantText(
+            await this.sessionManager.sendVisibleAssistantText(
               chatId,
               session,
               "Strada.Modules da kurulu değil. Kurmamı ister misiniz? (evet/hayır)",
@@ -3662,7 +3562,7 @@ export class Orchestrator {
             return;
           }
         } else {
-          await this.sendVisibleAssistantText(
+          await this.sessionManager.sendVisibleAssistantText(
             chatId,
             session,
             `Kurulum başarısız: ${result.error}`,
@@ -3671,7 +3571,7 @@ export class Orchestrator {
         }
       } else {
         this.depsSetupComplete = true;
-        await this.sendVisibleAssistantText(
+        await this.sessionManager.sendVisibleAssistantText(
           chatId,
           session,
           "Anlaşıldı. Strada.Core olmadan sınırlı destek sunabilirim.",
@@ -3682,7 +3582,7 @@ export class Orchestrator {
 
     // First message — send the install prompt
     this.pendingDepsPrompt.set(chatId, true);
-    await this.sendVisibleAssistantText(
+    await this.sessionManager.sendVisibleAssistantText(
       chatId,
       session,
       "⚠️ Strada.Core projenizde bulunamadı.\n\n" +
@@ -3698,26 +3598,26 @@ export class Orchestrator {
   private async handleModulesPrompt(msg: IncomingMessage): Promise<void> {
     const { chatId } = msg;
     const text = msg.text?.toLowerCase() ?? "";
-    const session = this.getOrCreateSession(chatId);
-    this.appendVisibleUserMessage(session, msg.text ?? "");
+    const session = this.sessionManager.getOrCreateSession(chatId);
+    this.sessionManager.appendVisibleUserMessage(session, msg.text ?? "");
     this.pendingModulesPrompt.delete(chatId);
 
     if (text.includes("evet") || text.includes("yes") || text.includes("kur")) {
-      await this.sendVisibleAssistantText(chatId, session, "Strada.Modules kuruluyor...");
+      await this.sessionManager.sendVisibleAssistantText(chatId, session, "Strada.Modules kuruluyor...");
       const result = await installStradaDep(this.projectPath, "modules", this.stradaConfig);
       if (result.kind === "ok") {
         this.stradaDeps = checkStradaDeps(this.projectPath, this.stradaConfig);
         this.rebuildBaseSystemPrompt();
-        await this.sendVisibleAssistantText(chatId, session, "Strada.Modules kuruldu!");
+        await this.sessionManager.sendVisibleAssistantText(chatId, session, "Strada.Modules kuruldu!");
       } else {
-        await this.sendVisibleAssistantText(
+        await this.sessionManager.sendVisibleAssistantText(
           chatId,
           session,
           `Modules kurulumu başarısız: ${result.error}`,
         );
       }
     } else {
-      await this.sendVisibleAssistantText(
+      await this.sessionManager.sendVisibleAssistantText(
         chatId,
         session,
         "Anlaşıldı. Strada.Modules olmadan devam ediyoruz.",
@@ -3738,30 +3638,30 @@ export class Orchestrator {
       channel: msg.channelType,
     });
 
-    const session = this.getOrCreateSession(chatId);
+    const session = this.sessionManager.getOrCreateSession(chatId);
 
     // Goal tree resume detection (trigger on first message when interrupted trees exist)
-    const pendingResumeTrees = this.takePendingResumeTrees(conversationScope, chatId);
+    const pendingResumeTrees = this.sessionManager.takePendingResumeTrees(conversationScope, chatId);
     if (pendingResumeTrees.length > 0) {
       const resumePrompt = formatResumePrompt(pendingResumeTrees);
       const normalized = text.toLowerCase().trim();
       if (normalized === "resume" || normalized === "resume all") {
-        this.appendVisibleUserMessage(session, text);
-        await this.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
+        this.sessionManager.appendVisibleUserMessage(session, text);
+        await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
         for (const tree of pendingResumeTrees) {
           const prepared = prepareTreeForResume(tree);
           this.activeGoalTrees.set(tree.sessionId, prepared);
         }
-        await this.sendVisibleAssistantMarkdown(
+        await this.sessionManager.sendVisibleAssistantMarkdown(
           chatId,
           session,
           "Resuming interrupted goal trees...",
         );
         return;
       } else if (normalized === "discard" || normalized === "discard all") {
-        this.appendVisibleUserMessage(session, text);
-        await this.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
-        await this.sendVisibleAssistantMarkdown(
+        this.sessionManager.appendVisibleUserMessage(session, text);
+        await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, resumePrompt);
+        await this.sessionManager.sendVisibleAssistantMarkdown(
           chatId,
           session,
           "Interrupted goal trees discarded.",
@@ -3778,14 +3678,14 @@ export class Orchestrator {
         const retryMsg = rateCheck.retryAfterMs
           ? ` Please try again in ${Math.ceil(rateCheck.retryAfterMs / 1000)} seconds.`
           : "";
-        this.appendVisibleUserMessage(session, text);
-        await this.sendVisibleAssistantText(chatId, session, `${rateCheck.reason}${retryMsg}`);
+        this.sessionManager.appendVisibleUserMessage(session, text);
+        await this.sessionManager.sendVisibleAssistantText(chatId, session, `${rateCheck.reason}${retryMsg}`);
         return;
       }
     }
 
     this.metrics?.recordMessage();
-    this.metrics?.setActiveSessions(this.sessions.size);
+    this.metrics?.setActiveSessions(this.sessionManager.sessions.size);
     const identityKey = resolveIdentityKey(chatId, userId, conversationId, this.userProfileStore, msg.channelType);
     const clearedPlanReview = this.interactionPolicy.noteUserMessage(chatId, text);
     if (clearedPlanReview) {
@@ -3809,10 +3709,10 @@ export class Orchestrator {
 
     // Touch user profile (lastSeenAt) — debounced to avoid per-message SQLite writes
     if (this.userProfileStore) {
-      const lastTouch = this.lastPersistTime.get(`touch:${identityKey}`) ?? 0;
+      const lastTouch = this.sessionManager.persistTimeMap.get(`touch:${identityKey}`) ?? 0;
       if (Date.now() - lastTouch > 60_000) {
         this.userProfileStore.touchLastSeen(identityKey);
-        this.lastPersistTime.set(`touch:${identityKey}`, Date.now());
+        this.sessionManager.persistTimeMap.set(`touch:${identityKey}`, Date.now());
       }
     }
 
@@ -3864,12 +3764,12 @@ export class Orchestrator {
     const provider = this.providerManager.getProvider(identityKey);
     const supportsVision = provider.capabilities.vision;
     const userContent = buildUserContent(text, msg.attachments, supportsVision);
-    this.appendVisibleUserMessage(session, userContent);
+    this.sessionManager.appendVisibleUserMessage(session, userContent);
 
     // Trim old messages to manage context window (provider-aware threshold)
     // Persist trimmed messages to memory before discarding
     const providerInfo = this.providerManager.getActiveInfo?.(identityKey);
-    const trimmed = this.trimSession(
+    const trimmed = this.sessionManager.trimSession(
       session,
       getRecommendedMaxMessages(
         providerInfo?.providerName ?? provider.name,
@@ -3883,7 +3783,7 @@ export class Orchestrator {
       ),
     );
     if (trimmed.length > 0) {
-      await this.persistSessionToMemory(chatId, trimmed, /* force */ true);
+      await this.sessionManager.persistSessionToMemory(chatId, trimmed, /* force */ true);
     }
 
     // Start typing indicator loop
@@ -3903,12 +3803,12 @@ export class Orchestrator {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
-      await this.sendVisibleAssistantText(chatId, session, classifyErrorMessage(error));
+      await this.sessionManager.sendVisibleAssistantText(chatId, session, classifyErrorMessage(error));
     } finally {
       clearInterval(typingInterval);
       // Persist conversation summary (forced to ensure no messages are lost)
-      const visibleMessages = this.getVisibleTranscript(session);
-      await this.persistSessionToMemory(chatId, visibleMessages.slice(-10), /* force */ true);
+      const visibleMessages = this.sessionManager.getVisibleTranscript(session);
+      await this.sessionManager.persistSessionToMemory(chatId, visibleMessages.slice(-10), /* force */ true);
       // Periodic summarization: every 10 messages, generate an LLM summary
       if (
         this.sessionSummarizer &&
@@ -3994,7 +3894,7 @@ export class Orchestrator {
     let systemPrompt = builtSystemPrompt;
 
     // ─── Autonomy layer ──────────────────────────────────────────────────
-    const lastUserMessage = this.extractLastUserMessage(session);
+    const lastUserMessage = this.sessionManager.extractLastUserMessage(session);
     const errorRecovery = new ErrorRecoveryEngine();
     const taskPlanner = new TaskPlanner({
       iterationBudget: this.getInteractiveIterationLimit(),
@@ -4046,7 +3946,7 @@ export class Orchestrator {
     this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
 
     // ─── Memory Re-retrieval: create refresher ───────────────────────
-    const memoryRefresher = this.createMemoryRefresher(initialContentHashes);
+    const memoryRefresher = this.sessionManager.createMemoryRefresher(initialContentHashes);
     // ────────────────────────────────────────────────────────────────
 
     // ─── Metrics: start recording ────────────────────────────────────
@@ -4169,9 +4069,9 @@ export class Orchestrator {
           });
 
           if (response.toolCalls.length === 0) {
-            const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
+            const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
             if (pendingPlanReviewText) {
-              await this.sendVisibleAssistantMarkdown(chatId, session, pendingPlanReviewText);
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, pendingPlanReviewText);
               this.recordMetricEnd(metricId, {
                 agentPhase: AgentPhase.COMPLETE,
                 iterations: agentState.iteration,
@@ -4181,12 +4081,12 @@ export class Orchestrator {
               return;
             }
 
-            const pendingWriteRejectionText = this.getPendingSelfManagedWriteRejectionVisibleText(
+            const pendingWriteRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
               session,
               response.text,
             );
             if (pendingWriteRejectionText) {
-              await this.sendVisibleAssistantMarkdown(
+              await this.sessionManager.sendVisibleAssistantMarkdown(
                 chatId,
                 session,
                 pendingWriteRejectionText,
@@ -4225,7 +4125,7 @@ export class Orchestrator {
                 clarificationIntervention.kind === "blocked") &&
               clarificationIntervention.message
             ) {
-              await this.sendVisibleAssistantMarkdown(
+              await this.sessionManager.sendVisibleAssistantMarkdown(
                 chatId,
                 session,
                 clarificationIntervention.message,
@@ -4338,7 +4238,7 @@ export class Orchestrator {
                 visibilityDecision.kind === "ask_user") &&
               visibilityDecision.visibleText
             ) {
-              await this.sendVisibleAssistantMarkdown(
+              await this.sessionManager.sendVisibleAssistantMarkdown(
                 chatId,
                 session,
                 visibilityDecision.visibleText,
@@ -4367,7 +4267,7 @@ export class Orchestrator {
             }
             const finalText = visibilityDecision.visibleText?.trim() ?? "";
             if (finalText) {
-              await this.sendVisibleAssistantMarkdown(chatId, session, finalText);
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, finalText);
             }
             this.recordPhaseOutcome({
               chatId,
@@ -4430,7 +4330,7 @@ export class Orchestrator {
                   if (updatedTree) {
                     this.activeGoalTrees.set(conversationScope, updatedTree);
                     const treeViz = renderGoalTree(updatedTree);
-                    await this.sendVisibleAssistantMarkdown(
+                    await this.sessionManager.sendVisibleAssistantMarkdown(
                       chatId,
                       session,
                       "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```",
@@ -4502,7 +4402,7 @@ export class Orchestrator {
                 continue;
               }
               if (visibilityDecision.visibleText) {
-                await this.sendVisibleAssistantMarkdown(
+                await this.sessionManager.sendVisibleAssistantMarkdown(
                   chatId,
                   session,
                   visibilityDecision.visibleText,
@@ -4545,7 +4445,7 @@ export class Orchestrator {
             const ackMsg =
               `Working on: ${lastUserMessage.slice(0, 80)}` +
               ` (${nodeCount} step${nodeCount !== 1 ? "s" : ""}, ~${goalBlock.estimatedMinutes} min). I'll update you as I go.`;
-            await this.sendVisibleAssistantText(chatId, session, ackMsg);
+            await this.sessionManager.sendVisibleAssistantText(chatId, session, ackMsg);
 
             // Submit as background task with pre-decomposed tree
             this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, {
@@ -4599,7 +4499,7 @@ export class Orchestrator {
               this.activeGoalTrees.set(conversationScope, goalTree);
               this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
               const treeViz = renderGoalTree(goalTree);
-              await this.sendVisibleAssistantMarkdown(
+              await this.sessionManager.sendVisibleAssistantMarkdown(
                 chatId,
                 session,
                 "Goal decomposition:\n```\n" + treeViz + "\n```",
@@ -4625,8 +4525,8 @@ export class Orchestrator {
               this.stripInternalDecisionMarkers(response.text) || response.text || "",
             ),
           );
-          const planText = this.getPendingPlanReviewVisibleText(chatId)!;
-          await this.sendVisibleAssistantMarkdown(chatId, session, planText);
+          const planText = this.sessionManager.getPendingPlanReviewVisibleText(chatId)!;
+          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, planText);
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
             iterations: agentState.iteration,
@@ -4639,9 +4539,9 @@ export class Orchestrator {
         // If no tool calls, send the final text response
         // (streaming already sent it, so skip for streamed end_turn)
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-          const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
+          const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
           if (pendingPlanReviewText) {
-            await this.sendVisibleAssistantMarkdown(chatId, session, pendingPlanReviewText);
+            await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, pendingPlanReviewText);
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
               iterations: agentState.iteration,
@@ -4651,12 +4551,12 @@ export class Orchestrator {
             return;
           }
 
-          const pendingWriteRejectionText = this.getPendingSelfManagedWriteRejectionVisibleText(
+          const pendingWriteRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
             session,
             response.text,
           );
           if (pendingWriteRejectionText) {
-            await this.sendVisibleAssistantMarkdown(chatId, session, pendingWriteRejectionText);
+            await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, pendingWriteRejectionText);
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
               iterations: agentState.iteration,
@@ -4691,7 +4591,7 @@ export class Orchestrator {
               clarificationIntervention.kind === "blocked") &&
             clarificationIntervention.message
           ) {
-            await this.sendVisibleAssistantMarkdown(
+            await this.sessionManager.sendVisibleAssistantMarkdown(
               chatId,
               session,
               clarificationIntervention.message,
@@ -4833,7 +4733,7 @@ export class Orchestrator {
                 visibilityDecision.kind === "ask_user") &&
               visibilityDecision.visibleText
             ) {
-              await this.sendVisibleAssistantMarkdown(
+              await this.sessionManager.sendVisibleAssistantMarkdown(
                 chatId,
                 session,
                 visibilityDecision.visibleText,
@@ -4862,7 +4762,7 @@ export class Orchestrator {
             }
             const finalText = visibilityDecision.visibleText?.trim() ?? "";
             if (finalText) {
-              await this.sendVisibleAssistantMarkdown(chatId, session, finalText);
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, finalText);
             }
             this.recordPhaseOutcome({
               chatId,
@@ -4902,7 +4802,7 @@ export class Orchestrator {
               canStream,
               provider: currentAssignment.providerName,
             });
-            await this.sendVisibleAssistantMarkdown(chatId, session, fallback);
+            await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, fallback);
           }
           // ─── Metrics: record end_turn ───────────────────────────────
           this.recordMetricEnd(metricId, {
@@ -4936,7 +4836,7 @@ export class Orchestrator {
               this.activeGoalTrees.set(conversationScope, goalTree);
               this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
               const treeViz = renderGoalTree(goalTree);
-              await this.sendVisibleAssistantMarkdown(
+              await this.sessionManager.sendVisibleAssistantMarkdown(
                 chatId,
                 session,
                 "Goal decomposition:\n```\n" + treeViz + "\n```",
@@ -5072,7 +4972,7 @@ export class Orchestrator {
         // ─── Memory Re-retrieval ─────────────────────────────────────────
         if (memoryRefresher) {
           try {
-            const recentContext = this.extractLastUserMessage(session);
+            const recentContext = this.sessionManager.extractLastUserMessage(session);
             const check = await memoryRefresher.shouldRefresh(iteration, recentContext, chatId);
             if (check.should) {
               const refreshed = await memoryRefresher.refresh(
@@ -5129,7 +5029,7 @@ export class Orchestrator {
       });
       // ────────────────────────────────────────────────────────────────
 
-      await this.sendVisibleAssistantText(
+      await this.sessionManager.sendVisibleAssistantText(
         chatId,
         session,
         "I've reached the maximum number of steps for this request. " +
@@ -5139,7 +5039,7 @@ export class Orchestrator {
       agentState = transitionPhase(agentState, AgentPhase.FAILED);
       throw error;
     } finally {
-      this.persistExecutionMemory(identityKey, executionJournal);
+      this.sessionManager.persistExecutionMemory(identityKey, executionJournal);
       // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
       this.recordMetricEnd(metricId, {
         agentPhase: agentState.phase,
@@ -6900,41 +6800,6 @@ export class Orchestrator {
     return response === "Yes";
   }
 
-  private getSessionPersistenceContext(): SessionPersistenceContext {
-    return {
-      sessions: this.sessions,
-      sessionLocks: this.sessionLocks,
-      activeGoalTrees: this.activeGoalTrees,
-      pendingResumeTrees: this.pendingResumeTrees,
-      memoryManager: this.memoryManager,
-      reRetrievalConfig: this.reRetrievalConfig,
-      embeddingProvider: this.embeddingProvider,
-      ragPipeline: this.ragPipeline,
-      instinctRetriever: this.instinctRetriever,
-      eventEmitter: this.eventEmitter,
-      taskExecutionStore: this.taskExecutionStore,
-      lastPersistTime: this.lastPersistTime,
-      persistDebounceMs: Orchestrator.PERSIST_DEBOUNCE_MS,
-    };
-  }
-
-  private extractLastUserMessage(session: Session): string {
-    return extractLastUserMessageHelper(session);
-  }
-
-  private getOrCreateSession(chatId: string): Session {
-    return getOrCreateSessionHelper(this.getSessionPersistenceContext(), chatId);
-  }
-
-  /**
-   * Trim session history to keep context manageable.
-   * Trims at safe boundaries to avoid orphaning tool_use/tool_result pairs.
-   * Returns the trimmed (removed) messages for persistence.
-   */
-  private trimSession(session: Session, maxMessages: number): ConversationMessage[] {
-    return trimSessionHelper(session, maxMessages);
-  }
-
   getProviderManager(): ProviderManager {
     return this.providerManager;
   }
@@ -6942,44 +6807,8 @@ export class Orchestrator {
   /**
    * Clean up expired sessions (call periodically).
    */
-  cleanupSessions(maxAgeMs: number = 3600_000): void {
-    const now = Date.now();
-    for (const [chatId, session] of this.sessions) {
-      if (now - session.lastActivity.getTime() > maxAgeMs) {
-        // Skip sessions with active locks — they are currently being processed
-        if (this.sessionLocks.has(chatId)) continue;
-
-        // Session-end summarization (fire-and-forget)
-        const visibleMessages = this.getVisibleTranscript(session);
-        if (this.sessionSummarizer && visibleMessages.length >= 2) {
-          void this.sessionSummarizer
-            .summarizeAndUpdateProfile(session.profileKey ?? chatId, visibleMessages)
-            .catch(() => {
-              // Session summarization failure is non-fatal
-            });
-        }
-        // Persist before cleanup (forced — session is being evicted)
-        void this.persistSessionToMemory(chatId, visibleMessages.slice(-10), /* force */ true);
-        this.lastPersistTime.delete(chatId);
-        this.sessions.delete(chatId);
-        this.activeGoalTrees.delete(session.conversationScope ?? chatId);
-      }
-    }
-  }
-
-  /** Minimum interval between debounced memory persists per chat (5s). */
-  private static readonly PERSIST_DEBOUNCE_MS = 5_000;
-
-  /**
-   * Persist conversation messages to memory so the agent remembers them next session.
-   * Debounced by default — pass `force: true` for trim evictions and session cleanup.
-   */
-  private async persistSessionToMemory(
-    chatId: string,
-    messages: ConversationMessage[],
-    force = false,
-  ): Promise<void> {
-    return persistSessionToMemoryHelper(this.getSessionPersistenceContext(), chatId, messages, force);
+  cleanupSessions(maxAgeMs: number = 3_600_000): void {
+    this.sessionManager.cleanupSessions(maxAgeMs);
   }
 
   private async maybeUpdateUserProfileFromPrompt(
@@ -7035,10 +6864,6 @@ export class Orchestrator {
         userId,
       );
     }
-  }
-
-  private persistExecutionMemory(scopeKey: string, executionJournal: ExecutionJournal): void {
-    persistExecutionMemoryHelper(this.getSessionPersistenceContext(), scopeKey, executionJournal);
   }
 
   private getRuntimeArtifactMatchKey(taskRunId?: string, chatId?: string): string | null {
@@ -7233,6 +7058,17 @@ export class Orchestrator {
       appliedInstinctIds: this.currentSessionInstinctIds.get(chatId) ?? [],
       timestamp: Date.now(),
     });
+
+    // Workspace monitor: agent activity event for dashboard UI
+    if (this.workspaceBus) {
+      this.workspaceBus.emit("monitor:agent_activity", {
+        taskId: undefined,
+        action: "tool_execute",
+        tool: tc.name,
+        detail: `Executing ${tc.name}`,
+        timestamp: Date.now(),
+      });
+    }
   }
 
   async buildTrajectoryReplayContext(params: {
@@ -7310,17 +7146,15 @@ export class Orchestrator {
       depth,
       timestamp: Date.now(),
     });
+
+    // Workspace monitor: task update event for dashboard UI
+    if (this.workspaceBus) {
+      this.workspaceBus.emit("monitor:task_update", {
+        rootId: String(rootId),
+        nodeId: String(nodeId),
+        status: String(status),
+      });
+    }
   }
 
-  /**
-   * Create a MemoryRefresher if re-retrieval is enabled, seeded with initial content hashes.
-   * Returns null when re-retrieval is disabled.
-   */
-  private createMemoryRefresher(initialContentHashes: string[]): MemoryRefresher | null {
-    return createMemoryRefresherHelper(this.getSessionPersistenceContext(), initialContentHashes);
-  }
-
-  private takePendingResumeTrees(conversationScope: string, chatId: string): GoalTree[] {
-    return takePendingResumeTreesHelper(this.getSessionPersistenceContext(), conversationScope, chatId);
-  }
 }

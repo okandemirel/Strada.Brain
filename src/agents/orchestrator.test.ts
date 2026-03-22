@@ -416,7 +416,7 @@ describe("Orchestrator", () => {
       memoryManager: { storeConversation } as any,
     });
 
-    const session = (memoryOrch as any).getOrCreateSession("chat-visible-only");
+    const session = (memoryOrch as any).sessionManager.getOrCreateSession("chat-visible-only");
     session.messages = [
       { role: "user", content: "Analyze the freeze" },
       { role: "assistant", content: "Geçmiş bağlamı çıkar\nmemory_search ile ara." },
@@ -428,9 +428,9 @@ describe("Orchestrator", () => {
       { role: "assistant", content: "Root cause verified." },
     ];
 
-    await (memoryOrch as any).persistSessionToMemory(
+    await (memoryOrch as any).sessionManager.persistSessionToMemory(
       "chat-visible-only",
-      (memoryOrch as any).getVisibleTranscript(session),
+      (memoryOrch as any).sessionManager.getVisibleTranscript(session),
       true,
     );
 
@@ -1181,7 +1181,7 @@ describe("Orchestrator", () => {
       },
     );
 
-    const bootstrapSession = (bootstrapOrch as any).getOrCreateSession("chat-post-setup");
+    const bootstrapSession = (bootstrapOrch as any).sessionManager.getOrCreateSession("chat-post-setup");
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
       "chat-post-setup",
       expect.stringContaining("Strada'ya Hoş Geldin"),
@@ -2177,7 +2177,7 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    const session = (resumeOrch as any).getOrCreateSession("ephemeral-chat");
+    const session = (resumeOrch as any).sessionManager.getOrCreateSession("ephemeral-chat");
     const visibleUserMessages = (
       (session.visibleMessages ?? []) as Array<{ role: string; content: unknown }>
     ).filter((message) => message.role === "user" && message.content === "hello");
