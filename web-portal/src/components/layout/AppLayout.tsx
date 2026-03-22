@@ -10,6 +10,7 @@ import { useWorkspaceStore } from '../../stores/workspace-store'
 import { useSidebarStore } from '../../stores/sidebar-store'
 
 const MonitorPanel = lazy(() => import('../monitor/MonitorPanel'))
+const CanvasPanel = lazy(() => import('../canvas/CanvasPanel'))
 
 function PrimaryContent() {
   const mode = useWorkspaceStore((s) => s.mode)
@@ -24,6 +25,14 @@ function PrimaryContent() {
         }
       >
         <MonitorPanel />
+      </Suspense>
+    )
+  }
+
+  if (mode === 'canvas') {
+    return (
+      <Suspense fallback={<div>Loading Canvas...</div>}>
+        <CanvasPanel />
       </Suspense>
     )
   }

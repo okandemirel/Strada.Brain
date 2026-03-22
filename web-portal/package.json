@@ -33,6 +33,7 @@
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
     "tailwindcss": "^4.2.2",
+    "tldraw": "^3.15.6",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

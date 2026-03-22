@@ -48,21 +48,21 @@ describe('BottomTabBar', () => {
     expect(mockSetMode).toHaveBeenCalledWith('chat')
   })
 
-  it('disabled tabs (Canvas, Code) are disabled, Monitor is enabled', () => {
+  it('disabled tabs (Code) are disabled, Monitor and Canvas are enabled', () => {
     render(<BottomTabBar />)
     const monitorBtn = screen.getByText('Monitor').closest('button')
     const canvasBtn = screen.getByText('Canvas').closest('button')
     const codeBtn = screen.getByText('Code').closest('button')
     expect(monitorBtn).not.toBeDisabled()
-    expect(canvasBtn).toBeDisabled()
+    expect(canvasBtn).not.toBeDisabled()
     expect(codeBtn).toBeDisabled()
   })
 
   it('clicking a disabled tab does not call setMode', async () => {
     const user = userEvent.setup()
     render(<BottomTabBar />)
-    const canvasBtn = screen.getByText('Canvas').closest('button')!
-    await user.click(canvasBtn)
+    const codeBtn = screen.getByText('Code').closest('button')!
+    await user.click(codeBtn)
     expect(mockSetMode).not.toHaveBeenCalled()
   })
 })

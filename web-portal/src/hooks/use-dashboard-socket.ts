@@ -1,5 +1,6 @@
 import { useMonitorStore } from '../stores/monitor-store'
 import { useWorkspaceStore, type WorkspaceMode } from '../stores/workspace-store'
+import { useCanvasStore } from '../stores/canvas-store'
 import type { MonitorTask, ActivityEntry, DagState } from '../stores/monitor-store'
 
 // ---- Workspace message type definitions ----
@@ -88,6 +89,18 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
     }
 
+    case 'canvas:shapes_add':
+      useCanvasStore.getState().addPendingShapes((data as any).shapes || [])
+      break
+
+    case 'canvas:shapes_update':
+      useCanvasStore.getState().addPendingShapes((data as any).shapes || [])
+      break
+
+    case 'canvas:shapes_remove':
+      // Shape removal is handled by the canvas component itself via the store
+      break
+
     case 'monitor:gate_request': {
       const payload = (data as any).payload ?? data
       if (payload.nodeId) {
@@ -138,5 +151,5 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
  * that should be dispatched via dispatchWorkspaceMessage.
  */
 export function isWorkspaceMessage(type: string): boolean {
-  return type.startsWith('monitor:') || type.startsWith('workspace:')
+  return type.startsWith('monitor:') || type.startsWith('workspace:') || type.startsWith('canvas:')
 }

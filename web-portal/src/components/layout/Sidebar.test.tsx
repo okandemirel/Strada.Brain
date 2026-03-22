@@ -136,7 +136,7 @@ describe('Sidebar', () => {
     const monitorBtn = screen.getByText('Monitor').closest('button')
     expect(monitorBtn).not.toBeDisabled()
     const canvasBtn = screen.getByText('Canvas').closest('button')
-    expect(canvasBtn).toBeDisabled()
+    expect(canvasBtn).not.toBeDisabled()
     const codeBtn = screen.getByText('Code').closest('button')
     expect(codeBtn).toBeDisabled()
   })
@@ -145,7 +145,7 @@ describe('Sidebar', () => {
     renderSidebar()
     // Tooltip content is rendered inline due to mock
     const tooltipContents = screen.getAllByTestId('tooltip-content')
-    expect(tooltipContents.length).toBe(2) // Canvas, Code
+    expect(tooltipContents.length).toBe(1) // Code only
     tooltipContents.forEach((el) => {
       expect(el.textContent).toContain('Coming soon')
     })

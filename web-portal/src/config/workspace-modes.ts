@@ -11,7 +11,7 @@ export interface ModeConfig {
 export const WORKSPACE_MODES: ModeConfig[] = [
   { mode: 'chat', icon: MessageSquare, label: 'Chat', enabled: true },
   { mode: 'monitor', icon: Activity, label: 'Monitor', enabled: true },
-  { mode: 'canvas', icon: Paintbrush, label: 'Canvas', enabled: false },
+  { mode: 'canvas', icon: Paintbrush, label: 'Canvas', enabled: true },
   { mode: 'code', icon: Code, label: 'Code', enabled: false },
 ]
 
