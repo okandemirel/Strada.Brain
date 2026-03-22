@@ -196,6 +196,7 @@ strada
 ./strada                  # Canonical source-checkout launcher
 .\strada.ps1             # Canonical Windows PowerShell source-checkout launcher
 strada.cmd               # Windows Command Prompt companion launcher inside the checkout
+node strada.js            # Universal Node.js entry point (works on any OS without shell wrappers)
 ./strada install-command  # Install a user-local bare `strada` command
 .\strada.ps1 install-command # Windows source-checkout bare-command install
 ./strada uninstall        # Remove the installed bare command and managed PATH/profile changes
