@@ -77,8 +77,22 @@ export class InstinctRetriever {
     // Filter out deprecated instincts (EVAL-05: deprecated excluded from retrieval)
     const filtered = matches.filter(m => !m.instinct || m.instinct.status !== "deprecated");
 
+    // Scope deduplication: most specific scope wins per pattern
+    const scopePriority: Record<string, number> = { user: 3, project: 2, global: 1 };
+    const byPattern = new Map<string, PatternMatch>();
+    for (const match of filtered) {
+      const pattern = match.instinct?.triggerPattern ?? '';
+      const existing = byPattern.get(pattern);
+      const matchScope = match.instinct?.scopeType ?? 'project';
+      const existingScope = existing?.instinct?.scopeType ?? 'project';
+      if (!existing || (scopePriority[matchScope] ?? 0) > (scopePriority[existingScope] ?? 0)) {
+        byPattern.set(pattern, match);
+      }
+    }
+    const scopeDeduped = Array.from(byPattern.values());
+
     // Apply 1.2x ranking boost for permanent instincts (EVAL-06: permanent highlighted)
-    const boosted = filtered.map(m =>
+    const boosted = scopeDeduped.map(m =>
       m.instinct?.status === "permanent"
         ? { ...m, confidence: m.confidence * 1.2 }
         : m

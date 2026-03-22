@@ -36,6 +36,7 @@ import {
   type RuntimeArtifact,
   type BayesianConfig,
   type InstinctLifecycleEvent,
+  type ScopeType,
   CONFIDENCE_THRESHOLDS,
   createInstinctId,
 } from "../types.js";
@@ -383,6 +384,7 @@ export class LearningPipeline {
     action: string;
     toolName?: string;
     contextConditions?: ContextCondition[];
+    scopeType?: ScopeType;
   }): Promise<Instinct | null> {
     // Check for similar existing instincts (use similarity threshold, not confidence)
     const similar = await this.patternMatcher.findSimilarInstincts(params.triggerPattern);
@@ -391,6 +393,8 @@ export class LearningPipeline {
 
     const initialConfidence = this.calculateInitialConfidence(params);
     if (initialConfidence < this.config.minConfidenceForCreation) return null;
+
+    const scopeType: ScopeType = params.scopeType ?? 'project';
 
     const instinct: Instinct = {
       id: createInstinctId(),
@@ -406,9 +410,14 @@ export class LearningPipeline {
       updatedAt: Date.now() as TimestampMs,
       sourceTrajectoryIds: [],
       tags: [],
+      scopeType,
     };
 
-    this.storage.createInstinct(instinct, this.projectPath);
+    // Store instinct row without old-style scope, then add v2 scope entry with scopeType
+    this.storage.createInstinct(instinct, undefined);
+    if (this.projectPath) {
+      this.storage.addInstinctScopeV2(instinct.id, this.projectPath, scopeType);
+    }
     this.checkScopePromotion(instinct);
     if (this.embeddingQueue) {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
@@ -417,7 +426,8 @@ export class LearningPipeline {
     return instinct;
   }
 
-  createInstinct(params: Omit<Instinct, "id" | "stats" | "createdAt" | "updatedAt" | "sourceTrajectoryIds" | "tags">): Instinct {
+  createInstinct(params: Omit<Instinct, "id" | "stats" | "createdAt" | "updatedAt" | "sourceTrajectoryIds" | "tags"> & { scopeType?: ScopeType }): Instinct {
+    const scopeType: ScopeType = params.scopeType ?? 'project';
     const instinct: Instinct = {
       ...params,
       id: createInstinctId(),
@@ -426,9 +436,14 @@ export class LearningPipeline {
       updatedAt: Date.now() as TimestampMs,
       sourceTrajectoryIds: [],
       tags: [],
+      scopeType,
     };
 
-    this.storage.createInstinct(instinct, this.projectPath);
+    // Store instinct row without old-style scope, then add v2 scope entry with scopeType
+    this.storage.createInstinct(instinct, undefined);
+    if (this.projectPath) {
+      this.storage.addInstinctScopeV2(instinct.id, this.projectPath, scopeType);
+    }
     this.checkScopePromotion(instinct);
     if (this.embeddingQueue) {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
