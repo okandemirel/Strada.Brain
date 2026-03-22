@@ -35,6 +35,7 @@ import type {
   ErrorDetails,
   InstinctStats,
   ErrorCategory,
+  TrustLevel,
 } from "../types.js";
 import { MS_PER_DAY } from "../types.js";
 import type { ChatId, SessionId, TimestampMs, JsonObject } from "../../types/index.js";
@@ -413,6 +414,56 @@ export class LearningStorage {
         PRIMARY KEY (week_start, event_type)
       ) WITHOUT ROWID;
     `);
+
+    // Learning Pipeline v2: factor columns on instincts
+    const v2FactorColumns = [
+      'ALTER TABLE instincts ADD COLUMN factor_recency REAL DEFAULT 0.5',
+      'ALTER TABLE instincts ADD COLUMN factor_consistency REAL DEFAULT 0.5',
+      'ALTER TABLE instincts ADD COLUMN factor_scope_breadth REAL DEFAULT 0.0',
+      'ALTER TABLE instincts ADD COLUMN factor_user_validation REAL DEFAULT 0.5',
+      'ALTER TABLE instincts ADD COLUMN factor_cross_session REAL DEFAULT 0.0',
+      "ALTER TABLE instincts ADD COLUMN trust_level TEXT DEFAULT 'new'",
+      'ALTER TABLE instincts ADD COLUMN seed INTEGER DEFAULT 0',
+      "ALTER TABLE instinct_scopes ADD COLUMN scope_type TEXT DEFAULT 'project'",
+      'ALTER TABLE instinct_scopes ADD COLUMN user_id TEXT',
+    ];
+    for (const sql of v2FactorColumns) {
+      try { this.db.prepare(sql).run(); } catch { /* column already exists */ }
+    }
+
+    // Learning Pipeline v2: Migrate CHECK constraint on type to include new types
+    this.migrateTypeConstraintV2();
+
+    // Learning Pipeline v2: feedback table
+    this.db.prepare(`CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK(type IN ('thumbs_up', 'thumbs_down', 'teaching', 'correction')),
+      user_id TEXT,
+      instinct_ids TEXT,
+      content TEXT,
+      scope_type TEXT,
+      source TEXT,
+      created_at INTEGER NOT NULL
+    )`).run();
+    this.db.prepare("CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id, created_at)").run();
+    this.db.prepare("CREATE INDEX IF NOT EXISTS idx_feedback_type ON feedback(type, created_at)").run();
+    this.db.prepare("CREATE INDEX IF NOT EXISTS idx_feedback_instinct ON feedback(instinct_ids)").run();
+
+    // Learning Pipeline v2: intervention_log table
+    this.db.prepare(`CREATE TABLE IF NOT EXISTS intervention_log (
+      id TEXT PRIMARY KEY,
+      instinct_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      action_taken TEXT NOT NULL,
+      user_id TEXT,
+      created_at INTEGER NOT NULL
+    )`).run();
+    this.db.prepare("CREATE INDEX IF NOT EXISTS idx_intervention_log_instinct ON intervention_log(instinct_id, created_at)").run();
+    this.db.prepare("CREATE INDEX IF NOT EXISTS idx_intervention_log_user ON intervention_log(user_id, created_at)").run();
+
+    // Learning Pipeline v2: scope index
+    this.db.prepare("CREATE INDEX IF NOT EXISTS idx_instinct_scopes_type_user ON instinct_scopes(scope_type, user_id, project_path)").run();
   }
 
   /**
@@ -582,6 +633,97 @@ export class LearningStorage {
   }
 
   /**
+   * Migrate the CHECK constraint on instincts.type to include v2 types:
+   * 'error_pattern', 'workflow_pattern', 'user_teaching', 'seed'.
+   * Uses table recreation since SQLite cannot ALTER CHECK constraints.
+   * Idempotent -- only runs if the new types are not already valid.
+   */
+  private migrateTypeConstraintV2(): void {
+    if (!this.db) return;
+
+    // Check if 'error_pattern' is already accepted (representative new type)
+    try {
+      this.db.prepare("INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        "__check_error_pattern__", "__test__", "error_pattern", "proposed", 0.5, "__test__", "__test__", "[]", "{}", 0, 0
+      );
+      // If we get here, new types are already in CHECK -- delete test row and return
+      this.db.prepare("DELETE FROM instincts WHERE id = ?").run("__check_error_pattern__");
+      return;
+    } catch {
+      // 'error_pattern' not valid -- proceed with migration
+    }
+
+    this.db.pragma("foreign_keys = OFF");
+    this.db.pragma("legacy_alter_table = ON");
+
+    const migrate = this.db.transaction(() => {
+      this.db!.prepare("ALTER TABLE instincts RENAME TO instincts_old").run();
+
+      this.db!.prepare(`
+        CREATE TABLE instincts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL CHECK(type IN ('error_fix', 'tool_usage', 'correction', 'verification', 'optimization', 'tool_chain', 'error_pattern', 'workflow_pattern', 'user_teaching', 'seed')),
+          status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'active', 'deprecated', 'evolved', 'permanent')),
+          confidence REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
+          trigger_pattern TEXT NOT NULL,
+          action TEXT NOT NULL,
+          context_conditions TEXT NOT NULL,
+          stats TEXT NOT NULL,
+          embedding TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          evolved_to TEXT,
+          source_trajectory_ids TEXT NOT NULL DEFAULT '[]',
+          tags TEXT NOT NULL DEFAULT '[]',
+          bayesian_alpha REAL DEFAULT 1.0,
+          bayesian_beta REAL DEFAULT 1.0,
+          cooling_started_at INTEGER,
+          cooling_failures INTEGER DEFAULT 0,
+          origin_session_id TEXT,
+          origin_boot_count INTEGER,
+          cross_session_hit_count INTEGER DEFAULT 0,
+          migrated_at INTEGER,
+          factor_recency REAL DEFAULT 0.5,
+          factor_consistency REAL DEFAULT 0.5,
+          factor_scope_breadth REAL DEFAULT 0.0,
+          factor_user_validation REAL DEFAULT 0.5,
+          factor_cross_session REAL DEFAULT 0.0,
+          trust_level TEXT DEFAULT 'new',
+          seed INTEGER DEFAULT 0
+        )
+      `).run();
+
+      this.db!.prepare(`
+        INSERT INTO instincts (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, source_trajectory_ids, tags, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at, factor_recency, factor_consistency, factor_scope_breadth, factor_user_validation, factor_cross_session, trust_level, seed)
+        SELECT id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to,
+               COALESCE(source_trajectory_ids, '[]'), COALESCE(tags, '[]'),
+               COALESCE(bayesian_alpha, 1.0), COALESCE(bayesian_beta, 1.0), cooling_started_at, COALESCE(cooling_failures, 0),
+               origin_session_id, origin_boot_count, COALESCE(cross_session_hit_count, 0), migrated_at,
+               COALESCE(factor_recency, 0.5), COALESCE(factor_consistency, 0.5), COALESCE(factor_scope_breadth, 0.0),
+               COALESCE(factor_user_validation, 0.5), COALESCE(factor_cross_session, 0.0),
+               COALESCE(trust_level, 'new'), COALESCE(seed, 0)
+        FROM instincts_old
+      `).run();
+
+      // Recreate indexes
+      this.db!.prepare("CREATE INDEX IF NOT EXISTS idx_instincts_status_confidence ON instincts(status, confidence DESC)").run();
+      this.db!.prepare("CREATE INDEX IF NOT EXISTS idx_instincts_type_status ON instincts(type, status)").run();
+
+      this.recreateTrajectoryInstinctsPreservingData();
+
+      this.db!.prepare("DROP TABLE instincts_old").run();
+    });
+
+    try {
+      migrate();
+    } finally {
+      this.db.pragma("legacy_alter_table = OFF");
+      this.db.pragma("foreign_keys = ON");
+    }
+  }
+
+  /**
    * Migrate the CHECK constraint on evolution_proposals.target_type so runtime
    * artifact targets remain aligned with the TypeScript model.
    */
@@ -699,15 +841,16 @@ export class LearningStorage {
     const stmts = {
       insertInstinct: `
         INSERT INTO instincts
-        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, source_trajectory_ids, tags, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, name, type, status, confidence, trigger_pattern, action, context_conditions, stats, embedding, created_at, updated_at, evolved_to, source_trajectory_ids, tags, bayesian_alpha, bayesian_beta, cooling_started_at, cooling_failures, origin_session_id, origin_boot_count, cross_session_hit_count, migrated_at, factor_recency, factor_consistency, factor_scope_breadth, factor_user_validation, factor_cross_session, trust_level, seed)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       updateInstinct: `
         UPDATE instincts SET
           name = ?, type = ?, status = ?, confidence = ?, trigger_pattern = ?,
           action = ?, context_conditions = ?, stats = ?, updated_at = ?, evolved_to = ?,
           source_trajectory_ids = ?, tags = ?, bayesian_alpha = ?, bayesian_beta = ?, cooling_started_at = ?, cooling_failures = ?,
-          origin_session_id = ?, origin_boot_count = ?, cross_session_hit_count = ?, migrated_at = ?
+          origin_session_id = ?, origin_boot_count = ?, cross_session_hit_count = ?, migrated_at = ?,
+          factor_recency = ?, factor_consistency = ?, factor_scope_breadth = ?, factor_user_validation = ?, factor_cross_session = ?, trust_level = ?, seed = ?
         WHERE id = ?
       `,
       getInstinct: `SELECT * FROM instincts WHERE id = ?`,
@@ -878,7 +1021,14 @@ export class LearningStorage {
       instinct.originSessionId ?? null,
       instinct.originBootCount ?? null,
       instinct.crossSessionHitCount ?? 0,
-      instinct.migratedAt ?? null
+      instinct.migratedAt ?? null,
+      instinct.factorRecency ?? 0.5,
+      instinct.factorConsistency ?? 0.5,
+      instinct.factorScopeBreadth ?? 0.0,
+      instinct.factorUserValidation ?? 0.5,
+      instinct.factorCrossSession ?? 0.0,
+      instinct.trustLevel ?? 'new',
+      instinct.seed ? 1 : 0,
     );
 
     // Insert scope row when projectPath is provided
@@ -923,6 +1073,13 @@ export class LearningStorage {
       instinct.originBootCount ?? null,
       instinct.crossSessionHitCount ?? 0,
       instinct.migratedAt ?? null,
+      instinct.factorRecency ?? 0.5,
+      instinct.factorConsistency ?? 0.5,
+      instinct.factorScopeBreadth ?? 0.0,
+      instinct.factorUserValidation ?? 0.5,
+      instinct.factorCrossSession ?? 0.0,
+      instinct.trustLevel ?? 'new',
+      instinct.seed ? 1 : 0,
       instinct.id
     );
   }
@@ -1752,6 +1909,249 @@ export class LearningStorage {
     }));
   }
 
+  // ─── Learning Pipeline v2 Operations ────────────────────────────────────────
+
+  /** Whitelist of valid factor column names to prevent SQL injection */
+  private static readonly FACTOR_COLUMNS = [
+    'factor_recency',
+    'factor_consistency',
+    'factor_scope_breadth',
+    'factor_user_validation',
+    'factor_cross_session',
+  ] as const;
+
+  /** Store a feedback record */
+  storeFeedback(record: {
+    id: string;
+    type: 'thumbs_up' | 'thumbs_down' | 'teaching' | 'correction';
+    userId?: string;
+    instinctIds?: string;
+    content?: string;
+    scopeType?: string;
+    source?: string;
+    createdAt: number;
+  }): void {
+    this.ensureConnection();
+    this.db!.prepare(`
+      INSERT INTO feedback (id, type, user_id, instinct_ids, content, scope_type, source, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.type,
+      record.userId ?? null,
+      record.instinctIds ?? null,
+      record.content ?? null,
+      record.scopeType ?? null,
+      record.source ?? null,
+      record.createdAt,
+    );
+  }
+
+  /** Get feedback records that reference a given instinct ID */
+  getFeedbackByInstinct(instinctId: string): Array<{
+    id: string;
+    type: string;
+    userId: string | null;
+    instinctIds: string | null;
+    content: string | null;
+    scopeType: string | null;
+    source: string | null;
+    createdAt: number;
+  }> {
+    this.ensureConnection();
+    const rows = this.db!.prepare(
+      "SELECT * FROM feedback WHERE instinct_ids LIKE ? ORDER BY created_at DESC"
+    ).all(`%${instinctId}%`) as Array<{
+      id: string;
+      type: string;
+      user_id: string | null;
+      instinct_ids: string | null;
+      content: string | null;
+      scope_type: string | null;
+      source: string | null;
+      created_at: number;
+    }>;
+    return rows.map(row => ({
+      id: row.id,
+      type: row.type,
+      userId: row.user_id,
+      instinctIds: row.instinct_ids,
+      content: row.content,
+      scopeType: row.scope_type,
+      source: row.source,
+      createdAt: row.created_at,
+    }));
+  }
+
+  /** Log an intervention event */
+  logIntervention(entry: {
+    id: string;
+    instinctId: string;
+    toolName: string;
+    tier: string;
+    actionTaken: string;
+    userId?: string;
+    createdAt: number;
+  }): void {
+    this.ensureConnection();
+    this.db!.prepare(`
+      INSERT INTO intervention_log (id, instinct_id, tool_name, tier, action_taken, user_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      entry.id,
+      entry.instinctId,
+      entry.toolName,
+      entry.tier,
+      entry.actionTaken,
+      entry.userId ?? null,
+      entry.createdAt,
+    );
+  }
+
+  /** Get intervention log entries, optionally filtered by instinct */
+  getInterventionLogs(instinctId?: string, limit: number = 100): Array<{
+    id: string;
+    instinctId: string;
+    toolName: string;
+    tier: string;
+    actionTaken: string;
+    userId: string | null;
+    createdAt: number;
+  }> {
+    this.ensureConnection();
+    let sql = "SELECT * FROM intervention_log";
+    const params: (string | number)[] = [];
+
+    if (instinctId) {
+      sql += " WHERE instinct_id = ?";
+      params.push(instinctId);
+    }
+
+    sql += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
+
+    const rows = this.db!.prepare(sql).all(...params) as Array<{
+      id: string;
+      instinct_id: string;
+      tool_name: string;
+      tier: string;
+      action_taken: string;
+      user_id: string | null;
+      created_at: number;
+    }>;
+    return rows.map(row => ({
+      id: row.id,
+      instinctId: row.instinct_id,
+      toolName: row.tool_name,
+      tier: row.tier,
+      actionTaken: row.action_taken,
+      userId: row.user_id,
+      createdAt: row.created_at,
+    }));
+  }
+
+  /** Add an instinct scope with extended v2 fields (scope_type, user_id) */
+  addInstinctScopeV2(instinctId: string, projectPath: string, scopeType: string = 'project', userId?: string): void {
+    this.ensureConnection();
+    this.db!.prepare(
+      "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at, scope_type, user_id) VALUES (?, ?, ?, ?, ?)"
+    ).run(instinctId, projectPath, Date.now(), scopeType, userId ?? null);
+  }
+
+  /** Get all scopes for an instinct */
+  getInstinctScopes(instinctId: string): Array<{
+    instinctId: string;
+    projectPath: string;
+    scopeType: string | null;
+    userId: string | null;
+    createdAt: number;
+  }> {
+    this.ensureConnection();
+    const rows = this.db!.prepare(
+      "SELECT * FROM instinct_scopes WHERE instinct_id = ?"
+    ).all(instinctId) as Array<{
+      instinct_id: string;
+      project_path: string;
+      scope_type: string | null;
+      user_id: string | null;
+      created_at: number;
+    }>;
+    return rows.map(row => ({
+      instinctId: row.instinct_id,
+      projectPath: row.project_path,
+      scopeType: row.scope_type,
+      userId: row.user_id,
+      createdAt: row.created_at,
+    }));
+  }
+
+  /** Update a specific factor column on an instinct (validates against whitelist) */
+  updateInstinctFactor(instinctId: string, factor: string, value: number): void {
+    this.ensureConnection();
+    if (!(LearningStorage.FACTOR_COLUMNS as readonly string[]).includes(factor)) {
+      throw new Error(`Invalid factor: ${factor}`);
+    }
+    this.db!.prepare(`UPDATE instincts SET ${factor} = ? WHERE id = ?`).run(value, instinctId);
+  }
+
+  /** Get instincts by scope (joins instincts with instinct_scopes) */
+  getInstinctsByScope(scopeType: string, userId?: string, projectPath?: string): Instinct[] {
+    this.ensureConnection();
+    let sql = "SELECT DISTINCT i.* FROM instincts i INNER JOIN instinct_scopes s ON i.id = s.instinct_id WHERE s.scope_type = ?";
+    const params: (string | number)[] = [scopeType];
+
+    if (userId) {
+      sql += " AND s.user_id = ?";
+      params.push(userId);
+    }
+    if (projectPath) {
+      sql += " AND s.project_path = ?";
+      params.push(projectPath);
+    }
+
+    sql += " ORDER BY i.confidence DESC";
+
+    const rows = this.db!.prepare(sql).all(...params) as InstinctRow[];
+    return rows.map(r => this.rowToInstinct(r));
+  }
+
+  /** Count total instincts */
+  countInstincts(): number {
+    this.ensureConnection();
+    const row = this.db!.prepare("SELECT COUNT(*) as cnt FROM instincts").get() as { cnt: number };
+    return row.cnt;
+  }
+
+  /** Delete the lowest-confidence instincts with a given status */
+  deleteLowestConfidenceInstincts(status: string, count: number): void {
+    this.ensureConnection();
+    this.db!.prepare(`
+      DELETE FROM instincts WHERE id IN (
+        SELECT id FROM instincts WHERE status = ? ORDER BY confidence ASC LIMIT ?
+      )
+    `).run(status, count);
+  }
+
+  /** Get an instinct by its trigger pattern, optionally filtered by scope type */
+  getInstinctByPattern(pattern: string, scopeType?: string): Instinct | null {
+    this.ensureConnection();
+
+    if (scopeType) {
+      const row = this.db!.prepare(`
+        SELECT DISTINCT i.* FROM instincts i
+        INNER JOIN instinct_scopes s ON i.id = s.instinct_id
+        WHERE i.trigger_pattern = ? AND s.scope_type = ?
+        LIMIT 1
+      `).get(pattern, scopeType) as InstinctRow | undefined;
+      return row ? this.rowToInstinct(row) : null;
+    }
+
+    const row = this.db!.prepare(
+      "SELECT * FROM instincts WHERE trigger_pattern = ? LIMIT 1"
+    ).get(pattern) as InstinctRow | undefined;
+    return row ? this.rowToInstinct(row) : null;
+  }
+
   // ─── Statistics ──────────────────────────────────────────────────────────────
 
   /** Get learning statistics (single query for efficiency) */
@@ -1826,6 +2226,13 @@ export class LearningStorage {
       originBootCount: row.origin_boot_count ?? undefined,
       crossSessionHitCount: row.cross_session_hit_count ?? 0,
       migratedAt: row.migrated_at ? (row.migrated_at as TimestampMs) : undefined,
+      factorRecency: row.factor_recency ?? undefined,
+      factorConsistency: row.factor_consistency ?? undefined,
+      factorScopeBreadth: row.factor_scope_breadth ?? undefined,
+      factorUserValidation: row.factor_user_validation ?? undefined,
+      factorCrossSession: row.factor_cross_session ?? undefined,
+      trustLevel: (row.trust_level as TrustLevel) ?? undefined,
+      seed: row.seed ? true : undefined,
     };
   }
 
@@ -1947,6 +2354,14 @@ interface InstinctRow {
   origin_boot_count: number | null;
   cross_session_hit_count: number | null;
   migrated_at: number | null;
+  // Learning Pipeline v2 factor columns
+  factor_recency: number | null;
+  factor_consistency: number | null;
+  factor_scope_breadth: number | null;
+  factor_user_validation: number | null;
+  factor_cross_session: number | null;
+  trust_level: string | null;
+  seed: number | null;
 }
 
 interface TrajectoryRow {

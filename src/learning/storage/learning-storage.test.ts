@@ -865,4 +865,263 @@ describe("LearningStorage", () => {
       migratedStorage.close();
     });
   });
+
+  describe("Learning Pipeline v2 Schema Migrations", () => {
+    const createTestInstinct = (): import("../types.ts").Instinct => ({
+      id: `instinct_${randomUUID()}` as import("../types.ts").InstinctId,
+      name: "V2 Test Instinct",
+      type: "error_fix",
+      status: "proposed",
+      confidence: 0.5,
+      triggerPattern: "CS0246",
+      action: "Add using directive",
+      contextConditions: [{ type: "error_code", value: "CS0246", match: "include" }],
+      stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0 },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    it("should have factor column defaults after instinct creation", () => {
+      const instinct = createTestInstinct();
+      storage.createInstinct(instinct);
+
+      const db = storage.getDatabase()!;
+      const row = db.prepare("SELECT factor_recency, factor_consistency, factor_scope_breadth, factor_user_validation, factor_cross_session, trust_level, seed FROM instincts WHERE id = ?").get(instinct.id) as {
+        factor_recency: number;
+        factor_consistency: number;
+        factor_scope_breadth: number;
+        factor_user_validation: number;
+        factor_cross_session: number;
+        trust_level: string;
+        seed: number;
+      };
+
+      expect(row.factor_recency).toBe(0.5);
+      expect(row.factor_consistency).toBe(0.5);
+      expect(row.factor_scope_breadth).toBe(0.0);
+      expect(row.factor_user_validation).toBe(0.5);
+      expect(row.factor_cross_session).toBe(0.0);
+      expect(row.trust_level).toBe("new");
+      expect(row.seed).toBe(0);
+    });
+
+    it("should round-trip factor fields through rowToInstinct", () => {
+      const instinct: import("../types.ts").Instinct = {
+        ...createTestInstinct(),
+        factorRecency: 0.8,
+        factorConsistency: 0.9,
+        factorScopeBreadth: 0.3,
+        factorUserValidation: 0.7,
+        factorCrossSession: 0.4,
+        trustLevel: "warn_enabled",
+        seed: true,
+      };
+      storage.createInstinct(instinct);
+
+      const retrieved = storage.getInstinct(instinct.id);
+      expect(retrieved).not.toBeNull();
+      expect(retrieved?.factorRecency).toBe(0.8);
+      expect(retrieved?.factorConsistency).toBe(0.9);
+      expect(retrieved?.factorScopeBreadth).toBe(0.3);
+      expect(retrieved?.factorUserValidation).toBe(0.7);
+      expect(retrieved?.factorCrossSession).toBe(0.4);
+      expect(retrieved?.trustLevel).toBe("warn_enabled");
+      expect(retrieved?.seed).toBe(true);
+    });
+
+    it("should accept new instinct types (error_pattern, workflow_pattern, user_teaching, seed)", () => {
+      const types = ["error_pattern", "workflow_pattern", "user_teaching", "seed"] as const;
+      for (const type of types) {
+        const instinct = { ...createTestInstinct(), id: `instinct_${type}_${randomUUID()}` as import("../types.ts").InstinctId, type };
+        expect(() => storage.createInstinct(instinct)).not.toThrow();
+        const retrieved = storage.getInstinct(instinct.id);
+        expect(retrieved?.type).toBe(type);
+      }
+    });
+
+    it("should store and retrieve feedback records", () => {
+      const feedbackId = randomUUID();
+      storage.storeFeedback({
+        id: feedbackId,
+        type: "thumbs_up",
+        userId: "user-123",
+        instinctIds: JSON.stringify(["instinct_abc", "instinct_def"]),
+        content: "Great suggestion!",
+        scopeType: "project",
+        source: "reaction",
+        createdAt: Date.now(),
+      });
+
+      const results = storage.getFeedbackByInstinct("instinct_abc");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.id).toBe(feedbackId);
+      expect(results[0]?.type).toBe("thumbs_up");
+      expect(results[0]?.userId).toBe("user-123");
+      expect(results[0]?.content).toBe("Great suggestion!");
+      expect(results[0]?.scopeType).toBe("project");
+      expect(results[0]?.source).toBe("reaction");
+    });
+
+    it("should return empty array for feedback with no matching instinct", () => {
+      const results = storage.getFeedbackByInstinct("non_existent_instinct");
+      expect(results).toHaveLength(0);
+    });
+
+    it("should store and retrieve intervention log entries", () => {
+      const entryId = randomUUID();
+      storage.logIntervention({
+        id: entryId,
+        instinctId: "instinct_test",
+        toolName: "dotnet_build",
+        tier: "suggest",
+        actionTaken: "Suggested fix for CS0246",
+        userId: "user-456",
+        createdAt: Date.now(),
+      });
+
+      const logs = storage.getInterventionLogs("instinct_test");
+      expect(logs).toHaveLength(1);
+      expect(logs[0]?.id).toBe(entryId);
+      expect(logs[0]?.instinctId).toBe("instinct_test");
+      expect(logs[0]?.toolName).toBe("dotnet_build");
+      expect(logs[0]?.tier).toBe("suggest");
+      expect(logs[0]?.actionTaken).toBe("Suggested fix for CS0246");
+      expect(logs[0]?.userId).toBe("user-456");
+    });
+
+    it("should return all intervention logs when no instinctId filter", () => {
+      storage.logIntervention({
+        id: randomUUID(),
+        instinctId: "instinct_a",
+        toolName: "tool_1",
+        tier: "passive",
+        actionTaken: "action_1",
+        createdAt: Date.now(),
+      });
+      storage.logIntervention({
+        id: randomUUID(),
+        instinctId: "instinct_b",
+        toolName: "tool_2",
+        tier: "warn",
+        actionTaken: "action_2",
+        createdAt: Date.now(),
+      });
+
+      const logs = storage.getInterventionLogs();
+      expect(logs).toHaveLength(2);
+    });
+
+    it("should add and retrieve instinct scopes with v2 fields", () => {
+      const instinct = createTestInstinct();
+      storage.createInstinct(instinct);
+      storage.addInstinctScopeV2(instinct.id, "/project/a", "project", "user-1");
+      storage.addInstinctScopeV2(instinct.id, "*", "global");
+
+      const scopes = storage.getInstinctScopes(instinct.id);
+      expect(scopes).toHaveLength(2);
+
+      const projectScope = scopes.find(s => s.projectPath === "/project/a");
+      expect(projectScope?.scopeType).toBe("project");
+      expect(projectScope?.userId).toBe("user-1");
+
+      const globalScope = scopes.find(s => s.projectPath === "*");
+      expect(globalScope?.scopeType).toBe("global");
+      expect(globalScope?.userId).toBeNull();
+    });
+
+    it("should count instincts correctly", () => {
+      const count0 = storage.countInstincts();
+      expect(count0).toBe(0);
+
+      storage.createInstinct(createTestInstinct());
+      storage.createInstinct(createTestInstinct());
+      storage.createInstinct(createTestInstinct());
+
+      expect(storage.countInstincts()).toBe(3);
+    });
+
+    it("should update instinct factor with valid factor name", () => {
+      const instinct = createTestInstinct();
+      storage.createInstinct(instinct);
+
+      storage.updateInstinctFactor(instinct.id, "factor_recency", 0.95);
+      const retrieved = storage.getInstinct(instinct.id);
+      expect(retrieved?.factorRecency).toBe(0.95);
+    });
+
+    it("should reject invalid factor names to prevent SQL injection", () => {
+      const instinct = createTestInstinct();
+      storage.createInstinct(instinct);
+
+      expect(() => storage.updateInstinctFactor(instinct.id, "name; DROP TABLE instincts;--", 0.5))
+        .toThrow("Invalid factor");
+      expect(() => storage.updateInstinctFactor(instinct.id, "confidence", 0.5))
+        .toThrow("Invalid factor");
+    });
+
+    it("should delete lowest confidence instincts", () => {
+      const low = { ...createTestInstinct(), confidence: 0.1, status: "proposed" as const };
+      const mid = { ...createTestInstinct(), confidence: 0.5, status: "proposed" as const };
+      const high = { ...createTestInstinct(), confidence: 0.9, status: "proposed" as const };
+      storage.createInstinct(low);
+      storage.createInstinct(mid);
+      storage.createInstinct(high);
+
+      storage.deleteLowestConfidenceInstincts("proposed", 1);
+
+      expect(storage.countInstincts()).toBe(2);
+      expect(storage.getInstinct(low.id)).toBeNull();
+      expect(storage.getInstinct(mid.id)).not.toBeNull();
+      expect(storage.getInstinct(high.id)).not.toBeNull();
+    });
+
+    it("should get instinct by trigger pattern", () => {
+      const instinct = createTestInstinct();
+      instinct.triggerPattern;
+      storage.createInstinct(instinct);
+
+      const found = storage.getInstinctByPattern("CS0246");
+      expect(found).not.toBeNull();
+      expect(found?.id).toBe(instinct.id);
+
+      const notFound = storage.getInstinctByPattern("non_existent_pattern");
+      expect(notFound).toBeNull();
+    });
+
+    it("should get instincts by scope", () => {
+      const instinct = createTestInstinct();
+      storage.createInstinct(instinct);
+      storage.addInstinctScopeV2(instinct.id, "/my/project", "project", "user-1");
+
+      const results = storage.getInstinctsByScope("project", "user-1", "/my/project");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.id).toBe(instinct.id);
+
+      const noResults = storage.getInstinctsByScope("global");
+      expect(noResults).toHaveLength(0);
+    });
+
+    it("should preserve factor fields through updateInstinct", () => {
+      const instinct: import("../types.ts").Instinct = {
+        ...createTestInstinct(),
+        factorRecency: 0.6,
+        factorConsistency: 0.7,
+        trustLevel: "suggest_only",
+      };
+      storage.createInstinct(instinct);
+
+      const updated = {
+        ...instinct,
+        confidence: 0.8 as any,
+        factorRecency: 0.9,
+        trustLevel: "auto_enabled" as const,
+      };
+      storage.updateInstinct(updated);
+
+      const retrieved = storage.getInstinct(instinct.id);
+      expect(retrieved?.factorRecency).toBe(0.9);
+      expect(retrieved?.factorConsistency).toBe(0.7);
+      expect(retrieved?.trustLevel).toBe("auto_enabled");
+    });
+  });
 });

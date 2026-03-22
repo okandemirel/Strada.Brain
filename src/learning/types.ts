@@ -188,6 +188,52 @@ export interface Instinct {
   readonly crossSessionHitCount?: number;
   /** Timestamp when this instinct was migrated to cross-session format */
   readonly migratedAt?: TimestampMs;
+  // --- Learning Pipeline v2 fields ---
+  /** Recency factor score for hybrid confidence model */
+  readonly factorRecency?: number;
+  /** Consistency factor score for hybrid confidence model */
+  readonly factorConsistency?: number;
+  /** Scope breadth factor score for hybrid confidence model */
+  readonly factorScopeBreadth?: number;
+  /** User validation factor score for hybrid confidence model */
+  readonly factorUserValidation?: number;
+  /** Cross-session factor score for hybrid confidence model */
+  readonly factorCrossSession?: number;
+  /** Current trust level governing intervention tier */
+  readonly trustLevel?: TrustLevel;
+  /** Whether this instinct was seeded at startup */
+  readonly seed?: boolean;
+  /** Scope type for this instinct */
+  readonly scopeType?: ScopeType;
+}
+
+// --- Learning Pipeline v2 Types ---
+
+export type InterventionTier = 'passive' | 'suggest' | 'warn' | 'auto';
+export type TrustLevel = 'new' | 'suggest_only' | 'warn_enabled' | 'auto_enabled';
+export type FeedbackType = 'thumbs_up' | 'thumbs_down' | 'teaching' | 'correction';
+export type ScopeType = 'user' | 'project' | 'global';
+export type FeedbackSource = 'natural_language' | 'file_heuristic' | 'reaction' | 'button';
+
+export interface FeedbackRecord {
+  readonly id: string;
+  readonly type: FeedbackType;
+  readonly userId?: string;
+  readonly instinctIds: readonly string[];
+  readonly content?: string;
+  readonly scopeType?: ScopeType;
+  readonly source: FeedbackSource;
+  readonly createdAt: number;
+}
+
+export interface InterventionLogEntry {
+  readonly id: string;
+  readonly instinctId: string;
+  readonly toolName: string;
+  readonly tier: InterventionTier;
+  readonly actionTaken: string;
+  readonly userId?: string;
+  readonly createdAt: number;
 }
 
 // =============================================================================
