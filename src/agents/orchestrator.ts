@@ -7067,6 +7067,34 @@ export class Orchestrator {
         detail: `Executing ${tc.name}`,
         timestamp: Date.now(),
       });
+
+      // Visual output detection: emit canvas events for diagrams and large diffs
+      const output = tr.content;
+      const shapes: Array<{ type: string; id: string; props: Record<string, unknown> }> = [];
+
+      if (/```(?:mermaid|plantuml)|@startuml/i.test(output)) {
+        shapes.push({
+          type: "DiagramNode",
+          id: `diagram-${Date.now()}`,
+          props: { content: output, language: output.includes("mermaid") ? "mermaid" : "plantuml" },
+        });
+      }
+
+      if (/^@@\s+-\d+/m.test(output) && output.split("\n").length > 50) {
+        shapes.push({
+          type: "DiffBlock",
+          id: `diff-${Date.now()}`,
+          props: { content: output },
+        });
+      }
+
+      if (shapes.length > 0) {
+        this.workspaceBus.emit("canvas:shapes_add", { shapes });
+        this.workspaceBus.emit("workspace:mode_suggest", {
+          mode: "canvas",
+          reason: `Visual output detected: ${shapes.map((s) => s.type).join(", ")}`,
+        });
+      }
     }
   }
 
