@@ -10,10 +10,10 @@ vi.mock('./VoiceRecorder', () => ({
 import ChatInput from './ChatInput'
 
 describe('ChatInput', () => {
-  let onSend: ReturnType<typeof vi.fn>
+  let onSend: (text: string, attachments?: unknown[]) => boolean
 
   beforeEach(() => {
-    onSend = vi.fn().mockReturnValue(true)
+    onSend = vi.fn().mockReturnValue(true) as unknown as (text: string, attachments?: unknown[]) => boolean
   })
 
   it('renders input field', () => {
