@@ -173,16 +173,20 @@ import {
   resolveIdentityKey,
 } from "./orchestrator-text-utils.js";
 import {
-  extractApproachSummary,
   mergeLearnedInsights,
   normalizeFailureFingerprint,
-  parseReflectionDecision,
-  validateReflectionDecision,
   replaceSection,
   sanitizeEventInput,
   sanitizeToolResult,
   shouldSurfaceTerminalFailureFromReflection,
 } from "./orchestrator-runtime-utils.js";
+import {
+  handlePlanPhaseTransition,
+  processReflectionPreamble,
+  applyReflectionContinuation,
+  handleReplanDecision,
+  handleVerifierReplan,
+} from "./orchestrator-loop-utils.js";
 import {
   buildExecutionTraceRecord,
   buildPhaseOutcomeRecord,
@@ -2305,19 +2309,14 @@ export class Orchestrator {
 
               // ─── PAOR: Handle REFLECTING phase response ─────────────────────
               if (bgAgentState.phase === AgentPhase.REFLECTING) {
-                const { decision, overrideReason } = validateReflectionDecision(parseReflectionDecision(response.text), bgAgentState);
-                if (overrideReason) getLogger().warn("PAOR reflection override (bg)", { overrideReason });
-                try {
-                  const { LearningMetrics } = await import("../learning/learning-metrics.js");
-                  LearningMetrics.getInstance().recordReflectionDone();
-                  if (overrideReason) LearningMetrics.getInstance().recordReflectionOverride();
-                } catch { /* non-fatal */ }
-                executionJournal.recordReflection(
-                  decision,
-                  response.text,
-                  currentAssignment.providerName,
-                  currentAssignment.modelId,
-                );
+                const { decision } = await processReflectionPreamble({
+                  agentState: bgAgentState,
+                  executionJournal,
+                  responseText: response.text,
+                  providerName: currentAssignment.providerName,
+                  modelId: currentAssignment.modelId,
+                  logLabel: "bg",
+                });
 
                 if (response.toolCalls.length === 0) {
                   const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
@@ -2410,13 +2409,14 @@ export class Orchestrator {
                       return finish(loopRecovery.message, "blocked", loopRecovery.message);
                     }
                     if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                      executionJournal.beginReplan({
-                        state: bgAgentState,
+                      bgAgentState = handleVerifierReplan({
+                        agentState: bgAgentState,
+                        executionJournal,
+                        responseText: response.text,
                         reason: loopRecovery.summary ?? "Loop recovery requested a different approach.",
                         providerName: executionStrategy.reviewer.providerName,
                         modelId: executionStrategy.reviewer.modelId,
                       });
-                      bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
                       if (response.text) {
                         session.messages.push({ role: "assistant", content: response.text });
                       }
@@ -2432,13 +2432,7 @@ export class Orchestrator {
                       ));
                       continue;
                     }
-                    bgAgentState = {
-                      ...bgAgentState,
-                      lastReflection: response.text ?? bgAgentState.lastReflection,
-                      reflectionCount: bgAgentState.reflectionCount + 1,
-                      consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
-                    };
-                    bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+                    bgAgentState = applyReflectionContinuation(bgAgentState, response.text);
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
@@ -2531,13 +2525,14 @@ export class Orchestrator {
                       return finish(loopRecovery.message, "blocked", loopRecovery.message);
                     }
                     if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                      executionJournal.beginReplan({
-                        state: bgAgentState,
+                      bgAgentState = handleVerifierReplan({
+                        agentState: bgAgentState,
+                        executionJournal,
+                        responseText: response.text,
                         reason: loopRecovery.summary ?? "Loop recovery requested a different plan.",
                         providerName: executionStrategy.reviewer.providerName,
                         modelId: executionStrategy.reviewer.modelId,
                       });
-                      bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
                       if (response.text) {
                         session.messages.push({ role: "assistant", content: response.text });
                       }
@@ -2553,13 +2548,7 @@ export class Orchestrator {
                       ));
                       continue;
                     }
-                    bgAgentState = {
-                      ...bgAgentState,
-                      lastReflection: response.text ?? bgAgentState.lastReflection,
-                      reflectionCount: bgAgentState.reflectionCount + 1,
-                      consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
-                    };
-                    bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+                    bgAgentState = applyReflectionContinuation(bgAgentState, response.text);
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
@@ -2675,13 +2664,14 @@ export class Orchestrator {
                       return finish(loopRecovery.message, "blocked", loopRecovery.message);
                     }
                     if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                      executionJournal.beginReplan({
-                        state: bgAgentState,
+                      bgAgentState = handleVerifierReplan({
+                        agentState: bgAgentState,
+                        executionJournal,
+                        responseText: response.text,
                         reason: loopRecovery.summary ?? verifierIntervention.result.summary,
                         providerName: executionStrategy.reviewer.providerName,
                         modelId: executionStrategy.reviewer.modelId,
                       });
-                      bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
                       if (response.text) {
                         session.messages.push({ role: "assistant", content: response.text });
                       }
@@ -2697,13 +2687,7 @@ export class Orchestrator {
                       ));
                       continue;
                     }
-                    bgAgentState = {
-                      ...bgAgentState,
-                      lastReflection: response.text ?? bgAgentState.lastReflection,
-                      reflectionCount: bgAgentState.reflectionCount + 1,
-                      consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
-                    };
-                    bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+                    bgAgentState = applyReflectionContinuation(bgAgentState, response.text);
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
@@ -2868,13 +2852,14 @@ export class Orchestrator {
                       return finish(loopRecovery.message, "blocked", loopRecovery.message);
                     }
                     if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                      executionJournal.beginReplan({
-                        state: bgAgentState,
+                      bgAgentState = handleVerifierReplan({
+                        agentState: bgAgentState,
+                        executionJournal,
+                        responseText: response.text,
                         reason: loopRecovery.summary ?? "Loop recovery requested a different plan.",
                         providerName: executionStrategy.reviewer.providerName,
                         modelId: executionStrategy.reviewer.modelId,
                       });
-                      bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
                       if (response.text) {
                         session.messages.push({ role: "assistant", content: response.text });
                       }
@@ -2890,13 +2875,7 @@ export class Orchestrator {
                       ));
                       continue;
                     }
-                    bgAgentState = {
-                      ...bgAgentState,
-                      lastReflection: response.text ?? bgAgentState.lastReflection,
-                      reflectionCount: bgAgentState.reflectionCount + 1,
-                      consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
-                    };
-                    bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+                    bgAgentState = applyReflectionContinuation(bgAgentState, response.text);
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
@@ -2949,22 +2928,13 @@ export class Orchestrator {
                 }
 
                 if (decision === "REPLAN") {
-                  executionJournal.beginReplan({
-                    state: bgAgentState,
-                    reason: response.text ?? "reflection requested a new plan",
+                  bgAgentState = handleReplanDecision({
+                    agentState: bgAgentState,
+                    executionJournal,
+                    responseText: response.text,
                     providerName: currentAssignment.providerName,
                     modelId: currentAssignment.modelId,
                   });
-                  bgAgentState = {
-                    ...bgAgentState,
-                    failedApproaches: [
-                      ...bgAgentState.failedApproaches,
-                      extractApproachSummary(bgAgentState),
-                    ],
-                    lastReflection: response.text ?? null,
-                    reflectionCount: bgAgentState.reflectionCount + 1,
-                  };
-                  bgAgentState = transitionPhase(bgAgentState, AgentPhase.REPLANNING);
                   if (response.text) {
                     session.messages.push({ role: "assistant", content: response.text });
                   }
@@ -2995,13 +2965,8 @@ export class Orchestrator {
                   continue;
                 }
 
-                // CONTINUE
-                bgAgentState = {
-                  ...bgAgentState,
-                  reflectionCount: bgAgentState.reflectionCount + 1,
-                  consecutiveErrors: bgAgentState.stepResults.at(-1)?.success ? 0 : bgAgentState.consecutiveErrors,
-                };
-                bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+                // CONTINUE — plain continuation, reflection text not persisted
+                bgAgentState = applyReflectionContinuation(bgAgentState, response.text, { skipLastReflection: true });
 
                 if (response.toolCalls.length === 0) {
                   if (response.text) {
@@ -3022,13 +2987,14 @@ export class Orchestrator {
                   toolNames: currentToolDefinitions.map((definition) => definition.name),
                 })
               ) {
-                executionJournal.recordPlan(
-                  response.text,
-                  bgAgentState.phase,
-                  currentAssignment.providerName,
-                  currentAssignment.modelId,
-                );
-                bgAgentState = { ...bgAgentState, plan: response.text ?? null };
+                bgAgentState = handlePlanPhaseTransition({
+                  agentState: bgAgentState,
+                  executionJournal,
+                  responseText: response.text,
+                  providerName: currentAssignment.providerName,
+                  modelId: currentAssignment.modelId,
+                  autoTransition: false,
+                });
                 const planText = applyVisibleResponseContract(
                   prompt,
                   this.stripInternalDecisionMarkers(response.text) || response.text || "",
@@ -3155,13 +3121,14 @@ export class Orchestrator {
                     return finish(loopRecovery.message, "blocked", loopRecovery.message);
                   }
                   if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                    executionJournal.beginReplan({
-                      state: bgAgentState,
+                    bgAgentState = handleVerifierReplan({
+                      agentState: bgAgentState,
+                      executionJournal,
+                      responseText: response.text,
                       reason: loopRecovery.summary ?? "Loop recovery requested a different approach.",
                       providerName: executionStrategy.reviewer.providerName,
                       modelId: executionStrategy.reviewer.modelId,
                     });
-                    bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
@@ -3269,13 +3236,14 @@ export class Orchestrator {
                     return finish(loopRecovery.message, "blocked", loopRecovery.message);
                   }
                   if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                    executionJournal.beginReplan({
-                      state: bgAgentState,
+                    bgAgentState = handleVerifierReplan({
+                      agentState: bgAgentState,
+                      executionJournal,
+                      responseText: response.text,
                       reason: loopRecovery.summary ?? "Loop recovery requested a different plan.",
                       providerName: executionStrategy.reviewer.providerName,
                       modelId: executionStrategy.reviewer.modelId,
                     });
-                    bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
@@ -3408,13 +3376,14 @@ export class Orchestrator {
                     return finish(loopRecovery.message, "blocked", loopRecovery.message);
                   }
                   if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                    executionJournal.beginReplan({
-                      state: bgAgentState,
+                    bgAgentState = handleVerifierReplan({
+                      agentState: bgAgentState,
+                      executionJournal,
+                      responseText: response.text,
                       reason: loopRecovery.summary ?? verifierIntervention.result.summary,
                       providerName: executionStrategy.reviewer.providerName,
                       modelId: executionStrategy.reviewer.modelId,
                     });
-                    bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
@@ -3596,25 +3565,14 @@ export class Orchestrator {
               }
 
               // ─── PAOR: Phase transitions ────────────────────────────────────
-              if (bgAgentState.phase === AgentPhase.PLANNING) {
-                executionJournal.recordPlan(
-                  response.text,
-                  bgAgentState.phase,
-                  currentAssignment.providerName,
-                  currentAssignment.modelId,
-                );
-                bgAgentState = { ...bgAgentState, plan: response.text ?? null };
-                bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
-              }
-              if (bgAgentState.phase === AgentPhase.REPLANNING) {
-                executionJournal.recordPlan(
-                  response.text,
-                  bgAgentState.phase,
-                  currentAssignment.providerName,
-                  currentAssignment.modelId,
-                );
-                bgAgentState = { ...bgAgentState, plan: response.text ?? null };
-                bgAgentState = transitionPhase(bgAgentState, AgentPhase.EXECUTING);
+              if (bgAgentState.phase === AgentPhase.PLANNING || bgAgentState.phase === AgentPhase.REPLANNING) {
+                bgAgentState = handlePlanPhaseTransition({
+                  agentState: bgAgentState,
+                  executionJournal,
+                  responseText: response.text,
+                  providerName: currentAssignment.providerName,
+                  modelId: currentAssignment.modelId,
+                });
               }
               // ────────────────────────────────────────────────────────────────
 
@@ -4506,19 +4464,13 @@ export class Orchestrator {
 
         // ─── PAOR: Handle REFLECTING phase response ─────────────────────
         if (agentState.phase === AgentPhase.REFLECTING) {
-          const { decision, overrideReason } = validateReflectionDecision(parseReflectionDecision(response.text), agentState);
-          if (overrideReason) getLogger().warn("PAOR reflection override", { overrideReason });
-          try {
-            const { LearningMetrics } = await import("../learning/learning-metrics.js");
-            LearningMetrics.getInstance().recordReflectionDone();
-            if (overrideReason) LearningMetrics.getInstance().recordReflectionOverride();
-          } catch { /* non-fatal */ }
-          executionJournal.recordReflection(
-            decision,
-            response.text,
-            currentAssignment.providerName,
-            currentAssignment.modelId,
-          );
+          const { decision } = await processReflectionPreamble({
+            agentState,
+            executionJournal,
+            responseText: response.text,
+            providerName: currentAssignment.providerName,
+            modelId: currentAssignment.modelId,
+          });
 
           if (response.toolCalls.length === 0) {
             const pendingPlanReviewText = this.getPendingPlanReviewVisibleText(chatId);
@@ -4565,13 +4517,7 @@ export class Orchestrator {
               usageHandler: this.onUsage,
             });
             if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
-              agentState = {
-                ...agentState,
-                lastReflection: response.text ?? agentState.lastReflection,
-                reflectionCount: agentState.reflectionCount + 1,
-                consecutiveErrors: agentState.stepResults.at(-1)?.success ? 0 : agentState.consecutiveErrors,
-              };
-              agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+              agentState = applyReflectionContinuation(agentState, response.text);
               if (response.text) {
                 session.messages.push({ role: "assistant", content: response.text });
               }
@@ -4631,13 +4577,7 @@ export class Orchestrator {
                   failureReason: verifierIntervention.result.summary,
                 }),
               });
-              agentState = {
-                ...agentState,
-                lastReflection: response.text ?? agentState.lastReflection,
-                reflectionCount: agentState.reflectionCount + 1,
-                consecutiveErrors: agentState.stepResults.at(-1)?.success ? 0 : agentState.consecutiveErrors,
-              };
-              agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+              agentState = applyReflectionContinuation(agentState, response.text);
               if (response.text) {
                 session.messages.push({ role: "assistant", content: response.text });
               }
@@ -4692,13 +4632,7 @@ export class Orchestrator {
                 session.messages.push({ role: "assistant", content: response.text });
               }
               session.messages.push({ role: "user", content: visibilityDecision.gate });
-              agentState = {
-                ...agentState,
-                lastReflection: response.text ?? agentState.lastReflection,
-                reflectionCount: agentState.reflectionCount + 1,
-                consecutiveErrors: agentState.stepResults.at(-1)?.success ? 0 : agentState.consecutiveErrors,
-              };
-              agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+              agentState = applyReflectionContinuation(agentState, response.text);
               continue;
             }
             if (
@@ -4762,21 +4696,14 @@ export class Orchestrator {
           }
 
           if (decision === "REPLAN") {
-            executionJournal.beginReplan({
-              state: agentState,
-              reason: response.text ?? "reflection requested a new plan",
+            agentState = handleReplanDecision({
+              agentState,
+              executionJournal,
+              responseText: response.text,
               providerName: currentAssignment.providerName,
               modelId: currentAssignment.modelId,
+              autoTransition: false, // Goal decomposition may happen before transition
             });
-            agentState = {
-              ...agentState,
-              failedApproaches: [
-                ...agentState.failedApproaches,
-                extractApproachSummary(agentState),
-              ],
-              lastReflection: response.text ?? null,
-              reflectionCount: agentState.reflectionCount + 1,
-            };
 
             // ─── Goal Decomposition: reactive decomposition when stuck ──────
             if (this.goalDecomposer && this.activeGoalTrees.has(conversationScope)) {
@@ -4851,13 +4778,8 @@ export class Orchestrator {
             continue;
           }
 
-          // CONTINUE
-          agentState = {
-            ...agentState,
-            reflectionCount: agentState.reflectionCount + 1,
-            consecutiveErrors: agentState.stepResults.at(-1)?.success ? 0 : agentState.consecutiveErrors,
-          };
-          agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+          // CONTINUE — plain continuation, reflection text not persisted
+          agentState = applyReflectionContinuation(agentState, response.text, { skipLastReflection: true });
 
           if (response.toolCalls.length === 0) {
             if (shouldSurfaceTerminalFailureFromReflection(response)) {
@@ -4958,13 +4880,14 @@ export class Orchestrator {
             toolNames: currentToolDefinitions.map((definition) => definition.name),
           })
         ) {
-          executionJournal.recordPlan(
-            response.text,
-            agentState.phase,
-            currentAssignment.providerName,
-            currentAssignment.modelId,
-          );
-          agentState = { ...agentState, plan: response.text ?? null };
+          agentState = handlePlanPhaseTransition({
+            agentState,
+            executionJournal,
+            responseText: response.text,
+            providerName: currentAssignment.providerName,
+            modelId: currentAssignment.modelId,
+            autoTransition: false,
+          });
 
           if (
             agentState.phase === AgentPhase.PLANNING &&
@@ -5337,13 +5260,14 @@ export class Orchestrator {
 
         // ─── PAOR: Phase transitions ────────────────────────────────────
         if (agentState.phase === AgentPhase.PLANNING) {
-          executionJournal.recordPlan(
-            response.text,
-            agentState.phase,
-            currentAssignment.providerName,
-            currentAssignment.modelId,
-          );
-          agentState = { ...agentState, plan: response.text ?? null };
+          agentState = handlePlanPhaseTransition({
+            agentState,
+            executionJournal,
+            responseText: response.text,
+            providerName: currentAssignment.providerName,
+            modelId: currentAssignment.modelId,
+            autoTransition: false, // Goal decomposition may happen before transition
+          });
 
           // ─── Goal Decomposition: proactive decomposition for complex tasks ───
           if (this.goalDecomposer && this.goalDecomposer.shouldDecompose(lastUserMessage)) {
@@ -5379,14 +5303,13 @@ export class Orchestrator {
           agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
         }
         if (agentState.phase === AgentPhase.REPLANNING) {
-          executionJournal.recordPlan(
-            response.text,
-            agentState.phase,
-            currentAssignment.providerName,
-            currentAssignment.modelId,
-          );
-          agentState = { ...agentState, plan: response.text ?? null };
-          agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
+          agentState = handlePlanPhaseTransition({
+            agentState,
+            executionJournal,
+            responseText: response.text,
+            providerName: currentAssignment.providerName,
+            modelId: currentAssignment.modelId,
+          });
         }
         // ────────────────────────────────────────────────────────────────
 
