@@ -53,4 +53,16 @@ describe('useKeyboardShortcuts', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', ctrlKey: true }))
     expect(handlers.setMode).toHaveBeenCalledWith('chat')
   })
+
+  it('Cmd+3 sets canvas mode', () => {
+    renderHook(() => useKeyboardShortcuts(handlers))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '3', metaKey: true }))
+    expect(handlers.setMode).toHaveBeenCalledWith('canvas')
+  })
+
+  it('Cmd+4 sets code mode', () => {
+    renderHook(() => useKeyboardShortcuts(handlers))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '4', metaKey: true }))
+    expect(handlers.setMode).toHaveBeenCalledWith('code')
+  })
 })
