@@ -134,7 +134,7 @@ describe('Sidebar', () => {
   it('disabled mode buttons are disabled', () => {
     renderSidebar()
     const monitorBtn = screen.getByText('Monitor').closest('button')
-    expect(monitorBtn).toBeDisabled()
+    expect(monitorBtn).not.toBeDisabled()
     const canvasBtn = screen.getByText('Canvas').closest('button')
     expect(canvasBtn).toBeDisabled()
     const codeBtn = screen.getByText('Code').closest('button')
@@ -145,7 +145,7 @@ describe('Sidebar', () => {
     renderSidebar()
     // Tooltip content is rendered inline due to mock
     const tooltipContents = screen.getAllByTestId('tooltip-content')
-    expect(tooltipContents.length).toBe(3) // Monitor, Canvas, Code
+    expect(tooltipContents.length).toBe(2) // Canvas, Code
     tooltipContents.forEach((el) => {
       expect(el.textContent).toContain('Coming soon')
     })
