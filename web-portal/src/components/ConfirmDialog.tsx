@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ConfirmationState } from '../types/messages'
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog'
+import { Button } from './ui/button'
 
 interface ConfirmDialogProps {
   confirmation: ConfirmationState
@@ -39,17 +41,6 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
   const [modifyText, setModifyText] = useState('')
   const [showModifyInput, setShowModifyInput] = useState(false)
   const modifyInputRef = useRef<HTMLTextAreaElement>(null)
-
-  // Close on ESC key
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onRespond(confirmation.confirmId, 'timeout')
-      }
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [confirmation, onRespond])
 
   // Auto-focus first button when dialog opens
   useEffect(() => {
@@ -93,61 +84,86 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
   const isPlan = isPlanQuestion(confirmation.question)
 
   return (
-    <div className="confirmation-overlay">
-      <div className={`confirmation-dialog ${isPlan ? 'confirmation-plan' : ''}`}>
+    <Dialog
+      open={!!confirmation}
+      onOpenChange={(open) => {
+        if (!open) onRespond(confirmation.confirmId, 'timeout')
+      }}
+    >
+      <DialogContent
+        hideClose
+        className={isPlan ? 'max-w-xl' : ''}
+        onOpenAutoFocus={(e) => {
+          // Prevent Radix default focus — we handle it manually with firstBtnRef
+          e.preventDefault()
+          firstBtnRef.current?.focus()
+        }}
+      >
         {isPlan ? (
           <PlanDisplay question={confirmation.question} />
         ) : (
-          <h3>{confirmation.question}</h3>
+          <DialogTitle className="mb-4">{confirmation.question}</DialogTitle>
         )}
-        {confirmation.details && (
-          <div className="details">{confirmation.details}</div>
+
+        {confirmation.details ? (
+          <DialogDescription className="mb-4">{confirmation.details}</DialogDescription>
+        ) : (
+          // Radix warns if no Description is present; provide a hidden one
+          <DialogDescription className="sr-only">
+            {isPlan ? 'Review the plan steps below' : 'Choose an option'}
+          </DialogDescription>
         )}
 
         {showModifyInput && (
-          <div className="modify-input-area">
+          <div className="mb-4">
             <textarea
               ref={modifyInputRef}
-              className="modify-input"
+              className="w-full resize-none rounded-lg border border-border bg-bg p-3 text-sm text-text placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent"
               value={modifyText}
               onChange={(e) => setModifyText(e.target.value)}
               onKeyDown={handleModifyKeyDown}
               placeholder="Describe your modification..."
               rows={3}
             />
-            <div className="modify-actions">
-              <button
-                className="modify-cancel"
+            <div className="mt-2 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => { setShowModifyInput(false); setModifyText('') }}
               >
                 Cancel
-              </button>
-              <button
-                className="modify-submit"
+              </Button>
+              <Button
+                size="sm"
                 onClick={handleModifySubmit}
                 disabled={!modifyText.trim()}
               >
                 Submit
-              </button>
+              </Button>
             </div>
           </div>
         )}
 
-        <div className="confirmation-options">
+        <div className="flex flex-wrap gap-2">
           {confirmation.options.map((option, idx) => (
-            <button
+            <Button
               key={option}
               ref={idx === 0 ? firstBtnRef : undefined}
-              className={isRecommended(option) ? 'recommended' : ''}
+              variant={isRecommended(option) ? 'default' : 'outline'}
               onClick={() => handleOptionClick(option)}
+              className="relative"
             >
-              {isRecommended(option) && <span className="recommended-badge">Recommended</span>}
+              {isRecommended(option) && (
+                <span className="mr-1.5 rounded-full bg-bg/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase">
+                  Recommended
+                </span>
+              )}
               {option.replace(/\s*\(recommended\)/i, '')}
-            </button>
+            </Button>
           ))}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -155,14 +171,19 @@ function PlanDisplay({ question }: { question: string }) {
   const { title, steps } = parsePlanSteps(question)
 
   return (
-    <div className="plan-display">
-      <h3 className="plan-title">Plan: {title}</h3>
+    <div className="mb-4">
+      <DialogTitle className="mb-3 text-accent">Plan: {title}</DialogTitle>
       {steps.length > 0 && (
-        <ol className="plan-steps">
+        <ol className="space-y-1.5">
           {steps.map((step, i) => (
-            <li key={i} className="plan-step">
-              <span className="plan-step-number">{i + 1}</span>
-              <span className="plan-step-text">{step}</span>
+            <li
+              key={i}
+              className="flex items-start gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-surface-hover"
+            >
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
+                {i + 1}
+              </span>
+              <span className="text-sm text-text">{step}</span>
             </li>
           ))}
         </ol>

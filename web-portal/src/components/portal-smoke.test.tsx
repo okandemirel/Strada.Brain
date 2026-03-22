@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ConfirmDialog from './ConfirmDialog'
 import EmptyState from './EmptyState'
@@ -15,7 +16,7 @@ describe('portal smoke', () => {
   })
 
   it('renders plan confirmations as structured steps', () => {
-    const html = renderToStaticMarkup(
+    render(
       <ConfirmDialog
         confirmation={{
           confirmId: 'confirm-1',
@@ -26,10 +27,10 @@ describe('portal smoke', () => {
       />,
     )
 
-    expect(html).toContain('Plan: Review release')
-    expect(html).toContain('Check lint')
-    expect(html).toContain('Ship build')
-    expect(html).toContain('Recommended')
+    expect(screen.getByText('Plan: Review release')).toBeDefined()
+    expect(screen.getByText('Check lint')).toBeDefined()
+    expect(screen.getByText('Ship build')).toBeDefined()
+    expect(screen.getByText('Recommended')).toBeDefined()
   })
 
   it('renders the default empty state copy', () => {
