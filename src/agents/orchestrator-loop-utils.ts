@@ -169,6 +169,8 @@ export interface VerifierReplanParams {
   reason: string;
   providerName: string;
   modelId?: string;
+  /** Optional hook called after journal recording but before state transition (e.g. recordPhaseOutcome). */
+  onBeforeTransition?: (agentState: AgentState) => void;
 }
 
 /**
@@ -178,7 +180,7 @@ export interface VerifierReplanParams {
  * handles multi-step phase transitions via `transitionToVerifierReplan`.
  */
 export function handleVerifierReplan(params: VerifierReplanParams): AgentState {
-  const { agentState, executionJournal, responseText, reason, providerName, modelId } = params;
+  const { agentState, executionJournal, responseText, reason, providerName, modelId, onBeforeTransition } = params;
 
   executionJournal.beginReplan({
     state: agentState,
@@ -186,6 +188,10 @@ export function handleVerifierReplan(params: VerifierReplanParams): AgentState {
     providerName,
     modelId,
   });
+
+  if (onBeforeTransition) {
+    onBeforeTransition(agentState);
+  }
 
   return transitionToVerifierReplan(agentState, responseText);
 }
@@ -305,16 +311,16 @@ export function buildToolResultContentBlocks(
   const contentBlocks: ContentBlock[] = [];
 
   if (stateCtx) {
-    contentBlocks.push({ type: "text" as const, text: stateCtx });
+    contentBlocks.push({ type: "text", text: stateCtx });
   }
 
   if (agentState.phase === AgentPhase.REFLECTING) {
-    contentBlocks.push({ type: "text" as const, text: buildReflectionPrompt(agentState) });
+    contentBlocks.push({ type: "text", text: buildReflectionPrompt(agentState) });
   }
 
   for (const tr of toolResults) {
     contentBlocks.push({
-      type: "tool_result" as const,
+      type: "tool_result",
       tool_use_id: tr.toolCallId,
       content: tr.content,
       is_error: tr.isError,

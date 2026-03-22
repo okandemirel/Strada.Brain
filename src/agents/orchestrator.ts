@@ -2205,6 +2205,7 @@ export class Orchestrator {
           finalReason = reason;
           return response;
         };
+        /** Terminal exit helper — always used with `return` to exit the loop. */
         const bgFinishBlocked = async (text: string): Promise<string> => {
           this.appendVisibleAssistantMessage(session, text);
           this.recordMetricEnd(metricId, {
@@ -2646,28 +2647,29 @@ export class Orchestrator {
                     if (loopRecovery.action === "blocked" && loopRecovery.message) {
                       return bgFinishBlocked(loopRecovery.message);
                     }
-                    executionJournal.beginReplan({
-                      state: bgAgentState,
+                    bgAgentState = handleVerifierReplan({
+                      agentState: bgAgentState,
+                      executionJournal,
+                      responseText: response.text,
                       reason: loopRecovery.summary ?? verifierIntervention.result.summary,
                       providerName: executionStrategy.reviewer.providerName,
                       modelId: executionStrategy.reviewer.modelId,
-                    });
-                    this.recordPhaseOutcome({
-                      chatId,
-                      identityKey,
-                      assignment: currentAssignment,
-                      phase: "reflecting",
-                      status: "replanned",
-                      task: executionStrategy.task,
-                      reason: verifierIntervention.result.summary,
-                      telemetry: buildBgPhaseOutcomeTelemetry({
-                        state: bgAgentState,
-                        usage: response.usage,
-                        verifierDecision: "replan",
-                        failureReason: verifierIntervention.result.summary,
+                      onBeforeTransition: () => this.recordPhaseOutcome({
+                        chatId,
+                        identityKey,
+                        assignment: currentAssignment,
+                        phase: "reflecting",
+                        status: "replanned",
+                        task: executionStrategy.task,
+                        reason: verifierIntervention.result.summary,
+                        telemetry: buildBgPhaseOutcomeTelemetry({
+                          state: bgAgentState,
+                          usage: response.usage,
+                          verifierDecision: "replan",
+                          failureReason: verifierIntervention.result.summary,
+                        }),
                       }),
                     });
-                    bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
                     if (response.text) {
                       session.messages.push({ role: "assistant", content: response.text });
                     }
@@ -4279,28 +4281,29 @@ export class Orchestrator {
               continue;
             }
             if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-              executionJournal.beginReplan({
-                state: agentState,
+              agentState = handleVerifierReplan({
+                agentState,
+                executionJournal,
+                responseText: response.text,
                 reason: verifierIntervention.result.summary,
                 providerName: executionStrategy.reviewer.providerName,
                 modelId: executionStrategy.reviewer.modelId,
-              });
-              this.recordPhaseOutcome({
-                chatId,
-                identityKey,
-                assignment: currentAssignment,
-                phase: "reflecting",
-                status: "replanned",
-                task: executionStrategy.task,
-                reason: verifierIntervention.result.summary,
-                telemetry: buildInteractivePhaseOutcomeTelemetry({
-                  state: agentState,
-                  usage: response.usage,
-                  verifierDecision: "replan",
-                  failureReason: verifierIntervention.result.summary,
+                onBeforeTransition: () => this.recordPhaseOutcome({
+                  chatId,
+                  identityKey,
+                  assignment: currentAssignment,
+                  phase: "reflecting",
+                  status: "replanned",
+                  task: executionStrategy.task,
+                  reason: verifierIntervention.result.summary,
+                  telemetry: buildInteractivePhaseOutcomeTelemetry({
+                    state: agentState,
+                    usage: response.usage,
+                    verifierDecision: "replan",
+                    failureReason: verifierIntervention.result.summary,
+                  }),
                 }),
               });
-              agentState = this.transitionToVerifierReplan(agentState, response.text);
               if (response.text) {
                 session.messages.push({ role: "assistant", content: response.text });
               }
