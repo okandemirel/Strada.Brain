@@ -4,9 +4,9 @@ import { WebSocketContext } from './ws-context'
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const ws = useWebSocket()
-  // useWebSocket returns a new object every render, but its individual
-  // properties are stable (useState values + useCallback refs). Memoize
-  // the context value so consumers only re-render when actual data changes.
+  // Read state now comes from the Zustand store (useSessionStore).
+  // The context primarily carries action methods. We still memoize
+  // the full value so legacy consumers using useWS() continue to work.
   const value = useMemo<UseWebSocketReturn>(
     () => ({
       messages: ws.messages,
