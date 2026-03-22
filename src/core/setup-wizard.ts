@@ -138,7 +138,7 @@ export function injectSetupModeMarker(html: string): string {
 
   return html.replace(
     "</head>",
-    '    <meta name="strada-setup" content="1" />\n  </head>',
+    '    <meta name="strada-setup" content="1" data-strada-setup="1" />\n  </head>',
   );
 }
 
