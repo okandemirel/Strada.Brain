@@ -31,6 +31,14 @@ import type { SlashCommand } from "./commands.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
+/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
+type FeedbackReactionCallback = (
+  type: "thumbs_up" | "thumbs_down",
+  instinctIds: string[],
+  userId?: string,
+  source?: "reaction" | "button",
+) => void;
+
 interface StreamingMessageState {
   message: Message;
   accumulatedText: string;
@@ -93,6 +101,9 @@ export class DiscordChannel implements IChannelAdapter {
   private queueInterval: NodeJS.Timeout | null = null;
   private rateLimited = false;
   private rateLimitResetTime = 0;
+  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+  /** Per-channelId applied instinct IDs for reaction-based feedback attribution. */
+  private readonly appliedInstinctIds = new Map<string, string[]>();
 
   constructor(
     token: string,
@@ -114,6 +125,7 @@ export class DiscordChannel implements IChannelAdapter {
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.GuildMessageReactions,
       ],
     });
 
@@ -123,6 +135,20 @@ export class DiscordChannel implements IChannelAdapter {
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
+  }
+
+  /** Register a callback for feedback reactions (thumbs up/down). */
+  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
+    this.feedbackReactionCallback = callback;
+  }
+
+  /** Set the applied instinct IDs for a channel so reactions can be attributed. */
+  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
+    if (instinctIds.length > 0) {
+      this.appliedInstinctIds.set(chatId, instinctIds);
+    } else {
+      this.appliedInstinctIds.delete(chatId);
+    }
   }
 
   async connect(): Promise<void> {
@@ -656,6 +682,33 @@ export class DiscordChannel implements IChannelAdapter {
       if (message.content.startsWith("/")) return;
 
       await this.handleRegularMessage(message);
+    });
+
+    // Feedback via emoji reactions (thumbs up/down)
+    this.client.on(Events.MessageReactionAdd, async (reaction, user) => {
+      try {
+        if (user.bot) return;
+        if (!this.feedbackReactionCallback) return;
+
+        const emoji = reaction.emoji.name;
+        let feedbackType: "thumbs_up" | "thumbs_down" | null = null;
+        if (emoji === "\uD83D\uDC4D" || emoji === "thumbsup") {
+          feedbackType = "thumbs_up";
+        } else if (emoji === "\uD83D\uDC4E" || emoji === "thumbsdown") {
+          feedbackType = "thumbs_down";
+        }
+        if (!feedbackType) return;
+
+        const channelId = reaction.message.channelId;
+        const instinctIds = this.appliedInstinctIds.get(channelId);
+        if (!instinctIds || instinctIds.length === 0) return;
+
+        this.feedbackReactionCallback(feedbackType, instinctIds, user.id, "reaction");
+      } catch (error) {
+        logger.debug("Error handling reaction feedback", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     });
   }
 

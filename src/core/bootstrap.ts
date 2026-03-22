@@ -699,6 +699,29 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     );
   }
 
+  // Wire feedback reactions from channel adapters to the learning event bus
+  if (learningResult.eventBus) {
+    const feedbackBus = learningResult.eventBus;
+    const feedbackCallback = (
+      type: "thumbs_up" | "thumbs_down",
+      instinctIds: string[],
+      userId?: string,
+      source?: "reaction" | "button",
+    ) => {
+      feedbackBus.emit("feedback:reaction", {
+        type,
+        instinctIds,
+        userId,
+        source: source ?? "reaction",
+        channel: channelType,
+        timestamp: Date.now(),
+      });
+    };
+    if ("setFeedbackHandler" in channel && typeof channel.setFeedbackHandler === "function") {
+      (channel as { setFeedbackHandler: (cb: typeof feedbackCallback) => void }).setFeedbackHandler(feedbackCallback);
+    }
+  }
+
   const postSetupBootstrap = options.postSetupBootstrap;
   if (postSetupBootstrap && channel.setPostSetupBootstrapHandler) {
     channel.setPostSetupBootstrapHandler(async (context) => {

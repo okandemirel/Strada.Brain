@@ -195,6 +195,20 @@ export interface ConsolidationInterruptedEvent {
 }
 
 // =============================================================================
+// FEEDBACK EVENT TYPES
+// =============================================================================
+
+/** Emitted when a user reacts to a message (thumbs up/down, emoji, button) */
+export interface FeedbackReactionEvent {
+  readonly type: "thumbs_up" | "thumbs_down";
+  readonly instinctIds: string[];
+  readonly userId?: string;
+  readonly source: "reaction" | "button";
+  readonly channel: string;
+  readonly timestamp: number;
+}
+
+// =============================================================================
 // EVENT MAP
 // =============================================================================
 
@@ -202,6 +216,7 @@ export interface ConsolidationInterruptedEvent {
 export interface LearningEventMap {
   [key: string]: unknown;
   "tool:result": ToolResultEvent;
+  "feedback:reaction": FeedbackReactionEvent;
   "instinct:cooling-started": InstinctLifecycleEvent;
   "instinct:deprecated": InstinctLifecycleEvent;
   "instinct:promoted": InstinctLifecycleEvent;

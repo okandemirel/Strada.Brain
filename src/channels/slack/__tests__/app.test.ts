@@ -28,6 +28,7 @@ vi.mock("@slack/bolt", () => ({
     start: vi.fn().mockResolvedValue(undefined),
     message: vi.fn(),
     action: vi.fn(),
+    event: vi.fn(),
     error: vi.fn(),
     command: vi.fn(),
     client: {
@@ -501,6 +502,7 @@ describe("SlackChannel file extraction", () => {
           }
         }),
         action: vi.fn(),
+        event: vi.fn(),
         error: vi.fn(),
         command: vi.fn(),
         client: {

@@ -34,6 +34,14 @@ import { classifyErrorMessage } from "../../utils/error-messages.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
+/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
+export type FeedbackReactionCallback = (
+  type: "thumbs_up" | "thumbs_down",
+  instinctIds: string[],
+  userId?: string,
+  source?: "reaction" | "button",
+) => void;
+
 interface WsClient {
   ws: WebSocket;
   chatId: string;
@@ -122,6 +130,9 @@ export class WebChannel
   private recentlyDisconnected = new Map<string, RecentlyDisconnectedSession>();
   private postSetupBootstrapHandler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null = null;
   private postSetupBootstrapConsumed = false;
+  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+  /** Per-chatId applied instinct IDs so responses can carry them for feedback attribution. */
+  private readonly appliedInstinctIds = new Map<string, string[]>();
   private readonly staticDir = resolveStaticDir();
   private readonly identityStore: WebIdentityStore;
 
@@ -138,6 +149,20 @@ export class WebChannel
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
+  }
+
+  /** Register a callback for feedback reactions (thumbs up/down). */
+  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
+    this.feedbackReactionCallback = callback;
+  }
+
+  /** Set the applied instinct IDs for a chat so outgoing messages include them for feedback. */
+  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
+    if (instinctIds.length > 0) {
+      this.appliedInstinctIds.set(chatId, instinctIds);
+    } else {
+      this.appliedInstinctIds.delete(chatId);
+    }
   }
 
   setPostSetupBootstrapHandler(handler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null): void {
@@ -229,18 +254,22 @@ export class WebChannel
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
+    const instinctIds = this.appliedInstinctIds.get(chatId);
     this.sendToClient(chatId, {
       type: "text",
       text,
       messageId: randomUUID(),
+      ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
     });
   }
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {
+    const instinctIds = this.appliedInstinctIds.get(chatId);
     this.sendToClient(chatId, {
       type: "markdown",
       text: markdown,
       messageId: randomUUID(),
+      ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
     });
   }
 
@@ -674,6 +703,26 @@ export class WebChannel
             messageId: randomUUID(),
           });
         });
+        break;
+      }
+
+      case "feedback": {
+        const feedbackType = String(data.feedbackType ?? "");
+        const instinctIds = Array.isArray(data.instinctIds) ? data.instinctIds.filter(
+          (id: unknown): id is string => typeof id === "string",
+        ) : [];
+        if (
+          (feedbackType === "thumbs_up" || feedbackType === "thumbs_down") &&
+          instinctIds.length > 0 &&
+          this.feedbackReactionCallback
+        ) {
+          this.feedbackReactionCallback(
+            feedbackType,
+            instinctIds,
+            client?.profileId ?? chatId,
+            "button",
+          );
+        }
         break;
       }
 

@@ -9,7 +9,8 @@ import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer, getVerdictScore } from "../scoring/confidence-scorer.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
 import { RuntimeArtifactManager } from "../runtime-artifact-manager.js";
-import type { ToolResultEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
+import type { ToolResultEvent, FeedbackReactionEvent, IEventBus, LearningEventMap } from "../../core/event-bus.js";
+import { FeedbackHandler } from "../feedback/feedback-handler.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
 import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import {
@@ -76,6 +77,7 @@ export class LearningPipeline {
   private config: LearningConfig;
   private bayesianConfig: BayesianConfig;
   private eventBus: IEventBus<LearningEventMap> | null = null;
+  private readonly feedbackHandler: FeedbackHandler;
   private embeddingQueue: EmbeddingQueue | null = null;
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
   private periodicTimer?: ReturnType<typeof setInterval>;
@@ -104,9 +106,29 @@ export class LearningPipeline {
     this.patternMatcher = new PatternMatcher(storage);
     this.runtimeArtifacts = new RuntimeArtifactManager(storage);
     this.eventBus = eventBus ?? null;
+    this.feedbackHandler = new FeedbackHandler(storage);
 
     if (embeddingProvider) {
       this.embeddingQueue = new EmbeddingQueue(embeddingProvider, storage);
+    }
+
+    // Subscribe to feedback:reaction events from channel adapters
+    if (this.eventBus) {
+      this.eventBus.on("feedback:reaction", (event: FeedbackReactionEvent) => {
+        if (event.type === "thumbs_up") {
+          this.feedbackHandler.handleThumbsUp({
+            instinctIds: event.instinctIds,
+            userId: event.userId,
+            source: event.source,
+          });
+        } else if (event.type === "thumbs_down") {
+          this.feedbackHandler.handleThumbsDown({
+            instinctIds: event.instinctIds,
+            userId: event.userId,
+            source: event.source,
+          });
+        }
+      });
     }
   }
 

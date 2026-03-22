@@ -103,11 +103,22 @@ const QUEUE_PROCESS_INTERVAL_MS = 50;
 const RATE_LIMIT_BACKOFF_MS = 5000;
 const MESSAGE_BATCH_SIZE = 5;
 
+/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
+type FeedbackReactionCallback = (
+  type: "thumbs_up" | "thumbs_down",
+  instinctIds: string[],
+  userId?: string,
+  source?: "reaction" | "button",
+) => void;
+
 export class SlackChannel implements IChannelAdapter {
   readonly name = "slack";
 
   private app: App | null = null;
   private messageHandler: ((msg: IncomingMessage) => Promise<void>) | null = null;
+  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+  /** Per-channelId applied instinct IDs for reaction-based feedback attribution. */
+  private readonly appliedInstinctIds = new Map<string, string[]>();
   private readonly logger = getLogger();
   private readonly rateLimiter: SlackRateLimiter;
   private readonly streamingLimiter: StreamingRateLimiter;
@@ -228,6 +239,20 @@ export class SlackChannel implements IChannelAdapter {
    */
   onMessage(handler: (msg: IncomingMessage) => Promise<void>): void {
     this.messageHandler = handler;
+  }
+
+  /** Register a callback for feedback reactions (thumbs up/down). */
+  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
+    this.feedbackReactionCallback = callback;
+  }
+
+  /** Set the applied instinct IDs for a channel so reactions can be attributed. */
+  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
+    if (instinctIds.length > 0) {
+      this.appliedInstinctIds.set(chatId, instinctIds);
+    } else {
+      this.appliedInstinctIds.delete(chatId);
+    }
   }
 
   // ---- Message Queue System ----
@@ -724,6 +749,34 @@ export class SlackChannel implements IChannelAdapter {
             ],
           });
         }
+      }
+    });
+
+    // Feedback via emoji reactions (thumbs up/down)
+    this.app.event("reaction_added", async ({ event }) => {
+      try {
+        if (!this.feedbackReactionCallback) return;
+
+        const reaction = event.reaction;
+        let feedbackType: "thumbs_up" | "thumbs_down" | null = null;
+        if (reaction === "+1" || reaction === "thumbsup") {
+          feedbackType = "thumbs_up";
+        } else if (reaction === "-1" || reaction === "thumbsdown") {
+          feedbackType = "thumbs_down";
+        }
+        if (!feedbackType) return;
+
+        const channelId = (event.item as { channel?: string }).channel;
+        if (!channelId) return;
+
+        const instinctIds = this.appliedInstinctIds.get(channelId);
+        if (!instinctIds || instinctIds.length === 0) return;
+
+        this.feedbackReactionCallback(feedbackType, instinctIds, event.user, "reaction");
+      } catch (error) {
+        this.logger.debug("Error handling reaction feedback", {
+          error: sanitizeError(error),
+        });
       }
     });
 
