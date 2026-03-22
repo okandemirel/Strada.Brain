@@ -44,7 +44,7 @@ export class TeachingParser {
     const trimmed = text.trim();
     const match = TEACHING_REGEX.exec(trimmed);
 
-    const content = match ? match[1].trim() : trimmed;
+    const content = match?.[1]?.trim() ?? trimmed;
     const scope = TeachingParser.detectScope(content);
 
     return { content, scope };

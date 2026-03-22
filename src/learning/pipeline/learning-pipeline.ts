@@ -944,7 +944,7 @@ export class LearningPipeline {
   /**
    * Store an explicit user teaching as a new instinct.
    */
-  async teachExplicit(content: string, scopeType: ScopeType, userId?: string): Promise<string> {
+  async teachExplicit(content: string, scopeType: ScopeType, _userId?: string): Promise<string> {
     const instinct = this.createInstinct({
       name: `teaching:explicit:${Date.now()}`,
       type: 'user_teaching',

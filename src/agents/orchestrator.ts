@@ -7200,7 +7200,7 @@ export class Orchestrator {
             }
 
             if (intervention.action === 'auto_apply') {
-              for (const match of intervention.matches.filter(i => i.tier === 'auto')) {
+              for (const match of intervention.matches.filter((i: { tier: string }) => i.tier === 'auto')) {
                 await this.interventionEngine.logIntervention(
                   match.instinctId, activeToolCall.name, 'auto', 'applied',
                 );

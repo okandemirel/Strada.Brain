@@ -44,7 +44,7 @@ export class InterventionEngine {
    */
   evaluate(
     toolName: string,
-    params: Record<string, unknown>,
+    _params: Record<string, unknown>,
     relevantInstincts: Instinct[],
   ): InterventionResult {
     const matches: InterventionMatch[] = [];
