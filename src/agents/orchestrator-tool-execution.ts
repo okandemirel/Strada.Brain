@@ -43,7 +43,7 @@ export interface ToolTrackingParams {
   executionJournal: ExecutionJournal;
   agentPhase: AgentPhase;
   providerName: string;
-  modelId: string;
+  modelId?: string;
   emitToolResult: (chatId: string, tc: ToolCall, tr: ToolResult) => void;
   /** BG-specific: worker collector for delegation audit trail. */
   workerCollector?: WorkerCollectorLike;
@@ -58,6 +58,8 @@ export interface ToolTrackingParams {
  *
  * Shared between runBackgroundTask and runAgentLoop. The optional workerCollector
  * and workspaceId params are used only by the background path.
+ *
+ * @remarks Mutates `toolResults` entries in-place when error recovery injection applies.
  */
 export function trackAndRecordToolResults(params: ToolTrackingParams): void {
   const {

@@ -26,7 +26,7 @@ export interface LoopStepParams {
   executionJournal: ExecutionJournal;
   responseText: string | undefined;
   providerName: string;
-  modelId: string;
+  modelId?: string;
 }
 
 export interface PlanPhaseTransitionParams extends LoopStepParams {
@@ -168,7 +168,7 @@ export interface VerifierReplanParams {
   responseText: string | undefined;
   reason: string;
   providerName: string;
-  modelId: string;
+  modelId?: string;
 }
 
 /**
@@ -220,6 +220,8 @@ export function buildPhasePromptSection(
     case AgentPhase.REPLANNING:
       section += "\n\n" + buildReplanningPrompt(agentState);
       break;
+    default:
+      break; // REFLECTING/COMPLETE/FAILED — no phase-specific prompt needed
   }
 
   section += executionJournal.buildPromptSection(agentState.phase);
@@ -250,22 +252,26 @@ export function recordStepResultsAndCheckReflection(
   const { toolCalls, toolResults, reflectInterval } = params;
   let { agentState } = params;
 
+  // Batch new steps to avoid O(n²) array spreading inside the loop
+  const newSteps: StepResult[] = [];
+  let consecutiveErrors = agentState.consecutiveErrors;
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i]!;
     const tr = toolResults[i]!;
-    const stepResult: StepResult = {
+    newSteps.push({
       toolName: tc.name,
       success: !(tr.isError ?? false),
       summary: tr.content.slice(0, 200),
       timestamp: Date.now(),
-    };
-    agentState = {
-      ...agentState,
-      stepResults: [...agentState.stepResults, stepResult],
-      iteration: agentState.iteration + 1,
-      consecutiveErrors: tr.isError ? agentState.consecutiveErrors + 1 : 0,
-    };
+    });
+    consecutiveErrors = tr.isError ? consecutiveErrors + 1 : 0;
   }
+  agentState = {
+    ...agentState,
+    stepResults: [...agentState.stepResults, ...newSteps],
+    iteration: agentState.iteration + toolCalls.length,
+    consecutiveErrors,
+  };
 
   const hasErrors = toolResults.some((tr) => tr.isError);
   const failedSteps = agentState.stepResults.filter((s) => !s.success);
