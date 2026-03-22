@@ -44,13 +44,9 @@ import {
   createInitialState,
   transitionPhase,
   type AgentState,
-  type StepResult,
 } from "./agent-state.js";
 import {
-  buildPlanningPrompt,
   buildReflectionPrompt,
-  buildReplanningPrompt,
-  buildExecutionContext,
 } from "./paor-prompts.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
@@ -69,7 +65,6 @@ import {
   type TaskConfig,
 } from "../config/config.js";
 import type { IEmbeddingProvider } from "../rag/rag.interface.js";
-import { shouldForceReplan } from "./failure-classifier.js";
 import {
   getRecommendedMaxMessages,
   type ModelIntelligenceLookup,
@@ -174,7 +169,6 @@ import {
 } from "./orchestrator-text-utils.js";
 import {
   extractApproachSummary,
-  mergeLearnedInsights,
   normalizeFailureFingerprint,
   parseReflectionDecision,
   validateReflectionDecision,
@@ -183,6 +177,7 @@ import {
   sanitizeToolResult,
   shouldSurfaceTerminalFailureFromReflection,
 } from "./orchestrator-runtime-utils.js";
+import { buildPhasePromptSection, recordStepResultsAndCheckReflection, runConsensusVerification } from "./orchestrator-loop-utils.js";
 import {
   buildExecutionTraceRecord,
   buildPhaseOutcomeRecord,
@@ -2226,28 +2221,11 @@ export class Orchestrator {
               }
 
               // ─── PAOR: Build phase-aware system prompt ──────────────────────
-              let activePrompt = systemPrompt;
-              switch (bgAgentState.phase) {
-                case AgentPhase.PLANNING:
-                  activePrompt +=
-                    "\n\n" +
-                    buildPlanningPrompt(
-                      bgAgentState.taskDescription,
-                      mergeLearnedInsights(
-                        bgAgentState.learnedInsights,
-                        executionJournal.getLearnedInsights(),
-                      ),
-                      { enableGoalDetection: false }, // Background tasks don't spawn sub-goals
-                    );
-                  break;
-                case AgentPhase.EXECUTING:
-                  activePrompt += buildExecutionContext(bgAgentState);
-                  break;
-                case AgentPhase.REPLANNING:
-                  activePrompt += "\n\n" + buildReplanningPrompt(bgAgentState);
-                  break;
-              }
-              activePrompt += executionJournal.buildPromptSection(bgAgentState.phase);
+              let activePrompt = systemPrompt + buildPhasePromptSection(
+                bgAgentState,
+                executionJournal,
+                { enableGoalDetection: false }, // Background tasks don't spawn sub-goals
+              );
               // ────────────────────────────────────────────────────────────────
 
               const currentAssignment = this.getPinnedToolTurnAssignment(
@@ -3713,69 +3691,31 @@ export class Orchestrator {
                     responseLength: (response.text ?? "").length,
                   });
 
-                  const bgAvailableCount = this.providerManager.listAvailable().length;
-                  const bgStrategy = this.consensusManager.shouldConsult(
-                    bgConfidence,
-                    bgTaskClass,
-                    bgAvailableCount,
-                  );
-
-                  if (bgStrategy !== "skip" && bgAvailableCount >= 2) {
-                    const bgReviewAssignment = this.resolveConsensusReviewAssignment(
+                  await runConsensusVerification({
+                    consensusManager: this.consensusManager,
+                    availableProviderCount: this.providerManager.listAvailable().length,
+                    taskClass: bgTaskClass,
+                    confidence: bgConfidence,
+                    originalOutput: {
+                      text: response.text ?? undefined,
+                      toolCalls: response.toolCalls.map((tc: ToolCall) => ({
+                        name: tc.name,
+                        input: tc.input,
+                      })),
+                    },
+                    originalProviderName: currentAssignment.providerName,
+                    prompt,
+                    reviewAssignment: this.resolveConsensusReviewAssignment(
                       executionStrategy.reviewer,
                       currentAssignment,
                       identityKey,
-                    );
-                    if (bgReviewAssignment) {
-                      if (bgReviewAssignment.provider) {
-                        const bgConsensusResult = await this.consensusManager.verify({
-                          originalOutput: {
-                            text: response.text ?? undefined,
-                            toolCalls: response.toolCalls.map((tc: ToolCall) => ({
-                              name: tc.name,
-                              input: tc.input,
-                            })),
-                          },
-                          originalProvider: currentAssignment.providerName,
-                          task: bgTaskClass,
-                          confidence: bgConfidence,
-                          reviewProvider: bgReviewAssignment.provider,
-                          prompt,
-                        });
-                        this.recordExecutionTrace({
-                          chatId,
-                          identityKey,
-                          assignment: bgReviewAssignment,
-                          phase: "consensus-review",
-                          source: "consensus-review",
-                          task: bgTaskClass,
-                          reason: bgReviewAssignment.reason,
-                        });
-                        this.recordPhaseOutcome({
-                          chatId,
-                          identityKey,
-                          assignment: bgReviewAssignment,
-                          phase: "consensus-review",
-                          source: "consensus-review",
-                          status: bgConsensusResult.agreed ? "approved" : "continued",
-                          task: bgTaskClass,
-                          reason:
-                            bgConsensusResult.reasoning?.trim() ||
-                            (bgConsensusResult.agreed
-                              ? "Consensus review agreed with the current path."
-                              : "Consensus review found a disagreement and kept execution open."),
-                        });
-
-                        if (!bgConsensusResult.agreed) {
-                          logger.warn("Consensus disagreement (background)", {
-                            chatId,
-                            strategy: bgConsensusResult.strategy,
-                            reasoning: bgConsensusResult.reasoning?.slice(0, 200),
-                          });
-                        }
-                      }
-                    }
-                  }
+                    ),
+                    chatId,
+                    identityKey,
+                    logLabel: "background",
+                    recordExecutionTrace: (p) => this.recordExecutionTrace(p as Parameters<typeof this.recordExecutionTrace>[0]),
+                    recordPhaseOutcome: (p) => this.recordPhaseOutcome(p as Parameters<typeof this.recordPhaseOutcome>[0]),
+                  });
                 } catch {
                   // Consensus failure is non-fatal
                 }
@@ -3783,42 +3723,25 @@ export class Orchestrator {
               // ────────────────────────────────────────────────────────────────────
 
               // ─── PAOR: Record step results ──────────────────────────────────
-              for (let i = 0; i < response.toolCalls.length; i++) {
-                const tc = response.toolCalls[i]!;
-                const tr = toolResults[i]!;
-                const stepResult: StepResult = {
-                  toolName: tc.name,
-                  success: !(tr.isError ?? false),
-                  summary: tr.content.slice(0, 200),
-                  timestamp: Date.now(),
-                };
-                bgAgentState = {
-                  ...bgAgentState,
-                  stepResults: [...bgAgentState.stepResults, stepResult],
-                  iteration: bgAgentState.iteration + 1,
-                  consecutiveErrors: tr.isError ? bgAgentState.consecutiveErrors + 1 : 0,
-                };
-              }
-
-              const hasErrors = toolResults.some((tr) => tr.isError);
-              const failedSteps = bgAgentState.stepResults.filter((s) => !s.success);
-              const shouldReflect =
-                hasErrors ||
-                (bgAgentState.stepResults.length > 0 &&
-                  bgAgentState.stepResults.length % BG_REFLECT_INTERVAL === 0) ||
-                shouldForceReplan(failedSteps);
-
-              if (shouldReflect && bgAgentState.phase === AgentPhase.EXECUTING) {
-                bgAgentState = transitionPhase(bgAgentState, AgentPhase.REFLECTING);
-                emitProgress(this.buildStructuredProgressSignal(
-                  prompt,
-                  progressTitle,
-                  {
-                    kind: "analysis",
-                    message: "Reflecting on progress...",
-                  },
-                  progressLanguage,
-                ));
+              {
+                const stepRecord = recordStepResultsAndCheckReflection({
+                  agentState: bgAgentState,
+                  toolCalls: response.toolCalls,
+                  toolResults,
+                  reflectInterval: BG_REFLECT_INTERVAL,
+                });
+                bgAgentState = stepRecord.agentState;
+                if (stepRecord.shouldReflect && bgAgentState.phase === AgentPhase.REFLECTING) {
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt,
+                    progressTitle,
+                    {
+                      kind: "analysis",
+                      message: "Reflecting on progress...",
+                    },
+                    progressLanguage,
+                  ));
+                }
               }
               // ────────────────────────────────────────────────────────────────
 
@@ -4403,28 +4326,11 @@ export class Orchestrator {
         );
 
         // ─── PAOR: Build phase-aware system prompt ──────────────────────
-        let activePrompt = systemPrompt;
-        switch (agentState.phase) {
-          case AgentPhase.PLANNING:
-            activePrompt +=
-              "\n\n" +
-              buildPlanningPrompt(
-                agentState.taskDescription,
-                mergeLearnedInsights(
-                  agentState.learnedInsights,
-                  executionJournal.getLearnedInsights(),
-                ),
-                { enableGoalDetection: !!this.taskManager },
-              );
-            break;
-          case AgentPhase.EXECUTING:
-            activePrompt += buildExecutionContext(agentState);
-            break;
-          case AgentPhase.REPLANNING:
-            activePrompt += "\n\n" + buildReplanningPrompt(agentState);
-            break;
-        }
-        activePrompt += executionJournal.buildPromptSection(agentState.phase);
+        let activePrompt = systemPrompt + buildPhasePromptSection(
+          agentState,
+          executionJournal,
+          { enableGoalDetection: !!this.taskManager },
+        );
         // ────────────────────────────────────────────────────────────────
 
         const currentAssignment = this.getPinnedToolTurnAssignment(
@@ -5166,61 +5072,26 @@ export class Orchestrator {
                   agentState,
                   responseLength: response.text.length,
                 });
-                const textAvailableCount = this.providerManager.listAvailable().length;
-                const textStrategy = this.consensusManager.shouldConsult(
-                  textConfidence,
-                  textTaskClass,
-                  textAvailableCount,
-                );
-                if (textStrategy !== "skip" && textAvailableCount >= 2) {
-                  const textReviewAssignment = this.resolveConsensusReviewAssignment(
+
+                await runConsensusVerification({
+                  consensusManager: this.consensusManager,
+                  availableProviderCount: this.providerManager.listAvailable().length,
+                  taskClass: textTaskClass,
+                  confidence: textConfidence,
+                  originalOutput: { text: response.text },
+                  originalProviderName: currentAssignment.providerName,
+                  prompt: lastUserMessage,
+                  reviewAssignment: this.resolveConsensusReviewAssignment(
                     executionStrategy.reviewer,
                     currentAssignment,
                     identityKey,
-                  );
-                  if (textReviewAssignment) {
-                    if (textReviewAssignment.provider) {
-                      const textConsensus = await this.consensusManager.verify({
-                        originalOutput: { text: response.text },
-                        originalProvider: currentAssignment.providerName,
-                        task: textTaskClass,
-                        confidence: textConfidence,
-                        reviewProvider: textReviewAssignment.provider,
-                        prompt: lastUserMessage,
-                      });
-                      this.recordExecutionTrace({
-                        chatId,
-                        identityKey,
-                        assignment: textReviewAssignment,
-                        phase: "consensus-review",
-                        source: "consensus-review",
-                        task: textTaskClass,
-                        reason: textReviewAssignment.reason,
-                      });
-                      this.recordPhaseOutcome({
-                        chatId,
-                        identityKey,
-                        assignment: textReviewAssignment,
-                        phase: "consensus-review",
-                        source: "consensus-review",
-                        status: textConsensus.agreed ? "approved" : "continued",
-                        task: textTaskClass,
-                        reason:
-                          textConsensus.reasoning?.trim() ||
-                          (textConsensus.agreed
-                            ? "Consensus review agreed with the current path."
-                            : "Consensus review found a disagreement and kept execution open."),
-                      });
-                      if (!textConsensus.agreed) {
-                        logger.warn("Consensus disagreement (text-only, critical)", {
-                          chatId,
-                          strategy: textConsensus.strategy,
-                          reasoning: textConsensus.reasoning?.slice(0, 200),
-                        });
-                      }
-                    }
-                  }
-                }
+                  ),
+                  chatId,
+                  identityKey,
+                  logLabel: "text-only, critical",
+                  recordExecutionTrace: (p) => this.recordExecutionTrace(p as Parameters<typeof this.recordExecutionTrace>[0]),
+                  recordPhaseOutcome: (p) => this.recordPhaseOutcome(p as Parameters<typeof this.recordPhaseOutcome>[0]),
+                });
               }
             } catch {
               // Consensus failure is non-fatal
@@ -5468,69 +5339,30 @@ export class Orchestrator {
               responseLength: (response.text ?? "").length,
             });
 
-            const availableCount = this.providerManager.listAvailable().length;
-            const strategy = this.consensusManager.shouldConsult(
-              confidence,
+            await runConsensusVerification({
+              consensusManager: this.consensusManager,
+              availableProviderCount: this.providerManager.listAvailable().length,
               taskClass,
-              availableCount,
-            );
-
-            if (strategy !== "skip" && availableCount >= 2) {
-              const reviewAssignment = this.resolveConsensusReviewAssignment(
+              confidence,
+              originalOutput: {
+                text: response.text ?? undefined,
+                toolCalls: response.toolCalls.map((tc: ToolCall) => ({
+                  name: tc.name,
+                  input: tc.input,
+                })),
+              },
+              originalProviderName: currentAssignment.providerName,
+              prompt: lastUserMessage,
+              reviewAssignment: this.resolveConsensusReviewAssignment(
                 executionStrategy.reviewer,
                 currentAssignment,
                 identityKey,
-              );
-              if (reviewAssignment) {
-                if (reviewAssignment.provider) {
-                  const consensusResult = await this.consensusManager.verify({
-                    originalOutput: {
-                      text: response.text ?? undefined,
-                      toolCalls: response.toolCalls.map((tc: ToolCall) => ({
-                        name: tc.name,
-                        input: tc.input,
-                      })),
-                    },
-                    originalProvider: currentAssignment.providerName,
-                    task: taskClass,
-                    confidence,
-                    reviewProvider: reviewAssignment.provider,
-                    prompt: lastUserMessage,
-                  });
-                  this.recordExecutionTrace({
-                    chatId,
-                    identityKey,
-                    assignment: reviewAssignment,
-                    phase: "consensus-review",
-                    source: "consensus-review",
-                    task: taskClass,
-                    reason: reviewAssignment.reason,
-                  });
-                  this.recordPhaseOutcome({
-                    chatId,
-                    identityKey,
-                    assignment: reviewAssignment,
-                    phase: "consensus-review",
-                    source: "consensus-review",
-                    status: consensusResult.agreed ? "approved" : "continued",
-                    task: taskClass,
-                    reason:
-                      consensusResult.reasoning?.trim() ||
-                      (consensusResult.agreed
-                        ? "Consensus review agreed with the current path."
-                        : "Consensus review found a disagreement and kept execution open."),
-                  });
-
-                  if (!consensusResult.agreed) {
-                    logger.warn("Consensus disagreement", {
-                      chatId,
-                      strategy: consensusResult.strategy,
-                      reasoning: consensusResult.reasoning?.slice(0, 200),
-                    });
-                  }
-                }
-              }
-            }
+              ),
+              chatId,
+              identityKey,
+              recordExecutionTrace: (p) => this.recordExecutionTrace(p as Parameters<typeof this.recordExecutionTrace>[0]),
+              recordPhaseOutcome: (p) => this.recordPhaseOutcome(p as Parameters<typeof this.recordPhaseOutcome>[0]),
+            });
           } catch {
             // Consensus failure is non-fatal
           }
@@ -5538,33 +5370,14 @@ export class Orchestrator {
         // ────────────────────────────────────────────────────────────────────
 
         // ─── PAOR: Record step results ──────────────────────────────────
-        for (let i = 0; i < response.toolCalls.length; i++) {
-          const tc = response.toolCalls[i]!;
-          const tr = toolResults[i]!;
-          const stepResult: StepResult = {
-            toolName: tc.name,
-            success: !(tr.isError ?? false),
-            summary: tr.content.slice(0, 200),
-            timestamp: Date.now(),
-          };
-          agentState = {
-            ...agentState,
-            stepResults: [...agentState.stepResults, stepResult],
-            iteration: agentState.iteration + 1,
-            consecutiveErrors: tr.isError ? agentState.consecutiveErrors + 1 : 0,
-          };
-        }
-
-        const hasErrors = toolResults.some((tr) => tr.isError);
-        const failedSteps = agentState.stepResults.filter((s) => !s.success);
-        const shouldReflect =
-          hasErrors ||
-          (agentState.stepResults.length > 0 &&
-            agentState.stepResults.length % REFLECT_INTERVAL === 0) ||
-          shouldForceReplan(failedSteps);
-
-        if (shouldReflect && agentState.phase === AgentPhase.EXECUTING) {
-          agentState = transitionPhase(agentState, AgentPhase.REFLECTING);
+        {
+          const stepRecord = recordStepResultsAndCheckReflection({
+            agentState,
+            toolCalls: response.toolCalls,
+            toolResults,
+            reflectInterval: REFLECT_INTERVAL,
+          });
+          agentState = stepRecord.agentState;
         }
         // ────────────────────────────────────────────────────────────────
 
