@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type {
   Attachment,
   ChatMessage,
@@ -6,11 +6,11 @@ import type {
   ConnectionStatus,
   IncomingMessage,
 } from '../types/messages'
+import { useSessionStore } from '../stores/session-store'
 import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from './websocket-storage'
 
 const MAX_RECONNECT_DELAY = 30000
 const MAX_RECONNECT_ATTEMPTS = 8
-const MAX_IN_MEMORY_MESSAGES = 200
 const CHAT_ID_STORAGE_KEY = 'strada-chatId'
 const PROFILE_ID_STORAGE_KEY = 'strada-profileId'
 const PROFILE_TOKEN_STORAGE_KEY = 'strada-profileToken'
@@ -65,12 +65,32 @@ export function buildModelSwitchCommand(provider: string, model?: string): strin
 }
 
 export function useWebSocket(): UseWebSocketReturn {
-  const [messages, setMessages] = useState<ChatMessage[]>(() => readSessionMessages(readStoredProfileId()))
-  const [status, setStatus] = useState<ConnectionStatus>('connecting')
-  const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null)
-  const [isTyping, setIsTyping] = useState(false)
-  const [sessionId, setSessionId] = useState<string | null>(() => readStoredChatId())
-  const [profileId, setProfileId] = useState<string | null>(() => readStoredProfileId())
+  // Read reactive state from Zustand store
+  const messages = useSessionStore((s) => s.messages)
+  const status = useSessionStore((s) => s.status)
+  const confirmation = useSessionStore((s) => s.confirmation)
+  const isTyping = useSessionStore((s) => s.isTyping)
+  const sessionId = useSessionStore((s) => s.sessionId)
+  const profileId = useSessionStore((s) => s.profileId)
+
+  // Initialize store with restored session messages on first mount
+  const initializedRef = useRef(false)
+  if (!initializedRef.current) {
+    initializedRef.current = true
+    const storedProfileId = readStoredProfileId()
+    const storedChatId = readStoredChatId()
+    const restoredMessages = readSessionMessages(storedProfileId)
+    if (restoredMessages.length > 0) {
+      useSessionStore.getState().setMessages(restoredMessages)
+    }
+    useSessionStore.getState().setStatus('connecting')
+    if (storedChatId) {
+      useSessionStore.getState().setSession(
+        storedChatId,
+        storedProfileId ?? storedChatId,
+      )
+    }
+  }
 
   const wsRef = useRef<WebSocket | null>(null)
   const chatIdRef = useRef<string | null>(readStoredChatId())
@@ -87,7 +107,6 @@ export function useWebSocket(): UseWebSocketReturn {
   // Use a ref for the streaming map so updates to it don't trigger re-renders
   // on their own -- we update `messages` state explicitly when streams change.
   const streamsRef = useRef<Map<string, string>>(new Map())
-  const streamRafRef = useRef<number | null>(null)
 
   const acceptConnectedSession = useCallback((
     chatId: string,
@@ -101,8 +120,7 @@ export function useWebSocket(): UseWebSocketReturn {
     chatIdRef.current = chatId
     profileIdRef.current = nextProfileId
     profileTokenRef.current = profileToken?.trim() || profileTokenRef.current
-    setSessionId(chatId)
-    setProfileId(nextProfileId)
+    useSessionStore.getState().setSession(chatId, nextProfileId)
     localStorage.setItem(CHAT_ID_STORAGE_KEY, chatId)
     localStorage.setItem(PROFILE_ID_STORAGE_KEY, nextProfileId)
     localStorage.removeItem(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY)
@@ -112,7 +130,8 @@ export function useWebSocket(): UseWebSocketReturn {
     localStorage.setItem(RECONNECT_TOKEN_STORAGE_KEY, reconnectToken)
 
     if (previousChatId !== chatId) {
-      setMessages((prev) => mergeSessionMessages(readSessionMessages(nextProfileId), prev))
+      const store = useSessionStore.getState()
+      store.setMessages(mergeSessionMessages(readSessionMessages(nextProfileId), store.messages))
     }
   }, [])
 
@@ -125,7 +144,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
     ws.addEventListener('open', () => {
       if (!mountedRef.current) return
-      setStatus('connected')
+      useSessionStore.getState().setStatus('connected')
       reconnectDelayRef.current = 1000
       reconnectAttemptsRef.current = 0
 
@@ -150,17 +169,18 @@ export function useWebSocket(): UseWebSocketReturn {
 
     ws.addEventListener('close', () => {
       if (!mountedRef.current) return
-      setStatus('disconnected')
+      useSessionStore.getState().setStatus('disconnected')
 
       // Fix 6.3: Reset typing indicator on disconnect
-      setIsTyping(false)
+      useSessionStore.getState().setTyping(false)
 
       // Fix 6.2: Complete any orphaned streaming messages
       if (streamsRef.current.size > 0) {
         const orphanedStreamIds = new Set(streamsRef.current.keys())
         streamsRef.current.clear()
-        setMessages((prev) =>
-          prev.map((msg) =>
+        const store = useSessionStore.getState()
+        store.setMessages(
+          store.messages.map((msg) =>
             msg.streamId && orphanedStreamIds.has(msg.streamId)
               ? { ...msg, isStreaming: false }
               : msg,
@@ -177,7 +197,7 @@ export function useWebSocket(): UseWebSocketReturn {
       // Auto-reconnect with exponential backoff
       reconnectTimerRef.current = setTimeout(() => {
         if (!mountedRef.current) return
-        setStatus('reconnecting')
+        useSessionStore.getState().setStatus('reconnecting')
         connectRef.current?.()
       }, reconnectDelayRef.current)
       reconnectDelayRef.current = Math.min(
@@ -225,73 +245,66 @@ export function useWebSocket(): UseWebSocketReturn {
         }
 
         case 'text':
-        case 'markdown':
-          setIsTyping(false)
-          setMessages((prev) => ([
-            ...prev,
-            {
-              id: data.messageId || generateId(),
-              sender: 'assistant' as const,
-              text: data.text,
-              isMarkdown: data.type === 'markdown',
-              timestamp: Date.now(),
-            },
-          ] satisfies ChatMessage[]).slice(-MAX_IN_MEMORY_MESSAGES))
+        case 'markdown': {
+          const store = useSessionStore.getState()
+          store.setTyping(false)
+          store.addMessage({
+            id: data.messageId || generateId(),
+            sender: 'assistant',
+            text: data.text,
+            isMarkdown: data.type === 'markdown',
+            timestamp: Date.now(),
+          })
           break
+        }
 
         case 'typing':
-          setIsTyping(data.active)
+          useSessionStore.getState().setTyping(data.active)
           break
 
         case 'stream_start':
-          setIsTyping(false)
+          useSessionStore.getState().setTyping(false)
           streamsRef.current.set(data.streamId, data.text || '')
-          setMessages((prev) => ([
-            ...prev,
-            {
-              id: generateId(),
-              sender: 'assistant' as const,
-              text: data.text || '',
-              isMarkdown: true,
-              isStreaming: true,
-              streamId: data.streamId,
-              timestamp: Date.now(),
-            },
-          ] satisfies ChatMessage[]).slice(-MAX_IN_MEMORY_MESSAGES))
+          useSessionStore.getState().addMessage({
+            id: generateId(),
+            sender: 'assistant',
+            text: data.text || '',
+            isMarkdown: true,
+            isStreaming: true,
+            streamId: data.streamId,
+            timestamp: Date.now(),
+          })
           break
 
-        case 'stream_update':
+        case 'stream_update': {
           streamsRef.current.set(data.streamId, data.text)
-          if (!streamRafRef.current) {
-            streamRafRef.current = requestAnimationFrame(() => {
-              streamRafRef.current = null
-              const pending = streamsRef.current
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.isStreaming && msg.streamId && pending.has(msg.streamId)
-                    ? { ...msg, text: pending.get(msg.streamId)! }
-                    : msg,
-                ),
-              )
-            })
+          const store = useSessionStore.getState()
+          const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
+          if (streamMsg) {
+            store.updateMessage(streamMsg.id, { text: data.text })
           }
           break
+        }
 
-        case 'stream_end':
+        case 'stream_end': {
           streamsRef.current.delete(data.streamId)
-          setMessages((prev) =>
-            data.text
-              ? prev.map((msg) =>
-                  msg.streamId === data.streamId
-                    ? { ...msg, text: data.text, isStreaming: false }
-                    : msg,
-                )
-              : prev.filter((msg) => msg.streamId !== data.streamId),
-          )
+          const store = useSessionStore.getState()
+          if (data.text) {
+            const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
+            if (streamMsg) {
+              store.updateMessage(streamMsg.id, { text: data.text, isStreaming: false })
+            }
+          } else {
+            const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
+            if (streamMsg) {
+              store.removeMessage(streamMsg.id)
+            }
+          }
           break
+        }
 
         case 'confirmation':
-          setConfirmation({
+          useSessionStore.getState().setConfirmation({
             confirmId: data.confirmId,
             question: data.question,
             options: data.options,
@@ -333,17 +346,14 @@ export function useWebSocket(): UseWebSocketReturn {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false
 
     // Add user message to display
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: generateId(),
-        sender: 'user',
-        text,
-        isMarkdown: false,
-        timestamp: Date.now(),
-        attachments,
-      },
-    ])
+    useSessionStore.getState().addMessage({
+      id: generateId(),
+      sender: 'user',
+      text,
+      isMarkdown: false,
+      timestamp: Date.now(),
+      attachments,
+    })
 
     const payload: Record<string, unknown> = {
       type: 'message',
@@ -361,7 +371,7 @@ export function useWebSocket(): UseWebSocketReturn {
     if (!ws || ws.readyState !== WebSocket.OPEN) return
 
     ws.send(JSON.stringify({ type: 'confirmation_response', confirmId, option }))
-    setConfirmation(null)
+    useSessionStore.getState().setConfirmation(null)
   }, [])
 
   const switchProvider = useCallback((provider: string, model?: string): boolean => {
