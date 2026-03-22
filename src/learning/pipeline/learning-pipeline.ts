@@ -42,6 +42,7 @@ import {
   createInstinctId,
 } from "../types.js";
 import { createBrand, type ToolName, type TimestampMs, type JsonObject } from "../../types/index.js";
+import { seedStradaConventions } from "../seeds/strada-core-seeds.js";
 
 const VERDICT_SCORE = {
   HIGH: 0.7,
@@ -125,6 +126,12 @@ export class LearningPipeline {
     if (this.isRunning || !this.config.enabled) return;
 
     this.isRunning = true;
+
+    // Seed Strada.Core conventions on every boot (idempotent — skips existing patterns)
+    seedStradaConventions(this.storage).catch((err) => {
+      console.error("[LearningPipeline] seed error:", err);
+    });
+
     // Detection timer removed -- event-driven processing via handleToolResult() replaces it
     this.evolutionTimer = setInterval(() => this.runEvolution(), this.config.evolutionIntervalMs);
 
