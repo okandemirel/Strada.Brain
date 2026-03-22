@@ -1,34 +1,40 @@
 import { NavLink } from 'react-router-dom'
+import {
+  MessageSquare, BarChart3, Settings, Wrench, Radio,
+  Users, ScrollText, Brain, Theater, Database,
+  Sun, Moon, ChevronLeft, ChevronRight,
+  type LucideIcon,
+} from 'lucide-react'
 import { useWS } from '../../hooks/useWS'
 import { useTheme } from '../../hooks/useTheme'
 import { useSidebar } from '../../hooks/useSidebar'
 import '../../styles/sidebar.css'
 
-const SECTIONS = [
+const SECTIONS: { title: string; items: { to: string; icon: LucideIcon; label: string; end?: boolean }[] }[] = [
   {
     title: 'MAIN',
     items: [
-      { to: '/', icon: '\uD83D\uDCAC', label: 'Chat', end: true },
-      { to: '/dashboard', icon: '\uD83D\uDCCA', label: 'Dashboard' },
+      { to: '/', icon: MessageSquare, label: 'Chat', end: true },
+      { to: '/dashboard', icon: BarChart3, label: 'Dashboard' },
     ],
   },
   {
     title: 'ADMIN',
     items: [
-      { to: '/config', icon: '\u2699\uFE0F', label: 'Config' },
-      { to: '/tools', icon: '\uD83D\uDD27', label: 'Tools' },
-      { to: '/channels', icon: '\uD83D\uDCE1', label: 'Channels' },
-      { to: '/sessions', icon: '\uD83D\uDC65', label: 'Sessions' },
-      { to: '/logs', icon: '\uD83D\uDCDC', label: 'Logs' },
+      { to: '/config', icon: Settings, label: 'Config' },
+      { to: '/tools', icon: Wrench, label: 'Tools' },
+      { to: '/channels', icon: Radio, label: 'Channels' },
+      { to: '/sessions', icon: Users, label: 'Sessions' },
+      { to: '/logs', icon: ScrollText, label: 'Logs' },
     ],
   },
   {
     title: 'AGENT',
     items: [
-      { to: '/identity', icon: '\uD83E\uDDEC', label: 'Identity' },
-      { to: '/personality', icon: '\uD83C\uDFAD', label: 'Personality' },
-      { to: '/memory', icon: '\uD83E\uDDE0', label: 'Memory' },
-      { to: '/settings', icon: '\u2699\uFE0F', label: 'Settings' },
+      { to: '/identity', icon: Brain, label: 'Identity' },
+      { to: '/personality', icon: Theater, label: 'Personality' },
+      { to: '/memory', icon: Database, label: 'Memory' },
+      { to: '/settings', icon: Settings, label: 'Settings' },
     ],
   },
 ]
@@ -61,7 +67,7 @@ export default function Sidebar() {
                 }
                 title={collapsed ? item.label : undefined}
               >
-                <span className="sidebar-item-icon">{item.icon}</span>
+                <span className="sidebar-item-icon"><item.icon size={18} /></span>
                 {!collapsed && <span className="sidebar-item-label">{item.label}</span>}
               </NavLink>
             ))}
@@ -71,12 +77,12 @@ export default function Sidebar() {
 
       <div className="sidebar-footer">
         <button className="sidebar-footer-btn" onClick={toggleTheme} title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}>
-          <span className="sidebar-item-icon">{theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19'}</span>
+          <span className="sidebar-item-icon">{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</span>
           {!collapsed && <span className="sidebar-item-label">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>}
         </button>
 
         <button className="sidebar-footer-btn" onClick={toggle} title={collapsed ? 'Expand' : 'Collapse'}>
-          <span className="sidebar-item-icon">{collapsed ? '\u203A' : '\u2039'}</span>
+          <span className="sidebar-item-icon">{collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}</span>
           {!collapsed && <span className="sidebar-item-label">Collapse</span>}
         </button>
 
