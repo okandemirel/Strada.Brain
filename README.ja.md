@@ -72,6 +72,15 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 .\Strada.Brain\strada.ps1 setup
 ```
 
+> **Windows向け注意**: PowerShellが実行ポリシーエラーで`.\strada.ps1`をブロックする場合、代わりに`strada.cmd`を使用してください（CMDとPowerShellの両方でポリシー変更なしで動作します）:
+> ```
+> .\Strada.Brain\strada.cmd install-command
+> .\Strada.Brain\strada.cmd setup
+> ```
+> または、ローカルスクリプトを許可してください: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+>
+> `SyntaxError: Unexpected identifier 'pipefail'`が表示された場合、`node strada`を実行してbashランチャーをJavaScriptとして解析しようとしています。代わりに`.\strada.cmd`、`.\strada.ps1`、または`node strada.js`を使用してください。
+
 すべての `npm` コマンドは `package.json` があるリポジトリルートで実行してください。`ENOENT ... /Strada/package.json` のようなエラーが出た場合は一つ上の階層にいるので、先に `cd Strada.Brain` するか `cd Strada.Brain && ...` で実行してください。
 
 `./strada` は source checkout 向けの正式ランチャーです。初回起動時に checkout を自動準備するため、通常セットアップで `npm link` は不要です。

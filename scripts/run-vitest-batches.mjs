@@ -58,6 +58,13 @@ function partitionFiles(files) {
 }
 
 async function main() {
+  // Ensure max heap size for large test suites — set programmatically so
+  // `npm run test` works on Windows where POSIX `VAR=val cmd` syntax is unsupported.
+  if (!process.env.NODE_OPTIONS?.includes("--max-old-space-size")) {
+    process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, "--max-old-space-size=8192"]
+      .filter(Boolean).join(" ");
+  }
+
   const forwardedArgs = process.argv.slice(2);
 
   if (forwardedArgs.length > 0) {

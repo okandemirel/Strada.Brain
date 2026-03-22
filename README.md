@@ -70,6 +70,15 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 .\Strada.Brain\strada.ps1 setup
 ```
 
+> **Windows note**: If PowerShell blocks `.\strada.ps1` with an execution policy error, use `strada.cmd` instead (works in both CMD and PowerShell without policy changes):
+> ```
+> .\Strada.Brain\strada.cmd install-command
+> .\Strada.Brain\strada.cmd setup
+> ```
+> Or allow local scripts: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+>
+> If you see `SyntaxError: Unexpected identifier 'pipefail'`, you ran `node strada` which tries to parse the bash launcher as JavaScript. Use `.\strada.cmd`, `.\strada.ps1`, or `node strada.js` instead.
+
 `./strada` is the canonical source-checkout launcher on macOS/Linux. On Windows, use `.\strada.ps1` from the checkout root, with `strada.cmd` as the companion wrapper for Command Prompt and bare-PATH launches. On first run the source launcher prepares the local checkout automatically, so normal setup no longer requires manual `npm install`, `npm run bootstrap`, or `npm link`.
 
 If you skip `./strada install-command`, keep using `./Strada.Brain/strada ...` from the parent folder or `./strada ...` from the repository root. Once installed, bare `strada ...` works from anywhere.

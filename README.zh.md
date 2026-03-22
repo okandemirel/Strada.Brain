@@ -72,6 +72,15 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 .\Strada.Brain\strada.ps1 setup
 ```
 
+> **Windows 注意**: 如果 PowerShell 因执行策略错误而阻止 `.\strada.ps1`，请改用 `strada.cmd`（在 CMD 和 PowerShell 中均可使用，无需更改策略）：
+> ```
+> .\Strada.Brain\strada.cmd install-command
+> .\Strada.Brain\strada.cmd setup
+> ```
+> 或允许本地脚本: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+>
+> 如果看到 `SyntaxError: Unexpected identifier 'pipefail'`，说明您运行了 `node strada`，Node.js 试图将 bash 启动器解析为 JavaScript。请改用 `.\strada.cmd`、`.\strada.ps1` 或 `node strada.js`。
+
 所有 `npm` 命令都必须在包含 `package.json` 的仓库根目录中执行。如果看到类似 `ENOENT ... /Strada/package.json` 的错误，说明你当前在上一级目录；请先执行 `cd Strada.Brain`，或者把命令写成 `cd Strada.Brain && ...`。
 
 `./strada` 是源码 checkout 的规范 launcher。首次运行时它会自动准备本地 checkout，所以常规 setup 已经不再需要手动 `npm link`。

@@ -17,7 +17,8 @@
     "README.zh.md",
     "SECURITY.md",
     "CHANGELOG.md",
-    "icon"
+    "icon",
+    "strada.js"
   ],
   "bin": {
     "strada": "./dist/index.js",
@@ -25,7 +26,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "bootstrap": "npm install --prefix web-portal; npm run build",
+    "bootstrap": "npm install --prefix web-portal && npm run build",
     "doctor": "node --import tsx src/index.ts doctor",
     "setup:web": "node --import tsx src/index.ts setup --web",
     "setup:terminal": "node --import tsx src/index.ts setup --terminal",
@@ -40,7 +41,7 @@
     "start": "node dist/index.js",
     "lint": "npm run lint:src && npm run lint:portal",
     "typecheck": "npm run typecheck:src && npm run typecheck:portal",
-    "test": "NODE_OPTIONS=--max-old-space-size=8192 node scripts/run-vitest-batches.mjs",
+    "test": "node scripts/run-vitest-batches.mjs",
     "test:portal": "npm --prefix web-portal run test",
     "sync:check": "node --import tsx src/index.ts sync --dry-run",
     "test:file-build-flow": "LOCAL_DOTNET_TESTS=1 NODE_OPTIONS=--max-old-space-size=8192 vitest run src/tests/integration/file-build-flow.test.ts",

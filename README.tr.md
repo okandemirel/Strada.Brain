@@ -72,6 +72,15 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 .\Strada.Brain\strada.ps1 setup
 ```
 
+> **Windows notu**: PowerShell `.\strada.ps1` dosyasini calisma politikasi hatasiyla engelliyorsa, bunun yerine `strada.cmd` kullanin (hem CMD hem PowerShell'de politika degisikligi gerektirmeden calisir):
+> ```
+> .\Strada.Brain\strada.cmd install-command
+> .\Strada.Brain\strada.cmd setup
+> ```
+> Ya da yerel betiklere izin verin: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+>
+> `SyntaxError: Unexpected identifier 'pipefail'` hatasi goruyorsaniz, `node strada` calistirdiniz ve Node.js bash launcher'i JavaScript olarak okumaya calisti. Bunun yerine `.\strada.cmd`, `.\strada.ps1` veya `node strada.js` kullanin.
+
 `./strada` kaynak checkout icin kanonik launcher'dir. Ilk calistirmada gerekli hazirligi kendi yapar; normal kurulumda artik manuel `npm install`, `npm run bootstrap` veya `npm link` gerekmez.
 
 `./strada install-command` atlanirsa parent klasorden `./Strada.Brain/strada ...` veya repo kokunden `./strada ...` kullanmaya devam edin. Kurulduktan sonra yalniz `strada ...` komutu her yerden calisir.
