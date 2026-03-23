@@ -54,7 +54,7 @@ Strada.Brain is organized into these key modules:
 | **Auto-Update** | `src/core/auto-updater.ts` | Self-updating system with 3-way install detection, atomic lockfile, idle-aware restart, dependency installation, post-update health check with rollback, daemon-aware restart, and webhook-triggered immediate checks (`POST /api/update`) |
 | **Setup Wizard** | `src/core/terminal-wizard.ts` | Interactive terminal/web setup for first-time configuration |
 | **Config** | `src/config/` | Zod-validated config with 90+ env vars |
-| **Channels** | `src/channels/` | Web, Telegram, Discord, Slack, WhatsApp, CLI |
+| **Channels** | `src/channels/` | Web, Telegram, Discord, Slack, WhatsApp, CLI, Matrix, IRC, Teams |
 | **Web Portal** | `web-portal/` | React + Vite dashboard (separate package.json) |
 
 ### Key Design Patterns
@@ -107,7 +107,7 @@ Strada.Brain is organized into these key modules:
 ## Running Tests
 
 ```bash
-# Full suite (3919+ tests)
+# Full suite (4,413+ tests)
 npm test
 
 # Specific module
@@ -136,7 +136,7 @@ npm run build   # Production build → src/channels/web/static/
 - Test edge cases: empty inputs, large inputs, error conditions.
 - Integration tests go in `src/` (co-located as `integration.test.ts`).
 - For Unity/Strada codegen changes, prefer `npm run test:unity-fixture` when a licensed local Unity editor is available.
-- Current test suite: 3919+ tests across 180+ test files.
+- Current test suite: 4,413+ tests across 180+ test files.
 
 ## Adding a New Tool
 
@@ -148,13 +148,166 @@ npm run build   # Production build → src/channels/web/static/
 
 ## Adding a New Channel
 
-Strada.Brain supports 6 channels: Web (default), Telegram, Discord, Slack, WhatsApp, and CLI.
+Strada.Brain supports 9 channels: Web (default), Telegram, Discord, Slack, WhatsApp, CLI, Matrix, IRC, and Teams.
 
 1. Create a directory under `src/channels/` (e.g., `src/channels/mychannel/`).
 2. Implement the `IChannelAdapter` interface from `channel.interface.ts`.
 3. Optionally implement `IChannelStreaming`, `IChannelRichMessaging`, or `IChannelInteractive`.
 4. Register the channel in `src/core/bootstrap-channels.ts`.
 5. Add the channel type to `SupportedChannelType` in `src/common/constants.ts`.
+
+## Creating a Skill
+
+Strada.Brain has a skill ecosystem that lets you extend the agent with new tools. Skills are self-contained packages with a manifest, tool implementations, and tests.
+
+### Skill Structure
+
+```
+my-skill/
+  SKILL.md       # Manifest (required)
+  index.ts       # Tool implementations (required)
+  my-skill.test.ts  # Tests (required for PRs)
+```
+
+### SKILL.md Manifest
+
+The manifest uses YAML frontmatter:
+
+```markdown
+---
+name: my-skill
+version: 1.0.0
+description: Short description of what this skill does
+author: your-github-username
+requires:
+  bins: ["some-cli"]
+  env: ["MY_API_KEY"]
+capabilities: ["domain.action1", "domain.action2"]
+---
+
+# My Skill
+
+Human-readable documentation about the skill.
+```
+
+**Required fields:** `name`, `version`, `description`
+**Optional fields:** `author`, `homepage`, `requires`, `capabilities`
+
+**Requirements gating:**
+- `bins`: Binaries that must exist in PATH (e.g., `gh`, `docker`)
+- `env`: Environment variables that must be set (e.g., `NOTION_API_KEY`)
+- `config`: Strada config keys that must exist
+- `skills`: Other skills this depends on
+
+### Tool Implementation
+
+Each skill exports an array of `ITool` objects from `index.ts`:
+
+```typescript
+import type { ITool, ToolContext, ToolExecutionResult } from "../../../agents/tools/tool.interface.js";
+
+const myTool: ITool = {
+  name: "my_tool_name",
+  description: "What this tool does — shown to the AI agent.",
+  inputSchema: {
+    type: "object" as const,
+    properties: {
+      param1: { type: "string", description: "Description of param1" },
+    },
+    required: ["param1"],
+  },
+  async execute(
+    input: Record<string, unknown>,
+    _context: ToolContext,
+  ): Promise<ToolExecutionResult> {
+    const param1 = typeof input["param1"] === "string" ? input["param1"] : "";
+    // Your logic here
+    return { content: `Result: ${param1}` };
+  },
+};
+
+export const tools = [myTool];
+export default tools;
+```
+
+**Key rules:**
+- Tool names must be unique — they get namespaced as `skill_{skillname}_{toolname}` at runtime
+- Always validate input types (the AI may send unexpected values)
+- Return `{ content: string }` — the string is shown to the AI agent
+- Use `_context: ToolContext` if you don't need context (respects linting)
+- For CLI tools, use `execFileNoThrow` from `src/utils/execFileNoThrow.js`
+
+### Testing
+
+Place tests next to `index.ts`, named `{skill-name}.test.ts`:
+
+```typescript
+import { describe, it, expect } from "vitest";
+import { tools } from "./index.js";
+import type { ToolContext } from "../../../agents/tools/tool.interface.js";
+
+const mockContext = {} as ToolContext;
+
+describe("my-skill", () => {
+  it("exports tools array", () => {
+    expect(Array.isArray(tools)).toBe(true);
+    expect(tools.length).toBeGreaterThan(0);
+  });
+
+  it("my_tool_name returns expected result", async () => {
+    const tool = tools.find((t) => t.name === "my_tool_name")!;
+    const result = await tool.execute({ param1: "hello" }, mockContext);
+    expect(result.content).toContain("hello");
+  });
+
+  it("handles missing input gracefully", async () => {
+    const tool = tools.find((t) => t.name === "my_tool_name")!;
+    const result = await tool.execute({}, mockContext);
+    expect(result.content).toBeDefined();
+  });
+});
+```
+
+### Three-Tier Loading
+
+Skills are loaded from three locations (highest precedence first):
+
+1. **Workspace:** `<projectRoot>/skills/` — project-specific skills
+2. **Managed:** `~/.strada/skills/` — user-installed skills
+3. **Bundled:** `src/skills/bundled/` — shipped with Strada.Brain
+
+Higher-tier skills override lower-tier skills with the same name.
+
+### Publishing to the Registry
+
+To share your skill with the community:
+
+1. Create a GitHub repository for your skill (e.g., `strada-skill-my-skill`)
+2. Ensure it has a valid `SKILL.md` and `index.ts` at the root
+3. Fork [okandemirel/strada-skill-registry](https://github.com/okandemirel/strada-skill-registry)
+4. Add your skill to `registry.json`:
+   ```json
+   {
+     "my-skill": {
+       "repo": "https://github.com/your-username/strada-skill-my-skill",
+       "description": "Short description",
+       "tags": ["category1", "category2"],
+       "version": "1.0.0",
+       "author": "your-username"
+     }
+   }
+   ```
+5. Open a pull request to the registry repository
+6. Users can then install via: `strada skill install my-skill`
+
+### Bundled Skill Contributions
+
+To contribute a skill directly to the Strada.Brain repo:
+
+1. Create a directory under `src/skills/bundled/your-skill/`
+2. Add `SKILL.md`, `index.ts`, and `your-skill.test.ts`
+3. Run tests: `npx vitest run src/skills/bundled/your-skill/`
+4. Bundled skills should have **zero external dependencies**
 
 ## Security Guidelines
 

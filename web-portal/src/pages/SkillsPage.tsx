@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useSkills } from '../hooks/use-api'
-import type { SkillEntryResponse } from '../hooks/use-api'
+import { useSkills, useSkillRegistry } from '../hooks/use-api'
+import type { SkillEntryResponse, RegistrySkillEntry } from '../hooks/use-api'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 
 // ---------------------------------------------------------------------------
 // Status badge helpers
@@ -40,7 +41,7 @@ function TierBadge({ tier }: { tier: SkillEntryResponse['tier'] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Toggle button with optimistic loading state
+// Toggle button
 // ---------------------------------------------------------------------------
 
 interface ToggleButtonProps {
@@ -80,10 +81,10 @@ function ToggleButton({ skill, onToggle }: ToggleButtonProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Main page
+// Installed tab content
 // ---------------------------------------------------------------------------
 
-export default function SkillsPage() {
+function InstalledTab() {
   const skillsQuery = useSkills()
   const queryClient = useQueryClient()
   const [filter, setFilter] = useState('')
@@ -93,16 +94,20 @@ export default function SkillsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-1 items-center justify-center h-[200px] text-text-secondary text-[15px]">
-        Loading skills...
+      <div className="space-y-3 mt-4">
+        {[...Array(4)].map((_, i) => (
+          <div key={i} className="h-14 rounded-xl bg-bg-tertiary animate-pulse" />
+        ))}
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="flex flex-1 items-center justify-center h-[200px] text-error text-[15px]">
-        Error: {error.message}
+      <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
+        <div className="text-4xl">⚠</div>
+        <h3 className="text-text text-lg font-semibold">Failed to Load Skills</h3>
+        <p className="text-sm max-w-[400px] text-center">{error.message}</p>
       </div>
     )
   }
@@ -111,14 +116,11 @@ export default function SkillsPage() {
 
   if (skills.length === 0) {
     return (
-      <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
-        <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Skills</h2>
-        <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">No Skills Loaded</h3>
-          <p className="text-sm max-w-[400px]">
-            No skills are currently registered. Add skill folders or install skills via the CLI.
-          </p>
-        </div>
+      <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
+        <h3 className="text-text text-lg font-semibold">No Skills Loaded</h3>
+        <p className="text-sm max-w-[400px]">
+          No skills are currently registered. Check the Marketplace tab to discover and install skills.
+        </p>
       </div>
     )
   }
@@ -141,24 +143,16 @@ export default function SkillsPage() {
       const body = await res.json().catch(() => ({})) as { error?: string }
       throw new Error(body.error ?? `Request failed: ${res.status}`)
     }
-    // Refresh the skills list so status reflects the config change
     await queryClient.invalidateQueries({ queryKey: ['skills'] })
   }
 
   return (
-    <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
-      <h2 className="text-[22px] font-bold tracking-tight mb-2 text-text">
-        Skills ({skills.length})
-      </h2>
-      <p className="text-sm text-text-tertiary mb-6">
-        Manage which skills are enabled. Changes take effect on next restart.
-      </p>
-
+    <div>
       {/* Search */}
       <input
         className="w-full max-w-[400px] px-4 py-2.5 border border-border rounded-xl bg-input-bg text-text font-[inherit] text-sm outline-none transition-all duration-200 mb-5 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] placeholder:text-text-tertiary"
         type="text"
-        placeholder="Search skills..."
+        placeholder="Search installed skills..."
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
       />
@@ -185,24 +179,12 @@ export default function SkillsPage() {
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="bg-bg-secondary border-b border-border">
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">
-                Name
-              </th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">
-                Description
-              </th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">
-                Version
-              </th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">
-                Tier
-              </th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">
-                Status
-              </th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">
-                Actions
-              </th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Name</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Description</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Version</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Tier</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Status</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -242,6 +224,186 @@ export default function SkillsPage() {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Marketplace tab content
+// ---------------------------------------------------------------------------
+
+function MarketplaceTab() {
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [installing, setInstalling] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+
+  // Debounce search
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current) }, [])
+  const handleSearch = (value: string) => {
+    setSearch(value)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => setDebouncedSearch(value), 300)
+  }
+
+  const { data, error, isLoading } = useSkillRegistry(debouncedSearch)
+
+  const handleInstall = async (skill: RegistrySkillEntry) => {
+    setInstalling(skill.name)
+    try {
+      const res = await fetch('/api/skills/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: skill.name, repo: skill.repo }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(body.error ?? `Install failed: ${res.status}`)
+      }
+      // Refresh both installed skills and registry
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['skills'] }),
+        queryClient.invalidateQueries({ queryKey: ['skill-registry'] }),
+      ])
+    } catch (err) {
+      // Show error in console for now (could be enhanced with toast)
+      console.error('Install failed:', err)
+    } finally {
+      setInstalling(null)
+    }
+  }
+
+  return (
+    <div>
+      {/* Search */}
+      <input
+        className="w-full max-w-[400px] px-4 py-2.5 border border-border rounded-xl bg-input-bg text-text font-[inherit] text-sm outline-none transition-all duration-200 mb-5 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] placeholder:text-text-tertiary"
+        type="text"
+        placeholder="Search skills in registry..."
+        value={search}
+        onChange={(e) => handleSearch(e.target.value)}
+      />
+
+      {/* Loading state */}
+      {isLoading && (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="h-[160px] rounded-xl bg-bg-tertiary animate-pulse" />
+          ))}
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && (
+        <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
+          <div className="text-4xl">⚠</div>
+          <h3 className="text-text text-lg font-semibold">Failed to Load Registry</h3>
+          <p className="text-sm max-w-[400px] text-center">{error.message}</p>
+        </div>
+      )}
+
+      {/* Results */}
+      {data && !isLoading && (
+        <>
+          {data.skills.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
+              <h3 className="text-text text-lg font-semibold">No Skills Found</h3>
+              <p className="text-sm max-w-[400px]">
+                {debouncedSearch
+                  ? `No skills match "${debouncedSearch}". Try a different search term.`
+                  : 'The skill registry is empty. Check back later for community skills.'}
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+              {data.skills.map((skill) => (
+                <div
+                  key={skill.name}
+                  className="rounded-xl border border-white/5 bg-white/3 backdrop-blur p-5 flex flex-col gap-3 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] transition-all duration-200"
+                >
+                  {/* Header */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="font-mono text-[14px] font-semibold text-text">{skill.name}</h3>
+                      {skill.author && (
+                        <span className="text-[11px] text-text-tertiary">by {skill.author}</span>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-text-tertiary whitespace-nowrap">v{skill.version}</span>
+                  </div>
+
+                  {/* Description */}
+                  <p className="text-[13px] text-text-secondary line-clamp-2 flex-1">
+                    {skill.description}
+                  </p>
+
+                  {/* Tags */}
+                  {skill.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {skill.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="text-[10px] px-2 py-0.5 rounded-md bg-bg-tertiary text-text-tertiary"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Install button */}
+                  <div className="pt-1">
+                    {skill.installed ? (
+                      <span className="text-[12px] font-semibold text-success px-3 py-1.5 rounded-lg bg-success/10 border border-success/20 inline-block">
+                        Installed
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => handleInstall(skill)}
+                        disabled={installing === skill.name}
+                        className="px-3 py-1.5 rounded-lg text-[12px] font-semibold border border-accent/40 bg-accent-glow text-accent hover:bg-accent/20 transition-all duration-150 font-[inherit] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {installing === skill.name ? 'Installing...' : 'Install'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main page with tabs
+// ---------------------------------------------------------------------------
+
+export default function SkillsPage() {
+  return (
+    <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
+      <h2 className="text-[22px] font-bold tracking-tight mb-2 text-text">Skills</h2>
+      <p className="text-sm text-text-tertiary mb-6">
+        Manage installed skills and discover new ones from the community registry.
+      </p>
+
+      <Tabs defaultValue="installed" className="w-full">
+        <TabsList className="mb-6">
+          <TabsTrigger value="installed">Installed</TabsTrigger>
+          <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="installed">
+          <InstalledTab />
+        </TabsContent>
+
+        <TabsContent value="marketplace">
+          <MarketplaceTab />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

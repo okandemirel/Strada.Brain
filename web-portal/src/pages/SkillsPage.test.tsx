@@ -9,9 +9,11 @@ import { MemoryRouter } from 'react-router-dom'
 // ---------------------------------------------------------------------------
 
 const mockUseSkills = vi.fn()
+const mockUseSkillRegistry = vi.fn()
 
 vi.mock('../hooks/use-api', () => ({
   useSkills: () => mockUseSkills(),
+  useSkillRegistry: () => mockUseSkillRegistry(),
 }))
 
 import SkillsPage from './SkillsPage'
@@ -60,12 +62,16 @@ const SAMPLE_SKILLS = [
 describe('SkillsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Default marketplace mock — not loading, empty
+    mockUseSkillRegistry.mockReturnValue({ data: { skills: [] }, error: null, isLoading: false })
   })
 
   it('renders loading state', () => {
     mockUseSkills.mockReturnValue({ data: undefined, error: null, isLoading: true })
     renderPage()
-    expect(screen.getByText('Loading skills...')).toBeInTheDocument()
+    // New layout uses skeleton loaders instead of text
+    const skeletons = document.querySelectorAll('.animate-pulse')
+    expect(skeletons.length).toBeGreaterThan(0)
   })
 
   it('renders error state', () => {
@@ -75,7 +81,7 @@ describe('SkillsPage', () => {
       isLoading: false,
     })
     renderPage()
-    expect(screen.getByText('Error: Skills API down')).toBeInTheDocument()
+    expect(screen.getByText('Failed to Load Skills')).toBeInTheDocument()
   })
 
   it('renders empty state when no skills loaded', () => {
@@ -92,7 +98,7 @@ describe('SkillsPage', () => {
     })
     renderPage()
 
-    expect(screen.getByText(/Skills \(3\)/)).toBeInTheDocument()
+    expect(screen.getByText('Skills')).toBeInTheDocument()
     expect(screen.getByText('unity-build')).toBeInTheDocument()
     expect(screen.getByText('web-search')).toBeInTheDocument()
     expect(screen.getByText('git-ops')).toBeInTheDocument()
@@ -163,7 +169,7 @@ describe('SkillsPage', () => {
     })
     renderPage()
 
-    const input = screen.getByPlaceholderText('Search skills...')
+    const input = screen.getByPlaceholderText('Search installed skills...')
     await user.type(input, 'unity')
 
     expect(screen.getByText('unity-build')).toBeInTheDocument()
@@ -256,7 +262,7 @@ describe('SkillsPage', () => {
     })
     renderPage()
 
-    const input = screen.getByPlaceholderText('Search skills...')
+    const input = screen.getByPlaceholderText('Search installed skills...')
     await user.type(input, 'xyznonexistent')
 
     expect(screen.getByText('No skills match your filter.')).toBeInTheDocument()

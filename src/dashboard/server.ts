@@ -47,6 +47,8 @@ import type { CanvasStorage } from "./canvas-storage.js";
 import type { WorkspaceBus } from "./workspace-bus.js";
 import type { SkillEntry } from "../skills/types.js";
 import { setSkillEnabled } from "../skills/skill-config.js";
+import { fetchRegistry, searchRegistry } from "../skills/skill-registry-client.js";
+import { isValidSkillName, installSkillFromRepo } from "../skills/skill-installer.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -1939,10 +1941,97 @@ export class DashboardServer {
           return;
         }
 
+        // GET /api/skills/registry?q=<query>&refresh=true
+        const registryMatch = url.match(/^\/api\/skills\/registry/);
+        if (registryMatch && req.method === "GET") {
+          const params = new URL(url, "http://localhost").searchParams;
+          const query = params.get("q") ?? "";
+          const refresh = params.get("refresh") === "true";
+
+          void (async () => {
+            try {
+              const registry = await fetchRegistry(refresh);
+              const results = query ? searchRegistry(registry, query) : Object.entries(registry.skills);
+
+              // Cross-reference with installed skills
+              const installed = new Set(
+                (this.skillManager?.getEntries() ?? []).map((e) => e.manifest.name)
+              );
+
+              const skills = results.map(([name, entry]) => ({
+                name,
+                ...entry,
+                installed: installed.has(name),
+              }));
+
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ skills }));
+            } catch (err) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+            }
+          })();
+          return;
+        }
+
+        // POST /api/skills/install — install from registry or URL
+        if (url === "/api/skills/install" && req.method === "POST") {
+          void this.readJsonBody<{ name?: string; repo?: string }>(req, res).then(async (parsed) => {
+            if (!parsed) return;
+            try {
+              const { name, repo } = parsed;
+              if (!name || typeof name !== "string") {
+                res.writeHead(400, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "name is required" }));
+                return;
+              }
+
+              if (!isValidSkillName(name)) {
+                res.writeHead(400, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Invalid skill name" }));
+                return;
+              }
+
+              // Determine repo URL
+              let repoUrl = repo;
+              if (!repoUrl) {
+                const registry = await fetchRegistry();
+                const entry = registry.skills[name];
+                if (!entry) {
+                  res.writeHead(404, { "Content-Type": "application/json" });
+                  res.end(JSON.stringify({ error: `Skill "${name}" not found in registry` }));
+                  return;
+                }
+                repoUrl = entry.repo;
+              }
+
+              const result = await installSkillFromRepo(name, repoUrl);
+              if (!result.success) {
+                const status = result.error?.includes("already installed") ? 409 : 500;
+                res.writeHead(status, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: result.error }));
+                return;
+              }
+
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ success: true, message: `Skill "${name}" installed. Restart to activate.` }));
+            } catch (err) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+            }
+          });
+          return;
+        }
+
         // POST /api/skills/:name/enable
         const enableMatch = url.match(/^\/api\/skills\/([^/]+)\/enable$/);
         if (enableMatch && req.method === "POST") {
           const name = decodeURIComponent(enableMatch[1] ?? "");
+          if (!isValidSkillName(name)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid skill name" }));
+            return;
+          }
           void setSkillEnabled(name, true).then(() => {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ success: true }));
@@ -1957,6 +2046,11 @@ export class DashboardServer {
         const disableMatch = url.match(/^\/api\/skills\/([^/]+)\/disable$/);
         if (disableMatch && req.method === "POST") {
           const name = decodeURIComponent(disableMatch[1] ?? "");
+          if (!isValidSkillName(name)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid skill name" }));
+            return;
+          }
           void setSkillEnabled(name, false).then(() => {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ success: true }));

@@ -539,3 +539,31 @@ export function useSkills() {
     refetchInterval: 15_000,
   })
 }
+
+// ---------------------------------------------------------------------------
+// Skill registry (marketplace)
+// ---------------------------------------------------------------------------
+
+export interface RegistrySkillEntry {
+  name: string
+  repo: string
+  description: string
+  tags: string[]
+  version: string
+  tag?: string
+  author?: string
+  installed: boolean
+}
+
+interface SkillRegistryResponse {
+  skills: RegistrySkillEntry[]
+}
+
+/** GET /api/skills/registry?q=<query> */
+export function useSkillRegistry(query: string) {
+  return useQuery<SkillRegistryResponse>({
+    queryKey: ['skill-registry', query],
+    queryFn: () => fetchApi<SkillRegistryResponse>(`/api/skills/registry?q=${encodeURIComponent(query)}`),
+    staleTime: 60_000,
+  })
+}

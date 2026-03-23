@@ -14,6 +14,7 @@ import { checkGates } from "./skill-gating.js";
 import { readSkillConfig, writeSkillConfig, setSkillEnabled } from "./skill-config.js";
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { fetchRegistry, searchRegistry } from "./skill-registry-client.js";
+import { isValidSkillName, installSkillFromRepo } from "./skill-installer.js";
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -31,54 +32,18 @@ export function registerSkillCommands(program: Command): void {
     .command("install <url>")
     .description("Install a skill from a git repository URL")
     .action(async (url: string) => {
-      // Verify git is available
-      const gitCheck = await execFileNoThrow("git", ["--version"]);
-      if (gitCheck.exitCode !== 0) {
-        console.error("Error: git is not installed or not in PATH.");
-        process.exitCode = 1;
-        return;
-      }
-
       // Derive skill name from URL (last path segment, sans .git).
-      // Sanitize to prevent path traversal: allow only alphanumeric, hyphens,
-      // underscores, and dots — no slashes or ".." components.
       const segments = url.replace(/\.git$/, "").split("/");
       const rawName = segments[segments.length - 1] ?? "unknown-skill";
       const repoName = rawName.replace(/[^a-zA-Z0-9._-]/g, "").replace(/^\.+$/, "unknown-skill") || "unknown-skill";
 
-      const targetDir = join(homedir(), ".strada", "skills", repoName);
-
-      // Check if already installed
-      try {
-        const s = await stat(targetDir);
-        if (s.isDirectory()) {
-          console.error(`Skill directory already exists: ${targetDir}`);
-          console.error("Use 'strada skill update' to update, or remove first.");
-          process.exitCode = 1;
-          return;
-        }
-      } catch {
-        // Does not exist — good
-      }
-
-      console.log(`Cloning ${url} into ${targetDir}...`);
-      const result = await execFileNoThrow("git", ["clone", url, targetDir], 60_000);
-      if (result.exitCode !== 0) {
-        console.error(`Git clone failed (exit ${result.exitCode}):`);
-        console.error(result.stderr || result.stdout);
+      console.log(`Installing skill "${repoName}" from ${url}...`);
+      const result = await installSkillFromRepo(repoName, url);
+      if (!result.success) {
+        console.error(result.error);
         process.exitCode = 1;
         return;
       }
-
-      // Validate SKILL.md exists
-      try {
-        await stat(join(targetDir, "SKILL.md"));
-      } catch {
-        console.error("Warning: Cloned repo does not contain a SKILL.md — it may not be a valid skill.");
-      }
-
-      // Enable by default in config
-      await setSkillEnabled(repoName, true);
       console.log(`Skill "${repoName}" installed and enabled.`);
     });
 
@@ -90,8 +55,7 @@ export function registerSkillCommands(program: Command): void {
     .command("remove <name>")
     .description("Remove an installed skill by name")
     .action(async (name: string) => {
-      // Sanitize name to prevent path traversal attacks.
-      if (!/^[a-zA-Z0-9._-]+$/.test(name) || /^\.+$/.test(name)) {
+      if (!isValidSkillName(name)) {
         console.error(`Invalid skill name: "${name}". Only alphanumeric, hyphen, underscore, and dot are allowed.`);
         process.exitCode = 1;
         return;
@@ -267,8 +231,7 @@ export function registerSkillCommands(program: Command): void {
       const managedDir = join(homedir(), ".strada", "skills");
 
       if (name) {
-        // Sanitize name to prevent path traversal attacks.
-        if (!/^[a-zA-Z0-9._-]+$/.test(name) || /^\.+$/.test(name)) {
+        if (!isValidSkillName(name)) {
           console.error(`Invalid skill name: "${name}". Only alphanumeric, hyphen, underscore, and dot are allowed.`);
           process.exitCode = 1;
           return;
