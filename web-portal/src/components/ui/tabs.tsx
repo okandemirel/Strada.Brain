@@ -1,3 +1,5 @@
+// Re-exports are intentional — wrapping Radix primitives for consistent styling
+/* eslint-disable react-refresh/only-export-components */
 import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react'
 import * as TabsPrimitive from '@radix-ui/react-tabs'
 

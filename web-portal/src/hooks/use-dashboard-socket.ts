@@ -42,6 +42,9 @@ export type WorkspaceMessage =
   | MonitorClearMessage
   | WorkspaceModeSuggestMessage
 
+/** Helper to safely read a property from an untyped payload bag. */
+type Bag = Record<string, unknown>
+
 /**
  * Dispatches a workspace/monitor message to the appropriate Zustand stores.
  * This is a pure function (no hooks) so it can be called from the WS message handler
@@ -50,21 +53,22 @@ export type WorkspaceMessage =
 export function dispatchWorkspaceMessage(data: { type: string; [key: string]: unknown }): void {
   // All events from monitor-bridge arrive wrapped as { type, payload, timestamp }.
   // Unwrap consistently for all cases.
-  const payload = (data as any).payload ?? data
+  const payload = (data.payload ?? data) as Bag
 
   switch (data.type) {
     case 'monitor:dag_init': {
       const monitor = useMonitorStore.getState()
-      monitor.setActiveRootId(payload.rootId)
-      const dag = payload.dag ?? { nodes: payload.nodes, edges: payload.edges }
+      monitor.setActiveRootId(payload.rootId as string)
+      const dag = (payload.dag ?? { nodes: payload.nodes, edges: payload.edges }) as Bag
       monitor.setDAG(dag as DagState)
-      for (const node of (dag.nodes ?? [])) {
+      const nodes = (dag.nodes ?? []) as Bag[]
+      for (const node of nodes) {
         monitor.addTask({
-          id: node.id,
-          nodeId: node.id,
-          title: (node as any).title ?? (node as any).task ?? node.id,
-          status: node.status,
-          reviewStatus: node.reviewStatus,
+          id: node.id as string,
+          nodeId: node.id as string,
+          title: (node.title ?? node.task ?? node.id) as string,
+          status: node.status as string,
+          reviewStatus: node.reviewStatus as string,
           ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
         })
       }
@@ -72,12 +76,12 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'monitor:task_update': {
-      useMonitorStore.getState().updateTask(payload.taskId, payload.updates ?? payload)
+      useMonitorStore.getState().updateTask(payload.taskId as string, (payload.updates ?? payload) as Partial<MonitorTask>)
       break
     }
 
     case 'monitor:agent_activity': {
-      useMonitorStore.getState().addActivity(payload.activity ?? payload)
+      useMonitorStore.getState().addActivity((payload.activity ?? payload) as ActivityEntry)
       break
     }
 
@@ -89,13 +93,13 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     case 'workspace:mode_suggest': {
       const ws = useWorkspaceStore.getState()
       const prevMode = ws.mode
-      ws.suggestMode(payload.mode)
+      ws.suggestMode(payload.mode as WorkspaceMode)
       // Show toast only if mode actually changed
       if (!ws.userOverride && payload.mode !== prevMode) {
         ws.addNotification({
           kind: 'mode_suggest',
           title: 'Mode switched',
-          message: payload.reason ?? `Switched to ${payload.mode}`,
+          message: (payload.reason as string) ?? `Switched to ${payload.mode}`,
           severity: 'info',
         })
       }
@@ -104,35 +108,35 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
 
     case 'workspace:notification': {
       useWorkspaceStore.getState().addNotification({
-        title: payload.title ?? '',
-        message: payload.message ?? '',
-        severity: payload.severity ?? 'info',
+        title: (payload.title as string) ?? '',
+        message: (payload.message as string) ?? '',
+        severity: (payload.severity as 'info' | 'warning' | 'error') ?? 'info',
       })
       break
     }
 
     case 'canvas:shapes_add':
-      useCanvasStore.getState().addPendingShapes(payload.shapes || [])
+      useCanvasStore.getState().addPendingShapes((payload.shapes as Array<{ type: string; id: string; props: Record<string, unknown> }>) || [])
       break
 
     case 'canvas:shapes_update':
-      useCanvasStore.getState().updatePendingShapes(payload.shapes || [])
+      useCanvasStore.getState().updatePendingShapes((payload.shapes as Array<{ type: string; id: string; props: Record<string, unknown> }>) || [])
       break
 
     case 'canvas:shapes_remove':
-      useCanvasStore.getState().removePendingShapeIds(payload.shapeIds || [])
+      useCanvasStore.getState().removePendingShapeIds((payload.shapeIds as string[]) || [])
       break
 
     case 'monitor:gate_request': {
       if (payload.nodeId) {
-        useMonitorStore.getState().updateTask(payload.nodeId, { reviewStatus: 'review_stuck' })
+        useMonitorStore.getState().updateTask(payload.nodeId as string, { reviewStatus: 'review_stuck' })
       }
       break
     }
 
     case 'monitor:review_result': {
       if (payload.nodeId) {
-        useMonitorStore.getState().updateTask(payload.nodeId, {
+        useMonitorStore.getState().updateTask(payload.nodeId as string, {
           reviewStatus: payload.passed ? 'passed' : 'failed',
           ...(payload.reviewType === 'spec_review' ? { specReviewResult: payload } : {}),
           ...(payload.reviewType === 'quality_review' ? { qualityReviewResult: payload } : {}),
@@ -145,13 +149,14 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       const monitor = useMonitorStore.getState()
       if (payload.nodes && payload.edges) {
         monitor.setDAG({ nodes: payload.nodes, edges: payload.edges } as DagState)
-        for (const node of payload.nodes) {
+        const nodes = payload.nodes as Bag[]
+        for (const node of nodes) {
           monitor.addTask({
-            id: node.id,
-            nodeId: node.id,
-            title: (node as any).title ?? (node as any).task ?? node.id,
-            status: node.status,
-            reviewStatus: node.reviewStatus,
+            id: node.id as string,
+            nodeId: node.id as string,
+            title: (node.title ?? node.task ?? node.id) as string,
+            status: node.status as string,
+            reviewStatus: node.reviewStatus as string,
             ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
           })
         }
@@ -160,36 +165,33 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'code:file_open': {
-      const payload = (data as any).payload ?? data
       const store = useCodeStore.getState()
       store.openFile({
-        path: payload.path,
-        content: payload.content ?? '',
-        language: payload.language ?? 'plaintext',
+        path: payload.path as string,
+        content: (payload.content as string) ?? '',
+        language: (payload.language as string) ?? 'plaintext',
       })
-      store.markTouched(payload.path, 'new')
+      store.markTouched(payload.path as string, 'new')
       break
     }
 
     case 'code:file_update': {
-      const payload = (data as any).payload ?? data
       const store = useCodeStore.getState()
       const existing = store.tabs.find((t) => t.path === payload.path)
       store.openFile({
-        path: payload.path,
+        path: payload.path as string,
         content: existing?.content ?? '',
         language: existing?.language ?? 'plaintext',
         isDiff: true,
-        diffContent: payload.diff,
+        diffContent: payload.diff as string,
       })
-      store.markTouched(payload.path, 'modified')
+      store.markTouched(payload.path as string, 'modified')
       break
     }
 
     case 'code:terminal_output': {
-      const payload = (data as any).payload ?? data
       const prefix = payload.command ? `$ ${payload.command}\n` : ''
-      useCodeStore.getState().appendTerminal(prefix + (payload.content ?? ''))
+      useCodeStore.getState().appendTerminal(prefix + ((payload.content as string) ?? ''))
       break
     }
 
@@ -199,19 +201,17 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'code:annotation_add': {
-      const payload = (data as any).payload ?? data
       useCodeStore.getState().addAnnotation({
-        path: payload.path,
-        line: payload.line,
-        message: payload.message,
-        severity: payload.severity ?? 'info',
+        path: payload.path as string,
+        line: payload.line as number,
+        message: payload.message as string,
+        severity: (payload.severity as 'info' | 'warning' | 'error') ?? 'info',
       })
       break
     }
 
     case 'code:annotation_clear': {
-      const payload = (data as any).payload ?? data
-      useCodeStore.getState().clearAnnotations(payload.path)
+      useCodeStore.getState().clearAnnotations(payload.path as string)
       break
     }
 
