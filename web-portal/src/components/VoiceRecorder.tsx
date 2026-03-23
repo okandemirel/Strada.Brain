@@ -35,10 +35,71 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
   const restartCountRef = useRef(0)
   const generationRef = useRef(0)
   const onTranscriptRef = useRef(onTranscript)
-  onTranscriptRef.current = onTranscript
+  const startRef = useRef<() => void>(() => {})
+
+  useEffect(() => { onTranscriptRef.current = onTranscript }, [onTranscript])
+
   const supported = useMemo(() => typeof window !== 'undefined' && getSpeechRecognition() !== null, [])
 
+  // Initialize the recognition starter in an effect (refs cannot be accessed during render)
   useEffect(() => {
+    const start = (): void => {
+      const SpeechRecognitionCtor = getSpeechRecognition()
+      if (!SpeechRecognitionCtor) return
+
+      const gen = ++generationRef.current
+      const recognition = new SpeechRecognitionCtor()
+      recognition.continuous = true
+      recognition.interimResults = false
+      recognition.lang = navigator.language || 'en-US'
+
+      recognition.onresult = (event) => {
+        restartCountRef.current = 0
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i]
+          if (result.isFinal && result[0]) {
+            const transcript = result[0].transcript.trim()
+            if (transcript) {
+              onTranscriptRef.current(transcript)
+            }
+          }
+        }
+      }
+
+      recognition.onerror = (event) => {
+        if (event.error === 'no-speech') return
+        if (event.error !== 'aborted' && import.meta.env.DEV) {
+          console.warn('[VoiceRecorder] Speech recognition error:', event.error)
+        }
+        wantRecordingRef.current = false
+      }
+
+      recognition.onend = () => {
+        if (generationRef.current !== gen) return
+        recognitionRef.current = null
+        if (wantRecordingRef.current && restartCountRef.current < 3) {
+          restartCountRef.current++
+          setTimeout(() => {
+            if (wantRecordingRef.current) {
+              try {
+                startRef.current()
+              } catch {
+                wantRecordingRef.current = false
+                setIsRecording(false)
+              }
+            }
+          }, 300)
+          return
+        }
+        wantRecordingRef.current = false
+        setIsRecording(false)
+      }
+
+      recognitionRef.current = recognition
+      recognition.start()
+    }
+    startRef.current = start
+
     return () => {
       wantRecordingRef.current = false
       if (recognitionRef.current) {
@@ -46,64 +107,6 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
         recognitionRef.current = null
       }
     }
-  }, [])
-
-  const startRecognition = useCallback(() => {
-    const SpeechRecognitionCtor = getSpeechRecognition()
-    if (!SpeechRecognitionCtor) return
-
-    const gen = ++generationRef.current
-    const recognition = new SpeechRecognitionCtor()
-    recognition.continuous = true
-    recognition.interimResults = false
-    recognition.lang = navigator.language || 'en-US'
-
-    recognition.onresult = (event) => {
-      restartCountRef.current = 0
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i]
-        if (result.isFinal && result[0]) {
-          const transcript = result[0].transcript.trim()
-          if (transcript) {
-            onTranscriptRef.current(transcript)
-          }
-        }
-      }
-    }
-
-    recognition.onerror = (event) => {
-      if (event.error === 'no-speech') {
-        return // Ignore — browser fires this on silence; onend will auto-restart
-      }
-      if (event.error !== 'aborted' && import.meta.env.DEV) {
-        console.warn('[VoiceRecorder] Speech recognition error:', event.error)
-      }
-      wantRecordingRef.current = false
-    }
-
-    recognition.onend = () => {
-      if (generationRef.current !== gen) return // Stale instance — newer one is active
-      recognitionRef.current = null
-      if (wantRecordingRef.current && restartCountRef.current < 3) {
-        restartCountRef.current++
-        setTimeout(() => {
-          if (wantRecordingRef.current) {
-            try {
-              startRecognition()
-            } catch {
-              wantRecordingRef.current = false
-              setIsRecording(false)
-            }
-          }
-        }, 300)
-        return
-      }
-      wantRecordingRef.current = false
-      setIsRecording(false)
-    }
-
-    recognitionRef.current = recognition
-    recognition.start()
   }, [])
 
   const toggleRecording = useCallback(() => {
@@ -121,14 +124,14 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
     try {
       wantRecordingRef.current = true
       restartCountRef.current = 0
-      startRecognition()
+      startRef.current()
       setIsRecording(true)
     } catch (err) {
       if (import.meta.env.DEV) console.warn('[VoiceRecorder] Failed to start speech recognition:', err)
       wantRecordingRef.current = false
       setIsRecording(false)
     }
-  }, [isRecording, startRecognition])
+  }, [isRecording])
 
   if (!supported) return null
 

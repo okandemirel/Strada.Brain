@@ -12,12 +12,14 @@ export interface TextMessage {
   type: 'text'
   text: string
   messageId?: string
+  instinctIds?: string[]
 }
 
 export interface MarkdownMessage {
   type: 'markdown'
   text: string
   messageId?: string
+  instinctIds?: string[]
 }
 
 export interface StreamStartMessage {
