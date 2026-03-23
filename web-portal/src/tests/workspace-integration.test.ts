@@ -465,7 +465,7 @@ describe('workspace integration — monitor event integration', () => {
     const task = useMonitorStore.getState().tasks['n1']
     expect(task.reviewStatus).toBe('passed')
     expect(task.specReviewResult).toBeDefined()
-    expect((task.specReviewResult as any).passed).toBe(true)
+    expect((task.specReviewResult as Record<string, unknown>).passed).toBe(true)
   })
 
   it('monitor:gate_request marks task as review_stuck', () => {
