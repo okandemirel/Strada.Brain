@@ -840,6 +840,73 @@ export class Orchestrator {
     return resolveConsensusReviewAssignmentHelper(this.getSupervisorRoutingContext(), preferredReviewer, currentAssignment, identityKey);
   }
 
+  /**
+   * Shared per-iteration boilerplate for both `runBackgroundTask` and `runAgentLoop`.
+   *
+   * Rebuilds the execution strategy, constructs the phase-aware active prompt,
+   * resolves the current provider assignment, builds tool definitions, and
+   * appends the supervisor role prompt.  The LLM call itself stays inline in
+   * each loop because the two paths diverge (direct `.chat()` vs streaming).
+   */
+  private prepareIteration(params: {
+    prompt: string;
+    identityKey: string;
+    agentState: AgentState;
+    executionJournal: import("./autonomy/execution-journal.js").ExecutionJournal;
+    systemPrompt: string;
+    fallbackProvider: IAIProvider;
+    toolTurnAffinity: SupervisorAssignment | null;
+    projectWorldFingerprint?: string;
+    enableGoalDetection: boolean;
+  }): {
+    executionStrategy: SupervisorExecutionStrategy;
+    activePrompt: string;
+    currentAssignment: SupervisorAssignment;
+    currentProvider: IAIProvider;
+    currentToolDefinitions: Array<{
+      name: string;
+      description: string;
+      input_schema: import("../types/index.js").JsonObject;
+    }>;
+    currentToolNames: string[];
+  } {
+    const executionStrategy = this.buildSupervisorExecutionStrategy(
+      params.prompt,
+      params.identityKey,
+      params.fallbackProvider,
+      params.projectWorldFingerprint,
+    );
+
+    let activePrompt = params.systemPrompt + buildPhasePromptSection(
+      params.agentState,
+      params.executionJournal,
+      { enableGoalDetection: params.enableGoalDetection },
+    );
+
+    const currentAssignment = this.getPinnedToolTurnAssignment(
+      executionStrategy,
+      params.agentState.phase,
+      params.toolTurnAffinity,
+    );
+    const currentProvider = currentAssignment.provider;
+    const currentToolDefinitions = this.buildWorkerToolDefinitions(
+      executionStrategy.task,
+      params.agentState.phase,
+      currentAssignment.role,
+    );
+    const currentToolNames = currentToolDefinitions.map((d) => d.name);
+    activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
+
+    return {
+      executionStrategy,
+      activePrompt,
+      currentAssignment,
+      currentProvider,
+      currentToolDefinitions,
+      currentToolNames,
+    };
+  }
+
   private shouldUseSupervisorSynthesis(strategy: SupervisorExecutionStrategy): boolean {
     return Boolean(this.providerRouter) && strategy.usesMultipleProviders;
   }
@@ -1854,42 +1921,33 @@ export class Orchestrator {
               bgEpochIteration < bgEpochIterationLimit;
               bgEpochIteration++, bgIteration++
             ) {
-              executionStrategy = this.buildSupervisorExecutionStrategy(
-                prompt,
-                identityKey,
-                fallbackProvider,
-                bgProjectWorldFingerprint,
-              );
-
               // Check cancellation
               if (signal.aborted) {
                 throw new Error("Task cancelled");
               }
 
-              // ─── PAOR: Build phase-aware system prompt ──────────────────────
-              let activePrompt = systemPrompt + buildPhasePromptSection(
-                bgAgentState,
+              const {
+                executionStrategy: iterStrategy,
+                activePrompt,
+                currentAssignment,
+                currentProvider,
+                currentToolDefinitions,
+                currentToolNames,
+              } = this.prepareIteration({
+                prompt,
+                identityKey,
+                agentState: bgAgentState,
                 executionJournal,
-                { enableGoalDetection: false },
-              );
-              // ────────────────────────────────────────────────────────────────
-
-              const currentAssignment = this.getPinnedToolTurnAssignment(
-                executionStrategy,
-                bgAgentState.phase,
+                systemPrompt,
+                fallbackProvider,
                 toolTurnAffinity,
-              );
+                projectWorldFingerprint: bgProjectWorldFingerprint,
+                enableGoalDetection: false,
+              });
+              executionStrategy = iterStrategy;
               if (workerCollector) {
                 workerCollector.lastAssignment = currentAssignment;
               }
-              const currentProvider = currentAssignment.provider;
-              const currentToolDefinitions = this.buildWorkerToolDefinitions(
-                executionStrategy.task,
-                bgAgentState.phase,
-                currentAssignment.role,
-              );
-              const currentToolNames = currentToolDefinitions.map((d) => d.name);
-              activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
 
               const response = await currentProvider.chat(
                 activePrompt,
@@ -2802,28 +2860,26 @@ export class Orchestrator {
 
     try {
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
-        executionStrategy = this.buildSupervisorExecutionStrategy(
-          lastUserMessage,
+        const {
+          executionStrategy: iterStrategy,
+          activePrompt,
+          currentAssignment,
+          currentProvider,
+          currentToolDefinitions,
+          currentToolNames,
+        } = this.prepareIteration({
+          prompt: lastUserMessage,
           identityKey,
-          fallbackProvider,
-          projectWorldFingerprint,
-        );
-
-        // ─── PAOR: Build phase-aware system prompt ──────────────────────
-        let activePrompt = systemPrompt + buildPhasePromptSection(
           agentState,
           executionJournal,
-          { enableGoalDetection: !!this.taskManager },
-        );
-        // ────────────────────────────────────────────────────────────────
-
-        const currentAssignment = this.getPinnedToolTurnAssignment(
-          executionStrategy,
-          agentState.phase,
+          systemPrompt,
+          fallbackProvider,
           toolTurnAffinity,
-        );
-        const currentProvider = currentAssignment.provider;
-        activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
+          projectWorldFingerprint,
+          enableGoalDetection: !!this.taskManager,
+        });
+        executionStrategy = iterStrategy;
+
         const canStream =
           this.streamingEnabled &&
           "chatStream" in currentProvider &&
@@ -2837,12 +2893,6 @@ export class Orchestrator {
           provider: currentAssignment.providerName,
           iteration,
         });
-        const currentToolDefinitions = this.buildWorkerToolDefinitions(
-          executionStrategy.task,
-          agentState.phase,
-          currentAssignment.role,
-        );
-        const currentToolNames = currentToolDefinitions.map((d) => d.name);
         let response;
         if (canStream) {
           // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
