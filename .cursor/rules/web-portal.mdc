@@ -1,0 +1,14 @@
+---
+description: "Rules for the React + Vite web portal frontend"
+globs: "web-portal/**"
+alwaysApply: false
+---
+
+# Web Portal Rules
+
+- Separate React + Vite project with its own `package.json`
+- Build output goes to `src/channels/web/static/`
+- Run `npm run bootstrap` to install and build
+- Tests: `npm run test:portal`
+- Uses React + TypeScript, no additional UI framework dependencies
+- Keep frontend code isolated from backend — communicate via API/WebSocket only

@@ -1,0 +1,15 @@
+---
+description: "Rules for core orchestrator, bootstrap, and agent lifecycle code"
+globs: "src/core/**,src/agents/**,src/agent-core/**"
+alwaysApply: false
+---
+
+# Core & Agent Rules
+
+- The orchestrator uses a PAOR loop (Plan → Act → Observe → Reflect) — understand the phase before modifying
+- Large files delegate to focused helper modules — prefer extracting to helpers over growing monoliths
+- Bootstrap follows a staged pipeline: providers → memory → channels → wiring
+- Event communication uses TypedEventBus — don't bypass it with direct calls
+- Agent sessions are isolated per-channel — never share state across channels
+- DelegationManager enforces max depth of 2 — respect this boundary
+- Changes to orchestrator or bootstrap require careful review — they coordinate the entire lifecycle

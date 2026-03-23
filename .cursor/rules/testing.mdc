@@ -1,0 +1,15 @@
+---
+description: "Testing conventions and patterns"
+globs: "**/*.test.ts,**/*.spec.ts"
+alwaysApply: false
+---
+
+# Testing Rules
+
+- Test runner: Vitest (not Jest) — run with `npm test`
+- Tests are colocated next to source files, not in a separate directory
+- Web portal tests: `npm run test:portal` (separate Vite project)
+- Never skip or disable existing tests to make new code pass
+- Use `vi.fn()` for mocks, `vi.spyOn()` for spies
+- Test files follow `kebab-case.test.ts` naming
+- Batched execution via `scripts/run-vitest-batches.mjs` — don't modify without approval

@@ -21,8 +21,10 @@ coverage/
 .claude/
 .codex/
 .cursor/
+!.cursor/rules/
 .roo/
 .windsurf/
+!.windsurf/rules/
 .opencode/
 .continue/
 .qodo/

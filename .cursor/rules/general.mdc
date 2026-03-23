@@ -1,0 +1,19 @@
+---
+description: "Strada.Brain general project conventions and coding standards"
+alwaysApply: true
+---
+
+# Strada.Brain — General Rules
+
+- TypeScript strict mode, ESM imports only (no CommonJS `require`)
+- Node.js 20+, `"type": "module"` in package.json
+- Zod schemas for all configuration and external data validation
+- File naming: `kebab-case.ts` for source, `kebab-case.test.ts` for colocated tests
+- No `any` types — use `unknown` with type guards
+- Prefer functional patterns; classes only for stateful components
+- Never hardcode secrets, credentials, or API keys
+- Never commit `.env` files
+- Sanitize file paths against directory traversal
+- Don't add npm dependencies without discussion
+- Don't modify `node_modules/`, `dist/`, or test infrastructure
+- Commit format: `type(scope): description` (e.g., `feat(agents): add tool`)

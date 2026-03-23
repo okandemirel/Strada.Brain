@@ -1,0 +1,14 @@
+---
+description: "Rules for channel adapter implementations"
+globs: "src/channels/**"
+alwaysApply: false
+---
+
+# Channel Rules
+
+- Each channel implements `src/channels/channel.interface.ts` (composite) and `src/channels/channel-core.interface.ts` (core ops)
+- Channel-specific code stays in its own `src/channels/{name}/` directory
+- Web channel binds to 127.0.0.1 only (security requirement)
+- Media processing includes SSRF protection and magic byte validation
+- All 9 channels: web, telegram, discord, slack, whatsapp, cli, matrix, irc, teams
+- Don't introduce channel-specific dependencies into shared code
