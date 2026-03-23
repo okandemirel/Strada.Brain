@@ -84,7 +84,7 @@ export async function executeAndTrackTools(
 }
 
 // =============================================================================
-// Pattern 3: refreshMemoryIfNeeded
+// Pattern 2: refreshMemoryIfNeeded
 // =============================================================================
 
 export interface RefreshMemoryParams {
@@ -170,7 +170,7 @@ export async function refreshMemoryIfNeeded(
 }
 
 // =============================================================================
-// Pattern 4: buildConsensusParams
+// Pattern 3: runConsensusIfAvailable
 // =============================================================================
 
 /** Inputs for building consensus verification params from loop context. */
@@ -219,16 +219,16 @@ export async function runConsensusIfAvailable(
       providerName: ctx.currentAssignment.providerName,
       providerCapabilities: ctx.currentProviderCapabilities,
       agentState: ctx.agentState,
-      responseLength: (ctx.responseText ?? "").length,
+      responseLength: ctx.responseText.length,
     });
     await runConsensusVerification({
-      consensusManager: ctx.consensusManager as ConsensusVerificationParams["consensusManager"],
+      consensusManager: ctx.consensusManager,
       availableProviderCount: ctx.providerManager.listAvailable().length,
       taskClass,
       confidence,
       originalOutput: {
-        text: ctx.responseText ?? undefined,
-        toolCalls: ctx.toolCalls.map((tc: ToolCall) => ({ name: tc.name, input: tc.input })),
+        text: ctx.responseText,
+        toolCalls: ctx.toolCalls.map((tc) => ({ name: tc.name, input: tc.input })),
       },
       originalProviderName: ctx.currentAssignment.providerName,
       prompt: ctx.prompt,
