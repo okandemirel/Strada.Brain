@@ -264,6 +264,46 @@ Dahili web portali (`http://localhost:3000`) 4 baglam-uyarlamali mod ile tam bir
 
 ---
 
+## Yetenek Ekosistemi
+
+Yetenekler, Strada.Brain uzerine kurulabilen istege bagli ozellik paketleridir. Her yetenek bir `SKILL.md` manifest dosyasi ve arac uygulamalari icerir.
+
+```bash
+strada skill install notion          # Kayit defterinden yukle
+strada skill list                    # Tum yetenekleri listele
+strada skill search <sorgu>          # Kayit defterinde ara
+strada skill enable <isim>           # Etkinlestir
+strada skill disable <isim>          # Devre disi birak
+strada skill remove <isim>           # Kaldir
+```
+
+### Hazir Yetenekler
+
+| Yetenek | Aciklama | Gereksinimler |
+|---------|----------|---------------|
+| `hello-world` | Mesajlari yankilayan test yetenegi | Yok |
+| `github-utils` | PR durumu, issue listesi, repo bilgisi | `gh` binary |
+| `unity-helpers` | Script bulma, sahne listeleme, proje yapisi | Yok |
+| `web-search` | URL icerigi getirme, DuckDuckGo ile arama | Yok |
+| `file-utils` | Kelime sayimi, satir sayimi, dosya analizi | Yok |
+| `system-info` | Sistem suresi, CPU/bellek/disk, ag arayuzleri | Yok |
+| `json-utils` | JSON formatlama, sorgulama, karsilastirma | Yok |
+
+### Topluluk Yetenekleri
+
+| Yetenek | Aciklama | Gereksinimler |
+|---------|----------|---------------|
+| `notion` | Sayfa arama, icerik okuma, sayfa olusturma | `NOTION_API_KEY` |
+| `google-calendar` | Etkinlik listeleme, olusturma, gunun programi | `GOOGLE_CALENDAR_API_KEY` |
+| `spotify` | Su an calanan, arama, oynatma kontrolu | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` |
+| `home-assistant` | Cihaz durumlari, acma/kapama, servis cagirma | `HA_URL`, `HA_TOKEN` |
+
+### Web Portal Marketi
+
+Web portal `/admin/skills` adresinde bir **Market** sekmesi icerir. Topluluk kayit defterinden yetenekleri arayabilir ve tek tikla yukleyebilirsiniz.
+
+---
+
 ## Mimari
 
 ```

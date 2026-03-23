@@ -260,6 +260,43 @@ Strada.Brain 每天自动检查更新，在空闲时应用更新。源码 checko
 
 ---
 
+## 技能生态系统
+
+技能是可以安装到 Strada.Brain 上的可选功能包。每个技能包含一个 `SKILL.md` 清单文件和工具实现。
+
+```bash
+strada skill install notion          # 从注册表安装
+strada skill list                    # 列出所有技能
+strada skill search <查询>            # 搜索注册表
+```
+
+### 内置技能
+
+| 技能 | 说明 | 要求 |
+|------|------|------|
+| `hello-world` | 回显消息的测试技能 | 无 |
+| `github-utils` | PR 状态、Issue 列表、仓库信息 | `gh` 二进制文件 |
+| `unity-helpers` | 查找脚本、列出场景、项目结构 | 无 |
+| `web-search` | 获取 URL、DuckDuckGo 搜索 | 无 |
+| `file-utils` | 字数、行数、文件分析 | 无 |
+| `system-info` | 运行时间、CPU/内存/磁盘、网络接口 | 无 |
+| `json-utils` | JSON 格式化、查询、对比差异 | 无 |
+
+### 社区技能
+
+| 技能 | 说明 | 要求 |
+|------|------|------|
+| `notion` | 搜索页面、读取内容、创建页面 | `NOTION_API_KEY` |
+| `google-calendar` | 列出事件、创建事件、今日日程 | `GOOGLE_CALENDAR_API_KEY` |
+| `spotify` | 正在播放、搜索、播放控制 | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` |
+| `home-assistant` | 实体状态、开关切换、调用服务 | `HA_URL`, `HA_TOKEN` |
+
+### Web 门户市场
+
+Web 门户在 `/admin/skills` 提供**市场**标签页，可以浏览、搜索社区技能并一键安装。
+
+---
+
 ## 架构
 
 ```

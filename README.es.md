@@ -260,6 +260,43 @@ El portal web integrado (`http://localhost:3000`) proporciona un espacio de trab
 
 ---
 
+## Ecosistema de Skills
+
+Los skills son paquetes de funcionalidad opcionales que se pueden instalar en Strada.Brain. Cada skill contiene un manifiesto `SKILL.md` e implementaciones de herramientas.
+
+```bash
+strada skill install notion          # Instalar desde el registro
+strada skill list                    # Listar todos los skills
+strada skill search <consulta>       # Buscar en el registro
+```
+
+### Skills Incluidos
+
+| Skill | Descripcion | Requisitos |
+|-------|-------------|-----------|
+| `hello-world` | Skill de prueba que repite mensajes | Ninguno |
+| `github-utils` | Estado de PR, lista de issues, info de repo | Binario `gh` |
+| `unity-helpers` | Buscar scripts, listar escenas, estructura del proyecto | Ninguno |
+| `web-search` | Obtener URLs, busqueda con DuckDuckGo | Ninguno |
+| `file-utils` | Conteo de palabras, lineas, analisis de archivos | Ninguno |
+| `system-info` | Tiempo activo, CPU/memoria/disco, red | Ninguno |
+| `json-utils` | Formatear, consultar, comparar JSON | Ninguno |
+
+### Skills de la Comunidad
+
+| Skill | Descripcion | Requisitos |
+|-------|-------------|-----------|
+| `notion` | Buscar paginas, leer contenido, crear paginas | `NOTION_API_KEY` |
+| `google-calendar` | Listar eventos, crear eventos, agenda del dia | `GOOGLE_CALENDAR_API_KEY` |
+| `spotify` | Reproduciendo ahora, busqueda, control de reproduccion | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` |
+| `home-assistant` | Estados de entidades, activar/desactivar, llamar servicios | `HA_URL`, `HA_TOKEN` |
+
+### Marketplace del Portal Web
+
+El portal web incluye una pestana **Marketplace** en `/admin/skills` donde puedes buscar e instalar skills de la comunidad con un solo clic.
+
+---
+
 ## Arquitectura
 
 ```

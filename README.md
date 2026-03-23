@@ -336,7 +336,40 @@ Skills in a higher-priority tier override those with the same name in lower tier
 
 ### Registry
 
-The public skill registry is a JSON index of community-maintained skills. Run `strada skill search` to browse it. Each entry lists the git repository, description, tags, version, and author. The registry URL is configurable via `SKILL_REGISTRY_URL`.
+The public skill registry is a JSON index of community-maintained skills (11 skills and growing). Run `strada skill search` to browse it. Each entry lists the git repository, description, tags, version, and author. The registry URL is configurable via `SKILL_REGISTRY_URL`.
+
+### Bundled Skills
+
+These skills ship with Strada.Brain and are always available:
+
+| Skill | Description | Requirements |
+|-------|-------------|-------------|
+| `hello-world` | Test skill that echoes messages | None |
+| `github-utils` | PR status, issue list, repo info via `gh` CLI | `gh` binary |
+| `unity-helpers` | Find scripts, list scenes, check project structure | None |
+| `web-search` | Fetch URLs, search via DuckDuckGo | None |
+| `file-utils` | Word count, line count, find duplicates, directory size | None |
+| `system-info` | OS uptime, CPU/memory/disk resources, network interfaces | None |
+| `json-utils` | Format, query (dot-path), diff/compare JSON objects | None |
+
+### Community Skills
+
+Install from the registry with a single command:
+
+```bash
+strada skill install notion
+```
+
+| Skill | Description | Requirements |
+|-------|-------------|-------------|
+| `notion` | Search pages, read content, create pages | `NOTION_API_KEY` |
+| `google-calendar` | List events, create events, today's schedule | `GOOGLE_CALENDAR_API_KEY` |
+| `spotify` | Now playing, search tracks, playback control | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` |
+| `home-assistant` | Entity states, toggle devices, call services | `HA_URL`, `HA_TOKEN` |
+
+### Web Portal Marketplace
+
+The web portal includes a **Marketplace** tab at `/admin/skills` where you can browse, search, and install skills from the community registry with one click. Installed skills appear in the **Installed** tab with enable/disable controls.
 
 ---
 
