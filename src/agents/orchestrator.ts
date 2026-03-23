@@ -750,17 +750,6 @@ export class Orchestrator {
     recordProviderUsageHelper(this.getSupervisorRoutingContext(), providerName, usage, onUsage);
   }
 
-  private toExecutionPhase(phase: AgentPhase): ExecutionPhase {
-    return toExecutionPhaseModel(phase);
-  }
-
-  private transitionToVerifierReplan(
-    state: AgentState,
-    reflectionText?: string | null,
-  ): AgentState {
-    return transitionToVerifierReplanModel(state, reflectionText);
-  }
-
   private resolveExecutionTraceSource(
     assignment: SupervisorAssignment,
     fallback: ExecutionTraceSource = "supervisor-strategy",
@@ -1899,7 +1888,7 @@ export class Orchestrator {
                 chatId,
                 identityKey,
                 assignment: currentAssignment,
-                phase: this.toExecutionPhase(bgAgentState.phase),
+                phase: toExecutionPhaseModel(bgAgentState.phase),
                 source: this.resolveExecutionTraceSource(currentAssignment),
                 task: executionStrategy.task,
               });
@@ -2800,7 +2789,7 @@ export class Orchestrator {
                     chatId,
                     identityKey,
                     assignment: currentAssignment,
-                    phase: this.toExecutionPhase(bgAgentState.phase),
+                    phase: toExecutionPhaseModel(bgAgentState.phase),
                     status: "continued",
                     task: executionStrategy.task,
                     reason: verifierIntervention.result.summary,
@@ -2908,7 +2897,7 @@ export class Orchestrator {
                     chatId,
                     identityKey,
                     assignment: currentAssignment,
-                    phase: this.toExecutionPhase(bgAgentState.phase),
+                    phase: toExecutionPhaseModel(bgAgentState.phase),
                     status: "replanned",
                     task: executionStrategy.task,
                     reason: verifierIntervention.result.summary,
@@ -2919,7 +2908,7 @@ export class Orchestrator {
                       failureReason: verifierIntervention.result.summary,
                     }),
                   });
-                  bgAgentState = this.transitionToVerifierReplan(bgAgentState, response.text);
+                  bgAgentState = transitionToVerifierReplanModel(bgAgentState, response.text);
                   if (response.text) {
                     session.messages.push({ role: "assistant", content: response.text });
                   }
@@ -2982,7 +2971,7 @@ export class Orchestrator {
                   chatId,
                   identityKey,
                   assignment: currentAssignment,
-                  phase: this.toExecutionPhase(bgAgentState.phase),
+                  phase: toExecutionPhaseModel(bgAgentState.phase),
                   status: "approved",
                   task: executionStrategy.task,
                   reason:
@@ -3195,7 +3184,7 @@ export class Orchestrator {
               chatId,
               identityKey,
               assignment: executionStrategy.executor,
-              phase: this.toExecutionPhase(bgAgentState.phase),
+              phase: toExecutionPhaseModel(bgAgentState.phase),
               status: continuedAfterBudget ? "continued" : "blocked",
               task: executionStrategy.task,
               reason: continuedAfterBudget
@@ -3757,7 +3746,7 @@ export class Orchestrator {
           chatId,
           identityKey,
           assignment: currentAssignment,
-          phase: this.toExecutionPhase(agentState.phase),
+          phase: toExecutionPhaseModel(agentState.phase),
           source: this.resolveExecutionTraceSource(currentAssignment),
           task: executionStrategy.task,
         });
@@ -4353,7 +4342,7 @@ export class Orchestrator {
               chatId,
               identityKey,
               assignment: currentAssignment,
-              phase: this.toExecutionPhase(agentState.phase),
+              phase: toExecutionPhaseModel(agentState.phase),
               status: "continued",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
@@ -4379,7 +4368,7 @@ export class Orchestrator {
               chatId,
               identityKey,
               assignment: currentAssignment,
-              phase: this.toExecutionPhase(agentState.phase),
+              phase: toExecutionPhaseModel(agentState.phase),
               status: "replanned",
               task: executionStrategy.task,
               reason: verifierIntervention.result.summary,
@@ -4390,7 +4379,7 @@ export class Orchestrator {
                 failureReason: verifierIntervention.result.summary,
               }),
             });
-            agentState = this.transitionToVerifierReplan(agentState, response.text);
+            agentState = transitionToVerifierReplanModel(agentState, response.text);
             if (response.text) {
               session.messages.push({ role: "assistant", content: response.text });
             }
@@ -4471,7 +4460,7 @@ export class Orchestrator {
                 chatId,
                 identityKey,
                 assignment: currentAssignment,
-                phase: this.toExecutionPhase(agentState.phase),
+                phase: toExecutionPhaseModel(agentState.phase),
                 status: "blocked",
                 task: executionStrategy.task,
                 reason: visibilityDecision.reason,
@@ -4497,7 +4486,7 @@ export class Orchestrator {
               chatId,
               identityKey,
               assignment: currentAssignment,
-              phase: this.toExecutionPhase(agentState.phase),
+              phase: toExecutionPhaseModel(agentState.phase),
               status: "approved",
               task: executionStrategy.task,
               reason: visibilityDecision.reason,
@@ -6322,6 +6311,25 @@ export class Orchestrator {
           mode: "canvas",
           reason: `Visual output detected: ${shapes.map((s) => s.type).join(", ")}`,
         });
+      }
+
+      // Code event emission for file and shell tools
+      const toolInput = tc.input as Record<string, unknown>;
+      if (tc.name === "file_write" || tc.name === "file_edit") {
+        const filePath = typeof toolInput.path === "string" ? toolInput.path : "";
+        if (filePath && !tr.isError) {
+          const content = typeof toolInput.content === "string" ? toolInput.content
+            : typeof toolInput.new_string === "string" ? toolInput.new_string
+            : output.slice(0, 10_000);
+          const ext = filePath.split(".").pop() ?? "";
+          const language = ext || "text";
+          this.workspaceBus.emit("code:file_open", { path: filePath, content, language });
+          this.workspaceBus.emit("workspace:mode_suggest", { mode: "code", reason: "File operation detected" });
+        }
+      } else if (tc.name === "shell_exec" || tc.name === "dotnet_build" || tc.name === "dotnet_test") {
+        const command = typeof toolInput.command === "string" ? toolInput.command : undefined;
+        this.workspaceBus.emit("code:terminal_output", { content: output.slice(0, 10_000), command });
+        this.workspaceBus.emit("workspace:mode_suggest", { mode: "code", reason: "Shell execution detected" });
       }
     }
   }
