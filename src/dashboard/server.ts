@@ -42,6 +42,7 @@ import { buildConfigCatalogEntries, summarizeConfigCatalog } from "../config/con
 import { resolveAutonomousModeWithDefault } from "../memory/unified/user-profile-store.js";
 import { handleMonitorRoute, MonitorActivityLog } from "./monitor-routes.js";
 import { handleCanvasRoute } from "./canvas-routes.js";
+import { handleWorkspaceRoute } from "./workspace-routes.js";
 import type { CanvasStorage } from "./canvas-storage.js";
 import type { WorkspaceBus } from "./workspace-bus.js";
 
@@ -472,6 +473,9 @@ export class DashboardServer {
   // Canvas storage context (Phase 4)
   private canvasStorage?: CanvasStorage;
 
+  // Workspace file explorer context (Phase 5)
+  private projectRoot?: string;
+
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
 
@@ -662,6 +666,13 @@ export class DashboardServer {
    */
   setCanvasStorage(storage: CanvasStorage): void {
     this.canvasStorage = storage;
+  }
+
+  /**
+   * Register the Unity project root for workspace file endpoints (Phase 5).
+   */
+  setProjectRoot(path: string): void {
+    this.projectRoot = path;
   }
 
   private getAutonomousDefaults(): { enabled: boolean; hours: number } {
@@ -1885,6 +1896,15 @@ export class DashboardServer {
         const handled = handleCanvasRoute(
           url, req.method ?? "GET", req, res,
           this.canvasStorage,
+        );
+        if (handled) return;
+      }
+
+      // Workspace file endpoints (Phase 5 — file explorer)
+      if (url.startsWith("/api/workspace")) {
+        const handled = handleWorkspaceRoute(
+          url, req.method ?? "GET", req, res,
+          this.projectRoot,
         );
         if (handled) return;
       }
