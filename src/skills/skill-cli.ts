@@ -21,7 +21,7 @@ import { fetchRegistry, searchRegistry } from "./skill-registry-client.js";
 export function registerSkillCommands(program: Command): void {
   const skill = program
     .command("skill")
-    .description("Manage skills (install, remove, list, update, search, info)");
+    .description("Manage skills (install, remove, enable, disable, list, update, search, info)");
 
   // =========================================================================
   // skill install <url>
@@ -133,6 +133,44 @@ export function registerSkillCommands(program: Command): void {
       }
 
       console.log(`Skill "${name}" removed.`);
+    });
+
+  // =========================================================================
+  // skill enable <name>
+  // =========================================================================
+
+  skill
+    .command("enable <name>")
+    .description("Enable a disabled skill")
+    .action(async (name: string) => {
+      const discovered = await discoverSkills();
+      const found = discovered.find((s) => s.manifest.name === name);
+      if (!found) {
+        console.error(`Skill "${name}" not found. Run 'strada skill list' to see available skills.`);
+        process.exitCode = 1;
+        return;
+      }
+      await setSkillEnabled(name, true);
+      console.log(`Skill '${name}' enabled. Restart to apply.`);
+    });
+
+  // =========================================================================
+  // skill disable <name>
+  // =========================================================================
+
+  skill
+    .command("disable <name>")
+    .description("Disable a skill without removing it")
+    .action(async (name: string) => {
+      const discovered = await discoverSkills();
+      const found = discovered.find((s) => s.manifest.name === name);
+      if (!found) {
+        console.error(`Skill "${name}" not found. Run 'strada skill list' to see available skills.`);
+        process.exitCode = 1;
+        return;
+      }
+      await setSkillEnabled(name, false);
+      console.log(`Skill '${name}' disabled. Restart to apply.`);
     });
 
   // =========================================================================
