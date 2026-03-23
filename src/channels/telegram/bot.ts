@@ -32,6 +32,14 @@ export interface DiffConfirmationOptions {
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
+/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
+type FeedbackReactionCallback = (
+  type: "thumbs_up" | "thumbs_down",
+  instinctIds: string[],
+  userId?: string,
+  source?: "reaction" | "button",
+) => void;
+
 /**
  * Pending diff confirmation state
  */
@@ -71,6 +79,9 @@ export class TelegramChannel implements IChannelAdapter {
     }
   >();
   private readonly pendingDiffConfirmations = new Map<string, PendingDiffConfirmation>();
+  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+  /** Per-chatId applied instinct IDs for feedback attribution via /feedback command. */
+  private readonly appliedInstinctIds = new Map<string, string[]>();
 
   constructor(token: string, auth: AuthManager, rateLimitConfig?: Partial<RateLimitConfig>) {
     this.bot = new Bot(token);
@@ -87,6 +98,20 @@ export class TelegramChannel implements IChannelAdapter {
     this.handler = handler;
   }
 
+  /** Register a callback for feedback reactions (thumbs up/down). */
+  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
+    this.feedbackReactionCallback = callback;
+  }
+
+  /** Set the applied instinct IDs for a chat so /feedback can attribute them. */
+  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
+    if (instinctIds.length > 0) {
+      this.appliedInstinctIds.set(chatId, instinctIds);
+    } else {
+      this.appliedInstinctIds.delete(chatId);
+    }
+  }
+
   async connect(): Promise<void> {
     const logger = getLogger();
     logger.info("Starting Telegram bot...");
@@ -98,6 +123,7 @@ export class TelegramChannel implements IChannelAdapter {
       { command: "analyze", description: "Analyze project structure" },
       { command: "autonomous", description: "Toggle autonomous mode (on/off/status)" },
       { command: "model", description: "Switch AI model provider (list/reset/provider-name)" },
+      { command: "feedback", description: "Give feedback on the last response (up/down)" },
       { command: "help", description: "Show help" },
     ]);
 
@@ -485,6 +511,39 @@ export class TelegramChannel implements IChannelAdapter {
           "Just describe what you need in natural language!",
         { parse_mode: "Markdown" }
       );
+    });
+
+    // Handle /feedback command for instinct-level thumbs up/down
+    this.bot.command("feedback", async (ctx) => {
+      if (!this.feedbackReactionCallback) {
+        await ctx.reply("Feedback is not available at this time.");
+        return;
+      }
+
+      const chatId = String(ctx.chat?.id ?? "");
+      const userId = String(ctx.from?.id ?? "");
+      const arg = (ctx.match as string | undefined)?.trim().toLowerCase() ?? "";
+
+      let feedbackType: "thumbs_up" | "thumbs_down" | null = null;
+      if (arg === "up" || arg === "thumbs_up") {
+        feedbackType = "thumbs_up";
+      } else if (arg === "down" || arg === "thumbs_down") {
+        feedbackType = "thumbs_down";
+      }
+
+      if (!feedbackType) {
+        await ctx.reply("Usage: /feedback up or /feedback down");
+        return;
+      }
+
+      const instinctIds = this.appliedInstinctIds.get(chatId);
+      if (!instinctIds || instinctIds.length === 0) {
+        await ctx.reply("No recent response to give feedback on.");
+        return;
+      }
+
+      this.feedbackReactionCallback(feedbackType, instinctIds, userId, "button");
+      await ctx.reply(feedbackType === "thumbs_up" ? "Thanks for the positive feedback!" : "Thanks for the feedback. I'll try to improve.");
     });
 
     // Handle photo messages

@@ -12,12 +12,27 @@ import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
+/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
+type FeedbackReactionCallback = (
+  type: "thumbs_up" | "thumbs_down",
+  instinctIds: string[],
+  userId?: string,
+  source?: "reaction" | "button",
+) => void;
+
+/** Patterns recognised as feedback input (text-based, since IRC has no native reactions). */
+const FEEDBACK_UP_PATTERNS = ["\uD83D\uDC4D", "!feedback up"];
+const FEEDBACK_DOWN_PATTERNS = ["\uD83D\uDC4E", "!feedback down"];
+
 export class IRCChannel implements IChannelAdapter {
   readonly name = "irc";
 
   private handler: MessageHandler | null = null;
   private client: IRCClientLike | null = null;
   private healthy = false;
+  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+  /** Per-chatId applied instinct IDs for feedback attribution. */
+  private readonly appliedInstinctIds = new Map<string, string[]>();
 
   constructor(
     private readonly server: string,
@@ -29,6 +44,20 @@ export class IRCChannel implements IChannelAdapter {
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
+  }
+
+  /** Register a callback for feedback reactions (thumbs up/down). */
+  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
+    this.feedbackReactionCallback = callback;
+  }
+
+  /** Set the applied instinct IDs for a channel so feedback can be attributed. */
+  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
+    if (instinctIds.length > 0) {
+      this.appliedInstinctIds.set(chatId, instinctIds);
+    } else {
+      this.appliedInstinctIds.delete(chatId);
+    }
   }
 
   async connect(): Promise<void> {
@@ -53,6 +82,24 @@ export class IRCChannel implements IChannelAdapter {
 
       const cleanText = limitIncomingText((isMention ? text.slice(this.nick.length + 1).trim() : text).slice(0, 4096));
       const chatId = isDirectMessage ? from : to;
+
+      // Feedback detection — intercept standalone emoji or !feedback commands
+      const trimmedText = cleanText.trim();
+      if (this.feedbackReactionCallback) {
+        let feedbackType: "thumbs_up" | "thumbs_down" | null = null;
+        if (FEEDBACK_UP_PATTERNS.includes(trimmedText)) {
+          feedbackType = "thumbs_up";
+        } else if (FEEDBACK_DOWN_PATTERNS.includes(trimmedText)) {
+          feedbackType = "thumbs_down";
+        }
+        if (feedbackType) {
+          const instinctIds = this.appliedInstinctIds.get(chatId);
+          if (instinctIds && instinctIds.length > 0) {
+            this.feedbackReactionCallback(feedbackType, instinctIds, from, "reaction");
+          }
+          return; // consumed as feedback — do not route to normal handler
+        }
+      }
 
       const msg: IncomingMessage = {
         channelType: "irc",

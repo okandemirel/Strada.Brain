@@ -12,6 +12,14 @@ import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
+/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
+type FeedbackReactionCallback = (
+  type: "thumbs_up" | "thumbs_down",
+  instinctIds: string[],
+  userId?: string,
+  source?: "reaction" | "button",
+) => void;
+
 export class TeamsChannel implements IChannelAdapter {
   readonly name = "teams";
 
@@ -20,6 +28,9 @@ export class TeamsChannel implements IChannelAdapter {
   private server: import("node:http").Server | null = null;
   private healthy = false;
   private activeTurnContexts = new Map<string, TurnContextLike>();
+  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+  /** Per-conversationId applied instinct IDs for feedback attribution. */
+  private readonly appliedInstinctIds = new Map<string, string[]>();
 
   constructor(
     private readonly appId: string,
@@ -32,6 +43,20 @@ export class TeamsChannel implements IChannelAdapter {
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
+  }
+
+  /** Register a callback for feedback reactions (thumbs up/down). */
+  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
+    this.feedbackReactionCallback = callback;
+  }
+
+  /** Set the applied instinct IDs for a conversation so feedback can be attributed. */
+  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
+    if (instinctIds.length > 0) {
+      this.appliedInstinctIds.set(chatId, instinctIds);
+    } else {
+      this.appliedInstinctIds.delete(chatId);
+    }
   }
 
   async connect(): Promise<void> {
@@ -58,6 +83,26 @@ export class TeamsChannel implements IChannelAdapter {
             }
 
             const chatId = context.activity.conversation.id;
+
+            // Detect feedback before routing to the normal handler
+            const feedbackType = this.detectFeedback(context.activity.text);
+            if (feedbackType) {
+              this.fireFeedback(feedbackType, chatId, context.activity.from.id);
+              this.activeTurnContexts.set(chatId, context);
+              try {
+                await context.sendActivity(
+                  feedbackType === "thumbs_up"
+                    ? "Thanks for the positive feedback!"
+                    : "Thanks for the feedback. I'll try to improve.",
+                );
+              } finally {
+                if (this.activeTurnContexts.get(chatId) === context) {
+                  this.activeTurnContexts.delete(chatId);
+                }
+              }
+              return;
+            }
+
             this.activeTurnContexts.set(chatId, context);
 
             const msg: IncomingMessage = {
@@ -126,6 +171,33 @@ export class TeamsChannel implements IChannelAdapter {
       this.allowedUserIds,
       this.allowOpenAccess ? "open" : "closed",
     );
+  }
+
+  /**
+   * Detect standalone feedback in a message text.
+   * Recognises emoji thumbs (👍 / 👎) and `/feedback up` / `/feedback down`.
+   */
+  private detectFeedback(text: string): "thumbs_up" | "thumbs_down" | null {
+    const trimmed = text.trim();
+    if (trimmed === "\uD83D\uDC4D" || trimmed === "/feedback up") {
+      return "thumbs_up";
+    }
+    if (trimmed === "\uD83D\uDC4E" || trimmed === "/feedback down") {
+      return "thumbs_down";
+    }
+    return null;
+  }
+
+  /** Fire the feedback callback with stored instinct IDs (if any). */
+  private fireFeedback(
+    type: "thumbs_up" | "thumbs_down",
+    chatId: string,
+    userId?: string,
+  ): void {
+    if (!this.feedbackReactionCallback) return;
+    const instinctIds = this.appliedInstinctIds.get(chatId);
+    if (!instinctIds || instinctIds.length === 0) return;
+    this.feedbackReactionCallback(type, instinctIds, userId, "reaction");
   }
 }
 

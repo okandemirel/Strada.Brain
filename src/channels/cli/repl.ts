@@ -8,6 +8,14 @@ import { limitIncomingText } from "../channel-messages.interface.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
+/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
+type FeedbackReactionCallback = (
+  type: "thumbs_up" | "thumbs_down",
+  instinctIds: string[],
+  userId?: string,
+  source?: "reaction" | "button",
+) => void;
+
 interface PendingCliConfirmation {
   options: string[];
   finalize: (value: string) => void;
@@ -26,9 +34,26 @@ export class CLIChannel implements IChannelAdapter {
   private processing = false;
   private readonly pendingInputs: string[] = [];
   private pendingConfirmation: PendingCliConfirmation | null = null;
+  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+  /** Per-chatId applied instinct IDs for feedback attribution. */
+  private readonly appliedInstinctIds = new Map<string, string[]>();
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
+  }
+
+  /** Register a callback for feedback reactions (thumbs up/down). */
+  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
+    this.feedbackReactionCallback = callback;
+  }
+
+  /** Set the applied instinct IDs for a chat so feedback can be attributed. */
+  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
+    if (instinctIds.length > 0) {
+      this.appliedInstinctIds.set(chatId, instinctIds);
+    } else {
+      this.appliedInstinctIds.delete(chatId);
+    }
   }
 
   async connect(): Promise<void> {
@@ -175,6 +200,19 @@ export class CLIChannel implements IChannelAdapter {
       return;
     }
 
+    // Detect feedback commands before routing to the normal handler
+    const feedbackType = this.detectFeedback(trimmed);
+    if (feedbackType) {
+      this.fireFeedback(feedbackType, "cli-local", "cli-user");
+      console.log(
+        feedbackType === "thumbs_up"
+          ? "\nThanks for the positive feedback!\n"
+          : "\nThanks for the feedback. I'll try to improve.\n",
+      );
+      this.showUserPrompt();
+      return;
+    }
+
     if (!trimmed) {
       this.showUserPrompt();
       return;
@@ -189,6 +227,32 @@ export class CLIChannel implements IChannelAdapter {
     this.pendingInputs.push(trimmed);
     this.showUserPrompt();
     void this.drainInputQueue();
+  }
+
+  /**
+   * Detect standalone feedback in input text.
+   * Recognises emoji thumbs (👍 / 👎) and `/feedback up` / `/feedback down`.
+   */
+  private detectFeedback(text: string): "thumbs_up" | "thumbs_down" | null {
+    if (text === "\uD83D\uDC4D" || text === "/feedback up") {
+      return "thumbs_up";
+    }
+    if (text === "\uD83D\uDC4E" || text === "/feedback down") {
+      return "thumbs_down";
+    }
+    return null;
+  }
+
+  /** Fire the feedback callback with stored instinct IDs (if any). */
+  private fireFeedback(
+    type: "thumbs_up" | "thumbs_down",
+    chatId: string,
+    userId?: string,
+  ): void {
+    if (!this.feedbackReactionCallback) return;
+    const instinctIds = this.appliedInstinctIds.get(chatId);
+    if (!instinctIds || instinctIds.length === 0) return;
+    this.feedbackReactionCallback(type, instinctIds, userId, "reaction");
   }
 
   private async drainInputQueue(): Promise<void> {

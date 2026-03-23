@@ -28,6 +28,14 @@ const MAX_RECONNECT_DELAY_MS = 60_000;
 /** Base reconnect delay (ms). */
 const BASE_RECONNECT_DELAY_MS = 1000;
 
+/** Callback for feedback reactions (thumbs up/down) from channel adapters. */
+type FeedbackReactionCallback = (
+  type: "thumbs_up" | "thumbs_down",
+  instinctIds: string[],
+  userId?: string,
+  source?: "reaction" | "button",
+) => void;
+
 // ---------- Internal types ----------
 
 interface StreamingMessageState {
@@ -81,6 +89,10 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
       userId?: string;
     }
   >();
+
+  private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+  /** Per-chatId applied instinct IDs for emoji-based feedback attribution. */
+  private readonly appliedInstinctIds = new Map<string, string[]>();
 
   // 4.1 Streaming support
   private readonly streamingMessages = new Map<string, StreamingMessageState>();
@@ -311,6 +323,26 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
             continue;
           }
 
+          // Detect standalone emoji feedback (thumbs up/down)
+          if (this.feedbackReactionCallback && attachments.length === 0) {
+            const trimmed = text.trim();
+            let feedbackType: "thumbs_up" | "thumbs_down" | null = null;
+            if (trimmed === "\uD83D\uDC4D" || trimmed === "\uD83D\uDC4D\uD83C\uDFFB" || trimmed === "\uD83D\uDC4D\uD83C\uDFFC" || trimmed === "\uD83D\uDC4D\uD83C\uDFFD" || trimmed === "\uD83D\uDC4D\uD83C\uDFFE" || trimmed === "\uD83D\uDC4D\uD83C\uDFFF") {
+              feedbackType = "thumbs_up";
+            } else if (trimmed === "\uD83D\uDC4E" || trimmed === "\uD83D\uDC4E\uD83C\uDFFB" || trimmed === "\uD83D\uDC4E\uD83C\uDFFC" || trimmed === "\uD83D\uDC4E\uD83C\uDFFD" || trimmed === "\uD83D\uDC4E\uD83C\uDFFE" || trimmed === "\uD83D\uDC4E\uD83C\uDFFF") {
+              feedbackType = "thumbs_down";
+            }
+
+            if (feedbackType) {
+              const instinctIds = this.appliedInstinctIds.get(chatId);
+              if (instinctIds && instinctIds.length > 0) {
+                this.feedbackReactionCallback(feedbackType, instinctIds, senderId, "reaction");
+                void this.sendText(chatId, feedbackType === "thumbs_up" ? "Thanks for the positive feedback!" : "Thanks for the feedback. I'll try to improve.");
+                continue;
+              }
+            }
+          }
+
           // 4.2 Track session
           this.touchSession(chatId, senderId);
 
@@ -370,6 +402,20 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
 
   onMessage(handler: (msg: IncomingMessage) => Promise<void>): void {
     this.messageHandler = handler;
+  }
+
+  /** Register a callback for feedback reactions (thumbs up/down). */
+  setFeedbackHandler(callback: FeedbackReactionCallback | null): void {
+    this.feedbackReactionCallback = callback;
+  }
+
+  /** Set the applied instinct IDs for a chat so emoji feedback can be attributed. */
+  setAppliedInstinctIds(chatId: string, instinctIds: string[]): void {
+    if (instinctIds.length > 0) {
+      this.appliedInstinctIds.set(chatId, instinctIds);
+    } else {
+      this.appliedInstinctIds.delete(chatId);
+    }
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
