@@ -8,8 +8,13 @@ vi.mock('lucide-react', () => ({
   ChevronRight: () => <svg data-testid="icon-chevron-right" />,
   ChevronDown: () => <svg data-testid="icon-chevron-down" />,
   File: () => <svg data-testid="icon-file" />,
+  FileCode: () => <svg data-testid="icon-file-code" />,
+  FileJson: () => <svg data-testid="icon-file-json" />,
+  FileText: () => <svg data-testid="icon-file-text" />,
   Folder: () => <svg data-testid="icon-folder" />,
   FolderOpen: () => <svg data-testid="icon-folder-open" />,
+  Package: () => <svg data-testid="icon-package" />,
+  Settings: () => <svg data-testid="icon-settings" />,
 }))
 
 import FileTree from './FileTree'

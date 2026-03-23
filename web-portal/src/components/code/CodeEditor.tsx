@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { useCodeStore } from '../../stores/code-store'
+import { cn } from '@/lib/utils'
 
 const Editor = lazy(() => import('@monaco-editor/react').then((m) => ({ default: m.default })))
 
@@ -14,14 +15,17 @@ export default function CodeEditor() {
   return (
     <div className="flex flex-col h-full">
       {/* Tab bar */}
-      <div className="flex items-center border-b border-border bg-bg-secondary overflow-x-auto shrink-0">
+      <div className="flex items-center bg-white/[0.03] backdrop-blur border-b border-white/5 overflow-x-auto shrink-0">
         {tabs.map((tab) => (
           <button
             key={tab.path}
             onClick={() => setActiveTab(tab.path)}
-            className={`flex items-center gap-1 px-3 py-1.5 text-xs border-r border-border whitespace-nowrap ${
-              activeTab === tab.path ? 'bg-bg text-text' : 'text-text-secondary hover:bg-surface-hover'
-            }`}
+            className={cn(
+              'group flex items-center gap-1 px-3 py-1.5 text-xs border-r border-white/5 whitespace-nowrap transition-colors',
+              activeTab === tab.path
+                ? 'border-b-2 border-b-accent text-text shadow-[0_1px_8px_0_rgba(var(--color-accent)/0.25)]'
+                : 'text-text-secondary hover:text-text',
+            )}
           >
             <span>{tab.path.split('/').pop()}</span>
             <span
@@ -31,7 +35,7 @@ export default function CodeEditor() {
                 e.stopPropagation()
                 closeFile(tab.path)
               }}
-              className="ml-1 hover:text-error cursor-pointer"
+              className="ml-1 hover:text-error cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
             >
               &times;
             </span>
@@ -43,7 +47,7 @@ export default function CodeEditor() {
         {activeFile ? (
           <Suspense
             fallback={
-              <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
+              <div className="flex items-center justify-center h-full text-text-tertiary text-sm animate-pulse">
                 Loading editor...
               </div>
             }

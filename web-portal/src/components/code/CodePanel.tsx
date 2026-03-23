@@ -45,7 +45,9 @@ export default function CodePanel() {
             <PanelResizeHandle className="h-1 cursor-row-resize bg-border transition-colors hover:bg-accent" />
 
             <Panel defaultSize={30} minSize={10}>
-              <Terminal />
+              <div className="h-full border-t border-white/5">
+                <Terminal />
+              </div>
             </Panel>
           </PanelGroup>
         </Panel>

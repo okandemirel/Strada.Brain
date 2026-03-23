@@ -10,9 +10,9 @@ export default function Terminal() {
   }, [output.length])
 
   return (
-    <div className="h-full bg-bg-secondary text-text font-mono text-xs overflow-y-auto p-2">
+    <div className="h-full bg-bg/80 border border-white/5 rounded-lg text-text font-mono text-xs overflow-y-auto p-2">
       {output.length === 0 ? (
-        <div className="text-text-tertiary">No terminal output</div>
+        <div className="text-text-tertiary text-sm italic">No terminal output</div>
       ) : (
         output.map((line, i) => (
           <div key={i} className="whitespace-pre-wrap leading-5">

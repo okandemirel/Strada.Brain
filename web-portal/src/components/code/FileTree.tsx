@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import type { TouchedStatus } from '../../stores/code-store'
-import { ChevronRight, ChevronDown, File, Folder, FolderOpen } from 'lucide-react'
+import { ChevronRight, ChevronDown, File, FileCode, FileJson, FileText, Folder, FolderOpen, Package, Settings } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 export interface FileEntry {
   name: string
@@ -27,6 +28,16 @@ const HIGHLIGHT_CLASSES: Record<string, string> = {
   modified: 'text-yellow-400',
   new: 'text-green-400',
   deleted: 'text-red-400 line-through',
+}
+
+function FileIcon({ name, size }: { name: string; size: number }) {
+  const ext = name.includes('.') ? name.split('.').pop()?.toLowerCase() : ''
+  if (ext === 'cs') return <FileCode size={size} className="shrink-0 text-text-tertiary" />
+  if (ext === 'meta') return <Settings size={size} className="shrink-0 text-text-tertiary" />
+  if (ext === 'json') return <FileJson size={size} className="shrink-0 text-text-tertiary" />
+  if (ext === 'md') return <FileText size={size} className="shrink-0 text-text-tertiary" />
+  if (ext === 'asmdef') return <Package size={size} className="shrink-0 text-text-tertiary" />
+  return <File size={size} className="shrink-0 text-text-tertiary" />
 }
 
 function TreeNode({
@@ -92,10 +103,14 @@ function TreeNode({
     return (
       <button
         onClick={() => onFileSelect(path)}
-        className={`flex items-center gap-1 w-full text-left px-1 py-0.5 text-xs hover:bg-surface-hover rounded ${highlightClass}`}
+        className={cn(
+          'flex items-center gap-1 w-full text-left px-1 py-0.5 text-xs rounded-md transition-colors',
+          'hover:bg-white/5',
+          highlightClass,
+        )}
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
       >
-        <File size={14} className="shrink-0 text-text-tertiary" />
+        <FileIcon name={name} size={14} />
         <span className="truncate">{name}</span>
       </button>
     )
@@ -105,7 +120,11 @@ function TreeNode({
     <div>
       <button
         onClick={toggle}
-        className={`flex items-center gap-1 w-full text-left px-1 py-0.5 text-xs hover:bg-surface-hover rounded font-medium ${highlightClass}`}
+        className={cn(
+          'flex items-center gap-1 w-full text-left px-1 py-0.5 text-xs rounded-md font-medium transition-colors',
+          'hover:bg-white/5',
+          highlightClass,
+        )}
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
       >
         {state.expanded ? (
@@ -128,19 +147,22 @@ function TreeNode({
         </div>
       )}
 
-      {state.expanded &&
-        state.entries.map((entry) => (
-          <TreeNode
-            key={entry.name}
-            path={path ? `${path}/${entry.name}` : entry.name}
-            name={entry.name}
-            type={entry.type as 'file' | 'directory'}
-            depth={depth + 1}
-            touchedFiles={touchedFiles}
-            onFileSelect={onFileSelect}
-            baseUrl={baseUrl}
-          />
-        ))}
+      {state.expanded && (
+        <div className="transition-all duration-200">
+          {state.entries.map((entry) => (
+            <TreeNode
+              key={entry.name}
+              path={path ? `${path}/${entry.name}` : entry.name}
+              name={entry.name}
+              type={entry.type as 'file' | 'directory'}
+              depth={depth + 1}
+              touchedFiles={touchedFiles}
+              onFileSelect={onFileSelect}
+              baseUrl={baseUrl}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
