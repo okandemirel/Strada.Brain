@@ -847,6 +847,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     }
   }
 
+  // Wire project root into dashboard for workspace file endpoints (Phase 5)
+  if (dashboard) {
+    dashboard.setProjectRoot(config.unityProjectPath);
+  }
+
   // Wire incoming workspace commands from the frontend into the workspace bus
   if ("setWorkspaceBusEmitter" in channel && typeof (channel as any).setWorkspaceBusEmitter === "function") {
     (channel as any).setWorkspaceBusEmitter((event: string, payload: unknown) => {
