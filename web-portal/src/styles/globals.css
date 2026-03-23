@@ -35,6 +35,56 @@
 @variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 @variant light (&:where([data-theme="light"], [data-theme="light"] *));
 
+/* ===== Shadcn/UI CSS Variable Bridge ===== */
+@layer base {
+  :root,
+  :root[data-theme="dark"] {
+    --background: var(--color-bg);
+    --foreground: var(--color-text);
+    --card: rgba(255, 255, 255, 0.03);
+    --card-foreground: var(--color-text);
+    --popover: var(--color-bg-secondary);
+    --popover-foreground: var(--color-text);
+    --primary: var(--color-accent);
+    --primary-foreground: #000000;
+    --secondary: var(--color-bg-tertiary);
+    --secondary-foreground: var(--color-text);
+    --muted: var(--color-bg-tertiary);
+    --muted-foreground: var(--color-text-secondary);
+    --accent: var(--color-accent);
+    --accent-foreground: #000000;
+    --destructive: var(--color-error);
+    --destructive-foreground: #ffffff;
+    --border: var(--color-border);
+    --input: var(--color-border);
+    --ring: var(--color-accent);
+    --radius: 0.75rem;
+  }
+
+  :root[data-theme="light"] {
+    --background: var(--color-bg);
+    --foreground: var(--color-text);
+    --card: #ffffff;
+    --card-foreground: var(--color-text);
+    --popover: var(--color-bg-secondary);
+    --popover-foreground: var(--color-text);
+    --primary: var(--color-accent);
+    --primary-foreground: #ffffff;
+    --secondary: var(--color-bg-tertiary);
+    --secondary-foreground: var(--color-text);
+    --muted: var(--color-bg-tertiary);
+    --muted-foreground: var(--color-text-secondary);
+    --accent: var(--color-accent);
+    --accent-foreground: #ffffff;
+    --destructive: var(--color-error);
+    --destructive-foreground: #ffffff;
+    --border: var(--color-border);
+    --input: var(--color-border);
+    --ring: var(--color-accent);
+    --radius: 0.75rem;
+  }
+}
+
 /* ===== Keyframe Animations ===== */
 
 @keyframes msg-in {
@@ -116,6 +166,21 @@
 @keyframes progress-shimmer {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(200%); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 15px rgba(0, 229, 255, 0.1); }
+  50% { box-shadow: 0 0 25px rgba(0, 229, 255, 0.25); }
+}
+
+@keyframes card-lift {
+  from { transform: translateY(0); }
+  to { transform: translateY(-2px); }
+}
+
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @layer base {

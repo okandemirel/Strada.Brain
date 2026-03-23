@@ -1,8 +1,14 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import path from 'path'
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, 'src'),
+    },
+  },
   plugins: [tailwindcss(), react()],
   build: {
     outDir: 'dist',
@@ -36,6 +42,10 @@ export default defineConfig({
 
           if (id.includes('/react/') || id.includes('react-dom')) {
             return 'react-vendor'
+          }
+
+          if (id.includes('class-variance-authority') || id.includes('clsx') || id.includes('tailwind-merge') || id.includes('sonner')) {
+            return 'ui-vendor'
           }
 
           return 'vendor'
