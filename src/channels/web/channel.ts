@@ -939,17 +939,17 @@ export class WebChannel
     const pathOnly = url.split("?")[0]!;
     const isAllowed =
       WebChannel.ALLOWED_PROXY_PATHS.has(pathOnly) ||
-      pathOnly.startsWith("/api/goals") ||
-      pathOnly.startsWith("/api/agent-metrics") ||
-      pathOnly.startsWith("/api/triggers") ||
+      pathOnly === "/api/goals" || pathOnly.startsWith("/api/goals/") ||
+      pathOnly === "/api/agent-metrics" || pathOnly.startsWith("/api/agent-metrics/") ||
+      pathOnly === "/api/triggers" || pathOnly.startsWith("/api/triggers/") ||
       pathOnly.startsWith("/api/personality/profiles/") ||
-      pathOnly.startsWith("/api/canvas") ||
-      pathOnly.startsWith("/api/workspace") ||
+      pathOnly === "/api/canvas" || pathOnly.startsWith("/api/canvas/") ||
+      pathOnly === "/api/workspace" || pathOnly.startsWith("/api/workspace/") ||
       pathOnly === "/api/skills" || pathOnly.startsWith("/api/skills/") ||
       pathOnly === "/api/providers/available" ||
       pathOnly === "/api/providers/active" ||
       pathOnly === "/api/user/autonomous" ||
-      pathOnly.startsWith("/api/providers/intelligence");
+      pathOnly === "/api/providers/intelligence" || pathOnly.startsWith("/api/providers/intelligence/");
 
     if (!isAllowed) {
       res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
@@ -961,7 +961,7 @@ export class WebChannel
     const isMutable =
       WebChannel.MUTABLE_PROXY_PATHS.has(pathOnly) ||
       pathOnly.startsWith("/api/personality/profiles/") ||
-      pathOnly.startsWith("/api/canvas") ||
+      pathOnly === "/api/canvas" || pathOnly.startsWith("/api/canvas/") ||
       pathOnly.startsWith("/api/skills/") ||
       pathOnly === "/api/models/refresh";
     if (method !== "GET" && !(isMutable && (method === "POST" || method === "DELETE" || method === "PUT"))) {
