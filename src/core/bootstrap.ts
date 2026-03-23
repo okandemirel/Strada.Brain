@@ -310,6 +310,33 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     },
   );
 
+  // Load skill ecosystem (after tool registry is initialized)
+  const { SkillManager } = await import("../skills/skill-manager.js");
+  const skillManager = new SkillManager();
+  skillManager.setToolRegistrar(
+    (tools) => {
+      for (const tool of tools) {
+        try {
+          toolRegistry.register(tool, { category: "custom", dangerous: false, readOnly: true });
+        } catch {
+          // Duplicate tool name — skip silently (already registered)
+        }
+      }
+    },
+    (toolNames) => {
+      for (const name of toolNames) {
+        toolRegistry.unregister(name);
+      }
+    },
+  );
+  try {
+    await skillManager.loadAll(config.unityProjectPath);
+  } catch (skillError) {
+    logger.warn("Skill loading failed (non-fatal)", {
+      error: skillError instanceof Error ? skillError.message : String(skillError),
+    });
+  }
+
   const { goalStorage, goalDecomposer, interruptedGoalTrees, crashContext, goalExecutorConfig } =
     initializeGoalContextStage({
       config,
@@ -435,6 +462,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       goalStorage,
       chainResilienceConfig: config.toolChain.resilience,
     });
+    dashboard.registerSkillManager(skillManager);
   }
   // HeartbeatLoop wired to CommandHandler below after daemon init (late binding)
 
