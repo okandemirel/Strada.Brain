@@ -40,8 +40,9 @@ export function createMonitorBridge(
         const handler = (payload: unknown) => {
           broadcast(JSON.stringify({ type: event, payload, timestamp: Date.now() }))
         }
-        workspaceBus.on(event, handler as any)
-        listeners.push(() => workspaceBus.off(event, handler as any))
+        // WorkspaceBus index signature allows any string key → unknown payload
+        workspaceBus.on(event, handler)
+        listeners.push(() => workspaceBus.off(event, handler))
       }
     },
 

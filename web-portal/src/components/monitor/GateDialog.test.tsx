@@ -25,14 +25,14 @@ vi.mock('../../stores/monitor-store', () => ({
 
 // Mock radix dialog to render without portal (jsdom limitation)
 vi.mock('@radix-ui/react-dialog', () => ({
-  Root: ({ children, open }: any) => (open ? <div data-testid="dialog-root">{children}</div> : null),
-  Trigger: ({ children }: any) => <button>{children}</button>,
-  Portal: ({ children }: any) => <div>{children}</div>,
+  Root: ({ children, open }: { children?: React.ReactNode; open?: boolean }) => (open ? <div data-testid="dialog-root">{children}</div> : null),
+  Trigger: ({ children }: { children?: React.ReactNode }) => <button>{children}</button>,
+  Portal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Overlay: () => <div data-testid="dialog-overlay" />,
-  Content: ({ children }: any) => <div data-testid="dialog-content">{children}</div>,
-  Title: ({ children }: any) => <h2>{children}</h2>,
-  Description: ({ children }: any) => <p>{children}</p>,
-  Close: ({ children }: any) => <button>{children}</button>,
+  Content: ({ children }: { children?: React.ReactNode }) => <div data-testid="dialog-content">{children}</div>,
+  Title: ({ children }: { children?: React.ReactNode }) => <h2>{children}</h2>,
+  Description: ({ children }: { children?: React.ReactNode }) => <p>{children}</p>,
+  Close: ({ children }: { children?: React.ReactNode }) => <button>{children}</button>,
 }))
 
 import GateDialog from './GateDialog'

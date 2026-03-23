@@ -814,10 +814,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   }
 
   // Monitor bridge: fan-out workspace events to all connected WS clients
-  if ("broadcastRaw" in channel && typeof (channel as any).broadcastRaw === "function") {
+  const channelWithBroadcast = channel as { broadcastRaw?: (msg: string) => void };
+  if (typeof channelWithBroadcast.broadcastRaw === "function") {
+    const broadcastFn = channelWithBroadcast.broadcastRaw.bind(channelWithBroadcast);
     const monitorBridge = createMonitorBridge(
       workspaceBus,
-      (msg: string) => (channel as any).broadcastRaw(msg),
+      broadcastFn,
     );
     monitorBridge.start();
     stoppableServers.push(monitorBridge);
@@ -853,9 +855,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   }
 
   // Wire incoming workspace commands from the frontend into the workspace bus
-  if ("setWorkspaceBusEmitter" in channel && typeof (channel as any).setWorkspaceBusEmitter === "function") {
-    (channel as any).setWorkspaceBusEmitter((event: string, payload: unknown) => {
-      workspaceBus.emit(event, payload as any);
+  const channelWithBus = channel as { setWorkspaceBusEmitter?: (emitter: ((event: string, payload: unknown) => void) | null) => void };
+  if (typeof channelWithBus.setWorkspaceBusEmitter === "function") {
+    channelWithBus.setWorkspaceBusEmitter((event: string, payload: unknown) => {
+      workspaceBus.emit(event as keyof import("../dashboard/workspace-events.js").WorkspaceEventMap & string, payload as never);
     });
   }
 

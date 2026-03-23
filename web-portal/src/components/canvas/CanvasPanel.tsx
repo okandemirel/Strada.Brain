@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { Tldraw, type Editor } from 'tldraw'
+import { Tldraw, type Editor, type TLShapeId } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { useCanvasStore } from '../../stores/canvas-store'
 import { useSessionStore } from '../../stores/session-store'
@@ -86,14 +86,12 @@ export default function CanvasPanel() {
 
     editor.run(() => {
       for (const pending of pendingShapes) {
-        const existing = typeof (editor as any).getShape === 'function'
-          ? (editor as any).getShape(pending.id)
-          : undefined
+        const existing = editor.getShape(pending.id as TLShapeId)
         if (existing) {
-          ;(editor as any).updateShape({ id: pending.id, type: pending.type, props: pending.props })
+          editor.updateShape({ id: pending.id as TLShapeId, type: pending.type, props: pending.props })
         } else {
           editor.createShape({
-            id: pending.id as any,
+            id: pending.id as TLShapeId,
             type: pending.type,
             props: pending.props,
           })

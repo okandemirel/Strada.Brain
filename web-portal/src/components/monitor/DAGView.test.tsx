@@ -16,12 +16,14 @@ vi.mock('../../stores/monitor-store', () => ({
 }))
 
 // Mock ReactFlow (requires canvas/SVG not available in jsdom)
+interface MockNode { id: string; data?: { label?: string }; [key: string]: unknown }
+
 vi.mock('@xyflow/react', () => ({
-  ReactFlow: ({ nodes, edges, onNodeClick, children }: any) => (
+  ReactFlow: ({ nodes, edges, onNodeClick, children }: { nodes: MockNode[]; edges: unknown[]; onNodeClick?: (event: null, node: MockNode) => void; children?: React.ReactNode }) => (
     <div data-testid="reactflow">
       <span data-testid="node-count">{nodes.length}</span>
       <span data-testid="edge-count">{edges.length}</span>
-      {nodes.map((n: any) => (
+      {nodes.map((n: MockNode) => (
         <div
           key={n.id}
           data-testid={`node-${n.id}`}
@@ -39,9 +41,9 @@ vi.mock('@xyflow/react', () => ({
 
 // Mock dag-nodes (they also use @xyflow/react internals)
 vi.mock('./dag-nodes', () => ({
-  TaskNode: ({ data }: any) => <div>{data?.label}</div>,
-  ReviewNode: ({ data }: any) => <div>{data?.label}</div>,
-  GateNode: ({ data }: any) => <div>{data?.label}</div>,
+  TaskNode: ({ data }: { data?: { label?: string } }) => <div>{data?.label}</div>,
+  ReviewNode: ({ data }: { data?: { label?: string } }) => <div>{data?.label}</div>,
+  GateNode: ({ data }: { data?: { label?: string } }) => <div>{data?.label}</div>,
 }))
 
 import DAGView from './DAGView'

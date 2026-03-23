@@ -1123,7 +1123,7 @@ export class DashboardServer {
           const decisions = this.learningStorage?.getInterventionLogs?.(undefined, limit) ?? [];
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ decisions }));
-        } catch (err) {
+        } catch (_err) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Failed to fetch learning decisions" }));
         }
@@ -1139,7 +1139,7 @@ export class DashboardServer {
             const runtime = { reflection: m.getReflectionStats(), consensus: m.getConsensusStats(), outcome: m.getOutcomeStats() };
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ aggregates, runtime }));
-          } catch (err) {
+          } catch (_err) {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "Failed to fetch learning health" }));
           }

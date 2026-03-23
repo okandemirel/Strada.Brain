@@ -11,11 +11,15 @@ const mockLoadSnapshot = vi.fn()
 const mockEditorOn = vi.fn()
 const mockEditorRun = vi.fn((fn: () => void) => fn())
 const mockCreateShape = vi.fn()
+const mockGetShape = vi.fn(() => undefined)
+const mockUpdateShape = vi.fn()
 
 const mockEditor = {
   on: mockEditorOn,
   run: mockEditorRun,
   createShape: mockCreateShape,
+  getShape: mockGetShape,
+  updateShape: mockUpdateShape,
   store: {
     getSnapshot: mockGetSnapshot,
     loadSnapshot: mockLoadSnapshot,

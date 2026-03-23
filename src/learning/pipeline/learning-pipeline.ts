@@ -150,8 +150,8 @@ export class LearningPipeline {
     this.isRunning = true;
 
     // Seed Strada.Core conventions on every boot (idempotent — skips existing patterns)
-    seedStradaConventions(this.storage).catch((err) => {
-      console.error("[LearningPipeline] seed error:", err);
+    seedStradaConventions(this.storage).catch((_err) => {
+      // Seed errors are non-fatal — conventions will be seeded on next boot
     });
 
     // Detection timer removed -- event-driven processing via handleToolResult() replaces it
