@@ -103,12 +103,16 @@ export function TypingAnimation({
     [words, children]
   )
 
-  useEffect(() => {
+  // Reset animation when source changes — React-approved "storing previous render" pattern
+  // https://react.dev/reference/react/useState#storing-information-from-previous-renders
+  const [prevKey, setPrevKey] = useState(animationSourceKey)
+  if (prevKey !== animationSourceKey) {
+    setPrevKey(animationSourceKey)
     setDisplayedText("")
     setCurrentWordIndex(0)
     setCurrentCharIndex(0)
     setPhase("typing")
-  }, [animationSourceKey])
+  }
 
   useEffect(() => {
     let timeout: ReturnType<typeof setTimeout> | null = null
