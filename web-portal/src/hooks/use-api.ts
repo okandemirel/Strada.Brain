@@ -325,6 +325,25 @@ interface BootReportResponse {
   } | null
 }
 
+export interface SkillEntryResponse {
+  manifest: {
+    name: string
+    version: string
+    description: string
+    author?: string
+    homepage?: string
+    capabilities?: string[]
+  }
+  status: 'active' | 'disabled' | 'gated' | 'error'
+  tier: 'workspace' | 'managed' | 'bundled' | 'extra'
+  path: string
+  gateReason?: string
+}
+
+interface SkillsResponse {
+  skills: SkillEntryResponse[]
+}
+
 // ---------------------------------------------------------------------------
 // Individual query hooks
 // ---------------------------------------------------------------------------
@@ -509,5 +528,14 @@ export function useBootReport() {
     queryKey: ['boot-report'],
     queryFn: () => fetchApi<BootReportResponse>('/api/system/boot'),
     refetchInterval: 30_000,
+  })
+}
+
+/** GET /api/skills */
+export function useSkills() {
+  return useQuery<SkillsResponse>({
+    queryKey: ['skills'],
+    queryFn: () => fetchApi<SkillsResponse>('/api/skills'),
+    refetchInterval: 15_000,
   })
 }

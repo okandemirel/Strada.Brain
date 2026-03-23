@@ -36,7 +36,7 @@ describe('AdminDropdown', () => {
     expect(screen.queryByText('Admin')).not.toBeInTheDocument()
   })
 
-  it('shows all 10 admin menu items when opened', async () => {
+  it('shows all 11 admin menu items when opened', async () => {
     const user = userEvent.setup()
     renderAdminDropdown()
     const btn = screen.getByRole('button')
@@ -44,7 +44,7 @@ describe('AdminDropdown', () => {
 
     const expectedLabels = [
       'Dashboard', 'Config', 'Tools', 'Channels', 'Sessions',
-      'Logs', 'Identity', 'Personality', 'Memory', 'Settings',
+      'Logs', 'Identity', 'Personality', 'Memory', 'Settings', 'Skills',
     ]
     for (const label of expectedLabels) {
       expect(screen.getByText(label)).toBeInTheDocument()
@@ -60,7 +60,7 @@ describe('AdminDropdown', () => {
     const expectedPaths = [
       '/admin/dashboard', '/admin/config', '/admin/tools', '/admin/channels',
       '/admin/sessions', '/admin/logs', '/admin/identity', '/admin/personality',
-      '/admin/memory', '/admin/settings',
+      '/admin/memory', '/admin/settings', '/admin/skills',
     ]
     // Radix DropdownMenuItem wraps NavLink as role="menuitem" anchor elements
     const menuItems = screen.getAllByRole('menuitem')

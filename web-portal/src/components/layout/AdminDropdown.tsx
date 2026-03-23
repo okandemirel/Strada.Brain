@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import {
   BarChart3, Settings, SlidersHorizontal, Wrench, Radio, Users,
-  ScrollText, Brain, Theater, Database, Shield,
+  ScrollText, Brain, Theater, Database, Shield, Puzzle,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -31,6 +31,7 @@ const ADMIN_PAGES: AdminPage[] = [
   { to: '/admin/personality', icon: Theater, label: 'Personality' },
   { to: '/admin/memory', icon: Database, label: 'Memory' },
   { to: '/admin/settings', icon: Settings, label: 'Settings' },
+  { to: '/admin/skills', icon: Puzzle, label: 'Skills' },
 ]
 
 interface AdminDropdownProps {

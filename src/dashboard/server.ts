@@ -45,6 +45,8 @@ import { handleCanvasRoute } from "./canvas-routes.js";
 import { handleWorkspaceRoute } from "./workspace-routes.js";
 import type { CanvasStorage } from "./canvas-storage.js";
 import type { WorkspaceBus } from "./workspace-bus.js";
+import type { SkillEntry } from "../skills/types.js";
+import { setSkillEnabled } from "../skills/skill-config.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -127,6 +129,11 @@ interface DashboardReadinessChecker {
     ready: boolean; reason?: string; testPassed: boolean;
     gitClean: boolean; branchMatch: boolean; timestamp: number; cached: boolean;
   }>;
+}
+
+/** Structural interface for SkillManager used by dashboard /api/skills endpoints */
+interface DashboardSkillManager {
+  getEntries(): SkillEntry[];
 }
 
 /** Structural interface for tool registry used by dashboard /api/tools endpoint */
@@ -476,6 +483,9 @@ export class DashboardServer {
   // Workspace file explorer context (Phase 5)
   private projectRoot?: string;
 
+  // Skill management context
+  private skillManager?: DashboardSkillManager;
+
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
 
@@ -673,6 +683,14 @@ export class DashboardServer {
    */
   setProjectRoot(path: string): void {
     this.projectRoot = path;
+  }
+
+  /**
+   * Register skill manager for /api/skills endpoints.
+   * Call after SkillManager.loadAll() has completed during bootstrap.
+   */
+  registerSkillManager(skillManager: DashboardSkillManager): void {
+    this.skillManager = skillManager;
   }
 
   private getAutonomousDefaults(): { enabled: boolean; hours: number } {
@@ -1907,6 +1925,47 @@ export class DashboardServer {
           this.projectRoot,
         );
         if (handled) return;
+      }
+
+      // Skills management endpoints
+      if (url.startsWith("/api/skills")) {
+        // GET /api/skills — list all skill entries
+        if (url === "/api/skills" && req.method === "GET") {
+          const entries: SkillEntry[] = this.skillManager
+            ? this.skillManager.getEntries()
+            : [];
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ skills: entries }));
+          return;
+        }
+
+        // POST /api/skills/:name/enable
+        const enableMatch = url.match(/^\/api\/skills\/([^/]+)\/enable$/);
+        if (enableMatch && req.method === "POST") {
+          const name = decodeURIComponent(enableMatch[1] ?? "");
+          void setSkillEnabled(name, true).then(() => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: true }));
+          }).catch((err) => {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          });
+          return;
+        }
+
+        // POST /api/skills/:name/disable
+        const disableMatch = url.match(/^\/api\/skills\/([^/]+)\/disable$/);
+        if (disableMatch && req.method === "POST") {
+          const name = decodeURIComponent(disableMatch[1] ?? "");
+          void setSkillEnabled(name, false).then(() => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: true }));
+          }).catch((err) => {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          });
+          return;
+        }
       }
 
       if (url === "/health") {

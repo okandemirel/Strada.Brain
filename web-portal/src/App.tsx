@@ -15,6 +15,7 @@ const IdentityPage = lazy(() => import('./pages/IdentityPage'))
 const PersonalityPage = lazy(() => import('./pages/PersonalityPage'))
 const MemoryPage = lazy(() => import('./pages/MemoryPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const SkillsPage = lazy(() => import('./pages/SkillsPage'))
 const SetupWizard = lazy(() => import('./pages/SetupWizard'))
 
 function NotFoundPage() {
@@ -77,6 +78,7 @@ export default function App() {
               <Route path="personality" element={<PersonalityPage />} />
               <Route path="memory" element={<MemoryPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="skills" element={<SkillsPage />} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Route>
