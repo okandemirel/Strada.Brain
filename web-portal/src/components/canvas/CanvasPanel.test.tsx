@@ -20,6 +20,9 @@ const mockEditor = {
   createShape: mockCreateShape,
   getShape: mockGetShape,
   updateShape: mockUpdateShape,
+  user: {
+    updateUserPreferences: vi.fn(),
+  },
   store: {
     getSnapshot: mockGetSnapshot,
     loadSnapshot: mockLoadSnapshot,
@@ -39,6 +42,10 @@ vi.mock('tldraw/tldraw.css', () => ({}))
 
 vi.mock('./custom-shapes', () => ({
   customShapeUtils: Array.from({ length: 9 }, (_, i) => ({ type: `shape-${i}` })),
+}))
+
+vi.mock('../../hooks/useTheme', () => ({
+  useTheme: () => ({ theme: 'dark' as const, toggleTheme: vi.fn() }),
 }))
 
 import CanvasPanel from './CanvasPanel'

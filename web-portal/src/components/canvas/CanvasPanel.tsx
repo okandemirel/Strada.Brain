@@ -3,6 +3,7 @@ import { Tldraw, type Editor, type TLShapeId } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { useCanvasStore } from '../../stores/canvas-store'
 import { useSessionStore } from '../../stores/session-store'
+import { useTheme } from '../../hooks/useTheme'
 import { customShapeUtils } from './custom-shapes'
 
 /** Trigger a browser download from an in-memory blob. */
@@ -21,16 +22,23 @@ export default function CanvasPanel() {
   const isDirty = useCanvasStore((s) => s.isDirty)
   const setDirty = useCanvasStore((s) => s.setDirty)
   const sessionId = useSessionStore((s) => s.sessionId)
+  const { theme } = useTheme()
   const editorRef = useRef<Editor | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleMount = useCallback(
     (editor: Editor) => {
       editorRef.current = editor
+      editor.user.updateUserPreferences({ colorScheme: theme })
       editor.on('change', () => setDirty(true))
     },
-    [setDirty],
+    [setDirty, theme],
   )
+
+  // Sync tldraw color scheme when portal theme changes
+  useEffect(() => {
+    editorRef.current?.user.updateUserPreferences({ colorScheme: theme })
+  }, [theme])
 
   // ---------------------------------------------------------------------------
   // Load canvas state on mount (when sessionId becomes available)

@@ -734,7 +734,7 @@
   .mcp-runtime-pill { font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 8px; white-space: nowrap; }
   .mcp-runtime-pill.is-installed { background: rgba(52, 211, 153, 0.15); color: var(--color-success); }
   .mcp-runtime-pill.is-missing { background: rgba(251, 191, 36, 0.12); color: var(--color-warning); }
-  .mcp-dependency-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+  .mcp-dependency-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 12px; overflow: hidden; }
   .mcp-dependency-card { padding: 10px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.06); }
   .mcp-dependency-card.is-installed { background: rgba(52, 211, 153, 0.06); }
   .mcp-dependency-card.is-missing { background: rgba(248, 113, 113, 0.06); }
@@ -746,8 +746,8 @@
   .mcp-inline-note.warning { color: var(--color-warning); background: rgba(251, 191, 36, 0.06); }
   .mcp-install-summary { margin-top: 12px; }
   .mcp-summary-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; }
-  .mcp-summary-label { color: rgba(255, 255, 255, 0.5); }
-  .mcp-summary-value { color: #e8e8ed; font-weight: 500; }
+  .mcp-summary-label { color: rgba(255, 255, 255, 0.5); flex-shrink: 0; }
+  .mcp-summary-value { color: #e8e8ed; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .mcp-summary-value.mono { font-family: "SF Mono", Consolas, monospace; font-size: 12px; }
   .mcp-feature-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
   .mcp-feature-chip { font-size: 11px; padding: 4px 10px; border-radius: 8px; background: var(--color-accent-glow); color: var(--color-accent); font-weight: 500; }

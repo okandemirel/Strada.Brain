@@ -945,6 +945,7 @@ export class WebChannel
       pathOnly.startsWith("/api/personality/profiles/") ||
       pathOnly.startsWith("/api/canvas") ||
       pathOnly.startsWith("/api/workspace") ||
+      pathOnly === "/api/skills" || pathOnly.startsWith("/api/skills/") ||
       pathOnly === "/api/providers/available" ||
       pathOnly === "/api/providers/active" ||
       pathOnly === "/api/user/autonomous" ||
@@ -961,6 +962,7 @@ export class WebChannel
       WebChannel.MUTABLE_PROXY_PATHS.has(pathOnly) ||
       pathOnly.startsWith("/api/personality/profiles/") ||
       pathOnly.startsWith("/api/canvas") ||
+      pathOnly.startsWith("/api/skills/") ||
       pathOnly === "/api/models/refresh";
     if (method !== "GET" && !(isMutable && (method === "POST" || method === "DELETE" || method === "PUT"))) {
       res.writeHead(405, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
