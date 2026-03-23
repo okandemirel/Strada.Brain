@@ -107,7 +107,7 @@ function makeComponents(isUser: boolean): Components {
       return (
         <div className="relative group/code">
           <pre {...props}>{children}</pre>
-          {rawText && (
+          {!isUser && rawText && (
             <CopyButton
               text={rawText}
               className="absolute top-2 right-2 opacity-0 group-hover/code:opacity-100 transition-opacity"
