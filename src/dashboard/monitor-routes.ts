@@ -8,6 +8,7 @@
  *   GET  /api/monitor/activity     — last N activity entries
  *   POST /api/monitor/task/:id/approve — approve a gate request
  *   POST /api/monitor/task/:id/skip    — skip a task
+ *   POST /api/monitor/export           — export monitor state as markdown report
  *
  * Follows the inline route-matching pattern used by DashboardServer.
  */
@@ -332,6 +333,89 @@ export function handleMonitorRoute(
       })
       jsonResponse(res, 200, { status: 'skipped', taskId })
     })
+    return true
+  }
+
+  // ── POST /api/monitor/export ──────────────────────────────────────────
+  if (method === 'POST' && (url === '/api/monitor/export' || url.startsWith('/api/monitor/export?'))) {
+    if (!goalStorage) {
+      jsonResponse(res, 200, { markdown: '# Monitor Export\n\nNo active goal trees.\n' })
+      return true
+    }
+    try {
+      const activeTrees = goalStorage.getInterruptedTrees()
+      if (activeTrees.length === 0) {
+        jsonResponse(res, 200, { markdown: '# Monitor Export\n\nNo active goal trees.\n' })
+        return true
+      }
+      const tree = activeTrees[0]!
+      const progress = calculateProgress(tree)
+
+      const lines: string[] = []
+      lines.push('# Monitor Export')
+      lines.push('')
+      lines.push(`**Goal:** ${tree.taskDescription}`)
+      lines.push(`**Root ID:** ${tree.rootId}`)
+      lines.push('')
+
+      // DAG summary
+      let completed = 0
+      let failed = 0
+      let total = 0
+      const taskRows: Array<{ id: string; task: string; status: string; depth: number }> = []
+      for (const [id, node] of tree.nodes) {
+        if (id === tree.rootId) continue
+        total++
+        if (node.status === 'completed') completed++
+        if (node.status === 'failed') failed++
+        taskRows.push({ id: node.id, task: node.task, status: node.status, depth: node.depth })
+      }
+
+      lines.push('## DAG Summary')
+      lines.push('')
+      lines.push(`| Metric | Value |`)
+      lines.push(`|--------|-------|`)
+      lines.push(`| Total tasks | ${total} |`)
+      lines.push(`| Completed | ${completed} |`)
+      lines.push(`| Failed | ${failed} |`)
+      lines.push(`| Progress | ${progress.percentage}% |`)
+      lines.push('')
+
+      // Task list
+      lines.push('## Tasks')
+      lines.push('')
+      lines.push('| Status | Task | Depth |')
+      lines.push('|--------|------|-------|')
+      for (const row of taskRows) {
+        const statusIcon = row.status === 'completed' ? '[done]'
+          : row.status === 'failed' ? '[FAIL]'
+          : row.status === 'executing' ? '[....]'
+          : row.status === 'skipped' ? '[skip]'
+          : '[    ]'
+        lines.push(`| ${statusIcon} | ${row.task} | ${row.depth} |`)
+      }
+      lines.push('')
+
+      // Review results from recent activity
+      const recentActivity = activityLog.getRecent(MAX_ACTIVITY_ENTRIES)
+      const reviewEntries = recentActivity.filter((e) => e.action === 'review_result' || e.action.includes('review'))
+      if (reviewEntries.length > 0) {
+        lines.push('## Review Results')
+        lines.push('')
+        for (const entry of reviewEntries) {
+          lines.push(`- **${entry.action}**${entry.taskId ? ` (task: ${entry.taskId})` : ''}: ${entry.detail}`)
+        }
+        lines.push('')
+      }
+
+      lines.push(`---`)
+      lines.push(`*Exported at ${new Date().toISOString()}*`)
+      lines.push('')
+
+      jsonResponse(res, 200, { markdown: lines.join('\n') })
+    } catch {
+      jsonResponse(res, 500, { error: 'Failed to generate export' })
+    }
     return true
   }
 

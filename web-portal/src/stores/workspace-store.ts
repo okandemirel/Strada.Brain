@@ -18,12 +18,14 @@ interface PanelSizes {
 
 interface WorkspaceState {
   mode: WorkspaceMode
+  previousMode: WorkspaceMode | null
   userOverride: boolean
   secondaryVisible: boolean
   panelSizes: PanelSizes
   notifications: WorkspaceNotification[]
   setMode: (mode: WorkspaceMode) => void
   suggestMode: (mode: WorkspaceMode) => void
+  undoModeSwitch: () => void
   resetOverride: () => void
   toggleSecondary: () => void
   setPanelSizes: (sizes: Partial<PanelSizes>) => void
@@ -36,6 +38,7 @@ const MAX_NOTIFICATIONS = 50
 
 const initialState = {
   mode: 'chat' as WorkspaceMode,
+  previousMode: null as WorkspaceMode | null,
   userOverride: false,
   secondaryVisible: false,
   panelSizes: { sidebar: 15, primary: 70, secondary: 15 } as PanelSizes,
@@ -44,8 +47,9 @@ const initialState = {
 
 export const useWorkspaceStore = create<WorkspaceState>()((set) => ({
   ...initialState,
-  setMode: (mode) => set({ mode, userOverride: true }),
-  suggestMode: (mode) => set((state) => (state.userOverride ? state : { mode })),
+  setMode: (mode) => set((state) => ({ mode, previousMode: state.mode, userOverride: true })),
+  suggestMode: (mode) => set((state) => (state.userOverride ? state : { mode, previousMode: state.mode })),
+  undoModeSwitch: () => set((state) => (state.previousMode ? { mode: state.previousMode, previousMode: null, userOverride: true } : state)),
   resetOverride: () => set({ userOverride: false, mode: 'chat' }),
   toggleSecondary: () => set((state) => ({ secondaryVisible: !state.secondaryVisible })),
   setPanelSizes: (sizes) => set((state) => ({ panelSizes: { ...state.panelSizes, ...sizes } })),

@@ -121,6 +121,9 @@ export default function CanvasPanel() {
         data-testid="canvas-toolbar"
       >
         <span className="text-xs font-medium text-[#a6adc8]">Canvas</span>
+        <span className="text-[10px] text-[#a6adc8] bg-[#313244] rounded px-1.5 py-0.5 md:hidden">
+          View only
+        </span>
         <div className="flex-1" />
         <button
           type="button"

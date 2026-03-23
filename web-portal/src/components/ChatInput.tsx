@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ChangeEvent, type DragEvent } from 'react'
 import type { Attachment } from '../types/messages'
+import { useWorkspaceStore } from '../stores/workspace-store'
 import VoiceRecorder from './VoiceRecorder'
 
 interface ChatInputProps {
@@ -107,6 +108,9 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
 
       setText('')
       setFiles([])
+
+      // Reset mode override so auto-switch resumes after user sends a chat message
+      useWorkspaceStore.getState().resetOverride()
 
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'

@@ -1,10 +1,12 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useState, useCallback } from 'react'
 import { Outlet } from 'react-router-dom'
 import { WebSocketProvider } from '../../contexts/WebSocketContext'
 import { TooltipProvider } from '../ui/tooltip'
 import Sidebar from './Sidebar'
 import PanelLayout from '../workspace/PanelLayout'
 import BottomTabBar from './BottomTabBar'
+import ToastContainer from '../ui/Toast'
+import ShortcutsHelp from '../ui/ShortcutsHelp'
 import { useKeyboardShortcuts } from '../../hooks/use-keyboard-shortcuts'
 import { useWorkspaceStore } from '../../stores/workspace-store'
 import { useSidebarStore } from '../../stores/sidebar-store'
@@ -59,7 +61,9 @@ function AppLayoutInner() {
   const setMode = useWorkspaceStore((s) => s.setMode)
   const toggleSecondary = useWorkspaceStore((s) => s.toggleSecondary)
   const toggleSidebar = useSidebarStore((s) => s.toggle)
-  useKeyboardShortcuts({ setMode, toggleSidebar, toggleSecondary })
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const showShortcutsHelp = useCallback(() => setShortcutsOpen((prev) => !prev), [])
+  useKeyboardShortcuts({ setMode, toggleSidebar, toggleSecondary, showShortcutsHelp })
 
   return (
     <>
@@ -70,6 +74,8 @@ function AppLayoutInner() {
         </div>
       </div>
       <BottomTabBar />
+      <ToastContainer />
+      <ShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </>
   )
 }

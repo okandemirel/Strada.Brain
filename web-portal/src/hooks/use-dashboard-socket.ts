@@ -87,7 +87,17 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'workspace:mode_suggest': {
-      useWorkspaceStore.getState().suggestMode(payload.mode)
+      const ws = useWorkspaceStore.getState()
+      const prevMode = ws.mode
+      ws.suggestMode(payload.mode)
+      // Show toast only if mode actually changed
+      if (!ws.userOverride && payload.mode !== prevMode) {
+        ws.addNotification({
+          title: 'Mode switched',
+          message: payload.reason ?? `Switched to ${payload.mode}`,
+          severity: 'info',
+        })
+      }
       break
     }
 

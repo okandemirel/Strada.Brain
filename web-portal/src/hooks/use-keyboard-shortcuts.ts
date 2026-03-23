@@ -12,9 +12,10 @@ interface ShortcutHandlers {
   setMode: (mode: WorkspaceMode) => void
   toggleSidebar: () => void
   toggleSecondary: () => void
+  showShortcutsHelp: () => void
 }
 
-export function useKeyboardShortcuts({ setMode, toggleSidebar, toggleSecondary }: ShortcutHandlers) {
+export function useKeyboardShortcuts({ setMode, toggleSidebar, toggleSecondary, showShortcutsHelp }: ShortcutHandlers) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
@@ -41,10 +42,17 @@ export function useKeyboardShortcuts({ setMode, toggleSidebar, toggleSecondary }
       if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
         e.preventDefault()
         toggleSecondary()
+        return
+      }
+
+      // Cmd/Ctrl+? for keyboard shortcuts help
+      if ((e.metaKey || e.ctrlKey) && e.key === '?') {
+        e.preventDefault()
+        showShortcutsHelp()
       }
     }
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [setMode, toggleSidebar, toggleSecondary])
+  }, [setMode, toggleSidebar, toggleSecondary, showShortcutsHelp])
 }

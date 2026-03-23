@@ -16,6 +16,7 @@ export default function Sidebar() {
   const { collapsed, toggle } = useSidebarStore()
   const currentMode = useWorkspaceStore((s) => s.mode)
   const setMode = useWorkspaceStore((s) => s.setMode)
+  const notificationCount = useWorkspaceStore((s) => s.notifications.length)
 
 
   useEffect(() => {
@@ -102,15 +103,18 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="p-2 border-t border-border flex flex-col gap-0.5 shrink-0">
-        {/* Notifications placeholder */}
+        {/* Notifications */}
         <button
-          disabled
           aria-label="Notifications"
-          className={`relative flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium whitespace-nowrap overflow-hidden select-none opacity-60 cursor-not-allowed bg-transparent border-none font-[inherit] text-left w-full ${collapsed ? 'justify-center px-2' : ''}`}
+          className={`relative flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium whitespace-nowrap overflow-hidden select-none transition-all duration-150 cursor-pointer bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center px-2' : ''}`}
         >
           <span className="w-[22px] text-center text-base shrink-0 leading-none relative">
             <Bell size={16} />
-            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-accent" />
+            {notificationCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-accent text-[10px] font-bold text-white flex items-center justify-center leading-none">
+                {notificationCount > 9 ? '9+' : notificationCount}
+              </span>
+            )}
           </span>
           {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">Notifications</span>}
         </button>

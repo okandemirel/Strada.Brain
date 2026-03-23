@@ -197,6 +197,55 @@ describe('isWorkspaceMessage — code prefix', () => {
   })
 })
 
+describe('dispatchWorkspaceMessage — mode_suggest notifications', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+  })
+
+  it('mode_suggest adds "Mode switched" notification when mode changes', () => {
+    dispatchWorkspaceMessage({
+      type: 'workspace:mode_suggest',
+      mode: 'monitor',
+    })
+
+    const state = useWorkspaceStore.getState()
+    expect(state.mode).toBe('monitor')
+    expect(state.notifications).toHaveLength(1)
+    expect(state.notifications[0].title).toBe('Mode switched')
+    expect(state.notifications[0].message).toContain('monitor')
+    expect(state.notifications[0].severity).toBe('info')
+  })
+
+  it('mode_suggest does NOT add notification when userOverride is true', () => {
+    useWorkspaceStore.getState().setMode('canvas')
+
+    dispatchWorkspaceMessage({
+      type: 'workspace:mode_suggest',
+      mode: 'monitor',
+    })
+
+    const state = useWorkspaceStore.getState()
+    // Mode should NOT change because userOverride is true
+    expect(state.mode).toBe('canvas')
+    expect(state.notifications).toHaveLength(0)
+  })
+
+  it('mode_suggest does NOT add notification when mode is already the same', () => {
+    // suggestMode to monitor first
+    useWorkspaceStore.getState().suggestMode('monitor')
+    expect(useWorkspaceStore.getState().mode).toBe('monitor')
+
+    // Now suggest the same mode again
+    dispatchWorkspaceMessage({
+      type: 'workspace:mode_suggest',
+      mode: 'monitor',
+    })
+
+    // No notification should be added because mode didn't change
+    expect(useWorkspaceStore.getState().notifications).toHaveLength(0)
+  })
+})
+
 describe('dispatchWorkspaceMessage — code:* events', () => {
   beforeEach(() => {
     useCodeStore.getState().reset()

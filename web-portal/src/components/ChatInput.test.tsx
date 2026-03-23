@@ -98,4 +98,21 @@ describe('ChatInput', () => {
     expect(textarea).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
   })
+
+  it('resets workspace override after sending message', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace-store')
+    const resetOverrideSpy = vi.spyOn(useWorkspaceStore.getState(), 'resetOverride')
+
+    const user = userEvent.setup()
+    render(<ChatInput onSend={onSend} disabled={false} />)
+
+    const textarea = screen.getByPlaceholderText(/Send a message/)
+    await user.type(textarea, 'Hello world')
+    await user.keyboard('{Enter}')
+
+    expect(onSend).toHaveBeenCalled()
+    expect(resetOverrideSpy).toHaveBeenCalled()
+
+    resetOverrideSpy.mockRestore()
+  })
 })

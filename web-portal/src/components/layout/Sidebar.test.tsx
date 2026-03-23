@@ -51,11 +51,11 @@ vi.mock('../../stores/workspace-store', async () => {
   return {
     ...actual,
     useWorkspaceStore: Object.assign(
-      (selector?: (s: { mode: string; setMode: (m: string) => void }) => unknown) => {
-        const state = { mode: mockMode, setMode: mockSetMode }
+      (selector?: (s: { mode: string; setMode: (m: string) => void; notifications: unknown[] }) => unknown) => {
+        const state = { mode: mockMode, setMode: mockSetMode, notifications: [] }
         return selector ? selector(state) : state
       },
-      { getState: () => ({ mode: mockMode, setMode: mockSetMode }) },
+      { getState: () => ({ mode: mockMode, setMode: mockSetMode, notifications: [] }) },
     ),
   }
 })
