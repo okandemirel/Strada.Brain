@@ -258,12 +258,14 @@ export function useWebSocket(): UseWebSocketReturn {
         case 'markdown': {
           const store = useSessionStore.getState()
           store.setTyping(false)
+          const instinctIds = Array.isArray(data.instinctIds) ? data.instinctIds as string[] : undefined
           store.addMessage({
             id: data.messageId || generateId(),
             sender: 'assistant',
             text: data.text,
             isMarkdown: data.type === 'markdown',
             timestamp: Date.now(),
+            ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
           })
           break
         }

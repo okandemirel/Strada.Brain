@@ -128,6 +128,8 @@ export interface ChatMessage {
   streamId?: string
   timestamp: number
   attachments?: Attachment[]
+  instinctIds?: string[]
+  feedback?: 'thumbs_up' | 'thumbs_down'
 }
 
 /** Connection status */

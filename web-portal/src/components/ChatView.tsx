@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useWS } from '../hooks/useWS'
 import ChatMessage from './ChatMessage'
 import ChatInput from './ChatInput'
@@ -7,9 +7,11 @@ import TypingIndicator from './TypingIndicator'
 import EmptyState from './EmptyState'
 import PrimaryWorkerSelector from './PrimaryWorkerSelector'
 import { BlurFade } from './ui/blur-fade'
+import { useSessionStore } from '../stores/session-store'
 
 export default function ChatView() {
-  const { messages, status, confirmation, isTyping, sendMessage, sendConfirmation } = useWS()
+  const { messages, status, confirmation, isTyping, sendMessage, sendConfirmation, sendRawJSON } = useWS()
+  const updateMessage = useSessionStore((s) => s.updateMessage)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const userScrolledUpRef = useRef(false)
@@ -35,6 +37,16 @@ export default function ChatView() {
     }
   }, [messages, isTyping])
 
+  const handleFeedback = useCallback((messageId: string, feedbackType: 'thumbs_up' | 'thumbs_down') => {
+    const msg = useSessionStore.getState().messages.find((m) => m.id === messageId)
+    if (!msg?.instinctIds || msg.instinctIds.length === 0) return
+    const newFeedback = msg.feedback === feedbackType ? undefined : feedbackType
+    updateMessage(messageId, { feedback: newFeedback })
+    if (newFeedback) {
+      sendRawJSON({ type: 'feedback', feedbackType: newFeedback, instinctIds: msg.instinctIds })
+    }
+  }, [sendRawJSON, updateMessage])
+
   const isDisconnected = status !== 'connected'
 
   return (
@@ -50,7 +62,7 @@ export default function ChatView() {
         ) : (
           <div className="w-full max-w-prose mx-auto flex flex-col gap-3">
             {messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} />
+              <ChatMessage key={msg.id} message={msg} onFeedback={handleFeedback} />
             ))}
             {isTyping && <TypingIndicator />}
           </div>

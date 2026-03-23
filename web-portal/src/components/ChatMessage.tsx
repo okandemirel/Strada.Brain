@@ -13,6 +13,7 @@ const REHYPE_PLUGINS = [rehypeHighlight]
 
 interface ChatMessageProps {
   message: ChatMessageType
+  onFeedback?: (messageId: string, type: 'thumbs_up' | 'thumbs_down') => void
 }
 
 const SAFE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
@@ -98,9 +99,51 @@ function makeComponents(isUser: boolean): Components {
 const USER_COMPONENTS = makeComponents(true)
 const AI_COMPONENTS = makeComponents(false)
 
-function ChatMessageComponent({ message }: ChatMessageProps) {
+function FeedbackToolbar({
+  messageId,
+  feedback,
+  onFeedback,
+}: {
+  messageId: string
+  feedback?: 'thumbs_up' | 'thumbs_down'
+  onFeedback: (messageId: string, type: 'thumbs_up' | 'thumbs_down') => void
+}) {
+  return (
+    <div className="flex items-center gap-0.5">
+      <button
+        type="button"
+        onClick={() => onFeedback(messageId, 'thumbs_up')}
+        aria-label="Good response"
+        className={cn(
+          'p-1 rounded-md text-xs transition-all duration-150',
+          feedback === 'thumbs_up'
+            ? 'text-success bg-success/10'
+            : 'text-text-tertiary hover:text-text-secondary hover:bg-white/5',
+        )}
+      >
+        👍
+      </button>
+      <button
+        type="button"
+        onClick={() => onFeedback(messageId, 'thumbs_down')}
+        aria-label="Bad response"
+        className={cn(
+          'p-1 rounded-md text-xs transition-all duration-150',
+          feedback === 'thumbs_down'
+            ? 'text-error bg-error/10'
+            : 'text-text-tertiary hover:text-text-secondary hover:bg-white/5',
+        )}
+      >
+        👎
+      </button>
+    </div>
+  )
+}
+
+function ChatMessageComponent({ message, onFeedback }: ChatMessageProps) {
   const isUser = message.sender === 'user'
   const showVoiceOutput = !isUser && !message.isStreaming && hasTextContent(message.text)
+  const showFeedback = !isUser && !message.isStreaming && onFeedback && message.instinctIds && message.instinctIds.length > 0
 
   return (
     <div
@@ -128,9 +171,16 @@ function ChatMessageComponent({ message }: ChatMessageProps) {
       {message.isStreaming && (
         <span className="inline-block w-0.5 h-[1em] bg-accent ml-0.5 align-text-bottom animate-[blink_1s_step-end_infinite] rounded-[1px]" />
       )}
-      {showVoiceOutput && (
+      {(showVoiceOutput || showFeedback) && (
         <div className="flex items-center gap-1.5 mt-2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 focus-within:opacity-100">
-          <VoiceOutput text={message.text} />
+          {showVoiceOutput && <VoiceOutput text={message.text} />}
+          {showFeedback && (
+            <FeedbackToolbar
+              messageId={message.id}
+              feedback={message.feedback}
+              onFeedback={onFeedback}
+            />
+          )}
         </div>
       )}
       <CopyButton
