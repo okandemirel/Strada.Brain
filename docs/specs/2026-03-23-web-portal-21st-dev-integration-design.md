@@ -28,11 +28,37 @@ Integrate shadcn/ui as the component foundation for the Strada.Brain web portal,
 ## Phase 0: Shadcn/UI Foundation + Theme Evolution
 
 ### Setup
-- Create `components.json` (Tailwind v4 config, custom paths)
+- Create `components.json` (Tailwind v4 config, custom paths — see concrete example below)
 - Create `src/lib/utils.ts` with `cn()` helper (clsx + tailwind-merge)
+- Add `@/` path alias to `tsconfig.json` (`"paths": { "@/*": ["./src/*"] }`) and `vite.config.ts` (`resolve.alias: { "@": path.resolve(__dirname, "src") }`)
 - Map CSS variables to shadcn/ui format
+- Reconcile dark mode: project uses `data-theme="dark"` attribute (not `.dark` class). Shadcn components.json must set `darkMode: { attribute: "data-theme" }` so generated components respect the existing toggle.
 
-### CSS Variable Mapping
+### components.json (Draft)
+```json
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "default",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/styles/globals.css",
+    "baseColor": "neutral",
+    "cssVariables": true
+  },
+  "aliases": {
+    "components": "@/components",
+    "utils": "@/lib/utils",
+    "ui": "@/components/ui",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
+  },
+  "iconLibrary": "lucide"
+}
+```
+
+### CSS Variable Mapping (Dark Mode)
 
 ```
 shadcn variable     → existing variable
@@ -46,6 +72,12 @@ shadcn variable     → existing variable
 --card              → glassmorphism variant (rgba(255,255,255,0.03))
 --destructive       → --color-error (#f87171)
 ```
+
+### CSS Variable Mapping (Light Mode)
+
+The project already has a full `[data-theme="light"]` override block in `globals.css` (lines 122–151). Shadcn CSS variables must be emitted under `[data-theme="light"]` (not the default `.dark` class). The `@variant light` directive already handles this: `@variant light (&:where([data-theme="light"], [data-theme="light"] *))`.
+
+**Strategy:** Emit shadcn variables inside both `[data-theme="dark"]` and `[data-theme="light"]` blocks within `globals.css`, mapping to the existing light theme values. No change to the `useTheme` hook or `data-theme` toggle mechanism.
 
 ### Theme Evolution — New Visual Properties
 
@@ -74,6 +106,7 @@ shadcn variable     → existing variable
 | `ui/dialog.tsx` | shadcn Dialog | Glassmorphism overlay, backdrop-blur |
 | `ui/dropdown-menu.tsx` | shadcn DropdownMenu | Smooth animation, item hover glow |
 | `ui/tooltip.tsx` | shadcn Tooltip | Subtle border glow |
+| `ui/tabs.tsx` | shadcn Tabs | Used in CodePanel, MonitorPanel; glassmorphism active indicator |
 
 ### New Base Components
 - **Sheet** — Slide-in panel for admin/notifications (mobile: full-screen)
@@ -102,9 +135,22 @@ shadcn variable     → existing variable
 - "Clear all" button
 - Grouping: today / older
 
+### Lifecycle Ownership
+
+Two distinct layers with clear ownership:
+
+| Layer | Owner | Responsibility |
+|-------|-------|---------------|
+| **Transient toasts** | Sonner | Fire-and-forget display, auto-dismiss timers, stacking. Sonner manages its own lifecycle — no coupling to store. |
+| **Persistent history** | `workspace-store.notifications` | All notifications stored with timestamps. `dismissNotification` becomes "mark as read/archive" (not "remove from toast"). Notification Center (Sheet) reads from this store. |
+
+### Migration from existing Toast.tsx
+
+The existing `ToastContainer` in `AppLayout.tsx` and `Toast.tsx` component will be replaced by Sonner's `<Toaster />` component. This is a hard cutover during Phase 2 — both files are updated in the same commit. The `workspace-store` notification actions (`addNotification`, `dismissNotification`) remain unchanged but their semantics shift from "show/hide toast" to "record/archive notification."
+
 ### WebSocket Integration
-- `workspace:notification` → sonner toast + notification store
-- `workspace:mode_suggest` → toast with "Switched to Monitor" + undo action
+- `workspace:notification` → sonner toast (transient) + notification store (persistent)
+- `workspace:mode_suggest` → sonner toast with "Switched to Monitor" + undo action + store entry
 
 ---
 
@@ -122,6 +168,8 @@ shadcn variable     → existing variable
 - Chevron toggle with smooth height animation
 - Admin pages directly visible in sidebar
 - Active admin page highlighted in cyan
+
+**Test breakage note:** `AdminDropdown.test.tsx` (4 tests) asserts on DropdownMenu behavior (`role="menuitem"`, open/close). `Sidebar.test.tsx` mocks `AdminDropdown` by path. Both test files must be rewritten when the collapsible section replaces the dropdown. The new component (e.g., `AdminNav.tsx`) needs corresponding tests for collapsible behavior, active route highlighting, and keyboard navigation.
 
 ### MiniChat Enhancement
 - Glassmorphism container
@@ -169,10 +217,10 @@ shadcn variable     → existing variable
 - Middle: Provider info, RAG status, Memory stats → info cards
 - Bottom: Tool call stats, Security stats → table/bar chart
 
-### Mini Chart Component
-- Sparkline: last 24h token usage trend
-- CSS-only bar chart: tool call distribution
-- Animated: bars grow upward on page load
+### Mini Chart Component (SVG-only, no new dependency)
+- Sparkline: last 24h token usage trend — inline SVG `<polyline>` rendered from data points
+- CSS-only bar chart: tool call distribution — `div` bars with CSS height transitions
+- Animated: bars grow upward on page load via CSS `@keyframes`
 
 ---
 
@@ -269,9 +317,16 @@ Phase 0 (foundation)
 Phase 0 → 1 are sequential (foundation must exist first).
 Phases 2–8 are independent and can be parallelized.
 
+## New Dependencies — Bundle Impact
+
+- `class-variance-authority`, `clsx`, `tailwind-merge` are **production** dependencies (not devDependencies)
+- Add to a dedicated `ui-vendor` chunk in `vite.config.ts` `build.rolldownOptions.output` to prevent landing in the main `vendor` catch-all
+
 ## Testing Strategy
 
-- All existing 447 web-portal tests must continue passing
+- All existing web-portal tests must continue passing (currently 447 tests across 58 files)
 - New shadcn components: unit tests for custom variants/behaviors
+- Phase 3 specifically: rewrite `AdminDropdown.test.tsx` and update `Sidebar.test.tsx` mock
+- Phase 2 specifically: update `AppLayout.tsx` import from `Toast` to Sonner `Toaster` in same commit
 - Visual regression: manual verification per phase
 - Integration: existing workspace-integration tests cover mode switching and WS dispatch
