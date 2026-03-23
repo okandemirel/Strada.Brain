@@ -18,12 +18,12 @@ vi.mock('../../stores/monitor-store', () => ({
 
 // Mock @dnd-kit (no pointer events in jsdom)
 vi.mock('@dnd-kit/core', () => ({
-  DndContext: ({ children }: any) => <div data-testid="dnd-context">{children}</div>,
+  DndContext: ({ children }: { children?: React.ReactNode }) => <div data-testid="dnd-context">{children}</div>,
   closestCenter: vi.fn(),
 }))
 
 vi.mock('@dnd-kit/sortable', () => ({
-  SortableContext: ({ children }: any) => <div>{children}</div>,
+  SortableContext: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   verticalListSortingStrategy: 'vertical',
   useSortable: ({ id }: { id: string }) => ({
     attributes: { 'data-sortable-id': id },

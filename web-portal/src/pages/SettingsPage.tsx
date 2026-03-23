@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useWS } from '../hooks/useWS'
 import { useAutonomousStatus, useProviders, useRagStatus, useDaemon, useAgentActivity, useBootReport } from '../hooks/use-api'
@@ -238,7 +238,7 @@ export default function SettingsPage() {
   const embeddingStatus: EmbeddingStatus | null = (ragStatusQuery.data?.status as EmbeddingStatus | undefined) ?? null
   const modelLoading = providersQuery.isLoading && Boolean(identityQuery)
 
-  const daemonStatus: DaemonStatus | null = daemonQuery.data
+  const daemonStatus: DaemonStatus | null = useMemo(() => daemonQuery.data
     ? {
         running: daemonQuery.data.running,
         configured: daemonQuery.data.configured,
@@ -248,7 +248,7 @@ export default function SettingsPage() {
         approvalQueue: (daemonQuery.data.approvalQueue ?? []) as DaemonStatus['approvalQueue'],
         startupNotices: daemonQuery.data.startupNotices,
       }
-    : null
+    : null, [daemonQuery.data])
   const daemonLoading = daemonQuery.isLoading
 
   const bootReport: BootReport | null = (bootReportQuery.data?.bootReport as BootReport | null) ?? null

@@ -12,8 +12,9 @@ import type {
   ScopeType,
   TrustLevel,
   InstinctStats,
+  InstinctId,
 } from "../types.js";
-import type { NormalizedScore } from "../../types/index.js";
+import type { NormalizedScore, TimestampMs } from "../../types/index.js";
 
 // =============================================================================
 // SEED INSTINCT TYPE
@@ -109,17 +110,17 @@ export async function seedStradaConventions(storage: LearningStorage): Promise<v
     const now = Date.now();
 
     storage.createInstinct({
-      id: id as any,
+      id: id as InstinctId,
       name: seed.pattern.replace(/_/g, " "),
       type: "seed",
       status: "active",
-      confidence: seed.confidence as any,
+      confidence: seed.confidence as NormalizedScore,
       triggerPattern: seed.pattern,
       action: seed.action.description,
       contextConditions: [],
       stats: EMPTY_STATS,
-      createdAt: now as any,
-      updatedAt: now as any,
+      createdAt: now as TimestampMs,
+      updatedAt: now as TimestampMs,
       sourceTrajectoryIds: [],
       tags: ["seed", "strada-core"],
       trustLevel: seed.trustLevel,

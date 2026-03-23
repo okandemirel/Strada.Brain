@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react'
 
 // Mock @xyflow/react Handle component (requires canvas internals)
 vi.mock('@xyflow/react', () => ({
-  Handle: ({ type, position }: any) => (
+  Handle: ({ type, position }: { type: string; position: string }) => (
     <div data-testid={`handle-${type}-${position}`} />
   ),
   Position: {
@@ -14,10 +14,11 @@ vi.mock('@xyflow/react', () => ({
   },
 }))
 
+import type { NodeProps, Node } from '@xyflow/react'
 import { TaskNode, ReviewNode, GateNode } from './dag-nodes'
 
 // Helper to create NodeProps-like objects
-function makeNodeProps<T extends Record<string, unknown>>(data: T) {
+function makeNodeProps<T extends Record<string, unknown>>(data: T): NodeProps<Node<T>> {
   return {
     id: 'test-node',
     data,
@@ -34,7 +35,7 @@ function makeNodeProps<T extends Record<string, unknown>>(data: T) {
     targetPosition: undefined,
     width: 200,
     height: 80,
-  } as any
+  } as NodeProps<Node<T>>
 }
 
 describe('TaskNode', () => {

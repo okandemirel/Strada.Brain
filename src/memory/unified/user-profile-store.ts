@@ -435,7 +435,7 @@ export class UserProfileStore {
   }> {
     return this.db.prepare(
       "SELECT id, channel_type as channelType, channel_user_id as channelUserId, display_name as displayName, confirmed, created_at as createdAt FROM identity_links WHERE unified_user_id = ? ORDER BY created_at",
-    ).all(unifiedUserId) as any[];
+    ).all(unifiedUserId) as Array<{ id: string; channelType: string; channelUserId: string; displayName?: string; confirmed: number; createdAt: number }>;
   }
 
   /**

@@ -1,4 +1,4 @@
-import { DndContext, closestCenter, type DragEndEvent } from '@dnd-kit/core'
+import { DndContext, closestCenter } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMonitorStore, type MonitorTask } from '../../stores/monitor-store'
@@ -66,7 +66,7 @@ function KanbanColumn({ id, label, tasks }: KanbanColumnProps) {
       <DndContext
         id={id}
         collisionDetection={closestCenter}
-        onDragEnd={(_event: DragEndEvent) => {
+        onDragEnd={() => {
           // Column-local reorder is visual-only; no store mutation needed
         }}
       >

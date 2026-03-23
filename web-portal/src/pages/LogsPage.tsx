@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useLogs } from '../hooks/use-api'
 
 interface LogEntry {
@@ -45,9 +45,9 @@ export default function LogsPage() {
   const containerRef = useRef<HTMLDivElement>(null)
 
   const rawData = logsQuery.data
-  const logs: LogEntry[] = rawData
+  const logs: LogEntry[] = useMemo(() => rawData
     ? (Array.isArray(rawData) ? rawData : (rawData as { logs?: LogEntry[] }).logs ?? [])
-    : []
+    : [], [rawData])
 
   useEffect(() => {
     if (autoScroll && containerRef.current) {
