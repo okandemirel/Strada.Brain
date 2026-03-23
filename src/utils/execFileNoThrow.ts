@@ -29,7 +29,9 @@ export function execFileNoThrow(
         return;
       }
       resolve({
-        exitCode: error ? (error as { code?: number }).code ?? 1 : 0,
+        // `error.exitCode` holds the numeric process exit code; `.code` is a
+        // string like "ENOENT" for OS-level errors, not the exit code.
+        exitCode: error ? ((error as NodeJS.ErrnoException & { exitCode?: number }).exitCode ?? 1) : 0,
         stdout: typeof stdout === "string" ? stdout : "",
         stderr: typeof stderr === "string" ? stderr : "",
       });
