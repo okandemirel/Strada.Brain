@@ -21,7 +21,7 @@ export default function MonitorPanel() {
             onClick={() => setViewMode('dag')}
             className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
               viewMode === 'dag'
-                ? 'bg-surface text-accent'
+                ? 'bg-white/5 text-accent'
                 : 'text-text-secondary hover:text-text'
             }`}
           >
@@ -31,7 +31,7 @@ export default function MonitorPanel() {
             onClick={() => setViewMode('kanban')}
             className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
               viewMode === 'kanban'
-                ? 'bg-surface text-accent'
+                ? 'bg-white/5 text-accent'
                 : 'text-text-secondary hover:text-text'
             }`}
           >
@@ -67,7 +67,7 @@ export default function MonitorPanel() {
       </div>
 
       {/* Right: Activity feed + task detail */}
-      <div className="flex flex-col w-64 shrink-0 border-l border-border min-h-0">
+      <div className="flex flex-col w-64 shrink-0 bg-white/3 backdrop-blur border-l border-white/5 min-h-0">
         {/* Task detail */}
         <div className="flex flex-col shrink-0 max-h-48 border-b border-border overflow-y-auto">
           <div className="px-3 py-2 text-xs font-semibold text-text-secondary uppercase tracking-wide shrink-0">

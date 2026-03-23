@@ -1,4 +1,5 @@
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
+import { cn } from '@/lib/utils'
 
 /* ------------------------------------------------------------------ */
 /*  Shared helpers                                                     */
@@ -10,6 +11,14 @@ const STATUS_COLORS: Record<string, string> = {
   completed: 'bg-success',
   failed: 'bg-error',
   skipped: 'bg-text-tertiary opacity-50',
+}
+
+const STATUS_BORDER_COLORS: Record<string, string> = {
+  pending: 'border-l-text-tertiary',
+  executing: 'border-l-accent animate-pulse',
+  completed: 'border-l-success',
+  failed: 'border-l-error',
+  review_stuck: 'border-l-warning',
 }
 
 function StatusDot({ status }: { status: string }) {
@@ -34,7 +43,12 @@ type TaskNodeType = Node<TaskNodeData, 'task'>
 
 export function TaskNode({ data }: NodeProps<TaskNodeType>) {
   return (
-    <div className="rounded-lg border border-border bg-surface px-3 py-2 min-w-[160px] shadow-sm">
+    <div
+      className={cn(
+        'bg-white/3 backdrop-blur border border-white/5 rounded-xl px-3 py-2 min-w-[160px] shadow-sm border-l-[3px]',
+        STATUS_BORDER_COLORS[data.status] || 'border-l-text-tertiary',
+      )}
+    >
       <Handle type="target" position={Position.Top} className="!bg-border" />
       <div className="flex items-center gap-2">
         <StatusDot status={data.status} />

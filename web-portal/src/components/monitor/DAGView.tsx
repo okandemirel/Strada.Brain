@@ -117,8 +117,21 @@ export default function DAGView() {
 
   if (!dag) {
     return (
-      <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
-        No active goal. Start a task to see the DAG.
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-text-tertiary">
+        <svg
+          className="w-10 h-10 animate-pulse text-text-tertiary"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={1}
+        >
+          <circle cx="12" cy="5" r="2" />
+          <circle cx="5" cy="19" r="2" />
+          <circle cx="19" cy="19" r="2" />
+          <line x1="12" y1="7" x2="5" y2="17" strokeLinecap="round" />
+          <line x1="12" y1="7" x2="19" y2="17" strokeLinecap="round" />
+        </svg>
+        <span className="text-sm">No active goal. Start a task to see the DAG.</span>
       </div>
     )
   }

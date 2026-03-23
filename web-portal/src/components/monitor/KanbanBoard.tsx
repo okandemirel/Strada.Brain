@@ -2,6 +2,8 @@ import { DndContext, closestCenter } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMonitorStore, type MonitorTask } from '../../stores/monitor-store'
+import { Badge } from '../ui/badge'
+import { cn } from '@/lib/utils'
 
 const COLUMNS = [
   { id: 'backlog', label: 'Backlog', filter: (t: MonitorTask) => t.status === 'pending' },
@@ -27,7 +29,7 @@ const COLUMNS = [
 ]
 
 function TaskCard({ task }: { task: MonitorTask }) {
-  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
   })
   const style = { transform: CSS.Transform.toString(transform), transition }
@@ -40,7 +42,10 @@ function TaskCard({ task }: { task: MonitorTask }) {
       {...attributes}
       {...listeners}
       onClick={() => setSelectedTask(task.id)}
-      className="rounded-lg border border-border bg-bg p-2 text-xs cursor-pointer hover:border-accent transition-colors"
+      className={cn(
+        'bg-white/3 backdrop-blur border border-white/5 rounded-lg p-2 text-xs cursor-pointer hover:border-accent transition-all',
+        isDragging && 'scale-[1.02] shadow-[0_0_15px_rgba(0,229,255,0.1)]',
+      )}
     >
       <div className="font-medium text-text truncate">{task.title}</div>
       <div className="text-text-tertiary mt-1">{task.status}</div>
@@ -61,7 +66,9 @@ function KanbanColumn({ id, label, tasks }: KanbanColumnProps) {
         <span className="text-xs font-semibold text-text-secondary uppercase tracking-wide">
           {label}
         </span>
-        <span className="text-xs text-text-tertiary">({tasks.length})</span>
+        <Badge variant="secondary" className="px-1.5 py-0 text-[10px] h-4 min-w-0">
+          {tasks.length}
+        </Badge>
       </div>
       <DndContext
         id={id}

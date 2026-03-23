@@ -31,6 +31,7 @@ vi.mock('@dnd-kit/sortable', () => ({
     setNodeRef: vi.fn(),
     transform: null,
     transition: null,
+    isDragging: false,
   }),
 }))
 
@@ -76,9 +77,9 @@ describe('KanbanBoard', () => {
       t3: makeTask({ id: 't3', status: 'executing' }),
     }
     render(<KanbanBoard />)
-    // Backlog should have 2, Working should have 1
-    expect(screen.getByText('(2)')).toBeInTheDocument()
-    expect(screen.getByText('(1)')).toBeInTheDocument()
+    // Backlog should have 2, Working should have 1 (shown in Badge)
+    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.getByText('1')).toBeInTheDocument()
   })
 
   it('places pending tasks in Backlog column', () => {
