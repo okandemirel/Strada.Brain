@@ -48,7 +48,7 @@ const initialState = {
 export const useWorkspaceStore = create<WorkspaceState>()((set) => ({
   ...initialState,
   setMode: (mode) => set((state) => ({ mode, previousMode: state.mode, userOverride: true })),
-  suggestMode: (mode) => set((state) => (state.userOverride ? state : { mode, previousMode: state.mode })),
+  suggestMode: (mode) => set((state) => (state.userOverride || state.mode === mode ? state : { mode, previousMode: state.mode })),
   undoModeSwitch: () => set((state) => (state.previousMode ? { mode: state.previousMode, previousMode: null, userOverride: true } : state)),
   resetOverride: () => set({ userOverride: false, mode: 'chat' }),
   toggleSecondary: () => set((state) => ({ secondaryVisible: !state.secondaryVisible })),

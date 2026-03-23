@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react'
+import { useEffect } from 'react'
 import { X } from 'lucide-react'
 import { useWorkspaceStore, type WorkspaceNotification } from '../../stores/workspace-store'
 
@@ -11,13 +11,10 @@ const SEVERITY_CLASSES: Record<string, string> = {
 const AUTO_DISMISS_MS = 5000
 
 function ToastItem({ notification }: { notification: WorkspaceNotification }) {
-  const dismiss = useWorkspaceStore((s) => s.dismissNotification)
-  const undoModeSwitch = useWorkspaceStore((s) => s.undoModeSwitch)
-
   useEffect(() => {
-    const timer = setTimeout(() => dismiss(notification.id), AUTO_DISMISS_MS)
+    const timer = setTimeout(() => useWorkspaceStore.getState().dismissNotification(notification.id), AUTO_DISMISS_MS)
     return () => clearTimeout(timer)
-  }, [notification.id, dismiss])
+  }, [notification.id])
 
   const isModeSuggest = notification.title === 'Mode switched'
 
@@ -31,8 +28,8 @@ function ToastItem({ notification }: { notification: WorkspaceNotification }) {
         {isModeSuggest && (
           <button
             onClick={() => {
-              undoModeSwitch()
-              dismiss(notification.id)
+              useWorkspaceStore.getState().undoModeSwitch()
+              useWorkspaceStore.getState().dismissNotification(notification.id)
             }}
             className="mt-1 text-accent text-[11px] font-medium hover:underline cursor-pointer bg-transparent border-none p-0"
           >
@@ -41,7 +38,7 @@ function ToastItem({ notification }: { notification: WorkspaceNotification }) {
         )}
       </div>
       <button
-        onClick={() => dismiss(notification.id)}
+        onClick={() => useWorkspaceStore.getState().dismissNotification(notification.id)}
         className="shrink-0 text-text-tertiary hover:text-text cursor-pointer bg-transparent border-none p-0"
         aria-label="Dismiss"
       >
