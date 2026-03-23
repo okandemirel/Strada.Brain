@@ -238,16 +238,10 @@ export function handleWorkspaceRoute(
     // Async directory listing
     void (async () => {
       const realCheck = await verifyRealPath(check.resolved, projectRoot)
-      if (realCheck.status === 'escaped') {
-        jsonResponse(res, 403, { error: 'Path escapes project boundary' })
-        return
-      }
-      if (realCheck.status === 'not_found') {
-        jsonResponse(res, 404, { error: 'Directory not found' })
-        return
-      }
-      if (realCheck.status === 'error') {
-        jsonResponse(res, 500, { error: 'Failed to access path' })
+      if (realCheck.status !== 'ok') {
+        const statusCode = realCheck.status === 'escaped' ? 403 : realCheck.status === 'not_found' ? 404 : 500
+        const msg = realCheck.status === 'escaped' ? 'Path escapes project boundary' : realCheck.status === 'not_found' ? 'Directory not found' : 'Failed to access path'
+        jsonResponse(res, statusCode, { error: msg })
         return
       }
 
@@ -306,16 +300,10 @@ export function handleWorkspaceRoute(
     // Async file read
     void (async () => {
       const realCheck = await verifyRealPath(check.resolved, projectRoot)
-      if (realCheck.status === 'escaped') {
-        jsonResponse(res, 403, { error: 'Path escapes project boundary' })
-        return
-      }
-      if (realCheck.status === 'not_found') {
-        jsonResponse(res, 404, { error: 'File not found' })
-        return
-      }
-      if (realCheck.status === 'error') {
-        jsonResponse(res, 500, { error: 'Failed to access path' })
+      if (realCheck.status !== 'ok') {
+        const statusCode = realCheck.status === 'escaped' ? 403 : realCheck.status === 'not_found' ? 404 : 500
+        const msg = realCheck.status === 'escaped' ? 'Path escapes project boundary' : realCheck.status === 'not_found' ? 'File not found' : 'Failed to access path'
+        jsonResponse(res, statusCode, { error: msg })
         return
       }
 
@@ -357,7 +345,6 @@ export function handleWorkspaceRoute(
   // -- GET /api/workspace/diff/:taskId ------------------------------------
   const diffMatch = url.match(/^\/api\/workspace\/diff\/([^/?]+)(?:\?.*)?$/)
   if (method === 'GET' && diffMatch) {
-    const _taskId = decodeURIComponent(diffMatch[1]!)
     // Diff data is not yet wired to goal storage — return 404 as placeholder
     jsonResponse(res, 404, { error: 'Diff not found' })
     return true

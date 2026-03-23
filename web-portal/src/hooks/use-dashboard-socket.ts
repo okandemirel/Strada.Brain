@@ -1,6 +1,7 @@
 import { useMonitorStore } from '../stores/monitor-store'
 import { useWorkspaceStore, type WorkspaceMode } from '../stores/workspace-store'
 import { useCanvasStore } from '../stores/canvas-store'
+import { useCodeStore } from '../stores/code-store'
 import type { MonitorTask, ActivityEntry, DagState } from '../stores/monitor-store'
 
 // ---- Workspace message type definitions ----
@@ -140,6 +141,62 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
     }
 
+    case 'code:file_open': {
+      const payload = (data as any).payload ?? data
+      const store = useCodeStore.getState()
+      store.openFile({
+        path: payload.path,
+        content: payload.content ?? '',
+        language: payload.language ?? 'plaintext',
+      })
+      store.markTouched(payload.path, 'new')
+      break
+    }
+
+    case 'code:file_update': {
+      const payload = (data as any).payload ?? data
+      const store = useCodeStore.getState()
+      const existing = store.tabs.find((t) => t.path === payload.path)
+      store.openFile({
+        path: payload.path,
+        content: existing?.content ?? '',
+        language: existing?.language ?? 'plaintext',
+        isDiff: true,
+        diffContent: payload.diff,
+      })
+      store.markTouched(payload.path, 'modified')
+      break
+    }
+
+    case 'code:terminal_output': {
+      const payload = (data as any).payload ?? data
+      const prefix = payload.command ? `$ ${payload.command}\n` : ''
+      useCodeStore.getState().appendTerminal(prefix + (payload.content ?? ''))
+      break
+    }
+
+    case 'code:terminal_clear': {
+      useCodeStore.getState().clearTerminal()
+      break
+    }
+
+    case 'code:annotation_add': {
+      const payload = (data as any).payload ?? data
+      useCodeStore.getState().addAnnotation({
+        path: payload.path,
+        line: payload.line,
+        message: payload.message,
+        severity: payload.severity ?? 'info',
+      })
+      break
+    }
+
+    case 'code:annotation_clear': {
+      const payload = (data as any).payload ?? data
+      useCodeStore.getState().clearAnnotations(payload.path)
+      break
+    }
+
     default:
       // Unknown workspace message type — ignore
       break
@@ -151,5 +208,5 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
  * that should be dispatched via dispatchWorkspaceMessage.
  */
 export function isWorkspaceMessage(type: string): boolean {
-  return type.startsWith('monitor:') || type.startsWith('workspace:') || type.startsWith('canvas:')
+  return type.startsWith('monitor:') || type.startsWith('workspace:') || type.startsWith('canvas:') || type.startsWith('code:')
 }

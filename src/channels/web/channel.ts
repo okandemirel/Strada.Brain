@@ -781,7 +781,11 @@ export class WebChannel
       case "monitor:reject_gate":
       // Canvas commands from frontend (Phase 4)
       case "canvas:user_shapes":
-      case "canvas:save": {
+      case "canvas:save":
+      // Code commands from frontend (Phase 5)
+      case "code:accept_diff":
+      case "code:reject_diff":
+      case "code:request_file": {
         if (this.workspaceBusEmitter) {
           this.workspaceBusEmitter(data.type as string, data);
         }
@@ -940,6 +944,7 @@ export class WebChannel
       pathOnly.startsWith("/api/triggers") ||
       pathOnly.startsWith("/api/personality/profiles/") ||
       pathOnly.startsWith("/api/canvas") ||
+      pathOnly.startsWith("/api/workspace") ||
       pathOnly === "/api/providers/available" ||
       pathOnly === "/api/providers/active" ||
       pathOnly === "/api/user/autonomous" ||

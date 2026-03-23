@@ -11,6 +11,7 @@ import { useSidebarStore } from '../../stores/sidebar-store'
 
 const MonitorPanel = lazy(() => import('../monitor/MonitorPanel'))
 const CanvasPanel = lazy(() => import('../canvas/CanvasPanel'))
+const CodePanel = lazy(() => import('../code/CodePanel'))
 
 function PrimaryContent() {
   const mode = useWorkspaceStore((s) => s.mode)
@@ -33,6 +34,20 @@ function PrimaryContent() {
     return (
       <Suspense fallback={<div>Loading Canvas...</div>}>
         <CanvasPanel />
+      </Suspense>
+    )
+  }
+
+  if (mode === 'code') {
+    return (
+      <Suspense
+        fallback={
+          <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
+            Loading code editor...
+          </div>
+        }
+      >
+        <CodePanel />
       </Suspense>
     )
   }

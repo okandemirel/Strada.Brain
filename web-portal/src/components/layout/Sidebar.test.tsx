@@ -131,24 +131,22 @@ describe('Sidebar', () => {
     expect(mockSetMode).toHaveBeenCalledWith('chat')
   })
 
-  it('disabled mode buttons are disabled', () => {
+  it('all mode buttons are enabled', () => {
     renderSidebar()
     const monitorBtn = screen.getByText('Monitor').closest('button')
     expect(monitorBtn).not.toBeDisabled()
     const canvasBtn = screen.getByText('Canvas').closest('button')
     expect(canvasBtn).not.toBeDisabled()
     const codeBtn = screen.getByText('Code').closest('button')
-    expect(codeBtn).toBeDisabled()
+    expect(codeBtn).not.toBeDisabled()
   })
 
-  it('shows "Coming soon" tooltip for disabled modes', () => {
+  it('clicking Code mode calls setMode', async () => {
+    const user = userEvent.setup()
     renderSidebar()
-    // Tooltip content is rendered inline due to mock
-    const tooltipContents = screen.getAllByTestId('tooltip-content')
-    expect(tooltipContents.length).toBe(1) // Code only
-    tooltipContents.forEach((el) => {
-      expect(el.textContent).toContain('Coming soon')
-    })
+    const codeBtn = screen.getByText('Code').closest('button')!
+    await user.click(codeBtn)
+    expect(mockSetMode).toHaveBeenCalledWith('code')
   })
 
   it('renders AdminDropdown', () => {

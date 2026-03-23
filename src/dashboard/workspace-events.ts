@@ -79,13 +79,35 @@ export interface WorkspaceEventMap {
   'canvas:user_shapes': { snapshot: string }
   'canvas:save': { sessionId: string }
 
-  // === Code events (Phase 5 — stub payloads) ===
-  'code:file_open': unknown
-  'code:file_update': unknown
-  'code:terminal_output': unknown
-  'code:terminal_clear': unknown
-  'code:annotation_add': unknown
-  'code:annotation_clear': unknown
+  // === Code events (Phase 5 — typed payloads) ===
+  'code:file_open': {
+    path: string
+    content: string
+    language: string
+  }
+  'code:file_update': {
+    path: string
+    diff: string
+  }
+  'code:terminal_output': {
+    content: string
+    command?: string
+  }
+  'code:terminal_clear': Record<string, never>
+  'code:annotation_add': {
+    path: string
+    line: number
+    message: string
+    severity: 'error' | 'warning' | 'info'
+  }
+  'code:annotation_clear': {
+    path: string
+  }
+
+  // === Code client-to-server events (Phase 5) ===
+  'code:accept_diff': { path: string; hunkIndex: number }
+  'code:reject_diff': { path: string; hunkIndex: number }
+  'code:request_file': { path: string }
 
   // === Workspace meta events ===
   'workspace:mode_suggest': { mode: string; reason: string }

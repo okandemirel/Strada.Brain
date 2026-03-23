@@ -147,7 +147,6 @@ import {
   replaceSection,
   sanitizeEventInput,
   sanitizeToolResult,
-  shouldSurfaceTerminalFailureFromReflection,
 } from "./orchestrator-runtime-utils.js";
 import {
   buildPhasePromptSection,
@@ -155,8 +154,6 @@ import {
   buildToolResultContentBlocks,
   handlePlanPhaseTransition,
   processReflectionPreamble,
-  applyReflectionContinuation,
-  handleReplanDecision,
   handleVerifierReplan,
 } from "./orchestrator-loop-utils.js";
 import { runConsensusVerification } from "./orchestrator-consensus.js";
@@ -216,6 +213,17 @@ import {
   buildSystemPromptWithContext as buildSystemPromptWithContextHelper,
   type ContextBuilderDeps,
 } from "./orchestrator-context-builder.js";
+import {
+  handleBgReflectionDone,
+  handleBgReflectionReplan,
+  handleBgReflectionContinue,
+  handleInteractiveReflectionDone,
+  handleInteractiveReflectionReplan,
+  handleInteractiveReflectionContinue,
+  type BgReflectionContext,
+  type InteractiveReflectionContext,
+  type ReflectionLoopAction,
+} from "./orchestrator-reflection-handler.js";
 
 const TYPING_INTERVAL_MS = 4000;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
@@ -1927,12 +1935,12 @@ export class Orchestrator {
                   logLabel: "bg",
                 });
 
+                // Pending checks (kept inline — tightly coupled to loop return)
                 if (response.toolCalls.length === 0) {
                   const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
                   if (pendingPlanReviewText) {
                     return bgFinishBlocked(pendingPlanReviewText);
                   }
-
                   const pendingWriteRejectionText =
                     this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(session, response.text);
                   if (pendingWriteRejectionText) {
@@ -1940,489 +1948,59 @@ export class Orchestrator {
                   }
                 }
 
+                const bgReflectionCtx: BgReflectionContext = {
+                  chatId,
+                  identityKey,
+                  prompt,
+                  responseText: response.text,
+                  responseUsage: response.usage,
+                  toolCallCount: response.toolCalls.length,
+                  executionStrategy,
+                  executionJournal,
+                  selfVerification,
+                  stradaConformance,
+                  taskStartedAtMs,
+                  currentToolNames: currentToolDefinitions.map((d) => d.name),
+                  currentAssignment,
+                  interventionDeps,
+                  session,
+                  usageHandler: options.onUsage ?? this.onUsage,
+                  recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
+                  buildPhaseOutcomeTelemetry: buildBgPhaseOutcomeTelemetry,
+                  controlLoopTracker,
+                  workerCollector,
+                  progressTitle,
+                  progressLanguage,
+                  iteration: bgIteration,
+                  workspaceLease: options.workspaceLease,
+                  systemPrompt,
+                  emitProgress,
+                  buildStructuredProgressSignal: (p, t, s, l) => this.buildStructuredProgressSignal(p, t, s, l),
+                  getClarificationContext: () => this.getClarificationContext(),
+                  formatBoundaryVisibleText: (b) => this.sessionManager.formatBoundaryVisibleText(b),
+                  appendVisibleAssistantMessage: (s, t) => this.sessionManager.appendVisibleAssistantMessage(s, t),
+                  synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
+                  persistSessionToMemory: (c, t, f) => this.sessionManager.persistSessionToMemory(c, t, f),
+                  getVisibleTranscript: (s) => this.sessionManager.getVisibleTranscript(s),
+                };
+
+                let bgAction: ReflectionLoopAction;
                 if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-                  const clarificationIntervention =
-                    await resolveDraftClarificationInterventionPipeline({
-                      chatId,
-                      identityKey,
-                      prompt,
-                      draft: response.text ?? "",
-                      state: bgAgentState,
-                      strategy: executionStrategy,
-                      touchedFiles: [...selfVerification.getState().touchedFiles],
-                      usageHandler: options.onUsage ?? this.onUsage,
-                    }, interventionDeps);
-                  if (
-                    clarificationIntervention.kind === "continue" &&
-                    clarificationIntervention.gate
-                  ) {
-                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
-                      chatId,
-                      identityKey,
-                      prompt,
-                      title: progressTitle,
-                      language: progressLanguage,
-                      state: bgAgentState,
-                      strategy: executionStrategy,
-                      tracker: controlLoopTracker,
-                      executionJournal,
-                      kind: "clarification_internal_continue",
-                      reason: "Clarification review kept the task internal.",
-                      gate: clarificationIntervention.gate,
-                      iteration: bgIteration,
-                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-                      selfVerification,
-                      usageHandler: options.onUsage ?? this.onUsage,
-                      onProgress: emitProgress,
-                      session,
-                      workerCollector,
-                      workspaceLease: options.workspaceLease,
-                    }, interventionDeps);
-                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      return bgFinishBlocked(loopRecovery.message);
-                    }
-                    if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                      bgAgentState = handleVerifierReplan({
-                        agentState: bgAgentState,
-                        executionJournal,
-                        responseText: response.text,
-                        reason: loopRecovery.summary ?? "Loop recovery requested a different approach.",
-                        providerName: executionStrategy.reviewer.providerName,
-                        modelId: executionStrategy.reviewer.modelId,
-                      });
-                      if (response.text) {
-                        session.messages.push({ role: "assistant", content: response.text });
-                      }
-                      session.messages.push({ role: "user", content: loopRecovery.gate });
-                      emitProgress(this.buildStructuredProgressSignal(
-                        prompt,
-                        progressTitle,
-                        {
-                          kind: "loop_recovery",
-                          message: "Loop recovery requested a replan after clarification review.",
-                        },
-                        progressLanguage,
-                      ));
-                      continue;
-                    }
-                    bgAgentState = applyReflectionContinuation(bgAgentState, response.text);
-                    if (response.text) {
-                      session.messages.push({ role: "assistant", content: response.text });
-                    }
-                    session.messages.push({
-                      role: "user",
-                      content: loopRecovery.gate ?? clarificationIntervention.gate,
-                    });
-                    emitProgress(this.buildStructuredProgressSignal(
-                      prompt,
-                      progressTitle,
-                      {
-                        kind: "clarification",
-                        message: "Clarification review kept the task internal",
-                      },
-                      progressLanguage,
-                    ));
-                    continue;
-                  }
-                  if (
-                    (clarificationIntervention.kind === "ask_user" ||
-                      clarificationIntervention.kind === "blocked") &&
-                    clarificationIntervention.message
-                  ) {
-                    return bgFinishBlocked(clarificationIntervention.message);
-                  }
+                  bgAction = await handleBgReflectionDone(bgAgentState, bgReflectionCtx);
+                } else if (decision === "REPLAN") {
+                  bgAction = handleBgReflectionReplan(bgAgentState, bgReflectionCtx);
+                } else {
+                  bgAction = handleBgReflectionContinue(bgAgentState, bgReflectionCtx, response.toolCalls.length);
+                }
 
-                  const rawBoundary = decideUserVisibleBoundaryHelper(this.getClarificationContext(), {
-                    chatId,
-                    prompt,
-                    workerDraft: response.text ?? "",
-                    task: executionStrategy.task,
-                    state: bgAgentState,
-                    selfVerification,
-                    taskStartedAtMs,
-                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-                    terminalFailureReported: isTerminalFailureReport(response.text),
-                  });
-                  if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
-                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
-                      chatId,
-                      identityKey,
-                      prompt,
-                      title: progressTitle,
-                      language: progressLanguage,
-                      state: bgAgentState,
-                      strategy: executionStrategy,
-                      tracker: controlLoopTracker,
-                      executionJournal,
-                      kind: "visibility_internal_continue",
-                      reason: "Visibility boundary kept the task internal.",
-                      gate: rawBoundary.gate,
-                      iteration: bgIteration,
-                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-                      selfVerification,
-                      usageHandler: options.onUsage ?? this.onUsage,
-                      onProgress: emitProgress,
-                      session,
-                      workerCollector,
-                      workspaceLease: options.workspaceLease,
-                    }, interventionDeps);
-                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      return bgFinishBlocked(loopRecovery.message);
-                    }
-                    if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                      bgAgentState = handleVerifierReplan({
-                        agentState: bgAgentState,
-                        executionJournal,
-                        responseText: response.text,
-                        reason: loopRecovery.summary ?? "Loop recovery requested a different plan.",
-                        providerName: executionStrategy.reviewer.providerName,
-                        modelId: executionStrategy.reviewer.modelId,
-                      });
-                      if (response.text) {
-                        session.messages.push({ role: "assistant", content: response.text });
-                      }
-                      session.messages.push({ role: "user", content: loopRecovery.gate });
-                      emitProgress(this.buildStructuredProgressSignal(
-                        prompt,
-                        progressTitle,
-                        {
-                          kind: "loop_recovery",
-                          message: "Loop recovery requested a replan after visibility review.",
-                        },
-                        progressLanguage,
-                      ));
-                      continue;
-                    }
-                    bgAgentState = applyReflectionContinuation(bgAgentState, response.text);
-                    if (response.text) {
-                      session.messages.push({ role: "assistant", content: response.text });
-                    }
-                    session.messages.push({ role: "user", content: loopRecovery.gate ?? rawBoundary.gate });
-                    emitProgress(this.buildStructuredProgressSignal(
-                      prompt,
-                      progressTitle,
-                      {
-                        kind: "visibility",
-                        message: "Visibility boundary kept the task internal",
-                      },
-                      progressLanguage,
-                    ));
+                if (bgAction.flow === "continue") {
+                  bgAgentState = bgAction.newState;
+                  if (decision !== "DONE" && decision !== "DONE_WITH_SUGGESTIONS" && response.toolCalls.length > 0) {
+                    // CONTINUE with tool calls — fall through to tool execution below
+                  } else {
                     continue;
                   }
-                  if (
-                    (rawBoundary.kind === "plan_review" ||
-                      rawBoundary.kind === "terminal_failure") &&
-                    rawBoundary.visibleText
-                  ) {
-                    const surfacedText = this.sessionManager.formatBoundaryVisibleText(rawBoundary)!;
-                    this.sessionManager.appendVisibleAssistantMessage(session, surfacedText);
-                    this.recordMetricEnd(metricId, {
-                      agentPhase: AgentPhase.COMPLETE,
-                      iterations: bgAgentState.iteration,
-                      toolCallCount: bgToolCallCount,
-                      hitMaxIterations: false,
-                    });
-                    await this.sessionManager.persistSessionToMemory(
-                      chatId,
-                      this.sessionManager.getVisibleTranscript(session),
-                      /* force */ true,
-                    );
-                    return finish(
-                      surfacedText,
-                      rawBoundary.kind === "plan_review" ? "blocked" : "completed",
-                      surfacedText,
-                    );
-                  }
-
-                  const verifierIntervention = await resolveVerifierInterventionPipeline({
-                    chatId,
-                    identityKey,
-                    prompt,
-                    state: bgAgentState,
-                    draft: response.text,
-                    selfVerification,
-                    stradaConformance,
-                    strategy: executionStrategy,
-                    taskStartedAtMs,
-                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-                    usageHandler: options.onUsage ?? this.onUsage,
-                  }, interventionDeps);
-                  if (workerCollector) {
-                    workerCollector.verifierResult = verifierIntervention.result;
-                  }
-                  executionJournal.recordVerifierResult(
-                    verifierIntervention.result,
-                    executionStrategy.reviewer.providerName,
-                    executionStrategy.reviewer.modelId,
-                  );
-                  if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
-                    this.recordPhaseOutcome({
-                      chatId,
-                      identityKey,
-                      assignment: currentAssignment,
-                      phase: "reflecting",
-                      status: "continued",
-                      task: executionStrategy.task,
-                      reason: verifierIntervention.result.summary,
-                      telemetry: buildBgPhaseOutcomeTelemetry({
-                        state: bgAgentState,
-                        usage: response.usage,
-                        verifierDecision: "continue",
-                        failureReason: verifierIntervention.result.summary,
-                      }),
-                    });
-                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
-                      chatId,
-                      identityKey,
-                      prompt,
-                      title: progressTitle,
-                      language: progressLanguage,
-                      state: bgAgentState,
-                      strategy: executionStrategy,
-                      tracker: controlLoopTracker,
-                      executionJournal,
-                      kind: "verifier_continue",
-                      reason: verifierIntervention.result.summary,
-                      gate: verifierIntervention.gate,
-                      iteration: bgIteration,
-                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-                      selfVerification,
-                      usageHandler: options.onUsage ?? this.onUsage,
-                      onProgress: emitProgress,
-                      session,
-                      workerCollector,
-                      workspaceLease: options.workspaceLease,
-                    }, interventionDeps);
-                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      return bgFinishBlocked(loopRecovery.message);
-                    }
-                    if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                      bgAgentState = handleVerifierReplan({
-                        agentState: bgAgentState,
-                        executionJournal,
-                        responseText: response.text,
-                        reason: loopRecovery.summary ?? verifierIntervention.result.summary,
-                        providerName: executionStrategy.reviewer.providerName,
-                        modelId: executionStrategy.reviewer.modelId,
-                      });
-                      if (response.text) {
-                        session.messages.push({ role: "assistant", content: response.text });
-                      }
-                      session.messages.push({ role: "user", content: loopRecovery.gate });
-                      emitProgress(this.buildStructuredProgressSignal(
-                        prompt,
-                        progressTitle,
-                        {
-                          kind: "loop_recovery",
-                          message: "Loop recovery requested a replan after repeated verifier feedback.",
-                        },
-                        progressLanguage,
-                      ));
-                      continue;
-                    }
-                    bgAgentState = applyReflectionContinuation(bgAgentState, response.text);
-                    if (response.text) {
-                      session.messages.push({ role: "assistant", content: response.text });
-                    }
-                    session.messages.push({
-                      role: "user",
-                      content: loopRecovery.gate ?? verifierIntervention.gate,
-                    });
-                    emitProgress(this.buildStructuredProgressSignal(
-                      prompt,
-                      progressTitle,
-                      {
-                        kind: "verification",
-                        message: "Verification required before completion",
-                      },
-                      progressLanguage,
-                    ));
-                    continue;
-                  }
-                  if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
-                      chatId,
-                      identityKey,
-                      prompt,
-                      title: progressTitle,
-                      language: progressLanguage,
-                      state: bgAgentState,
-                      strategy: executionStrategy,
-                      tracker: controlLoopTracker,
-                      executionJournal,
-                      kind: "verifier_replan",
-                      reason: verifierIntervention.result.summary,
-                      gate: verifierIntervention.gate,
-                      iteration: bgIteration,
-                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-                      selfVerification,
-                      usageHandler: options.onUsage ?? this.onUsage,
-                      onProgress: emitProgress,
-                      session,
-                      workerCollector,
-                      workspaceLease: options.workspaceLease,
-                    }, interventionDeps);
-                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      return bgFinishBlocked(loopRecovery.message);
-                    }
-                    bgAgentState = handleVerifierReplan({
-                      agentState: bgAgentState,
-                      executionJournal,
-                      responseText: response.text,
-                      reason: loopRecovery.summary ?? verifierIntervention.result.summary,
-                      providerName: executionStrategy.reviewer.providerName,
-                      modelId: executionStrategy.reviewer.modelId,
-                      onBeforeTransition: () => this.recordPhaseOutcome({
-                        chatId,
-                        identityKey,
-                        assignment: currentAssignment,
-                        phase: "reflecting",
-                        status: "replanned",
-                        task: executionStrategy.task,
-                        reason: verifierIntervention.result.summary,
-                        telemetry: buildBgPhaseOutcomeTelemetry({
-                          state: bgAgentState,
-                          usage: response.usage,
-                          verifierDecision: "replan",
-                          failureReason: verifierIntervention.result.summary,
-                        }),
-                      }),
-                    });
-                    if (response.text) {
-                      session.messages.push({ role: "assistant", content: response.text });
-                    }
-                    session.messages.push({
-                      role: "user",
-                      content: loopRecovery.gate ?? verifierIntervention.gate,
-                    });
-                    emitProgress(this.buildStructuredProgressSignal(
-                      prompt,
-                      progressTitle,
-                      {
-                        kind: loopRecovery.action === "replan" ? "loop_recovery" : "replanning",
-                        message:
-                          loopRecovery.action === "replan"
-                            ? "Loop recovery requested a replan after repeated verifier feedback."
-                            : "Verifier pipeline requested a replan",
-                      },
-                      progressLanguage,
-                    ));
-                    continue;
-                  }
-
-                  const finalText = await this.synthesizeUserFacingResponse({
-                    chatId,
-                    identityKey,
-                    prompt,
-                    draft: response.text ?? "",
-                    agentState: bgAgentState,
-                    strategy: executionStrategy,
-                    systemPrompt,
-                    usageHandler: options.onUsage ?? this.onUsage,
-                  });
-                  if (workerCollector) {
-                    workerCollector.lastAssignment = executionStrategy.synthesizer;
-                  }
-                  const finalBoundary = decideUserVisibleBoundaryHelper(this.getClarificationContext(), {
-                    chatId,
-                    prompt,
-                    workerDraft: response.text ?? "",
-                    visibleDraft: finalText,
-                    task: executionStrategy.task,
-                    state: bgAgentState,
-                    selfVerification,
-                    taskStartedAtMs,
-                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-                    terminalFailureReported: isTerminalFailureReport(response.text),
-                  });
-                  if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
-                    const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
-                      chatId,
-                      identityKey,
-                      prompt,
-                      title: progressTitle,
-                      language: progressLanguage,
-                      state: bgAgentState,
-                      strategy: executionStrategy,
-                      tracker: controlLoopTracker,
-                      executionJournal,
-                      kind: "visibility_internal_continue",
-                      reason: "Visibility boundary rejected the draft.",
-                      gate: finalBoundary.gate,
-                      iteration: bgIteration,
-                      availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-                      selfVerification,
-                      usageHandler: options.onUsage ?? this.onUsage,
-                      onProgress: emitProgress,
-                      session,
-                      workerCollector,
-                      workspaceLease: options.workspaceLease,
-                    }, interventionDeps);
-                    if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                      return bgFinishBlocked(loopRecovery.message);
-                    }
-                    if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                      bgAgentState = handleVerifierReplan({
-                        agentState: bgAgentState,
-                        executionJournal,
-                        responseText: response.text,
-                        reason: loopRecovery.summary ?? "Loop recovery requested a different plan.",
-                        providerName: executionStrategy.reviewer.providerName,
-                        modelId: executionStrategy.reviewer.modelId,
-                      });
-                      if (response.text) {
-                        session.messages.push({ role: "assistant", content: response.text });
-                      }
-                      session.messages.push({ role: "user", content: loopRecovery.gate });
-                      emitProgress(this.buildStructuredProgressSignal(
-                        prompt,
-                        progressTitle,
-                        {
-                          kind: "loop_recovery",
-                          message: "Loop recovery requested a replan after the draft was rejected.",
-                        },
-                        progressLanguage,
-                      ));
-                      continue;
-                    }
-                    bgAgentState = applyReflectionContinuation(bgAgentState, response.text);
-                    if (response.text) {
-                      session.messages.push({ role: "assistant", content: response.text });
-                    }
-                    session.messages.push({
-                      role: "user",
-                      content: loopRecovery.gate ?? finalBoundary.gate,
-                    });
-                    emitProgress(this.buildStructuredProgressSignal(
-                      prompt,
-                      progressTitle,
-                      {
-                        kind: "visibility",
-                        message: "Visibility boundary rejected the draft",
-                      },
-                      progressLanguage,
-                    ));
-                    continue;
-                  }
-                  const surfacedFinalText = finalBoundary.visibleText ?? finalText;
-                  if (surfacedFinalText) {
-                    this.sessionManager.appendVisibleAssistantMessage(session, surfacedFinalText);
-                  }
-                  this.recordPhaseOutcome({
-                    chatId,
-                    identityKey,
-                    assignment: currentAssignment,
-                    phase: "reflecting",
-                    status: "approved",
-                    task: executionStrategy.task,
-                    reason:
-                      "Reflection accepted completion after the verifier pipeline cleared the task.",
-                    telemetry: buildBgPhaseOutcomeTelemetry({
-                      state: bgAgentState,
-                      usage: response.usage,
-                      verifierDecision: "approve",
-                    }),
-                  });
+                } else if (bgAction.flow === "done") {
                   this.recordMetricEnd(metricId, {
                     agentPhase: AgentPhase.COMPLETE,
                     iterations: bgAgentState.iteration,
@@ -2432,58 +2010,19 @@ export class Orchestrator {
                   await this.sessionManager.persistSessionToMemory(
                     chatId,
                     this.sessionManager.getVisibleTranscript(session),
-                    /* force */ true,
+                    true,
                   );
-                  return finish(surfacedFinalText || "Task completed without output.");
-                }
-
-                if (decision === "REPLAN") {
-                  bgAgentState = handleReplanDecision({
-                    agentState: bgAgentState,
-                    executionJournal,
-                    responseText: response.text,
-                    providerName: currentAssignment.providerName,
-                    modelId: currentAssignment.modelId,
-                  });
-                  if (response.text) {
-                    session.messages.push({ role: "assistant", content: response.text });
+                  return finish(
+                    bgAction.visibleText || "Task completed without output.",
+                    bgAction.status ?? "completed",
+                    bgAction.visibleText || "Task completed without output.",
+                  );
+                } else {
+                  // blocked
+                  if (bgAction.status === "completed") {
+                    return finish(bgAction.visibleText, "completed", bgAction.visibleText);
                   }
-                  this.recordPhaseOutcome({
-                    chatId,
-                    identityKey,
-                    assignment: currentAssignment,
-                    phase: "reflecting",
-                    status: "replanned",
-                    task: executionStrategy.task,
-                    reason: response.text ?? "reflection requested a new plan",
-                    telemetry: buildBgPhaseOutcomeTelemetry({
-                      state: bgAgentState,
-                      usage: response.usage,
-                      failureReason: response.text,
-                    }),
-                  });
-                  session.messages.push({ role: "user", content: "Please create a new plan." });
-                  emitProgress(this.buildStructuredProgressSignal(
-                    prompt,
-                    progressTitle,
-                    {
-                      kind: "replanning",
-                      message: "Replanning: current approach needs adjustment",
-                    },
-                    progressLanguage,
-                  ));
-                  continue;
-                }
-
-                // CONTINUE — plain continuation, reflection text not persisted
-                bgAgentState = applyReflectionContinuation(bgAgentState, response.text, { skipLastReflection: true });
-
-                if (response.toolCalls.length === 0) {
-                  if (response.text) {
-                    session.messages.push({ role: "assistant", content: response.text });
-                  }
-                  session.messages.push({ role: "user", content: "Please continue." });
-                  continue;
+                  return bgFinishBlocked(bgAction.visibleText);
                 }
               }
               // ────────────────────────────────────────────────────────────────
@@ -3786,6 +3325,7 @@ export class Orchestrator {
             modelId: currentAssignment.modelId,
           });
 
+          // Pending checks (kept inline — tightly coupled to loop return)
           if (response.toolCalls.length === 0) {
             const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
             if (pendingPlanReviewText) {
@@ -3798,7 +3338,6 @@ export class Orchestrator {
               });
               return;
             }
-
             const pendingWriteRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
               session,
               response.text,
@@ -3819,188 +3358,129 @@ export class Orchestrator {
             }
           }
 
+          const interactiveReflectionCtx: InteractiveReflectionContext = {
+            chatId,
+            identityKey,
+            prompt: lastUserMessage,
+            responseText: response.text,
+            responseUsage: response.usage,
+            toolCallCount: response.toolCalls.length,
+            executionStrategy,
+            executionJournal,
+            selfVerification,
+            stradaConformance,
+            taskStartedAtMs,
+            currentToolNames: currentToolDefinitions.map((d) => d.name),
+            currentAssignment,
+            interventionDeps,
+            session,
+            usageHandler: this.onUsage,
+            recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
+            buildPhaseOutcomeTelemetry: buildInteractivePhaseOutcomeTelemetry,
+            systemPrompt,
+          };
+
+          let interactiveAction: ReflectionLoopAction;
           if (decision === "DONE" || decision === "DONE_WITH_SUGGESTIONS") {
-            const clarificationIntervention = await resolveDraftClarificationInterventionPipeline({
-              chatId,
-              identityKey,
-              prompt: lastUserMessage,
-              draft: response.text ?? "",
-              state: agentState,
-              strategy: executionStrategy,
-              touchedFiles: [...selfVerification.getState().touchedFiles],
-              usageHandler: this.onUsage,
-            }, interventionDeps);
-            if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
-              agentState = applyReflectionContinuation(agentState, response.text);
+            interactiveAction = await handleInteractiveReflectionDone(agentState, interactiveReflectionCtx);
+          } else if (decision === "REPLAN") {
+            interactiveAction = handleInteractiveReflectionReplan(agentState, interactiveReflectionCtx);
+            if (interactiveAction.flow === "continue") {
+              let replanState = interactiveAction.newState;
+
+              // ─── Goal Decomposition: reactive decomposition when stuck ──────
+              if (this.goalDecomposer && this.activeGoalTrees.has(conversationScope)) {
+                try {
+                  const goalTree = this.activeGoalTrees.get(conversationScope)!;
+                  // Find the currently-executing node
+                  let executingNodeId: GoalNodeId | null = null;
+                  for (const [, node] of goalTree.nodes) {
+                    if (node.status === "executing") {
+                      executingNodeId = node.id;
+                      break;
+                    }
+                  }
+                  if (executingNodeId) {
+                    const executingNode = goalTree.nodes.get(executingNodeId)!;
+                    this.emitGoalEvent(
+                      goalTree.rootId,
+                      executingNodeId,
+                      "failed",
+                      executingNode.depth,
+                    );
+                    const updatedTree = await this.goalDecomposer.decomposeReactive(
+                      goalTree,
+                      executingNodeId,
+                      response.text ?? "",
+                    );
+                    if (updatedTree) {
+                      this.activeGoalTrees.set(conversationScope, updatedTree);
+                      const treeViz = renderGoalTree(updatedTree);
+                      await this.sessionManager.sendVisibleAssistantMarkdown(
+                        chatId,
+                        session,
+                        "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```",
+                      );
+                    } else {
+                      getLogger().info("Reactive decomposition skipped (depth limit reached)", {
+                        chatId,
+                        nodeId: executingNodeId,
+                      });
+                    }
+                  }
+                } catch (reactiveError) {
+                  // Reactive decomposition failure is non-fatal
+                  getLogger().warn("Reactive goal decomposition failed", {
+                    chatId,
+                    error:
+                      reactiveError instanceof Error ? reactiveError.message : String(reactiveError),
+                  });
+                }
+              }
+              // ────────────────────────────────────────────────────────────────
+
+              replanState = transitionPhase(replanState, AgentPhase.REPLANNING);
               if (response.text) {
                 session.messages.push({ role: "assistant", content: response.text });
               }
-              session.messages.push({ role: "user", content: clarificationIntervention.gate });
-              continue;
-            }
-            if (
-              (clarificationIntervention.kind === "ask_user" ||
-                clarificationIntervention.kind === "blocked") &&
-              clarificationIntervention.message
-            ) {
-              await this.sessionManager.sendVisibleAssistantMarkdown(
-                chatId,
-                session,
-                clarificationIntervention.message,
-              );
-              this.recordMetricEnd(metricId, {
-                agentPhase: AgentPhase.COMPLETE,
-                iterations: agentState.iteration,
-                toolCallCount: agentState.stepResults.length,
-                hitMaxIterations: false,
-              });
-              return;
-            }
-
-            const verifierIntervention = await resolveVerifierInterventionPipeline({
-              chatId,
-              identityKey,
-              prompt: lastUserMessage,
-              state: agentState,
-              draft: response.text,
-              selfVerification,
-              stradaConformance,
-              strategy: executionStrategy,
-              taskStartedAtMs,
-              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-              usageHandler: this.onUsage,
-            }, interventionDeps);
-            executionJournal.recordVerifierResult(
-              verifierIntervention.result,
-              executionStrategy.reviewer.providerName,
-              executionStrategy.reviewer.modelId,
-            );
-            if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
               this.recordPhaseOutcome({
                 chatId,
                 identityKey,
                 assignment: currentAssignment,
                 phase: "reflecting",
-                status: "continued",
+                status: "replanned",
                 task: executionStrategy.task,
-                reason: verifierIntervention.result.summary,
+                reason: response.text ?? "reflection requested a new plan",
                 telemetry: buildInteractivePhaseOutcomeTelemetry({
-                  state: agentState,
+                  state: replanState,
                   usage: response.usage,
-                  verifierDecision: "continue",
-                  failureReason: verifierIntervention.result.summary,
+                  failureReason: response.text,
                 }),
               });
-              agentState = applyReflectionContinuation(agentState, response.text);
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              session.messages.push({ role: "user", content: verifierIntervention.gate });
+              session.messages.push({ role: "user", content: "Please create a new plan." });
+              agentState = replanState;
               continue;
             }
-            if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-              agentState = handleVerifierReplan({
-                agentState,
-                executionJournal,
-                responseText: response.text,
-                reason: verifierIntervention.result.summary,
-                providerName: executionStrategy.reviewer.providerName,
-                modelId: executionStrategy.reviewer.modelId,
-                onBeforeTransition: () => this.recordPhaseOutcome({
-                  chatId,
-                  identityKey,
-                  assignment: currentAssignment,
-                  phase: "reflecting",
-                  status: "replanned",
-                  task: executionStrategy.task,
-                  reason: verifierIntervention.result.summary,
-                  telemetry: buildInteractivePhaseOutcomeTelemetry({
-                    state: agentState,
-                    usage: response.usage,
-                    verifierDecision: "replan",
-                    failureReason: verifierIntervention.result.summary,
-                  }),
-                }),
-              });
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              session.messages.push({ role: "user", content: verifierIntervention.gate });
-              continue;
-            }
-
-            const visibilityDecision = await resolveVisibleDraftDecisionPipeline({
-              chatId,
-              identityKey,
-              prompt: lastUserMessage,
-              draft: response.text ?? "",
+          } else {
+            interactiveAction = await handleInteractiveReflectionContinue(
               agentState,
-              strategy: executionStrategy,
-              systemPrompt,
-              selfVerification,
-              taskStartedAtMs,
-              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-              usageHandler: this.onUsage,
-            }, interventionDeps);
-            if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
-              if (response.text) {
-                session.messages.push({ role: "assistant", content: response.text });
-              }
-              session.messages.push({ role: "user", content: visibilityDecision.gate });
-              agentState = applyReflectionContinuation(agentState, response.text);
+              interactiveReflectionCtx,
+              response,
+            );
+          }
+
+          // Handle action results
+          if (interactiveAction.flow === "continue") {
+            agentState = interactiveAction.newState;
+            if (decision !== "DONE" && decision !== "DONE_WITH_SUGGESTIONS" && response.toolCalls.length > 0) {
+              // Fall through to tool execution
+            } else {
               continue;
             }
-            if (
-              (visibilityDecision.kind === "plan_review" ||
-                visibilityDecision.kind === "blocked" ||
-                visibilityDecision.kind === "ask_user") &&
-              visibilityDecision.visibleText
-            ) {
-              await this.sessionManager.sendVisibleAssistantMarkdown(
-                chatId,
-                session,
-                visibilityDecision.visibleText,
-              );
-              this.recordPhaseOutcome({
-                chatId,
-                identityKey,
-                assignment: currentAssignment,
-                phase: "reflecting",
-                status: "blocked",
-                task: executionStrategy.task,
-                reason: visibilityDecision.reason,
-                telemetry: buildInteractivePhaseOutcomeTelemetry({
-                  state: agentState,
-                  usage: response.usage,
-                  verifierDecision: "approve",
-                }),
-              });
-              this.recordMetricEnd(metricId, {
-                agentPhase: AgentPhase.COMPLETE,
-                iterations: agentState.iteration,
-                toolCallCount: agentState.stepResults.length,
-                hitMaxIterations: false,
-              });
-              return;
+          } else if (interactiveAction.flow === "done") {
+            if (interactiveAction.visibleText) {
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, interactiveAction.visibleText);
             }
-            const finalText = visibilityDecision.visibleText?.trim() ?? "";
-            if (finalText) {
-              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, finalText);
-            }
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: "reflecting",
-              status: "approved",
-              task: executionStrategy.task,
-              reason: visibilityDecision.reason,
-              telemetry: buildInteractivePhaseOutcomeTelemetry({
-                state: agentState,
-                usage: response.usage,
-                verifierDecision: "approve",
-              }),
-            });
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
               iterations: agentState.iteration,
@@ -4008,138 +3488,18 @@ export class Orchestrator {
               hitMaxIterations: false,
             });
             return;
-          }
-
-          if (decision === "REPLAN") {
-            agentState = handleReplanDecision({
-              agentState,
-              executionJournal,
-              responseText: response.text,
-              providerName: currentAssignment.providerName,
-              modelId: currentAssignment.modelId,
-              autoTransition: false, // Goal decomposition may happen before transition
+          } else {
+            // blocked
+            if (interactiveAction.visibleText) {
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, interactiveAction.visibleText);
+            }
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
             });
-
-            // ─── Goal Decomposition: reactive decomposition when stuck ──────
-            if (this.goalDecomposer && this.activeGoalTrees.has(conversationScope)) {
-              try {
-                const goalTree = this.activeGoalTrees.get(conversationScope)!;
-                // Find the currently-executing node
-                let executingNodeId: GoalNodeId | null = null;
-                for (const [, node] of goalTree.nodes) {
-                  if (node.status === "executing") {
-                    executingNodeId = node.id;
-                    break;
-                  }
-                }
-                if (executingNodeId) {
-                  const executingNode = goalTree.nodes.get(executingNodeId)!;
-                  this.emitGoalEvent(
-                    goalTree.rootId,
-                    executingNodeId,
-                    "failed",
-                    executingNode.depth,
-                  );
-                  const updatedTree = await this.goalDecomposer.decomposeReactive(
-                    goalTree,
-                    executingNodeId,
-                    response.text ?? "",
-                  );
-                  if (updatedTree) {
-                    this.activeGoalTrees.set(conversationScope, updatedTree);
-                    const treeViz = renderGoalTree(updatedTree);
-                    await this.sessionManager.sendVisibleAssistantMarkdown(
-                      chatId,
-                      session,
-                      "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```",
-                    );
-                  } else {
-                    getLogger().info("Reactive decomposition skipped (depth limit reached)", {
-                      chatId,
-                      nodeId: executingNodeId,
-                    });
-                  }
-                }
-              } catch (reactiveError) {
-                // Reactive decomposition failure is non-fatal
-                getLogger().warn("Reactive goal decomposition failed", {
-                  chatId,
-                  error:
-                    reactiveError instanceof Error ? reactiveError.message : String(reactiveError),
-                });
-              }
-            }
-            // ────────────────────────────────────────────────────────────────
-
-            agentState = transitionPhase(agentState, AgentPhase.REPLANNING);
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: "reflecting",
-              status: "replanned",
-              task: executionStrategy.task,
-              reason: response.text ?? "reflection requested a new plan",
-              telemetry: buildInteractivePhaseOutcomeTelemetry({
-                state: agentState,
-                usage: response.usage,
-                failureReason: response.text,
-              }),
-            });
-            session.messages.push({ role: "user", content: "Please create a new plan." });
-            continue;
-          }
-
-          // CONTINUE — plain continuation, reflection text not persisted
-          agentState = applyReflectionContinuation(agentState, response.text, { skipLastReflection: true });
-
-          if (response.toolCalls.length === 0) {
-            if (shouldSurfaceTerminalFailureFromReflection(response)) {
-              const visibilityDecision = await resolveVisibleDraftDecisionPipeline({
-                chatId,
-                identityKey,
-                prompt: lastUserMessage,
-                draft: response.text ?? "",
-                agentState,
-                strategy: executionStrategy,
-                systemPrompt,
-                selfVerification,
-                taskStartedAtMs,
-                availableToolNames: currentToolDefinitions.map((definition) => definition.name),
-                terminalFailureReported: true,
-                usageHandler: this.onUsage,
-              }, interventionDeps);
-              if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
-                if (response.text) {
-                  session.messages.push({ role: "assistant", content: response.text });
-                }
-                session.messages.push({ role: "user", content: visibilityDecision.gate });
-                continue;
-              }
-              if (visibilityDecision.visibleText) {
-                await this.sessionManager.sendVisibleAssistantMarkdown(
-                  chatId,
-                  session,
-                  visibilityDecision.visibleText,
-                );
-              }
-              this.recordMetricEnd(metricId, {
-                agentPhase: AgentPhase.COMPLETE,
-                iterations: agentState.iteration,
-                toolCallCount: agentState.stepResults.length,
-                hitMaxIterations: false,
-              });
-              return;
-            }
-
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({ role: "user", content: "Please continue." });
-            continue;
+            return;
           }
         }
         // ────────────────────────────────────────────────────────────────

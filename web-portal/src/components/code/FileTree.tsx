@@ -1,0 +1,169 @@
+import { useState, useCallback } from 'react'
+import type { TouchedStatus } from '../../stores/code-store'
+import { ChevronRight, ChevronDown, File, Folder, FolderOpen } from 'lucide-react'
+
+export interface FileEntry {
+  name: string
+  type: 'file' | 'directory' | 'other'
+}
+
+interface TreeNodeState {
+  entries: FileEntry[]
+  loading: boolean
+  expanded: boolean
+  error?: string
+}
+
+interface FileTreeProps {
+  /** Set of file paths the agent has touched (for highlighting) */
+  touchedFiles?: Map<string, TouchedStatus>
+  /** Called when user clicks a file */
+  onFileSelect?: (path: string) => void
+  /** Base API URL (defaults to '') */
+  baseUrl?: string
+}
+
+const HIGHLIGHT_CLASSES: Record<string, string> = {
+  modified: 'text-yellow-400',
+  new: 'text-green-400',
+  deleted: 'text-red-400 line-through',
+}
+
+function TreeNode({
+  path,
+  name,
+  type,
+  depth,
+  touchedFiles,
+  onFileSelect,
+  baseUrl,
+}: {
+  path: string
+  name: string
+  type: 'file' | 'directory'
+  depth: number
+  touchedFiles: Map<string, TouchedStatus>
+  onFileSelect: (path: string) => void
+  baseUrl: string
+}) {
+  const [state, setState] = useState<TreeNodeState>({
+    entries: [],
+    loading: false,
+    expanded: false,
+  })
+
+  const toggle = useCallback(async () => {
+    if (type !== 'directory') return
+
+    if (state.expanded) {
+      setState((s) => ({ ...s, expanded: false }))
+      return
+    }
+
+    // Reuse cached entries if already loaded
+    if (state.entries.length > 0) {
+      setState((s) => ({ ...s, expanded: true }))
+      return
+    }
+
+    setState((s) => ({ ...s, loading: true, error: undefined }))
+    try {
+      const res = await fetch(`${baseUrl}/api/workspace/files?path=${encodeURIComponent(path)}`)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: 'Request failed' }))
+        setState((s) => ({ ...s, loading: false, error: body.error ?? 'Request failed' }))
+        return
+      }
+      const data = await res.json()
+      setState({
+        entries: (data.entries ?? []).filter((e: FileEntry) => e.type !== 'other'),
+        loading: false,
+        expanded: true,
+      })
+    } catch {
+      setState((s) => ({ ...s, loading: false, error: 'Network error' }))
+    }
+  }, [type, path, baseUrl, state.expanded, state.entries.length])
+
+  const highlight = touchedFiles.get(path)
+  const highlightClass = highlight ? HIGHLIGHT_CLASSES[highlight] ?? '' : ''
+
+  if (type === 'file') {
+    return (
+      <button
+        onClick={() => onFileSelect(path)}
+        className={`flex items-center gap-1 w-full text-left px-1 py-0.5 text-xs hover:bg-surface-hover rounded ${highlightClass}`}
+        style={{ paddingLeft: `${depth * 12 + 4}px` }}
+      >
+        <File size={14} className="shrink-0 text-text-tertiary" />
+        <span className="truncate">{name}</span>
+      </button>
+    )
+  }
+
+  return (
+    <div>
+      <button
+        onClick={toggle}
+        className={`flex items-center gap-1 w-full text-left px-1 py-0.5 text-xs hover:bg-surface-hover rounded font-medium ${highlightClass}`}
+        style={{ paddingLeft: `${depth * 12 + 4}px` }}
+      >
+        {state.expanded ? (
+          <ChevronDown size={14} className="shrink-0 text-text-tertiary" />
+        ) : (
+          <ChevronRight size={14} className="shrink-0 text-text-tertiary" />
+        )}
+        {state.expanded ? (
+          <FolderOpen size={14} className="shrink-0 text-accent" />
+        ) : (
+          <Folder size={14} className="shrink-0 text-accent" />
+        )}
+        <span className="truncate">{name}</span>
+        {state.loading && <span className="ml-1 text-text-tertiary animate-pulse">...</span>}
+      </button>
+
+      {state.error && (
+        <div className="text-[10px] text-error pl-6" style={{ paddingLeft: `${(depth + 1) * 12 + 4}px` }}>
+          {state.error}
+        </div>
+      )}
+
+      {state.expanded &&
+        state.entries.map((entry) => (
+          <TreeNode
+            key={entry.name}
+            path={path ? `${path}/${entry.name}` : entry.name}
+            name={entry.name}
+            type={entry.type as 'file' | 'directory'}
+            depth={depth + 1}
+            touchedFiles={touchedFiles}
+            onFileSelect={onFileSelect}
+            baseUrl={baseUrl}
+          />
+        ))}
+    </div>
+  )
+}
+
+const EMPTY_MAP = new Map<string, TouchedStatus>()
+const NOOP = () => {}
+
+export default function FileTree({ touchedFiles, onFileSelect, baseUrl = '' }: FileTreeProps) {
+  const files = touchedFiles ?? EMPTY_MAP
+  const handleSelect = onFileSelect ?? NOOP
+
+  return (
+    <div className="h-full overflow-y-auto bg-bg-secondary p-1">
+      <div className="text-[10px] uppercase tracking-wider text-text-tertiary px-2 py-1 font-semibold">Explorer</div>
+      <TreeNode
+        path="."
+        name="Project Root"
+        type="directory"
+        depth={0}
+        touchedFiles={files}
+        onFileSelect={handleSelect}
+        baseUrl={baseUrl}
+      />
+    </div>
+  )
+}

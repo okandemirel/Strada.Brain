@@ -26,6 +26,12 @@ export function createMonitorBridge(
         'canvas:shapes_remove',
         'canvas:viewport',
         'canvas:arrange',
+        'code:file_open',
+        'code:file_update',
+        'code:terminal_output',
+        'code:terminal_clear',
+        'code:annotation_add',
+        'code:annotation_clear',
         'workspace:mode_suggest',
         'workspace:notification',
       ] as const

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useMonitorStore } from '../stores/monitor-store'
 import { useWorkspaceStore } from '../stores/workspace-store'
-import { dispatchWorkspaceMessage } from './use-dashboard-socket'
+import { useCodeStore } from '../stores/code-store'
+import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-socket'
 
 describe('dispatchWorkspaceMessage', () => {
   beforeEach(() => {
@@ -109,5 +110,125 @@ describe('dispatchWorkspaceMessage', () => {
 
     const state = useMonitorStore.getState()
     expect(state.tasks).toEqual({})
+  })
+})
+
+describe('isWorkspaceMessage — code prefix', () => {
+  it('returns true for code: prefix', () => {
+    expect(isWorkspaceMessage('code:file_open')).toBe(true)
+    expect(isWorkspaceMessage('code:file_update')).toBe(true)
+    expect(isWorkspaceMessage('code:terminal_output')).toBe(true)
+    expect(isWorkspaceMessage('code:terminal_clear')).toBe(true)
+    expect(isWorkspaceMessage('code:annotation_add')).toBe(true)
+    expect(isWorkspaceMessage('code:annotation_clear')).toBe(true)
+  })
+})
+
+describe('dispatchWorkspaceMessage — code:* events', () => {
+  beforeEach(() => {
+    useCodeStore.getState().reset()
+  })
+
+  it('code:file_open dispatches to useCodeStore.openFile and markTouched("new")', () => {
+    dispatchWorkspaceMessage({
+      type: 'code:file_open',
+      path: 'src/index.ts',
+      content: 'console.log("hi")',
+      language: 'typescript',
+    })
+
+    const state = useCodeStore.getState()
+    expect(state.tabs).toHaveLength(1)
+    expect(state.tabs[0].path).toBe('src/index.ts')
+    expect(state.tabs[0].content).toBe('console.log("hi")')
+    expect(state.tabs[0].language).toBe('typescript')
+    expect(state.activeTab).toBe('src/index.ts')
+    expect(state.touchedFiles.get('src/index.ts')).toBe('new')
+  })
+
+  it('code:file_update dispatches to useCodeStore.openFile with isDiff and markTouched("modified")', () => {
+    dispatchWorkspaceMessage({
+      type: 'code:file_update',
+      path: 'src/app.ts',
+      diff: '--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new',
+    })
+
+    const state = useCodeStore.getState()
+    expect(state.tabs).toHaveLength(1)
+    expect(state.tabs[0].path).toBe('src/app.ts')
+    expect(state.tabs[0].isDiff).toBe(true)
+    expect(state.tabs[0].diffContent).toContain('-old')
+    expect(state.activeTab).toBe('src/app.ts')
+    expect(state.touchedFiles.get('src/app.ts')).toBe('modified')
+  })
+
+  it('code:terminal_output appends to terminal with command prefix', () => {
+    dispatchWorkspaceMessage({
+      type: 'code:terminal_output',
+      command: 'npm test',
+      content: 'All tests passed',
+    })
+
+    const output = useCodeStore.getState().terminalOutput
+    expect(output).toHaveLength(1)
+    expect(output[0]).toBe('$ npm test\nAll tests passed')
+  })
+
+  it('code:terminal_clear clears terminal', () => {
+    useCodeStore.getState().appendTerminal('existing output')
+    expect(useCodeStore.getState().terminalOutput).toHaveLength(1)
+
+    dispatchWorkspaceMessage({ type: 'code:terminal_clear' })
+
+    expect(useCodeStore.getState().terminalOutput).toEqual([])
+  })
+
+  it('code:annotation_add adds annotation', () => {
+    dispatchWorkspaceMessage({
+      type: 'code:annotation_add',
+      path: 'src/util.ts',
+      line: 42,
+      message: 'Unused variable',
+      severity: 'warning',
+    })
+
+    const anns = useCodeStore.getState().annotations
+    expect(anns).toHaveLength(1)
+    expect(anns[0].path).toBe('src/util.ts')
+    expect(anns[0].line).toBe(42)
+    expect(anns[0].message).toBe('Unused variable')
+    expect(anns[0].severity).toBe('warning')
+  })
+
+  it('code:annotation_clear clears annotations for path', () => {
+    useCodeStore.getState().addAnnotation({ path: 'a.ts', line: 1, message: 'err', severity: 'error' })
+    useCodeStore.getState().addAnnotation({ path: 'b.ts', line: 2, message: 'warn', severity: 'warning' })
+
+    dispatchWorkspaceMessage({
+      type: 'code:annotation_clear',
+      path: 'a.ts',
+    })
+
+    const anns = useCodeStore.getState().annotations
+    expect(anns).toHaveLength(1)
+    expect(anns[0].path).toBe('b.ts')
+  })
+
+  it('code:file_open handles payload wrapper (data.payload.path)', () => {
+    dispatchWorkspaceMessage({
+      type: 'code:file_open',
+      payload: {
+        path: 'src/wrapped.ts',
+        content: 'wrapped content',
+        language: 'typescript',
+      },
+    })
+
+    const state = useCodeStore.getState()
+    expect(state.tabs).toHaveLength(1)
+    expect(state.tabs[0].path).toBe('src/wrapped.ts')
+    expect(state.tabs[0].content).toBe('wrapped content')
+    expect(state.activeTab).toBe('src/wrapped.ts')
+    expect(state.touchedFiles.get('src/wrapped.ts')).toBe('new')
   })
 })
