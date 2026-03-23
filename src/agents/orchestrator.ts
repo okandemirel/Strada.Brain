@@ -71,7 +71,6 @@ import {
   buildCompletionReviewStageRequest,
   buildCompletionReviewStageSystemPrompt,
   buildCompletionReviewSynthesisRequest,
-  isTerminalFailureReport,
   parseCompletionReviewDecision,
   parseCompletionReviewStageResult,
   planVerifierPipeline,
@@ -153,7 +152,6 @@ import {
   buildToolResultContentBlocks,
   handlePlanPhaseTransition,
   processReflectionPreamble,
-  handleVerifierReplan,
 } from "./orchestrator-loop-utils.js";
 import { runConsensusVerification } from "./orchestrator-consensus.js";
 import {
@@ -168,7 +166,6 @@ import {
   buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
   resolveExecutionTraceSource as resolveExecutionTraceSourceModel,
   toExecutionPhase as toExecutionPhaseModel,
-  transitionToVerifierReplan as transitionToVerifierReplanModel,
 } from "./orchestrator-phase-telemetry.js";
 import {
   createCatalogVersion,
@@ -197,17 +194,12 @@ import {
 } from "./orchestrator-supervisor-routing.js";
 import { SessionManager, type Session } from "./orchestrator-session-manager.js";
 import {
-  decideUserVisibleBoundary as decideUserVisibleBoundaryHelper,
   buildSafeVisibleFallbackFromDraft as buildSafeVisibleFallbackFromDraftHelper,
   resolveAskUserClarificationIntervention as resolveAskUserClarificationInterventionHelper,
   type ClarificationIntervention,
   type ClarificationContext,
 } from "./orchestrator-clarification.js";
 import {
-  handleBackgroundLoopRecovery as handleBackgroundLoopRecoveryPipeline,
-  resolveVerifierIntervention as resolveVerifierInterventionPipeline,
-  resolveDraftClarificationIntervention as resolveDraftClarificationInterventionPipeline,
-  resolveVisibleDraftDecision as resolveVisibleDraftDecisionPipeline,
   reviewClarification as reviewClarificationPipeline,
   type InterventionDeps,
   type WorkerRunCollector,
@@ -227,6 +219,13 @@ import {
   type InteractiveReflectionContext,
   type ReflectionLoopAction,
 } from "./orchestrator-reflection-handler.js";
+import {
+  handleBgEndTurn,
+  handleInteractiveEndTurn,
+  type BgEndTurnContext,
+  type InteractiveEndTurnContext,
+  type EndTurnLoopAction,
+} from "./orchestrator-end-turn-handler.js";
 
 const TYPING_INTERVAL_MS = 4000;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
@@ -2083,7 +2082,7 @@ export class Orchestrator {
                 );
               }
 
-              // Final response — return text
+              // Final response — return text (extracted to orchestrator-end-turn-handler.ts)
               if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
                 const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
                 if (pendingPlanReviewText) {
@@ -2098,451 +2097,69 @@ export class Orchestrator {
                   return bgFinishBlocked(pendingWriteRejectionText);
                 }
 
-                const clarificationIntervention = await resolveDraftClarificationInterventionPipeline({
+                const bgEndTurnCtx: BgEndTurnContext = {
                   chatId,
                   identityKey,
                   prompt,
-                  draft: response.text ?? "",
-                  state: bgAgentState,
-                  strategy: executionStrategy,
-                  touchedFiles: [...selfVerification.getState().touchedFiles],
-                  usageHandler: options.onUsage ?? this.onUsage,
-                }, interventionDeps);
-                if (
-                  clarificationIntervention.kind === "continue" &&
-                  clarificationIntervention.gate
-                ) {
-                  const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
-                    chatId,
-                    identityKey,
-                    prompt,
-                    title: progressTitle,
-                    language: progressLanguage,
-                    state: bgAgentState,
-                    strategy: executionStrategy,
-                    tracker: controlLoopTracker,
-                    executionJournal,
-                    kind: "clarification_internal_continue",
-                    reason: "Clarification review kept the task internal.",
-                    gate: clarificationIntervention.gate,
-                    iteration: bgIteration,
-                    availableToolNames: currentToolNames,
-                    selfVerification,
-                    usageHandler: options.onUsage ?? this.onUsage,
-                    onProgress: emitProgress,
-                    session,
-                    workerCollector,
-                    workspaceLease: options.workspaceLease,
-                  }, interventionDeps);
-                  if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                    return bgFinishBlocked(loopRecovery.message);
-                  }
-                  if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                    bgAgentState = handleVerifierReplan({
-                      agentState: bgAgentState,
-                      executionJournal,
-                      responseText: response.text,
-                      reason: loopRecovery.summary ?? "Loop recovery requested a different approach.",
-                      providerName: executionStrategy.reviewer.providerName,
-                      modelId: executionStrategy.reviewer.modelId,
-                    });
-                    if (response.text) {
-                      session.messages.push({ role: "assistant", content: response.text });
-                    }
-                    session.messages.push({ role: "user", content: loopRecovery.gate });
-                    emitProgress(this.buildStructuredProgressSignal(
-                      prompt,
-                      progressTitle,
-                      {
-                        kind: "loop_recovery",
-                        message: "Loop recovery requested a replan after clarification review.",
-                      },
-                      progressLanguage,
-                    ));
-                    continue;
-                  }
-                  if (response.text) {
-                    session.messages.push({ role: "assistant", content: response.text });
-                  }
-                  session.messages.push({
-                    role: "user",
-                    content: loopRecovery.gate ?? clarificationIntervention.gate,
-                  });
-                  emitProgress(this.buildStructuredProgressSignal(
-                    prompt,
-                    progressTitle,
-                    {
-                      kind: "clarification",
-                      message: "Clarification review kept the task internal",
-                    },
-                    progressLanguage,
-                  ));
-                  continue;
-                }
-                if (
-                  (clarificationIntervention.kind === "ask_user" ||
-                    clarificationIntervention.kind === "blocked") &&
-                  clarificationIntervention.message
-                ) {
-                  this.sessionManager.appendVisibleAssistantMessage(session, clarificationIntervention.message);
-                  this.recordMetricEnd(metricId, {
-                    agentPhase: AgentPhase.COMPLETE,
-                    iterations: bgAgentState.iteration,
-                    toolCallCount: bgToolCallCount,
-                    hitMaxIterations: false,
-                  });
-                  await this.sessionManager.persistSessionToMemory(
-                    chatId,
-                    this.sessionManager.getVisibleTranscript(session),
-                    /* force */ true,
-                  );
-                  return finish(
-                    clarificationIntervention.message,
-                    "blocked",
-                    clarificationIntervention.message,
-                  );
-                }
-
-                const rawBoundary = decideUserVisibleBoundaryHelper(this.getClarificationContext(), {
-                  chatId,
-                  prompt,
-                  workerDraft: response.text ?? "",
-                  task: executionStrategy.task,
-                  state: bgAgentState,
-                  selfVerification,
-                  taskStartedAtMs,
-                  availableToolNames: currentToolNames,
-                  terminalFailureReported: isTerminalFailureReport(response.text),
-                });
-                if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
-                  const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
-                    chatId,
-                    identityKey,
-                    prompt,
-                    title: progressTitle,
-                    language: progressLanguage,
-                    state: bgAgentState,
-                    strategy: executionStrategy,
-                    tracker: controlLoopTracker,
-                    executionJournal,
-                    kind: "visibility_internal_continue",
-                    reason: "Visibility boundary kept the task internal.",
-                    gate: rawBoundary.gate,
-                    iteration: bgIteration,
-                    availableToolNames: currentToolNames,
-                    selfVerification,
-                    usageHandler: options.onUsage ?? this.onUsage,
-                    onProgress: emitProgress,
-                    session,
-                    workerCollector,
-                    workspaceLease: options.workspaceLease,
-                  }, interventionDeps);
-                  if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                    return bgFinishBlocked(loopRecovery.message);
-                  }
-                  if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                    bgAgentState = handleVerifierReplan({
-                      agentState: bgAgentState,
-                      executionJournal,
-                      responseText: response.text,
-                      reason: loopRecovery.summary ?? "Loop recovery requested a different plan.",
-                      providerName: executionStrategy.reviewer.providerName,
-                      modelId: executionStrategy.reviewer.modelId,
-                    });
-                    if (response.text) {
-                      session.messages.push({ role: "assistant", content: response.text });
-                    }
-                    session.messages.push({ role: "user", content: loopRecovery.gate });
-                    emitProgress(this.buildStructuredProgressSignal(
-                      prompt,
-                      progressTitle,
-                      {
-                        kind: "loop_recovery",
-                        message: "Loop recovery requested a replan after visibility review.",
-                      },
-                      progressLanguage,
-                    ));
-                    continue;
-                  }
-                  if (response.text) {
-                    session.messages.push({ role: "assistant", content: response.text });
-                  }
-                  session.messages.push({
-                    role: "user",
-                    content: loopRecovery.gate ?? rawBoundary.gate,
-                  });
-                  emitProgress(this.buildStructuredProgressSignal(
-                    prompt,
-                    progressTitle,
-                    {
-                      kind: "visibility",
-                      message: "Visibility boundary kept the task internal",
-                    },
-                    progressLanguage,
-                  ));
-                  continue;
-                }
-                if (
-                  (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure") &&
-                  rawBoundary.visibleText
-                ) {
-                  const surfacedText = this.sessionManager.formatBoundaryVisibleText(rawBoundary)!;
-                  this.sessionManager.appendVisibleAssistantMessage(session, surfacedText);
-                  this.recordMetricEnd(metricId, {
-                    agentPhase: AgentPhase.COMPLETE,
-                    iterations: bgAgentState.iteration,
-                    toolCallCount: bgToolCallCount,
-                    hitMaxIterations: false,
-                  });
-                  await this.sessionManager.persistSessionToMemory(
-                    chatId,
-                    this.sessionManager.getVisibleTranscript(session),
-                    /* force */ true,
-                  );
-                  return finish(
-                    surfacedText,
-                    rawBoundary.kind === "plan_review" ? "blocked" : "completed",
-                    surfacedText,
-                  );
-                }
-
-                const verifierIntervention = await resolveVerifierInterventionPipeline({
-                  chatId,
-                  identityKey,
-                  prompt,
-                  state: bgAgentState,
-                  draft: response.text,
+                  responseText: response.text,
+                  responseUsage: response.usage,
+                  executionStrategy,
+                  executionJournal,
                   selfVerification,
                   stradaConformance,
-                  strategy: executionStrategy,
                   taskStartedAtMs,
-                  availableToolNames: currentToolNames,
+                  currentToolNames,
+                  currentAssignment,
+                  interventionDeps,
+                  session,
                   usageHandler: options.onUsage ?? this.onUsage,
-                }, interventionDeps);
-                if (workerCollector) {
-                  workerCollector.verifierResult = verifierIntervention.result;
-                }
-                executionJournal.recordVerifierResult(
-                  verifierIntervention.result,
-                  executionStrategy.reviewer.providerName,
-                  executionStrategy.reviewer.modelId,
-                );
-                if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
-                  this.recordPhaseOutcome({
-                    chatId,
-                    identityKey,
-                    assignment: currentAssignment,
-                    phase: toExecutionPhaseModel(bgAgentState.phase),
-                    status: "continued",
-                    task: executionStrategy.task,
-                    reason: verifierIntervention.result.summary,
-                    telemetry: buildBgPhaseOutcomeTelemetry({
-                      state: bgAgentState,
-                      usage: response.usage,
-                      verifierDecision: "continue",
-                      failureReason: verifierIntervention.result.summary,
-                    }),
-                  });
-                  const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
-                    chatId,
-                    identityKey,
-                    prompt,
-                    title: progressTitle,
-                    language: progressLanguage,
-                    state: bgAgentState,
-                    strategy: executionStrategy,
-                    tracker: controlLoopTracker,
-                    executionJournal,
-                    kind: "verifier_continue",
-                    reason: verifierIntervention.result.summary,
-                    gate: verifierIntervention.gate,
-                    iteration: bgIteration,
-                    availableToolNames: currentToolNames,
-                    selfVerification,
-                    usageHandler: options.onUsage ?? this.onUsage,
-                    onProgress: emitProgress,
-                    session,
-                    workerCollector,
-                    workspaceLease: options.workspaceLease,
-                  }, interventionDeps);
-                  if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                    return bgFinishBlocked(loopRecovery.message);
-                  }
-                  if (loopRecovery.action === "replan" && loopRecovery.gate) {
-                    bgAgentState = handleVerifierReplan({
-                      agentState: bgAgentState,
-                      executionJournal,
-                      responseText: response.text,
-                      reason: loopRecovery.summary ?? verifierIntervention.result.summary,
-                      providerName: executionStrategy.reviewer.providerName,
-                      modelId: executionStrategy.reviewer.modelId,
-                    });
-                    if (response.text) {
-                      session.messages.push({ role: "assistant", content: response.text });
-                    }
-                    session.messages.push({ role: "user", content: loopRecovery.gate });
-                    emitProgress(this.buildStructuredProgressSignal(
-                      prompt,
-                      progressTitle,
-                      {
-                        kind: "loop_recovery",
-                        message: "Loop recovery requested a replan after repeated verifier feedback.",
-                      },
-                      progressLanguage,
-                    ));
-                    continue;
-                  }
-                  if (response.text) {
-                    session.messages.push({ role: "assistant", content: response.text });
-                  }
-                  session.messages.push({
-                    role: "user",
-                    content: loopRecovery.gate ?? verifierIntervention.gate,
-                  });
-                  emitProgress(this.buildStructuredProgressSignal(
-                    prompt,
-                    progressTitle,
-                    {
-                      kind: "verification",
-                      message: "Verification required before completion",
-                    },
-                    progressLanguage,
-                  ));
-                  continue;
-                }
-                if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-                  const loopRecovery = await handleBackgroundLoopRecoveryPipeline({
-                    chatId,
-                    identityKey,
-                    prompt,
-                    title: progressTitle,
-                    language: progressLanguage,
-                    state: bgAgentState,
-                    strategy: executionStrategy,
-                    tracker: controlLoopTracker,
-                    executionJournal,
-                    kind: "verifier_replan",
-                    reason: verifierIntervention.result.summary,
-                    gate: verifierIntervention.gate,
-                    iteration: bgIteration,
-                    availableToolNames: currentToolNames,
-                    selfVerification,
-                    usageHandler: options.onUsage ?? this.onUsage,
-                    onProgress: emitProgress,
-                    session,
-                    workerCollector,
-                    workspaceLease: options.workspaceLease,
-                  }, interventionDeps);
-                  if (loopRecovery.action === "blocked" && loopRecovery.message) {
-                    return bgFinishBlocked(loopRecovery.message);
-                  }
-                  this.recordPhaseOutcome({
-                    chatId,
-                    identityKey,
-                    assignment: currentAssignment,
-                    phase: toExecutionPhaseModel(bgAgentState.phase),
-                    status: "replanned",
-                    task: executionStrategy.task,
-                    reason: verifierIntervention.result.summary,
-                    telemetry: buildBgPhaseOutcomeTelemetry({
-                      state: bgAgentState,
-                      usage: response.usage,
-                      verifierDecision: "replan",
-                      failureReason: verifierIntervention.result.summary,
-                    }),
-                  });
-                  bgAgentState = transitionToVerifierReplanModel(bgAgentState, response.text);
-                  if (response.text) {
-                    session.messages.push({ role: "assistant", content: response.text });
-                  }
-                  session.messages.push({
-                    role: "user",
-                    content: loopRecovery.gate ?? verifierIntervention.gate,
-                  });
-                  emitProgress(this.buildStructuredProgressSignal(
-                    prompt,
-                    progressTitle,
-                    {
-                      kind: loopRecovery.action === "replan" ? "loop_recovery" : "replanning",
-                      message:
-                        loopRecovery.action === "replan"
-                          ? "Loop recovery requested a replan after repeated verifier feedback."
-                          : "Verifier pipeline requested a replan",
-                    },
-                    progressLanguage,
-                  ));
-                  continue;
-                }
-
-                const finalText = await this.synthesizeUserFacingResponse({
-                  chatId,
-                  identityKey,
-                  prompt,
-                  draft: response.text ?? "",
-                  agentState: bgAgentState,
-                  strategy: executionStrategy,
+                  recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
+                  buildPhaseOutcomeTelemetry: buildBgPhaseOutcomeTelemetry,
+                  controlLoopTracker,
+                  workerCollector,
+                  progressTitle,
+                  progressLanguage,
+                  iteration: bgIteration,
+                  workspaceLease: options.workspaceLease,
                   systemPrompt,
-                  usageHandler: options.onUsage ?? this.onUsage,
-                });
-                if (workerCollector) {
-                  workerCollector.lastAssignment = executionStrategy.synthesizer;
-                }
-                const finalBoundary = decideUserVisibleBoundaryHelper(this.getClarificationContext(), {
-                  chatId,
-                  prompt,
-                  workerDraft: response.text ?? "",
-                  visibleDraft: finalText,
-                  task: executionStrategy.task,
-                  state: bgAgentState,
-                  selfVerification,
-                  taskStartedAtMs,
-                  availableToolNames: currentToolNames,
-                  terminalFailureReported: isTerminalFailureReport(response.text),
-                });
-                if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
-                  if (response.text) {
-                    session.messages.push({ role: "assistant", content: response.text });
-                  }
-                  session.messages.push({ role: "user", content: finalBoundary.gate });
+                  emitProgress,
+                  buildStructuredProgressSignal: (p, t, s, l) => this.buildStructuredProgressSignal(p, t, s, l),
+                  getClarificationContext: () => this.getClarificationContext(),
+                  formatBoundaryVisibleText: (b) => this.sessionManager.formatBoundaryVisibleText(b),
+                  appendVisibleAssistantMessage: (s, t) => this.sessionManager.appendVisibleAssistantMessage(s, t),
+                  synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
+                  persistSessionToMemory: (c, t, f) => this.sessionManager.persistSessionToMemory(c, t as ConversationMessage[], f),
+                  getVisibleTranscript: (s) => this.sessionManager.getVisibleTranscript(s),
+                };
+                const bgEndAction: EndTurnLoopAction = await handleBgEndTurn(bgAgentState, bgEndTurnCtx);
+
+                if (bgEndAction.flow === "continue") {
+                  bgAgentState = bgEndAction.newState;
                   continue;
+                } else if (bgEndAction.flow === "done") {
+                  this.recordMetricEnd(metricId, {
+                    agentPhase: AgentPhase.COMPLETE,
+                    iterations: bgAgentState.iteration,
+                    toolCallCount: bgToolCallCount,
+                    hitMaxIterations: false,
+                  });
+                  await this.sessionManager.persistSessionToMemory(
+                    chatId,
+                    this.sessionManager.getVisibleTranscript(session),
+                    true,
+                  );
+                  return finish(
+                    bgEndAction.visibleText || "Task completed without output.",
+                    bgEndAction.status ?? "completed",
+                    bgEndAction.visibleText || "Task completed without output.",
+                  );
+                } else {
+                  // blocked
+                  if (bgEndAction.status === "completed") {
+                    return finish(bgEndAction.visibleText, "completed", bgEndAction.visibleText);
+                  }
+                  return bgFinishBlocked(bgEndAction.visibleText);
                 }
-                const surfacedFinalText = finalBoundary.visibleText ?? finalText;
-                if (surfacedFinalText) {
-                  this.sessionManager.appendVisibleAssistantMessage(session, surfacedFinalText);
-                }
-                this.recordPhaseOutcome({
-                  chatId,
-                  identityKey,
-                  assignment: currentAssignment,
-                  phase: toExecutionPhaseModel(bgAgentState.phase),
-                  status: "approved",
-                  task: executionStrategy.task,
-                  reason:
-                    "Execution produced a final response after the verifier pipeline cleared the task.",
-                  telemetry: buildBgPhaseOutcomeTelemetry({
-                    state: bgAgentState,
-                    usage: response.usage,
-                    verifierDecision: "approve",
-                  }),
-                });
-
-                // ─── Metrics: record success ────────────────────────────────
-                this.recordMetricEnd(metricId, {
-                  agentPhase: AgentPhase.COMPLETE,
-                  iterations: bgAgentState.iteration,
-                  toolCallCount: bgToolCallCount,
-                  hitMaxIterations: false,
-                });
-                // ────────────────────────────────────────────────────────────
-
-                // Persist background task conversation to memory
-                await this.sessionManager.persistSessionToMemory(
-                  chatId,
-                  this.sessionManager.getVisibleTranscript(session),
-                  /* force */ true,
-                );
-
-                return finish(surfacedFinalText || "Task completed without output.");
               }
 
               // ─── PAOR: Phase transitions ────────────────────────────────────
@@ -3581,7 +3198,7 @@ export class Orchestrator {
           return;
         }
 
-        // If no tool calls, send the final text response
+        // If no tool calls, send the final text response (extracted to orchestrator-end-turn-handler.ts)
         // (streaming already sent it, so skip for streamed end_turn)
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
           const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
@@ -3611,36 +3228,76 @@ export class Orchestrator {
             return;
           }
 
-          const clarificationIntervention = await resolveDraftClarificationInterventionPipeline({
+          const interactiveEndTurnCtx: InteractiveEndTurnContext = {
             chatId,
             identityKey,
             prompt: lastUserMessage,
-            draft: response.text ?? "",
-            state: agentState,
-            strategy: executionStrategy,
-            touchedFiles: [...selfVerification.getState().touchedFiles],
+            responseText: response.text,
+            responseUsage: response.usage,
+            executionStrategy,
+            executionJournal,
+            selfVerification,
+            stradaConformance,
+            taskStartedAtMs,
+            currentToolNames,
+            currentAssignment,
+            interventionDeps,
+            session,
             usageHandler: this.onUsage,
-          }, interventionDeps);
-          if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({
-              role: "user",
-              content: clarificationIntervention.gate,
-            });
+            recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
+            buildPhaseOutcomeTelemetry: buildInteractivePhaseOutcomeTelemetry,
+            systemPrompt,
+            defaultLanguage: this.defaultLanguage,
+            profileLanguage: profile?.language,
+            runTextConsensusIfCritical: async (p) => {
+              if (!this.consensusManager || !this.confidenceEstimator) return;
+              const textTaskClass = this.taskClassifier.classify(p.prompt);
+              if (textTaskClass.criticality !== "critical") return;
+              const textConfidence = this.confidenceEstimator.estimate({
+                task: textTaskClass,
+                providerName: p.providerName,
+                providerCapabilities: currentProvider.capabilities,
+                agentState: p.agentState,
+                responseLength: p.responseText.length,
+              });
+              await runConsensusVerification({
+                consensusManager: this.consensusManager,
+                availableProviderCount: this.providerManager.listAvailable().length,
+                taskClass: textTaskClass,
+                confidence: textConfidence,
+                originalOutput: { text: p.responseText },
+                originalProviderName: p.providerName,
+                prompt: p.prompt,
+                reviewAssignment: this.resolveConsensusReviewAssignment(executionStrategy.reviewer, currentAssignment, identityKey),
+                chatId,
+                identityKey,
+                logLabel: "text-only, critical",
+                recordExecutionTrace: (rp) => this.recordExecutionTrace(rp as Parameters<typeof this.recordExecutionTrace>[0]),
+                recordPhaseOutcome: (rp) => this.recordPhaseOutcome(rp as Parameters<typeof this.recordPhaseOutcome>[0]),
+              });
+            },
+          };
+          const interactiveEndAction: EndTurnLoopAction = await handleInteractiveEndTurn(agentState, interactiveEndTurnCtx);
+
+          if (interactiveEndAction.flow === "continue") {
+            agentState = interactiveEndAction.newState;
             continue;
-          }
-          if (
-            (clarificationIntervention.kind === "ask_user" ||
-              clarificationIntervention.kind === "blocked") &&
-            clarificationIntervention.message
-          ) {
-            await this.sessionManager.sendVisibleAssistantMarkdown(
-              chatId,
-              session,
-              clarificationIntervention.message,
-            );
+          } else if (interactiveEndAction.flow === "done") {
+            if (interactiveEndAction.visibleText) {
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, interactiveEndAction.visibleText);
+            }
+            this.recordMetricEnd(metricId, {
+              agentPhase: AgentPhase.COMPLETE,
+              iterations: agentState.iteration,
+              toolCallCount: agentState.stepResults.length,
+              hitMaxIterations: false,
+            });
+            return;
+          } else {
+            // blocked
+            if (interactiveEndAction.visibleText) {
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, interactiveEndAction.visibleText);
+            }
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
               iterations: agentState.iteration,
@@ -3649,215 +3306,6 @@ export class Orchestrator {
             });
             return;
           }
-
-          // ─── Verification gate: catch unverified exits ──────────────────
-          const verifierIntervention = await resolveVerifierInterventionPipeline({
-            chatId,
-            identityKey,
-            prompt: lastUserMessage,
-            state: agentState,
-            draft: response.text,
-            selfVerification,
-            stradaConformance,
-            strategy: executionStrategy,
-            taskStartedAtMs,
-            availableToolNames: currentToolNames,
-            usageHandler: this.onUsage,
-          }, interventionDeps);
-          if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: toExecutionPhaseModel(agentState.phase),
-              status: "continued",
-              task: executionStrategy.task,
-              reason: verifierIntervention.result.summary,
-              telemetry: buildInteractivePhaseOutcomeTelemetry({
-                state: agentState,
-                usage: response.usage,
-                verifierDecision: "continue",
-                failureReason: verifierIntervention.result.summary,
-              }),
-            });
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({
-              role: "user",
-              content: verifierIntervention.gate,
-            });
-            logger.debug("Verification gate triggered", { chatId, iteration });
-            continue; // send back to LLM with verification reminder
-          }
-          if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: toExecutionPhaseModel(agentState.phase),
-              status: "replanned",
-              task: executionStrategy.task,
-              reason: verifierIntervention.result.summary,
-              telemetry: buildInteractivePhaseOutcomeTelemetry({
-                state: agentState,
-                usage: response.usage,
-                verifierDecision: "replan",
-                failureReason: verifierIntervention.result.summary,
-              }),
-            });
-            agentState = transitionToVerifierReplanModel(agentState, response.text);
-            if (response.text) {
-              session.messages.push({ role: "assistant", content: response.text });
-            }
-            session.messages.push({
-              role: "user",
-              content: verifierIntervention.gate,
-            });
-            logger.debug("Verifier pipeline triggered replan", { chatId, iteration });
-            continue;
-          }
-          // ────────────────────────────────────────────────────────────────
-
-          // ─── Consensus for text-only responses on critical tasks ──────
-          if (this.consensusManager && this.confidenceEstimator && response.text) {
-            try {
-              const textTaskClass = this.taskClassifier.classify(lastUserMessage);
-              if (textTaskClass.criticality === "critical") {
-                const textConfidence = this.confidenceEstimator.estimate({
-                  task: textTaskClass,
-                  providerName: currentAssignment.providerName,
-                  providerCapabilities: currentProvider.capabilities,
-                  agentState,
-                  responseLength: response.text.length,
-                });
-                await runConsensusVerification({
-                  consensusManager: this.consensusManager,
-                  availableProviderCount: this.providerManager.listAvailable().length,
-                  taskClass: textTaskClass,
-                  confidence: textConfidence,
-                  originalOutput: { text: response.text },
-                  originalProviderName: currentAssignment.providerName,
-                  prompt: lastUserMessage,
-                  reviewAssignment: this.resolveConsensusReviewAssignment(executionStrategy.reviewer, currentAssignment, identityKey),
-                  chatId,
-                  identityKey,
-                  logLabel: "text-only, critical",
-                  recordExecutionTrace: (p) => this.recordExecutionTrace(p),
-                  recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
-                });
-              }
-            } catch {
-              // Consensus failure is non-fatal
-            }
-          }
-          // ────────────────────────────────────────────────────────────────
-
-          if (response.text) {
-            const visibilityDecision = await resolveVisibleDraftDecisionPipeline({
-              chatId,
-              identityKey,
-              prompt: lastUserMessage,
-              draft: response.text,
-              agentState,
-              strategy: executionStrategy,
-              systemPrompt,
-              selfVerification,
-              taskStartedAtMs,
-              availableToolNames: currentToolNames,
-              usageHandler: this.onUsage,
-            }, interventionDeps);
-            if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
-              session.messages.push({ role: "assistant", content: response.text });
-              session.messages.push({ role: "user", content: visibilityDecision.gate });
-              continue;
-            }
-            if (
-              (visibilityDecision.kind === "plan_review" ||
-                visibilityDecision.kind === "blocked" ||
-                visibilityDecision.kind === "ask_user") &&
-              visibilityDecision.visibleText
-            ) {
-              await this.sessionManager.sendVisibleAssistantMarkdown(
-                chatId,
-                session,
-                visibilityDecision.visibleText,
-              );
-              this.recordPhaseOutcome({
-                chatId,
-                identityKey,
-                assignment: currentAssignment,
-                phase: toExecutionPhaseModel(agentState.phase),
-                status: "blocked",
-                task: executionStrategy.task,
-                reason: visibilityDecision.reason,
-                telemetry: buildInteractivePhaseOutcomeTelemetry({
-                  state: agentState,
-                  usage: response.usage,
-                  verifierDecision: "approve",
-                }),
-              });
-              this.recordMetricEnd(metricId, {
-                agentPhase: AgentPhase.COMPLETE,
-                iterations: agentState.iteration,
-                toolCallCount: agentState.stepResults.length,
-                hitMaxIterations: false,
-              });
-              return;
-            }
-            const finalText = visibilityDecision.visibleText?.trim() ?? "";
-            if (finalText) {
-              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, finalText);
-            }
-            this.recordPhaseOutcome({
-              chatId,
-              identityKey,
-              assignment: currentAssignment,
-              phase: toExecutionPhaseModel(agentState.phase),
-              status: "approved",
-              task: executionStrategy.task,
-              reason: visibilityDecision.reason,
-              telemetry: buildInteractivePhaseOutcomeTelemetry({
-                state: agentState,
-                usage: response.usage,
-                verifierDecision: "approve",
-              }),
-            });
-          } else {
-            // LLM returned empty response — send fallback to user
-            const lang = profile?.language ?? this.defaultLanguage;
-            const fallback =
-              lang === "tr"
-                ? "Bir yanıt oluşturamadım. Sorunuzu yeniden ifade edebilir misiniz?"
-                : lang === "ja"
-                  ? "応答を生成できませんでした。質問を言い換えていただけますか？"
-                  : lang === "ko"
-                    ? "응답을 생성할 수 없었습니다. 질문을 다시 표현해 주시겠어요?"
-                    : lang === "zh"
-                      ? "我无法生成回复。您能重新表述您的问题吗？"
-                      : lang === "de"
-                        ? "Ich konnte keine Antwort generieren. Könnten Sie Ihre Frage umformulieren?"
-                        : lang === "es"
-                          ? "No pude generar una respuesta. ¿Podría reformular su pregunta?"
-                          : lang === "fr"
-                            ? "Je n'ai pas pu générer de réponse. Pourriez-vous reformuler votre question ?"
-                            : "I wasn't able to generate a response. Could you rephrase your question?";
-            logger.warn("LLM returned empty response", {
-              chatId,
-              canStream,
-              provider: currentAssignment.providerName,
-            });
-            await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, fallback);
-          }
-          // ─── Metrics: record end_turn ───────────────────────────────
-          this.recordMetricEnd(metricId, {
-            agentPhase: AgentPhase.COMPLETE,
-            iterations: agentState.iteration,
-            toolCallCount: agentState.stepResults.length,
-            hitMaxIterations: false,
-          });
-          // ──────────────────────────────────────────────────────────
-          return;
         }
 
         // ─── PAOR: Phase transitions ────────────────────────────────────
