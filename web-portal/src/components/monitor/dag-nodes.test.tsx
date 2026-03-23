@@ -17,7 +17,7 @@ vi.mock('@xyflow/react', () => ({
 import type { NodeProps, Node } from '@xyflow/react'
 import { TaskNode, ReviewNode, GateNode } from './dag-nodes'
 
-// Helper to create NodeProps-like objects
+// Components only destructure { data } — cast through unknown for complex NodeProps type
 function makeNodeProps<T extends Record<string, unknown>>(data: T): NodeProps<Node<T>> {
   return {
     id: 'test-node',
@@ -35,7 +35,7 @@ function makeNodeProps<T extends Record<string, unknown>>(data: T): NodeProps<No
     targetPosition: undefined,
     width: 200,
     height: 80,
-  } as NodeProps<Node<T>>
+  } as unknown as NodeProps<Node<T>>
 }
 
 describe('TaskNode', () => {
